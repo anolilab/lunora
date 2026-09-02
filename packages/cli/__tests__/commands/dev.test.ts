@@ -6,7 +6,7 @@ import { readDevServerState, writeDevServerState } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DevCommandOptions } from "../../src/commands/dev/handler";
-import { detectDevFlavor, planDevCommand, resolveWorkerPort, runDevCommand } from "../../src/commands/dev/handler";
+import { defaultWorkerSpawner, detectDevFlavor, planDevCommand, resolveWorkerPort, runDevCommand } from "../../src/commands/dev/handler";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {
@@ -464,6 +464,38 @@ describe("lunora dev", () => {
             const port = await resolveWorkerPort({ findFreePort: async () => 8801, logger: silentLogger() }, workdir);
 
             expect(port).toBe(8801);
+        });
+
+        it("refuses to drift off 8787 when .dev.vars pins the worker origin to it", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, ".dev.vars"), ["AUTH_URL=http://localhost:8787", "BETTER_AUTH_URL=http://127.0.0.1:8787", ""].join("\n"), "utf8");
+
+            const failure = await resolveWorkerPort({ findFreePort: async () => 8788, logger: silentLogger() }, workdir).catch((error: unknown) => error);
+
+            expect(failure).toBeInstanceOf(Error);
+            expect((failure as Error).message).toContain("AUTH_URL, BETTER_AUTH_URL");
+            expect((failure as Error).message).toContain("--worker-port 8788");
+        });
+
+        it("drifts silently when .dev.vars names no origin on the busy port", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, ".dev.vars"), ["AUTH_SECRET=not-a-url", "PUBLIC_URL=http://localhost:5173", ""].join("\n"), "utf8");
+
+            const port = await resolveWorkerPort({ findFreePort: async () => 8788, logger: silentLogger() }, workdir);
+
+            expect(port).toBe(8788);
+        });
+
+        it("lets an explicit --worker-port through even when .dev.vars pins 8787", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, ".dev.vars"), "AUTH_URL=http://localhost:8787\n", "utf8");
+
+            const port = await resolveWorkerPort({ findFreePort: async () => 8788, logger: silentLogger(), workerPort: 8790 }, workdir);
+
+            expect(port).toBe(8790);
         });
     });
 
@@ -1188,6 +1220,27 @@ describe("lunora dev", () => {
             const { origins } = await runWithProbe({ flavor: "vite" });
 
             expect(origins).toHaveLength(0);
+        });
+    });
+
+    describe("defaultWorkerSpawner", () => {
+        it("reports a signal-killed worker as a failure, not exit 0", async () => {
+            expect.assertions(1);
+
+            const worker = defaultWorkerSpawner(
+                { args: ["-e", "process.kill(process.pid, 'SIGKILL')"], command: process.execPath, cwd: workdir, tag: "wrangler" },
+                silentLogger(),
+            );
+
+            await expect(worker.exited).resolves.toBe(1);
+        });
+
+        it("passes a real exit code through", async () => {
+            expect.assertions(1);
+
+            const worker = defaultWorkerSpawner({ args: ["-e", "process.exit(0)"], command: process.execPath, cwd: workdir, tag: "wrangler" }, silentLogger());
+
+            await expect(worker.exited).resolves.toBe(0);
         });
     });
 });

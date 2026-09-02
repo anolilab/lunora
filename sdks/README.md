@@ -128,7 +128,7 @@ change that adds or removes a capability.
 | RPC query / mutation / action | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Live subscriptions            | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Shapes + poke protocol        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| Resume across reconnect       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Resume across reconnect       | ✅⁶    | ✅⁶ | ✅⁶  | ✅⁶  | ✅⁶   | ✅⁶  | ✅⁶    | ✅⁶  |
 | Typed argument models         | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Typed result models           | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Concurrency-safe client       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
@@ -140,6 +140,7 @@ change that adds or removes a capability.
 | Durable offline queue         | ✅²    | ✅² | ✅²  | ✅²  | ✅²   | ✅²  | ✅²    | ✅²  |
 | Per-shard drain               | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Batched offline replay        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Rate-limit backoff            | ✅⁵    | ✅⁵ | ✅⁵  | ✅⁵  | ✅⁵   | ✅⁵  | ✅⁵    | ✅⁵  |
 | Multi-tab leader election     | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Built-in HTTP / socket        | ✅⁴    | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Several sockets per client    | ❌³    | ❌³ | ❌³  | ❌³  | ❌³   | ❌³  | ❌³    | ❌³  |
@@ -176,6 +177,25 @@ The row read ❌ for all eight because that is what the seven were, and nobody
 re-read the eighth — a matrix is only worth its accuracy in the direction it does
 not expect to be wrong. Injecting `http_post` still overrides the default
 everywhere it is passed.
+
+⁵ **From the envelope only.** `protocol/README.md` §4.3 says a rate-limited
+retry SHOULD wait out `error.data.retryAfterMs` **or** the `Retry-After` header;
+these eight honour the first and none of them can see the second. Every port
+takes HTTP as an injected `(url, headers, body) -> (status, body)` poster, and a
+response header is not on that return — reading one means changing the contract a
+consumer already implements, in eight languages, for a value the RPC plane's own
+envelope carries. It is a real gap in front of an edge or a proxy that rate-limits
+with the header alone: the write is still re-queued and never dropped, but the
+retry is not paced. Widening the poster is the fix, and it is a change to make
+once for all eight rather than piecemeal.
+
+⁶ **Queries and shapes both.** `resendSubscriptions` walks the shape registry as
+well as the query one, carrying each shape's `sinceCheckpoint`/`sinceEpoch`. This
+row read ✅ for a long time while seven of the eight resent only queries, so
+after the first socket drop every `subscribeShape` view stopped receiving pokes
+for the life of the process — silently, because a shape is only ever fed by pokes
+the server had stopped sending. `shape_subscriptions_resend_after_reconnect` in
+`conformance-cases.json` is what makes the claim checkable rather than asserted.
 
 **The two argument rows are one problem with two halves, and no port can pass
 both by a rule applied at the transport.** An unset `v.optional()` must reach the
@@ -279,16 +299,31 @@ what a prediction applies to.
 a §4.3: the endpoint was in that document's transport table with no section
 describing it, so the envelope existed only in the TypeScript client. A flush of
 two or more writes now coalesces into `/_lunora/rpc-batch` round trips, chunked
-at the worker's own 500-entry cap and sent sequentially so FIFO survives a flush
-longer than one batch; a lone write still rides the single-call path, which is
-the proven one. The three rules that make it safe for a DURABLE write —
-`SHARD_UNAVAILABLE`/`SHARD_ERROR` slots are transient, an unanswered slot is
-retried under its original idempotency key, and a body with no `results` is a
-whole-batch outcome — are in §4.3 and asserted here.
+at the worker's own 500-entry cap AND under a byte budget of 1 MiB less 64 KiB of
+headroom, sent sequentially so FIFO survives a flush longer than one batch; a
+lone write still rides the single-call path, which is the proven one. The four
+rules that make it safe for a DURABLE write — a slot coded
+`SHARD_UNAVAILABLE`/`SHARD_ERROR`/`RATE_LIMITED`/`TOO_MANY_REQUESTS` is
+transient, an unanswered slot is retried under its original idempotency key, a
+body with no `results` is a whole-batch outcome classified the same way, and a
+`413` is a verdict on the REQUEST rather than on the writes inside it — are in
+§4.3 and asserted here.
 
-`offline_flush_batches_multiple_writes` in `conformance-cases.json` is what keeps
-the eight agreeing about it: the round-trip count, the per-entry envelope, and
-the transient-slot rule that only a batch can express.
+The byte budget and the `413` rule are the same defect from two directions, and
+it cost 500 durable writes at a time. The worker reads a batch body under a 1 MiB
+cap (`packages/runtime/src/body-readers.ts`) and answers
+`413 PAYLOAD_TOO_LARGE`; a chunker that counts entries and never weighs them
+sends a megabyte as soon as a backlog averages a couple of KiB per write, and a
+whole-batch coded envelope is otherwise terminal for every entry — so a flush
+settled the lot `rejected` although each write would have committed alone. Both
+halves are needed: the budget is an estimate that cannot see the framing the
+worker measures, so a chunk that is refused anyway is halved and retried rather
+than settled.
+
+`offline_flush_batches_multiple_writes` and
+`offline_flush_batch_splits_on_payload_too_large` in `conformance-cases.json` are
+what keep the eight agreeing about it: the round-trip count, the per-entry
+envelope, the transient-slot rule that only a batch can express, and the split.
 
 Deliberately not ported, and none of it is a gap a mobile client feels: cross-tab
 leader election and the `BroadcastChannel` mirror (there are no tabs), the
@@ -445,20 +480,33 @@ before it replays; an identity change refuses one; and a flush classifies each
 reply — success confirms the overlay, a coded verdict is terminal, a transient
 failure re-queues that write and every unreplayed one, in order.
 
+**A durable record holds the WIRE form of its args.** The native form carries the
+codec's own wrappers, and every real adapter serialises — a file, a SQLite text
+column, a preferences store — so a queued write with a `bigint`, `bytes`, `Date`
+or `Map` argument either failed to serialise (reported `queued` with nothing
+durable written) or serialised as whatever the adapter made of an opaque object
+and replayed after a restart with corrupted args. Encoding at the record boundary
+also catches args outside the codec entirely, which is reported as the `append`
+it prevented: the write stays in memory with its real args and settles terminally
+on the next flush, never persisted as a substitute. A record whose stored args no
+longer decode is purged and settled `OFFLINE_WRITE_UNDECODABLE` — replaying it
+with substitute args would commit a different write than the caller made.
+
 ### Where the ports deliberately differ from `@lunora/client`
 
 Each of these is forced by what these SDKs are rather than chosen:
 
-| Divergence                                                                                                                                                                                                                                                                                                  | Why                                                                                                                                                                                                                                                    |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **`submit` is a NEW method; `mutation` is unchanged.** `mutation` stays one direct HTTP round-trip that fails when the deployment is unreachable, because the generated surface calls it and a typed wrapper must keep returning a typed result. `submit` is the write path that survives a dropped socket. | Changing `mutation`'s contract under the generated code would turn "this write failed" into "this write is queued" for every existing caller.                                                                                                          |
-| **`submit` returns immediately with a `status` of `committed` or `queued`.** The browser client's `mutation()` returns a promise that stays PENDING until a queued write finally replays; the eventual verdict here arrives through `onSettled` (per write) or `onMutationSettled` (per client).            | A pending promise is fine in a browser event loop and bad on a goroutine, a Ruby thread or a JVM thread pool. A caller that must not report success early checks `status`.                                                                             |
-| **The persistence adapter is SYNCHRONOUS** in the seven non-Dart ports. The browser client's is async because IndexedDB is, and Dart's stays async because its IO is.                                                                                                                                       | A consumer injects whatever it likes — a file, SQLite, a key-value store — and owns its own threading, exactly as it already does for the HTTP poster and the frame sender.                                                                            |
-| **The identity stamp is an opaque string the CONSUMER sets** (`client.identity`), not a fingerprint derived from an auth token.                                                                                                                                                                             | These SDKs do not manage auth sessions, and a derived stamp would mean persisting a hash of a bearer token in the consumer's storage. Put a stable, non-secret subject (a user id) there.                                                              |
-| **A transient replay failure is classified by code**, not merely by "is it coded at all": a raw transport error or `SHARD_ERROR`/`SHARD_UNAVAILABLE` re-queues, everything else coded is terminal.                                                                                                          | This is the reference client's own BATCH classification. Its single-call path drops on any coded error, which loses a durable write to a shard blip; the ports take the better of its two.                                                             |
-| **Every fold notifies.** The TypeScript engine suppresses a notification whose folded result is reference-identical to the value already displayed.                                                                                                                                                         | Reference identity has no portable meaning across eight languages. A consumer sees at most a few redundant callbacks carrying the same value, never a missing one.                                                                                     |
-| **A persistence failure is SILENT unless you wire `on_persistence_error`.** The browser client falls back to `console.warn` when no handler is set.                                                                                                                                                         | There is no console in a Ruby worker or a JVM service, and writing to stderr from a library is its own bad default. The cost is real, so wire the handler: without it a durable store that has started failing looks exactly like one that is working. |
-| **An unencodable queued write settles with the coded verdict `OFFLINE_WRITE_UNENCODABLE`.** The reference settles the caller with the raw codec exception.                                                                                                                                                  | Every other terminal drop in these ports carries a code, and a consumer classifying by exception type would need to know seven languages' codec error hierarchies to spot this one.                                                                    |
+| Divergence                                                                                                                                                                                                                                                                                                                                                             | Why                                                                                                                                                                                                                                                    |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **`submit` is a NEW method; `mutation` is unchanged.** `mutation` stays one direct HTTP round-trip that fails when the deployment is unreachable, because the generated surface calls it and a typed wrapper must keep returning a typed result. `submit` is the write path that survives a dropped socket.                                                            | Changing `mutation`'s contract under the generated code would turn "this write failed" into "this write is queued" for every existing caller.                                                                                                          |
+| **`submit` returns immediately with a `status` of `committed` or `queued`.** The browser client's `mutation()` returns a promise that stays PENDING until a queued write finally replays; the eventual verdict here arrives through `onSettled` (per write) or `onMutationSettled` (per client).                                                                       | A pending promise is fine in a browser event loop and bad on a goroutine, a Ruby thread or a JVM thread pool. A caller that must not report success early checks `status`.                                                                             |
+| **The persistence adapter is SYNCHRONOUS** in the seven non-Dart ports. The browser client's is async because IndexedDB is, and Dart's stays async because its IO is.                                                                                                                                                                                                  | A consumer injects whatever it likes — a file, SQLite, a key-value store — and owns its own threading, exactly as it already does for the HTTP poster and the frame sender.                                                                            |
+| **The identity stamp is an opaque string the CONSUMER sets** (`client.identity`), not a fingerprint derived from an auth token.                                                                                                                                                                                                                                        | These SDKs do not manage auth sessions, and a derived stamp would mean persisting a hash of a bearer token in the consumer's storage. Put a stable, non-secret subject (a user id) there.                                                              |
+| **A transient replay failure is classified by code AND by status**: a raw transport error, `SHARD_ERROR`/`SHARD_UNAVAILABLE`, `RATE_LIMITED`/`TOO_MANY_REQUESTS`, any 5xx, and any non-2xx carrying no `{ error }` envelope all re-queue; everything else coded is terminal. One predicate governs the single-call path, a batch slot and a whole-batch outcome alike. | `protocol/README.md` §4.3. A durable write's fate must not depend on how many siblings were queued alongside it, which is exactly what it did: the same envelope-less 502 was transient for a batch and terminal for a lone write.                     |
+| **A rate limit defers the next flush rather than dropping the write.** `FlushReport.retryAfterMs` carries the envelope's `data.retryAfterMs`, clamped to 60 s, and a flush inside that window is a no-op reporting the time remaining.                                                                                                                                 | "Not now" is not "no", and a queue that honours a limiter by discarding loses data for being punctual. The `Retry-After` HEADER is not read: the injected poster surfaces `(status, body)` only — see the capability matrix's note ⁵.                  |
+| **Every fold notifies.** The TypeScript engine suppresses a notification whose folded result is reference-identical to the value already displayed.                                                                                                                                                                                                                    | Reference identity has no portable meaning across eight languages. A consumer sees at most a few redundant callbacks carrying the same value, never a missing one.                                                                                     |
+| **A persistence failure is SILENT unless you wire `on_persistence_error`.** The browser client falls back to `console.warn` when no handler is set.                                                                                                                                                                                                                    | There is no console in a Ruby worker or a JVM service, and writing to stderr from a library is its own bad default. The cost is real, so wire the handler: without it a durable store that has started failing looks exactly like one that is working. |
+| **An unencodable queued write settles with the coded verdict `OFFLINE_WRITE_UNENCODABLE`.** The reference settles the caller with the raw codec exception.                                                                                                                                                                                                             | Every other terminal drop in these ports carries a code, and a consumer classifying by exception type would need to know seven languages' codec error hierarchies to spot this one.                                                                    |
 
 **Multi-tab leader election** is the one browser-only half no port has — a Web
 Lock deciding which tab hydrates the shared durable queue, and there are no tabs

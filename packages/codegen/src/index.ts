@@ -18,6 +18,10 @@ export { formatAdvisories, lintSchema, toAdvisorContext } from "./advisor";
 export { describeErrorLevelFindings, errorAdvisoryNames, errorPlatformDiagnosticNames } from "./blocking";
 export { CodegenDiagnosticError, diagnosticAt } from "./diagnostics";
 export { AGENTS_FILENAME, discoverAgents } from "./discover/agents";
+// The canonical `lunora/` source walk — exported so a consumer deciding what
+// codegen would read (the Vite plugin's schema fingerprint) walks the same set,
+// symlinks and skips included, instead of forking the rules.
+export { listLunoraSourceFiles } from "./discover/ast";
 export { default as discoverAuthApiCalls } from "./discover/authapi-calls";
 export { CONTAINERS_FILENAME, discoverContainers } from "./discover/containers";
 export { default as discoverCrons } from "./discover/crons";

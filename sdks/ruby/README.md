@@ -47,8 +47,8 @@ unsubscribe = client.subscribe("messages:list", { "channel" => "general" }, meth
 ```
 
 `client.handle_frame(raw)` is what you call with each inbound WebSocket message;
-`client.resend_subscriptions` re-subscribes everything after a reconnect,
-carrying each subscription's resume cursor.
+`client.resend_subscriptions` re-subscribes everything after a reconnect —
+queries and shape views alike — carrying each one's resume cursor or checkpoint.
 
 ## Optimistic updates and offline writes
 
@@ -90,6 +90,17 @@ A queued write whose args cannot be wire-encoded settles terminally on the first
 flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and every
 discard — including one the capacity cap evicts out of a _restored_ queue, which
 has no caller left to tell — reaches `client.on_mutation_settled`.
+
+The durable record holds the **wire** form of the args, so a store that
+serialises (a file, a SQLite text column) round-trips a `WireBigInt`,
+`WireBytes`, `WireDate` or `WireMap` argument unchanged. A restored record whose
+args no longer decode is purged and settled `OFFLINE_WRITE_UNDECODABLE` rather
+than replayed with substitute args.
+
+A replay the server rate-limits (`RATE_LIMITED` / `TOO_MANY_REQUESTS`) is
+re-queued, never dropped; `FlushReport#retry_after_ms` carries the envelope's
+`data.retryAfterMs`, and a flush inside that window is a no-op that reports the
+time remaining.
 
 `client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write

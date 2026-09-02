@@ -56,6 +56,8 @@ Future<void> main() async {
   await run(caseServerFrameConsumer);
   await run(caseSubscriptionStreamYieldsFrameValuesInOrder);
   await run(caseShapeSubscribeFrame);
+  await run(caseShapeSubscriptionsResendAfterReconnect);
+  await run(caseRefusedPayloadReachesTheSubscriptionNotTheReadLoop);
   await run(casePokeSequenceMaterialisesRows);
   await run(casePokePartsDoNotApplyBeforePokeEnd);
   await run(caseResetPokeReplacesTheView);
@@ -93,6 +95,12 @@ Future<void> main() async {
   await run(caseGoldenOfflineQueueIdentityGate);
   await run(caseGoldenOfflineFlushReplay);
   await run(caseGoldenOfflineFlushUnencodableWrite);
+  await run(caseTypedArgsSurviveASerialisingStore);
+  await run(caseUndecodableRecordSettlesRejected);
+  await run(caseBatchSplitsOnPayloadTooLarge);
+  await run(caseLoneQueuedWriteSurvivesAnEnvelopeLess502);
+  await run(caseRateLimitedReplayRequeuesAndDefers);
+  await run(caseRateLimitedBatchSlotIsTransient);
 
   await run(caseOptimisticLayerRebasesOntoAServerFrame);
   await run(caseOptimisticLayerDropsOnItsCommitCursor);

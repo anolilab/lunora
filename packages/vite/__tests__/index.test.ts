@@ -68,6 +68,18 @@ describe("index", () => {
             expect(names.some((name) => name.includes("cloudflare"))).toBe(false);
         });
 
+        it("keeps the host-independent dev plugins on the BYO path", async () => {
+            expect.hasAssertions();
+
+            // `cloudflare: false` says only that the PROJECT adds the Cloudflare
+            // plugin (the shipped vinext default) — it still runs a dev worker and
+            // its containers. Gating these on the option left that path with no
+            // container logs at all.
+            const plugins = lunora({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false });
+
+            expect(plugins.map((plugin) => plugin.name)).toContain("lunora:container-logs");
+        });
+
         it("excludes the wrangler validator when validateWrangler is false", async () => {
             expect.hasAssertions();
 

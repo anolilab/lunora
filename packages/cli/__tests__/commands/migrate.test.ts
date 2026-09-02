@@ -5,7 +5,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
-import { runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand, runMigrateToHyperdriveCommand } from "../../src/commands/migrate/handler";
+import {
+    execute as migrateExecute,
+    runMigrateCreateCommand,
+    runMigrateDataCommand,
+    runMigrateGenerateCommand,
+    runMigrateToHyperdriveCommand,
+} from "../../src/commands/migrate/handler";
 import type { FetchLike } from "../../src/commands/run/handler";
 import type { Logger } from "../../src/util/logger";
 
@@ -700,6 +706,55 @@ export const backfillReadBy = defineMigration({
             }
 
             expect(calls[0]?.headers?.authorization).toBe("Bearer from-env");
+        });
+
+        it("falls back to the .dev.vars token against a local worker", async () => {
+            expect.hasAssertions();
+
+            const calls: CapturedCall[] = [];
+            const previous = process.env.LUNORA_ADMIN_TOKEN;
+
+            delete process.env.LUNORA_ADMIN_TOKEN;
+            // eslint-disable-next-line no-secrets/no-secrets -- a throwaway .dev.vars fixture in a temp directory, not a credential
+            writeFileSync(join(workdir, ".dev.vars"), 'LUNORA_ADMIN_TOKEN="local"\n', "utf8");
+
+            try {
+                await runMigrateDataCommand({
+                    cwd: workdir,
+                    fetchImpl: captureFetch(calls, okResponse()),
+                    id: "backfill-read-by",
+                    logger: silentLogger(),
+                    subcommand: "up",
+                });
+            } finally {
+                if (previous !== undefined) {
+                    process.env.LUNORA_ADMIN_TOKEN = previous;
+                }
+            }
+
+            expect(calls[0]?.headers?.authorization).toBe("Bearer local");
+        });
+
+        // The documented invocation is `lunora migrate up <id>` — the docs once
+        // showed a bare `up`/`status`, which exits 1. Pin the requirement so the
+        // examples cannot drift back.
+        it.each(["up", "down", "status"])("requires a migration id for %s", async (subcommand) => {
+            expect.assertions(1);
+
+            let exitCode: number | undefined;
+
+            await migrateExecute({
+                argument: [subcommand],
+                options: {},
+                process: {
+                    cwd: workdir,
+                    exit: (code: number) => {
+                        exitCode = code;
+                    },
+                },
+            } as unknown as Parameters<typeof migrateExecute>[0]);
+
+            expect(exitCode).toBe(1);
         });
 
         it("errors when no admin token is available", async () => {

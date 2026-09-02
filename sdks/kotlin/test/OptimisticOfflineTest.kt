@@ -1,6 +1,7 @@
 package dev.lunora
 
 import java.io.IOException
+import java.math.BigInteger
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -326,19 +327,29 @@ private fun optimisticCursorlessFramePreservesCursor() {
     check(live.state().layers.size == count(case["layersAfterConfirm"]), "so the reply's commit cursor can still drop the overlay")
 }
 
-/** A persistence adapter that records every call. */
+/**
+ * A persistence adapter that records every call.
+ *
+ * It JSON round-trips every record, which an adapter holding the objects by
+ * reference does not — and that is the whole point: a file, a SQLite text column
+ * or a preferences store all serialise, so a record carrying the codec's native
+ * wrappers either throws here or is written as something that does not read back.
+ * Holding references made this suite blind to both.
+ */
 private class MemoryStore(seeded: List<Map<String, Any?>> = emptyList()) : PersistenceAdapter {
-    val records = seeded.toMutableList()
+    val records = seeded.map { serialise(it) }.toMutableList()
     val appended = mutableListOf<Map<String, Any?>>()
     val removed = mutableListOf<String>()
     var cleared = 0
 
     override fun append(record: Map<String, Any?>) {
-        appended.add(record)
-        records.add(record)
+        val stored = serialise(record)
+
+        appended.add(stored)
+        records.add(stored)
     }
 
-    override fun load(): List<Map<String, Any?>> = records.toList()
+    override fun load(): List<Map<String, Any?>> = records.map { serialise(it) }
 
     override fun remove(mutationId: String) {
         removed.add(mutationId)
@@ -348,6 +359,11 @@ private class MemoryStore(seeded: List<Map<String, Any?>> = emptyList()) : Persi
     override fun clear() {
         cleared++
         records.clear()
+    }
+
+    companion object {
+        @Suppress("UNCHECKED_CAST")
+        private fun serialise(record: Map<String, Any?>): Map<String, Any?> = Json.parse(Json.write(record)) as Map<String, Any?>
     }
 }
 
@@ -541,6 +557,225 @@ private fun offlineQueueHydratesPersistedWrites() {
     // generator mints the default client id, so this covers both.
     check(List(2000) { randomId() }.toSet().size == 2000, "minted ids must not collide")
     check(Client("https://app.example").clientId != Client("https://app.example").clientId, "and two clients never share one")
+}
+
+/**
+ * A queued write carrying typed arguments survives a store that SERIALISES.
+ *
+ * Every wrapper below is one the codec understands and a JSON writer does not, so
+ * persisting the native form either throws inside the adapter — reporting the
+ * write "queued" while nothing durable was written — or stores whatever the
+ * adapter makes of an opaque object and replays after a restart with CORRUPTED
+ * args.
+ */
+private fun typedArgsSurviveASerialisingStore() {
+    covers("offline_queue_hydrates_persisted_writes")
+
+    val args = WireValue.Obj(
+        listOf(
+            "amount" to WireValue.BigInt(BigInteger("7")),
+            "blob" to WireValue.Bytes(byteArrayOf(1, 2, 3, 4)),
+            "when" to WireValue.Date(WireValue.Num(1700000000000.0)),
+        ),
+    )
+    val store = MemoryStore()
+    val queue = OfflineQueue(persistence = store)
+    val errors = mutableListOf<String>()
+
+    queue.onPersistenceError = { operation, _, id -> errors.add("$operation:$id") }
+    queue.enqueue(QueuedMutation("m-typed", "ledger:add", args))
+
+    check(errors.isEmpty(), "the record must serialise, so nothing is reported as a failed append")
+    check(Json.write(store.appended[0]["args"]) == Json.write(Wire.encode(args)), "the persisted args are the WIRE form")
+
+    val restored = OfflineQueue(persistence = store)
+
+    restored.hydrate()
+
+    check(queuedIds(restored.items()) == listOf("m-typed"), "the write restores")
+
+    // Decoded back to the SAME native values, so the replay sends the write that
+    // was made rather than whatever the adapter's stringification left.
+    val fields = (restored.items()[0].args as WireValue.Obj).fields.toMap()
+
+    check(fields["amount"] == WireValue.BigInt(BigInteger("7")), "the bigint round-trips exactly")
+    check((fields["blob"] as WireValue.Bytes).data.contentEquals(byteArrayOf(1, 2, 3, 4)), "and the bytes")
+    check(fields["when"] == WireValue.Date(WireValue.Num(1700000000000.0)), "and the date")
+}
+
+/**
+ * A persisted record whose args do not decode is purged and settled, never
+ * replayed and never fatal.
+ *
+ * A wire tag with no usable payload: the store was corrupted, or written by an
+ * incompatible build. Replaying it with substitute args would commit a DIFFERENT
+ * write than the caller made, and throwing out of the hydrate takes every OTHER
+ * durable write down with it.
+ */
+private fun undecodablePersistedRecordSettlesRejected() {
+    covers("offline_queue_hydrates_persisted_writes")
+
+    val record = linkedMapOf<String, Any?>(
+        "args" to mapOf("amount" to listOf(Wire.TAG, "bigint", "not-a-number")),
+        "functionPath" to "ledger:add",
+        "id" to "m-bad",
+    )
+    val store = MemoryStore(listOf(record))
+    val settled = mutableListOf<MutationSettled>()
+    val client = Client("https://app.example")
+
+    client.offlineQueue = OfflineQueue(persistence = store)
+    client.onMutationSettled { settled.add(it) }
+
+    val shardKeys = client.hydrateOfflineQueue()
+
+    check(shardKeys.isEmpty(), "nothing survived to be flushed")
+    check(queuedIds(client.offlineQueue.items()).isEmpty(), "the unreadable record is not queued")
+    check(settled.map { it.mutationId } == listOf("m-bad"), "it settles through the client's listener")
+    check(settled[0].status == MutationStatus.REJECTED, "as a rejection")
+    check(settledCodes(settled) == listOf(OFFLINE_WRITE_UNDECODABLE), "carrying the documented code")
+    check(store.removed == listOf("m-bad"), "and is purged, not left to fail every restart")
+}
+
+/**
+ * A batch the worker refuses for SIZE is split and retried, not settled.
+ *
+ * The worker reads a batch body under a 1 MiB budget
+ * (`packages/runtime/src/body-readers.ts`) and answers `413 PAYLOAD_TOO_LARGE`
+ * past it. A whole-batch coded envelope is a verdict on every entry, so a
+ * count-only chunker settled the lot `rejected` — 500 durable writes dropped for
+ * the size of the request they shared, each of which would have committed alone.
+ */
+private fun batchSplitsOnPayloadTooLarge() {
+    covers("offline_flush_batch_splits_on_payload_too_large")
+
+    val budget = 400
+    val bodies = mutableListOf<Int>()
+    val store = MemoryStore()
+    val client = Client(
+        "https://app.example",
+        { _, _, body ->
+            bodies.add(body.size)
+
+            if (body.size > budget) {
+                HttpResponse(413, "{\"error\":{\"code\":\"PAYLOAD_TOO_LARGE\",\"message\":\"Body too large\"}}")
+            } else {
+                HttpResponse(200, echoBatchSlots(body, commitCursor = 1))
+            }
+        },
+    )
+
+    client.clientId = "c-1"
+    client.offlineQueue = OfflineQueue(persistence = store)
+
+    val queued = List(4) { "m-$it" }
+
+    for (id in queued) {
+        client.offlineQueue.enqueue(QueuedMutation(id, "messages:send", WireValue.Obj(listOf("text" to WireValue.Text("x".repeat(120))))))
+    }
+
+    val report = client.flushOfflineQueue()
+
+    check(report.committed == queued, "every write commits; none is dropped for the size of the batch it shared")
+    check(report.rejected.isEmpty(), "nothing is settled terminally")
+    check(queuedIds(client.offlineQueue.items()).isEmpty(), "and the queue drains")
+    check(bodies.max() > budget, "the first attempt has to be the over-budget one, or nothing was split")
+}
+
+/**
+ * A lone queued write survives an envelope-less 502.
+ *
+ * `parseRpcResponse` codes such a body INTERNAL per protocol §4.2, and INTERNAL
+ * is not in [TRANSIENT_ERROR_CODES] — so whether a gateway blip LOST a durable
+ * write depended on the queue's depth, because the same response on the batch
+ * path was already classified transient.
+ */
+private fun loneQueuedWriteSurvivesAnEnvelopeLess502() {
+    val store = MemoryStore()
+    val settled = mutableListOf<MutationSettled>()
+    val client = Client("https://app.example", { _, _, _ -> HttpResponse(502, "{\"message\":\"bad gateway\"}") })
+
+    client.offlineQueue = OfflineQueue(persistence = store)
+    client.onMutationSettled { settled.add(it) }
+    client.offlineQueue.enqueue(entry("m-502"))
+
+    val report = client.flushOfflineQueue()
+
+    check(report.rejected.isEmpty(), "an edge error page is not a verdict")
+    check(report.requeued == listOf("m-502"), "the write goes back on the queue")
+    check(queuedIds(client.offlineQueue.items()) == listOf("m-502"), "and is still there")
+    check(settled.isEmpty(), "nothing settled: no verdict was ever reached")
+    check(store.removed.isEmpty(), "the durable record stays, because the write is still good")
+}
+
+/**
+ * A rate-limited replay requeues and defers the next flush.
+ *
+ * "Not now", not "no": the write is valid and the server asked for it later, so
+ * dropping it loses data for being punctual — and replaying immediately just
+ * earns the same 429 forever.
+ */
+private fun rateLimitedReplayDefersTheNextFlush() {
+    var posts = 0
+    val client = Client(
+        "https://app.example",
+        { _, _, _ ->
+            posts++
+
+            HttpResponse(429, "{\"error\":{\"code\":\"TOO_MANY_REQUESTS\",\"data\":{\"retryAfterMs\":60000},\"message\":\"slow down\"}}")
+        },
+    )
+
+    client.offlineQueue = OfflineQueue(persistence = MemoryStore())
+    client.offlineQueue.enqueue(entry("m-429"))
+
+    val report = client.flushOfflineQueue()
+
+    check(report.rejected.isEmpty(), "a rate limit is not a verdict")
+    check(report.requeued == listOf("m-429"), "the write stays queued")
+    check(report.retryAfterMs == 60000L, "and the envelope's delay is reported")
+
+    val again = client.flushOfflineQueue()
+
+    check(posts == 1, "the second flush waits out the delay rather than earning the same 429")
+    check((again.retryAfterMs ?: 0L) > 0L, "reporting what is left of it")
+    check(queuedIds(client.offlineQueue.items()) == listOf("m-429"), "with the write still queued")
+
+    rateLimitedBatchSlotRequeues()
+}
+
+/**
+ * A rate-limited SLOT is transient too, and the honoured delay is clamped.
+ *
+ * A slot's body is exactly a §4.2 envelope, so it runs through the SAME
+ * `isTransient` predicate as a whole batch and a single call — a second code set
+ * beside it is how a durable write's fate came to depend on how many siblings
+ * were queued alongside it. The clamp keeps a server that names an hour from
+ * parking the queue for one.
+ */
+private fun rateLimitedBatchSlotRequeues() {
+    val client = Client(
+        "https://app.example",
+        { _, _, _ ->
+            HttpResponse(
+                200,
+                "{\"results\":[" +
+                    "{\"id\":0,\"body\":{\"error\":{\"code\":\"TOO_MANY_REQUESTS\",\"data\":{\"retryAfterMs\":900000},\"message\":\"slow down\"}}}," +
+                    "{\"id\":1,\"body\":{\"commitCursor\":1,\"result\":null}}]}",
+            )
+        },
+    )
+
+    client.offlineQueue = OfflineQueue(persistence = MemoryStore())
+    client.offlineQueue.enqueue(entry("m-slot-429"))
+    client.offlineQueue.enqueue(entry("m-slot-ok"))
+
+    val report = client.flushOfflineQueue()
+
+    check(report.rejected.isEmpty(), "a rate-limited slot is not a verdict on that entry")
+    check(report.requeued == listOf("m-slot-429"), "it goes back on the queue")
+    check(report.committed == listOf("m-slot-ok"), "while its sibling still commits")
+    check(report.retryAfterMs == MAX_RETRY_AFTER_MS, "and the slot's delay is honoured, clamped at a minute")
 }
 
 /**
@@ -1063,9 +1298,14 @@ internal fun runOptimisticOfflineCases() {
     offlineQueueOverflowEvictsOldest()
     offlineQueuePreconditionDropsStaleWrite()
     offlineQueueHydratesPersistedWrites()
+    typedArgsSurviveASerialisingStore()
+    undecodablePersistedRecordSettlesRejected()
     offlineQueueHydrateOverflowSettlesDiscarded()
     offlineQueueIdentityGateRejectsReplay()
     offlineFlushReplaysAndConfirmsOptimistic()
     offlineFlushBatchesMultipleWrites()
+    batchSplitsOnPayloadTooLarge()
+    loneQueuedWriteSurvivesAnEnvelopeLess502()
+    rateLimitedReplayDefersTheNextFlush()
     offlineFlushUnencodableWriteSettlesTerminal()
 }

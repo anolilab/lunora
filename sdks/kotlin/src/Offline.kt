@@ -22,6 +22,17 @@ const val OFFLINE_IDENTITY_CHANGED: String = "OFFLINE_IDENTITY_CHANGED"
  */
 const val OFFLINE_WRITE_UNENCODABLE: String = "OFFLINE_WRITE_UNENCODABLE"
 
+/**
+ * A restored record's args are not readable as wire values — the store was
+ * corrupted, or written by an incompatible build.
+ *
+ * Such a record has no correct replay: sending it with substitute args would
+ * commit a DIFFERENT write than the caller made, which is corruption rather than
+ * failure, and throwing out of the hydrate kills the whole restart path along
+ * with every other queued write.
+ */
+const val OFFLINE_WRITE_UNDECODABLE: String = "OFFLINE_WRITE_UNDECODABLE"
+
 /** The client was closed while the write was still queued. */
 const val CLIENT_CLOSED: String = "CLIENT_CLOSED"
 
@@ -36,12 +47,49 @@ const val CLIENT_CLOSED: String = "CLIENT_CLOSED"
 val TRANSIENT_ERROR_CODES: Set<String> = setOf("SHARD_ERROR", "SHARD_UNAVAILABLE")
 
 /**
+ * The codes that say "not now" rather than "no".
+ *
+ * A rate-limited replay is the one verdict a durable queue must never honour: the
+ * write is perfectly valid and the server is asking for it later, so dropping it
+ * loses data for being punctual. The delay comes from the envelope's
+ * `data.retryAfterMs` (see `protocol/fixtures/rpc.json`'s `responseError.with-data`).
+ */
+val RATE_LIMIT_ERROR_CODES: Set<String> = setOf("RATE_LIMITED", "TOO_MANY_REQUESTS")
+
+/**
  * Hard cap on entries in one batch, matching the server's own
  * (`shared/batch-wire.ts`). A Durable Object is single-threaded and replays a
  * batch's entries sequentially, so an unbounded one could pin a shard for tens of
  * thousands of dispatches. A flush with a larger backlog chunks itself.
  */
 const val MAX_BATCH_ENTRIES: Int = 500
+
+/**
+ * Byte budget for one batch body, under the worker's own 1 MiB body cap
+ * (`packages/runtime/src/body-readers.ts`). The entry cap alone is blind to size:
+ * 500 writes carrying bytes or long text exceed a megabyte, the worker answers
+ * `413 PAYLOAD_TOO_LARGE`, and a whole-batch coded envelope is a verdict on every
+ * entry — so a count-only chunker settles 500 durable writes `rejected` that would
+ * each have committed alone. The 64 KiB of headroom covers the request line, the
+ * headers and the JSON framing this estimate does not weigh.
+ */
+const val MAX_BATCH_BYTES: Int = 1_048_576 - 65_536
+
+/**
+ * The longest rate-limit delay a flush will honour, matching `@lunora/client`.
+ *
+ * A server that names an hour would otherwise park a durable queue for an hour;
+ * the caller re-flushes on its own reconnect long before that, and a limiter that
+ * still refuses simply says so again.
+ */
+const val MAX_RETRY_AFTER_MS: Long = 60_000
+
+/**
+ * The worker's answer to a body over its cap. Coded, so it arrives as a
+ * whole-batch envelope — which every other coded envelope is a verdict on every
+ * entry, and this one is not.
+ */
+const val PAYLOAD_TOO_LARGE: String = "PAYLOAD_TOO_LARGE"
 
 /** Bounds the queue when no capacity is configured. */
 const val DEFAULT_MAX_ITEMS: Int = 1000
@@ -207,6 +255,11 @@ class QueuedMutation(
          * it did not survive the restart. A missing `identity` key restores as
          * [Identity.Absent] (a legacy record) while a stored null restores as
          * [Identity.SignedOut] — the distinction the identity gate turns on.
+         *
+         * Throws [WireFormatException] when the stored args are not wire values.
+         * It never substitutes: a record hydrated as empty args replays
+         * SUCCESSFULLY with the wrong arguments, which is corruption rather than
+         * failure. [OfflineQueue.hydrate] settles such a record terminally.
          */
         fun fromRecord(record: Map<String, Any?>): QueuedMutation {
             val entry = QueuedMutation(
@@ -355,8 +408,9 @@ class OfflineQueue(
      * Restores writes persisted in a prior session.
      *
      * Returns the distinct shard keys of the records that SURVIVED — so the caller
-     * can open exactly those sockets to trigger a flush — alongside whatever the
-     * capacity cap evicted. A no-op with no adapter configured.
+     * can open exactly those sockets to trigger a flush — alongside every record
+     * this restore let go of: what the capacity cap evicted, and what would not
+     * decode. A no-op with no adapter configured.
      *
      * Restored records are placed AHEAD of whatever is already queued. Hydration
      * runs after construction (a durable load takes time), so a write submitted
@@ -369,6 +423,7 @@ class OfflineQueue(
         val store = persistence ?: return Hydrated(emptyList(), emptyList())
         val seen = items.mapTo(mutableSetOf()) { it.id }
         val restored = mutableListOf<QueuedMutation>()
+        val undecodable = mutableListOf<Discarded>()
 
         for (record in store.load()) {
             val id = record["id"] as? String ?: ""
@@ -381,14 +436,29 @@ class OfflineQueue(
                 continue
             }
 
-            restored.add(QueuedMutation.fromRecord(record))
+            try {
+                restored.add(QueuedMutation.fromRecord(record))
+            } catch (error: WireFormatException) {
+                // Purged and REPORTED, never replayed with substitute args and
+                // never thrown: a record whose args do not decode has no correct
+                // replay, and failing the hydrate over one of them strands every
+                // OTHER durable write in the store.
+                persist("remove", id) { store.remove(id) }
+                undecodable.add(
+                    Discarded(
+                        QueuedMutation(id, record["functionPath"] as? String ?: "", WireValue.Obj(emptyList()), record["shardKey"] as? String),
+                        OFFLINE_WRITE_UNDECODABLE,
+                        "offline mutation restored from storage cannot be wire-decoded: ${error.message}",
+                    ),
+                )
+            }
         }
 
         items.addAll(0, restored)
 
         // A store holding more than maxItems (the cap was lowered between
         // sessions, or writes piled up across restarts) must not bypass it.
-        val evicted = evictOverflow()
+        val evicted = undecodable + evictOverflow()
 
         notifySize()
 

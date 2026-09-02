@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
-import { join, sep } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { listLunoraSourceFiles } from "@lunora/codegen";
 
 /**
  * Content hash of the schema directory's TypeScript sources — everything codegen
@@ -13,29 +15,32 @@ import { join, sep } from "node:path";
  * outright. Content can — a formatter that rewrites a file to the same bytes
  * leaves the hash alone, and a real edit does not.
  *
+ * The file set comes from codegen's own `listLunoraSourceFiles` (plus
+ * `schema.ts`, which discovery loads separately), so "what codegen reads" is one
+ * decision rather than two that drift: a `readdirSync` walk of its own silently
+ * disagreed about symlinked sources, which is exactly the case where a
+ * regeneration must not be judged a no-op.
+ *
  * Cheap by construction (a schema directory is a handful of files, read once per
  * regeneration, not per watcher event). An unreadable directory hashes to a
  * constant so a transient read error reads as "no change" rather than as an
  * edit — degrading toward doing nothing, never toward a spurious rerun.
  */
-const fingerprintSchemaSources = (schemaDirectory: string, generatedDirectory: string): string => {
-    let entries;
-
-    try {
-        entries = readdirSync(schemaDirectory, { recursive: true, withFileTypes: true });
-    } catch {
+const fingerprintSchemaSources = (schemaDirectory: string): string => {
+    if (!existsSync(schemaDirectory)) {
         return "unreadable";
+    }
+
+    const paths = listLunoraSourceFiles(schemaDirectory);
+    const schemaPath = join(schemaDirectory, "schema.ts");
+
+    if (existsSync(schemaPath)) {
+        paths.push(schemaPath);
     }
 
     const hash = createHash("sha256");
 
-    const paths = entries
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
-        .map((entry) => join(entry.parentPath, entry.name))
-        .filter((path) => !(path === generatedDirectory || path.startsWith(generatedDirectory + sep)))
-        .toSorted((a, b) => a.localeCompare(b));
-
-    for (const path of paths) {
+    for (const path of paths.toSorted((a, b) => a.localeCompare(b))) {
         try {
             hash.update(path).update("\u0000").update(readFileSync(path));
         } catch {

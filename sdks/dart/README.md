@@ -126,7 +126,9 @@ Each follows from what this transport is rather than from taste, and
   methods you implement over `shared_preferences`, `sqflite`, Drift or a plain
   file; the sibling ports take a synchronous adapter. `MemoryPersistence` ships
   for tests. With no adapter the queue survives a dropped socket but not a
-  restart.
+  restart. A `PersistedMutation`'s `args` are the WIRE form, so an adapter only
+  ever has to move JSON — a queued write carrying a `BigInt`, bytes or a date is
+  already encoded by the time it reaches you, and decoded again on hydrate.
 - **Connectivity is reported per shard.** `setConnected(true, shardKey: …)`
   flushes only that shard's writes, so one shard reconnecting cannot replay
   another's down a connection that cannot reach it. Omit `shardKey` for the
