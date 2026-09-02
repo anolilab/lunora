@@ -15,7 +15,8 @@ one `RateLimiter` per app from a config map, then either attach the `rateLimit`
 middleware to a procedure's `.use(...)` chain or call `limiter.limit(...)`
 directly. On rejection the middleware throws a structural `LunoraError` that the
 runtime maps to `429 Too Many Requests` (or `403 Forbidden` for a deny-list hit),
-carrying `retryAfter` in milliseconds.
+carrying `data.retryAfterMs` — the retry hint the client and every SDK read off
+a `TOO_MANY_REQUESTS` envelope (`protocol/README.md` §4.3).
 
 ```ts
 import type { RateLimitConfigMap } from "@lunora/ratelimit";
