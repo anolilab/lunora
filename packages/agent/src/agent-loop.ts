@@ -7,6 +7,7 @@ import { buildModelMessages } from "./model-messages";
 import { agentBindingName } from "./naming";
 import { toFunctionReference } from "./paths";
 import isPositiveInteger from "./positive-integer";
+import { capToolOutputText } from "./tool-output";
 import type {
     AgentApprovalContext,
     AgentCompact,
@@ -124,6 +125,8 @@ interface TurnContext {
     memoryContext: string | undefined;
     /** Live-only token-delta sink, when the runtime provided one (else `undefined`). */
     onTokenDelta: AgentTokenSink | undefined;
+    /** Verified owner of THIS run's thread (`params.owner`), handed to every tool context. */
+    owner: string | undefined;
     patchThread: (patch: Record<string, unknown>) => Promise<void>;
     persist: (message: Record<string, unknown>) => Promise<void>;
     run: AgentRunFunction;
@@ -144,6 +147,31 @@ interface ApprovalDecision {
 
 /** JSON-encode a tool's non-string output; `undefined` encodes as "null". */
 const stringifyOutput = (output: unknown): string => (output === undefined ? "null" : JSON.stringify(output));
+
+/**
+ * Record a FAILED run's terminal state without letting the recording replace the
+ * failure.
+ *
+ * The completion patch is a dispatch, so it can reject on its own. When it did,
+ * its error escaped the run-level catch and became what the workflow instance
+ * recorded — the operator saw a persist error where the actual cause should have
+ * been. The original error is what propagates; the dispatch failure rides along
+ * as its `cause`.
+ */
+const finishFailedRun = async (
+    finishRun: (patch: { error?: string; status: "error" | "idle"; usage?: AgentUsage }) => Promise<void>,
+    error: unknown,
+    usage: AgentUsage | undefined,
+): Promise<void> => {
+    try {
+        await finishRun({ error: error instanceof Error ? error.message : String(error), status: "error", ...(usage === undefined ? {} : { usage }) });
+    } catch (finishError: unknown) {
+        if (error instanceof Error && error.cause === undefined) {
+            // eslint-disable-next-line no-param-reassign -- annotating the run's own failure IS the fix: the caller rethrows this exact error, and the dispatch failure has nowhere else to go
+            error.cause = finishError;
+        }
+    }
+};
 
 /** Normalize the config's `stopWhen` (a condition or array) to an array. */
 const normalizeStopWhen = (stopWhen: AgentConfig["stopWhen"]): ReadonlyArray<StopCondition<ToolSet>> => (stopWhen === undefined ? [] : [stopWhen].flat());
@@ -352,7 +380,7 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Pro
 };
 
 const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promise<void> => {
-    const { depth, env, getState, instanceId, onTokenDelta, persist, run, setState, step, threadKey, tools } = turnContext;
+    const { depth, env, getState, instanceId, onTokenDelta, owner, persist, run, setState, step, threadKey, tools } = turnContext;
     const stepName = `tool:${call.name}:${call.id}`;
     const tool: AnyAgentTool | undefined = tools[call.name];
     const messageKey = `${instanceId}:tool:${call.id}`;
@@ -366,6 +394,25 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
         return;
     }
 
+    // The provider's arguments failed the tool's input schema (or did not parse
+    // as JSON), so the AI SDK refused to execute the call and only reported it —
+    // `call.input` is the raw value, not a validated one. Running it anyway
+    // handed `execute` garbage, and the throw that followed retried the durable
+    // step until the whole run failed. Recorded the same way a hallucinated tool
+    // NAME is, so the next turn lets the model correct its arguments.
+    if (call.invalid !== undefined) {
+        await persist({
+            content: `Error: invalid input for tool "${call.name}" — it was not run. ${call.invalid}`,
+            messageKey,
+            role: "tool",
+            stepName,
+            toolCallId: call.id,
+            toolName: call.name,
+        });
+
+        return;
+    }
+
     // Ephemeral progress: tees onto the SAME live-only sink the token deltas
     // ride. A no-op when the runtime wired no sink (the durable default), and —
     // because it fires from inside the tool's memoized `step.do` below — never
@@ -374,7 +421,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
         onTokenDelta?.({ data, kind: "progress", threadKey, toolCallId: call.id });
     };
 
-    const toolContext = { depth, env, getState, idempotencyKey: stepName, reportProgress, run, setState, step, threadKey, toolCallId: call.id };
+    const toolContext = { depth, env, getState, idempotencyKey: stepName, owner, reportProgress, run, setState, step, threadKey, toolCallId: call.id };
     // The gate's view: everything `toolContext` has EXCEPT `setState` — a gate
     // that mutates state is a side effect inside a decision predicate, which is
     // exactly the misuse durability here is fixing, not relocating.
@@ -417,7 +464,11 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
     const output: unknown = await step.do(stepName, () => Promise.resolve(tool.execute(call.input as never, toolContext)));
 
     await persist({
-        content: typeof output === "string" ? output : stringifyOutput(output),
+        // Capped, like `codeTool`'s per-step results: this row is re-rendered
+        // into the prompt of every later turn AND every later run on the thread,
+        // so one `fsTool` read of a big file (or an unbounded MCP result) is a
+        // permanent per-turn tax that ends in a context-window overflow.
+        content: capToolOutputText(typeof output === "string" ? output : stringifyOutput(output)),
         messageKey,
         role: "tool",
         stepName,
@@ -1243,6 +1294,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         listMessages,
         memoryContext,
         onTokenDelta,
+        owner: params.owner,
         deleteMessage: deleteMessageByKey,
         patchThread: patchThreadByKey,
         persist,
@@ -1337,11 +1389,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         // then rethrow so the workflow records/retries per its policy. A failed
         // run still hands the thread on: the next queued run is waiting for THIS
         // one to end, not for it to succeed.
-        await finishRun({
-            error: error instanceof Error ? error.message : String(error),
-            status: "error",
-            ...(usageBox.value === undefined ? {} : { usage: usageBox.value }),
-        });
+        await finishFailedRun(finishRun, error, usageBox.value);
 
         throw error;
     }

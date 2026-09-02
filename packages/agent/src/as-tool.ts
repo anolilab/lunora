@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
+import { isDuplicateInstanceError } from "@lunora/workflow";
 import { jsonSchema } from "ai";
 
-import { isDuplicateInstanceError } from "./channels";
 import { agentBindingName } from "./naming";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
 import isPositiveInteger from "./positive-integer";
@@ -19,8 +19,17 @@ import type {
 /** Cloudflare Workflows instance statuses that mean the run has stopped. */
 const TERMINAL_STATUSES = new Set(["complete", "errored", "terminated"]);
 
-/** Default cap on child-run status polls before the tool gives up. */
-const DEFAULT_MAX_POLLS = 120;
+/**
+ * Default cap on child-run status polls before the tool gives up. With
+ * {@link DEFAULT_POLL_INTERVAL_MS} this is a **five-minute** wall-clock budget.
+ *
+ * The old 120 polls were 60 seconds, which is under one multi-turn child run: a
+ * sub-agent that makes two or three tool-using LLM turns routinely passes it, so
+ * the default terminated legitimate delegations and told the parent the child
+ * "did not finish". Five minutes is inside a Workflow step's own bounds and
+ * still stops a wedged child from holding the parent forever.
+ */
+const DEFAULT_MAX_POLLS = 600;
 
 /**
  * How deep a chain of sub-agent delegations may go. A run started by a user is
@@ -48,6 +57,9 @@ const readStatus = (raw: unknown): string => {
     return "unknown";
 };
 
+/** Read the `output` off a Cloudflare Workflows `InstanceStatus` (`undefined` when absent). */
+const readOutput = (raw: unknown): unknown => (raw !== null && typeof raw === "object" ? (raw as { output?: unknown }).output : undefined);
+
 /** Sleep between polls; the default is a real timer, overridable for tests. */
 const defaultWait = async (ms: number): Promise<void> => {
     await new Promise<void>((resolve) => {
@@ -66,20 +78,34 @@ const pollUntilTerminal = async (
     maxPolls: number,
     pollIntervalMs: number,
     wait: (ms: number) => Promise<void>,
-): Promise<string> => {
+): Promise<{ output: unknown; status: string }> => {
     for (let attempt = 0; attempt < maxPolls; attempt += 1) {
         // eslint-disable-next-line no-await-in-loop -- sequential polling IS the model: read status, wait, read again
-        const status = readStatus(await instance.status());
+        const raw = await instance.status();
+        const status = readStatus(raw);
 
         if (TERMINAL_STATUSES.has(status)) {
-            return status;
+            return { output: readOutput(raw), status };
         }
 
         // eslint-disable-next-line no-await-in-loop -- deliberate back-off between status reads
         await wait(pollIntervalMs);
     }
 
-    return "timeout";
+    return { output: undefined, status: "timeout" };
+};
+
+/**
+ * Why the child loop stopped, off the completed instance's `output` (the
+ * `AgentRunResult` the agent workflow returns). `undefined` when the child ran
+ * to a normal answer, or when the host reported no output.
+ */
+const readStopped = (output: unknown): string | undefined => {
+    if (output !== null && typeof output === "object" && typeof (output as { stopped?: unknown }).stopped === "string") {
+        return (output as { stopped: string }).stopped;
+    }
+
+    return undefined;
 };
 
 /** The last assistant answer (a turn with no pending tool calls) on the child thread. */
@@ -162,7 +188,16 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
         // run instead of starting a second one.
         const childThreadKey = `${context.threadKey}::sub::${name}::${context.toolCallId}`;
         const childInstanceId = `sub-${name}-${context.toolCallId}`;
-        const params: AgentRunInput = { depth, input: input.prompt, threadKey: childThreadKey };
+        // The child thread inherits the PARENT's verified owner. Created without
+        // one it was ownerless, so `agents:agentThread`/`agentMessages` admitted
+        // any caller who knew the (derivable) key — a sub-thread of an owned
+        // conversation, world-readable.
+        const params: AgentRunInput = {
+            depth,
+            input: input.prompt,
+            threadKey: childThreadKey,
+            ...(context.owner === undefined ? {} : { owner: context.owner }),
+        };
 
         let instance: AgentWorkflowInstanceLike;
 
@@ -185,7 +220,7 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
             instance = await binding.get(childInstanceId);
         }
 
-        const terminal = await pollUntilTerminal(instance, maxPolls, pollIntervalMs, wait);
+        const { output, status: terminal } = await pollUntilTerminal(instance, maxPolls, pollIntervalMs, wait);
 
         if (terminal === "errored" || terminal === "terminated") {
             return `Sub-agent "${name}" ${terminal} before producing an answer.`;
@@ -204,6 +239,14 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
             }
 
             return `Sub-agent "${name}" did not finish within the allotted time.`;
+        }
+
+        // A child that ran out of turns still COMPLETES its workflow, and it has
+        // no assistant turn without pending tool calls — so `finalAnswer` came
+        // back empty and the parent got a blank tool result with no hint why.
+        // Say so instead, so the parent's model can narrow the sub-task.
+        if (readStopped(output) === "maxTurns") {
+            return `Sub-agent "${name}" hit its turn cap (maxTurns) before producing a final answer. Ask it something narrower, or answer with what you have.`;
         }
 
         const history = (await context.run(listMessages, { key: childThreadKey })) as AgentMessageRow[];
