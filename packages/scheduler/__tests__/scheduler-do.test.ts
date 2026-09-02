@@ -221,6 +221,32 @@ describe("schedulerDO", () => {
         expect(response.status).toBe(404);
     });
 
+    it("/schedule stores the record under a caller-supplied id", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const scheduledFor = Date.now() + 60_000;
+
+        // `@lunora/server`'s deferred-schedule facade hands a mutation handler the
+        // id synchronously and only makes the call after the transaction commits,
+        // so the id it answered has to be the one the record ends up under.
+        const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "messages.send", id: "pre-minted_1-A", scheduledFor })));
+
+        expect(id).toBe("pre-minted_1-A");
+
+        const hit = await scheduler.fetch(get("/get?id=pre-minted_1-A"));
+        const hitBody = await hit.json<{ record?: ScheduleRecord }>();
+
+        expect(hitBody.record?.functionPath).toBe("messages.send");
+
+        // An id that could corrupt the `id:` / `t:<padded>:<id>` storage keys is
+        // ignored rather than trusted, and the DO mints its own.
+        const rejected = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "messages.send", id: "bad:id", scheduledFor })));
+
+        expect(rejected).not.toBe("bad:id");
+    });
+
     it("/schedule validates required fields", async () => {
         expect.assertions(1);
 

@@ -94,6 +94,18 @@ export interface RetryPolicy {
 
 export interface RunOptions {
     /**
+     * Job id to store the record under, instead of one the SchedulerDO mints.
+     *
+     * Exists for `@lunora/server`'s deferred-schedule facade: inside a mutation a
+     * `runAfter`/`runAt` is buffered until the transaction commits, but the
+     * handler is handed the id synchronously, so the id has to be decided before
+     * the call is made. Callers that are not deferring should leave it unset and
+     * take the minted id from the return value. The DO ignores anything that is
+     * not a plain `[A-Za-z0-9_-]` id.
+     */
+    id?: string;
+
+    /**
      * Cap for the {@link RunOptions.pool} this job joins, applied when the pool
      * is first created and refreshed on every enqueue that carries one. Ignored
      * without `pool`. A pool created by a `runAfter`/`runAt` that omits it caps
