@@ -4,12 +4,19 @@ import { describe, expect, it, vi } from "vitest";
 import { createCelldShardPlatform, createCelldWorkerPlatform } from "../src/celld-platform";
 
 /**
- * A minimal `DurableObjectState` double carrying exactly the surface celld
- * documents: key-value storage, alarms, and the hibernation socket API — and,
- * deliberately, NO `storage.sql`.
+ * A minimal `DurableObjectState` double carrying the surface celld documents
+ * as of v0.4.0: key-value storage, `storage.sql`, alarms, and the hibernation
+ * socket API.
  */
 const createStateDouble = () => {
     const kv = new Map<string, unknown>();
+    const cursor = {
+        one: () => {
+            return {};
+        },
+        toArray: () => [],
+        [Symbol.iterator]: () => [][Symbol.iterator](),
+    };
 
     return {
         acceptWebSocket: vi.fn<(socket: unknown, tags?: string[]) => void>(),
@@ -23,6 +30,7 @@ const createStateDouble = () => {
                 kv.set(key, value);
             },
             setAlarm: vi.fn<(scheduledTime: number | Date) => Promise<void>>(async () => {}),
+            sql: { exec: vi.fn<() => typeof cursor>(() => cursor) },
         },
     };
 };
@@ -35,7 +43,20 @@ describe("createCelldWorkerPlatform", () => {
 
         expect(platform.capabilities).toBe(CELLD_CAPABILITIES);
         expect(platform.capabilities.id).toBe("celld");
-        expect(platform.capabilities.features.localSql?.level).toBe("unsupported");
+        expect(platform.capabilities.features.localSql?.level).toBe("native");
+    });
+
+    it("rates the two features celld blocks for a reason other than a missing binding", () => {
+        expect.assertions(2);
+
+        const { features } = createCelldWorkerPlatform({}).capabilities;
+
+        // celld ships Queues, but its consumer script cannot also export
+        // `fetch()` — and a Lunora app is one worker exporting both.
+        expect(features.queues?.level).toBe("unsupported");
+        // Cells land on whichever node has capacity, so there is nowhere to
+        // place a read replica nearer the reader.
+        expect(features.shardReadReplicas?.level).toBe("unsupported");
     });
 
     it("resolves a bound namespace through the shared directory adapter", () => {
@@ -62,32 +83,14 @@ describe("createCelldWorkerPlatform", () => {
 });
 
 describe("createCelldShardPlatform", () => {
-    it("names the celld localSql gap when sql.exec is called without storage.sql", () => {
-        expect.assertions(1);
-
-        const { shard } = createCelldShardPlatform(createStateDouble());
-
-        expect(() => shard.sql.exec("SELECT 1")).toThrow(/celld does not implement state\.storage\.sql/u);
-    });
-
-    it("delegates sql.exec once the host provides storage.sql", () => {
+    it("runs sql.exec straight through to the cell's storage.sql", () => {
         expect.assertions(2);
 
-        const cursor = {
-            one: () => {
-                return {};
-            },
-            toArray: () => [],
-            [Symbol.iterator]: () => [][Symbol.iterator](),
-        };
-        const state = createStateDouble() as ReturnType<typeof createStateDouble> & { storage: { sql?: unknown } };
-
-        state.storage.sql = { exec: vi.fn<() => typeof cursor>(() => cursor) };
-
+        const state = createStateDouble();
         const { shard } = createCelldShardPlatform(state);
 
-        expect(shard.sql.exec("SELECT ?", 1)).toBe(cursor);
-        expect((state.storage.sql as { exec: ReturnType<typeof vi.fn> }).exec).toHaveBeenCalledWith("SELECT ?", 1);
+        expect(shard.sql.exec("SELECT ?", 1)).toBe(state.storage.sql.exec.mock.results[0]?.value);
+        expect(state.storage.sql.exec).toHaveBeenCalledWith("SELECT ?", 1);
     });
 
     it("delegates kv and alarms to the shared Cloudflare adapters", async () => {
