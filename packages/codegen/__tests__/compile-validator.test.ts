@@ -26,6 +26,11 @@ const CORPUS: ReadonlyArray<Record<string, unknown>> = [
     { name: "ada", age: Number.NaN },
     { name: "ada", age: Number.POSITIVE_INFINITY },
     { name: "ada", extra: "dropped" },
+    // Over every modelled `.max()` bound in SNIPPETS, so the differential run
+    // actually exercises the emitted length guard rather than only its valid side.
+    { name: "adelaide" },
+    { nested: { y: "too long" } },
+    { tags: ["ok", "too long"] },
     { name: null },
     { name: undefined },
     { tags: [] },
@@ -109,6 +114,16 @@ describe("compileArgsValidator — differential parity vs interpreted oracle", (
         // read would commit the inherited `Object.prototype.toString` instead.
         "{ toString: v.any() }",
         "{ name: v.string(), nested: v.object({ x: v.number() }), tags: v.array(v.number()) }",
+        // The one modelled refinement. The corpus carries over-long strings, so
+        // the differential run is what proves the emitted bound never commits to
+        // a value the oracle rejects.
+        "{ name: v.string().max(3) }",
+        "{ name: v.string().max(3), age: v.optional(v.number()) }",
+        "{ nested: v.object({ y: v.string().max(1) }) }",
+        "{ tags: v.array(v.string().max(2)) }",
+        // A repeated bound: the runtime applies both checks, so the tighter one
+        // wins — emitting the later `10` would accept what the oracle rejects.
+        "{ name: v.string().max(3).max(10) }",
     ];
 
     // eslint-disable-next-line vitest/expect-expect, vitest/prefer-expect-assertions -- assertions live in the shared assertParity() helper; some snippets legitimately defer to the interpreted path with zero assertions
@@ -187,6 +202,23 @@ describe("compileArgsValidator — modelled behaviour", () => {
         // has no parse effect and still compiles.
         expect(compileArgsValidator(irFromSnippet("{ name: v.string().check((s) => s.length > 0) }") as never)).toBeUndefined();
         expect(compileArgsValidator(irFromSnippet("{ name: v.string().meta({ schema: { maxLength: 4 } }) }") as never)).toBeDefined();
+    });
+
+    it("compiles a `.max(<literal>)` string bound rather than declining it", () => {
+        expect.assertions(4);
+
+        // `v.string().max(n)` is a `.check()` whose predicate the IR represents
+        // exactly, so adding the bound the `unbounded_string_arg` advisor asks
+        // for must not cost the function its fast path. Every other refinement,
+        // and a bound that is not a literal, still declines.
+        const compiled = compiledFromIr(irFromSnippet("{ name: v.string().max(3) }"));
+
+        expect(compiled).toBeDefined();
+        expect(compiled?.({ name: "abc" })).toStrictEqual({ name: "abc" });
+        // Over the bound the fast path DEFERS — it never rejects on its own, so
+        // the interpreted parser still produces the ValidationError.
+        expect(compiled?.({ name: "abcd" })).toBe(DEFER);
+        expect(compileArgsValidator(irFromSnippet("{ name: v.string().max(LIMIT) }") as never)).toBeUndefined();
     });
 
     it("declines a `.check(...)` refinement on an OPTIONAL field so the predicate is never skipped", () => {

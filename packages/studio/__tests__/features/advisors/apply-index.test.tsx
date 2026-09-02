@@ -98,6 +98,17 @@ describe("hasIndexMetadata", () => {
         expect(hasIndexMetadata({ suggestedIndex: { fields: ["authorId"], name: 7 }, table: "posts" })).toBe(false);
         expect(hasIndexMetadata({ suggestedIndex: { fields: ["authorId"], name: "" }, table: "posts" })).toBe(false);
     });
+
+    it("returns false when a FIELD is not a usable string", () => {
+        expect.assertions(3);
+
+        // Same defect one level down: `Array.isArray` accepted `[null]` / `[42]`
+        // and the predicate then exposed them as strings, so the action handed
+        // one to `sqlIdentifier` and `.replaceAll` threw during the render.
+        expect(hasIndexMetadata({ suggestedIndex: { fields: [null], name: "byAuthorId" }, table: "posts" })).toBe(false);
+        expect(hasIndexMetadata({ suggestedIndex: { fields: [42], name: "byAuthorId" }, table: "posts" })).toBe(false);
+        expect(hasIndexMetadata({ suggestedIndex: { fields: ["authorId", ""], name: "byAuthorId" }, table: "posts" })).toBe(false);
+    });
 });
 
 // ── render test: ApplyIndexButton ───────────────────────────────────────────

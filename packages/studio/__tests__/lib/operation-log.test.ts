@@ -90,6 +90,18 @@ describe("summariseArgs", () => {
         expect(summary).not.toContain("alice@example.com");
     });
 
+    it("survives a malformed row instead of throwing before the RPC runs", () => {
+        expect.assertions(2);
+
+        // `operationLog.start` runs BEFORE dispatch, so a `null` row never reaches
+        // server validation: reading `.table` off it threw a TypeError here and
+        // took the whole operation down instead of the RPC's own error.
+        const summary = summariseArgs("__lunora_admin__:importShard", { rows: [null, { doc: {}, table: "users" }, "nonsense"] });
+
+        expect(summary).toContain("3 rows");
+        expect(summary).toContain("into users");
+    });
+
     it("renders an empty summary for a no-arg call", () => {
         expect.assertions(1);
 

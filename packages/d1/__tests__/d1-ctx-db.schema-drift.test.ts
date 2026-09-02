@@ -58,6 +58,24 @@ let harness: ReturnType<typeof createD1Exec>;
 
 const ids = (documents: ReadonlyArray<Record<string, unknown>>): unknown[] => documents.map((document_) => document_["_id"]);
 
+/**
+ * The `entries` table as a build that PREDATES the key encoding left it.
+ *
+ * Raw DDL rather than a seeding ctx-db, because provisioning is what runs the
+ * conversion pass and records its completion: a table created through this
+ * build's own ctx-db has, correctly, nothing legacy left to convert. The legacy
+ * rows have to be there before the first current-build ctx-db touches it, which
+ * is exactly the deployment this pass exists for.
+ */
+const createLegacyEntriesTable = async (): Promise<void> => {
+    await harness.exec.all(`CREATE TABLE "entries" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "cents" TEXT)`, []);
+};
+
+/** Plant one row in the pre-key storage form (plain decimal text). */
+const seedLegacyEntry = async (id: string, cents: string): Promise<void> => {
+    await harness.exec.all(`INSERT INTO "entries" ("id", "_creationTime", "cents") VALUES (?, ?, ?)`, [id, 1_700_000_000_000, cents]);
+};
+
 describe("d1 ctx-db reshapes an existing .global() table", () => {
     beforeEach(() => {
         harness = createD1Exec();
@@ -99,20 +117,19 @@ describe("d1 ctx-db reshapes an existing .global() table", () => {
     it("converts a bigint column still holding the decimal text an earlier build wrote", async () => {
         expect.assertions(3);
 
-        // Provision the table, then plant rows in the pre-key storage form —
-        // exactly what a binding deployed before the encoding change holds.
-        const seedDb = createD1CtxDb({ clock: () => 1_700_000_000_000, exec: harness.exec, idGenerator: () => "seed", schema: ledger });
-
-        await seedDb.insert("entries", { cents: 1n });
+        // A table left by a build that predates the encoding change, holding
+        // rows in the pre-key storage form.
+        await createLegacyEntriesTable();
 
         for (const [id, legacy] of [
+            ["e1", "1"],
             ["e2", "2"],
             ["e9", "9"],
             ["e10", "10"],
             ["e100", "100"],
         ]) {
             // eslint-disable-next-line no-await-in-loop -- sequential seeding on one connection
-            await harness.exec.all(`INSERT INTO "entries" ("id", "_creationTime", "cents") VALUES (?, ?, ?)`, [id, 1_700_000_000_000, legacy]);
+            await seedLegacyEntry(id!, legacy!);
         }
 
         const stored = await harness.exec.all(`SELECT "cents" FROM "entries" WHERE "id" = 'e10'`, []);
@@ -129,5 +146,62 @@ describe("d1 ctx-db reshapes an existing .global() table", () => {
         const all = await db.findMany("entries", { orderBy: [{ cents: "asc" }] });
 
         expect(all.page.map((document_) => document_["cents"])).toStrictEqual([1n, 2n, 9n, 10n, 100n]);
+    });
+
+    it("converts a NEGATIVE legacy value whose decimal text is exactly one key wide", async () => {
+        expect.assertions(2);
+
+        await createLegacyEntriesTable();
+
+        // A key is a sign character plus 39 digits = 40 characters, and `"-"`
+        // plus a 39-digit magnitude is 40 too — so `LENGTH(col) <> 40` walked
+        // straight past exactly the negative values it can still convert, and an
+        // `eq` against one stopped matching once the encoding changed. A key
+        // never starts with `-`, which is what tells the two apart.
+        const wide = `-${"9".repeat(39)}`;
+
+        await seedLegacyEntry("ewide", wide);
+        await seedLegacyEntry("esmall", "1");
+
+        const db = createD1CtxDb({ clock: () => 1_700_000_002_000, exec: harness.exec, idGenerator: () => "e0", schema: ledger });
+
+        const found = await db.findMany("entries", { where: { cents: BigInt(wide) } });
+
+        expect(ids(found.page)).toStrictEqual(["ewide"]);
+
+        const all = await db.findMany("entries", { orderBy: [{ cents: "asc" }] });
+
+        expect(ids(all.page)).toStrictEqual(["ewide", "esmall"]);
+    });
+
+    it("records the conversion pass as done so a later ctx-db does not re-walk the table", async () => {
+        expect.assertions(2);
+
+        await createLegacyEntriesTable();
+        await seedLegacyEntry("e1", "1");
+
+        // `ensureMigrated` is memoised per ctx-db — per REQUEST on a Hyperdrive
+        // binding — and the probe is a scan that matches nothing only after
+        // reading every row. Without a recorded completion every request paged
+        // the whole table again.
+        await createD1CtxDb({ clock: () => 1_700_000_002_000, exec: harness.exec, idGenerator: () => "e0", schema: ledger }).get("e1");
+
+        const state = await harness.exec.all(`SELECT "done" FROM "__lunora_search_state" WHERE "companion" = 'bigint-rewrite:entries'`, []);
+
+        expect(state.map((row) => Number(row["done"]))).toStrictEqual([1]);
+
+        const statements: string[] = [];
+        const counting: typeof harness.exec = {
+            ...harness.exec,
+            all: async (query, parameters) => {
+                statements.push(query);
+
+                return harness.exec.all(query, parameters);
+            },
+        };
+
+        await createD1CtxDb({ clock: () => 1_700_000_003_000, exec: counting, idGenerator: () => "e2", schema: ledger }).insert("entries", { cents: 2n });
+
+        expect(statements.some((query) => query.includes("SUBSTR"))).toBe(false);
     });
 });

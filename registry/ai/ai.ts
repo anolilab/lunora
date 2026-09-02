@@ -56,7 +56,7 @@ const requireUser = (userId: string | null): string => {
  * Requires the `AI` binding in wrangler.jsonc (added by this item).
  */
 export const summarize = action
-    .input({ text: v.string().meta({ schema: { maxLength: 20_000 } }) })
+    .input({ text: v.string().max(20_000) })
     .use(rateLimit(limiter, "inference", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .action(async ({ args: { text }, ctx }) => {
         requireUser(ctx.auth.userId);
@@ -73,7 +73,7 @@ export const summarize = action
  * Analyze sentiment with structured output.
  */
 export const analyzeSentiment = action
-    .input({ text: v.string().meta({ schema: { maxLength: 20_000 } }) })
+    .input({ text: v.string().max(20_000) })
     .use(rateLimit(limiter, "inference", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .action(async ({ args: { text }, ctx }) => {
         requireUser(ctx.auth.userId);

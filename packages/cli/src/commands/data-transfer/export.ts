@@ -274,7 +274,11 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
     // yesterday's dump over itself and losing the connection left neither copy.
     const out = options.out === undefined || options.out === "-" ? undefined : options.out;
     const file = out === undefined ? undefined : { path: out, stage: `${out}.${randomUUID()}.partial` };
-    const sink = file === undefined ? process.stdout : createWriteStream(file.stage, { encoding: "utf8" });
+    // `mode: 0o600` on the stage: `createWriteStream` defaults to 0o666 before
+    // the umask, so under the common `umask 022` the staged file is world-readable
+    // for the length of the dump — and a dump is every row of every table. The
+    // rename carries the mode onto `--out`, so the committed file is private too.
+    const sink = file === undefined ? process.stdout : createWriteStream(file.stage, { encoding: "utf8", mode: 0o600 });
 
     // A write stream with no `error` listener turns any write failure into an
     // unhandled `error` event, which takes the process down instead of surfacing

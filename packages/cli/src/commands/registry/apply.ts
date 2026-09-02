@@ -499,7 +499,10 @@ const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManif
     }
 
     if (nonDefaultSource) {
-        reasons.push(`come from a custom registry source (${String(options.source ?? options.from)})`);
+        // `from` first, matching `resolveRegistryRoot`: when both are given the
+        // resolver reads the local root and ignores `--source`, so naming
+        // `source` here asked the operator to confirm a place nothing read from.
+        reasons.push(`come from a custom registry source (${String(options.from ?? options.source)})`);
     }
 
     const reasonText = reasons.join(", ");

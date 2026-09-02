@@ -29,7 +29,7 @@ const byCaller = { key: (ctx: { ip?: string }): string => ctx.ip ?? "anon" };
  * file reach for it — the store rides this request's `ctx.db`.
  */
 export const checkout = action
-    .input({ priceId: v.string().meta({ schema: { maxLength: 256 } }) })
+    .input({ priceId: v.string().max(256) })
     .use(rateLimit(limiter, "checkout", byCaller))
     .action(async ({ args: { priceId }, ctx }): Promise<{ url: string }> => {
         const result = await ctx.payments.createCheckout({

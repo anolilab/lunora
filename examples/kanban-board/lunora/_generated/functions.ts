@@ -68,6 +68,7 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 if (typeof source["title"] !== "string") return DEFER;
+if (source["title"].length > 200) return DEFER;
 return { "id": source["id"], "title": source["title"] };
 });
 

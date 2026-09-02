@@ -138,9 +138,18 @@ const SUMMARISERS: Readonly<Partial<Record<keyof typeof ADMIN_FUNCTIONS, Argumen
             return "";
         }
 
-        const tables = [...new Set(args.rows.map((row) => (row as { table?: unknown }).table).filter((table) => typeof table === "string"))].toSorted((a, b) =>
-            a.localeCompare(b),
-        );
+        // `operationLog.start` runs BEFORE dispatch, so a malformed row never
+        // reaches server validation: reading `.table` off a `null` entry threw
+        // here and took the whole operation down with a TypeError instead of the
+        // RPC's own error. Narrow to real objects first.
+        const tables = [
+            ...new Set(
+                args.rows
+                    .filter((row): row is Record<string, unknown> => typeof row === "object" && row !== null)
+                    .map((row) => row["table"])
+                    .filter((table) => typeof table === "string"),
+            ),
+        ].toSorted((a, b) => a.localeCompare(b));
 
         return joinParts([`${String(args.rows.length)} rows`, tables.length === 0 ? undefined : `into ${tables.join(", ")}`]);
     },

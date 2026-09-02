@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 
 import { getIP } from "better-auth/api";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { lunoraAuthAdapter } from "../src/adapter";
 import type { LunoraAuth, LunoraAuthOptions } from "../src/create-auth";
@@ -58,6 +58,14 @@ const signInAttempt = (auth: LunoraAuth, clientIp: string): Promise<Response> =>
         }),
     );
 
+/**
+ * `cf-connecting-ip` is a header the client cannot write only ON Cloudflare, so
+ * the default IP-header policy is gated on the runtime: workerd stamps this
+ * `navigator.userAgent` and Node does not. Both blocks below therefore stub it,
+ * and every test asserts the Cloudflare policy unless it re-stubs it itself.
+ */
+const CLOUDFLARE_NAVIGATOR = { userAgent: "Cloudflare-Workers" };
+
 describe("rate-limit bucket key", () => {
     const buildAuth = (): LunoraAuth =>
         createAuth({
@@ -66,11 +74,13 @@ describe("rate-limit bucket key", () => {
         });
 
     beforeEach(() => {
+        vi.stubGlobal("navigator", CLOUDFLARE_NAVIGATOR);
         database = new DatabaseSync(":memory:");
         materialiseAuthSchema(database, baseOptions);
     });
 
     afterEach(() => {
+        vi.unstubAllGlobals();
         database.close();
     });
 
@@ -137,6 +147,14 @@ describe("rate-limit bucket key", () => {
 });
 
 describe("client IP resolution policy", () => {
+    beforeEach(() => {
+        vi.stubGlobal("navigator", CLOUDFLARE_NAVIGATOR);
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
     it("reads cf-connecting-ip and ignores a client-supplied x-forwarded-for", () => {
         expect.assertions(2);
 
@@ -167,6 +185,40 @@ describe("client IP resolution policy", () => {
         const resolved = resolveAuthOptions({ ...baseOptions, advanced: { ipAddress: { ipAddressHeaders: ["x-real-ip"] } } });
 
         expect(resolved.advanced?.ipAddress?.ipAddressHeaders).toStrictEqual(["x-real-ip"]);
+    });
+
+    it("does not trust cf-connecting-ip off Cloudflare", () => {
+        expect.assertions(2);
+
+        // On a Node host taking direct traffic, nothing sets that header — so it
+        // is whatever the client typed, and trusting it hands an attacker a fresh
+        // bucket per request: the sign-in limit stops applying to exactly the
+        // traffic it exists to stop. Better to resolve nothing and let those
+        // requests share the coarse `no-trusted-ip` bucket, which the `/**`
+        // fallback above already re-sizes by UNRESOLVED_IP_BUCKET_FACTOR.
+        vi.stubGlobal("navigator", { userAgent: "Node.js/24" });
+
+        const resolved = resolveAuthOptions(baseOptions);
+
+        expect(resolved.advanced?.ipAddress?.ipAddressHeaders).toStrictEqual([]);
+        // Two attacker-chosen values, one bucket. (`getIP` answers `127.0.0.1`
+        // rather than `null` under NODE_ENV=test — the point is that it is the
+        // SAME answer either way, so rotating the header buys nothing.)
+        expect(getIP(new Headers({ "cf-connecting-ip": "203.0.113.1" }), resolved)).toBe(getIP(new Headers({ "cf-connecting-ip": "203.0.113.2" }), resolved));
+    });
+
+    it("uses the declared proxy chain off Cloudflare", () => {
+        expect.assertions(2);
+
+        // The non-Cloudflare answer stays available: declared proxies are what
+        // make `x-forwarded-for` interpretable, and `cf-connecting-ip` is still
+        // not in the list because nothing out there writes it.
+        vi.stubGlobal("navigator", { userAgent: "Node.js/24" });
+
+        const resolved = resolveAuthOptions({ ...baseOptions, advanced: { ipAddress: { trustedProxies: ["192.0.2.10"] } } });
+
+        expect(resolved.advanced?.ipAddress?.ipAddressHeaders).toStrictEqual(["x-forwarded-for"]);
+        expect(getIP(new Headers({ "x-forwarded-for": "203.0.113.1, 192.0.2.10" }), resolved)).toBe("203.0.113.1");
     });
 });
 

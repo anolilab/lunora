@@ -6,18 +6,76 @@ import { procedureArgumentObjects } from "../procedure-argument-objects";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
-/** A constraint fragment that bounds a string's length — its presence means the arg is *not* unbounded. */
-const BOUND_RE = /\.check\(|\.meta\(|length|max/iu;
-/** Matches a `v.any()` validator anywhere in an initializer's source text. */
-const ANY_VALIDATOR_RE = /\bv\.any\s*\(/u;
-/** Matches a `v.string()` validator anywhere in an initializer's source text. */
-const STRING_VALIDATOR_RE = /\bv\.string\s*\(/u;
+/**
+ * Chain methods that actually bound a string's length.
+ *
+ * `.meta()` is deliberately absent. It is documented in `@lunora/values` as
+ * carrying "pure metadata (description + JSON Schema constraint fragment) with
+ * no effect on runtime parsing" — it reuses the parser unchanged — so a
+ * `.meta({ schema: { maxLength: 200 } })` is a claim about the emitted schema and
+ * nothing the runtime enforces. The text-matching predicate this replaced
+ * accepted it, and accepted the bare substrings `length` and `max` anywhere in
+ * the initializer besides: a comment, a nested field NAME (`v.object({ maxItems
+ * })`), a default string. Every one of those cleared the lint for an argument
+ * that is genuinely unbounded.
+ *
+ * `.check()` stays: it is the escape hatch a length predicate is written through
+ * (`v.string().check((s) => s.length <= 200, …)`), and its predicate is a
+ * function body this pass cannot read. Accepting it over-clears rather than
+ * over-reports, which is the right direction for an advisory lint.
+ *
+ * Same shape as `admin-routes.ts`'s guard detection, and for the same reason
+ * written down there: the path literal and the comments must not be able to
+ * false-clear the check.
+ */
+const BOUNDING_METHODS = new Set(["check", "length", "max"]);
 
-/** True for a property initializer that is (or wraps) a `v.any()` validator. */
-const isAnyValidator = (text: string): boolean => ANY_VALIDATOR_RE.test(text);
+/** The `v.<name>(…)` factory a call expression invokes, or `undefined` when it is not one. */
+const vFactoryName = (node: Node): string | undefined => {
+    if (!Node.isCallExpression(node)) {
+        return undefined;
+    }
 
-/** True for a `v.string()` validator (possibly `v.optional(v.string())`) with no length/max bound. */
-const isUnboundedString = (text: string): boolean => STRING_VALIDATOR_RE.test(text) && !BOUND_RE.test(text);
+    const expression = node.getExpression();
+
+    if (!Node.isPropertyAccessExpression(expression) || expression.getExpression().getText() !== "v") {
+        return undefined;
+    }
+
+    return expression.getName();
+};
+
+/** Every `v.<name>(…)` call inside `initializer`, including the initializer itself. */
+const vFactoryCalls = (initializer: Node): Node[] => [initializer, ...initializer.getDescendants()].filter((node) => vFactoryName(node) !== undefined);
+
+/**
+ * Whether a bounding method is applied to `call` — walking the chain
+ * (`v.string().min(1).max(200)`) rather than the source text, so only a real
+ * method call on this very validator counts.
+ */
+const isBounded = (call: Node): boolean => {
+    let current = call;
+
+    for (;;) {
+        const access = current.getParent();
+
+        if (!access || !Node.isPropertyAccessExpression(access) || access.getExpression() !== current) {
+            return false;
+        }
+
+        const invocation = access.getParent();
+
+        if (!invocation || !Node.isCallExpression(invocation) || invocation.getExpression() !== access) {
+            return false;
+        }
+
+        if (BOUNDING_METHODS.has(access.getName())) {
+            return true;
+        }
+
+        current = invocation;
+    }
+};
 
 /** Classify every arg property across the given object literals into any-typed and unbounded-string buckets. */
 const classifyArgs = (objects: ReadonlyArray<ObjectLiteralExpression>): { anyArgs: string[]; unboundedStringArgs: string[] } => {
@@ -36,12 +94,12 @@ const classifyArgs = (objects: ReadonlyArray<ObjectLiteralExpression>): { anyArg
                 continue;
             }
 
-            const text = initializer.getText();
+            const calls = vFactoryCalls(initializer);
             const name = property.getName();
 
-            if (isAnyValidator(text)) {
+            if (calls.some((call) => vFactoryName(call) === "any")) {
                 anyArgs.push(name);
-            } else if (isUnboundedString(text)) {
+            } else if (calls.some((call) => vFactoryName(call) === "string" && !isBounded(call))) {
                 unboundedStringArgs.push(name);
             }
         }
@@ -108,8 +166,8 @@ const argumentValidatorsInSourceFile = (sourceFile: SourceFile, relativePath: st
  * Discover, per exported **public** query/mutation/action under the lunora source
  * directory, the argument validators that weaken input safety: `v.any()` args
  * (unvalidated, untyped input — the `public_arg_uses_any` lint) and `v.string()`
- * args with no `.check()`/`.meta()` length bound (a DoS / storage-abuse vector —
- * the `unbounded_string_arg` lint). Only procedures with at least one flagged arg
+ * args with no `.max()`/`.length()`/`.check()` length bound (a DoS /
+ * storage-abuse vector — the `unbounded_string_arg` lint). Only procedures with at least one flagged arg
  * are recorded. Internal functions are skipped: they take server-trusted input.
  */
 const discoverArgumentValidators = (project: Project, lunoraDirectory: string): ArgumentValidatorIR[] => {

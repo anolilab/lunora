@@ -30,7 +30,7 @@ export const list = query.query(async ({ ctx }): Promise<Doc<"tasks">[]> => ctx.
 export const create = mutation
     .use(rateLimit(limiter, "write", byCaller))
     .input({
-        title: v.string().meta({ schema: { maxLength: 200 } }),
+        title: v.string().max(200),
         status: v.optional(v.union(v.literal("todo"), v.literal("in-progress"), v.literal("done"), v.literal("archived"))),
     })
     .mutation(async ({ args: { title, status: column }, ctx }): Promise<Id<"tasks">> => {
@@ -50,7 +50,7 @@ export const create = mutation
 
 export const rename = mutation
     .use(rateLimit(limiter, "write", byCaller))
-    .input({ id: v.id("tasks"), title: v.string().meta({ schema: { maxLength: 200 } }) })
+    .input({ id: v.id("tasks"), title: v.string().max(200) })
     .mutation(async ({ args: { id, title }, ctx }): Promise<void> => {
         ctx.log.info("task renamed", { id });
         await ctx.db.patch(id, { title });

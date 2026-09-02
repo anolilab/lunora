@@ -336,6 +336,45 @@ describe("global search provisioning", () => {
             await expect(runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello"), 300)).rejects.toThrow(/still backfilling/u);
         });
 
+        it("serves a staged index declared over an empty table", async () => {
+            expect.assertions(2);
+
+            createNotesTable();
+
+            // `staged` defers the backfill of rows that PREDATE the index, and an
+            // empty table has none. With no progress row written the plan said
+            // "not finished" and the coverage flag said "not covered", so every
+            // search refused — permanently, because the migration pass never
+            // backfills a staged index. Declaring one alongside a new table took
+            // search on that table offline for good.
+            await runSqlSearchMigrations(exec, stagedSchema, dialect);
+
+            const sync = createSearchSync({ dialect, exec, schema: stagedSchema });
+
+            insertNote("n1", "hello world");
+            await sync("notes", "n1", { body: "hello world" });
+
+            const rows = await runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello", { ...BY_BODY, staged: true }), 300);
+
+            expect(rows).toHaveLength(1);
+            expect(rows[0]?.["body"]).toBe("hello world");
+        });
+
+        it("still refuses a staged index over a table that already held rows", async () => {
+            expect.assertions(1);
+
+            createNotesTable();
+            insertNote("old", "hello ancient");
+
+            // The other half: the deferral is real when there IS a backfill to
+            // defer, so the gate must still hold until the host runs it.
+            await runSqlSearchMigrations(exec, stagedSchema, dialect);
+
+            await expect(runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello", { ...BY_BODY, staged: true }), 300)).rejects.toThrow(
+                /still backfilling/u,
+            );
+        });
+
         it("serves a fully indexed table without refusing", async () => {
             expect.assertions(1);
 

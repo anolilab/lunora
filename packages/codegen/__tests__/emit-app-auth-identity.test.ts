@@ -81,7 +81,7 @@ const emittedD1Resolver = async (session: SessionDouble | null): Promise<Emitted
     // text, which is how the resolver shipped without a credential expiry — so
     // there is no restructuring that removes the sink and keeps the test. The
     // suppression is scoped to this one query on this one line.
-    // codeql[js/unsafe-code-construction]
+    // codeql[js/bad-code-sanitization]
     const compiled = transformSync(`export const build = (getAuth) => (${match[1]});`, { loader: "ts" }).code;
 
     const file = join(scratch, `resolver-${randomUUID()}.mjs`);

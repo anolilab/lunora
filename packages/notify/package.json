@@ -1,6 +1,6 @@
 {
     "name": "@lunora/notify",
-    "version": "1.0.0-alpha.32",
+    "version": "1.0.0-alpha.33",
     "description": "Multi-channel notifications for Lunora — ctx.notify / ctx.push over @visulima/notification: edge-safe Web Push + FCM, plus chat, in-app inbox and webhook channels, with subscription storage and queue-backed fan-out",
     "keywords": [
         "cloudflare",
@@ -61,7 +61,7 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.28",
+        "@lunora/errors": "1.0.0-alpha.29",
         "@visulima/notification": "catalog:notify"
     },
     "devDependencies": {

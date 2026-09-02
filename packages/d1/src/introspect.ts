@@ -121,11 +121,11 @@ const clamp = (value: number, min: number, max: number): number => Math.min(Math
 /**
  * Bookkeeping tables that must never surface in the browser: SQLite internals
  * (`sqlite_*`), Cloudflare D1 internals (`_cf_*`, `d1_*`), and Lunora index
- * companions (`__agg_`/`__rank_`/`__fts_` infixes, the `__cdc_log`). Everything
- * else — the schema's `.global()` tables and any external/auth tables — is fair
- * game.
+ * companions (`__agg_`/`__rank_`/`__fts_` infixes, the `__cdc_log`, and the
+ * `__lunora_*` migration bookkeeping). Everything else — the schema's `.global()`
+ * tables and any external/auth tables — is fair game.
  */
-const INTERNAL_TABLE = /^sqlite_|^_cf_|^d1_|^__cdc|__agg_|__rank_|__fts_/u;
+const INTERNAL_TABLE = /^sqlite_|^_cf_|^d1_|^__cdc|^__lunora_|__agg_|__rank_|__fts_/u;
 
 const isInternalTable = (name: string): boolean => INTERNAL_TABLE.test(name);
 

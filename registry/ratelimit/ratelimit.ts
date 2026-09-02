@@ -53,7 +53,7 @@ const limitName = v.union(...(Object.keys(limits) as (keyof typeof limits)[]).ma
 export const consume = internalMutation
     .input({
         count: v.optional(v.number()),
-        key: v.optional(v.string().meta({ schema: { maxLength: 256 } })),
+        key: v.optional(v.string().max(256)),
         name: limitName,
     })
     .mutation(async ({ args: { count, key, name }, ctx }) => makeRateLimiter(ctx).limit(name, { count, key }));
@@ -65,7 +65,7 @@ export const consume = internalMutation
 export const check = internalQuery
     .input({
         count: v.optional(v.number()),
-        key: v.optional(v.string().meta({ schema: { maxLength: 256 } })),
+        key: v.optional(v.string().max(256)),
         name: limitName,
     })
     .query(async ({ args: { count, key, name }, ctx }) => makeRateLimiter(ctx).check(name, { count, key }));
@@ -73,7 +73,7 @@ export const check = internalQuery
 /** Clear accounting for a `(name, key)` pair — e.g. on a successful login. */
 export const reset = internalMutation
     .input({
-        key: v.optional(v.string().meta({ schema: { maxLength: 256 } })),
+        key: v.optional(v.string().max(256)),
         name: limitName,
     })
     .mutation(async ({ args: { key, name }, ctx }) => {

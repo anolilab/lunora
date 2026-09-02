@@ -25,6 +25,19 @@ import { validateSessionPolicy } from "./session";
 const CLOUDFLARE_CLIENT_IP_HEADER = "cf-connecting-ip";
 
 /**
+ * Whether this process runs behind Cloudflare's edge — the only condition under
+ * which {@link CLOUDFLARE_CLIENT_IP_HEADER} is a header the client cannot write.
+ *
+ * workerd sets `navigator.userAgent` to `"Cloudflare-Workers"`; Node and every
+ * other host this framework now targets do not. Read at call time rather than
+ * module scope so a test can stand the global up, and off `globalThis` with an
+ * optional chain because it is absent on older runtimes — where the honest
+ * answer is "not Cloudflare", which is also the safe one.
+ */
+// eslint-disable-next-line n/no-unsupported-features/node-builtins -- read defensively off globalThis precisely because the runtime may not have it; this is a Workers-vs-Node probe, not a Node API call
+const onCloudflareEdge = (): boolean => (globalThis as { navigator?: { userAgent?: string } }).navigator?.userAgent === "Cloudflare-Workers";
+
+/**
  * Which headers better-auth may resolve a client IP from, when the caller has
  * not chosen for themselves.
  *
@@ -44,9 +57,13 @@ const CLOUDFLARE_CLIENT_IP_HEADER = "cf-connecting-ip";
  * the limit stops applying to exactly the traffic it exists to stop.
  *
  * Reading `cf-connecting-ip` first closes both without needing to know which of
- * the two a given edge does, because behind Cloudflare that header is set by the
- * edge on every request and a client cannot influence it (off Cloudflare it is
- * not — see {@link CLOUDFLARE_CLIENT_IP_HEADER}).
+ * the two a given edge does, because Cloudflare sets that header itself on every
+ * request and a client cannot influence it — but only ON Cloudflare. Anywhere
+ * else it is a header like any other, so trusting it there reintroduces the
+ * second failure above verbatim: rotate the value, get a fresh bucket, and the
+ * sign-in limit stops applying. It is therefore gated on
+ * {@link onCloudflareEdge} rather than assumed, now that a Node host is a
+ * supported target.
  *
  * `x-forwarded-for` comes back into the list only when the caller has declared
  * `trustedProxies`, which is what makes the chain interpretable: better-auth then
@@ -57,8 +74,22 @@ const CLOUDFLARE_CLIENT_IP_HEADER = "cf-connecting-ip";
  * inventing a second switch. Without it we do not silently trust a header the
  * client can write.
  */
-const defaultIpAddressHeaders = (trustedProxies: ReadonlyArray<string> | undefined): string[] =>
-    trustedProxies !== undefined && trustedProxies.length > 0 ? [CLOUDFLARE_CLIENT_IP_HEADER, "x-forwarded-for"] : [CLOUDFLARE_CLIENT_IP_HEADER];
+const defaultIpAddressHeaders = (trustedProxies: ReadonlyArray<string> | undefined): string[] => {
+    const proxied = trustedProxies !== undefined && trustedProxies.length > 0;
+
+    if (!onCloudflareEdge()) {
+        // Off Cloudflare, `cf-connecting-ip` is not set by anything — it is just
+        // another header the client typed, so trusting it hands an attacker a
+        // fresh rate-limit bucket per request and removes the sign-in limit
+        // entirely. Without declared proxies there is no header here we can
+        // believe, so resolve nothing and let those requests fall into the
+        // shared `no-trusted-ip` bucket, which {@link UNRESOLVED_IP_BUCKET_FACTOR}
+        // already sizes for exactly that case.
+        return proxied ? ["x-forwarded-for"] : [];
+    }
+
+    return proxied ? [CLOUDFLARE_CLIENT_IP_HEADER, "x-forwarded-for"] : [CLOUDFLARE_CLIENT_IP_HEADER];
+};
 
 /**
  * Matches every auth path, so the fallback rule below is consulted for all of

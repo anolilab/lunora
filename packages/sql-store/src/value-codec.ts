@@ -8,9 +8,24 @@
  * order-preserving text key {@link bigintSqlKey} builds). `SqlDialect` deliberately carries NO codec member: an engine-native
  * one there would never run, and a dialect author writing one would only learn
  * that at runtime. Adding one means routing the core through it first.
+ *
+ * A `bigint` column is TEXT (SQLite/Postgres) or `VARCHAR(64)` (MySQL) on every
+ * engine, because no engine's native integer type holds the full range exactly
+ * and `Number(value)` collapses everything past 2^53 onto the nearest double —
+ * which makes `=` return *false positives* and a `.unique()` index reject two
+ * genuinely different ids as duplicates. The cost of the padded key is
+ * `SUM`/`AVG`/`MIN`/`MAX`: `"1000…0010"` is not a number any engine can reduce,
+ * so `aggregate`/`groupBy` refuse a `v.bigint()` field on the scan path rather
+ * than return the 1.5e40 that falls out of coercing padded text, and name the
+ * `aggregateIndex` that answers it instead.
  */
 import { LunoraError } from "@lunora/errors";
 import type { ValidatorLike } from "@lunora/shard-engine";
+// Same width, same sign characters, same complement as the shard plane, because
+// the two MUST agree: a `.global()` table and a shard-local one are queried
+// through the same `where`/`orderBy` surface, and the parity suite compares
+// their answers row for row. Imported rather than restated — the reasoning for
+// the scheme is written down in full at its definition in `@lunora/shard-engine`.
 import { BIGINT_KEY_DIGITS, BIGINT_KEY_NEGATIVE as NEGATIVE, BIGINT_KEY_NON_NEGATIVE as NON_NEGATIVE, bigintSqlKey } from "@lunora/shard-engine";
 
 import { effectiveKind } from "../../../shared/effective-kind";
@@ -42,20 +57,6 @@ const WIRE_PREFIX = WIRE_TAG;
  */
 const decodeJsonColumn = (raw: string, parse: (text: string) => unknown): unknown =>
     raw.startsWith(WIRE_PREFIX) ? decodeWire(parse(raw.slice(WIRE_PREFIX.length))) : parse(raw);
-
-/**
- * Digits of magnitude a stored `bigint` carries. 39 digits reach 1e39, clearing
- * the unsigned 128-bit maximum (~3.4e38), so money in minor units, snowflake
- * ids, epoch nanoseconds and UUID-as-integer all fit with room to spare.
- *
- * Same width, same sign characters, same complement as the shard plane's
- * `bigintSqlKey` (`@lunora/shard-engine`'s `sql-projection.ts`), which is where
- * the reasoning for the scheme is written down in full. The two planes MUST
- * agree: a `.global()` table and a shard-local one are queried through the same
- * `where`/`orderBy` surface, and the parity suite compares their answers row for
- * row. It is restated here rather than imported because `sql-projection.ts` does
- * not export it and is not on `@lunora/shard-engine`'s public surface.
- */
 
 /** A key's magnitude half: digits only, so a stored value that merely happens to be 40 characters cannot be mistaken for one. */
 const BIGINT_KEY_DIGITS_RE = /^\d+$/u;
@@ -93,31 +94,6 @@ const decodeBigintSqlKey = (raw: string): bigint | undefined => {
 
     return sign === NEGATIVE ? -BigInt(ninesComplement(digits)) : undefined;
 };
-
-/**
- * An order-preserving, exactly-reversible text key for `value`.
- *
- * A `bigint` column is TEXT (SQLite/Postgres) or `VARCHAR(64)` (MySQL) on every
- * engine, because no engine's native integer type holds the full range exactly
- * and `Number(value)` collapses everything past 2^53 onto the nearest double —
- * which makes `=` return *false positives* and a `.unique()` index reject two
- * genuinely different ids as duplicates.
- *
- * Plain decimal text (`"10"`) is exact for `=` but sorts `"9"` after `"10"`, so
- * a `gt`/`lt` range, an `ORDER BY`, a keyset page cursor and `MIN`/`MAX` all
- * returned the wrong rows — silently, and fail-closed: `where: { n: { gt: 9n } }`
- * returned nothing while `10n` and `100n` sat in the table. Padding every
- * magnitude to one width fixes it: at a fixed width, lexicographic order over
- * the digits *is* numeric order. Negatives take the nines' complement of the
- * padded magnitude under a lower sign character, so the order stays total across
- * zero.
- *
- * The cost is `SUM`/`AVG`/`MIN`/`MAX`: `"1000…0010"` is not a number any engine
- * can reduce. `@lunora/sql-store`'s `aggregate`/`groupBy` refuse a `v.bigint()`
- * field on the scan path rather than return the 1.5e40 that falls out of
- * coercing padded text, and name the `aggregateIndex` that answers it exactly.
- * @throws LunoraError `BAD_REQUEST` when the magnitude exceeds the fixed key width
- */
 
 /** Map a JS value onto its SQLite storage form — SQLite has no boolean, so true/false → 1/0. */
 export const sqliteEncode = (value: unknown): unknown => {

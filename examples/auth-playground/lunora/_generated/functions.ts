@@ -58,14 +58,18 @@ installCompiledValidatorMap(lunora_documents_0.create.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
+if (source["organizationId"].length > 128) return DEFER;
 if (typeof source["title"] !== "string") return DEFER;
+if (source["title"].length > 256) return DEFER;
 if (typeof source["body"] !== "string") return DEFER;
+if (source["body"].length > 100000) return DEFER;
 return { "organizationId": source["organizationId"], "title": source["title"], "body": source["body"] };
 });
 installCompiledValidatorMap(lunora_documents_0.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
+if (source["organizationId"].length > 128) return DEFER;
 return { "organizationId": source["organizationId"] };
 });
 

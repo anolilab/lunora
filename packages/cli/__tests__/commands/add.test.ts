@@ -439,6 +439,30 @@ describe("lunora add", () => {
             expect(existsSync(join(workdir, "lunora", "ratelimit", "index.ts"))).toBe(true);
         });
 
+        it("names the origin the resolver actually reads when both are given", async () => {
+            expect.assertions(2);
+
+            // `resolveRegistryRoot` takes `--from` and ignores `--source` when
+            // both are set, so a prompt naming `source` asked the operator to
+            // confirm a place nothing read from.
+            const prompts: string[] = [];
+            const result = await runAddFeature({
+                confirm: async (message: string) => {
+                    prompts.push(message);
+
+                    return true;
+                },
+                cwd: workdir,
+                feature: "ratelimit",
+                from: registryRoot,
+                logger: makeLogger().logger,
+                source: "gh:attacker/evil",
+            });
+
+            expect(result.code).toBe(0);
+            expect(prompts[0]).toContain(registryRoot);
+        });
+
         it("the default first-party registry still needs no confirmation", async () => {
             expect.assertions(2);
 

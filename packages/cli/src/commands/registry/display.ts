@@ -17,7 +17,10 @@
  * too.
  *
  * TAB is deliberately kept: it is real indentation in the source listing `view`
- * prints, and it spoofs nothing.
+ * prints, and it spoofs nothing. LF is not: every call site renders one value
+ * into one `logger.info` line (`view` splits a file body into lines before it
+ * gets here), so a registry-controlled newline does not wrap a line — it forges
+ * a new one, which is how a manifest field prints its own "✔ applied".
  *
  * One helper rather than one per module. `catalog.ts` and the command
  * orchestrators each grew their own copy of the C0/C1 regex and the two had
@@ -25,7 +28,7 @@
  * range ended up missing from both.
  */
 // eslint-disable-next-line no-control-regex -- the C0/C1 range minus TAB is exactly what must not reach the terminal
-const DISPLAY_UNSAFE_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/gu;
+const DISPLAY_UNSAFE_CHARS = /[\u0000-\u0008\u000A-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/gu;
 
 /** Strip everything that could repaint or reorder the line this value is rendered on. */
 const safe = (value: string): string => value.replaceAll(DISPLAY_UNSAFE_CHARS, "");
