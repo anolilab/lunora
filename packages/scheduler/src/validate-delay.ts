@@ -19,10 +19,11 @@ import { LunoraError } from "@lunora/errors";
  * code while production threw another.
  * @param delayMs the delay to validate
  * @param surface what to name in the message — the call the delay was passed to (e.g. `"ctx.scheduler.runAfter"`)
+ * @param argument the caller's argument to name in the message; `runAt` converts its absolute `date` to a delay and passes that name through so the answer points at what was actually written
  */
-const assertScheduleDelay = (delayMs: number, surface: string): void => {
+const assertScheduleDelay = (delayMs: number, surface: string, argument = "delayMs"): void => {
     if (!Number.isFinite(delayMs) || delayMs < 0) {
-        throw new LunoraError("INVALID_INPUT", `${surface}: \`delayMs\` must be a non-negative finite number`);
+        throw new LunoraError("INVALID_INPUT", `${surface}: \`${argument}\` must be a non-negative finite number`);
     }
 };
 

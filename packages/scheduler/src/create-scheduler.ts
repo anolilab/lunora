@@ -5,6 +5,7 @@ import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { CronTarget, LunoraSchedulerOptions, RunOptions, Scheduler, ScheduleRecord, ScheduleTargetArgs } from "./types";
 import { isWorkflowReference } from "./types";
 import assertScheduleDelay from "./validate-delay";
+import assertScheduleInstant from "./validate-instant";
 
 /**
  * Client-side scheduler — forwards `runAfter` / `runAt` / `cancel` calls to a
@@ -22,6 +23,12 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
     // `get(id)` returns the full record for a caller that wants it back.
     const runAt = async <T extends CronTarget>(date: Date | number, target: T, args: ScheduleTargetArgs<T>, options_: RunOptions = {}): Promise<string> => {
         const scheduledFor = date instanceof Date ? date.getTime() : date;
+
+        // The bound `runAfter` has always applied, restated for the absolute form.
+        // Without it `runAt` was the door a `NaN`/`Infinity` instant walked through
+        // — `JSON.stringify` renders it `null`, and the DO stores a `scheduledFor`
+        // no alarm can fire, so the job is accepted and then never runs.
+        assertScheduleInstant(scheduledFor, Date.now(), "ctx.scheduler.runAt");
 
         // Shared envelope; the target-specific field (`functionPath` xor
         // `workflow`) is merged in below.

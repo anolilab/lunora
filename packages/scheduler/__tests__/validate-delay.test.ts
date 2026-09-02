@@ -12,7 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import createScheduler from "../src/create-scheduler";
 import createWorkpool from "../src/create-workpool";
-import { assertScheduleDelay } from "../src/index";
+import { assertScheduleDelay, assertScheduleInstant } from "../src/index";
 import type { DurableObjectNamespaceLike, DurableObjectStubLike, SchedulableReference } from "../src/types";
 
 const namespace = (): DurableObjectNamespaceLike => {
@@ -61,6 +61,30 @@ describe("assertScheduleDelay", () => {
     });
 });
 
+describe("assertScheduleInstant", () => {
+    it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])("rejects %p, the value `runAfter` has always refused", (timestampMs) => {
+        expect.assertions(1);
+
+        // `runAt` was the door the same bad number walked through: `JSON.stringify`
+        // renders it `null`, so the DO stores a `scheduledFor` no alarm can fire and
+        // the job is accepted and then never runs.
+        expect(() => {
+            assertScheduleInstant(timestampMs, 1_000_000, "ctx.scheduler.runAt");
+        }).toThrow("ctx.scheduler.runAt: `date` must be a non-negative finite number");
+    });
+
+    it("accepts an instant that is already in the past", () => {
+        expect.assertions(1);
+
+        // An overdue job is not a bad argument — `runAt(row.dueAt)` on a row that
+        // came due mid-request is the ordinary case, and `runAfter` itself reaches
+        // `runAt` a fraction of a millisecond after reading its own clock.
+        expect(() => {
+            assertScheduleInstant(999, 1_000_000, "ctx.scheduler.runAt");
+        }).not.toThrow();
+    });
+});
+
 describe("schedule-delay guard parity", () => {
     it("createScheduler().runAfter rejects through the shared guard", async () => {
         expect.assertions(1);
@@ -68,6 +92,14 @@ describe("schedule-delay guard parity", () => {
         const scheduler = createScheduler({ namespace: namespace(), originUrl: "https://app.example" });
 
         await expect(scheduler.runAfter(-1, target, {})).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    });
+
+    it("createScheduler().runAt rejects a non-finite instant through the shared guard", async () => {
+        expect.assertions(1);
+
+        const scheduler = createScheduler({ namespace: namespace(), originUrl: "https://app.example" });
+
+        await expect(scheduler.runAt(Number.NaN, target, {})).rejects.toMatchObject({ code: "INVALID_INPUT" });
     });
 
     it("createWorkpool().enqueue rejects through the shared guard", async () => {

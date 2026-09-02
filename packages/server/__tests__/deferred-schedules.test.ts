@@ -49,6 +49,20 @@ const recordingScheduler = (
     };
 };
 
+/** The same recording scheduler, with the named targets refused the way an unreachable SchedulerDO refuses them. */
+const rejecting = <S extends { runAfter: RecordCall }>(scheduler: S, refuse: ReadonlyArray<string>): S => {
+    return {
+        ...scheduler,
+        runAfter: async (when: number, target: string, args?: unknown, options?: { id?: string }): Promise<string> => {
+            if (refuse.includes(target)) {
+                throw new Error(`unreachable: ${target}`);
+            }
+
+            return await scheduler.runAfter(when, target, args, options);
+        },
+    };
+};
+
 describe("withDeferredSchedules — types", () => {
     it("hands back the scheduler type it was given", () => {
         expect.assertions(1);
@@ -197,6 +211,127 @@ describe("withDeferredSchedules", () => {
         await settle(true);
 
         expect(calls).toHaveLength(0);
+    });
+
+    it("keeps a committed window's jobs when another window rolls back", async () => {
+        expect.assertions(2);
+
+        const log: string[] = [];
+        const { calls, scheduler } = recordingScheduler(log);
+        const facade = withDeferredSchedules(scheduler);
+
+        // One ctx, two transactions. An action need not await the mutation it
+        // composes, so the windows opened on a shared context do not have to settle
+        // in the order they opened.
+        const first = beginDeferredSchedules({ scheduler: facade });
+
+        await facade.runAfter(0, "first:job");
+
+        const second = beginDeferredSchedules({ scheduler: facade });
+
+        await facade.runAfter(0, "second:job");
+        await first(true);
+        await second(false);
+
+        // `second` rolled back; `first` committed. A single shared buffer with a
+        // depth counter answered that by discarding both.
+        expect(calls.map((entry) => entry.target)).toStrictEqual(["first:job"]);
+        expect(log).toStrictEqual(["schedule:first:job"]);
+    });
+
+    it("never lets a sibling's commit dispatch a rolled-back window's jobs", async () => {
+        expect.assertions(1);
+
+        const log: string[] = [];
+        const { calls, scheduler } = recordingScheduler(log);
+        const facade = withDeferredSchedules(scheduler);
+        const survivor = beginDeferredSchedules({ scheduler: facade });
+        const doomed = beginDeferredSchedules({ scheduler: facade });
+
+        await facade.runAfter(0, "doomed:job");
+        // Rolled back while another window is open: the writes this job was to act
+        // on are gone, so the job must go with them whoever settles next.
+        await doomed(false);
+        await survivor(true);
+
+        expect(calls).toHaveLength(0);
+    });
+
+    it("attempts every buffered job even when the first dispatch throws", async () => {
+        expect.assertions(3);
+
+        const log: string[] = [];
+        const { calls, scheduler } = recordingScheduler(log);
+        const facade = withDeferredSchedules(rejecting(scheduler, ["a"]));
+        const settle = beginDeferredSchedules({ scheduler: facade });
+
+        await facade.runAfter(0, "a");
+        await facade.runAfter(0, "b");
+        await facade.runAfter(0, "c");
+
+        // The flush runs AFTER the commit, so stopping at the first failure strands
+        // jobs the handler was already handed ids for — and skips the post-commit
+        // work behind the settle. One failure is rethrown as itself, so the DO's
+        // coded refusal still decides the status and survives redaction.
+        await expect(settle(true)).rejects.toThrow("unreachable: a");
+
+        expect(calls.map((entry) => entry.target)).toStrictEqual(["b", "c"]);
+        expect(log).toStrictEqual(["schedule:b", "schedule:c"]);
+    });
+
+    it("reports several failed dispatches together", async () => {
+        expect.assertions(2);
+
+        const log: string[] = [];
+        const { calls, scheduler } = recordingScheduler(log);
+        const facade = withDeferredSchedules(rejecting(scheduler, ["a", "c"]));
+        const settle = beginDeferredSchedules({ scheduler: facade });
+
+        await facade.runAfter(0, "a");
+        await facade.runAfter(0, "b");
+        await facade.runAfter(0, "c");
+
+        await expect(settle(true)).rejects.toThrow(AggregateError);
+
+        expect(calls.map((entry) => entry.target)).toStrictEqual(["b"]);
+    });
+
+    it("honours a caller-supplied job id instead of replacing it", async () => {
+        expect.assertions(2);
+
+        const log: string[] = [];
+        const { calls, scheduler } = recordingScheduler(log);
+        const facade = withDeferredSchedules(scheduler);
+        const settle = beginDeferredSchedules({ scheduler: facade });
+
+        // Outside a mutation the same argument reaches the SchedulerDO untouched.
+        // Replacing it inside one makes the id the caller chose — and stored, and
+        // deduped on — belong to no job, and hides the DO's duplicate-id refusal.
+        const id = await facade.runAfter(0, "mail:send", undefined, { id: "invoice-42" });
+
+        await settle(true);
+
+        expect(id).toBe("invoice-42");
+        expect(calls[0]?.id).toBe("invoice-42");
+    });
+
+    it("rejects a non-finite runAt instant at the call site rather than at the flush", async () => {
+        expect.assertions(3);
+
+        const log: string[] = [];
+        const { calls, scheduler } = recordingScheduler(log);
+        const facade = withDeferredSchedules(scheduler);
+        const settle = beginDeferredSchedules({ scheduler: facade });
+
+        // `runAfter` has always refused this; `runAt` took the same value through
+        // the other door and stored a `scheduledFor` that JSON renders as `null`.
+        expect(() => facade.runAt(Number.NaN, "mail:send")).toThrow("must be a non-negative finite number");
+        // An instant already in the past is an OVERDUE job, not a bad argument.
+        expect(() => facade.runAt(1000, "mail:digest")).not.toThrow();
+
+        await settle(true);
+
+        expect(calls).toHaveLength(1);
     });
 
     it("keeps the rest of the scheduler surface reachable", async () => {

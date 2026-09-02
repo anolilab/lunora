@@ -3431,12 +3431,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 return await schedule(Date.now() + delayMs, target, args);
             },
             runAt: async (timestampMs, target, args) => {
-                // Same guard as `runAfter`: an unchecked NaN/Infinity serializes
-                // to `null` through JSON and reaches the DO as a malformed
-                // `scheduledFor`, instead of failing here with something the
-                // caller can act on.
+                // `@lunora/scheduler`'s `assertScheduleInstant`, restated for the
+                // same reason `runAfter` restates its guard above — and to the same
+                // CODE and MESSAGE, byte for byte. An unchecked NaN/Infinity
+                // serializes to `null` through JSON and reaches the DO as a
+                // malformed `scheduledFor`; an instant already in the past is an
+                // overdue job, not a bad argument, so it passes.
                 if (!Number.isFinite(timestampMs)) {
-                    throw new LunoraError("ctx.scheduler.runAt: `timestampMs` must be a finite epoch-millisecond number", { code: "BAD_REQUEST", status: 400 });
+                    throw new LunoraError("ctx.scheduler.runAt: `date` must be a non-negative finite number", { code: "INVALID_INPUT", status: 400 });
                 }
 
                 return await schedule(timestampMs, target, args);
