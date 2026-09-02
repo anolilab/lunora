@@ -577,6 +577,14 @@ tables live in per-DO SQLite, so they need no migration), diffs against
 `lunora/migrations/.snapshot.json`, and emits a timestamped SQL file. Commit
 both the SQL and the snapshot: they are deterministic.
 
+Apply the SQL with `wrangler d1 execute <database> --file
+lunora/migrations/<file>.sql`. It is a multi-statement file, so it is not a
+`@lunora/d1` `Migration` — that API takes one statement per entry. In practice
+most of the file is redundant: the worker provisions every `.global()` table on
+first use, idempotently and additively. What it will never do is drop or
+retype, so the `DROP TABLE` / `DROP INDEX` statements and the hand-written
+block under "NOT auto-generated" are the parts worth applying.
+
 ### `lunora run`
 
 Send a single RPC to a running Worker without spinning up the client SDK:
