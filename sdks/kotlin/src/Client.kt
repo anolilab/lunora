@@ -164,12 +164,7 @@ class Client(
      * reconnect has to re-send `shape_subscribe` for every live shape, and a
      * registry holding only the callbacks cannot build that frame at all.
      */
-    private class Shape(
-        val name: String,
-        val args: WireValue?,
-        val onRows: ((List<WireValue>) -> Unit)?,
-        val onError: ((SubscriptionError) -> Unit)?,
-    ) {
+    private class Shape(val name: String, val args: WireValue?, val onRows: ((List<WireValue>) -> Unit)?, val onError: ((SubscriptionError) -> Unit)?) {
         val rows = LinkedHashMap<String, WireValue>()
         val order = mutableListOf<String>()
         var checkpoint: Any? = null
