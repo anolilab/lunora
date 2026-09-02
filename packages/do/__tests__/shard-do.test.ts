@@ -935,6 +935,42 @@ describe("shardDO subscription re-execution", () => {
         expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ data: [{ sessionId: "a", x: 50, y: 80 }], id: "sub-1", type: "data" });
     });
 
+    it("refuses to subscribe a paid (.x402) query instead of seeding it free", async () => {
+        expect.assertions(4);
+
+        // Stands in for the codegen override that consults `LUNORA_FUNCTIONS[path].x402`.
+        class PaidShard extends ReexecShard {
+            // eslint-disable-next-line class-methods-use-this -- override hook; the registry lookup needs no instance state
+            protected override isPaidFunction(functionPath: string): boolean {
+                return functionPath === "cursors:listCursors";
+            }
+        }
+
+        const shard = new PaidShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+
+        await subscribe(shard, ws);
+
+        // The paywall lives at the origin worker, which a WebSocket never
+        // crosses: the shard must answer with the batch gate's refusal, seed
+        // nothing, and register nothing — so no later poke can leak it either.
+        expect(JSON.parse(ws.sent[0]!)).toEqual({
+            code: "BAD_REQUEST",
+            error: {
+                code: "BAD_REQUEST",
+                message: 'paid (`.x402`) function "cursors:listCursors" cannot be subscribed; call it individually over /_lunora/rpc',
+            },
+            id: "sub-1",
+            type: "error",
+        });
+        expect(ws.sent).toHaveLength(1);
+        expect(shard.execCount).toBe(0);
+        expect(ws.attachment).toEqual({ subs: {} });
+    });
+
     it("re-executes but does not re-send when the result is byte-identical", async () => {
         expect.assertions(2);
 

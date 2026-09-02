@@ -55,6 +55,18 @@ describe("emitShard — reactive cache wiring", () => {
         );
     });
 
+    it("overrides isPaidFunction against the generated registry", () => {
+        expect.assertions(1);
+
+        // Same inert-by-default shape: the base `isPaidFunction` answers `false`,
+        // so without this override a `.x402({ price })` query subscribed over the
+        // WebSocket is seeded and poked free — the paywall only lives at the origin.
+        expect(emitShard({ schema: { tables: [], vectorIndexes: [] } })).toContain(
+            // eslint-disable-next-line no-secrets/no-secrets -- false positive: generated-code text asserted verbatim, not a credential
+            "protected override isPaidFunction(functionPath: string): boolean {\n            return LUNORA_FUNCTIONS[functionPath]?.x402 !== undefined;",
+        );
+    });
+
     it("does not wrap handleRpc dispatch in runCachedQuery — the base /rpc path already does", () => {
         expect.assertions(1);
 

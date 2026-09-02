@@ -383,7 +383,8 @@ abstract class ShardDO {
         strict?: boolean;
     }): void;
     protected runShardApplyCdc(_args: RunShardApplyCdcArgs): Promise<RunShardApplyCdcResult>;
-    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "serialize_failed" | "too_many";
+    protected isPaidFunction(_functionPath: string): boolean;
+    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "paid" | "serialize_failed" | "too_many";
     protected unsubscribe(ws: ShardSocketLike, subId: string): void;
     protected shapeSubscribe(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery): "ok" | "serialize_failed" | "too_many";
     protected shapeUnsubscribe(ws: ShardSocketLike, subId: string): void;
