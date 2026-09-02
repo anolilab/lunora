@@ -7,7 +7,7 @@
  * and error) lives in Cloudflare's control plane and is reachable only over the
  * account-scoped REST API: `GET .../workflows/{name}/instances` lists them,
  * `GET .../instances/{id}` returns one with its step array, and
- * `PATCH .../instances/{id}` pauses, resumes, or terminates it.
+ * `PATCH .../instances/{id}/status` pauses, resumes, or terminates it.
  *
  * Auth mirrors the `@lunora/bindings/analytics` SQL-API client: a Cloudflare account id
  * plus an API token (scoped `Workflows: Read`, or `Edit` for the status PATCH),
@@ -253,7 +253,13 @@ export const createWorkflowsRestClient = (config: WorkflowsRestConfig): Workflow
             };
         },
         setInstanceStatus: async ({ action, instanceId, workflowName }) => {
-            const body = await request(`/${encodeURIComponent(workflowName)}/instances/${encodeURIComponent(instanceId)}`, {
+            // The lifecycle action lives on the instance's `/status` SUB-resource,
+            // not on the instance itself — Cloudflare's API reference:
+            // PATCH /accounts/{account_id}/workflows/{workflow_name}/instances/{instance_id}/status
+            // (https://developers.cloudflare.com/api/resources/workflows/subresources/instances/subresources/status/methods/edit/).
+            // The instance path has no PATCH handler, so pausing/resuming/terminating
+            // from the studio reached an endpoint that could never act on it.
+            const body = await request(`/${encodeURIComponent(workflowName)}/instances/${encodeURIComponent(instanceId)}/status`, {
                 body: JSON.stringify({ status: action }),
                 method: "PATCH",
             });

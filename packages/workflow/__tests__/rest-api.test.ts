@@ -84,8 +84,8 @@ describe("createWorkflowsRestClient", () => {
         expect(detail.output).toStrictEqual({ ok: true });
     });
 
-    it("pATCHes instance status for a lifecycle action", async () => {
-        expect.assertions(3);
+    it("pATCHes the instance's /status sub-resource for a lifecycle action", async () => {
+        expect.assertions(4);
 
         const { calls, fetch } = fakeFetch(200, { result: { status: "paused" }, success: true });
         const client = createWorkflowsRestClient({ accountId: "acc", apiToken: "tok", fetch });
@@ -93,6 +93,8 @@ describe("createWorkflowsRestClient", () => {
         const result = await client.setInstanceStatus({ action: "pause", instanceId: "a", workflowName: "wf" });
 
         expect(result).toStrictEqual({ status: "paused" });
+        // The lifecycle action hangs off `/status`; the bare instance path has no PATCH handler.
+        expect(calls[0]?.url).toBe("https://api.cloudflare.com/client/v4/accounts/acc/workflows/wf/instances/a/status");
         expect(calls[0]?.init?.method).toBe("PATCH");
         expect(calls[0]?.init?.body).toBe(JSON.stringify({ status: "pause" }));
     });

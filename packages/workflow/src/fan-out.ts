@@ -26,7 +26,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { BRANCH_MARKER_KEY, BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { RESERVED_EVENT_TYPE_PREFIX } from "./define-event";
-import { NonRetryableError } from "./errors";
+import { isDuplicateInstanceError, NonRetryableError } from "./errors";
 import type {
     BranchCompensationParams,
     WorkflowBranch,
@@ -128,6 +128,42 @@ const errorOutcome = (error: unknown): BranchOutcome => {
     return { error: serializeError(error), status: "error" };
 };
 
+/**
+ * Cloudflare's hard ceiling on a workflow event payload. An outcome over it can
+ * never reach the parent — `sendEvent` rejects on every retry.
+ * https://developers.cloudflare.com/workflows/reference/limits/
+ */
+const MAX_EVENT_PAYLOAD_BYTES = 1_048_576;
+
+/**
+ * Start a child instance, or attach to the one a previous attempt already
+ * started.
+ *
+ * `step.do` memoizes a step's RESULT, not its side effects: a spawn body that
+ * fails *after* `create` landed (an RPC/transport error, a DO eviction
+ * mid-step) is re-run, and Cloudflare rejects the second create with "instance
+ * already exists". Without this the step burned its retries and `ctx.spawn` /
+ * `ctx.parallel` failed while the child it had just started kept running —
+ * contradicting the replay-re-attachment the docs promise. A duplicate-id
+ * rejection is exactly the signal that the create applied, so take the existing
+ * instance over; every other rejection surfaces so the step retries or fails
+ * visibly.
+ */
+const createOrAttach = async (
+    binding: ReturnType<WorkflowBindingResolver>,
+    options: { id: string; params?: Record<string, unknown> },
+): Promise<WorkflowInstanceLike> => {
+    try {
+        return await binding.create(options);
+    } catch (error: unknown) {
+        if (!isDuplicateInstanceError(error)) {
+            throw error;
+        }
+
+        return await binding.get(options.id);
+    }
+};
+
 /** A branch after id/event-type allocation — the parent's per-branch join bookkeeping. */
 interface PlannedBranch {
     childId: string;
@@ -174,7 +210,7 @@ const compensateCompleted = async (
                     output: done.output,
                 };
 
-                await compensation.create({ id: compensateId, params: compensationParams });
+                await createOrAttach(compensation, { id: compensateId, params: compensationParams });
 
                 return compensateId;
             });
@@ -251,7 +287,7 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
                     const binding = deps.resolveBinding(plan.item.workflow);
                     const marker: BranchMarker = { eventType: plan.eventType, index: plan.index, parentBinding: deps.parentBinding, parentId: deps.instanceId };
 
-                    await binding.create({ id: plan.childId, params: { ...plan.item.params, [BRANCH_MARKER_KEY]: marker } });
+                    await createOrAttach(binding, { id: plan.childId, params: { ...plan.item.params, [BRANCH_MARKER_KEY]: marker } });
 
                     return plan.childId;
                 }),
@@ -327,7 +363,7 @@ const createSpawn =
         await deps.step.do(`${SPAWN_STEP_PREFIX}${childId}`, async (): Promise<string> => {
             const binding = deps.resolveBinding(workflow);
 
-            await binding.create({ id: childId, params });
+            await createOrAttach(binding, { id: childId, params });
 
             return childId;
         });
@@ -388,6 +424,40 @@ const stripBranchMarker = (payload: unknown): unknown => {
 };
 
 /**
+ * Swap an outcome the event channel cannot carry for a bounded failure that it
+ * can.
+ *
+ * Cloudflare caps an event payload at {@link MAX_EVENT_PAYLOAD_BYTES}. A branch
+ * whose output is over it had `sendEvent` reject on every retry of the signal
+ * step; the failure was swallowed as best-effort, the child completed, and the
+ * parent then hibernated on its join until the branch `timeout` (Cloudflare's
+ * default is 24 hours) before compensating a branch that had actually
+ * succeeded. Reporting the size failure instead fails the group in seconds with
+ * a message that names the branch and the byte count.
+ *
+ * Measured on the serialised form, because that is what the host puts on the
+ * wire, and applied to the error path too — an oversized error message is just
+ * as undeliverable as an oversized value.
+ */
+const boundOutcome = (outcome: BranchOutcome): BranchOutcome => {
+    const bytes = new TextEncoder().encode(JSON.stringify(outcome)).length;
+
+    if (bytes <= MAX_EVENT_PAYLOAD_BYTES) {
+        return outcome;
+    }
+
+    return {
+        error: {
+            message:
+                `branch outcome serialises to ${String(bytes)} bytes, over Cloudflare's ${String(MAX_EVENT_PAYLOAD_BYTES)}-byte event payload limit — ` +
+                "the parent can never receive it. Return a reference the parent can dereference (an R2 key, a row id) instead of the payload itself",
+            name: "BranchOutputTooLarge",
+        },
+        status: "error",
+    };
+};
+
+/**
  * Signal a branch's terminal outcome back to its parent (a durable `step.do`, so
  * the send is retried until it lands). Best-effort: if the parent binding is
  * unavailable the call is a no-op and the parent's `waitForEvent` falls back to
@@ -405,11 +475,12 @@ const signalBranchParent = async (
     }
 
     const getParent = binding.get.bind(binding);
+    const deliverable = boundOutcome(outcome);
 
     await deps.step.do(`${SIGNAL_STEP_PREFIX}${String(marker.index)}`, async (): Promise<string> => {
         const parent = await getParent(marker.parentId);
 
-        await parent.sendEvent({ payload: outcome, type: marker.eventType });
+        await parent.sendEvent({ payload: deliverable, type: marker.eventType });
 
         return marker.eventType;
     });
