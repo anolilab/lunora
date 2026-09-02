@@ -1030,7 +1030,8 @@ describe("lunora backup", () => {
             const previous = process.env.LUNORA_ADMIN_TOKEN;
 
             delete process.env.LUNORA_ADMIN_TOKEN;
-            writeFileSync(join(workDir, ".dev.vars"), "LUNORA_ADMIN_TOKEN=from-dev-vars\n", "utf8");
+            // eslint-disable-next-line no-secrets/no-secrets -- a throwaway .dev.vars fixture in a temp directory, not a credential
+            writeFileSync(join(workDir, ".dev.vars"), 'LUNORA_ADMIN_TOKEN="local"\n', "utf8");
 
             try {
                 const result = await runBackupCommand({

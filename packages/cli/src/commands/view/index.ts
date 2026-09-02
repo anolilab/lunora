@@ -11,4 +11,4 @@ const viewCommand: Command = {
     name: "view",
 };
 
-export { viewCommand };
+export default viewCommand;

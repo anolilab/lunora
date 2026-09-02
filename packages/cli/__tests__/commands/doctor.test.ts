@@ -193,7 +193,8 @@ describe("runDoctor", () => {
         expect.assertions(2);
 
         seed(workdir, CLEAN_WRANGLER);
-        writeFileSync(join(workdir, ".dev.vars"), "LUNORA_ADMIN_TOKEN=dev-token\n", "utf8");
+        // eslint-disable-next-line no-secrets/no-secrets -- a throwaway .dev.vars fixture in a temp directory, not a credential
+        writeFileSync(join(workdir, ".dev.vars"), 'LUNORA_ADMIN_TOKEN="local"\n', "utf8");
 
         const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
 

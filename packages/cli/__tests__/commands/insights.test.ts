@@ -151,7 +151,8 @@ describe("runInsightsCommand", () => {
     it("falls back to the .dev.vars token against a local worker", async () => {
         expect.assertions(2);
 
-        writeFileSync(join(workdir, ".dev.vars"), "LUNORA_ADMIN_TOKEN=from-dev-vars\n", "utf8");
+        // eslint-disable-next-line no-secrets/no-secrets -- a throwaway .dev.vars fixture in a temp directory, not a credential
+        writeFileSync(join(workdir, ".dev.vars"), 'LUNORA_ADMIN_TOKEN="local"\n', "utf8");
 
         const calls: { body: unknown; headers?: Record<string, string>; url: string }[] = [];
 
@@ -163,7 +164,7 @@ describe("runInsightsCommand", () => {
         });
 
         expect(result.code).toBe(0);
-        expect(calls[0]?.headers?.authorization).toBe("Bearer from-dev-vars");
+        expect(calls[0]?.headers?.authorization).toBe("Bearer local");
     });
 
     it("refuses --prod without an explicit --url", async () => {

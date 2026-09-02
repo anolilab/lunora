@@ -715,7 +715,8 @@ export const backfillReadBy = defineMigration({
             const previous = process.env.LUNORA_ADMIN_TOKEN;
 
             delete process.env.LUNORA_ADMIN_TOKEN;
-            writeFileSync(join(workdir, ".dev.vars"), "LUNORA_ADMIN_TOKEN=from-dev-vars\n", "utf8");
+            // eslint-disable-next-line no-secrets/no-secrets -- a throwaway .dev.vars fixture in a temp directory, not a credential
+            writeFileSync(join(workdir, ".dev.vars"), 'LUNORA_ADMIN_TOKEN="local"\n', "utf8");
 
             try {
                 await runMigrateDataCommand({
@@ -731,7 +732,7 @@ export const backfillReadBy = defineMigration({
                 }
             }
 
-            expect(calls[0]?.headers?.authorization).toBe("Bearer from-dev-vars");
+            expect(calls[0]?.headers?.authorization).toBe("Bearer local");
         });
 
         // The documented invocation is `lunora migrate up <id>` — the docs once
@@ -745,7 +746,12 @@ export const backfillReadBy = defineMigration({
             await migrateExecute({
                 argument: [subcommand],
                 options: {},
-                process: { cwd: workdir, exit: (code: number) => (exitCode = code) },
+                process: {
+                    cwd: workdir,
+                    exit: (code: number) => {
+                        exitCode = code;
+                    },
+                },
             } as unknown as Parameters<typeof migrateExecute>[0]);
 
             expect(exitCode).toBe(1);
