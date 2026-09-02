@@ -471,6 +471,160 @@ describe("createPayment", () => {
         expect(afterWebhooks?.state).toBe("partially_refunded");
     });
 
+    it("asks the provider for the remainder when a full refund follows a partial one", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+        const polarSession = { ...paymentSession("user_1"), id: "ord_1", provider: "polar" as const };
+
+        await store.upsertPaymentSession(polarSession);
+
+        const forwarded: (bigint | undefined)[] = [];
+        const adapter = fakeAdapter({
+            identifier: "polar",
+            refundPayment: async (input) => {
+                forwarded.push(input.amount?.minorUnits);
+
+                return { ...polarSession, refundId: `ref_${String(forwarded.length)}` };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+        await payment.refundPayment({ sessionId: "ord_1" });
+
+        // An omitted amount means "whatever is left", not "the whole order". Polar reads the order
+        // total when no amount is given, so forwarding `undefined` here would refund 1000 on a session
+        // that already had 300 back — 1300 moved against a ledger that records 1000.
+        expect(forwarded[0]).toBe(300n);
+        expect(forwarded[1]).toBe(700n);
+
+        const stored = await store.getPaymentSession("polar", "ord_1");
+
+        expect(stored?.refundedAmount.minorUnits).toBe(1000n);
+        expect(stored?.state).toBe("refunded");
+    });
+
+    it("refunds nothing more once the captured amount is fully refunded", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession({ ...paymentSession("user_1"), refundedAmount: money(1000, "USD"), state: "refunded" });
+
+        let calls = 0;
+        const adapter = fakeAdapter({
+            refundPayment: async () => {
+                calls += 1;
+
+                return { ...paymentSession("user_1"), refundedAmount: money(1000, "USD"), state: "refunded" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        const result = await payment.refundPayment({ sessionId: "pi_1" });
+
+        // Zero remainder: the over-refund guard cannot catch this (the total does not move), so the
+        // call must stop here rather than let a provider read the order total and refund it again.
+        expect(calls).toBe(0);
+        expect(result.refundedAmount.minorUnits).toBe(1000n);
+    });
+
+    it("releases the local refund marker when the row write fails, so the webhook still carries the refund", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const polarSession = { ...paymentSession("user_1"), id: "ord_1", provider: "polar" as const };
+
+        await store.upsertPaymentSession(polarSession);
+
+        let failNext = true;
+        const failingStore = Object.create(store) as MemoryPaymentStore;
+
+        failingStore.upsertPaymentSession = async (session) => {
+            if (failNext) {
+                failNext = false;
+
+                throw new Error("row write failed");
+            }
+
+            return store.upsertPaymentSession(session);
+        };
+
+        const adapter = fakeAdapter({
+            identifier: "polar",
+            refundPayment: async () => {
+                return { ...polarSession, refundId: "ref_1" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: failingStore });
+
+        await expect(payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" })).rejects.toThrow("row write failed");
+
+        const afterFailure = await store.getPaymentSession("polar", "ord_1");
+
+        expect(afterFailure?.refundedAmount.minorUnits).toBe(0n);
+
+        // The marker stands for a fold that never happened. Left behind, Polar's confirming delta
+        // consumes it and contributes nothing — the refund would be absent from the row for good.
+        await applyWebhookAction(store, {
+            amount: money(300, "USD"),
+            eventId: "evt_a",
+            provider: "polar",
+            refundId: "ref_1",
+            sessionId: "ord_1",
+            type: "payment.refunded",
+        });
+
+        const afterWebhook = await store.getPaymentSession("polar", "ord_1");
+
+        expect(afterWebhook?.refundedAmount.minorUnits).toBe(300n);
+    });
+
+    it("leaves the ledger alone for a refund the provider has not settled yet", async () => {
+        expect.assertions(5);
+
+        const store = new MemoryPaymentStore();
+        const dodoSession = { ...paymentSession("user_1"), id: "pay_1", provider: "dodopayments" as const };
+
+        await store.upsertPaymentSession(dodoSession);
+
+        // Dodo answers `refunds.create` with `pending`/`review` and keeps the session `captured`.
+        const adapter = fakeAdapter({
+            identifier: "dodopayments",
+            refundPayment: async () => {
+                return { ...dodoSession, pending: true, refundId: "ref_1" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        const result = await payment.refundPayment({ sessionId: "pay_1" });
+
+        // No money moved yet, so nothing is recorded: a later `refund.failed` maps to `unhandled` and
+        // reverses nothing, which would leave an optimistic write over-stating the row forever.
+        expect(result.refundedAmount.minorUnits).toBe(0n);
+        expect(result.state).toBe("captured");
+
+        const afterIssue = await store.getPaymentSession("dodopayments", "pay_1");
+
+        expect(afterIssue?.refundedAmount.minorUnits).toBe(0n);
+
+        // And no marker was left either, so the confirming `refund.succeeded` still carries the money.
+        await applyWebhookAction(store, {
+            amount: money(1000, "USD"),
+            eventId: "evt_a",
+            provider: "dodopayments",
+            refundId: "ref_1",
+            sessionId: "pay_1",
+            type: "payment.refunded",
+        });
+
+        const afterWebhook = await store.getPaymentSession("dodopayments", "pay_1");
+
+        expect(afterWebhook?.refundedAmount.minorUnits).toBe(1000n);
+        expect(afterWebhook?.state).toBe("refunded");
+    });
+
     it("derives a distinct refund idempotency key per amount so partial refunds don't collide", async () => {
         expect.assertions(3);
 

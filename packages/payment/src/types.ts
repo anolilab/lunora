@@ -327,6 +327,15 @@ export interface RefundInput {
  */
 export interface RefundResult extends PaymentSession {
     /**
+     * The provider accepted the refund but has NOT moved the money yet — Dodo answers
+     * `refunds.create` with `pending`/`review` and settles later via `refund.succeeded`, or never,
+     * via `refund.failed`. The facade leaves its ledger untouched for one of these and lets the
+     * confirming webhook carry the money, because a `refund.failed` reverses nothing. Absent (the
+     * default) means the refund is already settled — Stripe and Polar refund synchronously.
+     */
+    readonly pending?: boolean;
+
+    /**
      * The provider's id for THIS refund — Stripe and Polar `Refund.id`, Dodo `refund_id`. It is the
      * identity the facade keys its local refund marker on, so two in-flight refunds of the same
      * amount on one session stay distinct. `undefined` only where a provider reports no id, which

@@ -98,7 +98,28 @@ describe("dodopayments adapter", () => {
         expect(() => adapter.capturePayment({ sessionId: "x" })).toThrow(/does not support/);
         // Refunds ARE supported by Dodo (unlike manual capture).
         // `refundId` is Dodo's `refund_id` — the same id `refund.succeeded` carries.
-        await expect(adapter.refundPayment({ sessionId: "pay_1" })).resolves.toMatchObject({ refundId: "ref_1", state: "refunded" });
+        await expect(adapter.refundPayment({ sessionId: "pay_1" })).resolves.toMatchObject({ pending: false, refundId: "ref_1", state: "refunded" });
+    });
+
+    it("flags a refund Dodo has only accepted, not settled", async () => {
+        expect.assertions(2);
+
+        const client = {
+            ...makeClient(),
+            refunds: {
+                create: async () => {
+                    return { amount: 2500, currency: "USD", payment_id: "pay_1", refund_id: "ref_1", status: "pending" };
+                },
+            },
+        };
+
+        const adapter = createDodoPaymentsAdapter({ client, webhookSecret: SECRET });
+        const result = await adapter.refundPayment({ sessionId: "pay_1" });
+
+        // `pending`/`review` settle later via `refund.succeeded` — or not at all, via `refund.failed`,
+        // which carries no transition. The facade holds its ledger back on this flag.
+        expect(result.pending).toBe(true);
+        expect(result.state).toBe("captured");
     });
 
     it("creates a checkout carrying the pinned reference metadata and product cart", async () => {
