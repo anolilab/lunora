@@ -14,6 +14,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
+import { LunoraError } from "@lunora/errors";
 import type { ShardAlarms, ShardHost, ShardSqlCursor, ShardSqlExec, SqlRow } from "@lunora/platform";
 import Database from "better-sqlite3";
 
@@ -435,13 +436,21 @@ const createNodeShardHost = (
      * what it CAN do is refuse, which keeps `ShardHost`'s "no partial writes are
      * observable" true instead of answering with rows that are about to roll
      * back.
+     *
+     * The refusal is `SHARD_UNAVAILABLE`/503 — catalogued and retryable —
+     * rather than a bare `Error`. A query dispatch is deliberately NOT inside
+     * the transaction's scope, so on this host every read that lands while a
+     * mutation is mid-await is refused; an uncatalogued throw is redacted to an
+     * `INTERNAL` 500 by `toErrorBody`, which no client retries, turning an
+     * ordinary "not this instant" into a hard failure. `SHARD_UNAVAILABLE` is
+     * already in the runtime's and the client's transient set.
      */
     const transactionScope = new AsyncLocalStorage<true>();
     let transactionOpen = false;
 
     const assertOwnTurn = (action: string): void => {
         if (transactionOpen && transactionScope.getStore() !== true) {
-            throw new Error(`shard busy: cannot ${action} while another task holds this shard's transaction`);
+            throw new LunoraError("SHARD_UNAVAILABLE", `shard busy: cannot ${action} while another task holds this shard's transaction`);
         }
     };
 

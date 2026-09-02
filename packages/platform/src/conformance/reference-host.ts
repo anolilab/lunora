@@ -272,13 +272,27 @@ const createReferenceHost = (): ReferenceHost => {
      * dispatch; what it CAN do is refuse, which keeps `ShardHost`'s "no partial
      * writes are observable" true instead of answering with rows that are about
      * to roll back.
+     *
+     * The refusal is coded `SHARD_UNAVAILABLE`/503, not a bare `Error`: the
+     * refused read failed only because it arrived while a mutation was
+     * mid-await, and the very next attempt will not, so it has to reach the
+     * caller as something retryable. An uncatalogued throw is redacted to an
+     * `INTERNAL` 500 by every transport edge (`toErrorBody`), which no client
+     * retries. `@lunora/platform` carries no dependencies, so the shape
+     * `isLunoraError` recognizes — string `code`, numeric `status`, the
+     * `VisulimaError` brand — is set here by hand rather than imported from
+     * `@lunora/errors`; `@lunora/platform-node` throws the real class.
      */
     const transactionScope = new AsyncLocalStorage<true>();
     let transactionOpen = false;
 
     const assertOwnTurn = (): void => {
         if (transactionOpen && transactionScope.getStore() !== true) {
-            throw new Error("shard busy: cannot run SQL while another task holds this shard's transaction");
+            throw Object.assign(new Error("shard busy: cannot run SQL while another task holds this shard's transaction"), {
+                code: "SHARD_UNAVAILABLE",
+                status: 503,
+                type: "VisulimaError",
+            });
         }
     };
 

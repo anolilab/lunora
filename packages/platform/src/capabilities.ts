@@ -451,7 +451,7 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
     features: {
         shardedState: {
             level: "emulated",
-            note: "One better-sqlite3 database per shard key, one process — no distributed placement or failover. Shard keys are percent-encoded into basenames with A-Z escaped, so `Tenant` and `tenant` stay two databases on a case-insensitive volume (APFS, NTFS) rather than folding into one. There is also no input gate: Cloudflare defers every other dispatch for the span of a mutation, whereas this host can only refuse — SQL issued from another task while a transaction is open throws rather than reading rows that are about to roll back",
+            note: "One better-sqlite3 database per shard key, one process — no distributed placement or failover. Shard keys are percent-encoded into basenames with A-Z escaped, so `Tenant` and `tenant` stay two databases on a case-insensitive volume (APFS, NTFS) rather than folding into one. There is also no input gate: Cloudflare defers every other dispatch for the span of a mutation, whereas this host can only refuse — SQL issued from another task while a transaction is open throws a retryable `SHARD_UNAVAILABLE` (503) rather than reading rows that are about to roll back, so a read that merely arrived mid-mutation is retried instead of failing the request",
         },
         globalTables: {
             level: "emulated",

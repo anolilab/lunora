@@ -122,7 +122,9 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
             });
 
             it("never lets a task outside a mutation observe its uncommitted writes", async () => {
-                expect.assertions(3);
+                // Not a fixed count: a host that defers the dispatch makes three
+                // assertions, one that refuses makes a fourth on the refusal.
+                expect.hasAssertions();
 
                 await withHost(async (host) => {
                     host.shard.sql.exec("CREATE TABLE IF NOT EXISTS isolation_test (id INTEGER PRIMARY KEY)");
@@ -152,14 +154,28 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                     // no partial writes are observable, and these are about to
                     // roll back.
                     let observed: unknown[];
+                    let refusal: unknown;
 
                     try {
                         observed = host.shard.sql.exec("SELECT id FROM isolation_test").toArray();
-                    } catch {
+                    } catch (error) {
                         observed = [];
+                        refusal = error;
                     }
 
                     expect(observed).toStrictEqual([]);
+
+                    // Refusing is conformant. Refusing with a bare `Error` is
+                    // not: the transport can only classify what it recognizes,
+                    // so an uncatalogued throw redacts to an `INTERNAL` 500 that
+                    // no client retries — and this read failed only because it
+                    // arrived while a mutation was mid-await, which the very
+                    // next attempt will not. A host that refuses must refuse
+                    // with the retryable 503 code the runtime and client already
+                    // treat as "no verdict, try again".
+                    if (refusal !== undefined) {
+                        expect(refusal).toMatchObject({ code: "SHARD_UNAVAILABLE", status: 503, type: "VisulimaError" });
+                    }
 
                     await expect(mutation).rejects.toThrow("boom");
                     expect(host.shard.sql.exec("SELECT id FROM isolation_test").toArray()).toStrictEqual([]);
