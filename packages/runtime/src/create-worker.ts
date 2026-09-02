@@ -4,6 +4,7 @@ import type { HttpCacheLike } from "@lunora/platform";
 import { asBucketStorage } from "../../../shared/as-bucket-storage";
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
+import { collectPages } from "../../../shared/collect-pages";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
@@ -142,6 +143,17 @@ interface HttpActionContext {
      * dependency; the server side narrows it to the real `Storage`.
      */
     storage?: unknown;
+
+    /**
+     * The request's `ExecutionContext.waitUntil`, forwarded so a handler can
+     * keep work alive past the returned `Response` — the shape an HTTP action
+     * exists for ("ack the webhook now, finish the work after"). Optional
+     * because {@link ExecutionContextLike.waitUntil} is: a framework mount seam
+     * or a unit test may hand over a partial context, and this is absent rather
+     * than a throwing stub so a caller can tell "no deferral available here"
+     * from "deferred". Mirrors `HttpActionCtx.waitUntil` on the server side.
+     */
+    waitUntil?: (promise: Promise<unknown>) => void;
 }
 
 /**
@@ -3378,27 +3390,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
          * The DO answers ONE bounded page (`{ records, truncated, cursor }`), so
          * handing the raw body back both breaks the declared
          * `Record<string, unknown>[]` contract and silently drops every job past
-         * the page size. Mirrors `@lunora/scheduler`'s `createScheduler.list()`
-         * — the shard-side client of the same route.
+         * the page size. The walk itself is `shared/collect-pages.ts`, which
+         * `@lunora/scheduler`'s `createScheduler.list()` — the shard-side client
+         * of the same route — also uses, so the two cannot drift apart.
          */
-        const listAll = async (): Promise<Record<string, unknown>[]> => {
-            const all: Record<string, unknown>[] = [];
-            let cursor: string | undefined;
-
-            for (;;) {
-                const query = cursor === undefined ? "" : `?cursor=${encodeURIComponent(cursor)}`;
-                // eslint-disable-next-line no-await-in-loop -- each page's cursor comes from the previous page, so the round-trips are inherently sequential
-                const page = await call<{ cursor?: string; records?: Record<string, unknown>[]; truncated?: boolean }>(`/list${query}`, { method: "GET" });
-
-                all.push(...(Array.isArray(page.records) ? page.records : []));
-
-                if (page.truncated !== true || typeof page.cursor !== "string" || page.cursor.length === 0) {
-                    return all;
-                }
-
-                cursor = page.cursor;
-            }
-        };
+        const listAll = async (): Promise<Record<string, unknown>[]> =>
+            await collectPages<Record<string, unknown>>(async (cursor) =>
+                call<{ cursor?: string; records?: Record<string, unknown>[]; truncated?: boolean }>(
+                    cursor === undefined ? "/list" : `/list?cursor=${encodeURIComponent(cursor)}`,
+                    { method: "GET" },
+                ),
+            );
 
         const schedule = async (scheduledFor: number, target: unknown, args: Record<string, unknown> = {}): Promise<string> => {
             const { id } = await post<{ id: string }>("/schedule", { args, scheduledFor, ...targetFields(target) });
@@ -3493,6 +3495,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             runMutation: run,
             runQuery: run,
             ...(schedulerDO === undefined ? {} : { scheduler: buildHttpScheduler(schedulerDO) }),
+            // Bound to the execution context so a handler — or a wrapper reading
+            // it structurally, e.g. `@lunora/x402`'s `withX402` receipt sink —
+            // can outlive the response. Omitted entirely when the host supplied
+            // no `waitUntil`, so the optional member stays honest.
+            ...(context.waitUntil === undefined ? {} : { waitUntil: context.waitUntil.bind(context) }),
             // Built over the worker's own R2 bindings — an HTTP handler runs
             // where an action does, so this needs no shard hop. Absent (rather
             // than a throwing stub) when the app declared no `.storage()`, which

@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 
 import { join } from "@visulima/path";
 
-import safe from "./display";
+import { safeLine } from "./display";
 import parseManifest from "./manifest";
 
 /** One catalog entry as `lunora registry list` reports it. */
@@ -20,13 +20,6 @@ interface CatalogItem {
 interface IndexItem extends CatalogItem {
     title?: string;
 }
-
-/**
- * Optional-aware wrapper over the shared display sanitizer ({@link safe}): a
- * hostile `--source` registry can embed escape or BIDI sequences in a `name`/
- * `description` to spoof `list` output.
- */
-const stripControlChars = (value: string | undefined): string | undefined => (value === undefined ? undefined : safe(value));
 
 /** Names of the subdirectories under `root` that ship a `registry.json`. */
 const listItemDirectories = (root: string): string[] =>
@@ -52,9 +45,10 @@ const collectCatalog = (root: string): CatalogItem[] => {
             return parsed.items
                 .filter((entry): entry is CatalogItem => typeof entry === "object" && entry !== null && typeof (entry as CatalogItem).name === "string")
                 .map((entry) => {
-                    // Strip control bytes from the untrusted remote strings before they
-                    // can reach the terminal (ANSI/OSC escape-injection hardening).
-                    return { description: stripControlChars(entry.description), name: stripControlChars(entry.name) ?? entry.name };
+                    // Sanitize the untrusted remote strings before they can reach the
+                    // terminal: escape/BIDI sequences AND newlines, since each entry
+                    // is one `list` line.
+                    return { description: entry.description === undefined ? undefined : safeLine(entry.description), name: safeLine(entry.name) };
                 });
         }
     }
@@ -62,7 +56,7 @@ const collectCatalog = (root: string): CatalogItem[] => {
     return listItemDirectories(root).map((name) => {
         const raw = JSON.parse(readFileSync(join(root, name, "registry.json"), "utf8")) as { description?: string };
 
-        return { description: stripControlChars(raw.description), name };
+        return { description: raw.description === undefined ? undefined : safeLine(raw.description), name };
     });
 };
 

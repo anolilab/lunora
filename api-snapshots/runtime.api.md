@@ -955,6 +955,7 @@ interface HttpActionContext {
     runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     scheduler?: SchedulerContext;
     storage?: unknown;
+    waitUntil?: (promise: Promise<unknown>) => void;
 }
 ```
 

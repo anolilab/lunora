@@ -33,4 +33,14 @@ const DISPLAY_UNSAFE_CHARS = /[\u0000-\u0008\u000A-\u001F\u007F-\u009F\u202A-\u2
 /** Strip everything that could repaint or reorder the line this value is rendered on. */
 const safe = (value: string): string => value.replaceAll(DISPLAY_UNSAFE_CHARS, "");
 
-export default safe;
+/**
+ * The line-scoped {@link safe}, for a value rendered INSIDE one line — a
+ * plan/report/catalog field. A newline there is a line break the renderer never wrote, so
+ * a registry `description` of `"chat\n  bind evil"` printed a second, fake
+ * plan line after the real one. `safe` keeps LF because `view` splits file
+ * bodies on it BEFORE sanitizing each line and the error paths echo multi-line
+ * messages; this strips it for the sites that own exactly one line.
+ */
+const safeLine = (value: string): string => safe(value).replaceAll("\n", "");
+
+export { safe, safeLine };

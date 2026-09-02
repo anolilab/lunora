@@ -11,7 +11,7 @@ import { detectPackageManager, installArgsFor } from "../../util/detect-package-
 import type { Logger } from "../../util/logger";
 import { confirmDepMutation, resolveDepRange } from "./apply";
 import { buildRegistryIndex, collectCatalog } from "./catalog";
-import safe from "./display";
+import { safe, safeLine } from "./display";
 import { readItemFile, reconcileItems } from "./reconcile";
 import { readManifest, resolveItemDirectory, resolvePlan, resolveRegistryRoot, sourceGateError } from "./resolve";
 import type { AddCommandOptions, AddCommandResult, RegistryManifest } from "./types";
@@ -21,10 +21,10 @@ import { emptyResult } from "./types";
 const printPlan = (logger: Logger, manifest: RegistryManifest): void => {
     const label = manifest.title ?? manifest.description;
 
-    logger.info(`plan: ${safe(manifest.name)}${label ? ` — ${safe(label)}` : ""}`);
+    logger.info(`plan: ${safeLine(manifest.name)}${label ? ` — ${safeLine(label)}` : ""}`);
 
     for (const file of manifest.files) {
-        logger.info(`  file  ${safe(file.to)}  (${safe(file.merge)})`);
+        logger.info(`  file  ${safeLine(file.to)}  (${safeLine(file.merge)})`);
     }
 
     // Show the range that will actually be WRITTEN, not the manifest's internal
@@ -51,11 +51,11 @@ const printPlan = (logger: Logger, manifest: RegistryManifest): void => {
     };
 
     for (const [dep, range] of Object.entries(manifest.deps ?? {})) {
-        logger.info(`  dep   ${safe(dep)}@${safe(rangeFor(range))}`);
+        logger.info(`  dep   ${safeLine(dep)}@${safeLine(rangeFor(range))}`);
     }
 
     for (const [dep, range] of Object.entries(manifest.devDependencies ?? {})) {
-        logger.info(`  dev   ${safe(dep)}@${safe(rangeFor(range))}`);
+        logger.info(`  dev   ${safeLine(dep)}@${safeLine(rangeFor(range))}`);
     }
 
     for (const binding of manifest.bindings ?? []) {
@@ -64,20 +64,20 @@ const printPlan = (logger: Logger, manifest: RegistryManifest): void => {
         // is applied — a bare key path hides the payload.
         // `JSON.stringify` escapes control bytes but NOT the BIDI overrides that
         // reorder the rendered line, so the serialized value is sanitized too.
-        logger.info(`  bind  ${safe(binding.path.join("."))} = ${safe(JSON.stringify(binding.value))}`);
+        logger.info(`  bind  ${safeLine(binding.path.join("."))} = ${safeLine(JSON.stringify(binding.value))}`);
     }
 
     for (const variable of manifest.envVars ?? []) {
         // Show non-secret values; secrets are scaffolded as empty placeholders so
         // there is nothing to leak.
-        const valueSuffix = variable.secret ? " (secret)" : ` = ${safe(JSON.stringify(variable.value ?? ""))}`;
+        const valueSuffix = variable.secret ? " (secret)" : ` = ${safeLine(JSON.stringify(variable.value ?? ""))}`;
 
-        logger.info(`  env   ${safe(variable.name)}${valueSuffix}`);
+        logger.info(`  env   ${safeLine(variable.name)}${valueSuffix}`);
     }
 
     for (const reexport of manifest.entrypointReexports ?? []) {
-        const specifier = `./lunora/${safe(reexport.module)}`;
-        const suffix = reexport.comment ? `  // ${safe(reexport.comment)}` : "";
+        const specifier = `./lunora/${safeLine(reexport.module)}`;
+        const suffix = reexport.comment ? `  // ${safeLine(reexport.comment)}` : "";
 
         logger.info(`  entry ${specifier}${suffix}`);
     }
@@ -148,7 +148,7 @@ const reportAddResult = (
 
     for (const { manifest } of items) {
         if (manifest.docs) {
-            logger.info(`${safe(manifest.name)}: ${safe(manifest.docs)}`);
+            logger.info(`${safeLine(manifest.name)}: ${safeLine(manifest.docs)}`);
         }
     }
 };

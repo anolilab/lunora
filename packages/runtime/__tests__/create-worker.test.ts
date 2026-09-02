@@ -1776,6 +1776,56 @@ describe("createWorker — HTTP actions", () => {
         expect(probe.status).toBe(201);
     });
 
+    it("hands the handler a ctx.waitUntil that reaches the execution context's", async () => {
+        expect.assertions(3);
+
+        // "Ack the webhook now, finish the work after" is the shape an HTTP
+        // action exists for, and work started but not awaited is cancelled when
+        // the response resolves. Wrappers that need deferral (`@lunora/x402`'s
+        // `withX402`, whose receipt sink must outlive the response) read
+        // `waitUntil` structurally off the ctx, so its absence made them
+        // silently no-op.
+        const deferred: Promise<unknown>[] = [];
+        const context: ExecutionContextLike = {
+            passThroughOnException: () => undefined,
+            waitUntil: (promise) => {
+                deferred.push(promise);
+            },
+        };
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.get("/hook", (c) => {
+                    c.var.lunora.waitUntil?.(Promise.resolve("after"));
+
+                    return new Response("accepted", { status: 202 });
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/hook"), {}, context);
+
+        expect(res.status).toBe(202);
+        expect(deferred).toHaveLength(1);
+        await expect(deferred[0]).resolves.toBe("after");
+    });
+
+    it("leaves ctx.waitUntil absent when the host supplied no waitUntil", async () => {
+        expect.assertions(2);
+
+        // Absent rather than a no-op stub, for the same reason `storage` is:
+        // a handler can tell "no deferral available here" from "deferred".
+        const worker = createWorker({
+            httpRouter: honoApp((app) => app.get("/probe", (c) => new Response(String(c.var.lunora.waitUntil === undefined), { status: 200 }))),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/probe"), {}, { passThroughOnException: () => undefined });
+
+        expect(res.status).toBe(200);
+        await expect(res.text()).resolves.toBe("true");
+    });
+
     it("leaves ctx.storage absent when the app declared no storage", async () => {
         expect.assertions(2);
 

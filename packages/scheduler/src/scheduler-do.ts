@@ -82,7 +82,7 @@ const HEADER_PREFIX = "id:";
 const RETRY_PREFIX = "retry:";
 const DEAD_PREFIX = "dead:";
 const POOL_PREFIX = "pool:";
-// Default page size for listRecords() (the `/list` + WS `jobs` view) and the
+// Default page size for the `/list` + WS `jobs` view (listPage()) and the
 // page size used internally by the exact-count cursor loop (forEachPage()).
 // Mirrors the alarm path's existing `limit: 100` bound so the whole file has
 // one bounded-page convention: every storage.list() here carries a limit.
@@ -806,7 +806,7 @@ class SchedulerDO {
         // Seed the new subscriber with the current (bounded) list so its first
         // value arrives over the same channel as later changes, in the same
         // `{ records, truncated }` shape `broadcastChange()` and `/list` use.
-        const seed = await this.listRecords();
+        const seed = await this.listPage(HEADER_PREFIX, DEFAULT_LIST_LIMIT);
 
         server.send(JSON.stringify({ records: seed.records, truncated: seed.truncated, type: "jobs" }));
 
@@ -815,7 +815,7 @@ class SchedulerDO {
     }
 
     /**
-     * Re-list the jobs (bounded — see {@link listRecords}) and push them to
+     * Re-list the jobs (bounded — see {@link listPage}) and push them to
      * every connected subscriber. Called after any change (schedule / cancel /
      * alarm-fire) so live studios reflect it immediately. A no-op when the
      * runtime doesn't support hibernated sockets.
@@ -827,7 +827,7 @@ class SchedulerDO {
             return;
         }
 
-        const { records, truncated } = await this.listRecords();
+        const { records, truncated } = await this.listPage(HEADER_PREFIX, DEFAULT_LIST_LIMIT);
         const message = JSON.stringify({ records, truncated, type: "jobs" });
 
         for (const socket of sockets) {
@@ -869,30 +869,19 @@ class SchedulerDO {
     }
 
     /**
-     * The current pending job records (shared by `/list` and the live channel),
-     * bounded to `limit` (default {@link DEFAULT_LIST_LIMIT}) so a large backlog
-     * can't be JSON-serialized and fanned out to every socket in one shot.
-     */
-    private async listRecords(
-        limit: number = DEFAULT_LIST_LIMIT,
-        startAfter?: string,
-    ): Promise<{ cursor?: string; records: ScheduleRecord[]; truncated: boolean }> {
-        return this.listPage(HEADER_PREFIX, limit, startAfter);
-    }
-
-    /**
      * Page through every row under `prefix` exactly once with bounded per-page
      * memory (a `limit`+`startAfter` cursor loop), invoking `visit` for each.
      * Unlike {@link listPage}, which intentionally truncates for the studio's
      * live view, `/status` and `/pool` need EXACT counts — this walks the full
      * set, but never materializes more than one page at a time.
      */
-    private async forEachPage(prefix: string, visit: (value: unknown, key: string) => void, pageSize: number = DEFAULT_LIST_LIMIT): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- T types the stored rows for the caller and is forwarded to `storage.list`; without it every visitor casts.
+    private async forEachPage<T>(prefix: string, visit: (value: T, key: string) => void, pageSize: number = DEFAULT_LIST_LIMIT): Promise<void> {
         let startAfter: string | undefined;
 
         for (;;) {
             // eslint-disable-next-line no-await-in-loop -- each page's cursor (startAfter) depends on the previous page's last key, so the pages are inherently sequential
-            const page = await this.state.storage.list(startAfter === undefined ? { limit: pageSize, prefix } : { limit: pageSize, prefix, startAfter });
+            const page = await this.state.storage.list<T>(startAfter === undefined ? { limit: pageSize, prefix } : { limit: pageSize, prefix, startAfter });
 
             if (page.size === 0) {
                 break;
@@ -991,7 +980,7 @@ class SchedulerDO {
         await this.state.storage.put(`${DEAD_PREFIX}${record.id}`, { ...record, attempts });
         // Park is terminal; clear the pending retry row AND the live header row
         // in one batched delete. Leaving `id:<id>` behind would keep the dead job
-        // visible in listRecords()/`/list` (and the studio) as a scheduled job
+        // visible in `/list` (and the studio) as a scheduled job
         // that can never fire — only the `dead:` record should survive.
         await this.state.storage.delete([`${RETRY_PREFIX}${record.id}`, `${HEADER_PREFIX}${record.id}`]);
 
@@ -1080,8 +1069,8 @@ class SchedulerDO {
 
         // Exact count via a bounded cursor loop — never materializes the whole
         // header set at once (see forEachPage()).
-        await this.forEachPage(HEADER_PREFIX, (value) => {
-            if ((value as ScheduleRecord).pool === name) {
+        await this.forEachPage<ScheduleRecord>(HEADER_PREFIX, (record) => {
+            if (record.pool === name) {
                 queued += 1;
             }
         });
@@ -1108,9 +1097,7 @@ class SchedulerDO {
         // exactly as handlePoolStatus() counts for one pool.
         const queuedByPool = new Map<string, number>();
 
-        await this.forEachPage(HEADER_PREFIX, (value) => {
-            const record = value as ScheduleRecord;
-
+        await this.forEachPage<ScheduleRecord>(HEADER_PREFIX, (record) => {
             if (record.pool !== undefined) {
                 queuedByPool.set(record.pool, (queuedByPool.get(record.pool) ?? 0) + 1);
             }
@@ -1124,8 +1111,7 @@ class SchedulerDO {
         // row per pool name is small in every app anyone has written, but the
         // names come from user code and nothing caps how many there are, so this
         // file has exactly one convention and no unlimited list() left in it.
-        await this.forEachPage(POOL_PREFIX, (value, key) => {
-            const pool = value as PoolState;
+        await this.forEachPage<PoolState>(POOL_PREFIX, (pool, key) => {
             const name = key.slice(POOL_PREFIX.length);
             // Defend against a corrupted row (`inFlight` should never go negative)
             // exactly as loadPool() does on the alarm path.
@@ -1253,7 +1239,7 @@ class SchedulerDO {
      * them (`createScheduler.list()` walks every page; the studio shows one).
      */
     private async handleList(url: URL): Promise<Response> {
-        const { cursor, records, truncated } = await this.listRecords(DEFAULT_LIST_LIMIT, url.searchParams.get("cursor") ?? undefined);
+        const { cursor, records, truncated } = await this.listPage(HEADER_PREFIX, DEFAULT_LIST_LIMIT, url.searchParams.get("cursor") ?? undefined);
 
         return SchedulerDO.json({ cursor, records, truncated });
     }

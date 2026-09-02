@@ -88,6 +88,15 @@ describe("hasIndexMetadata", () => {
         expect(hasIndexMetadata({ table: "posts" })).toBe(false);
     });
 
+    it("returns false when a field is not a usable string", () => {
+        expect.assertions(2);
+
+        // A non-empty `fields` passed the length check with unusable ELEMENTS in
+        // it, so `[null]` reached `quoteIdentifier` and threw inside the render.
+        expect(hasIndexMetadata({ suggestedIndex: { fields: [null], name: "byAuthorId" }, table: "posts" })).toBe(false);
+        expect(hasIndexMetadata({ suggestedIndex: { fields: ["authorId", 42], name: "byAuthorId" }, table: "posts" })).toBe(false);
+    });
+
     it("returns false when suggestedIndex.name is not a usable string", () => {
         expect.assertions(2);
 

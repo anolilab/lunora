@@ -33,6 +33,7 @@ import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/adviso
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import { autoLinkFromDeployOutput, parseDeployedUrl } from "../../util/auto-link";
+import { writeBindingManifestFile } from "../../util/binding-manifest-file";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { renderDeploySummary } from "../../util/deploy-summary";
@@ -90,6 +91,15 @@ interface DeployCommandOptions {
      * baseline re-bless) are skipped since nothing shipped.
      */
     dryRun?: boolean;
+
+    /**
+     * Write the binding manifest (`build --emit-bindings`) to this path once the
+     * bundle exists. Owned here rather than by the caller because it is the last
+     * artifact that has to read the PROVISIONED `wrangler.jsonc`, and the dry-run
+     * rollback below closes that window as soon as this function returns.
+     * Relative paths resolve against the project root.
+     */
+    emitBindings?: string;
     env?: string;
     /** Fetch implementation injected in tests for `--migrate` RPC calls. */
     fetchImpl?: FetchLike;
@@ -1689,16 +1699,28 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     }
 
     // The dry-run rollback for `deploy --dry-run`: provisioning's writes stay on
-    // disk until the wrangler bundle below has been built against them, then the
-    // committed config goes back exactly as it was. `build` is excluded because
-    // it snapshots one level up — it writes its binding manifest AFTER this
-    // returns, and that document must describe the provisioned config too.
-    const restoreWrangler = options.dryRun === true && options.commandName !== "build" ? snapshotWranglerConfig(options.cwd ?? process.cwd()) : undefined;
+    // disk until every artifact that has to describe them has been derived, then
+    // the committed config goes back exactly as it was. Both artifacts are
+    // produced inside this one window — the wrangler bundle by `executeDeploy`,
+    // and `--emit-bindings`'s requirements document right after it — so nothing
+    // else needs to own a snapshot.
+    const logger = loggerForFormat(options.format, options.logger);
+    const restoreWrangler = options.dryRun === true ? snapshotWranglerConfig(options.cwd ?? process.cwd()) : undefined;
 
     let result: DeployCommandResult;
 
     try {
-        result = await executeDeploy({ ...options, logger: loggerForFormat(options.format, options.logger) });
+        result = await executeDeploy({ ...options, logger });
+
+        if (result.code === 0 && options.emitBindings !== undefined) {
+            const { error } = writeBindingManifestFile({ destination: options.emitBindings, logger, projectRoot: options.cwd ?? process.cwd() });
+
+            if (error !== undefined) {
+                logger.error(error);
+
+                result = { ...result, code: 1 };
+            }
+        }
     } finally {
         restoreWrangler?.();
     }

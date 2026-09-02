@@ -1306,7 +1306,7 @@ type SubscriptionCallback = (data: unknown) => void;
 
 ```ts
 interface SubscriptionError {
-    code?: string;
+    code?: LunoraErrorCodeInput;
     message: string;
 }
 ```

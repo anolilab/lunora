@@ -1498,6 +1498,42 @@ export const archive = mutation({
             expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
         });
 
+        it("stops rerunning, and says why, once a non-idempotent hook has spun the recheck twice", async () => {
+            expect.assertions(2);
+
+            // The recheck converges for any idempotent `postcodegen` — a formatter
+            // reaches a fixed point on its second pass. A hook that writes DIFFERENT
+            // bytes under the schema directory every run never does, and would hand
+            // the dev loop back exactly the spin the settle window exists to
+            // prevent. MAX_SETTLE_RERUNS caps it: the initial run plus two reruns.
+            writeFixture(workdir);
+
+            let hookRuns = 0;
+
+            vi.mocked(runPostCodegenHook).mockImplementation(async () => {
+                hookRuns += 1;
+
+                // Stands in for a hook stamping a timestamp/generated id into a
+                // schema-directory file: never the same bytes twice.
+                writeFileSync(join(workdir, "lunora", "stamp.ts"), `export const stamp = ${String(hookRuns)};\n`, "utf8");
+
+                return { ran: true };
+            });
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+            changeListenerFor(server)(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(3);
+
+            const warnings = (server.config.logger.warn as ReturnType<typeof vi.fn>).mock.calls.map((call) => String(call[0]));
+
+            expect(warnings.join("\n")).toContain("keeps rewriting the schema sources");
+        });
+
         it("resumes regenerating once the settle window has passed", async () => {
             expect.assertions(1);
 
