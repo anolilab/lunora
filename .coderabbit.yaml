@@ -35,6 +35,9 @@
             - "fix/r8-client-react"
             - "fix/r8-do-streams"
             - "fix/r8-edges"
+            - "fix/r8-compute"
+            # Any later audit-chain branch (regex, per CodeRabbit's base_branches).
+            - "fix/r[0-9]+-.*"
 
     "profile": "chill"
 
