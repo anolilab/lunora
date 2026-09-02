@@ -297,7 +297,7 @@ export type PushContent = Omit<PushPayload, "to">;
  * single-channel convenience senders for the edge-safe channels.
  */
 export interface LunoraNotify {
-    /** Send an outbound webhook. */
+    /** Post to a chat channel (Slack/Discord/Teams/Telegram). */
     chat: (payload: ChatPayload) => Promise<Receipt>;
     /** Deliver an in-app inbox notification. */
     inApp: (payload: InAppPayload) => Promise<Receipt>;
@@ -305,7 +305,7 @@ export interface LunoraNotify {
     push: LunoraPush;
     /** Deliver a multi-channel message (one payload per channel). */
     send: (message: NotificationMessage) => Promise<Receipt[]>;
-    /** Post to a chat channel (Slack/Discord/Teams/Telegram). */
+    /** Send an outbound webhook. */
     webhook: (payload: WebhookPayload) => Promise<Receipt>;
 }
 

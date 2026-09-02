@@ -88,20 +88,24 @@ export { ShardDO };
 
 ### Workers Cache
 
-When `cache: { enabled: true }` is present in `wrangler.jsonc` and `compatibility_date >= "2026-05-01"`, the runtime forwards the Worker's `ExecutionContext.cache` into action handlers as `ctx.cache`. This lets you purge cache by tag from HTTP action handlers:
+When `cache: { enabled: true }` is present in `wrangler.jsonc` and `compatibility_date >= "2026-05-01"`, the runtime forwards the Worker's `ExecutionContext.cache` into the **HTTP action** context as `ctx.cache`. This lets you purge cache by tag from an `httpRouter()` handler:
 
 ```ts
-export const refreshProducts = action.action(async ({ ctx }) => {
-    if (!ctx.cache) {
-        throw new Error("Workers Cache is not enabled in wrangler.jsonc");
-    }
+app.post(
+    "/admin/refresh-products",
+    httpAction(async (ctx) => {
+        if (!ctx.cache) {
+            return new Response("Workers Cache is not enabled in wrangler.jsonc", { status: 501 });
+        }
 
-    await ctx.cache.purge({ tags: ["products"] });
-    return { ok: true };
-});
+        await ctx.cache.purge({ tags: ["products"] });
+
+        return Response.json({ ok: true });
+    }),
+);
 ```
 
-The `ctx.cache` binding is only available in **action** handlers (not query/mutation), because actions run in the Worker while queries/mutations run inside the Durable Object. Cache header declarations on `httpRoute` (`.cacheControl()`, `.cacheTag()`, `.vary()`) are attached by `@lunora/server` before the response leaves the handler.
+The `ctx.cache` binding reaches **HTTP action handlers only**. Queries, mutations, and RPC actions all run inside the Durable Object, which has no cache binding, so `ctx.cache` is `undefined` for every one of them — always branch on it. Cache header declarations on `httpRoute` (`.cacheControl()`, `.cacheTag()`, `.vary()`) are attached by `@lunora/server` before the response leaves the handler.
 
 ### Scheduled backups
 

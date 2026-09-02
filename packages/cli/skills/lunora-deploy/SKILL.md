@@ -148,7 +148,8 @@ file: on first use it runs `CREATE TABLE IF NOT EXISTS` plus additive
 Anything the generator cannot express — a backfilling `UPDATE`, a rename
 written as add/copy/drop, an index the schema does not declare — must be
 applied by hand:
-`wrangler d1 execute <DB> --remote --file=lunora/migrations/<file>.sql`.
+`wrangler d1 execute <DB> --remote --file=lunora/migrations/<file>.sql`. The
+file is multi-statement, so it is not a `@lunora/d1` `Migration` either.
 For data backfills, deploy first, then `lunora deploy --migrate --migrate-yes
 --migrate-url <url>` (or `lunora migrate up --prod`). See
 `lunora-migration-helper`.

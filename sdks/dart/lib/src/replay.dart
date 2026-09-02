@@ -49,6 +49,16 @@ class OfflineReplayer {
   final Set<String> _flushing = <String>{};
   final Set<String> _flushAgain = <String>{};
 
+  /// Elapsed milliseconds before which a flush is a no-op, set when a replay came
+  /// back rate-limited and the envelope named a delay.
+  ///
+  /// Measured against [_clock] rather than the wall clock, so a device's clock
+  /// jumping — an NTP correction, a user changing the date — cannot strand a
+  /// queue for hours.
+  int _flushNotBefore = 0;
+
+  final Stopwatch _clock = Stopwatch()..start();
+
   /// Replay every queued write, oldest first.
   ///
   /// Called for you on the transition to connected; public because a caller that
@@ -58,7 +68,9 @@ class OfflineReplayer {
   /// queue, because the client is connected by then. That matches the reference
   /// client, whose gate opens the moment its socket does; if a strict global
   /// order matters, wait for this Future before writing again.
-  Future<void> flush({String? shardKey}) async {
+  /// Returns the milliseconds the server asked the caller to wait before
+  /// flushing again, when a replay came back rate-limited, and null otherwise.
+  Future<int?> flush({String? shardKey}) async {
     final shard = shardKey ?? '';
 
     if (_flushing.contains(shard)) {
@@ -68,22 +80,25 @@ class OfflineReplayer {
       // untouched until some LATER reconnect happened to come along.
       _flushAgain.add(shard);
 
-      return;
+      return null;
     }
 
     _flushing.add(shard);
 
     try {
       bool again;
+      int? retryAfter;
 
       do {
         _flushAgain.remove(shard);
 
-        await _flushOnce(shardKey);
+        retryAfter = await _flushOnce(shardKey);
         // Only while THIS shard is still connected, so a disconnect that lands
         // mid-pass ends the loop instead of retrying into a socket that is down.
         again = _flushAgain.contains(shard);
       } while (again && isConnected(shardKey));
+
+      return retryAfter;
     } finally {
       _flushing.remove(shard);
       _flushAgain.remove(shard);
@@ -92,7 +107,7 @@ class OfflineReplayer {
 
   /// One drain-and-replay pass. See [flush], which owns the
   /// re-entrancy and the coalesced-reconnect loop around it.
-  Future<void> _flushOnce(String? shardKey) async {
+  Future<int?> _flushOnce(String? shardKey) async {
     // A client with no poster cannot replay anything. Checked here rather than
     // per write, because the two replay shapes classified it oppositely: the
     // single-call path saw a CODED error and rejected the whole queue
@@ -100,7 +115,16 @@ class OfflineReplayer {
     // missing poster is configuration, not a verdict on any write, so nothing is
     // drained and nothing is lost.
     if (isClosed() || !transport.canSend) {
-      return;
+      return null;
+    }
+
+    // A server that answered "not now" gets waited out. Without this the
+    // caller's own reconnect loop replays the identical burst immediately and
+    // earns the same 429, indefinitely.
+    final remaining = _flushNotBefore - _clock.elapsedMilliseconds;
+
+    if (remaining > 0) {
+      return remaining;
     }
 
     // Weed out writes whose assumptions expired while offline before draining
@@ -115,7 +139,7 @@ class OfflineReplayer {
     final drained = queue.drain((item) => sameShard(item.shardKey, shardKey));
 
     if (drained.isEmpty) {
-      return;
+      return null;
     }
 
     // ONE identity snapshot for the whole batch: a replay is a sequence of
@@ -137,38 +161,98 @@ class OfflineReplayer {
     final encodable = _encodableOrSettleTerminal(sendable);
 
     if (encodable.isEmpty) {
-      return;
+      return null;
     }
+
+    final state = _FlushState();
 
     // A lone write rides the single-call path, which is the proven one. Two or
     // more coalesce into batch round trips — the flaky-reconnect win, where N
     // queued writes cost a handful of hops instead of N.
     if (encodable.length == 1) {
-      await _replaySequential(encodable);
+      await _replaySequential(encodable, state);
 
-      return;
+      return state.retryAfterMs;
     }
 
     final toRequeue = <QueuedMutation>[];
+    final chunks = _chunkBatches(encodable);
 
-    for (var start = 0; start < encodable.length; start += lunoraMaxBatchEntries) {
-      final end = start + lunoraMaxBatchEntries > encodable.length ? encodable.length : start + lunoraMaxBatchEntries;
+    for (var index = 0; index < chunks.length; index += 1) {
       // Chunks replay sequentially, which is what preserves FIFO across a flush
       // longer than one batch.
-      final outcome = await _replayBatched(encodable.sublist(start, end));
+      final outcome = await _replayBatched(chunks[index], state);
 
       toRequeue.addAll(outcome.requeue);
 
       if (outcome.stop) {
         // A whole-chunk transport failure. Leave every write not yet sent queued,
         // in order, rather than sending on into a connection that just failed.
-        toRequeue.addAll(encodable.sublist(end));
+        for (final later in chunks.sublist(index + 1)) {
+          toRequeue.addAll(later);
+        }
 
         break;
       }
     }
 
     _returnOrAbandon(toRequeue);
+
+    return state.retryAfterMs;
+  }
+
+  /// A batch entry's contribution to the request body, in bytes.
+  ///
+  /// The args dominate and are the only part that can be large; the constant
+  /// covers the entry's fixed keys and the comma joining it to the next one.
+  /// Encoding twice — here and in [_replayBatched] — is deliberate: the flush is
+  /// the slow reconnect path, and carrying the encoded form through the chunker
+  /// would hold a second representation of every queued write in memory.
+  static int _entryBytes(QueuedMutation item) =>
+      utf8.encode(jsonEncode(encodeWire(item.args ?? const <String, Object?>{}))).length + item.functionPath.length + item.id.length + 160;
+
+  /// Split a flush into batch bodies the worker will accept.
+  ///
+  /// By BYTES as well as by count: the worker reads a batch body under a 1 MiB
+  /// budget and answers `413 PAYLOAD_TOO_LARGE` past it, so 500 writes carrying
+  /// bytes or long text are one request the server refuses whole. A single write
+  /// over the budget still forms its own chunk — splitting cannot help it, and
+  /// [_replayBatched] settles it on the answer.
+  static List<List<QueuedMutation>> _chunkBatches(List<QueuedMutation> items) {
+    final chunks = <List<QueuedMutation>>[];
+    var current = <QueuedMutation>[];
+    var size = 0;
+
+    for (final item in items) {
+      final cost = _entryBytes(item);
+
+      if (current.isNotEmpty && (current.length >= lunoraMaxBatchEntries || size + cost > lunoraMaxBatchBytes)) {
+        chunks.add(current);
+        current = <QueuedMutation>[];
+        size = 0;
+      }
+
+      current.add(item);
+      size += cost;
+    }
+
+    if (current.isNotEmpty) {
+      chunks.add(current);
+    }
+
+    return chunks;
+  }
+
+  /// Record a rate limit's delay, and hold the next flush off until it passes.
+  void _noteRetryAfter(_FlushState state, Object error) {
+    final delay = retryAfterMs(error);
+
+    if (delay == null) {
+      return;
+    }
+
+    state.retryAfterMs = delay;
+    _flushNotBefore = _flushNotBefore > _clock.elapsedMilliseconds + delay ? _flushNotBefore : _clock.elapsedMilliseconds + delay;
   }
 
   /// Put drained writes back on the queue, or settle them if the client closed
@@ -223,7 +307,7 @@ class OfflineReplayer {
   }
 
   /// Replay writes one at a time. FIFO is preserved by the loop itself.
-  Future<void> _replaySequential(List<QueuedMutation> items) async {
+  Future<void> _replaySequential(List<QueuedMutation> items, _FlushState state) async {
     for (var index = 0; index < items.length; index += 1) {
       final item = items[index];
 
@@ -234,8 +318,19 @@ class OfflineReplayer {
         item.onCommit?.call(outcome.commitCursor);
         item.resolve(outcome.result);
       } on LunoraApiException catch (error) {
-        // A coded error means the server answered and rejected the write.
-        // Terminal: replaying it would fail identically forever.
+        // Coded, but not necessarily a VERDICT. A 5xx, an envelope-less non-2xx
+        // (an edge error page, a WAF block, a proxy), a shard blip or a rate
+        // limit all mean the write never reached one — so it goes back on the
+        // queue rather than being dropped for having been alone in the flush.
+        if (isTransientFailure(error)) {
+          _noteRetryAfter(state, error);
+          _returnOrAbandon(items.sublist(index));
+
+          return;
+        }
+
+        // The server answered and rejected the write. Terminal: replaying it
+        // would fail identically forever.
         queue.unpersist(item.id);
         item.reject(error);
       } on Object {
@@ -258,7 +353,7 @@ class OfflineReplayer {
   /// Returns the writes to re-queue, and whether the caller should STOP: a
   /// whole-chunk transport failure leaves the later chunks unsent. Re-queuing is
   /// the caller's, once and in order, so a write cannot land twice in the queue.
-  Future<({List<QueuedMutation> requeue, bool stop})> _replayBatched(List<QueuedMutation> items) async {
+  Future<({List<QueuedMutation> requeue, bool stop})> _replayBatched(List<QueuedMutation> items, _FlushState state) async {
     if (!transport.canSend) {
       return (requeue: items, stop: true);
     }
@@ -303,7 +398,7 @@ class OfflineReplayer {
     final results = body['results'];
 
     if (results is List) {
-      return (requeue: _settleBatchSlots(items, results), stop: false);
+      return (requeue: _settleBatchSlots(items, results, state), stop: false);
     }
 
     // No per-slot results. A coded envelope is a verdict on the whole batch — a
@@ -316,7 +411,35 @@ class OfflineReplayer {
         envelope['code'] is String ? envelope['code'] as String : 'INTERNAL',
         envelope['message'] is String ? envelope['message'] as String : 'batch rejected',
         envelope['data'] == null ? null : decodeWire(envelope['data']),
+        response.status >= 500,
       );
+
+      // The body was too big, not wrong — every entry in it would have committed
+      // alone. Halve and retry: the estimate the chunker used cannot see the
+      // framing the worker actually measured, and only the answer can.
+      if (error.code == payloadTooLarge && items.length > 1) {
+        final middle = items.length ~/ 2;
+        final left = await _replayBatched(items.sublist(0, middle), state);
+
+        if (left.stop) {
+          // The left half stopped the flush, so the right half is re-queued
+          // UNSENT and in order behind it.
+          return (requeue: <QueuedMutation>[...left.requeue, ...items.sublist(middle)], stop: true);
+        }
+
+        final right = await _replayBatched(items.sublist(middle), state);
+
+        return (requeue: <QueuedMutation>[...left.requeue, ...right.requeue], stop: right.stop);
+      }
+
+      // A shard blip, a gateway failure or a rate limit is not a verdict on the
+      // batch's contents. Requeue it whole and stop the flush, exactly as the
+      // single-call path does for the same codes.
+      if (isTransientFailure(error)) {
+        _noteRetryAfter(state, error);
+
+        return (requeue: items, stop: true);
+      }
 
       for (final item in items) {
         queue.unpersist(item.id);
@@ -332,7 +455,7 @@ class OfflineReplayer {
   /// Demux a batch reply back onto the writes it replayed, in input order,
   /// classifying each slot exactly as the single-call replay classifies a whole
   /// response. Returns the writes to re-queue.
-  List<QueuedMutation> _settleBatchSlots(List<QueuedMutation> items, List<Object?> results) {
+  List<QueuedMutation> _settleBatchSlots(List<QueuedMutation> items, List<Object?> results, _FlushState state) {
     final bySlot = <int, Map<String, Object?>>{};
 
     for (final entry in results) {
@@ -364,22 +487,24 @@ class OfflineReplayer {
       final envelope = slot['error'];
 
       if (envelope is Map<String, Object?>) {
-        final code = envelope['code'] is String ? envelope['code'] as String : 'INTERNAL';
+        final error = LunoraApiException(
+          envelope['code'] is String ? envelope['code'] as String : 'INTERNAL',
+          envelope['message'] is String ? envelope['message'] as String : 'request failed',
+          envelope['data'] == null ? null : decodeWire(envelope['data']),
+        );
 
-        // A transient shard failure is the batch's counterpart of an uncoded
-        // throw on the single-call path: the server never reached a verdict, so
-        // the write goes back on the queue rather than being reported as failed.
-        if (transientBatchErrorCodes.contains(code)) {
+        // The SAME predicate the whole-batch and single-call paths use, not a
+        // second code set beside them: a slot's `body` is exactly a §4.2
+        // envelope, so a durable write's fate must not depend on how many
+        // siblings were queued alongside it. A shard that was never reached and
+        // a limiter that refused to look are both "no verdict", so the write goes
+        // back on the queue rather than being reported as failed.
+        if (isTransientFailure(error)) {
+          _noteRetryAfter(state, error);
           requeue.add(item);
         } else {
           queue.unpersist(item.id);
-          item.reject(
-            LunoraApiException(
-              code,
-              envelope['message'] is String ? envelope['message'] as String : 'request failed',
-              envelope['data'] == null ? null : decodeWire(envelope['data']),
-            ),
-          );
+          item.reject(error);
         }
 
         continue;
@@ -394,4 +519,14 @@ class OfflineReplayer {
 
     return requeue;
   }
+}
+
+/// What one flush pass has learned that its caller needs after it ends.
+///
+/// One mutable holder threaded through the replay shapes rather than a return
+/// value on each: a flush that splits a batch recursively has several places
+/// that can meet a rate limit, and only the outermost caller reports one.
+class _FlushState {
+  /// Milliseconds the server asked the caller to wait before flushing again.
+  int? retryAfterMs;
 }

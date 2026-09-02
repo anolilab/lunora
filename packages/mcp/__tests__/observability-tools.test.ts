@@ -46,8 +46,8 @@ describe("observability tool definitions", () => {
     });
 });
 
-describe("token-tier gating", () => {
-    it("omits the observability tools from the advertised list when no admin token resolved", () => {
+describe("observability-tier gating", () => {
+    it("omits the observability tools from the advertised list without the opt-in", () => {
         expect.assertions(2);
 
         const names = toolDefinitions(false).map((tool) => tool.name);
@@ -56,7 +56,7 @@ describe("token-tier gating", () => {
         expect(names.some((name) => OBSERVABILITY_NAMES.includes(name))).toBe(false);
     });
 
-    it("advertises them once a token resolved, without disturbing the write tier", () => {
+    it("advertises them once opted in, without disturbing the write tier", () => {
         expect.assertions(2);
 
         expect(toolDefinitions(false, true).map((tool) => tool.name)).toStrictEqual([
@@ -77,7 +77,7 @@ describe("token-tier gating", () => {
         ]);
     });
 
-    it("keeps the token tier independent of the write tier", () => {
+    it("keeps the observability tier independent of the write tier", () => {
         expect.assertions(1);
 
         // `--allow-writes` must not smuggle in the privileged reads.
@@ -91,18 +91,18 @@ describe("token-tier gating", () => {
         ]);
     });
 
-    it.each(OBSERVABILITY_NAMES)("refuses %s at dispatch when no admin token resolved, without touching the client", async (name) => {
+    it.each(OBSERVABILITY_NAMES)("refuses %s at dispatch without the opt-in, without touching the client", async (name) => {
         expect.assertions(3);
 
         const mock = mockClient();
         const result = await callTool(mock.asClient, name, {});
 
         expect(result.isError).toBe(true);
-        expect(result.content[0]!.text).toContain("admin token");
+        expect(result.content[0]!.text).toContain("LUNORA_MCP_ALLOW_OBSERVABILITY");
         expect(mock.query).not.toHaveBeenCalled();
     });
 
-    it("refuses at dispatch even when writes are enabled but no token resolved", async () => {
+    it("refuses at dispatch even when writes are enabled but observability is not", async () => {
         expect.assertions(2);
 
         const mock = mockClient();

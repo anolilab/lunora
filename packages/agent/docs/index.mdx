@@ -194,8 +194,15 @@ a thread that already has a _different_ instance in flight:
 
 - **`"reject"`** (default): fail the new run fast with a `CONFLICT` error.
 - **`"replace"`**: terminate the in-flight instance and take the thread over.
-- **`"queue"`**: reserved for a future durable queue; currently degrades to
-  `"reject"` (no queue exists yet).
+- **`"queue"`**: park the new run behind the one in flight (FIFO, **up to five
+  deep**) and hibernate it until the thread is handed over. Each parked run is a
+  live Workflow instance waiting on an event, so the depth cap is a real
+  resource bound — a sixth start is rejected exactly as `"reject"` would be, and
+  a parked run waits at most **12 hours** for its turn. A `"replace"` arriving
+  later supersedes the run in _flight_, not the queue. A dispatch with no
+  instance id (the inbound-email / inbound-channel paths) cannot be parked —
+  nothing later could tell it apart from another such dispatch to wake it — so
+  `"queue"` rejects those.
 
 A workflow _replay_ re-enters under the same instance id and is never treated as
 a concurrent run.
@@ -226,6 +233,16 @@ helpers dispatch it). On approve the tool runs exactly as normal; on reject it
 is skipped and a tool result explaining the rejection is persisted so the next
 turn recovers. Because `needsApproval` runs on replay, keep it deterministic
 (no `Date.now()`/`Math.random()`).
+
+**An unanswered approval is not pending forever.** The wait carries a timeout —
+`approvalTimeout` on the agent config, default `"3 days"`, **clamped to one
+week** — and when it elapses the call is recorded as **rejected** ("approval
+timed out") and the run continues down the normal rejection path. It has to: a
+wait that outlived the thread's abandoned-run horizon would let a new run
+reclaim the thread while the approval was still pending, so the approval could
+never be answered at all. Size `approvalTimeout` to your on-call reality, and do
+not assume an approval raised before a long weekend is still waiting on
+Monday.
 
 ## Client hooks
 
@@ -474,10 +491,18 @@ consuming step rebuild it.
 This is a **safe interpreted data-flow** between the whitelisted tools you hand
 `codeTool`, not arbitrary JavaScript, so there is no `eval` or isolate and it
 runs natively in workerd. Each composed tool still dispatches through the same
-durable context a normal call gets, keeping its RLS and its own `needsApproval`
-gate (a script can't smuggle a call past a sub-tool's approval), and each step's
+durable context a normal call gets, keeping its RLS, and each step's
 resolved input is validated against that tool's own `inputSchema` — the same
-check a top-level call gets. Scripts are capped at `maxSteps` (default 16); a
+check a top-level call gets.
+
+A composed tool's own `needsApproval` gate is **not** carried, because a script
+runs its steps in one shot and cannot hibernate mid-way for a human decision.
+`codeTool` therefore refuses at construction to compose any tool that declares
+one — the agent module throws on load rather than silently bypassing the gate.
+Expose that tool as a normal top-level tool, or gate the whole script with
+`codeTool`'s own `needsApproval`.
+
+Scripts are capped at `maxSteps` (default 16); a
 longer script is **rejected** (`code_tool_too_many_steps`) rather than run as a
 prefix, so the model can split the work instead of silently losing its trailing
 steps. Running arbitrary model-authored _code_ in an isolate (the Cloudflare
@@ -863,8 +888,12 @@ export const support = defineAgent({
   rendering deterministic `- alice —[works_at]→ acme` triples that are injected
   like any other memory context. Reads are always bounded; **storage is not**.
 - **Storage grows unbounded, with no eviction or TTL (yet).** Every run appends new
-  entities/edges (deduped by normalized name / triple, weight last-write-wins),
-  and nothing prunes stale ones. Traversal stays fast because it is bounded by
+  entities/edges, deduped by normalized name / triple. Weight is **monotonic**,
+  not last-write-wins: an edge's weight becomes `max(prior, confidence)` and an
+  entity's weight is never updated after insert, so a later extraction that
+  lowers a relation's confidence has no effect — a stale high-confidence edge
+  keeps out-ranking under `fanOut` and cannot be corrected by restating it more
+  weakly. Nothing prunes stale ones. Traversal stays fast because it is bounded by
   the knobs above, but the tables keep growing over an owner's lifetime; a
   weight/age-based prune is a planned follow-up. Note too that normalization is
   light (trim / collapse whitespace / lowercase), so distinct senses of the same
@@ -902,8 +931,10 @@ export const support = defineAgent({
 - **Recency recall on read.** A `memory:recall` step returns the owner's most
   recent `recall` episodes (default 5, max 20) rendered oldest → newest as
   `- <summary>` lines, injected like any other memory context.
-- Same accumulate-forever caveat as the graph tier: episodes are never evicted
-  (a weight/age prune is a follow-up).
+- Unlike the graph tier, episodes **are** capped: every `agentEpisodeUpsert`
+  deletes the owner's oldest rows beyond **200**, so the table is bounded but is
+  not an audit log — once an owner passes 200 runs, the earliest episodes are
+  gone.
 
 ## Testing
 

@@ -18,6 +18,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 
+import type { CodegenOptions } from "@lunora/codegen";
 import { CodegenDiagnosticError, runCodegen } from "@lunora/codegen";
 
 import join from "../path";
@@ -25,6 +26,7 @@ import type { ApplyFailureReason, SchemaEdit } from "../schema-edit/mutate";
 import { applyAdditiveEdit, classifyEdit } from "../schema-edit/mutate";
 import type { ParseSchemaResult, SchemaTable } from "../schema-edit/parse";
 import { parseSchema } from "../schema-edit/parse";
+import { studioCodegenOptions } from "./codegen-options";
 import writeFileAtomic from "./write-atomic";
 
 /**
@@ -36,6 +38,8 @@ const SCHEMA_EDIT_ENDPOINT = "/__lunora/schema-edit";
 
 /** A request adapted from the host transport. */
 interface SchemaEditRequest {
+    /** API-spec mode the host runs codegen with; forwarded to the regeneration. */
+    readonly apiSpec?: CodegenOptions["apiSpec"];
     /** Parsed JSON body for a `POST`; ignored for `GET`. */
     readonly body?: unknown;
     /** HTTP method (`GET` / `POST`). */
@@ -146,7 +150,7 @@ const handlePost = (request: SchemaEditRequest, schemaPath: string): SchemaEditR
     let diagnostics: ReadonlyArray<string> = [];
 
     try {
-        runCodegen({ lunoraDirectory: request.schemaDirectory ?? "lunora", projectRoot: request.projectRoot });
+        runCodegen(studioCodegenOptions(request));
     } catch (error: unknown) {
         if (error instanceof CodegenDiagnosticError) {
             diagnostics = [error.message];

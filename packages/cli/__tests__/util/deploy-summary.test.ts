@@ -46,7 +46,8 @@ describe("renderDeploySummary", () => {
         // discovery had thrown or the project declared none. The migration path
         // already logs each id it applies.
         expect(out).not.toContain("migrations:");
-        expect(out).toContain("lunora view --remote");
+        // No studio line: the studio is local-only, so there was never a deployed one to open.
+        expect(out).not.toContain("lunora view");
         expect(out).toContain("lunora logs");
     });
 

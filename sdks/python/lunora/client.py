@@ -116,10 +116,18 @@ def parse_rpc_response(body: dict, status: int) -> Any:
     if "error" in body:
         err = body["error"]
         data = decode_wire(err["data"]) if "data" in err and err["data"] is not None else None
-        raise LunoraError(err.get("code", "INTERNAL"), err.get("message", "request failed"), data)
+        # A 5xx is the shard or the edge failing under the call, not a verdict on
+        # it, so a queued write replayed under the same idempotency key is still
+        # good. See `lunora.submit.is_transient`.
+        raise LunoraError(err.get("code", "INTERNAL"), err.get("message", "request failed"), data, transient=status >= 500)
 
     if not 200 <= status <= 299:
-        raise LunoraError("INTERNAL", f"HTTP {status} without an error envelope")
+        # No envelope at all, so this body never came from a Lunora function: an
+        # edge error page, a WAF block, a proxy. Nothing reached the shard, which
+        # makes it transport rather than a verdict — the batch path already
+        # classified the identical response that way, and a lone queued write
+        # must not be dropped for being alone.
+        raise LunoraError("INTERNAL", f"HTTP {status} without an error envelope", transient=True)
 
     return decode_wire(body.get("result"))
 
@@ -269,6 +277,10 @@ class LunoraClient:
         #: itself an identity a write can be stamped with.
         self.identity = identity
         self._settled_listeners: list[Callable[[MutationSettled], None]] = []
+        #: `time.monotonic()` before which a flush is a no-op, set when a replay
+        #: came back rate-limited and the envelope named a delay. Monotonic, so a
+        #: wall-clock adjustment cannot strand a queue for hours.
+        self._flush_not_before = 0.0
         self._was_ever_connected = False
         self._closed = False
         self._subs: dict[str, _Subscription] = {}

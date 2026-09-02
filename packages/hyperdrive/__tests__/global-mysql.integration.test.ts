@@ -347,6 +347,37 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
         );
 
         it(
+            "groupBy() over the indexed aggregate counter (regression: `key` is a reserved word on MySQL 8)",
+            async () => {
+                expect.assertions(1);
+
+                // The unconstrained group key takes the enumerate branch, which
+                // aliases the companion's `__key__` column. The alias was emitted
+                // bare — and `KEY` is reserved in MySQL 8, so the statement failed
+                // to parse (ER_PARSE_ERROR) and every `groupBy` whose `by` matches
+                // an `aggregateIndex` and carries no `where` was a 500. Postgres
+                // and SQLite accept the bare token, so only a real MySQL sees it.
+                await runSqlGlobalTableMigrations(harness.exec, aggregateSchema, mysqlDialect);
+                await runSqlAggregateMigrations(harness.exec, aggregateSchema, mysqlDialect);
+                const writer = writerFor(aggregateSchema);
+
+                await seed(writer);
+
+                const groups = await writer.groupBy("todos", { agg: { field: "seq", op: "sum" }, by: ["projectId"] });
+
+                expect(
+                    groups
+                        .map((group) => [(group.key as { projectId: string }).projectId, group.value] as const)
+                        .toSorted((left, right) => left[0].localeCompare(right[0])),
+                ).toEqual([
+                    ["p1", 6],
+                    ["p2", 4],
+                ]);
+            },
+            TEST_TIMEOUT,
+        );
+
+        it(
             "rankPage() over the indexed rank companion (per-kind sort-key column)",
             async () => {
                 expect.assertions(1);

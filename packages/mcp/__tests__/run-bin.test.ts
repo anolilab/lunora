@@ -42,7 +42,14 @@ describe("runBin", () => {
 
         await runBin({ LUNORA_ADMIN_TOKEN: "admin-token", LUNORA_URL: "https://example.workers.dev" }, { connect, writeError });
 
-        expect(connect).toHaveBeenCalledWith({ agents: [], allowAgents: false, allowWrites: false, token: "admin-token", url: "https://example.workers.dev" });
+        expect(connect).toHaveBeenCalledWith({
+            agents: [],
+            allowAgents: false,
+            allowObservability: false,
+            allowWrites: false,
+            token: "admin-token",
+            url: "https://example.workers.dev",
+        });
     });
 
     // Every tool reaches admin-gated `/_lunora/admin/*` routes, so a tokenless
@@ -82,7 +89,38 @@ describe("runBin", () => {
             { connect, writeError },
         );
 
-        expect(connect).toHaveBeenCalledWith({ agents: [], allowAgents: false, allowWrites: true, token: "admin-token", url: "https://example.workers.dev" });
+        expect(connect).toHaveBeenCalledWith({
+            agents: [],
+            allowAgents: false,
+            allowObservability: false,
+            allowWrites: true,
+            token: "admin-token",
+            url: "https://example.workers.dev",
+        });
+    });
+
+    // The five `lunora_get_*` reads ship production log lines and grouped error
+    // messages to the model provider, so holding the admin bearer (which every
+    // tool needs) must not be what turns them on.
+    it("exposes the observability tools only when LUNORA_MCP_ALLOW_OBSERVABILITY is truthy", async () => {
+        expect.assertions(1);
+
+        const connect = vi.fn<Connect>(async () => undefined);
+        const writeError = vi.fn<WriteError>();
+
+        await runBin(
+            { LUNORA_ADMIN_TOKEN: "admin-token", LUNORA_MCP_ALLOW_OBSERVABILITY: "1", LUNORA_URL: "https://example.workers.dev" },
+            { connect, writeError },
+        );
+
+        expect(connect).toHaveBeenCalledWith({
+            agents: [],
+            allowAgents: false,
+            allowObservability: true,
+            allowWrites: false,
+            token: "admin-token",
+            url: "https://example.workers.dev",
+        });
     });
 
     it("exposes agent tools when LUNORA_MCP_ALLOW_AGENTS is truthy and LUNORA_MCP_AGENTS is set", async () => {
@@ -109,6 +147,7 @@ describe("runBin", () => {
                 { description: "Billing help", name: "billing" },
             ],
             allowAgents: true,
+            allowObservability: false,
             allowWrites: false,
             token: "admin-token",
             url: "https://example.workers.dev",

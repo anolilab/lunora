@@ -924,7 +924,7 @@ export interface AgentAsToolOptions {
     /** What the sub-agent does — shown to the parent's model (it decides from it). */
     description: string;
 
-    /** Cap on child-run status polls before giving up — a positive integer. Default 120. */
+    /** Cap on child-run status polls before giving up — a positive integer. Default 600 (with the 500 ms default interval, a five-minute budget). */
     maxPolls?: number;
 
     /**

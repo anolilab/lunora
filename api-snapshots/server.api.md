@@ -1904,8 +1904,8 @@ interface Scheduler {
     }>;
     get: (id: string) => Promise<ScheduledJob | null>;
     list: () => Promise<ScheduledJob[]>;
-    runAfter: (delayMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
+    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
 }
 ```
 
