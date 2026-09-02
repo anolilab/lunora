@@ -200,14 +200,25 @@ const dispatchAgentEmail = (targets: ReadonlyArray<AgentEmailTarget>): InboundAg
         // routes through, so a mapper that forgets is not the only thing
         // standing between a forged sender and a privileged run.
         verify: (email) => {
-            const { dkim, dkimDomain, dmarc, dmarcDomain, spf, spfDomain } = email.authentication;
+            const { dkim, dmarc, spf } = email.authentication;
             const from = fromDomain(email.from);
 
             if (from === undefined) {
                 return false;
             }
 
-            return (dmarc === "pass" && dmarcDomain === from) || (spf === "pass" && spfDomain === from) || (dkim === "pass" && dkimDomain === from);
+            // EVERY reported clause of a method is considered, not just the
+            // first. One header legitimately reports a method more than once —
+            // an ESP-relayed message is DKIM-signed by both the relay and the
+            // author domain — and reading only the first threw away the aligned
+            // pass whenever the MX happened to list the other one ahead of it,
+            // bouncing mail it had fully authenticated. "Any clause passes AND
+            // aligns" is still strictly narrower than a bare pass: a clause that
+            // vouches for some other domain contributes nothing.
+            const alignedPass = (results: ReadonlyArray<{ domain: null | string; result: string }>): boolean =>
+                results.some((entry) => entry.result === "pass" && entry.domain === from);
+
+            return alignedPass(dmarc) || alignedPass(spf) || alignedPass(dkim);
         },
     });
 

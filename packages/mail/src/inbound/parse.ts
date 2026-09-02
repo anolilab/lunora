@@ -33,6 +33,19 @@ interface InboundAttachment {
     mimeType: string;
 }
 
+/** One reported `method=result [ptype.property=value]` clause of an `Authentication-Results` header. */
+interface InboundAuthResult {
+    /**
+     * The identifier the result is about, lowercased — DKIM's signing domain
+     * (`header.d=`), SPF's envelope `MAIL FROM` domain (`smtp.mailfrom=`, local
+     * part dropped) or DMARC's `header.from=`. `null` when the clause reported
+     * none, in which case it cannot be aligned and vouches for nothing.
+     */
+    domain: string | null;
+    /** The result token, lowercased (`"pass"`, `"fail"`, `"none"`, …). */
+    result: string;
+}
+
 /**
  * Sender-authentication verdicts pulled from the `Authentication-Results` header
  * the receiving MX (e.g. Cloudflare Email Routing) stamped on the message.
@@ -42,17 +55,27 @@ interface InboundAttachment {
  * spoofable, so a downstream handler MUST NOT make trust/authorization decisions
  * on `email.from` alone — gate on these verdicts (or your own policy) instead.
  * Verdicts are best-effort: when the receiving MX did not stamp an
- * `Authentication-Results` header, every field is `null` ("unknown").
+ * `Authentication-Results` header, every list is empty ("unknown").
+ *
+ * Each method holds a LIST, because RFC 8601 lets one header report the same
+ * method more than once and real mail does. An ESP-relayed message carries two
+ * DKIM signatures — the relay's and the author domain's — and the MX stamps a
+ * clause per signature in whatever order it verified them. Keeping only the
+ * first threw the aligned one away whenever it was not the one that happened to
+ * come first, and the message was rejected as unauthenticated. A consumer
+ * therefore asks "does ANY reported clause pass and align?", not "did the first
+ * one?".
  *
  * SECURITY: a bare `"pass"` is NOT proof the `From` header is genuine. SPF
  * authenticates the envelope `MAIL FROM` domain and DKIM the signing domain
  * (`d=`), and an attacker controls both — `spf=pass smtp.mailfrom=evil.example;
  * dkim=pass header.d=evil.example` is routine for a message whose `From` says
  * `ceo@victim.example`. Each verdict therefore carries the identifier it is
- * about (`*Domain`): an SPF or DKIM pass only vouches for `from` when that
- * domain equals the `From` address's domain (RFC 7489 strict alignment). Only a
- * DMARC pass already checked alignment for you. A pass with no identifier
- * reported cannot be aligned and must be treated as unauthenticated.
+ * about ({@link InboundAuthResult.domain}): an SPF or DKIM pass only vouches for
+ * `from` when that domain equals the `From` address's domain (RFC 7489 strict
+ * alignment). Only a DMARC pass already checked alignment for you. A pass with
+ * no identifier reported cannot be aligned and must be treated as
+ * unauthenticated.
  *
  * SECURITY: verdicts are read from the **first/topmost** `Authentication-Results`
  * header in document order. The receiving MX prepends its own genuine header per
@@ -63,18 +86,12 @@ interface InboundAttachment {
  * config this runtime-agnostic parser does not carry, so it is left to the host.
  */
 interface InboundAuthentication {
-    /** DKIM verdict (`"pass"`/`"fail"`/…), or `null` when not reported. */
-    dkim: string | null;
-    /** Signing domain the DKIM verdict is about (`header.d=`, lowercased), or `null` when not reported. */
-    dkimDomain: string | null;
-    /** DMARC verdict (`"pass"`/`"fail"`/…), or `null` when not reported. */
-    dmarc: string | null;
-    /** `From` domain the DMARC verdict evaluated (`header.from=`, lowercased), or `null` when not reported. */
-    dmarcDomain: string | null;
-    /** SPF verdict (`"pass"`/`"fail"`/…), or `null` when not reported. */
-    spf: string | null;
-    /** Envelope `MAIL FROM` domain the SPF verdict is about (`smtp.mailfrom=`, local part dropped, lowercased), or `null` when not reported. */
-    spfDomain: string | null;
+    /** Every DKIM clause the header reported, in header order; empty when the method was not reported. */
+    dkim: InboundAuthResult[];
+    /** Every DMARC clause the header reported, in header order; empty when the method was not reported. */
+    dmarc: InboundAuthResult[];
+    /** Every SPF clause the header reported, in header order; empty when the method was not reported. */
+    spf: InboundAuthResult[];
 }
 
 /** Normalised, transport-agnostic view of a received message. */
@@ -87,8 +104,8 @@ interface InboundEmail {
      * about, parsed from the receiving MX's **first/topmost**
      * `Authentication-Results` header. SECURITY: see
      * {@link InboundAuthentication} — `from` is spoofable, and an SPF/DKIM pass
-     * vouches for it only when its `*Domain` equals the `From` domain (a DMARC
-     * pass checked that already). Reading the raw `headers["authentication-results"]`
+     * vouches for it only when that clause's `domain` equals the `From` domain (a
+     * DMARC pass checked that already). Reading the raw `headers["authentication-results"]`
      * map instead exposes last-wins (a lower, potentially attacker-injected)
      * value — trust `authentication`, not the raw map.
      */
@@ -142,46 +159,50 @@ const formatAddress = (entry: { address?: string; group?: { address?: string; na
 };
 
 /**
- * Pull one method's `method=result [ptype.property=value …]` clause out of an
- * `Authentication-Results` header value (RFC 8601: clauses are `;`-separated,
- * the first being the `authserv-id`). Returns the lowercased result and the
- * domain of the named property (the part after the last `@`, so `smtp.mailfrom`
- * may be a full address), each `null` when absent. Case-insensitive; CFWS
- * comments are dropped first so a `;` or `=` inside one cannot split a clause,
- * and the remaining CFWS (optional whitespace) is accepted around both `=`
- * separators — RFC 8601 permits `dkim = pass header.d = sender.example` just
- * as much as the tight form.
+ * Pull EVERY one of a method's `method=result [ptype.property=value …]` clauses
+ * out of an `Authentication-Results` header value (RFC 8601: clauses are
+ * `;`-separated, the first being the `authserv-id`). Each entry carries the
+ * lowercased result and the domain of the named property (the part after the
+ * last `@`, so `smtp.mailfrom` may be a full address), the domain `null` when
+ * the clause reported none.
+ *
+ * All of them, not the first: one header may report a method repeatedly — an
+ * ESP-relayed message is DKIM-signed twice — and the aligned clause is not
+ * reliably the first one. Case-insensitive; CFWS comments are dropped first so a
+ * `;` or `=` inside one cannot split a clause, and the remaining CFWS (optional
+ * whitespace) is accepted around both `=` separators, since RFC 8601 permits
+ * `dkim = pass header.d = sender.example` just as much as the tight form.
  */
-const authVerdict = (authResults: string, method: string, property: string): [result: string | null, domain: string | null] => {
-    const clause = new RegExp(String.raw`(?:^|;)\s*${method}\s*=\s*([a-z]+)([^;]*)`, "i").exec(authResults.replaceAll(/\([^()]*\)/g, ""));
+const authVerdicts = (authResults: string, method: string, property: string): InboundAuthResult[] => {
+    const clauses = authResults.replaceAll(/\([^()]*\)/g, "").matchAll(new RegExp(String.raw`(?:^|;)\s*${method}\s*=\s*([a-z]+)([^;]*)`, "gi"));
+    const propertyRe = new RegExp(String.raw`\b${property.replaceAll(".", String.raw`\.`)}\s*=\s*"?([^\s;"]+)`, "i");
 
-    if (!clause) {
-        // eslint-disable-next-line unicorn/no-null -- documented "method not reported" sentinel
-        return [null, null];
-    }
+    return [...clauses].map((clause) => {
+        const value = propertyRe.exec(clause[2] ?? "")?.[1];
 
-    const value = new RegExp(String.raw`\b${property.replaceAll(".", String.raw`\.`)}\s*=\s*"?([^\s;"]+)`, "i").exec(clause[2] ?? "")?.[1];
-
-    // eslint-disable-next-line unicorn/no-null -- documented "property not reported" sentinel
-    return [clause[1]?.toLowerCase() ?? null, value === undefined ? null : value.slice(value.lastIndexOf("@") + 1).toLowerCase()];
+        return {
+            // eslint-disable-next-line unicorn/no-null -- documented "property not reported" sentinel
+            domain: value === undefined ? null : value.slice(value.lastIndexOf("@") + 1).toLowerCase(),
+            result: (clause[1] ?? "").toLowerCase(),
+        };
+    });
 };
 
 /**
- * Parse the receiving MX's `Authentication-Results` header into DKIM/SPF/DMARC
- * verdicts plus the identifier each one is about. Returns all-`null`
+ * Parse the receiving MX's `Authentication-Results` header into the DKIM/SPF/DMARC
+ * clauses it reported, each with the identifier it is about. Returns empty lists
  * ("unknown") when the header is absent.
  */
 const parseAuthentication = (authResults: string | undefined): InboundAuthentication => {
     if (authResults === undefined || authResults === "") {
-        // eslint-disable-next-line unicorn/no-null -- all-`null` is the documented "unknown" verdict in the public `InboundAuthentication` contract.
-        return { dkim: null, dkimDomain: null, dmarc: null, dmarcDomain: null, spf: null, spfDomain: null };
+        return { dkim: [], dmarc: [], spf: [] };
     }
 
-    const [dkim, dkimDomain] = authVerdict(authResults, "dkim", "header.d");
-    const [dmarc, dmarcDomain] = authVerdict(authResults, "dmarc", "header.from");
-    const [spf, spfDomain] = authVerdict(authResults, "spf", "smtp.mailfrom");
-
-    return { dkim, dkimDomain, dmarc, dmarcDomain, spf, spfDomain };
+    return {
+        dkim: authVerdicts(authResults, "dkim", "header.d"),
+        dmarc: authVerdicts(authResults, "dmarc", "header.from"),
+        spf: authVerdicts(authResults, "spf", "smtp.mailfrom"),
+    };
 };
 
 /**
@@ -248,4 +269,4 @@ const parseInboundEmail = async (raw: RawInboundEmail): Promise<InboundEmail> =>
 };
 
 export { parseInboundEmail };
-export type { InboundAttachment, InboundAuthentication, InboundEmail, RawInboundEmail };
+export type { InboundAttachment, InboundAuthentication, InboundAuthResult, InboundEmail, RawInboundEmail };

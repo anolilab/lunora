@@ -484,9 +484,34 @@ const stripBranchMarker = (payload: unknown): unknown => {
  * Measured on the serialised form, because that is what the host puts on the
  * wire, and applied to the error path too — an oversized error message is just
  * as undeliverable as an oversized value.
+ *
+ * An outcome that cannot be serialised AT ALL (a cyclic object, a `BigInt`, a
+ * throwing `toJSON`) is the same failure one step earlier: the measurement
+ * itself throws, `signalBranchParentSafe` swallows it as best-effort, and the
+ * parent again hibernates to its join timeout on a branch that finished. So it
+ * gets the same treatment — a bounded error outcome the event channel can carry.
  */
 const boundOutcome = (outcome: BranchOutcome): BranchOutcome => {
-    const bytes = new TextEncoder().encode(JSON.stringify(outcome)).length;
+    let bytes: number;
+
+    try {
+        bytes = new TextEncoder().encode(JSON.stringify(outcome)).length;
+    } catch (encodeError: unknown) {
+        return {
+            error: {
+                message:
+                    // Sliced: V8's cyclic-structure message names a path through
+                    // the offending object and is itself unbounded, which would
+                    // reintroduce the oversized-payload failure this guard exists
+                    // one branch below to prevent.
+                    `branch outcome cannot be serialised to JSON (${(encodeError instanceof Error ? encodeError.message : String(encodeError)).slice(0, 200)}) — ` +
+                    "the parent can never receive it. Return a plain JSON value (no cycles, no BigInt, no class instance that fails to serialise) " +
+                    "or a reference the parent can dereference (an R2 key, a row id)",
+                name: "BranchOutputUnserializable",
+            },
+            status: "error",
+        };
+    }
 
     if (bytes <= MAX_EVENT_PAYLOAD_BYTES) {
         return outcome;

@@ -607,6 +607,34 @@ describe("signalBranchParent", () => {
         expect(JSON.stringify(sent.payload).length).toBeLessThan(1024);
     });
 
+    it("replaces an unserialisable outcome with a bounded failure instead of stranding the parent", async () => {
+        expect.assertions(2);
+
+        const parent = makeInstance("parent-1");
+        const env = { WORKFLOW_PARENT: { get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async () => parent) } };
+
+        // A cyclic child output: `JSON.stringify` throws inside the size check, and
+        // `signalBranchParentSafe` only logs — so the parent got no terminal event
+        // and hibernated to its join timeout (24 h by default) on a branch that had
+        // actually finished.
+        const cyclic: Record<string, unknown> = {};
+
+        cyclic.self = cyclic;
+
+        await signalBranchParent({ env, step: makeStep() }, marker, okOutcome(cyclic));
+
+        const sent = (parent.sendEvent as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as { payload: BranchOutcome };
+
+        expect(sent.payload).toStrictEqual({
+            error: {
+                message: expect.stringContaining("cannot be serialised"),
+                name: "BranchOutputUnserializable",
+            },
+            status: "error",
+        });
+        expect(JSON.stringify(sent.payload).length).toBeLessThan(1024);
+    });
+
     it("is a no-op when the parent binding is absent (parent falls back to its timeout)", async () => {
         expect.assertions(1);
 

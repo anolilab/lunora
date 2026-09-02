@@ -263,16 +263,22 @@ interface InboundAttachment {
 }
 ```
 
+### `InboundAuthResult` (interface)
+
+```ts
+interface InboundAuthResult {
+    domain: string | null;
+    result: string;
+}
+```
+
 ### `InboundAuthentication` (interface)
 
 ```ts
 interface InboundAuthentication {
-    dkim: string | null;
-    dkimDomain: string | null;
-    dmarc: string | null;
-    dmarcDomain: string | null;
-    spf: string | null;
-    spfDomain: string | null;
+    dkim: InboundAuthResult[];
+    dmarc: InboundAuthResult[];
+    spf: InboundAuthResult[];
 }
 ```
 

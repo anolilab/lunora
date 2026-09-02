@@ -670,7 +670,7 @@ export const support = defineAgent({
         // The handler has already bounced any message whose `From` domain is not
         // vouched for by an aligned DMARC, SPF or DKIM pass. Add your own policy on
         // top — here, only a full DMARC pass is trusted.
-        if (email.authentication.dmarc !== "pass") {
+        if (!email.authentication.dmarc.some((result) => result.result === "pass")) {
             return null; // declined — no run, no bounce
         }
 
@@ -691,10 +691,12 @@ export const support = defineAgent({
 **Security: inbound mail is untrusted and a run dispatches privileged.**
 Cloudflare Email Routing authenticates only the _recipient_ domain, not the
 _sender_: the envelope `from`, subject, and body are trivially spoofable. Before
-any mapper runs, the handler bounces a message unless a DMARC pass, or an SPF or
-DKIM pass whose domain (`spfDomain` / `dkimDomain`) equals the `From` domain,
-vouches for the sender — alignment is strict (`mail.example.com` does not vouch
-for `example.com`), and a pass with no reported domain is rejected. Layer any
+any mapper runs, the handler bounces a message unless some reported DMARC, SPF or
+DKIM clause both passes and names a `domain` equal to the `From` domain
+(`email.authentication.dkim` / `.spf` / `.dmarc` are lists, because one header
+legitimately reports a method more than once) — alignment is strict
+(`mail.example.com` does not vouch for `example.com`), and a pass with no
+reported domain is rejected. Layer any
 stricter policy on `email.authentication` inside the mapper, and treat every
 mapped field as attacker-controlled input. A message no agent claims is
 dropped silently; a throw while parsing or dispatching bounces the message with a

@@ -24,6 +24,6 @@ export type {
     RpcEnvelope,
 } from "./handler";
 export { createInboundEmailHandler, dispatchToLunoraFunction } from "./handler";
-export type { InboundAttachment, InboundAuthentication, InboundEmail, RawInboundEmail } from "./parse";
+export type { InboundAttachment, InboundAuthentication, InboundAuthResult, InboundEmail, RawInboundEmail } from "./parse";
 export { parseInboundEmail } from "./parse";
 export type { ShardNamespaceLike, ShardStubLike } from "./shard";
