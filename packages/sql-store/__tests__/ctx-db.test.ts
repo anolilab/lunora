@@ -379,6 +379,49 @@ describe("createSqlCtxDb — the column ceiling", () => {
     });
 
     /**
+     * `_version` joined the framework column set after tables were already in
+     * production, dropping the declared-field ceiling from 98 to 97. A table
+     * standing at the old ceiling is one column over the new one on its very
+     * next request, and the engine's limit is hard — there is no `ALTER` that
+     * widens a table already at 100 columns. The rejection is therefore correct
+     * and unavoidable; what it must not do is read as "your schema is too wide"
+     * when the schema never changed.
+     */
+    it("names the migration path for a table already provisioned at the pre-_version ceiling", async () => {
+        expect.assertions(3);
+
+        const fields = Array.from({ length: 98 }, (_unused, index) => `f${String(index)}`);
+
+        // The DDL the framework itself emitted before `_version` existed:
+        // id + _creationTime + 98 declared fields = exactly the 100-column limit.
+        await harness.exec.run(
+            `CREATE TABLE existing (id TEXT PRIMARY KEY, _creationTime REAL NOT NULL, ${fields.map((field) => `${field} TEXT`).join(", ")})`,
+            [],
+        );
+        await harness.exec.run(`INSERT INTO existing (id, _creationTime, f0) VALUES ('row-1', 1, 'already here')`, []);
+
+        const existing: SchemaLike = {
+            tables: {
+                existing: {
+                    indexes: [],
+                    shape: Object.fromEntries(fields.map((field) => [field, col("string")])),
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as never;
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: existing });
+        const thrown = (await writer.insert("existing", { f0: "x" }).catch((error: unknown) => error)) as LunoraError;
+
+        // Still a caller-safe VALIDATION_ERROR, so the message survives the wire.
+        expect(thrown.code).toBe("VALIDATION_ERROR");
+        // It says which column displaced the table and what the new ceiling is…
+        expect(thrown.message).toMatch(/"_version".+caps declared fields at 97/u);
+        // …and names a migration for the rows that are already in there.
+        expect(thrown.message).toMatch(/defineMigration/u);
+    });
+
+    /**
      * D1 runs Workerd's SQLite build, which caps a statement at 100 BOUND
      * PARAMETERS as well as at 100 columns. The optimistic-concurrency guard used
      * to bind one parameter per physical column of the snapshot on top of one per
