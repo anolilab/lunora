@@ -1,6 +1,6 @@
 import type { Injector, Signal } from "@angular/core";
 import { computed, DestroyRef, inject, signal } from "@angular/core";
-import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
+import type { FunctionReference, LunoraClient, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
 import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
 
@@ -40,6 +40,7 @@ const buildPageArgs = (page: Page, baseArgs: Record<string, unknown>): Record<st
 
 /** The signal-backed handle {@link usePaginatedCore} returns. */
 interface PaginatedCore<F extends FunctionReference> {
+    error: Signal<SubscriptionError | undefined>;
     loadMore: (numberItems: number) => void;
     pageResults: Signal<(PaginationResult<PageItemOf<F>> | undefined)[]>;
     status: Signal<PaginationStatus>;
@@ -73,6 +74,7 @@ const usePaginatedCore = <F extends FunctionReference>(
     const pages = signal<Page[]>(initialPages(initialNumItems));
     const pageResults = signal<(PaginationResult<PageItemOf<F>> | undefined)[]>([]);
     const status = signal<PaginationStatus>("LoadingFirstPage");
+    const error = signal<SubscriptionError | undefined>(undefined);
 
     /**
      * Each active subscription entry, keyed in `activeSubs` by the page key it
@@ -168,6 +170,7 @@ const usePaginatedCore = <F extends FunctionReference>(
                 (value) => {
                     resultsByKey.set(entry.currentKey, value as PaginationResult<PageItemOf<F>>);
                     pendingPageKeys.delete(entry.currentKey);
+                    error.set(undefined);
 
                     doRebuildPageResults();
 
@@ -186,9 +189,25 @@ const usePaginatedCore = <F extends FunctionReference>(
                     }
                 },
                 {
-                    onError: () => {
-                        pendingPageKeys.delete(entry.currentKey);
+                    onError: (subscriptionError) => {
+                        pendingPageKeys.delete(key);
+                        error.set(subscriptionError);
+
+                        // A tail that fails before its first frame is dropped so
+                        // the feed leaves `LoadingMore` (status falls back to the
+                        // previous page's cursor) and `loadMore` can retry it. The
+                        // first page has nothing to fall back to and stays.
+                        const current = pages();
+                        const tail = current.at(-1);
+
+                        if (current.length > 1 && tail && !resultsByKey.has(key) && buildPageKey(functionPath, buildPageArgs(tail, narrowedArgs)) === key) {
+                            pages.set(current.slice(0, -1));
+                            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- runs inside a deferred subscription callback, after syncSubscriptions is defined
+                            syncSubscriptions(pages());
+                        }
+
                         doRebuildPageResults();
+                        options.onError?.(subscriptionError);
                     },
                     shardKey,
                 },
@@ -305,12 +324,13 @@ const usePaginatedCore = <F extends FunctionReference>(
             }
         }
 
+        error.set(undefined);
         pages.set(next);
         syncSubscriptions(pages());
         doRebuildPageResults();
     };
 
-    return { loadMore, pageResults, status };
+    return { error, loadMore, pageResults, status };
 };
 
 /**
@@ -364,6 +384,7 @@ const useReactivePaginatedCore = <F extends FunctionReference>(
     }
 
     return {
+        error: computed(() => active()?.error()),
         loadMore: (numberItems: number) => {
             active()?.loadMore(numberItems);
         },
@@ -396,6 +417,9 @@ export interface PaginatedQueryOptions {
      */
     injector?: Injector;
 
+    /** Called when a page subscription reports an error (also surfaced on the `error` signal). */
+    onError?: SubscriptionErrorCallback;
+
     /** Route to a specific shard when the target function is `.shardBy(...)`-partitioned. */
     shardKey?: string;
 }
@@ -405,6 +429,14 @@ export interface PaginatedQueryOptions {
  * @experimental
  */
 export interface PaginatedQueryResult<T> {
+    /**
+     * The last page subscription error, or `undefined`. A tail page that fails
+     * before its first frame is dropped so `status` returns to `"CanLoadMore"`
+     * and `loadMore` can retry it; cleared by the next successful frame,
+     * `loadMore`, or an args change.
+     */
+    error: Signal<SubscriptionError | undefined>;
+
     /** `true` while the first page or a `loadMore` page is in flight. */
     isLoading: Signal<boolean>;
 
@@ -423,6 +455,9 @@ export interface PaginatedQueryResult<T> {
  * @experimental
  */
 export interface InfiniteQueryResult<T> {
+    /** The last page subscription error, or `undefined` — see `PaginatedQueryResult.error`. */
+    error: Signal<SubscriptionError | undefined>;
+
     /** Request the next page. A no-op unless `status === "CanLoadMore"`. */
     fetchNextPage: (numberItems?: number) => void;
 
@@ -481,6 +516,7 @@ export const paginatedQuery = <F extends FunctionReference>(
     });
 
     return {
+        error: core.error,
         isLoading,
         loadMore: core.loadMore,
         results,
@@ -523,6 +559,7 @@ export const infiniteQuery = <F extends FunctionReference>(
     };
 
     return {
+        error: core.error,
         fetchNextPage,
         hasNextPage,
         isFetchingNextPage,

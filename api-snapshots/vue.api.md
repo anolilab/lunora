@@ -416,6 +416,7 @@ interface UseAuthResult {
 ```ts
 interface UseInfiniteQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -424,6 +425,7 @@ interface UseInfiniteQueryOptions {
 
 ```ts
 interface UseInfiniteQueryResult<T> {
+    error: Ref<SubscriptionError | undefined>;
     fetchNextPage: (numberItems?: number) => void;
     hasNextPage: Ref<boolean>;
     isFetchingNextPage: Ref<boolean>;
@@ -438,6 +440,7 @@ interface UseInfiniteQueryResult<T> {
 ```ts
 interface UsePaginatedQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -446,6 +449,7 @@ interface UsePaginatedQueryOptions {
 
 ```ts
 interface UsePaginatedQueryResult<T> {
+    error: Ref<SubscriptionError | undefined>;
     isLoading: Ref<boolean>;
     loadMore: (numberItems: number) => void;
     results: Ref<T[]>;
@@ -611,7 +615,9 @@ const createLunora: (client: LunoraClient) => {
 ### `hydratePreloaded` (const)
 
 ```ts
-const hydratePreloaded: <T>(preloaded: Preloaded<T>) => Ref<T>;
+const hydratePreloaded: <T>(preloaded: Preloaded<T>, options?: {
+    onError?: SubscriptionErrorCallback;
+}) => Ref<T>;
 ```
 
 ### `provideLunora` (const)
@@ -624,6 +630,7 @@ const provideLunora: (client: LunoraClient) => void;
 
 ```ts
 const subscribeToQuery: <F extends FunctionReference, T = ReturnOf<F>>(client: LunoraClient, function_: F, args: ArgsOf<F>, options?: {
+    onError?: SubscriptionErrorCallback;
     seed?: T;
     shardKey?: string;
 }) => Ref<T | undefined>;

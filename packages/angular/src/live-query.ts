@@ -73,7 +73,8 @@ export interface LiveQueryOptions {
  *
  * `args` also accepts a function/`Signal` — `() => ({ channelId: channelId() })`
  * — to make the subscription reactive: an args change tears the old
- * subscription down and opens a fresh one for the new args, mirroring
+ * subscription down, resets the signal to `undefined`, and opens a fresh one
+ * for the new args, mirroring
  * `@lunora/solid`'s `createQuery`/`@lunora/vue`'s `useQuery`. A static (plain
  * object) `args` resolves once and never re-runs — no `effect()` is created for
  * it, so it carries none of the reactive form's DI requirement.
@@ -91,6 +92,10 @@ export const liveQuery = <F extends FunctionReference>(
     const value = signal<ReturnOf<F> | undefined>(undefined);
 
     const open = (currentArgs: ArgsOf<F> | "skip", registerCleanup: (unsubscribe: () => void) => void): void => {
+        // The previous args' value must not render under the new args until the
+        // new subscription's first frame lands.
+        value.set(undefined);
+
         const unsubscribe = createQuerySubscription<F>(
             client,
             reference,

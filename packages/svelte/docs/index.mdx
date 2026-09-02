@@ -233,6 +233,11 @@ hydration mismatch. When the store gains its first subscriber on the client, a
 live WS subscription attaches and every subsequent delta re-emits, exactly like a
 plain `query` store.
 
+Pass `{ onError }` as the third argument (after the optional `client`) to observe
+a subscription-scoped error the server pushes after hydration (a session expiry,
+an RLS denial). Without it such an error is dropped and the store keeps
+rendering the SSR snapshot as if it were live.
+
 ```svelte
 <script lang="ts">
     import { hydratePreloaded } from "@lunora/svelte";
@@ -304,7 +309,8 @@ listener (`presence`, `rateLimit`) return a `teardown()`; call it from
 
 A raw live subscription as a pair of readable stores, `{ data, error }`. `data`
 holds the latest server push (`undefined` until the first), `error` holds the
-last subscription error. Pass `"skip"` as `args` to keep the handle but leave the
+last subscription error (a `LunoraError` carrying the server `code` when one was
+sent). Pass `"skip"` as `args` to keep the handle but leave the
 subscription dormant. Options: `{ shardKey, onError }`.
 
 ```svelte
@@ -319,14 +325,17 @@ subscription dormant. Options: `{ shardKey, onError }`.
 {#each $data ?? [] as m (m._id)}<li>{m.text}</li>{/each}
 ```
 
-### `paginatedQuery(fn, args, { initialNumItems })`
+### `paginatedQuery(fn, args, { initialNumItems, shardKey?, onError? })`
 
 A cursor-paginated live query. `args` is the function's args minus
 `paginationOpts` (the framework supplies the cursor), or `"skip"`. The handle is
-`{ results, status, isLoading, loadMore }`: `results` is the flattened items
+`{ results, status, isLoading, loadMore, error }`: `results` is the flattened items
 across every loaded page; `status` is `"LoadingFirstPage" | "LoadingMore" |
 "CanLoadMore" | "Exhausted"`; `loadMore(n)` appends the next page (a no-op unless
-`status === "CanLoadMore"`).
+`status === "CanLoadMore"`); `error` holds the last page subscription error
+(`undefined` when healthy) — a page that fails before its first frame is dropped,
+`status` returns to `"CanLoadMore"`, and `loadMore(n)` retries it. `onError` is
+called with the same error.
 
 ```svelte
 <script lang="ts">
@@ -341,7 +350,7 @@ across every loaded page; `status` is `"LoadingFirstPage" | "LoadingMore" |
 ```
 
 `infiniteQuery` is the TanStack-Query-shaped variant: `{ pages, status,
-isLoading, hasNextPage, isFetchingNextPage, fetchNextPage }`, where `pages` keeps
+isLoading, hasNextPage, isFetchingNextPage, fetchNextPage, error }`, where `pages` keeps
 each loaded page as its own inner array.
 
 ### `presence(roomId, options)`

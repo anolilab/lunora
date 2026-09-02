@@ -63,7 +63,7 @@ render(
 | `createAction`                                      | primitive | Action handle: `{ data, error, pending, call, reset }` accessors. No optimistic options.         |
 | `createActionForClient`                             | primitive | Build an action handle bound to an explicit client (test/internal seam).                         |
 | `createSubscription`                                | primitive | Raw live stream as `{ data, error }` accessors. `"skip"` tears down.                             |
-| `createPaginatedQuery`                              | primitive | Cursor pagination: `{ results, status, isLoading, loadMore }`.                                   |
+| `createPaginatedQuery`                              | primitive | Cursor pagination: `{ results, status, isLoading, loadMore, error }`.                            |
 | `createInfiniteQuery`                               | primitive | Infinite-scroll variant: `{ pages, status, hasNextPage, fetchNextPage, ... }`.                   |
 | `createAuth`                                        | primitive | Identity plumbing: `{ token, user }` signals + `setToken`.                                       |
 | `Authenticated` / `AuthLoading` / `Unauthenticated` | component | Render `children` per identity state (signed-in / resolving / signed-out).                       |
@@ -100,7 +100,8 @@ every delta the WebSocket pushes.
 
 `args` may be a plain value or an accessor. Passing an accessor makes the
 subscription reactive: when the args change the previous subscription is torn
-down (via `onCleanup`) and a fresh one opens for the new args. Pass `"skip"` (or
+down (via `onCleanup`), the accessor resets to `undefined`, and a fresh one opens
+for the new args. Pass `"skip"` (or
 an accessor returning `"skip"`) to short-circuit: no network call, no socket.
 
 ```tsx
@@ -233,6 +234,11 @@ during hydration returns the server-rendered value with no loading flash and no
 `Suspense` fallback (unlike `createResource`, which always starts pending). After
 mount, a WebSocket subscription attaches in an effect and every subsequent delta
 flows into the same signal, so the UI goes live with zero refetch.
+
+Pass `{ onError }` as the second argument to observe a subscription-scoped error
+the server pushes after hydration (a session expiry, an RLS denial). Without it
+such an error is dropped and the accessor keeps rendering the SSR snapshot as if
+it were live.
 
 Internally `hydratePreloaded` is a default export, but the package barrel
 re-publishes it as a named binding, so import it from `@lunora/solid` directly:

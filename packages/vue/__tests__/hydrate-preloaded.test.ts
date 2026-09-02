@@ -168,6 +168,27 @@ describe("hydratePreloaded return type", () => {
         Reflect.deleteProperty(globalThis, "window");
     });
 
+    it("forwards onError so a server-pushed subscription error reaches the caller", () => {
+        // Regression: the live subscription behind the SSR seed had no error
+        // channel, so a session expiry after hydration was fanned to nobody and
+        // the snapshot kept rendering as if it were live.
+        const fake = createFakeClient();
+        const errors: SubscriptionError[] = [];
+        const scope = effectScope();
+
+        scope.run(() => {
+            fake.provide(() => {
+                hydratePreloaded(makePreloaded(["seed"]), { onError: (error) => errors.push(error) });
+            });
+        });
+
+        fake.subscribeCalls[0]?.options.onError?.({ code: "UNAUTHORIZED", message: "session expired" });
+
+        expect(errors).toStrictEqual([{ code: "UNAUTHORIZED", message: "session expired" }]);
+
+        scope.stop();
+    });
+
     it("is Ref<T>, not Ref<T | undefined> — the seed makes undefined unreachable", () => {
         const fake = createFakeClient();
         const scope = effectScope();
@@ -283,6 +304,9 @@ describe(useQuery, () => {
         channelId.value = "b";
         await nextTick();
 
+        // The previous args' value must not render under the new args until the
+        // new subscription's first frame lands.
+        expect(data?.value).toBeUndefined();
         expect(fake.unsubscribeSpy).toHaveBeenCalledTimes(1);
         expect(fake.subscribeCalls).toHaveLength(2);
         expect(fake.subscribeCalls[1]?.args).toStrictEqual({ channelId: "b" });

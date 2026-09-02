@@ -33,8 +33,10 @@
  * const source = new EventSource(initialState, reducer);
  *
  * const sync = new EventsSync({
- *   // Transport: fetch events since last known seq
- *   fetchEventsSince: (sinceSeq) => client.getSince(sinceSeq),
+ *   // Transport: fetch the next batch of events after the last known seq.
+ *   // `getSince` answers one bounded page; EventsSync keeps calling until the
+ *   // log is exhausted.
+ *   fetchEventsSince: async (sinceSeq) => (await client.getSince(sinceSeq)).entries,
  *
  *   // Replay events through the EventSource
  *   applyEvents: (events) => {
@@ -59,6 +61,17 @@ import type { EventLogEntry } from "./event-log";
 import type { LocalMirror } from "./local-mirror";
 import type { TableDiff } from "./table-diff";
 
+/**
+ * Batches one poll cycle will drive before yielding, however much log is left.
+ *
+ * A catch-up loop that runs until a fetch comes back empty never terminates
+ * against a log being written faster than it is read. Bounding the cycle leaves
+ * the remainder to the next one, at the advanced watermark, so progress is
+ * unaffected and a busy log cannot pin the cycle open (or its `#inFlight`
+ * promise, which every concurrent `sync()` awaits).
+ */
+const MAX_BATCHES_PER_CYCLE = 1000;
+
 // ── Types ──────────────────────────────────────────────────────────────────
 
 /**
@@ -77,12 +90,15 @@ export interface EventsSyncOptions {
     applyEvents: (events: ReadonlyArray<EventLogEntry>) => void;
 
     /**
-     * Fetch all events whose `seq >= sinceSeq`.
+     * Fetch the next batch of events whose `seq >= sinceSeq`.
      *
-     * In a server-side context, this typically wraps
-     * {@link import("@lunora/replica").EventLogDOClient.getSince |
-     * EventLogDOClient.getSince()}.
-     * In a client context it could call a Lunora action that proxies to the
+     * It does NOT have to return the whole backlog: a bounded batch is
+     * preferred and is what the DO-backed transport gives you
+     * ({@link import("@lunora/replica").EventLogDOClient.getSince |
+     * EventLogDOClient.getSince()} answers one page). {@link EventsSync} keeps
+     * calling with the advanced watermark until a call returns nothing, so the
+     * whole log is applied either way — one bounded atom at a time.
+     * In a client context this could call a Lunora action that proxies to the
      * event log, or read from an IndexedDB cache.
      *
      * Return an empty array when there are no new events.
@@ -153,6 +169,14 @@ export class EventsSync {
     readonly #options: EventsSyncOptions;
     /** The highest `seq + 1` that has been applied. Starts at `0`. */
     #watermark = 0;
+
+    /**
+     * The highest `seq + 1` already handed to `applyEvents`. Runs AHEAD of
+     * `#watermark` between a successful replay and the mirror fan-out that
+     * commits it, which is exactly the interval a retry must not replay through
+     * the state machine a second time.
+     */
+    #appliedSeq = 0;
     #timer: ReturnType<typeof setInterval> | undefined;
 
     /**
@@ -244,27 +268,37 @@ export class EventsSync {
     }
 
     /**
-     * One poll cycle: fetch the whole batch since the watermark, then drive it
-     * through the pipeline as ONE atom — `applyEvents` → `getTableDiffs` →
-     * mirror fan-out → advance the watermark.
+     * One poll cycle: drive every batch available since the watermark through
+     * the pipeline — `applyEvents` → `getTableDiffs` → mirror fan-out →
+     * advance the watermark — one batch at a time until a fetch comes back
+     * empty.
      *
-     * ## Whole batch as one atom
+     * ## One batch at a time, but a whole batch as one atom
      *
-     * A returning-from-offline client with a large backlog drives the WHOLE
-     * fetched batch through the pipeline once: a single `applyEvents(events)`,
-     * a single `getTableDiffs()`, and a single mirror fan-out. A 500-event
-     * catch-up therefore computes ONE aggregate diff and issues ONE mirror
-     * round, not 500 of each. The watermark advances past the last event **only
-     * after** every diff has been mirrored — it is the LAST statement in the
-     * try, reached only on full success.
+     * `fetchEventsSince` answers with whatever the transport is willing to
+     * return in one call — for the DO-backed transport that is ONE bounded page
+     * (`EventLogDOClient.getSince`), so a returning-from-offline client with a
+     * 10k-event backlog never materialises 10k events, and never asks the
+     * server to serialise them into one response. Each batch is driven through
+     * the pipeline exactly once: a single `applyEvents(events)`, a single
+     * `getTableDiffs()`, and a single mirror fan-out — 500 events per page
+     * compute ONE aggregate diff, not 500 of them. The loop then re-fetches
+     * from the advanced watermark and repeats; the cycle ends when a fetch
+     * returns nothing (or when the batch failed to move the watermark forward,
+     * which would otherwise spin).
+     *
+     * The watermark advances past a batch's last event **only after** every
+     * diff for that batch has been mirrored — it is the last statement of the
+     * iteration, reached only on full success.
      *
      * ## Atomicity on failure — retry the whole batch from a clean state
      *
      * If any stage throws (`applyEvents`, `getTableDiffs`, or a
      * `mirror.applyDiff` partway through the fan-out), control falls to the
-     * catch: the error is surfaced via `onError` and the watermark is left
-     * exactly where it was. The next poll therefore re-fetches the SAME batch
-     * from the same watermark and re-derives the still-missing diffs.
+     * catch: the error is surfaced via `onError`, the cycle stops, and the
+     * watermark is left exactly where the last fully-mirrored batch put it. The
+     * next poll therefore re-fetches the SAME batch from the same watermark and
+     * re-derives the still-missing diffs.
      *
      * This is safe — and lossless — precisely because `getTableDiffs` is
      * required to be idempotent (recompute-from-current-mirror-state, no
@@ -276,40 +310,79 @@ export class EventsSync {
      * advances past a diff the mirror never received.
      */
     async #pollOnce(): Promise<number> {
+        let total = 0;
+
         try {
-            const events = await this.#options.fetchEventsSince(this.#watermark);
+            for (let batches = 0; batches < MAX_BATCHES_PER_CYCLE; batches += 1) {
+                // eslint-disable-next-line no-await-in-loop -- each batch is fetched from the watermark the previous one advanced, so the round-trips are inherently sequential
+                const events = await this.#options.fetchEventsSince(this.#watermark);
 
-            if (events.length === 0) {
-                return 0;
+                if (events.length === 0) {
+                    return total;
+                }
+
+                // ── Whole batch as ONE atom ───────────────────────────────
+                // Any throw below skips the watermark advance and lands in the
+                // catch: the watermark stays put and the next poll re-fetches
+                // and (via the idempotent getTableDiffs) re-derives the missing
+                // diffs.
+                //
+                // Only the events this sync has not already replayed reach
+                // `applyEvents`. A batch whose replay SUCCEEDED and then failed
+                // downstream (`getTableDiffs`, or a `mirror.applyDiff` partway
+                // through the fan-out) is re-fetched from the unmoved watermark,
+                // and handing it to the state machine a second time would apply
+                // the same events twice — only `getTableDiffs` is required to be
+                // idempotent, `applyEvents` is not, and it has no rollback. A
+                // replay that THREW is not recorded, so that batch is still
+                // retried whole (the state machine's own atomicity, unchanged).
+                const fresh = events.filter((event) => event.seq >= this.#appliedSeq);
+
+                if (fresh.length > 0) {
+                    this.#options.applyEvents(fresh);
+                    this.#appliedSeq = (fresh[fresh.length - 1] as EventLogEntry).seq + 1;
+                }
+
+                const diffs = this.#options.getTableDiffs();
+
+                for (const diff of diffs) {
+                    this.#options.mirror.applyDiff(diff);
+                }
+
+                total += events.length;
+
+                // Every stage succeeded for this batch — advance past its last
+                // event. This is the last statement of the iteration, so it is
+                // reached only when every diff above has been mirrored.
+                const lastEvent = events[events.length - 1] as EventLogEntry;
+                const next = lastEvent.seq + 1;
+
+                if (next <= this.#watermark) {
+                    // The transport handed back a batch that ends at or before
+                    // the watermark it was given: re-fetching would return the
+                    // same batch forever. Stop instead of spinning.
+                    return total;
+                }
+
+                this.#watermark = next;
             }
 
-            // ── Whole batch as ONE atom ───────────────────────────────────
-            // Any throw below skips the watermark advance and lands in the
-            // catch: the watermark stays put and the next poll re-fetches and
-            // (via the idempotent getTableDiffs) re-derives the missing diffs.
-            this.#options.applyEvents(events);
-
-            const diffs = this.#options.getTableDiffs();
-
-            for (const diff of diffs) {
-                this.#options.mirror.applyDiff(diff);
-            }
-
-            // Every stage succeeded for the whole batch — advance past the last
-            // event in one step. This is the last statement, so it is reached
-            // only when every diff above has been mirrored.
-            const lastEvent = events[events.length - 1] as EventLogEntry;
-
-            this.#watermark = lastEvent.seq + 1;
-
-            return events.length;
+            // The page budget ran out. A log with a writer faster than this
+            // sync never returns an empty batch, so an unbounded loop would
+            // never finish — and `#inFlight` would never settle, hanging every
+            // later `sync()` on it. The watermark is where the last completed
+            // batch left it, so the next cycle picks up exactly there.
+            return total;
         } catch (error: unknown) {
             // eslint-disable-next-line no-console -- fallback for a caller that supplied no `onError`; swallowing the failure silently is the worse default
             const onError = this.#options.onError ?? console.error;
 
             onError(error);
 
-            return 0;
+            // The batches that DID complete before the failure are already
+            // mirrored and past the watermark — report them rather than
+            // claiming the whole cycle did nothing.
+            return total;
         }
     }
 }

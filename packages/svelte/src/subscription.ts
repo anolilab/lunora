@@ -1,5 +1,6 @@
 import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, Unsubscribe } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
+import { LunoraError } from "@lunora/errors";
 import type { Readable } from "svelte/store";
 import { readable, writable } from "svelte/store";
 
@@ -31,8 +32,8 @@ interface SubscriptionHandle<T> {
  * argument to bypass the ambient context (useful in tests).
  *
  * `args` may also be a `Readable` store: each emission tears down the previous
- * subscription and opens a fresh one; a `"skip"` emission tears down without
- * re-opening and resets `data` to `undefined`.
+ * subscription, resets `data` to `undefined`, and opens a fresh one; a `"skip"`
+ * emission tears down without re-opening.
  */
 function subscription<F extends FunctionReference>(function_: F, args: ReactiveArgs<F>, options?: SubscriptionStoreOptions): SubscriptionHandle<ReturnOf<F>>;
 function subscription<F extends FunctionReference>(
@@ -66,8 +67,9 @@ function subscription<F extends FunctionReference>(
         // a socket — so the reset path below is reachable, unlike a local early
         // return that would make it dead code.
         const open = (resolved: ArgsOf<F> | "skip"): Unsubscribe => {
-            // Each emission starts from a clean slate: drop the error the
-            // previous args produced before opening the new subscription.
+            // Each emission starts from a clean slate: drop the value and error
+            // the previous args produced before opening the new subscription.
+            set(undefined);
             errorStore.set(undefined);
 
             return createQuerySubscription(
@@ -80,7 +82,13 @@ function subscription<F extends FunctionReference>(
                         errorStore.set(undefined);
                     },
                     onError: (subscriptionError) => {
-                        const error = new Error(subscriptionError.message);
+                        // Preserve the server-supplied `code` (matching Vue/Solid's
+                        // subscription primitives) so consumers can branch on it.
+                        const error =
+                            subscriptionError.code === undefined
+                                ? new Error(subscriptionError.message)
+                                : new LunoraError(subscriptionError.code, subscriptionError.message);
+
                         errorStore.set(error);
                         onError?.(error);
                     },

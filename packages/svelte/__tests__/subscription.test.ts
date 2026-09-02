@@ -1,4 +1,5 @@
 import type { FunctionReference, LunoraClient } from "@lunora/client";
+import { LunoraError } from "@lunora/errors";
 import { get, writable } from "svelte/store";
 import { describe, expect, it, vi } from "vitest";
 
@@ -10,10 +11,15 @@ const args = { channelId: "c1" } as unknown;
 const createFakeClient = () => {
     const unsubscribeSpy = vi.fn<() => void>();
     let lastCallback: ((value: unknown) => void) | undefined;
-    let lastOnError: ((error: { message: string }) => void) | undefined;
+    let lastOnError: ((error: { code?: string; message: string }) => void) | undefined;
 
     const subscribeSpy = vi.fn<
-        (function_: unknown, args: unknown, callback: (value: unknown) => void, options?: { onError?: (error: { message: string }) => void }) => () => void
+        (
+            function_: unknown,
+            args: unknown,
+            callback: (value: unknown) => void,
+            options?: { onError?: (error: { code?: string; message: string }) => void },
+        ) => () => void
     >((_fn, _args, callback, options) => {
         lastCallback = callback;
         lastOnError = options?.onError;
@@ -26,7 +32,7 @@ const createFakeClient = () => {
     return {
         client,
         emit: (value: unknown) => lastCallback?.(value),
-        emitError: (message: string) => lastOnError?.({ message }),
+        emitError: (message: string, code?: string) => lastOnError?.(code === undefined ? { message } : { code, message }),
         subscribeSpy,
         unsubscribeSpy,
     };
@@ -107,6 +113,25 @@ describe("subscription store", () => {
         stopError();
     });
 
+    it("preserves the server-supplied code on the error store as a LunoraError", () => {
+        // Sibling gap: Vue/Solid's subscription primitives keep `code` so a
+        // consumer can branch on UNAUTHORIZED vs NOT_FOUND; a bare `Error` lost it.
+        const { client, emitError } = createFakeClient();
+        const { data, error } = subscription(client, fnRef, args);
+
+        const stop = data.subscribe(() => {});
+
+        emitError("denied", "FORBIDDEN");
+
+        const captured = get(error);
+
+        expect(captured).toBeInstanceOf(LunoraError);
+        expect((captured as LunoraError).code).toBe("FORBIDDEN");
+        expect(captured?.message).toBe("denied");
+
+        stop();
+    });
+
     it("clears the error store once a healthy value arrives after an error", () => {
         const { client, emit, emitError } = createFakeClient();
         const { data, error } = subscription(client, fnRef, args);
@@ -150,7 +175,7 @@ describe("subscription store", () => {
 
 describe("subscription store with reactive args", () => {
     it("re-subscribes with the new args when the args store emits", () => {
-        const { client, subscribeSpy, unsubscribeSpy } = createFakeClient();
+        const { client, emit, subscribeSpy, unsubscribeSpy } = createFakeClient();
         const argsStore = writable<unknown>({ channelId: "c1" });
         const { data } = subscription(client, fnRef, argsStore);
 
@@ -159,7 +184,14 @@ describe("subscription store with reactive args", () => {
         expect(subscribeSpy).toHaveBeenCalledTimes(1);
         expect(subscribeSpy.mock.calls[0]?.[1]).toStrictEqual({ channelId: "c1" });
 
+        emit([{ id: "1" }]);
+
+        expect(get(data)).toStrictEqual([{ id: "1" }]);
+
         argsStore.set({ channelId: "c2" });
+
+        // The previous args' value does not survive the switch.
+        expect(get(data)).toBeUndefined();
 
         // The previous subscription is torn down before the new one opens.
         expect(unsubscribeSpy).toHaveBeenCalledTimes(1);

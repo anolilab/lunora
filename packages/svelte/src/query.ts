@@ -47,9 +47,9 @@ export type QueryStore<F extends FunctionReference> = Readable<ReturnOf<F> | und
  * before this runs).
  *
  * `args` may also be a `Readable` store (wrap runes state with `toStore` or
- * `derived`): each emission tears down the previous subscription and opens a
- * fresh one against the new args — the Svelte counterpart of Vue's
- * `MaybeRefOrGetter` args. An emission of `"skip"` tears down without
+ * `derived`): each emission tears down the previous subscription, resets the
+ * value to `undefined`, and opens a fresh one against the new args — the Svelte
+ * counterpart of Vue's `MaybeRefOrGetter` args. An emission of `"skip"` tears down without
  * re-opening and resets the value to `undefined`.
  */
 export function query<F extends FunctionReference>(function_: F, args: ReactiveArgs<F>, options?: QueryStoreOptions): QueryStore<F>;
@@ -75,8 +75,12 @@ export function query<F extends FunctionReference>(
         // pushes every subsequent delta into the store, and its returned teardown
         // is the store's stop callback, so the WS subscription closes when the
         // last `$`-reader detaches.
-        const open = (resolved: ArgsOf<F> | "skip"): Unsubscribe =>
-            createQuerySubscription<F>(
+        const open = (resolved: ArgsOf<F> | "skip"): Unsubscribe => {
+            // The previous args' value must not render under the new args until
+            // the new subscription's first frame lands.
+            set(undefined);
+
+            return createQuerySubscription<F>(
                 client,
                 functionRef,
                 resolved,
@@ -94,6 +98,7 @@ export function query<F extends FunctionReference>(
                 },
                 { shardKey: options.shardKey },
             );
+        };
 
         return subscribeReactiveArgs<ArgsOf<F> | "skip">(args, open);
     });
