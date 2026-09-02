@@ -34,8 +34,16 @@ const val MAX_PENDING_POKES: Int = 64
  */
 enum class Verb { QUERY, MUTATION, ACTION }
 
-/** A coded error from an RPC error envelope. */
-class ApiException(val code: String, message: String, val data: WireValue? = null) : RuntimeException(message)
+/**
+ * A coded error from an RPC error envelope.
+ *
+ * [transient] says the call never reached a verdict — a 5xx, or a non-2xx
+ * carrying no envelope at all (an edge error page, a WAF block, a proxy). It is
+ * set where the HTTP STATUS is still in scope, because nothing downstream can
+ * recover it: [code] alone cannot tell a `BAD_REQUEST` the function returned from
+ * the `INTERNAL` this client synthesises for a body that never came from one.
+ */
+class ApiException(val code: String, message: String, val data: WireValue? = null, val transient: Boolean = false) : RuntimeException(message)
 
 /** A subscription-scoped error the server pushed. */
 data class SubscriptionError(val code: String?, val message: String)
@@ -151,7 +159,17 @@ class Client(
         val resets = mutableSetOf<String>()
     }
 
-    private class Shape(val onRows: ((List<WireValue>) -> Unit)?, val onError: ((SubscriptionError) -> Unit)?) {
+    /**
+     * [name] and [args] are KEPT, not merely used to build the first frame: a
+     * reconnect has to re-send `shape_subscribe` for every live shape, and a
+     * registry holding only the callbacks cannot build that frame at all.
+     */
+    private class Shape(
+        val name: String,
+        val args: WireValue?,
+        val onRows: ((List<WireValue>) -> Unit)?,
+        val onError: ((SubscriptionError) -> Unit)?,
+    ) {
         val rows = LinkedHashMap<String, WireValue>()
         val order = mutableListOf<String>()
         var checkpoint: Any? = null
@@ -203,11 +221,21 @@ class Client(
                     envelope["code"] as? String ?: "INTERNAL",
                     envelope["message"] as? String ?: "request failed",
                     data,
+                    // A 5xx is the shard or the edge failing UNDER the call, not a
+                    // verdict on it, so a queued write replayed under the same
+                    // idempotency key is still good. See [isTransient].
+                    status >= 500,
                 )
             }
 
             if (status !in 200..299) {
-                throw ApiException("INTERNAL", "HTTP $status without an error envelope")
+                // No envelope at all, so this body never came from a Lunora
+                // function: an edge error page, a WAF block, a proxy. Nothing
+                // reached the shard, which makes it transport rather than a
+                // verdict — the batch path already classified the identical
+                // response that way, and a lone queued write must not be dropped
+                // for being alone.
+                throw ApiException("INTERNAL", "HTTP $status without an error envelope", transient = true)
             }
 
             return Wire.decode(body["result"])
@@ -278,6 +306,13 @@ class Client(
         /**
          * Whether a failed replay may be retried rather than dropped.
          *
+         * Three ways in: [ApiException.transient], set from the HTTP status where
+         * a code cannot say (a 5xx, or a non-2xx with no envelope at all); a shard
+         * code; or a rate limit, which is "not now" rather than "no" and is the
+         * one verdict a durable queue must never honour — the write is valid and
+         * the server asked for it later, so dropping it loses data for being
+         * punctual.
+         *
          * A raw exception from the injected poster is the network, not the server:
          * no verdict was reached, so the write is still good. `Exception`, not
          * `RuntimeException`: a poster is a bare function type with no exception
@@ -291,7 +326,7 @@ class Client(
          * this arm is what keeps one surfacing from anywhere else terminal too.
          */
         fun isTransient(error: Exception): Boolean = when (error) {
-            is ApiException -> error.code in TRANSIENT_ERROR_CODES
+            is ApiException -> error.transient || error.code in TRANSIENT_ERROR_CODES || error.code in RATE_LIMIT_ERROR_CODES
             is OfflineException -> false
             is WireFormatException -> false
             else -> true
@@ -303,6 +338,13 @@ class Client(
 
     internal var wasEverConnected = false
     internal var closed = false
+
+    /**
+     * The `System.nanoTime()` reading before which a flush is a no-op, set when a
+     * replay came back rate-limited and the envelope named a delay. Monotonic, so
+     * a wall-clock adjustment cannot strand a queue for hours.
+     */
+    internal var flushNotBefore = 0L
     internal val settledListeners = mutableListOf<(MutationSettled) -> Unit>()
 
     /**
@@ -573,7 +615,7 @@ class Client(
 
             val id = "shape_$nextShapeId"
 
-            shapes[id] = Shape(onRows, onError)
+            shapes[id] = Shape(name, args, onRows, onError)
 
             id to send
         }
@@ -601,9 +643,15 @@ class Client(
                 if (sender == null) {
                     emptyList()
                 } else {
+                    // BOTH registries. A resend that walks only the queries leaves
+                    // every shape view subscribed to a socket that no longer
+                    // exists — silently, and for the rest of the process's life.
                     subscriptions.map { (id, entry) ->
                         buildSubscribeFrame(id, entry.functionPath, entry.args, null, entry.cursor, entry.epoch)
-                    }
+                    } +
+                        shapes.map { (id, shape) ->
+                            buildShapeSubscribeFrame(id, shape.name, shape.args, shape.checkpoint, shape.epoch)
+                        }
                 }
 
             sender to frames
@@ -638,7 +686,20 @@ class Client(
         when (kind) {
             "data", "delta" -> {
                 val payload = frame["data"] ?: frame["delta"]
-                val value = Wire.decode(payload)
+                val value = try {
+                    Wire.decode(payload)
+                } catch (error: WireFormatException) {
+                    // One subscription's payload is one subscription's problem.
+                    // Thrown out of here it ends the caller's read loop and with it
+                    // EVERY other subscription on this client, so it is delivered
+                    // to the addressed subscription's error callbacks instead and
+                    // the frame is reported as the error it is.
+                    val handler = synchronized(lock) { subscriptions[id]?.onError }
+
+                    handler?.invoke(SubscriptionError("INVALID_FRAME", error.message ?: "subscription payload could not be decoded"))
+
+                    return "error"
+                }
                 val deferred = mutableListOf<() -> Unit>()
 
                 synchronized(lock) {
