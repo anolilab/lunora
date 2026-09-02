@@ -137,7 +137,13 @@ interface ReadRequestLogOptions {
     outcome?: RequestOutcome;
     /** Exact shard-key match. */
     shardKey?: string;
-    /** Only entries strictly after this cursor (forward paging). */
+
+    /**
+     * Only entries strictly after this cursor. Setting it switches the read to
+     * ASCENDING order — see {@link readRequestLog} — because that is the only
+     * ordering under which advancing the cursor to the last returned `seq`
+     * actually pages forward without a hole.
+     */
     sinceSeq?: number;
     /** Keep only entries whose read OR written table set contains this table. */
     tableTouched?: string;
@@ -145,7 +151,7 @@ interface ReadRequestLogOptions {
     userId?: string;
 }
 
-/** Payload of a `__lunora_admin__:getRequestLog` call: the recorded entries, newest first. */
+/** Payload of a `__lunora_admin__:getRequestLog` call: the recorded entries, newest first — or oldest first when the request paged forward with `sinceSeq` (see {@link readRequestLog}). */
 interface RequestLogResult {
     entries: RequestLogEntry[];
 }
@@ -259,6 +265,22 @@ const redactArgs = (value: unknown, captureRaw = false): unknown => {
 };
 
 /**
+ * SQL handles whose request-log table (and its back-filled columns) have already
+ * been ensured in this isolate. Every read and write path calls
+ * {@link ensureRequestLogTable} defensively and `appendRequestLogEntry` runs once
+ * per RPC dispatch, so without memoizing, every dispatch re-ran `CREATE TABLE IF
+ * NOT EXISTS` plus the two back-fill `ALTER TABLE`s below — and an `ALTER` for a
+ * column that already exists THROWS, so two SQLite errors were being constructed
+ * and swallowed per dispatch forever. `getRequestLog`/`getIssues` pay it twice
+ * per read, and `getIssues` is a wildcard subscription re-run on every flush.
+ *
+ * A `WeakSet` so a torn-down shard's handle is collectable, and a fresh handle (a
+ * new isolate after hibernation) re-ensures, which is correct — the same pattern
+ * and the same reasoning as `function-metrics.ts` and `metric-history.ts`.
+ */
+const ensuredHandles = new WeakSet<SqlExec>();
+
+/**
  * Create the `__lunora_reqlog__` table. `seq` is an `AUTOINCREMENT` primary
  * key, giving each shard a monotonic cursor the Logs tab pages through; the
  * `args`/`identity`/`tables_read`/`tables_written` columns hold JSON and are
@@ -280,6 +302,10 @@ const redactArgs = (value: unknown, captureRaw = false): unknown => {
  * next column's add.
  */
 const ensureRequestLogTable = (sql: SqlExec): void => {
+    if (ensuredHandles.has(sql)) {
+        return;
+    }
+
     runSql(
         sql,
         `CREATE TABLE IF NOT EXISTS "${REQUEST_LOG_TABLE}" (
@@ -309,6 +335,8 @@ const ensureRequestLogTable = (sql: SqlExec): void => {
             // Column already exists — no-op.
         }
     }
+
+    ensuredHandles.add(sql);
 };
 
 /** Serialise a table list to a sorted, de-duplicated JSON array so the `LIKE` table-touched filter matches deterministically. */
@@ -685,12 +713,21 @@ const decodeRedactedArgs = (raw: string): unknown => {
 };
 
 /**
- * Read request-log entries newest-first, AND-combining the supplied filters
- * (function-path prefix, exact userId/shardKey/outcome, and a table-touched
- * match against the read OR written table sets), up to `limit` (clamped to
- * [1, 10000]). Each value is a bound parameter, so no filter can inject SQL.
- * Creates the table first so reads on a never-logged shard return `[]` instead
- * of throwing. Mirrors `readAuditLog`/`readCdcChanges`.
+ * Read request-log entries, AND-combining the supplied filters (function-path
+ * prefix, exact userId/shardKey/outcome, and a table-touched match against the
+ * read OR written table sets), up to `limit` (clamped to [1, 10000]). Each value
+ * is a bound parameter, so no filter can inject SQL. Creates the table first so
+ * reads on a never-logged shard return `[]` instead of throwing. Mirrors
+ * `readAuditLog`/`readCdcChanges`.
+ *
+ * **Ordering follows `sinceSeq`.** Without a cursor this is a "show me the tail"
+ * read and returns NEWEST FIRST, which is what the studio's Logs tab renders.
+ * With `sinceSeq` it is forward paging and returns OLDEST FIRST, starting at the
+ * cursor: descending there silently loses rows, because `ORDER BY seq DESC LIMIT
+ * n` answers "the newest n after the cursor", so a consumer that advances to the
+ * largest returned `seq` skips everything between `sinceSeq` and that page
+ * whenever more than `limit` rows accumulated between polls — the more traffic
+ * the shard takes, the more it drops.
  */
 const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): RequestLogEntry[] => {
     ensureRequestLogTable(sql);
@@ -719,10 +756,13 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
 
     parameters.push(limit);
 
+    // See the ordering paragraph above: a cursored read pages FORWARD from it.
+    const direction = options.sinceSeq === undefined ? "DESC" : "ASC";
+
     const rows = runSql<RequestLogRow>(
         sql,
         `SELECT seq, ts, function_path, shard_key, user_id, identity, args, outcome, error_message, trace_id, duration_ms, tables_read, tables_written, cache_hit, subscriptions_rerun
-         FROM "${REQUEST_LOG_TABLE}" WHERE ${conjuncts.join(" AND ")} ORDER BY seq DESC LIMIT ?`,
+         FROM "${REQUEST_LOG_TABLE}" WHERE ${conjuncts.join(" AND ")} ORDER BY seq ${direction} LIMIT ?`,
         ...parameters,
     ).toArray();
 

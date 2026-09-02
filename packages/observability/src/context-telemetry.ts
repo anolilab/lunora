@@ -67,8 +67,14 @@ const MAX_SPAN_ATTRIBUTES = 128;
 
 /**
  * Merge normalized fields into a span's attribute bag, dropping NEW keys once
- * {@link MAX_SPAN_ATTRIBUTES} is reached. Shared by all three attribute writers so
- * the bound cannot be bypassed through one of them.
+ * {@link MAX_SPAN_ATTRIBUTES} is reached.
+ *
+ * EVERY path that puts attributes on an exported span goes through this or
+ * {@link boundedAttributes} — the post-hoc `setAttribute`/`recordEvaluation`
+ * writers, the START attributes of `ctx.trace(name, fn, bag)`, and the per-item
+ * bags on `addEvent`/`addLink`. The last three used to skip it, which meant a
+ * handler that forwarded request args as span attributes let a client mint
+ * unbounded keys through a door the bound did not cover.
  */
 const assignBoundedAttributes = (attributes: Record<string, LogFields[string]>, fields: LogFields | undefined): void => {
     if (fields === undefined) {
@@ -91,6 +97,26 @@ const assignBoundedAttributes = (attributes: Record<string, LogFields[string]>, 
         // eslint-disable-next-line no-param-reassign -- documented mutate-in-place contract (see jsdoc above): the caller owns the bag and all three writers merge into it
         attributes[key] = value;
     }
+};
+
+/**
+ * The bounded form of {@link assignBoundedAttributes} for a fresh bag: normalize
+ * a caller's fields, cap them at {@link MAX_SPAN_ATTRIBUTES}, and return
+ * `undefined` when nothing survives — so an empty bag is omitted rather than
+ * riding as `{}`, exactly like {@link normalizeLogFields} on its own.
+ */
+const boundedAttributes = (fields: LogFields | undefined): LogFields | undefined => {
+    const normalized = normalizeLogFields(fields);
+
+    if (normalized === undefined || Object.keys(normalized).length <= MAX_SPAN_ATTRIBUTES) {
+        return normalized;
+    }
+
+    const bounded: LogFields = {};
+
+    assignBoundedAttributes(bounded, normalized);
+
+    return bounded;
 };
 
 /**
@@ -383,7 +409,7 @@ export const createSpanCollector = (ids: { spanId: string; traceId: string }, ca
                 return;
             }
 
-            const normalized = normalizeLogFields(attributes);
+            const normalized = boundedAttributes(attributes);
 
             collected.events.push({
                 ...(normalized === undefined ? {} : { attributes: normalized }),
@@ -396,7 +422,7 @@ export const createSpanCollector = (ids: { spanId: string; traceId: string }, ca
                 return;
             }
 
-            const normalized = normalizeLogFields(link.attributes);
+            const normalized = boundedAttributes(link.attributes);
 
             collected.links.push({
                 ...(normalized === undefined ? {} : { attributes: normalized }),
@@ -555,7 +581,19 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                     // post-hoc; post-hoc wins on a key clash. Emit `attributes`
                     // only when the merged bag is non-empty, so a span with
                     // neither doesn't ride an empty object.
-                    const merged = { ...normalized, ...collected.attributes };
+                    //
+                    // Merged THROUGH the bound, not with a spread: `collected` is
+                    // already capped on its own, but the start bag never was, so a
+                    // spread let `ctx.trace(name, fn, req.body)` mint unbounded
+                    // keys — the exact high-cardinality blow-up
+                    // `MAX_SPAN_ATTRIBUTES` exists to stop, through a door it did
+                    // not cover. Start attributes are merged first so they claim
+                    // the slots (they are the ones the caller declared up front);
+                    // a post-hoc write to a key already present always lands.
+                    const merged: LogFields = {};
+
+                    assignBoundedAttributes(merged, normalized);
+                    assignBoundedAttributes(merged, collected.attributes);
                     // Start links (known up front) then post-hoc ones, in the order
                     // they were declared — a link list is causal history, not a set.
                     const links = [...(resolved.links ?? []), ...collected.links];

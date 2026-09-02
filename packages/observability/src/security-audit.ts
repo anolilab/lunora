@@ -15,7 +15,7 @@ type SecurityFindingLevel = "error" | "info" | "warning";
  *
  * `admin-token-weak`: `LUNORA_ADMIN_TOKEN` is set but short enough to be brute-forceable. (An *unset* token disables admin introspection entirely, so this audit — itself admin-gated — only ever runs with a token present.)
  *
- * `ws-gate-open`: admin HTTP RPCs require the bearer, but `LUNORA_WS_BEARER` is unset so the WebSocket upgrade gate defaults open — live admin subscriptions (Logs, Metrics, …) are reachable without a credential.
+ * `ws-gate-open`: `LUNORA_WS_BEARER` is unset, so the WebSocket upgrade gate defaults open and anyone who can reach the worker can open a socket and run ordinary USER subscriptions (whatever `ctx.auth` / RLS then allows them to read). Admin subscriptions are NOT part of this: they require the socket's `admin` stamp, which the upgrade sets only from `LUNORA_ADMIN_TOKEN` or a minted admin sub-token, so an unset `LUNORA_WS_BEARER` never exposes Logs/Metrics/introspection. Which is why this is a posture finding about the app's own live-query surface, not an admin hole — set the var when subscribers are expected to present a shared credential.
  *
  * `dev-args-unredacted`: the worker reports a development environment, so the durable request log captures raw, un-redacted args and identity (PII). A production deploy mislabeled as dev would persist sensitive payloads.
  *
@@ -164,9 +164,11 @@ const buildSecurityAudit = (rawEnv: unknown, options: { dev: boolean }): Securit
     const { dev } = options;
 
     if (typeof wsBearer !== "string" || wsBearer === "") {
-        // Open live-subscription gate: a real exposure in production, expected
-        // (and only informational) on a local dev worker.
-        findings.push({ kind: "ws-gate-open", level: dev ? "info" : "error" });
+        // Open USER live-subscription gate — anyone who can reach the worker can
+        // open a socket. Admin subscriptions are gated separately by the socket's
+        // `admin` stamp (`LUNORA_ADMIN_TOKEN`), so nothing privileged is exposed
+        // here. Expected (and only informational) on a local dev worker.
+        findings.push({ kind: "ws-gate-open", level: dev ? "info" : "warning" });
     }
 
     if (dev) {
