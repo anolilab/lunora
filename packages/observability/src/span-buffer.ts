@@ -10,10 +10,9 @@
  */
 import type { LogFields } from "../../../shared/log-fields";
 import type { SpanEvent, SpanEventPoint, SpanKind } from "../../../shared/span-event";
+import { DEFAULT_CAPACITY, normalizeCapacity } from "./log-buffer";
 
 /* eslint-disable import/exports-last -- a data + types module: the public TraceSpan/TraceSummary shapes are declared next to the ring buffer and fold that produce them; grouping all exports at the end would scatter the contract. */
-
-const DEFAULT_CAPACITY = 500;
 
 /**
  * One span in a folded trace, flattened for rendering: `depth` is its nesting
@@ -84,20 +83,6 @@ export interface TraceSummary {
     startTs: number;
     traceId: string;
 }
-
-/**
- * Normalize a caller-supplied ring capacity to a usable integer.
- *
- * `> 0` alone was not enough, in both directions. A fractional capacity passed
- * that test and then truncated to ZERO, so the ring evicted every entry it was
- * handed and capture was silently off. `Infinity` passed it too and truncates to
- * itself, removing the memory bound the ring exists to impose — on a buffer that
- * lives for the life of a Durable Object.
- *
- * Anything not a finite value of at least 1 therefore falls back to the default
- * rather than being coerced into a degenerate ring.
- */
-const normalizeCapacity = (capacity: number): number => (Number.isFinite(capacity) && capacity >= 1 ? Math.trunc(capacity) : DEFAULT_CAPACITY);
 
 /**
  * A bounded, in-memory ring of recent {@link SpanEvent}s (oldest evicted first),

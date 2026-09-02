@@ -32,6 +32,8 @@ As a package it gets ESLint, its own tests and its own coverage gate. As `privat
 
 **Analysis is stored.** The same analysis must run over a document when it is indexed and over the query when it is searched, forever, or the two stop meeting. That is why `createSearchAnalyzer` carries a `profile` string: it is recorded alongside each companion's backfill progress, so changing a language — or bumping `ANALYZER_VERSION` — is _detected_ and rebuilds the index instead of leaving half of it analyzed the old way.
 
+The recorded profile is `<analyzer>:<field>`, not the analyzer alone — re-pointing an index at another column leaves every stored row holding the text of the column you abandoned, and a profile that only tracked analysis reported such an index complete while searches over the new column returned nothing. Anything the profile string changes shape by rebuilds every deployed index once, in place, on the first migration after the change: reads keep being served throughout (a rebuild rewrites each row where it stands, and the coverage flag is latched), so it costs one backfill walk per index, not an outage.
+
 If you change folding, stopwords, the token-length cap, or (one day) stemming, bump `ANALYZER_VERSION`. Not doing so leaves every existing index half-matching, silently, for the rest of its life.
 
 ## License
