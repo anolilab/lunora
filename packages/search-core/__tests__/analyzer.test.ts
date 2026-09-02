@@ -78,6 +78,21 @@ describe("search analyzer", () => {
             expect(analyzer.document("iphone15プロ用")).toStrictEqual(["iphone15", "プロ", "ロ用"]);
         });
 
+        it("leaves a run holding no CJK alone, and keeps a trailing Latin stretch whole", () => {
+            expect.assertions(2);
+
+            const analyzer = createSearchAnalyzer(undefined);
+
+            // The CJK cut is decided once for the whole text, then applied per
+            // run — so a text that has CJK *somewhere* still sends its
+            // CJK-free runs through the expander, which must hand them back
+            // untouched rather than bigram them.
+            expect(analyzer.document("hello 世界")).toStrictEqual(["hello", "世界"]);
+            // The mirror of `iphone15プロ用`: the Latin/digit stretch trails the
+            // CJK run instead of leading it, and is still kept whole.
+            expect(analyzer.document("プロ15")).toStrictEqual(["プロ", "15"]);
+        });
+
         it("does not fold ß, which has no combining decomposition", () => {
             expect.assertions(1);
 

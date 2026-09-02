@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createSearchAnalyzer } from "../src/analyzer";
-import { planSearchBackfillPass, searchIndexProfile } from "../src/backfill";
+import { planSearchBackfillPass, searchIndexField, searchIndexProfile } from "../src/backfill";
 
 describe(searchIndexProfile, () => {
     it("names the analyzer profile and the indexed field, so re-pointing an index changes it", () => {
@@ -64,5 +64,23 @@ describe(planSearchBackfillPass, () => {
             finished: false,
             wipe: true,
         });
+    });
+});
+
+describe(searchIndexField, () => {
+    it("reads back the field a profile was built for, so a re-point is told from a re-analysis", () => {
+        expect.assertions(2);
+
+        expect(searchIndexField(searchIndexProfile({ field: "body", language: "en" }))).toBe("body");
+        expect(searchIndexField(searchIndexProfile({ field: "title" }))).toBe("title");
+    });
+
+    it("ignores a physical layout a backend appended, which is a fourth fact and not the field", () => {
+        expect.assertions(2);
+
+        expect(searchIndexField("en-v2:body/blob")).toBe("body");
+        // Only the LAST slash separates the layout: a field cannot contain one,
+        // but a layout identity may.
+        expect(searchIndexField("en-v2:body/blob/v3")).toBe("body/blob");
     });
 });
