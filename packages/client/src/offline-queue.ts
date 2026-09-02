@@ -346,11 +346,15 @@ class OfflineQueue {
             };
 
             this.rewriteStamp(id, record).catch((error: unknown) => {
-                // `rewriteStamp` reports and contains every failure it can see;
-                // this is the backstop for anything it cannot (an adapter that
-                // throws outside its own promise), and keeps the fire-and-forget
-                // call from floating.
-                reportPersistenceError(this.onPersistenceError, "append", error, id);
+                // `rewriteStamp` reports and contains every failure of the durable
+                // write itself; what reaches here is a failure of the REPORTING (an
+                // `onPersistenceError` handler that throws and a `console.warn` that
+                // throws after it), plus whatever future edit adds a throw outside
+                // that try. Either way it keeps the fire-and-forget call from
+                // floating — and the operation named is still `replace`, the one
+                // this method performs: an app that routes on `context.operation`
+                // must not be told a write it never issued has failed.
+                reportPersistenceError(this.onPersistenceError, "replace", error, id);
             });
         }
     }

@@ -502,6 +502,48 @@ describe("offlineQueue — persistence error reporting", () => {
         expect(persisted[0]?.identity).toBe("old");
     });
 
+    it("restampIdentity's backstop names 'replace' too — the op it performs, not the one it never issued", async () => {
+        expect.assertions(2);
+
+        const base = createInMemoryPersistence();
+
+        await base.append({ args: {}, functionPath: "posts:create", id: "1", identity: "old" });
+
+        // The only way past `rewriteStamp`'s own try/catch is for the REPORTING to
+        // throw: a handler that throws falls through to `console.warn`, and a
+        // `console.warn` that throws rejects the promise the backstop catches. The
+        // backstop reported `"append"` — an operation `restampIdentity` never
+        // performs, which an app routing on `context.operation` acts on as a lost
+        // enqueue rather than a failed rewrite.
+        const persistence: PersistenceAdapter = { ...base, replace: () => Promise.reject(new Error("quota")) };
+        const handler = vi.fn<(context: PersistenceErrorContext) => void>(() => {
+            throw new Error("the app's own reporter is down too");
+        });
+        const warnings: string[] = [];
+        const warn = vi
+            .spyOn(console, "warn")
+            .mockImplementationOnce(() => {
+                throw new Error("console is gone");
+            })
+            .mockImplementation((message: unknown) => {
+                warnings.push(String(message));
+            });
+        const queue = new OfflineQueue({ onPersistenceError: handler }, { persistence });
+
+        await queue.hydrate();
+
+        queue.restampIdentity("old", "new");
+
+        await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
+
+        warn.mockRestore();
+
+        expect(handler.mock.calls.map((call) => call[0].operation)).toStrictEqual(["replace", "replace"]);
+        expect(warnings).toStrictEqual(["[lunora] offline-queue persistence replace failed"]);
+    });
+
     it("append failure invokes onPersistenceError handler with operation 'append'", async () => {
         expect.assertions(3);
 

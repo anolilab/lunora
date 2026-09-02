@@ -33,19 +33,4 @@ const DISPLAY_UNSAFE_CHARS = /[\u0000-\u0008\u000A-\u001F\u007F-\u009F\u202A-\u2
 /** Strip everything that could repaint or reorder the line this value is rendered on. */
 const safe = (value: string): string => value.replaceAll(DISPLAY_UNSAFE_CHARS, "");
 
-/**
- * The line-scoped {@link safe}, for a value rendered INSIDE one line — a
- * plan/report/catalog field. A newline there is a line break the renderer never
- * wrote, so a registry `description` of `"chat\n  bind evil"` printed a second,
- * fake plan line after the real one.
- *
- * LF is in `DISPLAY_UNSAFE_CHARS`, so `safe` already removes it and this adds
- * nothing today. It stays as a distinct name because the two call sites mean
- * different things: `view` sanitizes a file body one already-split line at a
- * time, while these render one value into one log line and must never gain a
- * second. Should `safe` ever need to carry a newline through, only this
- * has to keep stripping it.
- */
-const safeLine = (value: string): string => safe(value).replaceAll("\n", "");
-
-export { safe, safeLine };
+export default safe;

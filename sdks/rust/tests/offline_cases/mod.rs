@@ -1246,7 +1246,11 @@ fn a_rate_limited_replay_requeues_and_defers_the_next_flush() {
         1,
         "the second flush must wait out the delay rather than earn the same 429"
     );
-    assert!(again.retry_after_ms.is_some_and(|remaining| remaining > 0));
+    assert!(
+        again.retry_after_ms.is_some_and(|remaining| remaining > 0),
+        "the deferred flush reports what is left of the delay, got {:?}",
+        again.retry_after_ms
+    );
     assert_eq!(queued_ids(&client.offline_queue), vec!["m-429".to_string()]);
 
     a_rate_limited_batch_slot_is_retried_and_its_hint_clamped();

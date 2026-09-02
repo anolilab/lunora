@@ -724,7 +724,7 @@ class TestFlushIntegration < Minitest::Test
     assert_equal queued, report.committed, "every write commits; none is dropped for the size of the batch it shared"
     assert_empty report.rejected
     assert_empty ids(client.offline_queue.items)
-    assert bodies.max > budget, "the first attempt has to be the over-budget one, or nothing was split"
+    assert_operator bodies.max, :>, budget, "the first attempt has to be the over-budget one, or nothing was split"
   end
 
   # The same response on the batch path (two or more writes) was already
@@ -778,7 +778,7 @@ class TestFlushIntegration < Minitest::Test
     again = client.flush_offline_queue
 
     assert_equal 1, posts, "the second flush must wait out the delay rather than earn the same 429"
-    assert again.retry_after_ms.positive?
+    assert_operator again.retry_after_ms, :>, 0
     assert_equal %w[m-429], ids(client.offline_queue.items)
   end
 

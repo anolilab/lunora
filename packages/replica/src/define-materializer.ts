@@ -471,7 +471,9 @@ class MaterializerRuntime {
         // and skips it permanently: the next `initialize()` starts after the
         // gap and nothing ever reads those entries. The walk re-fetches this
         // entry too; `applyEntries` skips it as already applied, so the call
-        // below stays correct either way.
+        // below stays correct either way. It closes the gap only UP TO
+        // MAX_CATCHUP_PAGES — `#catchUp` stops at the same bound `initialize()`
+        // does — so a backlog deeper than that is still stepped over here.
         if (this.#materializers.length > 0 && this.appliedSeq < entry.seq) {
             await this.#catchUp();
         }
