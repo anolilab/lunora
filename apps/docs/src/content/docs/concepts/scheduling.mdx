@@ -13,26 +13,29 @@ Triggers, both backed by a `SchedulerDO` you mount once per app.
 ## Deferring a function
 
 `ctx.scheduler` is available on `MutationCtx` and `ActionCtx` (not on a
-read-only `QueryCtx`). It enqueues a function to run later by path:
+read-only `QueryCtx`). It enqueues a function to run later:
 
-- `ctx.scheduler.runAfter(delayMs, functionPath, args?)` runs after a delay.
-- `ctx.scheduler.runAt(timestampMs, functionPath, args?)` runs at an absolute
+- `ctx.scheduler.runAfter(delayMs, target, args?)` runs after a delay.
+- `ctx.scheduler.runAt(timestampMs, target, args?)` runs at an absolute
   epoch-millisecond time.
 
 Both return the scheduled job's id (a string) so you can track or cancel it. The
-target is referenced as a `"namespace:function"` path string, and it may be a
-mutation or an action. That includes an [internal](/docs/concepts/function-context)
-function that isn't exposed to clients, which is the usual choice for follow-up
-work.
+target is either a generated reference (`internal.notifications.notifySubscribers`,
+`api.…`) or the equivalent `"namespace:function"` path string, and it may be a
+mutation or an action — not a query. A reference is the better habit: it is
+checked against what actually exists, where a path string is not.
+[Internal](/docs/concepts/function-context) functions, which aren't exposed to
+clients, are the usual choice for follow-up work.
 
 ```ts
+import { internal } from "@/lunora/_generated/api";
 import { mutation, v } from "@/lunora/_generated/server";
 
 export const publishPost = mutation.input({ postId: v.id("posts") }).mutation(async ({ ctx, args: { postId } }) => {
     await ctx.db.patch(postId, { status: "published" });
 
     // Fire-and-forget follow-up: notify subscribers 30s later.
-    await ctx.scheduler.runAfter(30_000, "notifications:notifySubscribers", { postId });
+    await ctx.scheduler.runAfter(30_000, internal.notifications.notifySubscribers, { postId });
 });
 ```
 
@@ -115,8 +118,9 @@ read-only and eventually consistent.
 ## Recurring jobs (Cron Triggers)
 
 For work on a fixed cadence (nightly cleanups, hourly digests) declare **Cron
-Triggers**. They run on the platform's cron schedule and dispatch a function
-through the same `SchedulerDO`:
+Triggers**. They run on the platform's cron schedule, and the worker's
+`scheduled()` handler dispatches the target straight to its shard — **not**
+through the `SchedulerDO`:
 
 ```ts
 import { createCronTrigger } from "@lunora/scheduler";
@@ -139,14 +143,25 @@ The CLI's wrangler validator surfaces a missing or unreachable trigger as an
 error during dev, so a bad reference fails fast rather than silently never
 firing.
 
+<Callout type="warn">
+    **A cron fire gets none of the `SchedulerDO`'s durability.** The retry ladder, exponential backoff, and dead-letter park described above belong to
+    `ctx.scheduler` jobs, which the DO owns. A cron trigger is dispatched once from the worker's `scheduled()` handler; a failure is logged as `CRON_JOB_FAILED`
+    and the tick is gone until the next one. Make cron handlers idempotent, and re-derive missed work from your own data rather than assuming a redelivery.
+</Callout>
+
 ## How dispatch works
 
 A scheduled job is stored in the `SchedulerDO` sorted by its fire time and
 dispatched on the DO's alarm. When it fires, the DO calls back into your worker
-and the runtime runs the target function exactly as if it were an RPC: same
-context, same `ctx.db` / `ctx.auth` resolution, same code path. There's no
-separate "background worker" mental model to keep. A scheduled mutation is just
-your mutation, run later.
+and the runtime runs the target function on the same code path as an RPC: same
+context, same `ctx.db`. There's no separate "background worker" mental model to
+keep. A scheduled mutation is just your mutation, run later.
+
+The one difference is the caller. A scheduled or cron dispatch is
+**server-initiated**: it carries no end-user identity, so `ctx.auth.userId` is
+`null` and `ctx.ip` is `undefined`. That is also what lets it reach `internal`
+functions. Pass whatever the job needs to know about a user in its `args`, and
+don't gate a scheduled function on `ctx.auth`.
 
 ## See also
 

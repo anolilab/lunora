@@ -9,8 +9,10 @@ description: Adds authentication to a Lunora app. Use for sign-up/sign-in, email
 
 Wire authentication into a Lunora app using the `auth` registry item, which is
 built on `@lunora/auth` (a thin wrapper over
-[better-auth](https://www.better-auth.com)) with sessions persisted in
-`SessionDO` and identity tables in D1.
+[better-auth](https://www.better-auth.com)) with identity **and session** tables
+in D1. (`SessionDO` is a standalone TTL'd token store `@lunora/auth` never
+calls — don't wire it for auth. The Durable Object option is `LunoraAuthDO` /
+`.auth({ namespace })`, which holds the whole better-auth schema.)
 
 ## When to Use
 
@@ -104,7 +106,7 @@ dependency). OAuth items need the provider's client id/secret added to
 The runtime resolves the session and exposes the user on every context:
 
 ```ts
-import { LunoraError } from "@lunora/server";
+import { LunoraError } from "lunorash/server";
 
 import { mutation, v } from "#lunora/_generated/server.js";
 
@@ -121,22 +123,35 @@ call the better-auth server API — see the scaffolded `lunora/auth/index.ts`.
 
 ### In the UI (React)
 
+`useAuth()` returns exactly `{ setToken, token, user }` — there is no `signIn` /
+`signOut`. Lunora owns the **token**, not the sign-in flow: run the flow with
+the better-auth client (`authClient.signIn.email(...)`), then hand the resulting
+JWT to `setToken`. `setToken(null)` signs out.
+
 ```tsx
 import { Authenticated, Unauthenticated, useAuth } from "@lunora/react";
 
+import { authClient } from "./auth-client";
+
 function Account() {
-    const { user, signIn, signOut } = useAuth();
+    const { setToken, user } = useAuth();
+
+    const signIn = async () => {
+        const { data } = await authClient.signIn.email({ email, password });
+
+        setToken(data?.token ?? null);
+    };
 
     return (
         <>
             <Authenticated>
                 <span>Signed in as {user?.email}</span>
-                <button type="button" onClick={() => signOut()}>
+                <button type="button" onClick={() => setToken(null)}>
                     Sign out
                 </button>
             </Authenticated>
             <Unauthenticated>
-                <button type="button" onClick={() => signIn()}>
+                <button type="button" onClick={signIn}>
                     Sign in
                 </button>
             </Unauthenticated>

@@ -98,7 +98,14 @@ reads an object without its row, so the window itself is invisible.
 `ctx.storage.bucket("avatars").deleteAfterCommit(key)` queues against that bucket.
 An action needs none of this for its own deletes — it is not transactional, so it
 calls `delete` directly — but a mutation it reaches through `ctx.runMutation`
-still queues, and those deletes are flushed when the action finishes.
+still queues, and those deletes are flushed when the action **returns**.
+
+<Callout type="warn">
+    **An action that throws drops its queued deletes.** The submutation's rows are already committed (`ctx.runMutation` does not put the action in a
+    transaction), so the row is gone and the object stays — and because the flush never ran, nothing is logged either. It is still the safe direction, an
+    orphaned object rather than a dangling row, but it is not the "the row and the bytes cannot disagree" guarantee a top-level mutation gives. If a delete has
+    to be observable, do the delete-and-row work in one top-level mutation rather than composing it from an action.
+</Callout>
 
 Build the full `Storage` outside a handler (or to use the object-level reads,
 ranged downloads, and multipart shown below) with

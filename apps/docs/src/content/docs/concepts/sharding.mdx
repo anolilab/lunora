@@ -26,9 +26,12 @@ before you hit the wall. See https://lunora.sh/docs/concepts/sharding for
 guidance.
 ```
 
-The warning fires from `ShardDO` after every RPC that touches storage and
-deduplicates itself with a static flag, so it shows up at most once per DO
-instance. Non-`__root__` DOs are never affected, even when they exceed
+The warning fires from `ShardDO` after an RPC write, and deduplicates itself
+with a flag that is **static on the class** — so it shows up at most once per
+isolate, not once per DO instance, and several shards sharing an isolate see one
+warning between them. It is also only on the RPC write path: admin, WebSocket,
+and alarm writes never trigger the check. Treat it as a nudge to go look, not as
+a per-shard alert. Non-`__root__` DOs are never affected, even when they exceed
 1 GB on their own.
 
 On an empty table, sharding is a single edit:
