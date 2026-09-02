@@ -61,6 +61,26 @@ class EmittedShardContract extends ShardDO {
     }
 
     /**
+     * Mirrors the generated `executeStream` override. Its third parameter is the
+     * socket's verified identity, which the generated body threads by value into
+     * `buildCtx` — if the base signature ever drops it, the generated shard stops
+     * compiling and this file is where that surfaces.
+     */
+    // eslint-disable-next-line class-methods-use-this -- mirrors the generated override's shape; the real body reaches `this.buildCtx`
+    protected override executeStream(
+        functionPath: string,
+        args: Record<string, unknown>,
+        identity?: { identity?: Record<string, unknown>; userId?: string },
+    ): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
+        return {
+            iterator: () =>
+                (async function* stream() {
+                    yield { args, functionPath, identity };
+                })(),
+        };
+    }
+
+    /**
      * Mirrors the post-commit flush the generated dispatches perform. It reaches
      * one base member (`deferPastResponse`), which is `protected` for exactly this
      * call — the host's `waitUntil` behind it is private.

@@ -5512,7 +5512,7 @@ ${relationFanout.override}
             return { ranges: footprint.ranges(), result, tables: footprint.tables };
         }
 
-        protected override executeStream(functionPath: string, args: Record<string, unknown>): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
+        protected override executeStream(functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             if (!registered || registered.kind !== "stream" || registered.visibility === "internal") {
@@ -5523,7 +5523,12 @@ ${relationFanout.override}
 
             return {
                 ...(registered.durable ? { durable: registered.durable as { ttlMs?: number } } : {}),
-                iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx({ functionPath }), args, signal),
+                // Identity threaded EXPLICITLY from the socket, exactly as
+                // \`executeSubscription\` above: the iterator is pulled after this
+                // frame returned, interleaved with unrelated dispatches, so
+                // \`buildCtx\`'s per-request fallback would run an \`rls()\` /
+                // \`ctx.auth\` stream as nobody — or as a concurrent RPC's caller.
+                iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx({ functionPath, identity }), args, signal),
             };
         }
 ${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}${externalSourceOverride}
