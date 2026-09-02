@@ -189,6 +189,28 @@ describe("runDoctor", () => {
         expect(result.findings.some((finding) => finding.level === "warn" && /AUTH_SECRET/u.test(finding.message))).toBe(true);
     });
 
+    it("counts a .dev.vars LUNORA_ADMIN_TOKEN as set", async () => {
+        expect.assertions(2);
+
+        seed(workdir, CLEAN_WRANGLER);
+        writeFileSync(join(workdir, ".dev.vars"), "LUNORA_ADMIN_TOKEN=dev-token\n", "utf8");
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+        expect(result.findings.some((finding) => finding.code === "admin-token-missing")).toBe(false);
+        expect(result.findings.some((finding) => finding.code === "admin-token-set")).toBe(true);
+    });
+
+    it("reports the token as missing when neither the environment nor .dev.vars has one", async () => {
+        expect.assertions(1);
+
+        seed(workdir, CLEAN_WRANGLER);
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+        expect(result.findings.some((finding) => finding.code === "admin-token-missing")).toBe(true);
+    });
+
     const seedContainerProject = (entry: string): void => {
         seed(
             workdir,

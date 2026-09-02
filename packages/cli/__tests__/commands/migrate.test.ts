@@ -702,6 +702,32 @@ export const backfillReadBy = defineMigration({
             expect(calls[0]?.headers?.authorization).toBe("Bearer from-env");
         });
 
+        it("falls back to the .dev.vars token against a local worker", async () => {
+            expect.hasAssertions();
+
+            const calls: CapturedCall[] = [];
+            const previous = process.env.LUNORA_ADMIN_TOKEN;
+
+            delete process.env.LUNORA_ADMIN_TOKEN;
+            writeFileSync(join(workdir, ".dev.vars"), "LUNORA_ADMIN_TOKEN=from-dev-vars\n", "utf8");
+
+            try {
+                await runMigrateDataCommand({
+                    cwd: workdir,
+                    fetchImpl: captureFetch(calls, okResponse()),
+                    id: "backfill-read-by",
+                    logger: silentLogger(),
+                    subcommand: "up",
+                });
+            } finally {
+                if (previous !== undefined) {
+                    process.env.LUNORA_ADMIN_TOKEN = previous;
+                }
+            }
+
+            expect(calls[0]?.headers?.authorization).toBe("Bearer from-dev-vars");
+        });
+
         it("errors when no admin token is available", async () => {
             expect.hasAssertions();
 

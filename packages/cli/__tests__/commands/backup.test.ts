@@ -1021,5 +1021,32 @@ describe("lunora backup", () => {
                 }
             }
         });
+
+        it("falls back to the .dev.vars token against a local worker", async () => {
+            expect.assertions(1);
+
+            const { logger } = capturingLogger();
+            const calls: PitrCall[] = [];
+            const previous = process.env.LUNORA_ADMIN_TOKEN;
+
+            delete process.env.LUNORA_ADMIN_TOKEN;
+            writeFileSync(join(workDir, ".dev.vars"), "LUNORA_ADMIN_TOKEN=from-dev-vars\n", "utf8");
+
+            try {
+                const result = await runBackupCommand({
+                    cwd: workDir,
+                    logger,
+                    adminFetch: captureFetch(calls, { current: "bm-123" }),
+                    subcommand: "pitr",
+                    url: "http://localhost:8787",
+                });
+
+                expect(result.code).toBe(0);
+            } finally {
+                if (previous !== undefined) {
+                    process.env.LUNORA_ADMIN_TOKEN = previous;
+                }
+            }
+        });
     });
 });

@@ -16,7 +16,7 @@ import { join } from "@visulima/path";
 import { Project } from "ts-morph";
 
 import { REPROJECTION_MIGRATION_PREFIX, reprojectionMigrationTable } from "../../../../../shared/reprojection-id";
-import { targetsRemoteWorker } from "../../util/admin-token";
+import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
 import { normalizeAdminBaseUrl, resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -537,14 +537,6 @@ const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateD
         return undefined;
     }
 
-    const token = options.token ?? process.env.LUNORA_ADMIN_TOKEN;
-
-    if (!token) {
-        options.logger.error("admin token required — pass --token or set LUNORA_ADMIN_TOKEN");
-
-        return undefined;
-    }
-
     const table = resolveValidatedTable(cwd, options);
 
     if (table === undefined) {
@@ -554,6 +546,20 @@ const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateD
     const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
     if (baseUrl === undefined) {
+        return undefined;
+    }
+
+    // Resolved after `baseUrl`, and through the shared resolver, because the
+    // `.dev.vars` fallback is gated on the target being loopback — it needs to
+    // know where the request is going. Reading only `--token`/the environment
+    // made `migrate up/down/status` the one admin command that still demanded a
+    // flag against the local worker, where `lunora dev` has already written the
+    // token into `.dev.vars`.
+    const { token } = resolveAdminBearer({ cwd, token: options.token, url: baseUrl });
+
+    if (!token) {
+        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
+
         return undefined;
     }
 
