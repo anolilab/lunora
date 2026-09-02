@@ -107,6 +107,13 @@ export interface RunOptions {
      * the call is made. Callers that are not deferring should leave it unset and
      * take the minted id from the return value. The DO ignores anything that is
      * not a plain `[A-Za-z0-9_-]` id.
+     *
+     * **Not an idempotency key.** An id that is already scheduled is REFUSED
+     * (`409 DUPLICATE_SCHEDULE_ID`), not replaced or de-duplicated: the time
+     * index is keyed by time as well as id, so an overwrite would fire the new
+     * job at the old job's instant and drop the slot it was actually scheduled
+     * for. Cancel the existing job first if you mean to reschedule it. The id
+     * is free again once the job has fired or been cancelled.
      */
     id?: string;
 
