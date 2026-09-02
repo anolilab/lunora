@@ -291,12 +291,19 @@ Four rules a conforming client MUST follow, because each one is a durable write:
   entry — it could not reach the shard, or a limiter refused to look — so it is
   retried rather than reported failed. Every other coded error is a verdict, and
   terminal. A rate-limited retry SHOULD wait out the hint the server sent, either
-  `error.data.retryAfterMs` or the `Retry-After` header (whole seconds).
+  `error.data.retryAfterMs` or the `Retry-After` header — which RFC 9110 defines
+  as EITHER delta-seconds or an HTTP-date, so a client that parses only the first
+  must treat the second as absent rather than as `NaN`. A transient refusal that
+  carried NO hint still needs one: the socket stays open through a 429 or a 503,
+  so nothing reconnects to trigger the next flush, and a client MUST fall back to
+  a bounded, jittered backoff rather than leave the write parked.
 - A slot the server never returned is **retried** — it may or may not have
   committed, and the entry's `mutationId` is what makes that safe.
 - A body with **no** `results` array is a whole-batch outcome, classified by the
-  same rule: a transient code, a non-JSON body or a bare 5xx retries the whole
-  chunk; any other coded `{ error }` is a verdict on every entry and terminal.
+  same rule: a transient code retries the whole chunk, and any other coded
+  `{ error }` is a verdict on every entry and terminal. A reply carrying no
+  envelope to read at all — a non-JSON body, an edge's HTML page — is classified
+  by HTTP STATUS instead, per the paragraph below.
 - A `413` is a verdict on the REQUEST, not on the writes inside it: a chunk of
   more than one entry MUST be split and retried rather than settled. A client
   also holds the request body under the 1 MiB cap up front, splitting before it
@@ -304,9 +311,17 @@ Four rules a conforming client MUST follow, because each one is a durable write:
   writes as soon as they average a couple of KiB each.
 
 The same classification governs a **single-call** replay, so a durable write's
-fate never depends on how many siblings were queued alongside it: a non-2xx
-carrying no `{ error }` envelope (a proxy's HTML 5xx, a bare gateway page) is
-transient, exactly as it is for a whole batch.
+fate never depends on how many siblings were queued alongside it.
+
+A response carrying no `{ error }` envelope to classify — a proxy's HTML page, a
+captive portal, a truncated body — is classified by its HTTP status, and MUST be:
+unclassified, it is neither retried nor discarded, and it parks the head of the
+outbox in front of every write behind it. `408`, any `5xx`, and any status outside
+400-599 leave the write's fate UNKNOWN (it may have committed at the origin behind
+the proxy) and are transient. `429` is transient too, with any `Retry-After` it
+carried. Every other `4xx` is a refusal of the REQUEST that resending can only
+reproduce, and is terminal for the write: dropping a write the edge refused is the
+lesser harm against replaying it forever.
 
 No golden fixtures, and no case in `conformance-cases.json`: the endpoint is
 optional, so requiring it would fail the seven SDKs that correctly do not
