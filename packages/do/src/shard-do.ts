@@ -918,6 +918,20 @@ const paidSocketRefusal = (functionPath: string, verb: "streamed" | "subscribed"
     `paid (\`.x402\`) function "${functionPath}" cannot be ${verb}; call it individually over /_lunora/rpc`;
 
 /**
+ * What the client is told when a socket cannot take another registration.
+ *
+ * Both refusals name the limit AND a way around it. An app only ever meets one
+ * of them at runtime, in production, on the connection it was relying on — so
+ * "cap reached" without a number to design against and a remedy to reach for is
+ * a wall, not a diagnostic. The queries and shapes share one budget, which is
+ * the part nobody guesses.
+ */
+const subscriptionRefusal = (kind: "count" | "size", cap: number, bytes: number): string =>
+    kind === "count"
+        ? `subscription cap of ${String(cap)} reached on this socket (live queries and shapes share it); unsubscribe an idle one, or open a second socket`
+        : `failed to persist the socket attachment, which must stay under the ${String(bytes)}-byte hibernation limit (live queries and shapes share it); shrink the subscription's arguments, unsubscribe an idle one, or open a second socket`;
+
+/**
  * The run-key component for a caller with no verified identity.
  *
  * Anonymous callers must not share a transcript with each other — collapsing
@@ -1086,30 +1100,55 @@ abstract class ShardDO {
     protected static readonly MAX_STREAMS_PER_SOCKET = 8;
 
     /**
-     * Per-socket cap on `subs` + `shapes` together.
+     * The runtime's hard ceiling on one hibernation attachment.
      *
-     * The real ceiling is the runtime's **2048-byte `serializeAttachment`
-     * budget**, not this number: every registration is persisted in the
-     * hibernation attachment as `{functionPath, table, args, sinceSeq,
-     * sinceEpoch}` beside `connectionId`/`userId`/`identity`/`clientId`/
-     * `context`/`whispers`. A realistic subscription record (a function path,
-     * one id argument, a limit, a cursor and an epoch uuid) costs ~200
-     * structured-clone bytes, so the old ceiling of 32 was unreachable — that
-     * attachment serializes to ~6.7 KB, and the socket would have failed the
-     * serialize somewhere in the low teens instead, one
-     * `SUBSCRIPTION_PERSIST_FAILED` at a time.
+     * MEASURED against workerd rather than taken from a doc page: a
+     * `serializeAttachment` of 16385 bytes throws
+     * `A WebSocket 'attachment' cannot be larger than 16384 bytes.`, and 8192
+     * succeeds. The measurement lives in
+     * `__tests__/shard-do.subscription-cap.test.ts`; the workerd half is
+     * `__tests__/workerd/shard-do.workerd.test.ts`.
      *
-     * 8 fits a plain authenticated socket (~1.8 KB) with room for a subscription
-     * whose args are larger than the average. It does NOT fit every socket: add
-     * identity claims, app `context` and whisper topics and the same 8 overflow.
-     * That is by design — no fixed count can bound a record whose `args` the
-     * client chooses, so the budget is enforced where it actually binds:
-     * `subscribe`/`shapeSubscribe` roll the registry back on a serialize throw
-     * and answer `SUBSCRIPTION_PERSIST_FAILED`.
-     *
-     * All three numbers are asserted in `__tests__/shard-do.subscription-cap.test.ts`.
+     * This is the bound that actually binds, and the runtime is the only thing
+     * that enforces it — deliberately. A pre-flight size check here would need a
+     * second size model, and `JSON.stringify` is not it: an attachment
+     * legitimately holds the decoded wire types (`bigint`, `Date`, bytes), and
+     * stringifying a `bigint` throws. So `subscribe`/`shapeSubscribe` let the
+     * runtime refuse, roll the registry back, and spend this constant on saying
+     * WHY — the hibernation API makes them swallow the throw itself, and
+     * "failed to persist subscription attachment" is not something an app can
+     * act on.
      */
-    protected static readonly MAX_SUBSCRIPTIONS_PER_SOCKET = 8;
+    protected static readonly MAX_ATTACHMENT_BYTES = 16_384;
+
+    /**
+     * Per-socket cap on `subs` + `shapes` together — a coarse backstop on
+     * per-poke fan-out work, NOT the storage bound.
+     *
+     * The storage bound is {@link ShardDO.MAX_ATTACHMENT_BYTES}, and it is the
+     * one that can actually stop a legitimate app: every registration is
+     * persisted in the hibernation attachment as `{functionPath, table, args,
+     * sinceSeq, sinceEpoch}` beside `connectionId`/`userId`/`identity`/
+     * `clientId`/`context`/`whispers`, and `args` is the client's to choose, so
+     * no fixed count can bound it.
+     *
+     * 32 against the measured numbers: a realistic registration (a function
+     * path, one id argument, a limit, a cursor and an epoch uuid) costs ~218
+     * bytes, and a fully decorated socket's fixed fields — identity claims, app
+     * `context`, whisper topics — about 550. 32 of them is ~7.5 KB, under half
+     * the 16384-byte ceiling, so the count cap never fires before the byte
+     * budget for a record of that shape. It fires only for registrations small
+     * enough that 32 of them are cheap, which is where a fan-out backstop
+     * belongs.
+     *
+     * This was briefly 8, derived from a 2048-byte attachment budget that the
+     * runtime does not impose — 8× too small, and low enough to break an app
+     * holding a dozen live queries on one socket at runtime, which is the
+     * failure this number exists to avoid.
+     *
+     * Both numbers are asserted in `__tests__/shard-do.subscription-cap.test.ts`.
+     */
+    protected static readonly MAX_SUBSCRIPTIONS_PER_SOCKET = 32;
 
     /**
      * How many times one `onQueryChange` reactor may run within a single refresh
@@ -5468,10 +5507,13 @@ abstract class ShardDO {
                 // subscription (seed + every poke) cannot be.
                 const { code, message: errorMessage } = {
                     paid: { code: "BAD_REQUEST", message: paidSocketRefusal(String(functionPath), "subscribed") },
-                    serialize_failed: { code: "SUBSCRIPTION_PERSIST_FAILED", message: "failed to persist subscription attachment" },
+                    serialize_failed: {
+                        code: "SUBSCRIPTION_PERSIST_FAILED",
+                        message: subscriptionRefusal("size", ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET, ShardDO.MAX_ATTACHMENT_BYTES),
+                    },
                     too_many: {
                         code: "TOO_MANY_SUBSCRIPTIONS",
-                        message: `subscription cap of ${String(ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET)} reached on this socket`,
+                        message: subscriptionRefusal("count", ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET, ShardDO.MAX_ATTACHMENT_BYTES),
                     },
                 }[status];
 
@@ -7052,6 +7094,19 @@ abstract class ShardDO {
     private async handleBulkRowOp(functionPath: string, args: Record<string, unknown>): Promise<Response> {
         let applied = 0;
 
+        // ONE meter for the whole batch, threaded by value into every per-row
+        // `runShardWrite` — the same shape {@link ShardDO.pollTtlSweeps} uses for
+        // its own many-rows-under-one-ceiling pass, and for the same reason.
+        //
+        // Letting each row fall through to the override's
+        // `headroom ?? this.transactionHeadroom()` fallback minted a FRESH
+        // tracker per row: up to {@link SHARD_BULK_ROW_CAP} allocations and, more
+        // to the point, a ceiling that resets every row and therefore bounds
+        // nothing. A bulk op is precisely the unbounded-work case the meter
+        // exists for — 500 rows is where a clear-table can actually exhaust the
+        // isolate — so it gets one budget, charged across the batch.
+        const headroom = this.transactionHeadroom();
+
         try {
             // `clearTable` is `deleteRows` with no predicate — the same
             // writer-routed bounded loop, matching every row — so the two share an
@@ -7062,7 +7117,7 @@ abstract class ShardDO {
             if (isClear || functionPath === ADMIN_FUNCTIONS.deleteRows) {
                 const parsed = isClear ? parseClearTableArgs(args) : parseBulkDeleteArgs(args);
                 const result = await this.runShardBulkRowOp(parsed, async (id) => {
-                    await this.runShardWrite({ id, op: "delete", table: parsed.table });
+                    await this.runShardWrite({ id, op: "delete", table: parsed.table }, headroom);
                     applied += 1;
                 });
 
@@ -7087,7 +7142,7 @@ abstract class ShardDO {
                 parsed,
                 async (id) => {
                     try {
-                        await this.runShardWrite({ doc: parsed.doc, id, op: "patch", table: parsed.table });
+                        await this.runShardWrite({ doc: parsed.doc, id, op: "patch", table: parsed.table }, headroom);
                         applied += 1;
                     } catch (error) {
                         if (!(error instanceof LunoraError) || error.code !== "NOT_FOUND") {
@@ -9598,10 +9653,7 @@ abstract class ShardDO {
 
         if (status !== "ok") {
             const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
-            const message =
-                status === "too_many"
-                    ? `subscription cap of ${String(ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET)} reached on this socket`
-                    : "failed to persist shape subscription attachment";
+            const message = subscriptionRefusal(status === "too_many" ? "count" : "size", ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET, ShardDO.MAX_ATTACHMENT_BYTES);
 
             this.sendSubscriptionError(ws, subId, code, message);
 
@@ -10409,8 +10461,8 @@ abstract class ShardDO {
 
     /**
      * Delete one expired row through {@link ShardDO.runShardWrite}, passing this
-     * sweep's own by-value meter (an alarm has no dispatch in flight, so the
-     * override's `this.transactionHeadroom()` fallback would be `undefined`),
+     * sweep's own by-value meter (the override's `this.transactionHeadroom()`
+     * fallback would mint a fresh budget per row, bounding nothing),
      * absorbing a `TRANSACTION_LIMIT_EXCEEDED` as "batch full" rather than
      * letting it propagate — split out of {@link ShardDO.pollTtlSweeps} to keep
      * that method's own complexity down. Returns `true` when the limit was hit

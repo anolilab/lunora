@@ -83,6 +83,35 @@ interface ConformanceHost {
     disposeTerminally?: () => void;
 
     /**
+     * Declare that this host's concurrency boundary is the **dispatch**, not
+     * the SQL executor: the runtime refuses to deliver a second event to the
+     * shard while a mutation holds it, so two tasks never reach `shard.sql`
+     * concurrently in the first place.
+     *
+     * Cloudflare is the case. `runSerialized` is `blockConcurrencyWhile`, which
+     * closes the Durable Object's input gate; every other event — including
+     * timer continuations — is queued behind it until the mutation settles. Two
+     * consequences the TCK has to respect:
+     *
+     * - A read issued from inside the *same* event is not "a task outside the
+     * mutation" at all. It is the mutation's own task, sharing its
+     * `storage.transaction`, and it reads the uncommitted row. Measured
+     * against workerd: the row comes back.
+     * - A test cannot manufacture a second event either. The gate delivers
+     * queued continuations in scheduling order, so an outer `await sleep(n)`
+     * armed before the gate closed and due *earlier* than the mutation's own
+     * timer head-of-line blocks that timer — the closure never settles, the
+     * gate never opens, and the object deadlocks until the test times out.
+     *
+     * So on such a host the isolation leg asserts the half the adapter owns
+     * (nothing uncommitted survives the rollback) and reports the observation
+     * half as a gap, the same way {@link ConformanceHost.awaitAlarmFired}'s
+     * absence reports platform-owned alarm delivery. Enforcing the gate is
+     * workerd's test, not the adapter's.
+     */
+    isolatesByDispatch?: true;
+
+    /**
      * The durable key-value store under test. Optional: a host that implements
      * only the reactive-engine half (`ShardHost`) has no KV surface to offer,
      * and the suite reports the gap rather than asserting against a stub.
