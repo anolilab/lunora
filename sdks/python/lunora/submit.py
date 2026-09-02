@@ -24,6 +24,8 @@ it, then run callbacks and I/O — never one round trip with the lock held.
 from __future__ import annotations
 
 import contextlib
+import json
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -60,11 +62,38 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
 #: it would only re-trigger the same failure (a poison-message loop).
 TRANSIENT_ERROR_CODES = frozenset({"SHARD_ERROR", "SHARD_UNAVAILABLE"})
 
+#: Codes that say "not now" rather than "no". A rate-limited replay is the one
+#: verdict a durable queue must never honour: the write is perfectly valid and
+#: the server is asking for it later, so dropping it loses data for being
+#: punctual. The delay comes from the envelope's ``data.retryAfterMs`` (see
+#: ``protocol/fixtures/rpc.json``'s ``responseError.with-data``).
+RATE_LIMIT_ERROR_CODES = frozenset({"RATE_LIMITED", "TOO_MANY_REQUESTS"})
+
 #: Hard cap on entries in one batch, matching the server's own
 #: (``shared/batch-wire.ts``). A Durable Object is single-threaded and replays a
 #: batch's entries sequentially, so an unbounded one could pin a shard for tens
 #: of thousands of dispatches. A flush with a larger backlog chunks itself.
 MAX_BATCH_ENTRIES = 500
+
+#: Byte budget for one batch body: the worker's own 1 MiB body cap
+#: (``packages/runtime/src/body-readers.ts``) less 64 KiB of headroom, per
+#: ``protocol/README.md`` §4.3. The entry cap alone is blind to size: 500 writes
+#: carrying bytes or long text exceed a megabyte, the worker answers
+#: ``413 PAYLOAD_TOO_LARGE``, and a whole-batch coded envelope is terminal for
+#: every entry — so a count-only chunker settles 500 durable writes `rejected`
+#: that would each have committed alone. The headroom covers the request line,
+#: the headers and the JSON framing this estimate does not weigh.
+MAX_BATCH_BYTES = 1_048_576 - 65_536
+
+#: Ceiling on a rate limit's honoured delay. A server (or a proxy in front of it)
+#: can name minutes, and a durable queue that sleeps that long has stopped being
+#: a queue; the write is not dropped either way, only retried sooner.
+MAX_RETRY_AFTER_MS = 60_000
+
+#: The worker's answer to a body over its cap. Coded, so it arrives as a
+#: whole-batch envelope — which every other coded envelope is a verdict on every
+#: entry, and this one is not.
+PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE"
 
 Transform = Callable[[Any], Any]
 
@@ -126,9 +155,14 @@ class MutationSettled:
 class FlushReport:
     """What one :meth:`LunoraClient.flush_offline_queue` pass achieved."""
 
-    __slots__ = ("committed", "conflicted", "rejected", "requeued")
+    __slots__ = ("committed", "conflicted", "rejected", "requeued", "retry_after_ms")
 
     def __init__(self) -> None:
+        #: Milliseconds the server asked the caller to wait before flushing
+        #: again, when a replay came back rate-limited. ``None`` otherwise. The
+        #: client enforces it too — a flush inside the window is a no-op — so
+        #: this is for a caller that schedules its own retry.
+        self.retry_after_ms: Optional[int] = None
         #: Ids the server accepted.
         self.committed: list[str] = []
         #: Ids dropped on a server verdict, an identity change, an unencodable
@@ -191,9 +225,29 @@ def is_transient(error: BaseException) -> bool:
     """
 
     if isinstance(error, LunoraError):
-        return error.code in TRANSIENT_ERROR_CODES
+        return error.transient or error.code in TRANSIENT_ERROR_CODES or error.code in RATE_LIMIT_ERROR_CODES
 
     return True
+
+
+def retry_after_ms(error: BaseException) -> Optional[int]:
+    """How long a rate-limited replay asks to wait, if the envelope said.
+
+    ``None`` when the server named no delay — the caller then decides its own
+    backoff rather than hammering, which is what :attr:`FlushReport.retry_after_ms`
+    reports.
+    """
+
+    if not isinstance(error, LunoraError) or error.code not in RATE_LIMIT_ERROR_CODES:
+        return None
+
+    data = error.data
+    delay = data.get("retryAfterMs") if isinstance(data, dict) else None
+
+    if not isinstance(delay, int) or isinstance(delay, bool) or delay <= 0:
+        return None
+
+    return min(delay, MAX_RETRY_AFTER_MS)
 
 
 async def submit_write(client: LunoraClient, options: SubmitOptions) -> MutationOutcome:
@@ -298,6 +352,16 @@ async def flush_queue(client: LunoraClient, shard_key: Optional[str] = None) -> 
     report = FlushReport()
 
     with client._lock:
+        # A server that answered "not now" gets waited out. Without this the
+        # caller's own reconnect loop replays the identical burst immediately and
+        # earns the same 429, indefinitely.
+        remaining = client._flush_not_before - time.monotonic()
+
+        if remaining > 0:
+            report.retry_after_ms = int(remaining * 1000) + 1
+
+            return report
+
         queue = client.offline_queue
         current_identity = client.identity
         pending = queue.items()
@@ -366,18 +430,20 @@ async def flush_queue(client: LunoraClient, shard_key: Optional[str] = None) -> 
         return report
 
     to_requeue: list = []
+    chunks = _chunk_batches(sendable)
 
-    for start in range(0, len(sendable), MAX_BATCH_ENTRIES):
+    for index, chunk in enumerate(chunks):
         # Chunks replay sequentially, which is what preserves FIFO across a flush
         # longer than one batch.
-        chunk_requeue, stop = await _replay_batched(client, queue, sendable[start : start + MAX_BATCH_ENTRIES], report)
+        chunk_requeue, stop = await _replay_batched(client, queue, chunk, report)
         to_requeue.extend(chunk_requeue)
 
         if stop:
             # A whole-chunk transport failure. Leave every write not yet sent
             # queued, in order, rather than sending on into a connection that
             # just failed.
-            to_requeue.extend(sendable[start + MAX_BATCH_ENTRIES :])
+            for later in chunks[index + 1 :]:
+                to_requeue.extend(later)
 
             break
 
@@ -387,6 +453,66 @@ async def flush_queue(client: LunoraClient, shard_key: Optional[str] = None) -> 
         report.requeued.extend(entry.id for entry in to_requeue)
 
     return report
+
+
+def _entry_bytes(item: QueuedMutation) -> int:
+    """A batch entry's contribution to the request body, in bytes.
+
+    The args dominate and are the only part that can be large; the constant
+    covers the entry's fixed keys and the comma joining it to the next one.
+    Encoding twice (here and in :func:`_replay_batched`) is deliberate — the
+    flush is the slow path, and carrying the encoded form through the chunker
+    would put a second representation of every queued write in memory.
+    """
+
+    encoded = json.dumps(encode_wire(item.args if item.args is not None else {}), separators=(",", ":"))
+
+    return len(encoded.encode("utf-8")) + len(item.function_path) + len(item.id) + 160
+
+
+def _chunk_batches(items: list) -> list:
+    """Split a flush into batch bodies the worker will accept.
+
+    By BYTES as well as by count: the worker reads a batch body under a 1 MiB
+    budget and answers ``413 PAYLOAD_TOO_LARGE`` past it, so 500 writes carrying
+    bytes or long text are one request the server refuses whole. A single write
+    over the budget still forms its own chunk — splitting cannot help it, and
+    :func:`_replay_batched` settles it on the answer.
+    """
+
+    chunks: list = []
+    current: list = []
+    size = 0
+
+    for item in items:
+        cost = _entry_bytes(item)
+
+        if current and (len(current) >= MAX_BATCH_ENTRIES or size + cost > MAX_BATCH_BYTES):
+            chunks.append(current)
+            current = []
+            size = 0
+
+        current.append(item)
+        size += cost
+
+    if current:
+        chunks.append(current)
+
+    return chunks
+
+
+def _note_retry_after(client: LunoraClient, report: FlushReport, error: BaseException) -> None:
+    """Record a rate limit's delay, and hold the next flush off until it passes."""
+
+    delay = retry_after_ms(error)
+
+    if delay is None:
+        return
+
+    report.retry_after_ms = delay
+
+    with client._lock:
+        client._flush_not_before = max(client._flush_not_before, time.monotonic() + delay / 1000)
 
 
 async def _replay_sequential(client: LunoraClient, queue: Any, items: list, report: FlushReport) -> None:
@@ -403,6 +529,7 @@ async def _replay_sequential(client: LunoraClient, queue: Any, items: list, repo
             )
         except Exception as error:
             if is_transient(error):
+                _note_retry_after(client, report, error)
                 # Nothing after this write may go out ahead of it: replaying out
                 # of order is how a durable queue corrupts the data it was
                 # protecting.
@@ -478,6 +605,28 @@ async def _replay_batched(client: LunoraClient, queue: Any, items: list, report:
             decode_wire(envelope["data"]) if envelope.get("data") is not None else None,
         )
 
+        # The body was too big, not wrong — every entry in it would have
+        # committed alone. Halve and retry; the estimate the chunker used cannot
+        # see the framing the worker actually measured, and only the answer can.
+        if error.code == PAYLOAD_TOO_LARGE and len(items) > 1:
+            middle = len(items) // 2
+            left, stop = await _replay_batched(client, queue, items[:middle], report)
+
+            if stop:
+                return left + items[middle:], True
+
+            right, stop = await _replay_batched(client, queue, items[middle:], report)
+
+            return left + right, stop
+
+        # A shard blip or a rate limit is not a verdict on the batch's contents.
+        # Requeue it whole and stop the flush, exactly as the single-call path
+        # does for the same codes.
+        if is_transient(error):
+            _note_retry_after(client, report, error)
+
+            return items, True
+
         with client._lock:
             for item in items:
                 queue.unpersist(item.id)
@@ -519,22 +668,21 @@ def _settle_batch_slots(client: LunoraClient, queue: Any, items: list, results: 
         envelope = slot.get("error")
 
         if isinstance(envelope, dict):
-            code = envelope.get("code") if isinstance(envelope.get("code"), str) else "INTERNAL"
-
-            # A transient shard failure is the batch's counterpart of an uncoded
-            # throw on the single-call path: the server never reached a verdict,
-            # so the write goes back on the queue rather than being reported as
-            # failed.
-            if code in TRANSIENT_ERROR_CODES:
-                requeue.append(item)
-
-                continue
-
             error = LunoraError(
-                code,
+                envelope.get("code") if isinstance(envelope.get("code"), str) else "INTERNAL",
                 envelope.get("message") if isinstance(envelope.get("message"), str) else "request failed",
                 decode_wire(envelope["data"]) if envelope.get("data") is not None else None,
             )
+
+            # A transient shard failure — or a limiter that refused to look — is
+            # the batch's counterpart of an uncoded throw on the single-call path:
+            # the server never reached a verdict, so the write goes back on the
+            # queue rather than being reported as failed.
+            if is_transient(error):
+                _note_retry_after(client, report, error)
+                requeue.append(item)
+
+                continue
 
             with client._lock:
                 queue.unpersist(item.id)

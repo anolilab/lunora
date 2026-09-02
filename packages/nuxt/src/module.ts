@@ -1,8 +1,8 @@
 /**
  * The Lunora **Nuxt module** — single-worker composition, the inverse of the
  * old two-worker split. Instead of Lunora owning the Cloudflare worker entry, it
- * is mounted *inside* Nitro: a server route at `<prefix>/**` (default
- * `/_lunora/**`) forwards every RPC / WebSocket / admin request to the project's
+ * is mounted *inside* Nitro: a server route at `/_lunora/**` (the paths the
+ * worker routes on) forwards every RPC / WebSocket / admin request to the project's
  * Lunora app (`createWorker(...)` / `defineApp().build()`), which runs in the
  * same worker Nuxt deploys as. The `ShardDO` Durable Object class is carried to
  * the deployed worker by a root `worker.ts` wrapper (`wrangler.jsonc`'s `main`)
@@ -190,6 +190,9 @@ export const checkWorkerEntry = (rootDirectory: string, warn: (message: string) 
     }
 };
 
+/** The fixed path prefix the Lunora worker routes on (`RPC_PATH` / `WS_PATH` in `@lunora/runtime`). */
+const LUNORA_ROUTE_PREFIX = "/_lunora";
+
 /** Options for the `@lunora/nuxt` module (configurable under the `lunora` key in `nuxt.config`). */
 export interface ModuleOptions {
     /**
@@ -198,8 +201,6 @@ export interface ModuleOptions {
      * `ShardDO`. Aliased to the `#lunora/app` virtual the server route imports.
      */
     appEntry: string;
-    /** URL prefix Lunora realtime is mounted at. */
-    prefix: string;
 }
 
 /**
@@ -218,7 +219,6 @@ type LunoraNuxtModule = typeof defineNuxtModule<ModuleOptions> extends {
 const lunoraNuxtModule: LunoraNuxtModule = defineNuxtModule<ModuleOptions>({
     defaults: {
         appEntry: "~/lunora/server",
-        prefix: "/_lunora",
     },
     meta: {
         configKey: "lunora",
@@ -251,9 +251,14 @@ const lunoraNuxtModule: LunoraNuxtModule = defineNuxtModule<ModuleOptions>({
         // Mount Lunora realtime (RPC + WebSocket + admin) as a Nitro server route.
         // The handler reconstructs a Web Request, resolves the Cloudflare env/ctx
         // off the event, and forwards to the Lunora app's `fetch` in-process.
+        //
+        // The mount is fixed, not an option: `createWorker` routes on the
+        // `/_lunora/rpc` + `/_lunora/ws` constants and the generated client calls
+        // them, so a configurable prefix could only mount a route whose every
+        // request the worker answers 404 — which is what it used to do.
         addServerHandler({
             handler: resolver.resolve("./runtime/server/lunora"),
-            route: `${options.prefix}/**`,
+            route: `${LUNORA_ROUTE_PREFIX}/**`,
         });
 
         // The `ShardDO` class must reach the deployed Cloudflare worker: Nitro's

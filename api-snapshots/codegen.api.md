@@ -1334,6 +1334,12 @@ const isTypedSchema: (schema: Record<string, unknown> | undefined) => boolean;
 const lintSchema: (options: LintSchemaOptions) => Finding[];
 ```
 
+### `listLunoraSourceFiles` (const)
+
+```ts
+const listLunoraSourceFiles: (directory: string, accumulator?: string[], root?: string, visited?: Set<string>) => string[];
+```
+
 ### `parseSchemaSnapshot` (const)
 
 ```ts

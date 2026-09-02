@@ -43,8 +43,8 @@ Runnable unsubscribe = client.subscribe("messages:list", args, onData, onError, 
 ```
 
 `client.handleFrame(raw)` is what you call with each inbound WebSocket message;
-`client.resendSubscriptions()` re-subscribes everything after a reconnect,
-carrying each subscription's resume cursor.
+`client.resendSubscriptions()` re-subscribes everything after a reconnect —
+queries carrying their resume cursor and shapes their checkpoint and epoch.
 
 ## Optimistic updates and offline writes
 
@@ -86,7 +86,18 @@ a prior session persisted, returning the shard keys to flush.
 A queued write whose args cannot be wire-encoded settles terminally on the first
 flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and every
 discard — including one the capacity cap evicts out of a _restored_ queue, which
-has no caller left to tell — reaches `client.onMutationSettled`.
+has no caller left to tell — reaches `client.onMutationSettled`. A persisted
+record whose args no longer decode is purged and settled
+`OFFLINE_WRITE_UNDECODABLE` rather than replayed with substitute args, which
+would commit a different write than the caller made.
+
+The durable record holds the **wire** form of a write's args, so a store that
+serialises — a file, a SQLite column, a preferences store — round-trips a
+`bigint`, `bytes`, date or map argument intact.
+
+A replay the server rate-limits is re-queued rather than dropped, and the
+envelope's `data.retryAfterMs` comes back as `FlushReport.retryAfterMs`; the
+client also holds the next flush off until that delay passes.
 
 `client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write

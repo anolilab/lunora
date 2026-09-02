@@ -1,130 +1,70 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-
-import { parse as parseJsonc } from "jsonc-parser";
+/**
+ * `lunora view` — open the Lunora studio in a browser.
+ *
+ * There is exactly one studio and it is served locally: the CLI's own server
+ * (`util/studio-server.ts`, `http://127.0.0.1:6173`) for the wrangler flavor,
+ * and `@lunora/vite`'s `/__lunora` route inside the Vite dev server for the
+ * Vite flavor. The deployed worker serves no studio — its `/_lunora/*` table is
+ * rpc/ws/status/migrate/admin only — so there is nothing remote to open.
+ *
+ * The running dev server records where its studio actually is in
+ * `.lunora/dev.json`, so read that (the same source `admin-url.ts` reads for
+ * the admin base URL) instead of guessing a port: the Vite flavor bumps to the
+ * next free port when 5173 is taken, and no hardcoded default survives that.
+ */
+import { readLiveDevServerState } from "@lunora/config";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
 import type { OpenUrlOptions } from "../../util/open-url";
 import { openUrl } from "../../util/open-url";
-import type { ViewOptions } from "./index";
 
 interface ViewCommandOptions {
     cwd?: string;
     logger: Logger;
     /** Inject the opener so tests don't spawn a browser. */
     opener?: OpenUrlOptions["opener"];
-    /** Open the deployed worker URL instead of the local dev studio. */
-    remote?: boolean;
 }
 
 interface ViewCommandResult {
     code: number;
-    url: string | undefined;
+    url: string;
 }
 
-const DEFAULT_DEV_PORT = 8787;
-const STUDIO_PATH = "/_lunora/studio";
+/** Where the CLI's embedded studio server listens (`dev`'s `DEFAULT_STUDIO_PORT`). */
+const DEFAULT_STUDIO_URL = "http://127.0.0.1:6173";
 
-const findWranglerFile = (projectRoot: string): string | undefined => {
-    for (const candidate of ["wrangler.jsonc", "wrangler.json"]) {
-        const fullPath = join(projectRoot, candidate);
+/** Path `@lunora/vite`'s studio plugin mounts the studio on inside the Vite dev server. */
+const VITE_STUDIO_PATH = "/__lunora";
 
-        if (existsSync(fullPath)) {
-            return fullPath;
-        }
+const TRAILING_SLASH = /\/$/u;
+
+/**
+ * The studio URL for the dev server that is running right now, or the CLI
+ * studio's default port when none is.
+ *
+ * `studioUrl` is written by the wrangler flavor once its studio server is
+ * listening; the Vite flavor records only the Vite origin, whose studio is the
+ * `/__lunora` route on it.
+ */
+const resolveStudioUrl = (cwd: string): string => {
+    const state = readLiveDevServerState(cwd);
+
+    if (state === undefined) {
+        return DEFAULT_STUDIO_URL;
     }
 
-    return undefined;
-};
-
-const readWrangler = (projectRoot: string): Record<string, unknown> | undefined => {
-    const file = findWranglerFile(projectRoot);
-
-    if (!file) {
-        return undefined;
+    if (state.studioUrl !== undefined) {
+        return state.studioUrl;
     }
 
-    try {
-        const parsed: unknown = parseJsonc(readFileSync(file, "utf8"));
-
-        return parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
-    } catch {
-        return undefined;
-    }
-};
-
-const resolveDevPort = (wrangler: Record<string, unknown> | undefined): number => {
-    if (!wrangler) {
-        return DEFAULT_DEV_PORT;
-    }
-
-    const { dev } = wrangler;
-
-    if (dev !== null && typeof dev === "object") {
-        const { port } = dev as Record<string, unknown>;
-
-        if (typeof port === "number" && Number.isFinite(port)) {
-            return port;
-        }
-    }
-
-    return DEFAULT_DEV_PORT;
-};
-
-const resolveRemoteUrl = (wrangler: Record<string, unknown> | undefined): string | undefined => {
-    if (!wrangler) {
-        return undefined;
-    }
-
-    // Prefer the first declared `routes[].pattern` if present.
-    const { routes } = wrangler;
-
-    if (Array.isArray(routes) && routes.length > 0) {
-        const first: unknown = routes[0];
-
-        if (typeof first === "string") {
-            return `https://${first.split("/")[0] ?? first}${STUDIO_PATH}`;
-        }
-
-        if (first !== null && typeof first === "object") {
-            const { pattern } = first as Record<string, unknown>;
-
-            if (typeof pattern === "string" && pattern.length > 0) {
-                return `https://${pattern.split("/")[0] ?? pattern}${STUDIO_PATH}`;
-            }
-        }
-    }
-
-    // Otherwise fall back to the implicit workers.dev subdomain (best effort).
-    const { name } = wrangler;
-
-    if (typeof name === "string" && name.length > 0) {
-        return `https://${name}.workers.dev${STUDIO_PATH}`;
-    }
-
-    return undefined;
+    return state.mode === "vite" ? `${state.url.replace(TRAILING_SLASH, "")}${VITE_STUDIO_PATH}` : DEFAULT_STUDIO_URL;
 };
 
 const runViewCommand = async (options: ViewCommandOptions): Promise<ViewCommandResult> => {
-    const cwd = options.cwd ?? process.cwd();
-    const wrangler = readWrangler(cwd);
+    const url = resolveStudioUrl(options.cwd ?? process.cwd());
     const { logger } = options;
-
-    let url: string | undefined;
-
-    if (options.remote) {
-        url = resolveRemoteUrl(wrangler);
-
-        if (!url) {
-            logger.error("view --remote: could not determine the remote URL from wrangler config (set `routes` or `name`).");
-
-            return { code: 1, url: undefined };
-        }
-    } else {
-        url = `http://localhost:${String(resolveDevPort(wrangler))}${STUDIO_PATH}`;
-    }
 
     logger.info(`opening ${url}`);
 
@@ -142,9 +82,7 @@ const runViewCommand = async (options: ViewCommandOptions): Promise<ViewCommandR
 };
 
 /** `lunora view` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<ViewOptions> = defineHandler<ViewOptions>(({ cwd, logger, options }) =>
-    runViewCommand({ cwd, logger, remote: options.remote === true }),
-);
+const execute: CommandHandler<Record<string, never>> = defineHandler<Record<string, never>>(({ cwd, logger }) => runViewCommand({ cwd, logger }));
 
 export { execute };
 export type { ViewCommandOptions, ViewCommandResult };

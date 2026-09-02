@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt;
 use std::sync::mpsc::{channel, Receiver};
+use std::time::Instant;
 
 use serde_json::{json, Map, Value};
 
@@ -22,6 +23,10 @@ pub const RPC_BATCH_PATH: &str = "/_lunora/rpc-batch";
 /// The live-subscription endpoint.
 pub const WS_PATH: &str = "/_lunora/ws";
 
+/// The code a subscription's error callback carries when the wire codec refused
+/// that subscription's `data`/`delta` payload.
+pub const CODE_INVALID_FRAME: &str = "INVALID_FRAME";
+
 /// Which RPC method a call dispatches to. Generated code emits these variants
 /// rather than raw strings, so a typo in a target template is a compile error
 /// instead of a read silently sent over the write path.
@@ -38,6 +43,14 @@ pub struct ApiError {
     pub code: String,
     pub message: String,
     pub data: Option<WireValue>,
+    /// Whether the call reached no verdict — a 5xx, or a non-2xx carrying no
+    /// envelope at all (an edge error page, a WAF block, a proxy).
+    ///
+    /// It is set where the HTTP STATUS is still in scope, because nothing
+    /// downstream can recover it: `code` alone cannot tell a `BAD_REQUEST` a
+    /// function returned from the `INTERNAL` this client synthesises for a body
+    /// that never came from one. [`crate::submit::is_transient`] reads it.
+    pub transient: bool,
 }
 
 impl fmt::Display for ApiError {
@@ -155,6 +168,10 @@ pub fn parse_rpc_response(body: &Value, status: u16) -> Result<WireValue, Client
             code: envelope.get("code").and_then(Value::as_str).unwrap_or("INTERNAL").to_string(),
             data,
             message: envelope.get("message").and_then(Value::as_str).unwrap_or("request failed").to_string(),
+            // A 5xx is the shard or the edge failing under the call, not a
+            // verdict on it, so a queued write replayed under the same
+            // idempotency key is still good.
+            transient: status >= 500,
         })));
     }
 
@@ -163,6 +180,12 @@ pub fn parse_rpc_response(body: &Value, status: u16) -> Result<WireValue, Client
             code: "INTERNAL".to_string(),
             data: None,
             message: format!("HTTP {status} without an error envelope"),
+            // No envelope at all, so this body never came from a Lunora
+            // function. Nothing reached the shard, which makes it transport
+            // rather than a verdict — the batch path already classified the
+            // identical response that way, and a lone queued write must not be
+            // dropped for being alone.
+            transient: true,
         })));
     }
 
@@ -283,6 +306,11 @@ impl Subscription {
 }
 
 struct ShapeSubscription {
+    /// The shape's name and args, kept for exactly one reason: a reconnect has
+    /// to rebuild its `shape_subscribe` frame, and a registry that dropped them
+    /// left every shape view subscribed to a socket that no longer exists.
+    name: String,
+    args: Option<WireValue>,
     rows: HashMap<String, WireValue>,
     order: Vec<String>,
     checkpoint: Option<Value>,
@@ -375,6 +403,10 @@ pub struct Client {
     next_id: usize,
     next_shape_id: usize,
     pub(crate) was_ever_connected: bool,
+    /// The monotonic instant before which a flush is a no-op, set when a replay
+    /// came back rate-limited and the envelope named a delay. [`Instant`] rather
+    /// than a wall clock, so an NTP correction cannot strand a queue for hours.
+    pub(crate) flush_not_before: Option<Instant>,
     pub(crate) closed: bool,
     pub(crate) settled_listeners: Vec<SettledHandler>,
 }
@@ -386,6 +418,7 @@ impl Client {
             base_url: base_url.into(),
             client_id: format!("client-{}", random_id()),
             closed: false,
+            flush_not_before: None,
             identity: None,
             next_id: 0,
             next_shape_id: 0,
@@ -655,15 +688,43 @@ impl Client {
 
     /// Re-subscribes everything after a reconnect, carrying each subscription's
     /// resume cursor so the server can skip results that have not changed.
+    ///
+    /// BOTH registries. A resend that walked only the queries left every shape
+    /// view subscribed to a socket that no longer exists — silently, and for the
+    /// rest of the process's life.
     pub fn resend_subscriptions(&self) -> Result<(), ClientError> {
         let Some(send) = &self.send else {
             return Ok(());
         };
 
-        for (id, entry) in &self.subscriptions {
-            let frame = build_subscribe_frame(id, &entry.function_path, &entry.args, None, entry.cursor.as_ref(), entry.epoch.as_ref())?;
+        // Every frame is built BEFORE any is sent, so a shape whose args no
+        // longer encode fails the whole resend rather than leaving the socket
+        // half re-subscribed.
+        let mut frames = Vec::with_capacity(self.subscriptions.len() + self.shapes.len());
 
-            send(&frame);
+        for (id, entry) in &self.subscriptions {
+            frames.push(build_subscribe_frame(
+                id,
+                &entry.function_path,
+                &entry.args,
+                None,
+                entry.cursor.as_ref(),
+                entry.epoch.as_ref(),
+            )?);
+        }
+
+        for (id, shape) in &self.shapes {
+            frames.push(build_shape_subscribe_frame(
+                id,
+                &shape.name,
+                shape.args.as_ref(),
+                shape.checkpoint.as_ref(),
+                shape.epoch.as_ref(),
+            )?);
+        }
+
+        for frame in &frames {
+            send(frame);
         }
 
         Ok(())
@@ -693,8 +754,10 @@ impl Client {
         self.shapes.insert(
             id.clone(),
             ShapeSubscription {
+                args,
                 checkpoint: None,
                 epoch: None,
+                name: name.to_string(),
                 on_error,
                 on_rows,
                 order: Vec::new(),
@@ -726,7 +789,25 @@ impl Client {
                     Some(Value::Null) | None => frame.get("delta").unwrap_or(&Value::Null),
                     Some(inner) => inner,
                 };
-                let value = decode_wire(payload)?;
+                let value = match decode_wire(payload) {
+                    Ok(decoded) => decoded,
+                    Err(error) => {
+                        // A malformed payload belongs on the subscription's error
+                        // callback, not on the socket read loop's stack. Letting
+                        // it escape here ended that loop — and with it every
+                        // OTHER subscription on this client — over one bad frame.
+                        let reported = SubscriptionError {
+                            code: Some(CODE_INVALID_FRAME.to_string()),
+                            message: error.to_string(),
+                        };
+
+                        if let Some(handler) = self.subscriptions.get(&id).and_then(|entry| entry.on_error.as_ref()) {
+                            handler(&reported);
+                        }
+
+                        return Ok(Some("error".to_string()));
+                    }
+                };
 
                 if let Some(entry) = self.subscriptions.get_mut(&id) {
                     advance(entry, &frame);

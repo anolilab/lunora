@@ -1114,6 +1114,75 @@ const readSqlCdcChangedTables = async (
     return { cursor, tables, ...(floor === undefined ? {} : { floor }) };
 };
 
+/** SQLite phrases `SQLITE_TOOBIG` as "string or blob too big"; D1, workerd and `node:sqlite` all surface that same text. */
+const SQLITE_ROW_TOO_BIG_RE = /string or blob too big/iu;
+
+/** Postgres' wording for a heap tuple that will not fit its page (`ERROR: row is too big: size 8168, maximum size 8160`). */
+const PG_ROW_TOO_BIG_RE = /row is too big/iu;
+
+/**
+ * Does `error` say the row this write tried to store is over the engine's
+ * per-row ceiling, and if so, what is that ceiling called? Returns `undefined`
+ * when the error is anything else.
+ *
+ * Recognised per dialect, because only the wording is shared with the
+ * shard-local plane:
+ *
+ * - **SQLite** (D1, workerd, `node:sqlite`) phrases `SQLITE_TOOBIG` as "string
+ *   or blob too big" — the same text the `lunora-row-too-big` solutions entry
+ *   in `@lunora/errors` keys on.
+ * - **MySQL** raises `ER_TOO_BIG_ROWSIZE`. Drivers disagree on which field
+ *   carries it — mysql2 sets `errno`, others only the symbolic `code` — so
+ *   accept either, the way `createIndexIfNotExists` already accepts
+ *   `ER_DUP_KEYNAME`.
+ * - **Postgres** raises `program_limit_exceeded` (SQLSTATE 54000) with "row is
+ *   too big"; the code alone is too broad (it also covers target-list and
+ *   argument-count limits), so the message is what decides.
+ */
+const rowTooBigLimit = (dialect: SqlDialect, error: unknown): string | undefined => {
+    const { code, errno } = error as { code?: unknown; errno?: unknown };
+    const message = error instanceof Error ? error.message : "";
+
+    switch (dialect.name) {
+        case "mysql": {
+            return errno === 1118 || code === "ER_TOO_BIG_ROWSIZE"
+                ? "InnoDB's per-row ceiling — roughly 8 KB, half a 16 KB page, for the part of the row stored inline"
+                : undefined;
+        }
+        case "postgres": {
+            return PG_ROW_TOO_BIG_RE.test(message) ? "the 8 KB heap page a tuple must fit once its wide columns have been TOASTed out" : undefined;
+        }
+        default: {
+            return SQLITE_ROW_TOO_BIG_RE.test(message) ? "the storage engine's per-row ceiling (2 MB on D1)" : undefined;
+        }
+    }
+};
+
+/**
+ * Row-size overflow is the one storage-engine limit a caller can act on, so it
+ * must survive the wire. None of the three engines raises a `LunoraError`, and
+ * `toErrorBody` redacts every foreign throw to `INTERNAL` / "Internal error" /
+ * 500 — leaving the operator a redacted 500 for a document they can simply move
+ * to R2. `PAYLOAD_TOO_LARGE` is catalogued non-internal (413), so this message
+ * reaches the client with the limit named.
+ *
+ * The shard-local plane does the same thing in its own `runWrite`
+ * (`@lunora/shard-engine`); the recogniser is not shared because the engine
+ * ceilings and their error shapes are not.
+ */
+const throwIfRowTooBig = (dialect: SqlDialect, error: unknown, table: string): void => {
+    const limit = rowTooBigLimit(dialect, error);
+
+    if (limit === undefined) {
+        return;
+    }
+
+    throw new LunoraError(
+        "PAYLOAD_TOO_LARGE",
+        `document is too large to store in "${table}": a single row cannot exceed ${limit}. The limit is on the STORED bytes, which are UTF-8. Keep the payload in R2 (ctx.storage) and store a reference on the row.`,
+    );
+};
+
 const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     const { crossShardCounter, crossShardReader, exec, maxRelationKeys, schema } = options;
 
@@ -1906,6 +1975,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 throw new ConflictError(`unique constraint violation on "${table}"`, "unique");
             }
 
+            throwIfRowTooBig(dialect, error, table);
+
             throw error;
         }
     };
@@ -2002,6 +2073,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             if (isUniqueViolation(error)) {
                 throw new ConflictError(`unique constraint violation on "${table}"`, "unique");
             }
+
+            throwIfRowTooBig(dialect, error, table);
 
             throw error;
         }

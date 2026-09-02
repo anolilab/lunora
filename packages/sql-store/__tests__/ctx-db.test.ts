@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
+import { LunoraError } from "@lunora/errors";
 import { MAX_SEARCH_SCAN } from "@lunora/search-core";
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { CURSOR_PREFIX } from "@lunora/shard-engine";
@@ -110,6 +111,37 @@ const createSqliteHarness = (): { close: () => void; exec: SqlCtxExec } => {
     };
 };
 
+/**
+ * Wrap an exec so a bound value over `limitBytes` fails the way the real engine
+ * does. `node:sqlite` is built with SQLite's default `SQLITE_MAX_LENGTH` (~1 GB),
+ * so it stores a 2 MB row happily — the ceiling this asserts against is D1's, and
+ * workerd raises it as a bare `SQLITE_TOOBIG` whose message is "string or blob
+ * too big". Both seams are capped because an insert funnels through `run` while
+ * a `RETURNING`-guarded patch funnels through `all`.
+ */
+const cappedExec = (exec: SqlCtxExec, limitBytes: number): SqlCtxExec => {
+    const check = (parameters: ReadonlyArray<unknown>): void => {
+        for (const parameter of parameters) {
+            if (typeof parameter === "string" && Buffer.byteLength(parameter, "utf8") > limitBytes) {
+                throw new Error("string or blob too big");
+            }
+        }
+    };
+
+    return {
+        all: (query, parameters) => {
+            check(parameters);
+
+            return exec.all(query, parameters);
+        },
+        run: (query, parameters) => {
+            check(parameters);
+
+            return exec.run(query, parameters);
+        },
+    };
+};
+
 const col = (kind: string, extra: Record<string, unknown> = {}): ValidatorLike => {
     return { _meta: { column: { notNull: true, ...extra } }, kind };
 };
@@ -158,6 +190,31 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
 
         expect(doc).toMatchObject({ archived: false, body: "hello", priority: 3, slug: "a" });
         expect(doc?._id).toBe(id);
+    });
+
+    it("names the row-size limit instead of redacting an oversized row to INTERNAL", async () => {
+        expect.assertions(4);
+
+        // D1's per-row ceiling is 2 MB; a row over it raises a bare
+        // `SQLITE_TOOBIG`, which is not a LunoraError — so `toErrorBody` used to
+        // redact it to `{ code: "INTERNAL", message: "Internal error" }`, status
+        // 500, telling the caller nothing about a document they can simply move
+        // to R2.
+        const twoMegabytes = 2 * 1024 * 1024;
+        const writer = createSqlCtxDb({
+            clock: () => 1_700_000_000_000,
+            dialect: makeSqliteDialect(),
+            exec: cappedExec(harness.exec, twoMegabytes),
+            schema,
+        });
+
+        const oversized = "x".repeat(twoMegabytes + 1);
+        const error = await writer.insert("notes", { archived: false, body: oversized, priority: 1, slug: "big" }).catch((error_: unknown) => error_);
+
+        expect(error).toBeInstanceOf(LunoraError);
+        expect((error as LunoraError).code).toBe("PAYLOAD_TOO_LARGE");
+        expect((error as LunoraError).message).toContain('too large to store in "notes"');
+        expect((error as LunoraError).message).toContain("2 MB on D1");
     });
 
     it("decodes booleans and numbers back to their JS forms", async () => {
@@ -802,6 +859,30 @@ describe("createSqlCtxDb — cross-dialect SQL rendering", () => {
 
     // The NULL-safe-equality operator each engine must emit (never a bare `col IS ?`, which is SQLite-only).
     const NULL_SAFE_OPERATOR = { mysql: /<=>/u, postgres: /IS NOT DISTINCT FROM/u } as const;
+
+    it.each([
+        ["mysql", Object.assign(new Error("Row size too large (8126)"), { errno: 1118 }), "InnoDB's per-row ceiling"],
+        ["postgres", new Error("row is too big: size 8168, maximum size 8160"), "8 KB heap page"],
+    ] as const)("maps the %s row-size error to PAYLOAD_TOO_LARGE rather than a redacted INTERNAL", async (engine, raised, limitText) => {
+        expect.assertions(3);
+
+        // Neither engine phrases the overflow the way SQLite does, so the
+        // recogniser has to key on each one's own shape — MySQL's
+        // `ER_TOO_BIG_ROWSIZE` errno, Postgres' "row is too big" message. Without
+        // it the raw driver error is not a LunoraError and `toErrorBody` redacts
+        // it to INTERNAL / 500.
+        const exec: SqlCtxExec = {
+            all: () => Promise.resolve([]),
+            run: (query) => (/^\s*insert into/iu.test(query) ? Promise.reject(raised) : Promise.resolve()),
+        };
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(engine), exec, schema });
+
+        const error = await writer.insert("notes", { archived: false, body: "x", priority: 1, slug: "s" }).catch((error_: unknown) => error_);
+
+        expect(error).toBeInstanceOf(LunoraError);
+        expect((error as LunoraError).code).toBe("PAYLOAD_TOO_LARGE");
+        expect((error as LunoraError).message).toContain(limitText);
+    });
 
     it.each(["postgres", "mysql"] as const)("renders the %s OCC guard with engine-correct NULL-safe equality", async (engine) => {
         expect.assertions(2);

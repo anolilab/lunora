@@ -63,6 +63,12 @@ public struct LunoraFlushReport {
     /// The ids dropped because their precondition no longer held.
     public var conflicted: [String] = []
 
+    /// Milliseconds the server asked the caller to wait before flushing again,
+    /// when a replay came back rate-limited. Nil otherwise. The client enforces
+    /// it too — a flush inside the window is a no-op — so this is for a caller
+    /// that schedules its own retry.
+    public var retryAfterMs: Int?
+
     public init() {}
 }
 
@@ -234,7 +240,18 @@ extension LunoraClient {
     @discardableResult
     public func flushOfflineQueue(shardKey: String? = nil) -> LunoraFlushReport {
         var report = LunoraFlushReport()
-        let (queue, current) = withLock { (storedOfflineQueue, storedIdentity) }
+        let (queue, current, remaining) = withLock {
+            (storedOfflineQueue, storedIdentity, storedFlushNotBefore - ProcessInfo.processInfo.systemUptime)
+        }
+
+        // A server that answered "not now" gets waited out. Without this the
+        // caller's own reconnect loop replays the identical burst immediately and
+        // earns the same 429, indefinitely.
+        if remaining > 0 {
+            report.retryAfterMs = Int(remaining * 1000) + 1
+
+            return report
+        }
 
         // The consumer's `precondition` is evaluated with the lock RELEASED — one
         // that touches this client would deadlock the flush — and only its verdict
@@ -349,13 +366,12 @@ extension LunoraClient {
         }
 
         var toRequeue: [LunoraQueuedMutation] = []
-        var start = sendable.startIndex
+        let chunks = LunoraClient.chunkBatches(sendable)
 
-        while start < sendable.endIndex {
-            let end = min(start + lunoraMaxBatchEntries, sendable.endIndex)
+        for (index, chunk) in chunks.enumerated() {
             // Chunks replay sequentially, which is what preserves FIFO across a
             // flush longer than one batch.
-            let outcome = replayBatched(queue, Array(sendable[start..<end]), &report)
+            let outcome = replayBatched(queue, chunk, &report)
 
             toRequeue.append(contentsOf: outcome.requeue)
 
@@ -363,12 +379,12 @@ extension LunoraClient {
                 // A whole-chunk transport failure. Leave every write not yet sent
                 // queued, in order, rather than sending on into a connection that
                 // just failed.
-                toRequeue.append(contentsOf: sendable[end...])
+                for later in chunks[(index + 1)...] {
+                    toRequeue.append(contentsOf: later)
+                }
 
                 break
             }
-
-            start = end
         }
 
         guard !toRequeue.isEmpty else { return }
@@ -406,6 +422,7 @@ extension LunoraClient {
                 )
             } catch {
                 if LunoraClient.isTransient(error) {
+                    noteRetryAfter(&report, error)
                     // Nothing after this write may go out ahead of it: replaying
                     // out of order is how a durable queue corrupts the data it was
                     // protecting.
@@ -477,27 +494,104 @@ extension LunoraClient {
             calls.append(call)
         }
 
-        guard let body = try? rpcBatch(calls) else {
+        guard let reply = try? rpcBatch(calls) else {
             // Transport failure — nothing committed, so retry everything.
             return (items, true)
         }
 
-        if let results = body["results"] as? [Any] {
+        if let results = reply.body["results"] as? [Any] {
             return (settleBatchSlots(queue, items, results, &report), false)
         }
 
         // No per-slot results. A coded envelope is a verdict on the WHOLE batch —
         // a bad request, an authorization denial — and therefore terminal for
         // every entry; anything else is transport, and transient.
-        guard let envelope = body["error"] as? [String: Any] else { return (items, true) }
+        guard let envelope = reply.body["error"] as? [String: Any] else { return (items, true) }
 
-        let error = LunoraClient.batchSlotError(envelope, fallback: "batch rejected")
+        let error = LunoraClient.batchSlotError(envelope, fallback: "batch rejected", transient: reply.status >= 500)
+
+        // The body was too big, not wrong — every entry in it would have committed
+        // alone. Halve and retry; the estimate the chunker used cannot see the
+        // framing the worker actually measured, and only the answer can.
+        if error.code == LunoraOfflineCode.payloadTooLarge, items.count > 1 {
+            let middle = items.count / 2
+            let left = replayBatched(queue, Array(items[..<middle]), &report)
+
+            if left.stop { return (left.requeue + Array(items[middle...]), true) }
+
+            let right = replayBatched(queue, Array(items[middle...]), &report)
+
+            return (left.requeue + right.requeue, right.stop)
+        }
+
+        // A shard blip or a rate limit is not a verdict on the batch's contents.
+        // Requeue it whole and stop the flush, exactly as the single-call path
+        // does for the same codes.
+        if LunoraClient.isTransient(error) {
+            noteRetryAfter(&report, error)
+
+            return (items, true)
+        }
 
         for entry in items {
             settleBatchRejection(queue, entry, error, &report)
         }
 
         return ([], false)
+    }
+
+    /// A batch entry's contribution to the request body, in bytes.
+    ///
+    /// The args dominate and are the only part that can be large; the constant
+    /// covers the entry's fixed keys and the comma joining it to the next one.
+    /// Encoding twice (here and in ``replayBatched(_:_:_:)``) is deliberate — the
+    /// flush is the slow path, and carrying the encoded form through the chunker
+    /// would put a second representation of every queued write in memory.
+    private static func entryBytes(_ item: LunoraQueuedMutation) -> Int {
+        let encoded = Wire.stableStringify((try? Wire.encode(item.args ?? [String: Any]())) ?? NSNull())
+
+        return encoded.utf8.count + item.functionPath.utf8.count + item.id.utf8.count + 160
+    }
+
+    /// Splits a flush into batch bodies the worker will accept.
+    ///
+    /// By BYTES as well as by count: the worker reads a batch body under a 1 MiB
+    /// budget and answers `413 PAYLOAD_TOO_LARGE` past it, so 500 writes carrying
+    /// bytes or long text are one request the server refuses whole. A single write
+    /// over the budget still forms its own chunk — splitting cannot help it, and
+    /// ``replayBatched(_:_:_:)`` settles it on the answer.
+    private static func chunkBatches(_ items: [LunoraQueuedMutation]) -> [[LunoraQueuedMutation]] {
+        var chunks: [[LunoraQueuedMutation]] = []
+        var current: [LunoraQueuedMutation] = []
+        var size = 0
+
+        for item in items {
+            let cost = entryBytes(item)
+
+            if !current.isEmpty && (current.count >= lunoraMaxBatchEntries || size + cost > lunoraMaxBatchBytes) {
+                chunks.append(current)
+                current = []
+                size = 0
+            }
+
+            current.append(item)
+            size += cost
+        }
+
+        if !current.isEmpty { chunks.append(current) }
+
+        return chunks
+    }
+
+    /// Records a rate limit's delay, and holds the next flush off until it passes.
+    private func noteRetryAfter(_ report: inout LunoraFlushReport, _ error: Error) {
+        guard let delay = LunoraClient.retryAfterMs(error) else { return }
+
+        report.retryAfterMs = delay
+
+        withLock {
+            storedFlushNotBefore = max(storedFlushNotBefore, ProcessInfo.processInfo.systemUptime + Double(delay) / 1000)
+        }
     }
 
     /// Demuxes a batch reply back onto the writes it replayed, in input order,
@@ -532,19 +626,22 @@ extension LunoraClient {
             }
 
             if let envelope = slot["error"] as? [String: Any] {
-                let code = envelope["code"] as? String ?? "INTERNAL"
+                let error = LunoraClient.batchSlotError(envelope, fallback: "request failed")
 
-                // A transient shard failure is the batch's counterpart of an
-                // uncoded throw on the single-call path: the server never reached
-                // a verdict, so the write goes back on the queue rather than being
-                // reported as failed.
-                if LunoraOfflineCode.transient.contains(code) {
+                // The SAME predicate the whole-batch and single-call paths use, so
+                // a durable write's fate never depends on how many siblings were
+                // queued alongside it. The server reached no verdict on a slot
+                // coded transient — it could not reach the shard, or a limiter
+                // refused to look — so the write goes back on the queue rather
+                // than being reported as failed.
+                if LunoraClient.isTransient(error) {
+                    noteRetryAfter(&report, error)
                     requeue.append(entry)
 
                     continue
                 }
 
-                settleBatchRejection(queue, entry, LunoraClient.batchSlotError(envelope, fallback: "request failed"), &report)
+                settleBatchRejection(queue, entry, error, &report)
 
                 continue
             }
@@ -598,7 +695,25 @@ extension LunoraClient {
     public static func isTransient(_ error: Error) -> Bool {
         guard let api = error as? LunoraAPIError else { return true }
 
-        return LunoraOfflineCode.transient.contains(api.code)
+        return api.transient
+            || LunoraOfflineCode.transient.contains(api.code)
+            || LunoraOfflineCode.rateLimited.contains(api.code)
+    }
+
+    /// How long a rate-limited replay asks to wait, if the envelope said.
+    ///
+    /// Nil when the server named no delay — the caller then decides its own
+    /// backoff rather than hammering, which is what
+    /// ``LunoraFlushReport/retryAfterMs`` reports.
+    ///
+    /// The `Retry-After` HEADER is deliberately not read: ``LunoraHTTPPoster``
+    /// surfaces `(status, body)` only, and the RPC plane's rate-limit envelope
+    /// carries `retryAfterMs`.
+    public static func retryAfterMs(_ error: Error) -> Int? {
+        guard let api = error as? LunoraAPIError, LunoraOfflineCode.rateLimited.contains(api.code) else { return nil }
+        guard let data = api.data as? [String: Any], let delay = intValue(data["retryAfterMs"]), delay > 0 else { return nil }
+
+        return min(delay, lunoraMaxRetryAfterMs)
     }
 
     /// Registers both optimistic paths' layers.

@@ -691,7 +691,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     // identical either way, and both this call and the recheck's
                     // then read the SAME `absoluteGeneratedDirectory` (the emit
                     // reassigns it one line above) and so exclude the same tree.
-                    const consumedSources = fingerprintSchemaSources(absoluteSchemaDirectory, absoluteGeneratedDirectory);
+                    const consumedSources = fingerprintSchemaSources(absoluteSchemaDirectory);
 
                     // The project's post-generation step, before the client is told
                     // the API changed — the point of the hook is that what the dev
@@ -749,7 +749,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 // Late-bound: `regenerate` reassigns `absoluteGeneratedDirectory`
                 // from codegen's emit, and the recheck must exclude the same tree
                 // the pre-hook snapshot did.
-                fingerprint: () => fingerprintSchemaSources(absoluteSchemaDirectory, absoluteGeneratedDirectory),
+                fingerprint: () => fingerprintSchemaSources(absoluteSchemaDirectory),
                 logger: serverLogger,
                 regenerate: (changedFile: string, onHookSettled: (consumedSources: string) => void): void => {
                     // Fire-and-forget: `regenerate` reports every failure itself (its
@@ -995,4 +995,4 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     };
 };
 
-export default codegenPlugin;
+export { codegenPlugin, reconcileBindingsSafely };

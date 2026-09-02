@@ -239,15 +239,6 @@ const codegenPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
 const containerLogsPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
 ```
 
-### `createCommandProbe` (const)
-
-```ts
-const createCommandProbe: () => {
-    isServe: () => boolean;
-    plugin: Plugin;
-};
-```
-
 ### `detectFramework` (const)
 
 Re-exported from `@lunora/config` — signature tracked at its source.
@@ -331,7 +322,7 @@ const remoteBindingsCleanupPlugin: (cleanup: () => void) => Plugin;
 ### `remoteBindingsConfigPlugin` (const)
 
 ```ts
-const remoteBindingsConfigPlugin: (options: CloudflarePluginOptions, plan: ViteRemotePlan) => Plugin;
+const remoteBindingsConfigPlugin: (options: CloudflarePluginOptions | undefined, plan: ViteRemotePlan) => Plugin;
 ```
 
 ### `resolveOverlayOption` (const)
@@ -343,13 +334,7 @@ const resolveOverlayOption: (overlay: LunoraPluginOptions["overlay"]) => false |
 ### `studioPlugin` (const)
 
 ```ts
-const studioPlugin: () => Plugin;
-```
-
-### `withDevWorkerEnv` (const)
-
-```ts
-const withDevWorkerEnv: (options: CloudflarePluginOptions, isServe: () => boolean) => CloudflarePluginOptions;
+const studioPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
 ```
 
 ### `withRemoteBindings` (const)
