@@ -1904,8 +1904,8 @@ interface Scheduler {
     }>;
     get: (id: string) => Promise<ScheduledJob | null>;
     list: () => Promise<ScheduledJob[]>;
-    runAfter: (delayMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
+    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
 }
 ```
 
@@ -1948,14 +1948,6 @@ interface SearchIndexDefinition {
     name: string;
     staged?: boolean;
     strategy?: SearchStrategy;
-}
-```
-
-### `ServeStorageObjectOptions` (interface)
-
-```ts
-interface ServeStorageObjectOptions {
-    authorize: (context: StorageServeAuthzContext) => boolean | Promise<boolean>;
 }
 ```
 
@@ -2189,6 +2181,12 @@ type StorageRuleDecision = boolean | undefined;
 interface StorageRulesOptions {
     readonly roles?: ReadonlyArray<Role>;
 }
+```
+
+### `StorageServeAuthorizer` (type)
+
+```ts
+type StorageServeAuthorizer = (context: StorageServeAuthzContext) => boolean | Promise<boolean>;
 ```
 
 ### `StorageServeAuthzContext` (interface)
@@ -2831,7 +2829,7 @@ const asBucketStorage: (raw: unknown) => unknown;
 ### `beginDeferredSchedules` (const)
 
 ```ts
-const beginDeferredSchedules: (context: unknown) => ((committed: boolean) => Promise<void>);
+const beginDeferredSchedules: (context: DeferredScheduleContext) => ((committed: boolean) => Promise<void>);
 ```
 
 ### `bindOrm` (const)
@@ -3180,7 +3178,7 @@ const rls: <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray
 ### `serveStorageObject` (const)
 
 ```ts
-const serveStorageObject: (context: ContextWithStorage, key: string, request: Request, options: ServeStorageObjectOptions) => Promise<Response>;
+const serveStorageObject: (context: ContextWithStorage, key: string, request: Request, authorize: StorageServeAuthorizer) => Promise<Response>;
 ```
 
 ### `storageRules` (const)
@@ -3208,7 +3206,7 @@ const withDeferredDeletes: (storage: unknown) => unknown;
 ### `withDeferredSchedules` (const)
 
 ```ts
-const withDeferredSchedules: (scheduler: unknown) => unknown;
+const withDeferredSchedules: <S extends SchedulerLike>(scheduler: S) => S;
 ```
 
 ## `@lunora/server/data-model`

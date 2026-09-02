@@ -505,6 +505,18 @@ interface WorkpoolOptions extends LunoraSchedulerOptions {
 }
 ```
 
+### `assertScheduleDelay` (const)
+
+```ts
+const assertScheduleDelay: (delayMs: number, surface: string, argument?: string) => void;
+```
+
+### `assertScheduleInstant` (const)
+
+```ts
+const assertScheduleInstant: (timestampMs: number, nowMs: number, surface: string) => void;
+```
+
 ### `assertValidCronExpression` (const)
 
 ```ts
@@ -575,6 +587,12 @@ const isValidCronExpression: (schedule: string) => boolean;
 
 ```ts
 const isWorkflowReference: (target: unknown) => target is WorkflowReference;
+```
+
+### `resolveScheduleId` (const)
+
+```ts
+const resolveScheduleId: (requested: unknown) => string;
 ```
 
 ### `warnIfSecondsLeading` (const)
