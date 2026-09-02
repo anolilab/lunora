@@ -77,6 +77,31 @@ describe("describeValue", () => {
         expect(describeValue(Object.create(null))).toBe("object");
     });
 
+    it("ignores an own `constructor` data property — a parsed body is not a class", () => {
+        expect.assertions(2);
+
+        // `JSON.parse('{"constructor":{"name":"…"}}')` carries `constructor` as an
+        // own data property. It is client text, not a constructor, and the
+        // object branch is the only one without a length cap — so an
+        // unauthenticated arg turned a 1 MB name into a 1 MB 400 body and log line.
+        const parsed = JSON.parse(`{"constructor":{"name":"${"A".repeat(1_000_000)}"}}`) as object;
+
+        expect(describeValue(parsed)).toBe("object");
+        expect(describeValue(Object.assign(Object.create(null) as object, { constructor: { name: "Nope" } }))).toBe("object");
+    });
+
+    it("caps a genuine constructor name like every primitive branch", () => {
+        expect.assertions(1);
+
+        class Long {
+            public readonly id = 0;
+        }
+
+        Object.defineProperty(Long, "name", { value: "X".repeat(200) });
+
+        expect(describeValue(new Long()).length).toBeLessThan(100);
+    });
+
     it("does not throw on a hostile object whose constructor getter throws", () => {
         expect.assertions(2);
 

@@ -35,10 +35,10 @@ export const registerDevice = mutation
         // POST to), so the validator rejects anything else before it reaches the
         // store, and the handler needs no cast.
         subscription: v.object({
-            endpoint: v.string().meta({ schema: { maxLength: 2048 } }),
+            endpoint: v.string().max(2048),
             keys: v.object({
-                auth: v.string().meta({ schema: { maxLength: 256 } }),
-                p256dh: v.string().meta({ schema: { maxLength: 256 } }),
+                auth: v.string().max(256),
+                p256dh: v.string().max(256),
             }),
         }),
     })
@@ -49,7 +49,7 @@ export const registerDevice = mutation
 
 /** Record an announcement row — the subscribable log the client renders. */
 export const announce = mutation
-    .input({ body: v.string().meta({ schema: { maxLength: 2048 } }), title: v.string().meta({ schema: { maxLength: 256 } }) })
+    .input({ body: v.string().max(2048), title: v.string().max(256) })
     .use(rateLimit(mutationLimiter, "write", byCaller))
     .mutation(async ({ args: { body, title }, ctx }): Promise<Id<"announcements">> => ctx.db.insert("announcements", { body, sentAt: Date.now(), title }));
 
@@ -73,7 +73,7 @@ export const listAnnouncements = query.query(async ({ ctx }): Promise<Announceme
  * merely rate-limit it.
  */
 export const broadcast = action
-    .input({ body: v.string().meta({ schema: { maxLength: 2048 } }), title: v.string().meta({ schema: { maxLength: 256 } }) })
+    .input({ body: v.string().max(2048), title: v.string().max(256) })
     .use(rateLimit(actionLimiter, "broadcast", byCaller))
     .action(async ({ args: { body, title }, ctx }): Promise<{ failed: number; pruned: number; sent: number; total: number }> => {
         // A targeted single send. It goes through `ctx.push.send`, which resolves

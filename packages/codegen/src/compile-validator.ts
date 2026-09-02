@@ -25,9 +25,12 @@ import LITERAL_VALUE_RE from "./literal-value";
  * dropped), arrays are fresh, scalars pass through by reference, an absent
  * optional key is omitted.
  *
- * Refinements (`.check(...)`) are dropped by the AST→IR step and thus invisible
- * here, so the caller must refuse to compile any args whose source text carries a
- * refinement (see `FunctionIR.argsHaveRefinement`).
+ * Refinements are runtime predicates the IR records by NAME only, so the compiler
+ * declines every node carrying one — with a single exception: a string/array
+ * length bound (`.max(n)` / `.min(n)` / `.length(n)`) whose argument was a numeric
+ * literal, which `ValidatorIR.refinementArgs` carries and which reproduces exactly
+ * as a `.length` comparison. A chain mixing one of those with anything else
+ * (`.max(64).email()`) still declines as a whole.
  *
  * Emitted-code shape: the output is plain JavaScript that is also valid under
  * strict TypeScript (it lands in the type-checked `_generated/functions.ts`).
@@ -85,6 +88,54 @@ const emitScalarGuard = (kind: string, inExpr: string): string => {
     }
 };
 
+/**
+ * The refinements the compiler can reproduce, mapped to the comparison that
+ * FAILS them: `.max(n)` rejects `length > n`, `.min(n)` rejects `length < n`,
+ * `.length(n)` rejects `length !== n`. These are the only refinements whose whole
+ * effect is a length comparison against a constant — every other one
+ * (`.email()`, `.pattern()`, `.int()`, a bare `.check()`) carries a predicate the
+ * IR cannot represent.
+ */
+const LENGTH_BOUND_FAILS: Record<string, string> = { length: "!==", max: ">", min: "<" };
+
+/**
+ * Emit the `return DEFER` guards for `node`'s refinement chain, or `undefined`
+ * when any link of it is not a statically-known length bound (the caller then
+ * declines the whole node, exactly as before this existed). Sound the same way
+ * every other guard here is: a value outside the bound defers to the interpreted
+ * parser, which owns the `expected string length <= N` error — the compiled path
+ * never has to reproduce a message.
+ *
+ * Only `string` and `array` qualify: `.min`/`.max` on a NUMBER bound the value,
+ * not a length, so reading them here would compile the wrong comparison.
+ */
+const emitRefinementGuards = (node: ValidatorIR, inExpr: string): string | undefined => {
+    const { refinements } = node;
+
+    if (refinements === undefined) {
+        return "";
+    }
+
+    if (node.kind !== "array" && node.kind !== "string") {
+        return undefined;
+    }
+
+    let guards = "";
+
+    for (const refinement of refinements) {
+        const fails = LENGTH_BOUND_FAILS[refinement];
+        const bound = node.refinementArgs?.[refinement];
+
+        if (fails === undefined || bound === undefined) {
+            return undefined;
+        }
+
+        guards += `if (${inExpr}.length ${fails} ${String(bound)}) return DEFER;\n`;
+    }
+
+    return guards;
+};
+
 /** Compile `v.literal(value)` for a primitive literal; declines for any non-primitive literal source. */
 const compileLiteral = (node: ValidatorIR, inExpr: string): NodeEmit | undefined => {
     const literal = node.literalValue?.trim();
@@ -109,20 +160,23 @@ const compileNode = (node: ValidatorIR, inExpr: string, context: EmitContext): N
         return undefined;
     }
 
-    // Decline two classes of node the compiler can't soundly model:
-    //
-    // - `hasRefinement` — a `.check(...)` predicate (a runtime closure the IR
-    //   can't represent); compiling it would silently skip the predicate.
-    // - `sourceText` — an expression the AST→IR step could NOT resolve to a
-    //   concrete validator, most importantly a referenced validator identifier
-    //   (`args: { name: sharedV }` → `{ kind: "any", sourceText: "sharedV" }`).
-    //   The real runtime validator is unknown, so treating it as `v.any()` (an
-    //   unconditional pass-through) would bypass the actual validator and accept
-    //   input the interpreted parser rejects.
-    //
-    // In both cases keep the function on the interpreted path. Genuine `v.any()`
-    // carries neither flag and still compiles to a pass-through below.
-    if (node.hasRefinement || node.sourceText !== undefined) {
+    // Decline the node whose `sourceText` says the AST→IR step could NOT resolve it
+    // to a concrete validator, most importantly a referenced validator identifier
+    // (`args: { name: sharedV }` → `{ kind: "any", sourceText: "sharedV" }`). The
+    // real runtime validator is unknown, so treating it as `v.any()` (an
+    // unconditional pass-through) would bypass the actual validator and accept
+    // input the interpreted parser rejects. Genuine `v.any()` carries no
+    // `sourceText` and still compiles to a pass-through below.
+    if (node.sourceText !== undefined) {
+        return undefined;
+    }
+
+    // Refinements are predicates the IR keeps by name; only a statically-known
+    // length bound survives as emitted code, everything else declines here so the
+    // function keeps the interpreted path rather than skipping the predicate.
+    const refinementGuards = emitRefinementGuards(node, inExpr);
+
+    if (refinementGuards === undefined) {
         return undefined;
     }
 
@@ -132,13 +186,14 @@ const compileNode = (node: ValidatorIR, inExpr: string, context: EmitContext): N
             return { out: inExpr, pre: "" };
         }
 
-        return { out: inExpr, pre: emitScalarGuard(node.kind, inExpr) };
+        // The bound reads `.length`, so it must follow the type guard.
+        return { out: inExpr, pre: emitScalarGuard(node.kind, inExpr) + refinementGuards };
     }
 
     switch (node.kind) {
         case "array": {
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: compileArray re-enters compileNode for its element type
-            return compileArray(node, inExpr, context);
+            return compileArray(node, inExpr, context, refinementGuards);
         }
 
         case "literal": {
@@ -158,8 +213,13 @@ const compileNode = (node: ValidatorIR, inExpr: string, context: EmitContext): N
     }
 };
 
-/** Compile `v.array(inner)`: Array guard + a fresh array built element-by-element through `inner`. */
-const compileArray = (node: ValidatorIR, inExpr: string, context: EmitContext): NodeEmit | undefined => {
+/**
+ * Compile `v.array(inner)`: Array guard, then the caller's length-bound guards
+ * (`lengthGuards`, emitted before the loop so an out-of-bounds input defers
+ * without building the copy), then a fresh array built element-by-element
+ * through `inner`.
+ */
+const compileArray = (node: ValidatorIR, inExpr: string, context: EmitContext, lengthGuards: string): NodeEmit | undefined => {
     const { inner } = node;
 
     if (!inner) {
@@ -179,8 +239,7 @@ const compileArray = (node: ValidatorIR, inExpr: string, context: EmitContext): 
 
     // `new Array(n)` is `any[]`, so the index-write below is type-clean.
     const pre =
-        `if (!Array.isArray(${inExpr})) return DEFER;\n` +
-        `const ${array} = new Array(${inExpr}.length);\n` +
+        `if (!Array.isArray(${inExpr})) return DEFER;\n${lengthGuards}const ${array} = new Array(${inExpr}.length);\n` +
         `for (let ${index} = 0; ${index} < ${inExpr}.length; ${index}++) {\n` +
         `const ${element} = ${inExpr}[${index}];\n` +
         `${innerEmit.pre}${array}[${index}] = ${innerEmit.out};\n` +
@@ -210,11 +269,11 @@ const compileField = (key: string, node: ValidatorIR, access: string, context: E
         // The optional wrapper itself may carry a `.check(...)` refinement, an
         // unresolved `sourceText`, or a column modifier — e.g.
         // `v.optional(v.string()).check(isEmail)` lowers to an optional node with
-        // `hasRefinement: true`. Recursing into `inner` alone would compile a bare
+        // `refinements: ["check"]`. Recursing into `inner` alone would compile a bare
         // string guard and silently skip the predicate, accepting input the
         // interpreted parser rejects. Decline here exactly as compileNode does for
         // every other node so the function keeps the interpreted path.
-        if (node.hasRefinement || node.sourceText !== undefined || hasColumnModifier(node)) {
+        if (node.refinements !== undefined || node.sourceText !== undefined || hasColumnModifier(node)) {
             return undefined;
         }
 

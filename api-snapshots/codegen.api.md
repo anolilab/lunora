@@ -912,12 +912,13 @@ const VERSION = "0.0.0";
 interface ValidatorIR {
     bucket?: string;
     column?: ColumnMetaIR;
-    hasRefinement?: boolean;
     inner?: ValidatorIR;
     keyType?: ValidatorIR;
     kind: string;
     literalValue?: string;
     members?: ValidatorIR[];
+    refinementArgs?: Record<string, number>;
+    refinements?: string[];
     shape?: Record<string, ValidatorIR>;
     sourceText?: string;
     tableName?: string;

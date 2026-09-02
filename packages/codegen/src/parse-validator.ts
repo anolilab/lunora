@@ -97,7 +97,7 @@ const SCALAR_KINDS = new Set(["any", "bigint", "boolean", "bytes", "date", "geoP
  * `StringColumnValidator` / `NumberColumnValidator` / `ArrayColumnValidator`.
  *
  * Each is a `self.check(...)` at runtime (see `v.ts`), so it refines the value
- * without changing the validator's kind, and each records `hasRefinement` for the
+ * without changing the validator's kind, and each is appended to `refinements` for the
  * same reason: the predicate is a closure the IR cannot represent, so the AOT
  * compiler must decline the node rather than emit a fast path that accepts a
  * 10,000-character string the interpreted parser rejects.
@@ -443,6 +443,34 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>, call: Cal
     }
 };
 
+/**
+ * Append `member` to a node's refinement chain, lifting its numeric literal
+ * argument into `refinementArgs` so the AOT compiler can reproduce a length
+ * bound instead of declining it. Only a plain numeric literal is lifted — a
+ * computed bound, a regex, a predicate closure leaves no entry, which the
+ * compiler reads as "not statically known" and declines.
+ */
+const applyRefinement = (base: ValidatorIR, member: string, argument: Node | undefined): ValidatorIR => {
+    // `base` is destructured rather than spread whole: a chain that DROPS an
+    // entry below would otherwise see the receiver's own `refinementArgs`
+    // survive into the result, and the compiler would emit a bound the chain no
+    // longer stands behind.
+    const { refinementArgs: inherited, ...rest } = base;
+    const refinements = [...(base.refinements ?? []), member];
+
+    // A name used twice in one chain (`.max(3).max(5)`) keeps NO entry: keyed by
+    // name, one entry cannot hold both bounds, and keeping either silently
+    // widens the other. Neither recorded ⇒ the compiler declines the node.
+    const repeated = base.refinements?.includes(member) === true;
+    const entries = Object.entries(inherited ?? {}).filter(([name]) => !(repeated && name === member));
+
+    if (!repeated && argument !== undefined && Node.isNumericLiteral(argument)) {
+        entries.push([member, argument.getLiteralValue()]);
+    }
+
+    return entries.length > 0 ? { ...rest, refinementArgs: Object.fromEntries(entries), refinements } : { ...rest, refinements };
+};
+
 const parseValidatorCall = (call: CallExpression): ValidatorIR => {
     const callee = call.getExpression();
 
@@ -466,7 +494,7 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
             return applyColumnModifier(base, member);
         }
 
-        return REFINEMENT_MODIFIERS.has(member) ? { ...base, hasRefinement: true } : base;
+        return REFINEMENT_MODIFIERS.has(member) ? applyRefinement(base, member, args[0]) : base;
     }
 
     return parseBuilderMember(member, args, call);

@@ -20,13 +20,43 @@ const WEAK_ARGS = `
     });
 `;
 
-/** A public mutation whose string arg carries a `.check()` length bound — not flagged. */
+/** A public mutation whose string args carry an enforced length bound (`.max()` / `.length()`), at any nesting — not flagged. */
 const BOUNDED = `
     import { mutation } from "@lunora/server";
 
+    const vSlug = v.string().max(64);
+
     export const rename = mutation({
         args: {
-            name: v.string().check((value) => value.length <= 256),
+            name: v.string().min(1).max(256),
+            code: v.string().length(8),
+            nickname: v.optional(v.string().max(32)),
+            tags: v.array(v.string().max(16)),
+            slug: vSlug,
+        },
+        handler: async () => null,
+    });
+`;
+
+/**
+ * Every way the source TEXT can look bounded while the runtime accepts any
+ * length: `.meta()` is pure metadata (no parse effect), a `.check()` may
+ * predicate anything but length, and `length`/`max` may simply be words inside
+ * a description string. All must stay flagged.
+ */
+const LOOKS_BOUNDED = `
+    import { mutation } from "@lunora/server";
+
+    const vName = v.string();
+
+    export const rename = mutation({
+        args: {
+            metaOnly: v.string().meta({ schema: { maxLength: 64 } }),
+            prefixCheck: v.string().check((value) => value.startsWith("x")),
+            wordy: v.string().meta({ description: "max length of the name" }),
+            minOnly: v.string().min(1),
+            aliased: vName,
+            nested: v.object({ inner: v.string().meta({ schema: { maxLength: 64 } }) }),
         },
         handler: async () => null,
     });
@@ -68,12 +98,23 @@ describe("discoverArgumentValidators", () => {
         expect(found[0]?.unboundedStringArgs).toStrictEqual(["name"]);
     });
 
-    it("does NOT flag a string arg with a length bound", () => {
+    it("does NOT flag a string arg with an enforced length bound", () => {
         expect.assertions(1);
 
         writeFileSync(join(workdir, "lunora", "rename.ts"), BOUNDED, "utf8");
 
         expect(discoverArgumentValidators(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("flags a string arg whose bound exists only in the source text, not the parser", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "lunora", "rename.ts"), LOOKS_BOUNDED, "utf8");
+
+        const found = discoverArgumentValidators(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]?.unboundedStringArgs).toStrictEqual(["metaOnly", "prefixCheck", "wordy", "minOnly", "aliased", "nested"]);
     });
 
     it("skips internal procedures (server-trusted input)", () => {

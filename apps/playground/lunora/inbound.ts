@@ -28,14 +28,12 @@ const limits = { onEmail: { kind: "fixed window", period: 60_000, rate: 100 } } 
  */
 export const onEmail = mutation
     .input({
-        from: v.string().check((value) => value.length <= 320, { message: "must be at most 320 characters", schema: { maxLength: 320 } }),
-        messageId: v.optional(v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } })),
+        from: v.string().max(320),
+        messageId: v.optional(v.string().max(256)),
         receivedAt: v.number(),
-        subject: v.optional(v.string().check((value) => value.length <= 512, { message: "must be at most 512 characters", schema: { maxLength: 512 } })),
-        text: v.optional(
-            v.string().check((value) => value.length <= 100_000, { message: "must be at most 100_000 characters", schema: { maxLength: 100_000 } }),
-        ),
-        to: v.array(v.string().check((value) => value.length <= 320, { message: "must be at most 320 characters", schema: { maxLength: 320 } })),
+        subject: v.optional(v.string().max(512)),
+        text: v.optional(v.string().max(100_000)),
+        to: v.array(v.string().max(320)),
     })
     .use(dbRateLimit(limits, "onEmail"))
     .mutation(async ({ args, ctx }): Promise<Id<"inbox">> => {

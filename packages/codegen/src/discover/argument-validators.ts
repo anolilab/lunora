@@ -1,25 +1,40 @@
 import type { ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node } from "ts-morph";
 
-import type { ArgumentValidatorIR } from "../ir";
+import type { ArgumentValidatorIR, ValidatorIR } from "../ir";
+import { parseValidator } from "../parse-validator";
 import { procedureArgumentObjects } from "../procedure-argument-objects";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
-/** A constraint fragment that bounds a string's length — its presence means the arg is *not* unbounded. */
-const BOUND_RE = /\.check\(|\.meta\(|length|max/iu;
-/** Matches a `v.any()` validator anywhere in an initializer's source text. */
-const ANY_VALIDATOR_RE = /\bv\.any\s*\(/u;
-/** Matches a `v.string()` validator anywhere in an initializer's source text. */
-const STRING_VALIDATOR_RE = /\bv\.string\s*\(/u;
+/**
+ * The refinements that cap a string's length at runtime. Nothing else counts:
+ * `.meta({ maxLength })` is pure metadata the parser never enforces, `.min()`
+ * bounds the wrong end, and a bare `.check()` may predicate anything — so a
+ * `.check((s) => s.length <= n)` is over-reported rather than trusted.
+ */
+const LENGTH_BOUNDS = new Set(["length", "max"]);
 
-/** True for a property initializer that is (or wraps) a `v.any()` validator. */
-const isAnyValidator = (text: string): boolean => ANY_VALIDATOR_RE.test(text);
+/** The validators nested directly inside `node` (optional/array inner, record key/value, union members, object fields). */
+const children = (node: ValidatorIR): ValidatorIR[] =>
+    [node.inner, node.keyType, node.valueType, ...(node.members ?? []), ...Object.values(node.shape ?? {})].filter((child) => child !== undefined);
 
-/** True for a `v.string()` validator (possibly `v.optional(v.string())`) with no length/max bound. */
-const isUnboundedString = (text: string): boolean => STRING_VALIDATOR_RE.test(text) && !BOUND_RE.test(text);
+/** True when `node`, or any validator nested inside it, satisfies `predicate`. */
+const contains = (node: ValidatorIR, predicate: (candidate: ValidatorIR) => boolean): boolean =>
+    predicate(node) || children(node).some((child) => contains(child, predicate));
 
-/** Classify every arg property across the given object literals into any-typed and unbounded-string buckets. */
+/** A `v.any()` proper — not the `{ kind: "any", sourceText }` fallback for an expression the parser could not read. */
+const isAny = (node: ValidatorIR): boolean => node.kind === "any" && node.sourceText === undefined;
+
+/** A `v.string()` with no length-capping refinement chained onto it. */
+const isUnboundedString = (node: ValidatorIR): boolean => node.kind === "string" && !node.refinements?.some((refinement) => LENGTH_BOUNDS.has(refinement));
+
+/**
+ * Classify every arg property across the given object literals into any-typed
+ * and unbounded-string buckets. Decided on the parsed {@link ValidatorIR}, never
+ * on the initializer's source text: a substring test concluded "bounded" from
+ * `.meta(…)`, from any `.check(…)`, and from the word `max` inside a description.
+ */
 const classifyArgs = (objects: ReadonlyArray<ObjectLiteralExpression>): { anyArgs: string[]; unboundedStringArgs: string[] } => {
     const anyArgs: string[] = [];
     const unboundedStringArgs: string[] = [];
@@ -36,12 +51,12 @@ const classifyArgs = (objects: ReadonlyArray<ObjectLiteralExpression>): { anyArg
                 continue;
             }
 
-            const text = initializer.getText();
+            const validator = parseValidator(initializer);
             const name = property.getName();
 
-            if (isAnyValidator(text)) {
+            if (contains(validator, isAny)) {
                 anyArgs.push(name);
-            } else if (isUnboundedString(text)) {
+            } else if (contains(validator, isUnboundedString)) {
                 unboundedStringArgs.push(name);
             }
         }
@@ -108,7 +123,7 @@ const argumentValidatorsInSourceFile = (sourceFile: SourceFile, relativePath: st
  * Discover, per exported **public** query/mutation/action under the lunora source
  * directory, the argument validators that weaken input safety: `v.any()` args
  * (unvalidated, untyped input — the `public_arg_uses_any` lint) and `v.string()`
- * args with no `.check()`/`.meta()` length bound (a DoS / storage-abuse vector —
+ * args with no `.max(n)` / `.length(n)` bound (a DoS / storage-abuse vector —
  * the `unbounded_string_arg` lint). Only procedures with at least one flagged arg
  * are recorded. Internal functions are skipped: they take server-trusted input.
  */

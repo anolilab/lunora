@@ -63,7 +63,9 @@ installCompiledValidatorMap(lunora_messages_0.send.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["authorName"] !== "string") return DEFER;
+if (source["authorName"].length > 256) return DEFER;
 if (typeof source["text"] !== "string") return DEFER;
+if (source["text"].length > 4096) return DEFER;
 return { "authorName": source["authorName"], "text": source["text"] };
 });
 

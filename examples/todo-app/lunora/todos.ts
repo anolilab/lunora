@@ -19,7 +19,7 @@ export const list = query.query(async ({ ctx }): Promise<TodoDoc[]> => {
 });
 
 export const add = mutation
-    .input({ text: v.string() })
+    .input({ text: v.string().max(4096) })
     .mutation(async ({ args: { text }, ctx }): Promise<Id<"todos">> => ctx.db.insert("todos", { text, done: false, createdAt: Date.now() }));
 
 export const toggle = mutation.input({ id: v.id("todos"), done: v.boolean() }).mutation(async ({ args: { id, done }, ctx }): Promise<void> => {

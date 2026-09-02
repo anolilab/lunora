@@ -100,7 +100,7 @@ const fieldSnapshotOf = (validator: ValidatorIR): FieldSnapshot => {
         ...STRUCTURAL_DETAIL[target.kind]?.(target),
     };
 
-    if (target.hasRefinement === true || validator.hasRefinement === true) {
+    if (target.refinements !== undefined || validator.refinements !== undefined) {
         snapshot.refined = true;
     }
 

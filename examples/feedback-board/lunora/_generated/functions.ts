@@ -76,14 +76,17 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["feedbackId"] !== "string") return DEFER;
 if (typeof source["authorName"] !== "string") return DEFER;
+if (source["authorName"].length > 80) return DEFER;
 let __has1 = false;
 let __val1;
 if (source["authorEmail"] !== undefined) {
 if (typeof source["authorEmail"] !== "string") return DEFER;
+if (source["authorEmail"].length > 254) return DEFER;
 __val1 = source["authorEmail"];
 __has1 = true;
 }
 if (typeof source["content"] !== "string") return DEFER;
+if (source["content"].length > 4000) return DEFER;
 let __has2 = false;
 let __val2;
 if (source["isOfficial"] !== undefined) {
@@ -103,12 +106,16 @@ installCompiledValidatorMap(lunora_feedback_0.create.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["title"] !== "string") return DEFER;
+if (source["title"].length > 200) return DEFER;
 if (typeof source["description"] !== "string") return DEFER;
+if (source["description"].length > 4000) return DEFER;
 if (typeof source["authorName"] !== "string") return DEFER;
+if (source["authorName"].length > 80) return DEFER;
 let __has1 = false;
 let __val1;
 if (source["authorEmail"] !== undefined) {
 if (typeof source["authorEmail"] !== "string") return DEFER;
+if (source["authorEmail"].length > 254) return DEFER;
 __val1 = source["authorEmail"];
 __has1 = true;
 }
@@ -120,6 +127,7 @@ const __arr2 = new Array(source["tags"].length);
 for (let __i2 = 0; __i2 < source["tags"].length; __i2++) {
 const __e2 = source["tags"][__i2];
 if (typeof __e2 !== "string") return DEFER;
+if (__e2.length > 40) return DEFER;
 __arr2[__i2] = __e2;
 }
 __val3 = __arr2;
@@ -137,6 +145,7 @@ installCompiledValidatorMap(lunora_feedback_0.myVotes.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["voterEmail"] !== "string") return DEFER;
+if (source["voterEmail"].length > 254) return DEFER;
 return { "voterEmail": source["voterEmail"] };
 });
 installCompiledValidatorMap(lunora_feedback_0.remove.args, (source) => {
@@ -150,6 +159,7 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["feedbackId"] !== "string") return DEFER;
 if (typeof source["voterEmail"] !== "string") return DEFER;
+if (source["voterEmail"].length > 254) return DEFER;
 return { "feedbackId": source["feedbackId"], "voterEmail": source["voterEmail"] };
 });
 installCompiledValidatorMap(lunora_summaries_1.generate.args, (source) => {

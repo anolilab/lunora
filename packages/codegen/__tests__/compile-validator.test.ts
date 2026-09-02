@@ -28,8 +28,14 @@ const CORPUS: ReadonlyArray<Record<string, unknown>> = [
     { name: "ada", extra: "dropped" },
     { name: null },
     { name: undefined },
+    // Over/under a declared length bound: the bounded snippets below are the
+    // only reason these are here, and without them their parity check would
+    // pass vacuously (every short input is inside every bound).
+    { name: "x".repeat(65) },
+    { name: "" },
     { tags: [] },
     { tags: ["a", "b"] },
+    { tags: ["a", "b", "c", "d"] },
     { tags: ["a", 2] },
     { tags: "nope" },
     { flag: true },
@@ -109,6 +115,16 @@ describe("compileArgsValidator — differential parity vs interpreted oracle", (
         // read would commit the inherited `Object.prototype.toString` instead.
         "{ toString: v.any() }",
         "{ name: v.string(), nested: v.object({ x: v.number() }), tags: v.array(v.number()) }",
+        // Length bounds — the one refinement family the compiler reproduces.
+        "{ name: v.string().max(64) }",
+        "{ name: v.string().min(1).max(64) }",
+        "{ name: v.string().length(3) }",
+        "{ tags: v.array(v.string()).max(3) }",
+        "{ name: v.optional(v.string().max(64)) }",
+        // Chains it must still decline: a non-length predicate alongside the
+        // bound, and a bound whose argument isn't a literal.
+        "{ name: v.string().max(64).email() }",
+        "{ age: v.number().min(1).max(64) }",
     ];
 
     // eslint-disable-next-line vitest/expect-expect, vitest/prefer-expect-assertions -- assertions live in the shared assertParity() helper; some snippets legitimately defer to the interpreted path with zero assertions
@@ -179,21 +195,60 @@ describe("compileArgsValidator — modelled behaviour", () => {
         expect(compileArgsValidator(irFromSnippet("{ x: v.any() }") as never)).toBeDefined();
     });
 
-    it("declines a `.check(...)` refinement (IR hasRefinement) so the predicate is never skipped", () => {
+    it("declines a `.check(...)` refinement (IR refinements) so the predicate is never skipped", () => {
         expect.assertions(2);
 
-        // `.check(...)` lowers to the base kind + `hasRefinement: true`; compiling it
+        // `.check(...)` lowers to the base kind + `refinements: ["check"]`; compiling it
         // would silently drop the predicate, so the node must decline. `.meta(...)`
         // has no parse effect and still compiles.
         expect(compileArgsValidator(irFromSnippet("{ name: v.string().check((s) => s.length > 0) }") as never)).toBeUndefined();
         expect(compileArgsValidator(irFromSnippet("{ name: v.string().meta({ schema: { maxLength: 4 } }) }") as never)).toBeDefined();
     });
 
+    it("compiles a `.max(n)` length bound into the fast path and defers anything outside it", () => {
+        expect.assertions(5);
+
+        const source = compileArgsValidator(irFromSnippet("{ name: v.string().max(64) }") as never);
+
+        // The bound is emitted, not dropped: a compiled validator that skipped it
+        // would accept the 65-char string the interpreted parser rejects.
+        expect(source).toContain(".length > 64");
+
+        const compiled = compiledFromIr(irFromSnippet("{ name: v.string().max(64) }"));
+
+        expect(compiled?.({ name: "x".repeat(64) })).toStrictEqual({ name: "x".repeat(64) });
+        expect(compiled?.({ name: "x".repeat(65) })).toBe(DEFER);
+
+        // …and deferring is what keeps the error contract exact: the interpreted
+        // parser owns the message, so the compiled path can never drift from it.
+        expect(() => parseValidatorMap(liveFromSnippet("{ name: v.string().max(64) }"), { name: "x".repeat(65) }, "args")).toThrow(
+            "expected string length <= 64",
+        );
+        expect(parseValidatorMap(liveFromSnippet("{ name: v.string().max(64) }"), { name: "x".repeat(64) }, "args")).toStrictEqual({
+            name: "x".repeat(64),
+        });
+    });
+
+    it("declines a length bound it cannot reproduce exactly", () => {
+        expect.assertions(4);
+
+        // A non-length predicate alongside the bound: the chain is all-or-nothing.
+        expect(compileArgsValidator(irFromSnippet("{ name: v.string().max(64).email() }") as never)).toBeUndefined();
+        // `.min`/`.max` on a NUMBER bound the value, not a `.length` — declined
+        // rather than compiled into the wrong comparison.
+        expect(compileArgsValidator(irFromSnippet("{ age: v.number().max(64) }") as never)).toBeUndefined();
+        // A non-literal bound leaves no `refinementArgs` entry to emit.
+        expect(compileArgsValidator(irFromSnippet("{ name: v.string().max(LIMIT) }") as never)).toBeUndefined();
+        // A repeated bound: keyed by name, one entry cannot represent both, so
+        // the parser records neither and the compiler declines.
+        expect(compileArgsValidator(irFromSnippet("{ name: v.string().max(3).max(5) }") as never)).toBeUndefined();
+    });
+
     it("declines a `.check(...)` refinement on an OPTIONAL field so the predicate is never skipped", () => {
         expect.assertions(3);
 
         // `v.optional(v.string()).check(...)` lowers to an `optional` node carrying
-        // `hasRefinement: true`. The optional field branch must consult the wrapper's
+        // `refinements: ["check"]`. The optional field branch must consult the wrapper's
         // own flags (not just `inner`), else it compiles a bare string guard and the
         // hot path accepts input the interpreted parser rejects — a validation bypass.
         expect(compileArgsValidator(irFromSnippet("{ nick: v.optional(v.string()).check((s) => s.length > 0) }") as never)).toBeUndefined();

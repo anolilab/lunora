@@ -21,15 +21,6 @@ export interface ValidatorIR {
     /** Column modifiers (`.unique()`, `.default()`, `.nullable()`, …) when present. */
     column?: ColumnMetaIR;
 
-    /**
-     * `true` when this validator carries a `.check(...)` refinement. The predicate
-     * is a runtime closure the AST→IR step can't represent, so the node keeps its
-     * base `kind` but records the refinement's presence here. The AOT args-validator
-     * compiler declines any node with this flag (compiling it would silently skip
-     * the predicate). `.meta(...)` is pure metadata with no parse effect and does
-     * NOT set this.
-     */
-    hasRefinement?: boolean;
     /** For `v.optional(inner)` / `v.array(inner)`. */
     inner?: ValidatorIR;
     /** For `v.record(key, value)`. */
@@ -40,6 +31,32 @@ export interface ValidatorIR {
     literalValue?: string;
     /** For `v.union(a, b, ...)`. */
     members?: ValidatorIR[];
+
+    /**
+     * The numeric literal argument of a refinement in {@link ValidatorIR.refinements},
+     * keyed by its name (`v.string().min(1).max(64)` → `{ min: 1, max: 64 }`).
+     * Only a plain numeric literal is lifted, and only for a name used ONCE in
+     * the chain — a repeat (`.max(3).max(5)`) records neither, since keeping one
+     * would silently widen the other. Absent when no refinement carried one.
+     * Read by the AOT args-validator compiler to emit a length bound it can
+     * otherwise only decline.
+     */
+    refinementArgs?: Record<string, number>;
+
+    /**
+     * The refinement modifiers chained onto this validator, left to right
+     * (`v.string().min(1).max(64)` → `["min", "max"]`). Names only: the
+     * predicates are runtime closures the AST→IR step can't represent, so the
+     * node keeps its base `kind` and records only their presence (their numeric
+     * arguments, where they have one, ride in {@link ValidatorIR.refinementArgs}).
+     * Absent when there is none. The AOT args-validator compiler declines any node
+     * whose chain it cannot reproduce exactly — everything but a statically-known
+     * string/array length bound; the unbounded-string lint reads the names to tell
+     * a length bound (`max`, `length`) from a refinement that bounds nothing
+     * (`min`, `email`, a bare `check`). `.meta(...)` is pure metadata with no parse
+     * effect and does NOT add to this.
+     */
+    refinements?: string[];
     /** For `v.object({...})`. */
     shape?: Record<string, ValidatorIR>;
     /** Verbatim source text — used in emitted code when we can't reconstruct from AST. */

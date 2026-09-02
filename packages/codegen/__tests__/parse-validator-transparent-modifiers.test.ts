@@ -57,9 +57,9 @@ describe("transparent .check()/.meta() modifiers in codegen", () => {
         expect(result).toHaveLength(1);
         // `.meta(...)` / `.check(...)` are transparent — the arg keeps its base kind.
         // `.meta(...)` leaves the IR unchanged; `.check(...)` additionally records
-        // `hasRefinement` (its predicate can't be represented in the IR).
+        // itself in `refinements` (its predicate can't be represented in the IR).
         expect(result[0]?.args.text).toEqual({ kind: "string" });
-        expect(result[0]?.args.name).toEqual({ hasRefinement: true, kind: "string" });
+        expect(result[0]?.args.name).toEqual({ kind: "string", refinements: ["check"] });
         // Unwrapping composes through v.optional and v.array.
         expect(result[0]?.args.id).toEqual({ inner: { kind: "string" }, kind: "optional" });
         expect(result[0]?.args.to).toEqual({ inner: { kind: "string" }, kind: "array" });
@@ -95,15 +95,17 @@ describe("transparent .check()/.meta() modifiers in codegen", () => {
         const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
         const result = discoverFunctions(project, workdir);
 
-        // Base kind preserved, and `hasRefinement` set: each carries a runtime
-        // predicate the IR can't represent, so the AOT compiler must decline the
-        // node rather than emit a fast path that accepts what the interpreted
-        // parser rejects.
-        expect(result[0]?.args.text).toEqual({ hasRefinement: true, kind: "string" });
-        expect(result[0]?.args.email).toEqual({ hasRefinement: true, kind: "string" });
-        expect(result[0]?.args.code).toEqual({ hasRefinement: true, kind: "string" });
-        expect(result[0]?.args.count).toEqual({ hasRefinement: true, kind: "number" });
-        expect(result[0]?.args.tags).toEqual({ hasRefinement: true, inner: { kind: "string" }, kind: "array" });
+        // Base kind preserved, `refinements` recorded, and the numeric literal
+        // argument lifted alongside it: a length bound the AOT compiler can
+        // reproduce exactly (`.max`/`.min`/`.length`) becomes an emitted guard,
+        // everything else carries a predicate the IR can't represent, so the
+        // compiler declines the node rather than emit a fast path that accepts
+        // what the interpreted parser rejects.
+        expect(result[0]?.args.text).toEqual({ kind: "string", refinementArgs: { max: 200, min: 1 }, refinements: ["max", "min"] });
+        expect(result[0]?.args.email).toEqual({ kind: "string", refinements: ["email"] });
+        expect(result[0]?.args.code).toEqual({ kind: "string", refinementArgs: { length: 6 }, refinements: ["length", "pattern"] });
+        expect(result[0]?.args.count).toEqual({ kind: "number", refinements: ["int", "positive"] });
+        expect(result[0]?.args.tags).toEqual({ inner: { kind: "string" }, kind: "array", refinementArgs: { max: 5 }, refinements: ["max"] });
     });
 
     it("treats .serverDefault() as a column default instead of aborting the run", () => {
@@ -165,7 +167,7 @@ describe("transparent .check()/.meta() modifiers in codegen", () => {
         const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
         const result = discoverFunctions(project, workdir);
 
-        expect(result[0]?.args.bounded).toEqual({ hasRefinement: true, kind: "string" });
+        expect(result[0]?.args.bounded).toEqual({ kind: "string", refinementArgs: { max: 200 }, refinements: ["max"] });
         // The aliased hop: an imported validator resolves through the shorthand too.
         expect(result[0]?.args.shared).toEqual({ kind: "object", shape: { done: { kind: "boolean" } } });
     });

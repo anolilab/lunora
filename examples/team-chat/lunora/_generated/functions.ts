@@ -78,44 +78,55 @@ installCompiledValidatorMap(lunora_channels_0.create.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["name"] !== "string") return DEFER;
+if (source["name"].length > 64) return DEFER;
 return { "name": source["name"] };
 });
 installCompiledValidatorMap(lunora_messages_1.attachmentUrl.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["channelId"] !== "string") return DEFER;
+if (source["channelId"].length > 128) return DEFER;
 if (typeof source["key"] !== "string") return DEFER;
+if (source["key"].length > 512) return DEFER;
 return { "channelId": source["channelId"], "key": source["key"] };
 });
 installCompiledValidatorMap(lunora_messages_1.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["channelId"] !== "string") return DEFER;
+if (source["channelId"].length > 128) return DEFER;
 return { "channelId": source["channelId"] };
 });
 installCompiledValidatorMap(lunora_messages_1.requestAttachmentUpload.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["channelId"] !== "string") return DEFER;
+if (source["channelId"].length > 128) return DEFER;
 if (typeof source["contentType"] !== "string") return DEFER;
+if (source["contentType"].length > 128) return DEFER;
 return { "channelId": source["channelId"], "contentType": source["contentType"] };
 });
 installCompiledValidatorMap(lunora_messages_1.search.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["channelId"] !== "string") return DEFER;
+if (source["channelId"].length > 128) return DEFER;
 if (typeof source["text"] !== "string") return DEFER;
+if (source["text"].length > 200) return DEFER;
 return { "channelId": source["channelId"], "text": source["text"] };
 });
 installCompiledValidatorMap(lunora_messages_1.send.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["channelId"] !== "string") return DEFER;
+if (source["channelId"].length > 128) return DEFER;
 if (typeof source["content"] !== "string") return DEFER;
+if (source["content"].length > 4096) return DEFER;
 let __has1 = false;
 let __val1;
 if (source["attachmentKey"] !== undefined) {
 if (typeof source["attachmentKey"] !== "string") return DEFER;
+if (source["attachmentKey"].length > 512) return DEFER;
 __val1 = source["attachmentKey"];
 __has1 = true;
 }
@@ -123,6 +134,7 @@ let __has2 = false;
 let __val2;
 if (source["attachmentName"] !== undefined) {
 if (typeof source["attachmentName"] !== "string") return DEFER;
+if (source["attachmentName"].length > 256) return DEFER;
 __val2 = source["attachmentName"];
 __has2 = true;
 }
@@ -132,43 +144,53 @@ installCompiledValidatorMap(lunora_presence_2.heartbeat.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["channelId"] !== "string") return DEFER;
+if (source["channelId"].length > 128) return DEFER;
 if (typeof source["sessionId"] !== "string") return DEFER;
+if (source["sessionId"].length > 64) return DEFER;
 if (typeof source["name"] !== "string") return DEFER;
+if (source["name"].length > 80) return DEFER;
 return { "channelId": source["channelId"], "sessionId": source["sessionId"], "name": source["name"] };
 });
 installCompiledValidatorMap(lunora_presence_2.leave.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["channelId"] !== "string") return DEFER;
+if (source["channelId"].length > 128) return DEFER;
 if (typeof source["sessionId"] !== "string") return DEFER;
+if (source["sessionId"].length > 64) return DEFER;
 return { "channelId": source["channelId"], "sessionId": source["sessionId"] };
 });
 installCompiledValidatorMap(lunora_presence_2.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["channelId"] !== "string") return DEFER;
+if (source["channelId"].length > 128) return DEFER;
 return { "channelId": source["channelId"] };
 });
 installCompiledValidatorMap(lunora_profiles_3.avatarUrl.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["key"] !== "string") return DEFER;
+if (source["key"].length > 512) return DEFER;
 return { "key": source["key"] };
 });
 installCompiledValidatorMap(lunora_profiles_3.requestAvatarUpload.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["contentType"] !== "string") return DEFER;
+if (source["contentType"].length > 128) return DEFER;
 return { "contentType": source["contentType"] };
 });
 installCompiledValidatorMap(lunora_profiles_3.save.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["name"] !== "string") return DEFER;
+if (source["name"].length > 80) return DEFER;
 let __has1 = false;
 let __val1;
 if (source["avatarKey"] !== undefined) {
 if (typeof source["avatarKey"] !== "string") return DEFER;
+if (source["avatarKey"].length > 512) return DEFER;
 __val1 = source["avatarKey"];
 __has1 = true;
 }

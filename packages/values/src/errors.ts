@@ -8,18 +8,24 @@ const truncate = (text: string): string => (text.length > MAX_DESCRIBED_LENGTH ?
 /**
  * Describe a non-null object value: plain objects (literal / null-prototype)
  * stay as bare `"object"`; named instances (Date, Map, custom classes) surface
- * their constructor name. Reading `constructor`/`name` can trigger a hostile
- * user getter that throws; this is the error/diagnostic path, so any such throw
- * is swallowed and the bare descriptor returned rather than masking the real
- * validation error with an unrelated exception.
+ * their constructor name.
+ *
+ * The constructor is read off the PROTOTYPE, never the value itself: a parsed
+ * request body `{"constructor":{"name":"…"}}` carries `constructor` as an own
+ * data property, which is client text, not a class — echoing it made every
+ * public arg a reflection point and the only `received` with no length cap.
+ * A genuine name is capped like the primitive branches. Reading the prototype
+ * or `name` can still trigger a hostile getter (or proxy trap) that throws;
+ * this is the error/diagnostic path, so any such throw is swallowed and the
+ * bare descriptor returned rather than masking the real validation error.
  */
 const describeObject = (value: object): string => {
     try {
-        const { constructor } = value as { constructor?: { name?: string } };
-        const constructorName = constructor?.name;
+        const prototype = Object.getPrototypeOf(value) as { constructor?: { name?: unknown } } | null;
+        const constructorName = prototype?.constructor?.name;
 
-        if (constructorName !== undefined && constructorName !== "Object") {
-            return `object ${constructorName}`;
+        if (typeof constructorName === "string" && constructorName !== "" && constructorName !== "Object") {
+            return `object ${truncate(constructorName)}`;
         }
     } catch {
         return "object";
