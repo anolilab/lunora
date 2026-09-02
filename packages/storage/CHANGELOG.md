@@ -1,3 +1,10 @@
+## @lunora/storage [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.45...@lunora/storage@1.0.0-alpha.46) (2026-09-01)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.28
+
 ## @lunora/storage [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.44...@lunora/storage@1.0.0-alpha.45) (2026-09-01)
 
 ### ⚠ BREAKING CHANGES

@@ -20,6 +20,24 @@
         "base_branches":
             - "main"
             - "alpha"
+            # Audit-round fix PRs are stacked on this branch so each group is
+            # reviewable on its own; auto review skips any base not listed here.
+            - "fix/audit-round-5"
+            # The audit chain: each group PR is based on the previous one.
+            - "fix/r7-auth-agent-mail"
+            - "fix/r7-payment"
+            - "fix/r7-adapters-replica"
+            - "fix/r7-storage-planes"
+            - "fix/r7-paywall-ratelimit"
+            - "fix/r7-values-bounds"
+            - "fix/r7-cli-vite-client"
+            - "fix/r7-foundations"
+            - "fix/r8-client-react"
+            - "fix/r8-do-streams"
+            - "fix/r8-edges"
+            - "fix/r8-compute"
+            # Any later audit-chain branch (regex, per CodeRabbit's base_branches).
+            - "fix/r[0-9]+-.*"
 
     "profile": "chill"
 

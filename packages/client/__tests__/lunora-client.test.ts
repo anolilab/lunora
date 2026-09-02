@@ -2769,7 +2769,9 @@ describe("lunoraClient", () => {
             const page2 = [{ args: {}, enqueuedAt: 1, functionPath: "email:send", id: "d100", scheduledFor: 2000 }];
 
             const fetchMock = vi.fn<typeof fetch>(async (input) => {
-                const requested = input instanceof URL ? input.href : input;
+                // `fetch`'s input is `string | URL | Request`; only a URL string
+                // can be substring-matched for the cursor.
+                const requested = input instanceof Request ? input.url : String(input);
 
                 return requested.includes("cursor=")
                     ? jsonResponse({ records: page2, truncated: false })

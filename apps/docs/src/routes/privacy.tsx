@@ -261,6 +261,43 @@ const RouteComponent = () => (
         </p>
         <p>If other cookies and services are used on this website, you can find this information in this privacy policy.</p>
 
+        <h3>Server log files</h3>
+        <p>
+            The provider of this website and its pages automatically collects and stores information in so-called server log files, which your browser
+            communicates to us automatically. The information comprises:
+        </p>
+        <ul>
+            <li>The type and version of browser used</li>
+            <li>The used operating system</li>
+            <li>Referrer URL</li>
+            <li>The hostname of the accessing computer</li>
+            <li>The time of the server inquiry</li>
+            <li>The IP address</li>
+        </ul>
+        <p>
+            This data is not merged with other data sources. This data is recorded on the basis of Art. 6(1)(f) GDPR. The operator of the website has a
+            legitimate interest in the technically error free depiction and the optimization of the operator&rsquo;s website. In order to achieve this, server
+            log files must be recorded.
+        </p>
+        <p>
+            We also operate a programmatic interface at <code>/mcp</code>, which serves this documentation to AI development tools. To keep that interface
+            available, the server counts the requests received per IP address over a short period in its working memory. This information is not written to
+            permanent storage and is not merged with other data. The legal basis is Art. 6(1)(f) GDPR; our legitimate interest lies in protecting the interface
+            against overload and abuse.
+        </p>
+
+        <h3>Consent record</h3>
+        <p>
+            When you make a selection in the consent banner on this website, we store that selection on your device, in the local storage of your browser, so
+            that you are not asked again on every page. The record contains your selection and the time it was made. It is not transmitted to a server and is
+            not merged with other data.
+        </p>
+        <p>
+            Storing this record is technically necessary in order to honor the decision you made, which is why it is set on the basis of Art. 6(1)(f) GDPR and
+            &sect; 25 (2) no. 2 TDDDG and does not itself require consent. You can delete it at any time by clearing the site data in your browser; the banner
+            will then be displayed again on your next visit.
+        </p>
+
         <h3>Waitlist and forms</h3>
         <p>
             On certain pages (for example, the Lunora Cloud early-access page) we offer a form that allows you to join a waitlist. If you use this form, we
@@ -283,78 +320,56 @@ const RouteComponent = () => (
             have processed your request). Mandatory statutory retention periods remain unaffected.
         </p>
 
-        <h2>5. Newsletter</h2>
-
-        <h3>Newsletter data</h3>
+        <h3>Request by e-mail</h3>
         <p>
-            If you would like to subscribe to the newsletter offered on this website, we will need from you an e-mail address as well as information that allow
-            us to verify that you are the owner of the e-mail address provided and consent to the receipt of the newsletter. No further data shall be collected
-            or shall be collected only on a voluntary basis. We shall use such data only for the sending of the requested information and shall not share such
-            data with any third parties.
+            If you contact us by e-mail, your inquiry including all resulting personal data (name, inquiry) will be stored and processed by us for the purpose
+            of processing your request. We do not pass these data on without your consent.
         </p>
         <p>
-            The processing of the information entered into the newsletter subscription form shall occur exclusively on the basis of your consent (Art. 6(1)(a)
-            GDPR). You may revoke the consent you have given to the archiving of data, the e-mail address, and the use of this information for the sending of
-            the newsletter at any time, for instance by clicking on the &ldquo;Unsubscribe&rdquo; link in the newsletter. This shall be without prejudice to the
-            lawfulness of any data processing transactions that have taken place to date.
+            The processing of these data is based on Art. 6(1)(b) GDPR if your inquiry is related to the fulfillment of a contract or if it is necessary to
+            carry out pre-contractual measures. In all other cases, the data are processed on the basis of our legitimate interest in the effective handling of
+            inquiries submitted to us (Art. 6(1)(f) GDPR) or on the basis of your consent (Art. 6(1)(a) GDPR) if it has been obtained; the consent can be
+            revoked at any time.
         </p>
         <p>
-            The data deposited with us for the purpose of subscribing to the newsletter will be stored by us until you unsubscribe from the newsletter or the
-            newsletter service provider and deleted from the newsletter distribution list after you unsubscribe from the newsletter or after the purpose has
-            ceased to apply. We reserve the right to delete or block e-mail addresses from our newsletter distribution list at our own discretion within the
-            scope of our legitimate interest in accordance with Art. 6(1)(f) GDPR.
-        </p>
-        <p>Data stored for other purposes with us remain unaffected.</p>
-        <p>
-            After you unsubscribe from the newsletter distribution list, your e-mail address may be stored by us or the newsletter service provider in a
-            blacklist, if such action is necessary to prevent future mailings. The data from the blacklist is used only for this purpose and not merged with
-            other data. This serves both your interest and our interest in complying with the legal requirements when sending newsletters (legitimate interest
-            within the meaning of Art. 6(1)(f) GDPR). The storage in the blacklist is indefinite.{" "}
-            <strong>You may object to the storage if your interests outweigh our legitimate interest.</strong>
+            The data sent by you to us via contact requests remain with us until you request us to delete, revoke your consent to the storage, or the purpose
+            for the data storage lapses (e.g., after completion of your request). Mandatory statutory provisions &ndash; in particular statutory retention
+            periods &ndash; remain unaffected.
         </p>
 
-        <h2>6. Plug-ins and Tools</h2>
+        <h2>5. Analysis tools</h2>
 
-        <h3>Cloudflare Turnstile</h3>
+        <h3>PostHog</h3>
         <p>
-            We use &ldquo;Cloudflare Turnstile&rdquo; on this website. The provider is Cloudflare Inc., 101 Townsend St., San Francisco, CA 94107, USA
-            (hereinafter &ldquo;Turnstile&rdquo;).
+            This website uses PostHog, a web analysis service. The provider is PostHog, Inc., 965 Mission Street, Suite 425, San Francisco, CA 94103, USA
+            (hereinafter &ldquo;PostHog&rdquo;).
         </p>
         <p>
-            Turnstile is used to check whether the data input on this website (e.g., in a contact form) is done by a human or by an automated program. For this
-            purpose, Turnstile analyzes the behavior of the website visitor based on a number of characteristics.
+            PostHog enables us to analyze the use of our website. It records, among other things, the pages you visit, the interactions you perform on them
+            (e.g., clicks on links and buttons), the referring page, your approximate location derived from your IP address (country and region level), and
+            technical information about your browser, operating system and device. If an error occurs while you are using the website, PostHog also records a
+            report about that error so that we can fix it. We use this information to understand which content is useful and to improve this website.
         </p>
         <p>
-            This analysis starts automatically as soon as the website visitor enters a website that uses Turnstile. For the analysis, Turnstile evaluates
-            various information (e.g., IP address, time spent on the website or mouse movements made by the user). The data collected during the analysis is
-            forwarded to Cloudflare.
+            The use of PostHog is based exclusively on your consent (Art. 6(1)(a) GDPR and &sect; 25 (1) TDDDG). You give this consent via the consent banner
+            displayed on this website and can revoke it at any time with effect for the future by changing your selection via the consent settings link in the
+            footer of this website. Until you consent, and if you decline or later revoke your consent, PostHog neither stores information on your device nor
+            reads information from it; in that case no analysis data is transmitted at all.
         </p>
         <p>
-            The storage and analysis of the data is based on Art. 6 (1)(f) GDPR. The website operator has a legitimate interest in protecting his web offerings
-            from abusive automated spying and from Spam. If such consent has been obtained, the data will be processed exclusively on the basis of Art. 6 (1)(a)
-            GDPR and &sect; 25 (1) TDDDG, if the consent comprises the storage of cookies or access to information on the user&rsquo;s device (e.g., device
-            fingerprinting) as defined in the TDDDG (German Telecommunications Act). Such consent may be revoked at any time.
+            The data is collected via our own domain (a so-called reverse proxy) and processed in PostHog&rsquo;s European infrastructure. PostHog acts as a
+            processor for us on the basis of a data processing agreement (Art. 28 GDPR). Insofar as data is nevertheless accessed from the USA, the transfer is
+            safeguarded by the EU Standard Contractual Clauses.
         </p>
         <p>
-            The processing of data is based on Standard Contract Clauses, which you can find here:{" "}
-            <a href="https://www.cloudflare.com/cloudflare-customer-scc/" rel="noopener noreferrer" target="_blank">
-                https://www.cloudflare.com/cloudflare-customer-scc/
-            </a>
-            .
-        </p>
-        <p>
-            For more information on Cloudflare Turnstile, please visit the privacy policy at:{" "}
-            <a href="https://www.cloudflare.com/cloudflare-customer-dpa/" rel="noopener noreferrer" target="_blank">
-                https://www.cloudflare.com/cloudflare-customer-dpa/
-            </a>
-            .
-        </p>
-        <p>
-            The company is certified in accordance with the &ldquo;EU-US Data Privacy Framework&rdquo; (DPF). The DPF is an agreement between the European Union
-            and the US, which is intended to ensure compliance with European data protection standards for data processing in the US. Every company certified
-            under the DPF is obliged to comply with these data protection standards. For more information, please contact the provider under the following link:{" "}
-            <a href="https://www.dataprivacyframework.gov/participant/5666" rel="noopener noreferrer" target="_blank">
-                https://www.dataprivacyframework.gov/participant/5666
+            The data collected is deleted once it is no longer required for our analysis purposes, at the latest in accordance with the retention periods
+            configured with the provider. For more information about how PostHog handles data, please see the provider&rsquo;s privacy policy at:{" "}
+            <a href="https://posthog.com/privacy" rel="noopener noreferrer" target="_blank">
+                https://posthog.com/privacy
+            </a>{" "}
+            and the data processing agreement at:{" "}
+            <a href="https://posthog.com/dpa" rel="noopener noreferrer" target="_blank">
+                https://posthog.com/dpa
             </a>
             .
         </p>

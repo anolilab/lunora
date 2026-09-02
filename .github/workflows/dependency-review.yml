@@ -1,7 +1,7 @@
 "name": "Dependency review"
 "on":
     "pull_request":
-        "branches": ["main", "alpha", "next", "beta"]
+        "branches": ["main", "alpha", "next", "beta", "fix/**"]
         # The review diffs the dependency graph — only manifests, lockfiles,
         # vendored patches, action pins, and the python SDK can change it.
         "paths":
