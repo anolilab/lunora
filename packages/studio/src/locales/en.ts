@@ -773,7 +773,7 @@ const MESSAGE_IDS = [
     "FK: no rows in {ref} — seed it first",
     "→ {ref}",
     "No rows generated — all columns were skipped.",
-    "Cannot generate rows: {cols} reference tables with no rows. Seed those tables first.",
+    "Cannot generate rows: these columns reference tables with no rows: {cols}. Seed those tables first.",
     "Inserted {count} rows successfully.",
     "Inserted {inserted} of {total} rows — {conflicts} skipped as id conflicts.",
     "Generate & insert",

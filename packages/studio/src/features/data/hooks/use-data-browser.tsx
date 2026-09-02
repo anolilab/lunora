@@ -880,7 +880,9 @@ const useDataBrowser = ({
             for (const [id, columns] of Object.entries(stagedEdits.staged)) {
                 // eslint-disable-next-line no-await-in-loop -- one patch per edited row; sequential so a failure pins the offending row
                 (await client.query(WRITE_ROW, { doc: columns, id, op: "patch", table: selectedTable }, callOptions(debouncedShard))) as WriteRowResult;
-                stagedEdits.drop(id);
+                // `columns` is what this patch actually wrote — pass it so a cell
+                // the operator restaged while the write was in flight survives.
+                stagedEdits.drop(id, columns);
             }
         } catch (error) {
             setWriteError((error as Error).message);

@@ -17,6 +17,7 @@
  */
 import { decodeWire } from "../../../../shared/wire-codec";
 import type { ColumnMeta } from "./admin";
+import { errorMessage } from "./internal";
 
 /** Endpoint both dev hosts mount the seed-data handler at. */
 const SEED_ENDPOINT = "/__lunora/seed";
@@ -70,6 +71,17 @@ const collectUnresolvableFkColumns = (columns: ReadonlyArray<ColumnMeta>, fkPool
     return blocked;
 };
 
+/** The reply envelope, typed as it actually arrives: every field is host-supplied and unvalidated. */
+interface SeedResponseBody {
+    readonly error?: unknown;
+    readonly rows?: unknown;
+    readonly tables?: unknown;
+}
+
+/** Narrow a decoded reply to the row documents `onInsertRows` can hand to `importShard`. */
+const isRowList = (value: unknown): value is ReadonlyArray<Record<string, unknown>> =>
+    Array.isArray(value) && value.every((row) => typeof row === "object" && row !== null && !Array.isArray(row));
+
 /**
  * Request generated rows from the dev host, normalising every outcome.
  *
@@ -77,24 +89,60 @@ const collectUnresolvableFkColumns = (columns: ReadonlyArray<ColumnMeta>, fkPool
  * turns a `v.bigint()` cell back into a real `bigint` and a `v.bytes()` cell back
  * into an `ArrayBuffer` before the caller hands them to `importShard`, whose
  * per-column validators reject the JSON-narrowed forms. Identity for pure JSON.
+ *
+ * EVERY failure comes back as `{ kind: "error" }` rather than a rejection. The
+ * only caller (`GenerateRowsDialog`) runs this inside a `try`/`finally` with no
+ * `catch` and dispatches it through `fireAndForget`, which swallows a rejection
+ * — so a throw here left the dialog silently doing nothing at all. Four paths
+ * could throw: the transport itself (dev host down, route unmounted), a body
+ * that is not JSON (an HTML 404 page), `decodeWire` on a malformed tag, and
+ * `.join` on a non-array `tables`. A body of literal `null` parses fine and then
+ * threw on the first property read.
  */
 const requestSeedRows = async (request: SeedRowsRequest): Promise<SeedRowsResult> => {
-    const response = await fetch(SEED_ENDPOINT, {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-    });
-    const body = (await response.json()) as { error?: string; ok?: boolean; rows?: unknown; tables?: ReadonlyArray<string> };
+    let response: Response;
+
+    try {
+        response = await fetch(SEED_ENDPOINT, {
+            body: JSON.stringify(request),
+            headers: { "Content-Type": "application/json" },
+            method: "POST",
+        });
+    } catch (error) {
+        return { kind: "error", message: `seed request failed: ${errorMessage(error)}` };
+    }
+
+    let body: SeedResponseBody;
+
+    try {
+        body = ((await response.json()) as SeedResponseBody | null) ?? {};
+    } catch {
+        return { kind: "error", message: `seed request failed (${String(response.status)})` };
+    }
 
     if (response.ok && body.rows !== undefined) {
-        return { kind: "ok", rows: decodeWire(body.rows) as ReadonlyArray<Record<string, unknown>> };
+        let decoded: unknown;
+
+        try {
+            decoded = decodeWire(body.rows);
+        } catch (error) {
+            return { kind: "error", message: `seed response could not be decoded: ${errorMessage(error)}` };
+        }
+
+        if (!isRowList(decoded)) {
+            return { kind: "error", message: "seed response did not carry a list of row documents" };
+        }
+
+        return { kind: "ok", rows: decoded };
     }
 
     if (body.error === "fk-parents-empty") {
-        return { kind: "error", message: `no rows to reference in ${(body.tables ?? []).join(", ")} — seed those tables first` };
+        const tables = Array.isArray(body.tables) ? body.tables.filter((table): table is string => typeof table === "string") : [];
+
+        return { kind: "error", message: `no rows to reference in ${tables.join(", ")} — seed those tables first` };
     }
 
-    return { kind: "error", message: body.error ?? `seed request failed (${String(response.status)})` };
+    return { kind: "error", message: typeof body.error === "string" ? body.error : `seed request failed (${String(response.status)})` };
 };
 
 export type { SeedRowsRequest, SeedRowsResult };
