@@ -470,6 +470,30 @@ const stripBranchMarker = (payload: unknown): unknown => {
 };
 
 /**
+ * A bounded, never-throwing description of whatever `JSON.stringify` threw.
+ *
+ * The obvious `error instanceof Error ? error.message : String(error)` is not
+ * total on this path: `message` is a plain writable property, so an `Error` can
+ * carry a non-string one (`.slice` is then not a function), and a thrown
+ * non-`Error` can have a `toString` that throws or no prototype at all
+ * (`String()` then throws "Cannot convert object to primitive value"). Both come
+ * from a `toJSON` the branch handler wrote, so both are reachable — and a throw
+ * here escapes the very guard that exists to keep the parent off its 24-hour
+ * join timeout, leaving it hibernating on a branch that finished.
+ *
+ * Sliced because V8's cyclic-structure message names a path through the
+ * offending object and is itself unbounded, which would reintroduce the
+ * oversized-payload failure the guard below prevents.
+ */
+const describeSerializationFailure = (error: unknown): string => {
+    try {
+        return String(error instanceof Error ? error.message : error).slice(0, 200);
+    } catch {
+        return "the failure itself could not be described";
+    }
+};
+
+/**
  * Swap an outcome the event channel cannot carry for a bounded failure that it
  * can.
  *
@@ -491,6 +515,7 @@ const stripBranchMarker = (payload: unknown): unknown => {
  * parent again hibernates to its join timeout on a branch that finished. So it
  * gets the same treatment — a bounded error outcome the event channel can carry.
  */
+
 const boundOutcome = (outcome: BranchOutcome): BranchOutcome => {
     let bytes: number;
 
@@ -500,11 +525,7 @@ const boundOutcome = (outcome: BranchOutcome): BranchOutcome => {
         return {
             error: {
                 message:
-                    // Sliced: V8's cyclic-structure message names a path through
-                    // the offending object and is itself unbounded, which would
-                    // reintroduce the oversized-payload failure this guard exists
-                    // one branch below to prevent.
-                    `branch outcome cannot be serialised to JSON (${(encodeError instanceof Error ? encodeError.message : String(encodeError)).slice(0, 200)}) — ` +
+                    `branch outcome cannot be serialised to JSON (${describeSerializationFailure(encodeError)}) — ` +
                     "the parent can never receive it. Return a plain JSON value (no cycles, no BigInt, no class instance that fails to serialise) " +
                     "or a reference the parent can dereference (an R2 key, a row id)",
                 name: "BranchOutputUnserializable",

@@ -103,10 +103,18 @@ R2 binding to hand, so it serves whole objects and skips `Range`/`ETag`. Both
 verbs, by hand:
 
 ```ts
+import { isSafeHeaderValue } from "@lunora/server";
 import { verifySignedUrl } from "@lunora/storage";
 
 /** Cap what a single signed PUT may store. */
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Origins allowed to upload cross-origin. Leave it empty when
+ * `STORAGE_PUBLIC_BASE_URL` is your app's own origin — then `cors` is inert and
+ * no browser ever preflights these routes.
+ */
+const ALLOWED_ORIGINS = new Set(["https://app.example.com"]);
 
 /**
  * Types safe to render in the browser. Everything else downloads — an uploader
@@ -132,6 +140,24 @@ export default {
         const url = new URL(request.url);
 
         if (url.pathname.startsWith("/storage/")) {
+            const origin = request.headers.get("origin");
+            // `vary` rides on EVERY response, allowed origin or not: a shared
+            // cache keyed on the URL alone would otherwise replay one origin's
+            // `access-control-allow-origin` to another.
+            const cors = {
+                vary: "origin",
+                ...(origin !== null && ALLOWED_ORIGINS.has(origin)
+                    ? { "access-control-allow-headers": "content-type", "access-control-allow-methods": "GET, PUT", "access-control-allow-origin": origin }
+                    : {}),
+            };
+
+            // Before the verb check and the signature check: a preflight carries
+            // neither the signed method nor any credentials, so answering it
+            // later would 405 every cross-origin upload.
+            if (request.method === "OPTIONS") {
+                return new Response(null, { headers: cors, status: 204 });
+            }
+
             // The method is signed, so a GET URL cannot be replayed as a PUT —
             // check the verb anyway rather than relying on that alone.
             if (request.method !== (url.searchParams.get("method") ?? "GET")) {
@@ -172,7 +198,10 @@ export default {
 
                 await env.UPLOADS.put(result.key, request.body, { httpMetadata: { contentType: result.contentType } });
 
-                return new Response(null, { status: 204 });
+                // The preflight's answer does not carry over: without CORS
+                // headers HERE too the browser passes preflight and then rejects
+                // the actual response.
+                return new Response(null, { headers: cors, status: 204 });
             }
 
             const object = await env.UPLOADS.get(result.key);
@@ -181,10 +210,17 @@ export default {
                 return new Response("not found", { status: 404 });
             }
 
-            const contentType = object.httpMetadata?.contentType ?? "application/octet-stream";
+            // The stored content type came off an uploader-signed URL, so it is
+            // attacker-influenced: a CR/LF/NUL in it either throws inside
+            // `Headers` (an unhandled 500) or, on a permissive runtime, splits
+            // the response. Reject the value rather than reflect it — this is
+            // exactly what `isSafeHeaderValue` does inside `serveStorageObject`.
+            const rawContentType = object.httpMetadata?.contentType;
+            const contentType = rawContentType !== undefined && isSafeHeaderValue(rawContentType) ? rawContentType : "application/octet-stream";
 
             return new Response(object.body, {
                 headers: {
+                    ...cors,
                     // The URL expires; a cached copy would not. Without this a
                     // browser or CDN can keep serving private bytes past `exp`,
                     // with `verifySignedUrl` never consulted again.
@@ -202,28 +238,17 @@ export default {
 };
 ```
 
-**Cross-origin uploads need a preflight branch.** The sample assumes
-`STORAGE_PUBLIC_BASE_URL` is your app's own origin. If it is a different one, the
-browser `PUT` below is preflighted (`PUT` is not a simple method, and
-`content-type: image/png` is not a safelisted value), so the route must answer
-`OPTIONS` and echo CORS headers on the real response — otherwise the upload never
-leaves the browser:
-
-```ts
-const ALLOWED_ORIGINS = new Set(["https://app.example.com"]);
-const origin = request.headers.get("origin");
-const cors =
-    origin !== null && ALLOWED_ORIGINS.has(origin)
-        ? { "access-control-allow-headers": "content-type", "access-control-allow-methods": "GET, PUT", "access-control-allow-origin": origin, vary: "origin" }
-        : {};
-
-if (request.method === "OPTIONS") {
-    return new Response(null, { headers: cors, status: 204 });
-}
-```
+**Why the CORS lines are there.** If `STORAGE_PUBLIC_BASE_URL` is not your app's
+own origin, the browser `PUT` below is preflighted (`PUT` is not a simple method,
+and `content-type: image/png` is not a safelisted value). Answering `OPTIONS` is
+only half of it: the browser also reads
+`access-control-allow-origin` off the **real** response, so the 204 and the
+download response carry `...cors` too — a route that answers only the preflight
+passes it and then fails the request it was preflighting.
 
 Keep `STORAGE_PUBLIC_BASE_URL` same-origin if you would rather not maintain an
-allowlist.
+allowlist; then `ALLOWED_ORIGINS` can be empty and `cors` never adds a header
+beyond `vary: origin`.
 
 `verifySignedUrl` checks expiry, then the HMAC. On a host-rewrite / CDN topology
 pass `{ expectedHost }` (the `STORAGE_PUBLIC_BASE_URL` host) so the signature

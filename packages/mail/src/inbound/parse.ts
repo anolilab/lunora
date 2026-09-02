@@ -178,8 +178,17 @@ const CFWS_OR_QUOTED_STRING = /"(?:[^"\\]|\\.)*(?:"|$)|\((?:[^()\\]|\\.)*(?:\)|$
  * domain, and a consumer asking "does ANY clause pass and align?" then accepts a
  * message that authenticated nothing.
  *
- * Comments are dropped (they are pure CFWS) and a quoted-string's `;` becomes a
- * space (the value itself must survive so the property reader still finds it).
+ * Comments are dropped (they are pure CFWS) and a quoted-string's `;` and `=`
+ * become spaces. Both are grammar inside a clause and neither can be sender
+ * text: a `;` manufactures a clause, and an `=` manufactures a `propspec`, which
+ * matters because the property reader accepts CFWS around the `ptype.property`
+ * dot. Without this, a quoted local part of `"x header . d = victim.example"`
+ * would plant a `header.d` the MX never wrote, EARLIER in the clause than the
+ * genuine one, and the first match wins. The quoted value's leading run still
+ * survives, which is all the reader ever captures (it stops at the first space
+ * or quote), so a quoted identifier keeps yielding garbage rather than a real
+ * domain — garbage aligns with nothing.
+ *
  * ONE scan, not two passes: parens inside a quoted-string are literal and quotes
  * inside a comment are literal, so stripping either kind first can unbalance the
  * other and re-expose the `;` it was about to protect. Whichever token opens
@@ -190,7 +199,7 @@ const CFWS_OR_QUOTED_STRING = /"(?:[^"\\]|\\.)*(?:"|$)|\((?:[^()\\]|\\.)*(?:\)|$
  * manufactured, and this only happens on a header no conformant MX emits.
  */
 const neutralizeClauseSeparators = (authResults: string): string =>
-    authResults.replaceAll(CFWS_OR_QUOTED_STRING, (token) => (token.startsWith('"') ? token.replaceAll(";", " ") : " "));
+    authResults.replaceAll(CFWS_OR_QUOTED_STRING, (token) => (token.startsWith('"') ? token.replaceAll(/[;=]/gu, " ") : " "));
 
 /**
  * Pull EVERY one of a method's `method=result [ptype.property=value …]` clauses
@@ -213,8 +222,12 @@ const neutralizeClauseSeparators = (authResults: string): string =>
  * real one — which is the point: garbage aligns with nothing.
  */
 const authVerdicts = (authResults: string, method: string, property: string): InboundAuthResult[] => {
-    const clauses = neutralizeClauseSeparators(authResults).matchAll(new RegExp(String.raw`(?:^|;)\s*${method}\s*=\s*([a-z]+)([^;]*)`, "gi"));
-    const propertyRe = new RegExp(String.raw`\b${property.replaceAll(".", String.raw`\.`)}\s*=\s*"?([^\s;"]+)`, "i");
+    // `method` may carry a version (`dkim/1=pass`), and a `ptype.property` may
+    // carry CFWS around its dot (`header . d = …`) — RFC 8601 permits both, and
+    // a clause written either way reported nothing at all, so a fully
+    // authenticated message read as unauthenticated.
+    const clauses = neutralizeClauseSeparators(authResults).matchAll(new RegExp(String.raw`(?:^|;)\s*${method}\s*(?:/\s*\d+\s*)?=\s*([a-z]+)([^;]*)`, "gi"));
+    const propertyRe = new RegExp(String.raw`\b${property.split(".").join(String.raw`\s*\.\s*`)}\s*=\s*"?([^\s;"]+)`, "i");
 
     return [...clauses].map((clause) => {
         const value = propertyRe.exec(clause[2] ?? "")?.[1];

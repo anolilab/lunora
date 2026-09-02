@@ -56,7 +56,11 @@ const collectCatalog = (root: string): CatalogItem[] => {
     return listItemDirectories(root).map((name) => {
         const raw = JSON.parse(readFileSync(join(root, name, "registry.json"), "utf8")) as { description?: string };
 
-        return { description: raw.description === undefined ? undefined : safe(raw.description), name };
+        // The directory NAME is as untrusted as the manifest text beside it — a
+        // remote registry is unpacked into this root, and a tarball entry may
+        // carry escape or BIDI bytes in its path. `list` renders it, so it is
+        // sanitized like every other rendered value.
+        return { description: raw.description === undefined ? undefined : safe(raw.description), name: safe(name) };
     });
 };
 

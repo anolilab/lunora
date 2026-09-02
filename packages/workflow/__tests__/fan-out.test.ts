@@ -635,6 +635,60 @@ describe("signalBranchParent", () => {
         expect(JSON.stringify(sent.payload).length).toBeLessThan(1024);
     });
 
+    it("still reports the outcome when the serialization failure cannot be stringified", async () => {
+        expect.assertions(4);
+
+        const parent = makeInstance("parent-1");
+        const env = { WORKFLOW_PARENT: { get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async () => parent) } };
+
+        // A branch handler's own `toJSON` decides what `JSON.stringify` throws, so
+        // the thrown value is as arbitrary as any other user value. Two shapes
+        // defeated the naive `instanceof Error ? .message : String()`: an `Error`
+        // carrying a non-string `message` (`.slice` is not a function) and a
+        // null-prototype object (`String()` throws). Either way the diagnostic
+        // threw INSIDE the guard, `signalBranchParentSafe` swallowed it, and the
+        // parent hibernated to its 24 h join timeout on a finished branch.
+        const numericMessage = Object.assign(new Error("ignored"), { message: 42 });
+
+        await signalBranchParent(
+            { env, step: makeStep() },
+            marker,
+            okOutcome({
+                toJSON: () => {
+                    throw numericMessage;
+                },
+            }),
+        );
+
+        await signalBranchParent(
+            { env, step: makeStep() },
+            marker,
+            okOutcome({
+                toJSON: () => {
+                    // No prototype, so no `toString`: `String(value)` throws
+                    // "Cannot convert object to primitive value".
+                    throw Object.create(null) as unknown;
+                },
+            }),
+        );
+
+        const sends = (parent.sendEvent as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0] as { payload: BranchOutcome });
+
+        expect(sends).toHaveLength(2);
+
+        for (const sent of sends) {
+            expect(sent.payload).toStrictEqual({
+                error: {
+                    message: expect.stringContaining("cannot be serialised"),
+                    name: "BranchOutputUnserializable",
+                },
+                status: "error",
+            });
+        }
+
+        expect(JSON.stringify(sends[1]?.payload).length).toBeLessThan(1024);
+    });
+
     it("is a no-op when the parent binding is absent (parent falls back to its timeout)", async () => {
         expect.assertions(1);
 

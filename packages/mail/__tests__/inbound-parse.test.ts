@@ -179,6 +179,66 @@ describe("parseInboundEmail", () => {
         });
     });
 
+    it("parses a method version and CFWS around a property's dot", async () => {
+        expect.assertions(1);
+
+        // RFC 8601: `method = Keyword [ [CFWS] "/" [CFWS] 1*DIGIT ]` and
+        // `propspec = ptype [CFWS] "." [CFWS] property [CFWS] "=" [CFWS] pvalue`.
+        // A clause written either way reported NOTHING — the method regex stopped
+        // at the version and the property regex at the spaced dot — so a fully
+        // authenticated message read as unauthenticated and the inbound gate
+        // rejected it.
+        const versioned = crlf([
+            "From: Alice <alice@example.com>",
+            "To: rcpt@example.test",
+            "Subject: Versioned",
+            "Message-ID: <auth-version-1@example.com>",
+            "Authentication-Results: mx.cloudflare.net; dkim/1=pass header . d = example.com; spf / 1 = pass smtp . mailfrom = alice@example.com; dmarc/1=pass header.from=example.com",
+            "Content-Type: text/plain; charset=utf-8",
+            "",
+            "body",
+            "",
+        ]);
+
+        const parsed = await parseInboundEmail(versioned);
+
+        expect(parsed.authentication).toStrictEqual({
+            dkim: [{ domain: "example.com", result: "pass" }],
+            dmarc: [{ domain: "example.com", result: "pass" }],
+            spf: [{ domain: "example.com", result: "pass" }],
+        });
+    });
+
+    it("does not let a quoted value forge a CFWS-spaced property the MX never wrote", async () => {
+        expect.assertions(1);
+
+        // Accepting CFWS around the `ptype.property` dot is what RFC 8601 asks
+        // for, but a quoted local part is sender text sitting INSIDE the clause
+        // and EARLIER than the genuine property — first match wins. So an `=`
+        // inside a quoted-string is neutralised along with `;`: without that,
+        // this header would report `header.d=victim.example` on a DKIM clause the
+        // MX failed.
+        const injected = crlf([
+            'Authentication-Results: mx.cloudflare.net; dkim=fail header.i="x header . d = victim.example" header.d=evil.example; spf=fail; dmarc=fail header.from=victim.example',
+            "From: CEO <ceo@victim.example>",
+            "To: rcpt@example.test",
+            "Subject: approve the wire",
+            "Message-ID: <inject-propspec@evil.example>",
+            "Content-Type: text/plain; charset=utf-8",
+            "",
+            "please approve",
+            "",
+        ]);
+
+        const parsed = await parseInboundEmail(injected);
+
+        expect(parsed.authentication).toStrictEqual({
+            dkim: [{ domain: "evil.example", result: "fail" }],
+            dmarc: [{ domain: "victim.example", result: "fail" }],
+            spf: [{ domain: null, result: "fail" }],
+        });
+    });
+
     it("keeps every reported clause when a method appears more than once", async () => {
         expect.assertions(1);
 
