@@ -560,12 +560,17 @@ Manages both schema migrations (D1 SQL) and online data migrations (row
 transforms that run against a live worker):
 
 ```bash
-lunora migrate generate add_email_index   # diff schema.ts → emit D1 SQL
-lunora migrate create --name backfill_at  # scaffold a data-migration stub
-lunora migrate up                         # run pending data migrations (dev)
-lunora migrate up --prod --url <url>      # run against production (requires --yes)
-lunora migrate status                     # show pending / applied / failed
+lunora migrate generate add_email_index        # diff schema.ts → emit D1 SQL
+lunora migrate create --name backfill_at       # scaffold a data-migration stub
+lunora migrate up backfill_at                  # run one data migration (dev)
+lunora migrate up backfill_at --prod --url <url>  # against production (requires --yes)
+lunora migrate down backfill_at                # run its `down` direction
+lunora migrate status backfill_at              # applied / pending / failed
 ```
+
+`up`, `down` and `status` each take the migration id declared in
+`lunora/migrations.ts` — there is no "run everything pending" mode here;
+`lunora deploy --migrate` is what iterates the declared ids in order.
 
 `generate` parses `lunora/schema.ts`, filters to `.global()` tables (sharded
 tables live in per-DO SQLite, so they need no migration), diffs against

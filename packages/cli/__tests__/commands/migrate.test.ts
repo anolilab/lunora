@@ -5,7 +5,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
-import { runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand, runMigrateToHyperdriveCommand } from "../../src/commands/migrate/handler";
+import {
+    execute as migrateExecute,
+    runMigrateCreateCommand,
+    runMigrateDataCommand,
+    runMigrateGenerateCommand,
+    runMigrateToHyperdriveCommand,
+} from "../../src/commands/migrate/handler";
 import type { FetchLike } from "../../src/commands/run/handler";
 import type { Logger } from "../../src/util/logger";
 
@@ -726,6 +732,23 @@ export const backfillReadBy = defineMigration({
             }
 
             expect(calls[0]?.headers?.authorization).toBe("Bearer from-dev-vars");
+        });
+
+        // The documented invocation is `lunora migrate up <id>` — the docs once
+        // showed a bare `up`/`status`, which exits 1. Pin the requirement so the
+        // examples cannot drift back.
+        it.each(["up", "down", "status"])("requires a migration id for %s", async (subcommand) => {
+            expect.assertions(1);
+
+            let exitCode: number | undefined;
+
+            await migrateExecute({
+                argument: [subcommand],
+                options: {},
+                process: { cwd: workdir, exit: (code: number) => (exitCode = code) },
+            } as unknown as Parameters<typeof migrateExecute>[0]);
+
+            expect(exitCode).toBe(1);
         });
 
         it("errors when no admin token is available", async () => {
