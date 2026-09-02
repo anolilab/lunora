@@ -188,12 +188,12 @@ const githubAuthHeaders = (): Record<string, string> => {
  * rate-limited, malformed body, timeout) so the caller can fall back to the
  * moving branch. Uses `fetch` (Node 22/24 global) — no new dependency.
  */
-const fetchBranchSha = async (branch: string): Promise<string | undefined> => {
+const fetchBranchSha = async (branch: string, repo: string = SOURCE_REPO): Promise<string | undefined> => {
     try {
         // Encode the ref as a single path segment. GitHub's `GET /repos/{o}/{r}/commits/{ref}`
         // accepts a slash-containing ref percent-encoded (`feat/x` → `feat%2Fx`), and encoding
         // keeps a ref with other special characters from breaking out of the URL path.
-        const response = await fetch(`https://api.github.com/repos/${SOURCE_REPO}/commits/${encodeURIComponent(branch)}`, {
+        const response = await fetch(`https://api.github.com/repos/${repo}/commits/${encodeURIComponent(branch)}`, {
             headers: { accept: "application/vnd.github+json", "user-agent": "lunora-cli", ...githubAuthHeaders() },
             signal: AbortSignal.timeout(10_000),
         });
@@ -213,38 +213,47 @@ const fetchBranchSha = async (branch: string): Promise<string | undefined> => {
 };
 
 /**
- * Resolve the source ref AND pin a moving release branch to the immutable commit
- * SHA it currently points at, so remote template / registry fetches are
- * reproducible and tamper-evident (supply-chain hardening). The flow:
+ * Pin a moving branch to the immutable commit SHA it currently points at, so a
+ * remote template / registry / base fetch is reproducible and tamper-evident
+ * (supply-chain hardening).
  *
- * First {@link resolveSourceRef} validates + derives the ref (explicit `--ref`,
- * else the version-derived release branch). An already-immutable ref — a 40-hex
- * SHA or a version tag ({@link isImmutableRef}) — is returned verbatim; no API
- * call is made. Otherwise the ref is a long-lived branch, so it is resolved to
- * its current SHA via the GitHub API and that SHA (which still passes the
- * `isSafeRef` charset gate) is fetched instead; the pin is logged so the user can
- * audit it. If resolution fails (offline / rate-limited / air-gapped), the branch
- * is used with a one-line warning that the fetch is UNPINNED — never a hard fail.
+ * An already-immutable ref — a 40-hex SHA or a version tag
+ * ({@link isImmutableRef}) — is returned verbatim; no API call is made.
+ * Otherwise the branch is resolved to its current SHA via the GitHub API and
+ * that SHA (which still passes the `isSafeRef` charset gate) is fetched instead;
+ * the pin is logged so the user can audit it. If resolution fails (offline /
+ * rate-limited / air-gapped), the branch is used with a one-line warning that
+ * the fetch is UNPINNED — never a hard fail.
+ *
+ * `repo` is a parameter because `lunora init --vite` scaffolds its base out of
+ * `vitejs/vite`, not the Lunora repo — a third-party moving branch is exactly
+ * the fetch that most wants a logged, auditable SHA.
  */
-const resolvePinnedSourceRef = async (ref: string | undefined, logger: Logger): Promise<string> => {
-    const resolved = resolveSourceRef(ref);
-
-    if (isImmutableRef(resolved)) {
-        return resolved;
+const resolvePinnedRepoRef = async (repo: string, branch: string, logger: Logger): Promise<string> => {
+    if (isImmutableRef(branch)) {
+        return branch;
     }
 
-    const sha = await fetchBranchSha(resolved);
+    const sha = await fetchBranchSha(branch, repo);
 
     if (sha === undefined) {
-        logger.warn(`could not pin ${SOURCE_REPO}#${resolved} to a commit — fetching the UNPINNED branch (set GITHUB_TOKEN if rate-limited).`);
+        logger.warn(`could not pin ${repo}#${branch} to a commit — fetching the UNPINNED branch (set GITHUB_TOKEN if rate-limited).`);
 
-        return resolved;
+        return branch;
     }
 
-    logger.info(`pinned ${SOURCE_REPO}#${resolved} → ${sha}`);
+    logger.info(`pinned ${repo}#${branch} → ${sha}`);
 
     return sha;
 };
+
+/**
+ * Pin the Lunora repo's source ref: {@link resolvePinnedRepoRef} bound to
+ * {@link SOURCE_REPO}, with the ref derived by {@link resolveSourceRef} (an
+ * explicit `--ref`, else the version-derived release branch).
+ */
+const resolvePinnedSourceRef = async (ref: string | undefined, logger: Logger): Promise<string> =>
+    resolvePinnedRepoRef(SOURCE_REPO, resolveSourceRef(ref), logger);
 
 /**
  * The immutable git tag the release tooling cuts for the running CLI's own
@@ -358,6 +367,7 @@ export {
     resolveCliVersion,
     resolveCliVersionRef,
     resolveDistTag,
+    resolvePinnedRepoRef,
     resolvePinnedSourceRef,
     resolveSourceRef,
     resolveTagVersion,
