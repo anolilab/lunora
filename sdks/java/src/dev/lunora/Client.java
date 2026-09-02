@@ -78,10 +78,22 @@ public final class Client {
         public final String code;
         public final transient Object data;
 
-        public ApiException(String code, String message, Object data) {
+        /**
+         * Whether the call reached no verdict — a 5xx, or a non-2xx carrying no envelope at all (an
+         * edge error page, a WAF block, a proxy).
+         *
+         * <p>Set where the HTTP STATUS is still in scope, because nothing downstream can recover
+         * it: {@code code} alone cannot tell a {@code BAD_REQUEST} the function returned from the
+         * {@code INTERNAL} this client synthesises for a body that never came from one. See {@link
+         * Submit#isTransient}.
+         */
+        public final boolean transientFailure;
+
+        public ApiException(String code, String message, Object data, boolean transientFailure) {
             super(message);
             this.code = code;
             this.data = data;
+            this.transientFailure = transientFailure;
         }
     }
 
@@ -176,6 +188,15 @@ public final class Client {
     }
 
     private static final class Shape {
+        /**
+         * The shape's name and args, kept so {@link #resendSubscriptions} can rebuild its subscribe
+         * frame. Without them a reconnect has nothing to re-subscribe WITH, and every shape view
+         * goes silent for the life of the client.
+         */
+        final String name;
+
+        final Object args;
+
         final Map<String, Object> rows = new LinkedHashMap<>();
         final List<String> order = new ArrayList<>();
         final Consumer<List<Object>> onRows;
@@ -183,7 +204,13 @@ public final class Client {
         Object checkpoint;
         Object epoch;
 
-        Shape(Consumer<List<Object>> onRows, Consumer<SubscriptionError> onError) {
+        Shape(
+                String name,
+                Object args,
+                Consumer<List<Object>> onRows,
+                Consumer<SubscriptionError> onError) {
+            this.name = name;
+            this.args = args;
             this.onRows = onRows;
             this.onError = onError;
         }
@@ -215,6 +242,14 @@ public final class Client {
     public volatile String identity;
 
     OfflineQueue offlineQueue = new OfflineQueue();
+
+    /**
+     * The {@link System#nanoTime} reading before which a flush is a no-op, set when a replay came
+     * back rate-limited and the envelope named a delay. Monotonic, so a wall-clock adjustment
+     * cannot strand a queue for hours. Guarded by {@link #lock}.
+     */
+    long flushNotBefore = System.nanoTime();
+
     boolean wasEverConnected;
     boolean closed;
     final List<Consumer<MutationSettled>> settledListeners = new ArrayList<>();
@@ -351,15 +386,22 @@ public final class Client {
             Object code = ((Map<String, Object>) error).get("code");
             Object message = ((Map<String, Object>) error).get("message");
 
+            // A 5xx is the shard or the edge failing under the call, not a verdict on it, so a
+            // queued write replayed under the same idempotency key is still good.
             throw new ApiException(
                     code instanceof String text ? text : "INTERNAL",
                     message instanceof String text ? text : "request failed",
-                    data);
+                    data,
+                    status >= 500);
         }
 
         if (status < 200 || status > 299) {
+            // No envelope at all, so this body never came from a Lunora function: an edge error
+            // page, a WAF block, a proxy. Nothing reached the shard, which makes it transport
+            // rather than a verdict — the batch path already classified the identical response
+            // that way, and a lone queued write must not be dropped for being alone.
             throw new ApiException(
-                    "INTERNAL", "HTTP " + status + " without an error envelope", null);
+                    "INTERNAL", "HTTP " + status + " without an error envelope", null, true);
         }
 
         return Wire.decode(body.get("result"));
@@ -413,7 +455,7 @@ public final class Client {
             String mutationId,
             String issuingClientId) {
         if (poster == null) {
-            throw new ApiException("INTERNAL", "no HTTP poster configured", null);
+            throw new ApiException("INTERNAL", "no HTTP poster configured", null, false);
         }
 
         Map<String, String> headers = new LinkedHashMap<>();
@@ -451,7 +493,7 @@ public final class Client {
     @SuppressWarnings("unchecked")
     Map<String, Object> rpcBatch(List<Object> calls) {
         if (poster == null) {
-            throw new ApiException("INTERNAL", "no HTTP poster configured", null);
+            throw new ApiException("INTERNAL", "no HTTP poster configured", null, false);
         }
 
         Map<String, String> headers = new LinkedHashMap<>();
@@ -738,7 +780,7 @@ public final class Client {
             nextShapeId++;
             id = "shape_" + nextShapeId;
 
-            shapes.put(id, new Shape(onRows, onError));
+            shapes.put(id, new Shape(name, args, onRows, onError));
             socket = sender;
         }
 
@@ -786,6 +828,21 @@ public final class Client {
                                 null,
                                 subscription.cursor,
                                 subscription.epoch));
+            }
+
+            // BOTH registries. A resend that walks only the queries leaves every shape view
+            // subscribed to a socket that no longer exists — silently, and for the rest of the
+            // process's life, because a shape only ever hears from the server through a poke.
+            for (Map.Entry<String, Shape> entry : shapes.entrySet()) {
+                Shape shape = entry.getValue();
+
+                frames.add(
+                        buildShapeSubscribeFrame(
+                                entry.getKey(),
+                                shape.name,
+                                shape.args,
+                                shape.checkpoint,
+                                shape.epoch));
             }
         }
 

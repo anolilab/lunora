@@ -33,10 +33,20 @@ public struct LunoraAPIError: Error, CustomStringConvertible {
     public let message: String
     public let data: Any?
 
-    public init(code: String, message: String, data: Any? = nil) {
+    /// Whether the call reached no verdict — a 5xx, or a non-2xx carrying no
+    /// envelope at all (an edge error page, a WAF block, a proxy).
+    ///
+    /// Set where the HTTP STATUS is still in scope, because nothing downstream
+    /// can recover it: ``code`` alone cannot tell a `BAD_REQUEST` a function
+    /// returned from the `INTERNAL` this client synthesises for a body that never
+    /// came from one. See ``LunoraClient/isTransient(_:)``.
+    public let transient: Bool
+
+    public init(code: String, message: String, data: Any? = nil, transient: Bool = false) {
         self.code = code
         self.message = message
         self.data = data
+        self.transient = transient
     }
 
     public var description: String { "\(code): \(message)" }
@@ -161,6 +171,10 @@ public final class LunoraClient {
 
     private final class ShapeSubscription {
         let name: String
+        /// Kept for the same reason a query keeps its `functionPath` and `args`:
+        /// a reconnect has to REBUILD the subscribe frame, and a registry that
+        /// only remembers the callbacks cannot.
+        let args: Any?
         let onRows: (([Any]) -> Void)?
         let onError: ((LunoraSubscriptionError) -> Void)?
         var rows: [String: Any] = [:]
@@ -168,8 +182,9 @@ public final class LunoraClient {
         var checkpoint: Any?
         var epoch: Any?
 
-        init(name: String, onRows: (([Any]) -> Void)?, onError: ((LunoraSubscriptionError) -> Void)?) {
+        init(name: String, args: Any?, onRows: (([Any]) -> Void)?, onError: ((LunoraSubscriptionError) -> Void)?) {
             self.name = name
+            self.args = args
             self.onRows = onRows
             self.onError = onError
         }
@@ -185,6 +200,11 @@ public final class LunoraClient {
     var storedOfflineQueue = LunoraOfflineQueue()
     var wasEverConnected = false
     var closed = false
+
+    /// `ProcessInfo.systemUptime` before which a flush is a no-op, set when a
+    /// replay came back rate-limited and the envelope named a delay. Monotonic,
+    /// so a wall-clock adjustment cannot strand a queue for hours.
+    var storedFlushNotBefore: TimeInterval = 0
     var settledListeners: [(LunoraMutationSettled) -> Void] = []
 
     /// Identifies this client to the shard. It rides every write that carries an
@@ -308,12 +328,21 @@ public final class LunoraClient {
             throw LunoraAPIError(
                 code: envelope["code"] as? String ?? "INTERNAL",
                 message: envelope["message"] as? String ?? "request failed",
-                data: data
+                data: data,
+                // A 5xx is the shard or the edge failing under the call, not a
+                // verdict on it, so a queued write replayed under the same
+                // idempotency key is still good.
+                transient: status >= 500
             )
         }
 
         guard (200...299).contains(status) else {
-            throw LunoraAPIError(code: "INTERNAL", message: "HTTP \(status) without an error envelope")
+            // No envelope at all, so this body never came from a Lunora function:
+            // an edge error page, a WAF block, a proxy. Nothing reached the shard,
+            // which makes it transport rather than a verdict — the batch path
+            // already classified the identical response that way, and a lone
+            // queued write must not be dropped for being alone.
+            throw LunoraAPIError(code: "INTERNAL", message: "HTTP \(status) without an error envelope", transient: true)
         }
 
         return try Wire.decode(body["result"])
@@ -369,11 +398,12 @@ public final class LunoraClient {
 
     /// Rebuilds a ``LunoraAPIError`` from a slot's or a batch's error envelope,
     /// defaulting the way ``parseRPCResponse(_:status:)`` does.
-    static func batchSlotError(_ envelope: [String: Any], fallback: String) -> LunoraAPIError {
+    static func batchSlotError(_ envelope: [String: Any], fallback: String, transient: Bool = false) -> LunoraAPIError {
         LunoraAPIError(
             code: envelope["code"] as? String ?? "INTERNAL",
             message: envelope["message"] as? String ?? fallback,
-            data: envelope["data"].flatMap { try? Wire.decode($0) }
+            data: envelope["data"].flatMap { try? Wire.decode($0) },
+            transient: transient
         )
     }
 
@@ -419,16 +449,19 @@ public final class LunoraClient {
     /// carrying independent calls, so each entry carries its own idempotency key
     /// and client id in the body. A single outer header would name one write and
     /// de-duplicate the whole chunk against it.
-    func rpcBatch(_ calls: [Any]) throws -> [String: Any] {
+    func rpcBatch(_ calls: [Any]) throws -> (status: Int, body: [String: Any]) {
         guard let post else { throw LunoraAPIError(code: "INTERNAL", message: "no HTTP poster configured") }
 
         var headers = ["content-type": "application/json"]
         if let authToken { headers["authorization"] = "Bearer \(authToken)" }
 
         let payload = try JSONSerialization.data(withJSONObject: ["calls": calls])
-        let (_, raw) = try post(join(lunoraRPCBatchPath), headers, payload)
+        // The status is returned, not discarded: a whole-batch envelope is only
+        // a verdict on its entries when the shard answered, and that is what the
+        // status says.
+        let (status, raw) = try post(join(lunoraRPCBatchPath), headers, payload)
 
-        return try JSONSerialization.jsonObject(with: raw) as? [String: Any] ?? [:]
+        return (status, try JSONSerialization.jsonObject(with: raw) as? [String: Any] ?? [:])
     }
 
     /// Projects a generated model into the dictionary tree ``Wire/encode(_:depth:)``
@@ -642,7 +675,7 @@ public final class LunoraClient {
         let (id, sender) = withLock { () -> (String, LunoraFrameSender?) in
             nextShapeID += 1
             let id = "shape_\(nextShapeID)"
-            shapes[id] = ShapeSubscription(name: name, onRows: onRows, onError: onError)
+            shapes[id] = ShapeSubscription(name: name, args: args, onRows: onRows, onError: onError)
 
             return (id, send)
         }
@@ -667,6 +700,10 @@ public final class LunoraClient {
     /// Re-subscribes everything after a reconnect, carrying each subscription's
     /// resume cursor so the server can skip results that have not changed.
     ///
+    /// BOTH registries. A resend that walks only the queries leaves every shape
+    /// view subscribed to a socket that no longer exists — silently, and for the
+    /// rest of the process's life.
+    ///
     /// Without this the `cursor`/`epoch` tracked on every `data` frame would be
     /// write-only state and a reconnect would silently re-seed from scratch.
     public func resendSubscriptions() {
@@ -676,12 +713,22 @@ public final class LunoraClient {
         let (sender, frames) = withLock { () -> (LunoraFrameSender?, [[String: Any]]) in
             guard send != nil else { return (nil, []) }
 
-            let frames = subscriptions.compactMap { id, entry in
+            var frames = subscriptions.compactMap { id, entry in
                 try? LunoraClient.buildSubscribeFrame(
                     id: id,
                     functionPath: entry.functionPath,
                     args: entry.args,
                     sinceSeq: entry.cursor,
+                    sinceEpoch: entry.epoch
+                )
+            }
+
+            frames += shapes.compactMap { id, entry in
+                try? LunoraClient.buildShapeSubscribeFrame(
+                    id: id,
+                    name: entry.name,
+                    args: entry.args,
+                    sinceCheckpoint: entry.checkpoint,
                     sinceEpoch: entry.epoch
                 )
             }
@@ -734,7 +781,28 @@ public final class LunoraClient {
         case "ack": return kind
         case "data", "delta":
             let payload = (frame["data"] is NSNull ? nil : frame["data"]) ?? frame["delta"]
-            let value = try Wire.decode(payload)
+            let value: Any
+
+            do {
+                value = try Wire.decode(payload)
+            } catch {
+                // Scoped to the subscription it was addressed to. Throwing out of
+                // here ends the caller's read loop, and with it every OTHER
+                // subscription on this client — one peer's malformed payload
+                // silently taking the whole socket down.
+                let handlers = withLock { () -> [(LunoraSubscriptionError) -> Void] in
+                    guard let id, let onError = subscriptions[id]?.onError else { return [] }
+
+                    return [onError]
+                }
+
+                for handler in handlers {
+                    handler(LunoraSubscriptionError(code: "INVALID_FRAME", message: "frame payload could not be decoded: \(error)"))
+                }
+
+                return "error"
+            }
+
             let deferred = withLock { () -> LunoraOptimistic.Deferred in
                 guard let id, let entry = subscriptions[id] else { return [] }
 

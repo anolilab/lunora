@@ -50,6 +50,7 @@
         "server_frame_consumer",
         "subscription_stream_yields_frame_values_in_order",
         "shape_subscribe_frame",
+    "shape_subscriptions_resend_after_reconnect",
         "poke_sequence_materialises_rows",
         "poke_parts_do_not_apply_before_poke_end",
         "shape_reset_poke_replaces_membership",
@@ -66,6 +67,7 @@
         "offline_queue_identity_gate_rejects_replay",
         "offline_flush_replays_and_confirms_optimistic",
         "offline_flush_batches_multiple_writes",
+    "offline_flush_batch_splits_on_payload_too_large",
         "optimistic_cursorless_frame_preserves_cursor",
         "offline_queue_hydrate_overflow_settles_discarded",
         "offline_flush_unencodable_write_settles_terminal"
