@@ -29,6 +29,8 @@ import {
 } from "@lunora/config/studio-host";
 import type { Plugin, ViteDevServer } from "vite";
 
+import type { ResolvedLunoraPluginOptions } from "./types";
+
 /** Dev-server path the studio SPA is served from. */
 const STUDIO_PATH = "/__lunora";
 /** Static asset routes the studio document references. */
@@ -101,13 +103,24 @@ const pathnameOf = (url: string): string => {
 const createStudioHandler = (
     server: ViteDevServer,
     isNonLoopbackBind: boolean,
+    options: ResolvedLunoraPluginOptions,
 ): ((request: IncomingMessage, response: ServerResponse, next: () => void) => void) => {
     let assets: StudioAssets | undefined;
     let assetsStamp: number | undefined;
     let html: string | undefined;
 
+    // The plugin's own `projectRoot` — NOT Vite's `root`. `lunora()` resolves
+    // every other file it touches (codegen output, `.dev.vars`) against this
+    // one, so reading the admin token or the schema from Vite's root would look
+    // in a different directory whenever the two differ.
+    const { projectRoot } = options;
+    // Vite serves everything under `base`, so the studio's mount moves with it.
+    // This middleware runs BEFORE Vite's base middleware strips the prefix, so
+    // match the prefixed pathname ourselves — otherwise the URL announced at
+    // startup falls through to the SPA fallback and serves the app instead.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime value can be undefined on a mocked server even though the type says string
-    const projectRoot = server.config.root ?? process.cwd();
+    const configuredBase = server.config.base ?? "/";
+    const basePrefix = configuredBase === "/" ? "" : configuredBase.replace(TRAILING_SLASH, "");
 
     // Serve a static studio asset — the compiled stylesheet, the `studio.js`
     // entry, or one of its on-demand `chunk-*.js` code-split siblings — re-reading
@@ -171,7 +184,10 @@ const createStudioHandler = (
     };
 
     return (request: IncomingMessage, response: ServerResponse, next: () => void): void => {
-        const pathname = pathnameOf(request.url ?? "");
+        const requestPath = pathnameOf(request.url ?? "");
+        // Accept both spellings: the base-prefixed URL a browser follows from the
+        // announced link, and the bare one the studio document's asset URLs use.
+        const pathname = basePrefix !== "" && requestPath.startsWith(basePrefix) ? requestPath.slice(basePrefix.length) : requestPath;
 
         // Own the mount and everything under it (`/__lunora`, `/__lunora/`,
         // `/__lunora/data`, …); anything else passes through.
@@ -205,7 +221,7 @@ const createStudioHandler = (
         const jsonHandler = JSON_ENDPOINT_HANDLERS[pathname];
 
         if (jsonHandler !== undefined) {
-            serveJsonHandler(request, response, jsonHandler, projectRoot);
+            serveJsonHandler(request, response, jsonHandler, projectRoot, { apiSpec: options.apiSpec, schemaDirectory: options.schemaDir });
 
             return;
         }
@@ -253,7 +269,7 @@ const createStudioHandler = (
  * `lunora dev` and on a plain `vite` with no per-project files. The studio
  * is served as a prebuilt static bundle, independent of the host app.
  */
-const studioPlugin = (): Plugin => {
+const studioPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     return {
         apply: "serve",
         configureServer(server: ViteDevServer) {
@@ -267,7 +283,7 @@ const studioPlugin = (): Plugin => {
                 configuredHost !== "127.0.0.1" &&
                 configuredHost !== "::1";
 
-            server.middlewares.use(createStudioHandler(server, isNonLoopbackBind));
+            server.middlewares.use(createStudioHandler(server, isNonLoopbackBind, options));
 
             // Surface the studio URL at startup. Returned hook runs after
             // internal middlewares are installed.

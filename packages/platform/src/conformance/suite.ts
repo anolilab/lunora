@@ -34,6 +34,12 @@ type VitestApi = {
 /** The message every host raises once `disposeTerminally` has run. */
 const PLATFORM_CLOSED = /platform closed/u;
 
+/** Yield the turn for `ms`, hoisted so legs nested inside a host closure stay flat. */
+const sleep = (ms: number): Promise<void> =>
+    new Promise((resolve) => {
+        setTimeout(resolve, ms);
+    });
+
 const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, vitest: VitestApi): void => {
     const { describe, expect, it } = vitest;
 
@@ -112,6 +118,51 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
 
                     const rows = host.shard.sql.exec("SELECT id FROM rollback_test WHERE id = 2").toArray();
                     expect(rows).toHaveLength(0);
+                });
+            });
+
+            it("never lets a task outside a mutation observe its uncommitted writes", async () => {
+                expect.assertions(3);
+
+                await withHost(async (host) => {
+                    host.shard.sql.exec("CREATE TABLE IF NOT EXISTS isolation_test (id INTEGER PRIMARY KEY)");
+
+                    // The engine's mutation shape: `runSerialized(() => transaction(work))`,
+                    // with a real await inside — fs-backed object storage, an
+                    // outbound `fetch`, anything that yields the turn.
+                    const mutation = host.shard.runSerialized(async () =>
+                        host.shard.transaction(async () => {
+                            host.shard.sql.exec("INSERT INTO isolation_test (id) VALUES (1)");
+
+                            await sleep(20);
+
+                            throw new Error("boom");
+                        }),
+                    );
+
+                    await sleep(5);
+
+                    // A query dispatch is NOT wrapped in `runSerialized` — only
+                    // mutations are — so this is what the shard actually does
+                    // while a mutation is mid-await. On Cloudflare the input
+                    // gate defers the whole dispatch until the gate releases; a
+                    // host whose SQL executor is synchronous cannot defer, so
+                    // refusing is the other conformant answer. What no host may
+                    // do is hand back the row: `ShardHost` guarantee 2 is that
+                    // no partial writes are observable, and these are about to
+                    // roll back.
+                    let observed: unknown[];
+
+                    try {
+                        observed = host.shard.sql.exec("SELECT id FROM isolation_test").toArray();
+                    } catch {
+                        observed = [];
+                    }
+
+                    expect(observed).toStrictEqual([]);
+
+                    await expect(mutation).rejects.toThrow("boom");
+                    expect(host.shard.sql.exec("SELECT id FROM isolation_test").toArray()).toStrictEqual([]);
                 });
             });
 

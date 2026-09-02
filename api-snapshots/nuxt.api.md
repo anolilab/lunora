@@ -14,7 +14,6 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 ```ts
 interface ModuleOptions {
     appEntry: string;
-    prefix: string;
 }
 ```
 

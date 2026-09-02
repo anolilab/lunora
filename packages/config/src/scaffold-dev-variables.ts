@@ -6,10 +6,9 @@ import { join } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
 
-import { isSecretKeyName } from "../../../shared/secret-key";
 import { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_NEWLINE, parseDevVariableEntries, parseDevVariableLine } from "./dev-variables-format";
 import type { SecretEntry } from "./package-secrets-registry";
-import { CORE_SECRETS, PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
+import { CORE_SECRETS, MINTABLE_SECRET_KEYS, secretsForPackages } from "./package-secrets-registry";
 
 /** Core (always-scaffolded) secrets followed by the package-specific ones for the detected capabilities. */
 const requiredSecrets = (packageNames: ReadonlyArray<string>): SecretEntry[] => [...CORE_SECRETS, ...secretsForPackages(packageNames)];
@@ -111,25 +110,18 @@ const isPlaceholderValue = (value: string): boolean => {
 const defaultRandomHex = (bytes: number): string => randomBytes(bytes).toString("hex");
 
 /**
- * Provider-issued secret keys we CANNOT mint locally — you obtain them from a
- * third-party dashboard (Resend, Stripe, Polar, …). Derived from the registry:
- * a secret-keyed entry whose placeholder is an angle-bracket `<your-…>` marker
- * (rather than the `openssl rand` marker) is a provider key. Generating a random
- * value for one would be actively wrong (the provider would reject it).
+ * True for a secret key the registry says Lunora can mint locally (a random
+ * 32-byte hex, like `openssl rand -hex 32`) — `AUTH_SECRET`,
+ * `LUNORA_ADMIN_TOKEN`, `STORAGE_SIGNING_SECRET`, …
+ *
+ * Registry membership, NOT the key's name shape, is the rule. A secret-looking
+ * key nothing in the registry declares (`OPENAI_API_KEY`,
+ * `GITHUB_CLIENT_SECRET`, a project's own `*_TOKEN`) is provider-issued as far
+ * as Lunora knows, so minting for it would write a value the provider rejects at
+ * runtime — over the developer's own half-filled `.dev.vars` — and hide the gap
+ * from `lunora env doctor`, whose job is to report it as unfilled.
  */
-const PROVIDER_SECRET_KEYS: ReadonlySet<string> = new Set(
-    [...CORE_SECRETS, ...Object.values(PACKAGE_SECRETS_REGISTRY).flat()]
-        .filter((entry) => isSecretKeyName(entry.key) && entry.placeholderValue.startsWith("<"))
-        .map((entry) => entry.key),
-);
-
-/**
- * True for a secret-looking key whose value Lunora can mint locally (a random
- * 32-byte hex, like `openssl rand -hex 32`) — e.g. `AUTH_SECRET`,
- * `LUNORA_ADMIN_TOKEN`, `STORAGE_SIGNING_SECRET`. False for provider-issued keys
- * ({@link PROVIDER_SECRET_KEYS}) and any non-secret key.
- */
-const isMintableSecretKey = (key: string): boolean => isSecretKeyName(key) && !PROVIDER_SECRET_KEYS.has(key);
+const isMintableSecretKey = (key: string): boolean => MINTABLE_SECRET_KEYS.has(key);
 
 /**
  * The fresh secret to substitute for an example `key=value` entry, or `undefined`
@@ -139,10 +131,11 @@ const isMintableSecretKey = (key: string): boolean => isSecretKeyName(key) && !P
  * share.
  *
  * Only {@link isMintableSecretKey mintable} secret keys are regenerated:
- * provider-issued placeholders (e.g. `RESEND_API_KEY`, `STRIPE_SECRET_KEY`) are
- * left verbatim so they stay detectable as unfilled by `lunora env doctor` —
- * minting a random value for one would be actively wrong (the provider would
- * reject it) and would hide the misconfiguration.
+ * provider-issued placeholders (e.g. `RESEND_API_KEY`, `STRIPE_SECRET_KEY`) and
+ * every key outside the registry (`OPENAI_API_KEY`, a project's own
+ * `*_CLIENT_SECRET`) are left verbatim so they stay detectable as unfilled by
+ * `lunora env doctor` — minting a random value for one would be actively wrong
+ * (the provider would reject it) and would hide the misconfiguration.
  */
 const generatedSecretFor = (key: string, value: string, randomHex: (bytes: number) => string): string | undefined =>
     isMintableSecretKey(key) && isPlaceholderValue(value) ? randomHex(SECRET_BYTES) : undefined;

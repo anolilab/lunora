@@ -6,6 +6,7 @@ import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { collectExportGaps, findWranglerFile, readWranglerJsonc, validateWranglerConfig } from "@lunora/config/cloudflare";
 
 import { isSecretKeyName } from "../../../../../shared/secret-key";
+import { describeAdminTokenSource, resolveAdminBearer } from "../../util/admin-token";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
@@ -258,11 +259,20 @@ const checkDevVariables = (cwd: string, findings: Finding[]): void => {
     }
 };
 
-/** `LUNORA_ADMIN_TOKEN` not set → INFO (studio/admin RPCs need it, but it's optional locally). */
-const checkAdminToken = (findings: Finding[]): void => {
-    const token = process.env.LUNORA_ADMIN_TOKEN;
+/**
+ * No admin bearer resolvable → INFO (studio/admin RPCs need it, but it's
+ * optional locally).
+ *
+ * Resolved through {@link resolveAdminBearer}, the same resolver every admin
+ * command uses, so `.dev.vars` counts. Reading only the environment reported
+ * `LUNORA_ADMIN_TOKEN is not set` on every `lunora dev`-scaffolded project —
+ * `lunora dev` writes the token into `.dev.vars` and never exports it — while
+ * this check's own fix text already said "(env or `.dev.vars`)".
+ */
+const checkAdminToken = (cwd: string, findings: Finding[]): void => {
+    const { source } = resolveAdminBearer({ cwd });
 
-    if (token === undefined || token.trim() === "") {
+    if (source === undefined) {
         findings.push({
             code: "admin-token-missing",
             fix: "Set LUNORA_ADMIN_TOKEN (env or `.dev.vars`) to enable admin RPCs / studio.",
@@ -270,7 +280,7 @@ const checkAdminToken = (findings: Finding[]): void => {
             message: "LUNORA_ADMIN_TOKEN is not set.",
         });
     } else {
-        findings.push({ code: "admin-token-set", level: "pass", message: "LUNORA_ADMIN_TOKEN is set." });
+        findings.push({ code: "admin-token-set", level: "pass", message: `LUNORA_ADMIN_TOKEN is set (${describeAdminTokenSource(source)}).` });
     }
 };
 
@@ -533,7 +543,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     checkD1Placeholders(parsed, findings);
     checkEmailDestination(parsed, findings);
     checkDevVariables(cwd, findings);
-    checkAdminToken(findings);
+    checkAdminToken(cwd, findings);
     checkVersionSkew(cwd, findings);
     checkVectorMetadataIndexes(cwd, findings);
     checkCliShadow(cwd, options.executablePath ?? process.argv[1], findings);

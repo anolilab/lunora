@@ -71,6 +71,7 @@ final class ConformanceTests: XCTestCase {
             case "server_frame_consumer": try caseServerFrameConsumer()
             case "subscription_stream_yields_frame_values_in_order": try caseSubscriptionStreamYieldsFrameValuesInOrder()
             case "shape_subscribe_frame": try caseShapeSubscribeFrame()
+            case "shape_subscriptions_resend_after_reconnect": try caseShapeSubscriptionsResendAfterReconnect()
             case "poke_sequence_materialises_rows": try casePokeSequenceMaterialisesRows()
             case "poke_parts_do_not_apply_before_poke_end": try casePokePartsDoNotApplyBeforePokeEnd()
             case "shape_reset_poke_replaces_membership": try testResetPokeReplacesShapeMembership()
@@ -87,6 +88,7 @@ final class ConformanceTests: XCTestCase {
             case "offline_queue_identity_gate_rejects_replay": try caseOfflineQueueIdentityGateRejectsReplay()
             case "offline_flush_replays_and_confirms_optimistic": try caseOfflineFlushReplaysAndConfirmsOptimistic()
             case "offline_flush_batches_multiple_writes": try caseOfflineFlushBatchesMultipleWrites()
+            case "offline_flush_batch_splits_on_payload_too_large": try caseOfflineFlushBatchSplitsOnPayloadTooLarge()
             case "optimistic_cursorless_frame_preserves_cursor": try caseOptimisticCursorlessFramePreservesCursor()
             case "offline_queue_hydrate_overflow_settles_discarded": try caseOfflineQueueHydrateOverflowSettlesDiscarded()
             case "offline_flush_unencodable_write_settles_terminal": try caseOfflineFlushUnencodableWriteSettlesTerminal()
@@ -421,6 +423,78 @@ final class ConformanceTests: XCTestCase {
         let shape = try XCTUnwrap(fixture("ws-frames.json")["shape"] as? [String: Any])
         let frame = try LunoraClient.buildShapeSubscribeFrame(id: "shape_1", name: "roomMessages", args: ["room": "general"])
         XCTAssertEqual(canonical(frame), canonical(shape["shape-subscribe-cold"]))
+    }
+
+    /// A reconnect re-subscribes the SHAPE registry too.
+    ///
+    /// Walking only the queries leaves every shape view attached to a socket that
+    /// no longer exists — silently, and for the rest of the process's life.
+    func caseShapeSubscriptionsResendAfterReconnect() throws {
+        let client = LunoraClient(url: "https://app.example")
+
+        client.attachSocket { _ in }
+        client.subscribe("messages:list", args: ["channel": "general"], onData: { _ in })
+        client.subscribeShape("roomMessages", args: ["room": "general"], onRows: { _ in })
+
+        // The cursors a resume carries are written by the frame handler, so they
+        // have to exist before the resend is built.
+        for frame in [
+            ["cursor": 9, "data": [], "epoch": "e1", "id": "sub_1", "type": "data"] as [String: Any],
+            ["epoch": "e1", "pokeId": "poke-1", "type": "pokeStart"],
+            ["pokeId": "poke-1", "reset": true, "rowsPatch": [], "shapeId": "shape_1", "type": "pokePart"],
+            ["checkpoint": 5, "epoch": "e1", "pokeId": "poke-1", "type": "pokeEnd"],
+        ] {
+            let raw = try JSONSerialization.data(withJSONObject: frame)
+
+            try client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+        }
+
+        var resent: [[String: Any]] = []
+
+        client.attachSocket { resent.append($0) }
+        client.resendSubscriptions()
+
+        XCTAssertEqual(resent.map { $0["type"] as? String }, ["subscribe", "shape_subscribe"])
+        XCTAssertEqual((resent[0]["query"] as? [String: Any])?["sinceSeq"] as? Int, 9)
+
+        let shape = try XCTUnwrap(resent[1]["shape"] as? [String: Any])
+
+        XCTAssertEqual(resent[1]["id"] as? String, "shape_1")
+        XCTAssertEqual(shape["name"] as? String, "roomMessages")
+        XCTAssertEqual(canonical(shape["args"]), canonical(["room": "general"]))
+        XCTAssertEqual(resent[1]["sinceCheckpoint"] as? Int, 5)
+        XCTAssertEqual(resent[1]["sinceEpoch"] as? String, "e1")
+    }
+
+    /// A payload the codec refuses is that subscription's error, not the socket's.
+    ///
+    /// Throwing out of `handleFrame` ends the caller's read loop, which takes
+    /// every OTHER subscription on the client down with it.
+    func testARefusedPayloadStaysScopedToItsSubscription() throws {
+        let client = LunoraClient(url: "https://app.example")
+
+        client.attachSocket { _ in }
+
+        var errors: [LunoraSubscriptionError] = []
+        var delivered: [Any] = []
+
+        client.subscribe("messages:list", args: ["channel": "a"], onData: { _ in }, onError: { errors.append($0) })
+        client.subscribe("messages:list", args: ["channel": "b"], onData: { delivered.append($0) })
+
+        let refused = try JSONSerialization.data(
+            withJSONObject: ["data": ["amount": [Wire.tag, "bigint", "not-a-number"]], "id": "sub_1", "type": "data"]
+        )
+        var kind: String?
+
+        XCTAssertNoThrow(kind = try client.handleFrame(try XCTUnwrap(String(data: refused, encoding: .utf8))))
+        XCTAssertEqual(kind, "error", "the frame is reported, not thrown")
+        XCTAssertEqual(errors.first?.code, "INVALID_FRAME")
+
+        let good = try JSONSerialization.data(withJSONObject: ["data": ["ok": true], "id": "sub_2", "type": "data"])
+
+        try client.handleFrame(try XCTUnwrap(String(data: good, encoding: .utf8)))
+
+        XCTAssertEqual(delivered.count, 1, "the other subscription is still live")
     }
 
     func casePokeSequenceMaterialisesRows() throws {
