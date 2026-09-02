@@ -369,7 +369,8 @@ const shapeForm = ({ nullable, optional, refined, unique, ...shape }: FieldSnaps
 };
 
 /**
- * One accepted form: a value shape plus the VALIDATION state attached to it.
+ * One accepted value: a canonical shape plus the member-level state that changes
+ * what that shape accepts.
  *
  * `shapeForm` alone is wrong here. It strips `optional`/`nullable`/`refined`
  * because a COLUMN's flags are diffed on their own, but a union MEMBER's are
@@ -377,27 +378,47 @@ const shapeForm = ({ nullable, optional, refined, unique, ...shape }: FieldSnaps
  * `v.union(v.string(), v.number())` → `v.union(v.string().check(…), v.number())`
  * read as an unchanged member set and was reported `widenedFieldShape` ("every
  * stored value stays valid") for a change that narrows the accepted strings;
- * dropping `v.optional(…)` from a member did the same. `unique` is left out: it
- * is a storage constraint on the column, not part of the value a member accepts.
+ * dropping `v.optional(…)` from a member did the same.
+ *
+ * `refined` is kept OUT of `form` because it is directional: only its presence is
+ * knowable, so a member that drops its predicate still accepts everything the
+ * refined one did, while one that gains a predicate does not. Folded into the
+ * string, those two read alike. `unique` is left out entirely — it is a storage
+ * constraint on the column, not part of the value a member accepts.
  */
-const acceptedForm = ({ nullable, optional, refined, unique, ...shape }: FieldSnapshot): string =>
-    JSON.stringify([sortKeys(shape as Record<string, unknown>), optional, nullable === true, refined === true]);
+interface AcceptedValue {
+    /** Canonical value shape plus the flags that have to match exactly. */
+    form: string;
+    /** A `.check()`-family predicate narrows this member to a subset the IR cannot read. */
+    refined: boolean;
+}
+
+/** One field snapshot as the value it accepts. */
+const acceptedValueOf = (field: FieldSnapshot): AcceptedValue => {
+    return { form: JSON.stringify([shapeForm(field), field.optional === true, field.nullable === true]), refined: field.refined === true };
+};
 
 /**
- * A field's accepted shapes as a set of canonical forms: a union contributes its
- * members, anything else itself.
+ * A field's accepted values: a union contributes its members, anything else
+ * contributes itself.
  *
- * A non-union field is normalized to a member's neutral flags first. Its
- * `optional`/`nullable`/`refined` belong to the column and are diffed there —
- * unchanged across the pair by the time this runs, or already reported — while
- * the union member it is being matched against carries no column metadata at
- * all. Left in, `v.optional(v.string())` → `v.optional(v.union(v.string(),
- * v.number()))` failed to match its own member and lost a real widening.
+ * A non-union field is normalized to a member's neutral WRAPPER flags first.
+ * `optional`/`nullable` belong to the column, are diffed there — unchanged across
+ * the pair by the time this runs, or already reported — while the union member it
+ * is matched against carries no column metadata at all. Left in,
+ * `v.optional(v.string())` → `v.optional(v.union(v.string(), v.number()))` failed
+ * to match its own member and lost a real widening.
+ *
+ * `refined` is NOT a wrapper and so is carried through: `.max(10)` describes the
+ * same predicate whether it sits on the column or on the member that column
+ * became. Forced to `false`, `v.string().max(10)` →
+ * `v.union(v.string().max(10), v.number())` could not match its own member and
+ * demanded a backfill migration for a change that invalidates no stored row.
  */
-const memberForms = (field: FieldSnapshot): string[] =>
+const acceptedValues = (field: FieldSnapshot): AcceptedValue[] =>
     field.kind === "union" && field.members
-        ? field.members.map((member) => acceptedForm(member))
-        : [acceptedForm({ ...field, nullable: false, optional: false, refined: false })];
+        ? field.members.map((member) => acceptedValueOf(member))
+        : [acceptedValueOf({ ...field, nullable: false, optional: false })];
 
 /**
  * Is `field` a widening of `old` — does it still accept everything `old` did?
@@ -413,9 +434,13 @@ const isWidening = (old: FieldSnapshot, field: FieldSnapshot): boolean => {
         return false;
     }
 
-    const accepted = new Set(memberForms(field));
+    const accepted = acceptedValues(field);
 
-    return memberForms(old).every((form) => accepted.has(form));
+    // A candidate covers an old value when the shape matches and the candidate did
+    // not GAIN a predicate. Dropping one only widens; two predicates the IR cannot
+    // read are taken to be the same one, which is the approximation `refined`
+    // already is everywhere else.
+    return acceptedValues(old).every((value) => accepted.some((candidate) => candidate.form === value.form && (value.refined || !candidate.refined)));
 };
 
 /**

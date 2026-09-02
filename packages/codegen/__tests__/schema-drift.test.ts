@@ -688,6 +688,42 @@ describe("schema-drift", () => {
             expect(changes.map((change) => [change.severity, change.type])).toStrictEqual([["safe", "widenedFieldShape"]]);
         });
 
+        it("reads a refined column folded into a union as a widening, and a member that gained one as not", () => {
+            expect.assertions(3);
+
+            // The column's refinement travels WITH it into the union: the member
+            // it becomes carries the same `.max(10)`, so nothing on disk stops
+            // being valid. Normalizing the old side to `refined: false` made it
+            // unable to match its own member, and a change that invalidates no
+            // stored row demanded a backfill migration.
+            const carried = compare(
+                { value: { hasRefinement: true, kind: "string" } },
+                { value: { kind: "union", members: [{ hasRefinement: true, kind: "string" }, { kind: "number" }] } },
+            );
+            // Only the PRESENCE of a predicate is knowable, so dropping one can
+            // only widen…
+            const dropped = compare(
+                { value: { hasRefinement: true, kind: "string" } },
+                { value: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] } },
+            );
+            // …while gaining one narrows the strings the column still accepts,
+            // however many members were added alongside it.
+            const gained = compare(
+                { value: { kind: "string" } },
+                { value: { kind: "union", members: [{ hasRefinement: true, kind: "string" }, { kind: "number" }] } },
+            );
+
+            expect(carried.changes.map((change) => [change.severity, change.type])).toStrictEqual([
+                ["safe", "widenedFieldShape"],
+                ["safe", "relaxedFieldConstraint"],
+            ]);
+            expect(dropped.changes.map((change) => [change.severity, change.type])).toStrictEqual([
+                ["safe", "widenedFieldShape"],
+                ["safe", "relaxedFieldConstraint"],
+            ]);
+            expect(gained.changes.map((change) => [change.severity, change.type])).toStrictEqual([["breaking", "changedFieldKind"]]);
+        });
+
         it("treats a reordered union as no change at all — a union is a set", () => {
             expect.assertions(2);
 

@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 
 import { join } from "@visulima/path";
 
-import { safeLine } from "./display";
+import safe from "./display";
 import parseManifest from "./manifest";
 
 /** One catalog entry as `lunora registry list` reports it. */
@@ -48,7 +48,7 @@ const collectCatalog = (root: string): CatalogItem[] => {
                     // Sanitize the untrusted remote strings before they can reach the
                     // terminal: escape/BIDI sequences AND newlines, since each entry
                     // is one `list` line.
-                    return { description: entry.description === undefined ? undefined : safeLine(entry.description), name: safeLine(entry.name) };
+                    return { description: entry.description === undefined ? undefined : safe(entry.description), name: safe(entry.name) };
                 });
         }
     }
@@ -56,7 +56,7 @@ const collectCatalog = (root: string): CatalogItem[] => {
     return listItemDirectories(root).map((name) => {
         const raw = JSON.parse(readFileSync(join(root, name, "registry.json"), "utf8")) as { description?: string };
 
-        return { description: raw.description === undefined ? undefined : safeLine(raw.description), name };
+        return { description: raw.description === undefined ? undefined : safe(raw.description), name };
     });
 };
 

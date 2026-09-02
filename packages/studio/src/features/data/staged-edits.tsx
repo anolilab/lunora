@@ -71,9 +71,17 @@ const useStagedEdits = (): StagedEditsModel => {
             // the whole row entry silently discarded any edit made since —
             // an edit the writer never saw.
             const pending = Object.fromEntries(Object.entries(row).filter(([column, value]) => !Object.is(value, committed[column])));
-            const rest = Object.fromEntries(Object.entries(previous).filter(([id]) => id !== rowId));
 
-            return Object.keys(pending).length === 0 ? rest : { ...rest, [rowId]: pending };
+            if (Object.keys(pending).length === 0) {
+                return Object.fromEntries(Object.entries(previous).filter(([id]) => id !== rowId));
+            }
+
+            // Overwrite in place. Deleting the key and re-adding it moved the row
+            // to the END of the buffer, and insertion order is what `commitStaged`
+            // iterates and the diff panel renders — so a partly-committed row
+            // jumped to the bottom of a list the operator was reading, and the
+            // retry ran out of the order the writes were made in.
+            return { ...previous, [rowId]: pending };
         });
     };
 

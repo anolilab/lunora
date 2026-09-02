@@ -52,6 +52,35 @@ describe("useStagedEdits", () => {
         expect(result.current.staged["m1"]).toStrictEqual({ author: "ada", text: "second" });
         expect(result.current.count).toBe(2);
     });
+
+    it("leaves a partly-committed row where it was in the buffer", () => {
+        expect.assertions(2);
+
+        // `commitStaged` iterates the buffer's insertion order and the diff panel
+        // renders it, so re-adding the row after filtering it out moved it to the
+        // END — the row the operator was reading jumped to the bottom of the list
+        // and its retry ran out of the order the edits were made in.
+        const { result } = renderHook(() => useStagedEdits());
+
+        act(() => {
+            result.current.stage("m1", "text", "first");
+            result.current.stage("m2", "text", "second");
+            result.current.stage("m3", "text", "third");
+        });
+
+        const committed = result.current.staged["m1"] ?? {};
+
+        act(() => {
+            result.current.stage("m1", "author", "ada");
+        });
+
+        act(() => {
+            result.current.drop("m1", committed);
+        });
+
+        expect(Object.keys(result.current.staged)).toStrictEqual(["m1", "m2", "m3"]);
+        expect(result.current.staged["m1"]).toStrictEqual({ author: "ada" });
+    });
 });
 
 describe("coerceCellValue", () => {

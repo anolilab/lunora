@@ -703,7 +703,7 @@ class TestFlushIntegration(unittest.TestCase):
         self.assertEqual(report.committed, queued, "every write commits; none is dropped for the size of the batch it shared")
         self.assertEqual(report.rejected, [])
         self.assertEqual(_ids(client.offline_queue.items()), [])
-        self.assertTrue(max(bodies) > budget, "the first attempt has to be the over-budget one, or nothing was split")
+        self.assertGreater(max(bodies), budget, "the first attempt has to be the over-budget one, or nothing was split")
 
     def test_a_lone_queued_write_survives_an_envelope_less_502(self):
         covers("non_2xx_without_error_envelope_fails")
@@ -754,7 +754,7 @@ class TestFlushIntegration(unittest.TestCase):
         again = asyncio.run(client.flush_offline_queue())
 
         self.assertEqual(len(posts), 1, "the second flush must wait out the delay rather than earn the same 429")
-        self.assertTrue(again.retry_after_ms > 0)
+        self.assertGreater(again.retry_after_ms, 0)
         self.assertEqual(_ids(client.offline_queue.items()), ["m-429"])
 
     def test_a_rate_limited_batch_slot_requeues_and_clamps_the_delay(self):
