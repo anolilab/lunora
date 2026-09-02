@@ -77,7 +77,9 @@ with a uniform `{ kind, args, handler }` shape consumed by codegen.
 `QueryCtx`, `MutationCtx`, and `ActionCtx` share `auth`, `scheduler`, and
 `storage`. `MutationCtx.db` extends `QueryCtx.db` with mutating methods;
 `ActionCtx` drops `db` entirely; actions must read/write via mutations or
-queries called through `ctx.runQuery` / `ctx.runMutation`.
+queries called through `ctx.runQuery` / `ctx.runMutation`. A mutation dispatched
+that way gets the same transaction a top-level one gets, which is what makes the
+"do the transactional part in a mutation, call it from the action" split safe.
 
 ### Client-supplied ids
 
@@ -119,7 +121,10 @@ delete), `restore(id)` clears it, and `hardDelete(id)` physically removes the ro
 There is no explicit `transaction()` API: a **mutation _is_ a transaction** —
 for the tables that live in the shard. Every shard-local `ctx.db` write in a
 single mutation commits atomically and rolls back together if the handler
-throws, because they share one Durable Object storage transaction.
+throws, because they share one Durable Object storage transaction. This holds
+however the mutation was reached — a top-level RPC, `ctx.runMutation` from an
+action, or a reactor — and a `ctx.runMutation` from inside a mutation joins the
+caller's transaction rather than opening a second one.
 
 That transaction does **not** reach a [`.global()` table](/docs/tutorial/scaling):
 those rows live in D1, which has no interactive transactions, so a mutation
@@ -132,7 +137,9 @@ idempotent.
 To run a side effect only after the write commits, schedule it:
 `ctx.scheduler.runAfter(0, internalFn, args)`, the deterministic equivalent of
 an `afterCommit` hook (a registered function with serializable args, not an
-inline closure).
+inline closure). Scheduling from a mutation is part of the same all-or-nothing
+unit: the job is enqueued only once the transaction commits, and a rollback
+discards it.
 
 ### Determinism: what actually replays
 

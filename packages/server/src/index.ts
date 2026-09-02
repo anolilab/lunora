@@ -21,6 +21,7 @@ export { initLunora } from "./builder/index";
 export { createSecrets } from "./create-secrets";
 export type { DeferredDeleteFlushResult } from "./deferred-deletes";
 export { flushDeferredDeletes, withDeferredDeletes } from "./deferred-deletes";
+export { beginDeferredSchedules, withDeferredSchedules } from "./deferred-schedules";
 export type { DefineDocumentHistoryOptions, DocumentHistoryComponent, DocumentHistoryEntry, DocumentHistoryFunctions } from "./document-history";
 export { defineDocumentHistory, DOCUMENT_HISTORY_REDACTED_FIELDS, DOCUMENT_HISTORY_TABLE, documentHistoryExtension } from "./document-history";
 export type { EnvAccessor, EnvKeyFailure, EnvShape, InferEnv } from "./env";
@@ -39,6 +40,8 @@ export type {
     LunoraHttpApp,
     LunoraHttpEnv,
     LunoraRouteHandler,
+    ServeStorageObjectOptions,
+    StorageServeAuthzContext,
 } from "./http";
 export { httpAction, httpRoute, httpRouter, isSafeHeaderValue, serveStorageObject } from "./http";
 export type { DefineIdentityOptions, IdentityContract, IdentityRejectMode, IdentityValidation, InferIdentity } from "./identity";

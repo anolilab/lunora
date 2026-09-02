@@ -521,6 +521,7 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
         getSignedUrl(key, { contentType: uploadUrlOptions.contentType, expiresInSeconds: uploadUrlOptions.expiresInSeconds, method: "PUT" });
 
     return {
+        bucketName: options.bucketName,
         createMultipartUpload,
         delete: deleteObject,
         download,

@@ -19,6 +19,8 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-search-state" mirrors its parent "ctx-db.ts", the established module name in this package. */
 
 import type { SearchBackfillState } from "@lunora/search-core";
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
+import { searchIndexField } from "@lunora/search-core";
 import { sql } from "drizzle-orm";
 
 import type { SqlDialect } from "./dialect";
@@ -155,6 +157,14 @@ const readSearchBackfillState = async (exec: SqlCtxExec, dialect: SqlDialect, co
  * which is what lets a rebuild that has cleared `done` still be told apart from
  * a first walk. `covered = covered` is the portable no-op assignment; the three
  * dialects disagree about whether `MAX` is scalar or aggregate.
+ *
+ * The one thing that BREAKS the latch is re-pointing the index at another
+ * FIELD. The latch's justification is that a rebuilding companion still holds
+ * an answer about the column that was asked for, just under older rules. After
+ * a field change it does not: every stored row holds the text of the abandoned
+ * column, so a latched `covered` had the read path serve confidently wrong
+ * matches for the whole re-walk. Only the FIELD half of the profile is
+ * compared, so an analyzer-version or language bump keeps the latch as before.
  */
 const writeSearchBackfillState = async (
     exec: SqlCtxExec,
@@ -166,13 +176,19 @@ const writeSearchBackfillState = async (
 ): Promise<void> => {
     // eslint-disable-next-line unicorn/no-null -- SQL bind value: "no page has run yet" is a NULL column, not undefined
     const cursorValue = cursor ?? null;
-    const coveredSet = done ? sql`${sql.identifier("covered")} = 1` : sql`${sql.identifier("covered")} = ${sql.identifier("covered")}`;
-    const update = sql`UPDATE ${sql.identifier(SEARCH_STATE_TABLE)} SET ${sql.identifier("cursor")} = ${cursorValue}, ${sql.identifier("done")} = ${done ? 1 : 0}, ${sql.identifier("profile")} = ${profile}, ${coveredSet} WHERE ${sql.identifier("companion")} = ${companion}`;
     const existing = await queryAll(
         exec,
         dialect,
-        sql`SELECT ${sql.identifier("companion")} FROM ${sql.identifier(SEARCH_STATE_TABLE)} WHERE ${sql.identifier("companion")} = ${companion}`,
+        sql`SELECT ${sql.identifier("profile")} FROM ${sql.identifier(SEARCH_STATE_TABLE)} WHERE ${sql.identifier("companion")} = ${companion}`,
     );
+    const recorded = existing[0]?.["profile"];
+    // Only the FIRST page of a field-change rebuild sees a differing recorded
+    // profile — from the second page on, the recorded profile is already the new one.
+    const fieldChanged = typeof recorded === "string" && searchIndexField(recorded) !== searchIndexField(profile);
+    const doneValue = done ? 1 : 0;
+    const coveredSet =
+        done || fieldChanged ? sql`${sql.identifier("covered")} = ${doneValue}` : sql`${sql.identifier("covered")} = ${sql.identifier("covered")}`;
+    const update = sql`UPDATE ${sql.identifier(SEARCH_STATE_TABLE)} SET ${sql.identifier("cursor")} = ${cursorValue}, ${sql.identifier("done")} = ${doneValue}, ${sql.identifier("profile")} = ${profile}, ${coveredSet} WHERE ${sql.identifier("companion")} = ${companion}`;
 
     if (existing.length > 0) {
         await queryRun(exec, dialect, update);

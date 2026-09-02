@@ -18,7 +18,7 @@ interface StreamCall {
     iterable: StreamIterable<unknown>;
     /** Spy invoked when the primitive cancels its iterator (teardown). */
     onCancel: ReturnType<typeof vi.fn>;
-    options: { maxBuffer?: number; shardKey?: string };
+    options: { durable?: boolean; maxBuffer?: number; shardKey?: string };
 }
 
 /**
@@ -79,7 +79,7 @@ const createFakeClient = (): FakeClient => {
     const stream = <F extends FunctionReference<"stream">>(
         function_: F,
         args: ArgsOf<F>,
-        options: { maxBuffer?: number; shardKey?: string } = {},
+        options: { durable?: boolean; maxBuffer?: number; shardKey?: string } = {},
     ): StreamIterable<ReturnOf<F>> => {
         const onCancel = vi.fn<() => void>();
         const { handle, iterable } = createStream<unknown>({ maxBuffer: options.maxBuffer, onCancel });

@@ -113,7 +113,9 @@ export const notifySlack = action.input({ messageId: v.id("messages") }).action(
 - **Pick the right kind.** Reactive read → `query`. Transactional write →
   `mutation`. External I/O (`fetch`, third-party SDKs, calling other functions)
   → `action`. An action has no `ctx.db`; it reaches data via `ctx.runQuery` /
-  `ctx.runMutation`.
+  `ctx.runMutation`. A mutation called that way runs in its own all-or-nothing
+  transaction, so put every write that has to land together in ONE mutation
+  rather than sequencing several from the action.
 - **`internal*` variants** (`internalQuery`, `internalMutation`,
   `internalAction`) are not exposed to clients — use them for server-only logic
   called from actions, crons, or other functions.

@@ -19,6 +19,7 @@
  * run RLS-bypassed under the `owner` the mapper sets.
  */
 import { LunoraError } from "@lunora/errors";
+import { isDuplicateInstanceError } from "@lunora/workflow";
 
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { fnv1a64Hex } from "../../../shared/fnv1a";
@@ -220,20 +221,8 @@ const discordPongResponse = (channel: AgentInboundChannelKind, body: string): Re
 /** The eligible targets for a channel, paired with their resolved `onInbound` config. */
 type EligibleTarget = { config: NonNullable<AgentDefinition["onInbound"]>; target: AgentChannelTarget };
 
-/** Matches Cloudflare Workflows' "instance already exists" rejection (hoisted). */
-const DUPLICATE_INSTANCE = /already[\s-]?exists/iu;
-
 /** A bare `200 OK` — the provider's "delivered, do not redeliver" acknowledgement. */
 const ack = (): Response => new Response(undefined, { status: 200 });
-
-/**
- * Whether a `workflow.create()` rejection is a duplicate-instance-id error — the
- * idempotency signal — as opposed to a transient/config failure (Workflows
- * service error, instance-creation quota, bad params). Only the former may be
- * acked; every other failure MUST surface so the handler returns non-2xx and the
- * provider redelivers, rather than silently dropping the event.
- */
-const isDuplicateInstanceError = (error: unknown): boolean => DUPLICATE_INSTANCE.test(error instanceof Error ? error.message : String(error));
 
 /**
  * A stable per-delivery id for idempotent dispatch: GitHub's `X-GitHub-Delivery`
@@ -384,6 +373,4 @@ const dispatchAgentChannel =
 
 export type { AgentChannelTarget, InboundChannelHandler };
 export type { InboundChannelEvent } from "./types";
-// `isDuplicateInstanceError` is re-exported for `as-tool.ts`, which mirrors
-// this same idempotency check for `agentAsTool`'s child-run create.
-export { dispatchAgentChannel, isDuplicateInstanceError, verifyDiscord, verifyGithub, verifySlack };
+export { dispatchAgentChannel, verifyDiscord, verifyGithub, verifySlack };

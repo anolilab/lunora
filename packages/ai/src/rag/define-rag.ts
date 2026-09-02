@@ -679,7 +679,26 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             }
         };
 
-        /** Read chunk #0's bookkeeping metadata (content hash + chunk count) for a source. */
+        /**
+         * Read chunk #0's bookkeeping metadata (content hash + chunk count) for a source.
+         *
+         * EVENTUALLY CONSISTENT, and both callers below inherit that. Vectorize
+         * applies mutations asynchronously, so a head written moments ago may not
+         * be readable yet and this returns `{}`. The consequences differ by caller:
+         *
+         * `index()` treats an invisible head as "changed" and re-indexes, which is
+         * idempotent — a wasted embed, nothing worse. `remove()` and the
+         * shrink-on-reindex path instead use `chunks` to decide HOW MANY chunks to
+         * delete, so an invisible head means `remove()` deletes only chunk #0 and a
+         * shrinking reindex leaves its trailing chunks searchable — silently, since
+         * both report success.
+         *
+         * So a `remove()` (or a shrinking `index({ reindex: true })`) issued in
+         * the same request as the `index()` that created the source can under-
+         * delete. Re-issue it once the write has settled; a repeat is idempotent.
+         * A store with read-after-write consistency (`sqliteVectorStore`, whose
+         * `exec` is synchronous) has no such window.
+         */
         const readHead = async (sourceId: string, namespace?: string): Promise<{ chunks?: number; hash?: string }> => {
             const [head] = await store.getByIds([chunkVectorId(namespace, sourceId, 0)], namespace);
             const hash = head?.metadata?.[HASH_KEY];

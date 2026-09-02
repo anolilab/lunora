@@ -206,6 +206,31 @@ describe("storageRules — prefix scoping + default-deny", () => {
         await expect(handler.handler(makeContext(fake, "u1"), {})).rejects.toThrow(/denied by access rule/);
     });
 
+    it("scopes a prefix on a path-segment boundary — users/1 never governs users/10", async () => {
+        expect.assertions(1);
+
+        // The only rule that allows anything is scoped to user 1's subtree. A raw
+        // `startsWith` would let it grant user 10's objects too, because "users/10"
+        // starts with "users/1".
+        const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "read", prefix: "users/1", when: () => true });
+
+        const fake = createFakeStorage();
+        const handler = lunora.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.getUrl("users/10/avatar.png"));
+
+        await expect(handler.handler(makeContext(fake, "u1"), {})).rejects.toThrow(/denied by access rule/);
+    });
+
+    it("still governs the prefix's own subtree, trailing slash or not", async () => {
+        expect.assertions(1);
+
+        const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "read", prefix: "users/1", when: () => true });
+
+        const fake = createFakeStorage();
+        const handler = lunora.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.getUrl("users/1/avatar.png"));
+
+        await expect(handler.handler(makeContext(fake, "u1"), {})).resolves.toBe("https://cdn.example/users/1/avatar.png");
+    });
+
     it("applies OR across multiple rules — any allowing rule grants the op", async () => {
         expect.assertions(1);
 

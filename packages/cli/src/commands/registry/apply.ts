@@ -311,6 +311,41 @@ const freshArrayEntries = (existing: ReadonlyArray<unknown>, incoming: ReadonlyA
 /** Narrowing guard that yields `unknown[]` (not `any[]`) from `Array.isArray`. */
 const isUnknownArray = (value: unknown): value is unknown[] => Array.isArray(value);
 
+const isPlainObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * The object analogue of {@link freshArrayEntries}: the incoming keys that are
+ * not already set on `existing`.
+ *
+ * A key the project already sets is KEPT and the item's value skipped, with the
+ * same warning shape an array collision produces. The project's `wrangler.jsonc`
+ * is the authority — a registry item (which can come from an arbitrary
+ * `--source`) must not silently repoint an existing `ai` / `browser` binding, and
+ * writing the incoming object wholesale would drop every sibling key the project
+ * had under that root (`vars` being the worst case).
+ */
+const freshObjectEntries = (existing: Record<string, unknown>, incoming: Record<string, unknown>, path: string, logger: Logger): Record<string, unknown> => {
+    const fresh: Record<string, unknown> = {};
+
+    for (const [key, value] of Object.entries(incoming)) {
+        if (!Object.hasOwn(existing, key)) {
+            fresh[key] = value;
+
+            continue;
+        }
+
+        if (JSON.stringify(existing[key]) === JSON.stringify(value)) {
+            continue;
+        }
+
+        logger.warn(
+            `${key} already exists in ${path} — keeping the project's value and skipping the registry item's. Reconcile by hand if the item needs different settings.`,
+        );
+    }
+
+    return fresh;
+};
+
 /** Read the current value at a jsonc key path in `text` (comments tolerated). */
 const readAt = (text: string, path: ReadonlyArray<string>): unknown => {
     let node: unknown = parse(text);
@@ -357,26 +392,39 @@ const SKIP_BINDING = Symbol("skip-binding");
  * Array bindings (e.g. `r2_buckets`) MERGE into any existing array rather than
  * replacing it — otherwise adding `storage` then `backup` (or adding into a
  * project that already has buckets) would silently drop the earlier entries.
+ * Object bindings (`ai`, `browser`, `vars`) merge key-wise for the same reason:
+ * writing the item's object verbatim would replace the whole root, so a `vars`
+ * binding from a custom `--source` could wipe every variable the project set.
  */
 // Returns `unknown` because a union with the sentinel collapses to `unknown`
 // anyway (`typeof SKIP_BINDING | unknown` is just `unknown`), so the caller
 // compares against SKIP_BINDING by identity rather than narrowing.
 const mergedBindingValue = (text: string, binding: RegistryBinding, logger: Logger): unknown => {
     const { value } = binding;
-
-    if (!isUnknownArray(value)) {
-        return value;
-    }
-
+    const path = binding.path.join(".");
     const existing = readAt(text, binding.path);
 
-    if (!isUnknownArray(existing)) {
-        return value;
+    if (isUnknownArray(value)) {
+        if (!isUnknownArray(existing)) {
+            return value;
+        }
+
+        const fresh = freshArrayEntries(existing, value, path, logger);
+
+        return fresh.length === 0 ? SKIP_BINDING : [...existing, ...fresh];
     }
 
-    const fresh = freshArrayEntries(existing, value, binding.path.join("."), logger);
+    if (isPlainObject(value)) {
+        if (!isPlainObject(existing)) {
+            return value;
+        }
 
-    return fresh.length === 0 ? SKIP_BINDING : [...existing, ...fresh];
+        const fresh = freshObjectEntries(existing, value, path, logger);
+
+        return Object.keys(fresh).length === 0 ? SKIP_BINDING : { ...existing, ...fresh };
+    }
+
+    return value;
 };
 
 /** Apply wrangler.jsonc bindings (structural jsonc edits preserving comments). Returns applied paths. */

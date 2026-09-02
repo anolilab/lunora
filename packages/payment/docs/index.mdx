@@ -306,6 +306,7 @@ store exist:
 
 ```ts
 // lunora/http.ts
+import { webhookResponse } from "@lunora/payment";
 import { httpAction, httpRouter } from "lunorash/server";
 import { processWebhook } from "./billing";
 
@@ -317,7 +318,10 @@ app.post(
         const body = await request.text();
         const signature = request.headers.get("stripe-signature") ?? "";
 
-        return Response.json(await ctx.runAction(processWebhook, { body, signature }));
+        // `webhookResponse`, not `Response.json(...)`: only the JSON payload crosses the
+        // `runAction` boundary, so the status has to be re-applied on this side or every
+        // outcome — including the deliberate 500 below — answers 200.
+        return webhookResponse(await ctx.runAction(processWebhook, { body, signature }));
     }),
 );
 ```
@@ -351,9 +355,23 @@ There is one deliberate non-200. An **orphaned** event — one that patches a ro
 whose create event has not arrived yet, which is how providers deliver
 out-of-order — returns `500` so the provider retries it, and the update applies
 once the create lands. Do not "fix" that by always answering `200`: swallowing
-the retry is how an out-of-order delivery is lost for good. Malformed deliveries
+the retry is how an out-of-order delivery is lost for good. That is also why the
+route must return `webhookResponse(result)` rather than `Response.json(result)` —
+the status does not survive the `runAction` hop on its own. Malformed deliveries
 (a missing provider event id) likewise surface as a `5xx` rather than a `400`,
 so every provider retries them instead of some treating a `400` as "stop".
+
+The orphan retry is **bounded to exactly one**. The row may never appear at all —
+a subscription created before the integration existed, a store reset, a
+completed-but-unpaid checkout whose create event never arrives — and an event
+retried forever makes the provider hammer the endpoint until it disables it,
+taking every other event down with it. So the first sighting answers `500` and
+the second is acknowledged `200` with `reason: "unhandled"`. That budget is spent
+in wall-clock order, not on a schedule: a sender that retries immediately
+(svix-backed providers such as Polar and Dodo do) can burn it seconds after the
+first delivery, while the create event is still in flight. If the create event
+can lag that far behind, do not lean on the webhook retry — sweep non-terminal
+rows with `reconcile` as below.
 
 <Callout type="warn">
     Webhooks are eventually-but-not-guaranteed: an endpoint down past the provider's retry window can drop an event for good. `reconcile` re-fetches the

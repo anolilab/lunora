@@ -161,14 +161,18 @@ const createFakeScheduler = (
     /** Every captured TERMINAL job failure (retry budget exhausted), in execution order, across all sweeps. */
     const recordedFailures: ScheduledJobFailure[] = [];
 
-    const enqueue = (scheduledFor: number, functionPath: string, args: Record<string, unknown> = {}): string => {
+    const enqueue = (scheduledFor: number, functionPath: string, args: Record<string, unknown> = {}, requestedId?: string): string => {
         // Production posts the job to the SchedulerDO as a JSON body
         // (`@lunora/scheduler`'s `callDO` → `JSON.stringify`), so an arg it cannot
         // serialize — a `bigint`, a cycle — throws at SCHEDULE time. Do the same
         // work here rather than accepting the job and failing only in production.
         JSON.stringify(args);
 
-        const id = `fake-job-${String(nextId)}`;
+        // A caller-supplied id is honoured exactly as the SchedulerDO honours
+        // `RunOptions.id`: `@lunora/server`'s deferred-schedule facade decides the
+        // id up front so a mutation handler gets it synchronously, then replays the
+        // call after the transaction commits.
+        const id = requestedId ?? `fake-job-${String(nextId)}`;
 
         nextId += 1;
 
@@ -203,7 +207,12 @@ const createFakeScheduler = (
 
         list: () => Promise.resolve([...pending.values()]),
 
-        runAfter: (delayMs: number, target: Parameters<Scheduler["runAfter"]>[1], args?: Record<string, unknown>) => {
+        // The fourth parameter is `@lunora/scheduler`'s `RunOptions`; only `id` is
+        // meaningful to this fake. It is not on the public `Scheduler` ctx type and
+        // deliberately stays off it — the only caller is `@lunora/server`'s
+        // deferred-schedule facade, which needs the id decided before the call is
+        // made so a mutation handler can be handed it synchronously.
+        runAfter: (delayMs: number, target: Parameters<Scheduler["runAfter"]>[1], args?: Record<string, unknown>, options?: { id?: string }) => {
             // Verbatim mirror of `@lunora/scheduler`'s `createScheduler().runAfter`,
             // which rejects a negative/non-finite delay before it reaches the DO.
             // The guard is inline there (not exported), so it is restated here.
@@ -211,13 +220,13 @@ const createFakeScheduler = (
                 throw new LunoraError("INTERNAL", "@lunora/scheduler: `delayMs` must be a non-negative finite number");
             }
 
-            const id = enqueue(nowMs + delayMs, targetPath(target), args);
+            const id = enqueue(nowMs + delayMs, targetPath(target), args, options?.id);
 
             return Promise.resolve(id);
         },
 
-        runAt: (timestampMs: number, target: Parameters<Scheduler["runAt"]>[1], args?: Record<string, unknown>) => {
-            const id = enqueue(timestampMs, targetPath(target), args);
+        runAt: (timestampMs: number, target: Parameters<Scheduler["runAt"]>[1], args?: Record<string, unknown>, options?: { id?: string }) => {
+            const id = enqueue(timestampMs, targetPath(target), args, options?.id);
 
             return Promise.resolve(id);
         },

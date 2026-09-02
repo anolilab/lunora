@@ -345,8 +345,12 @@ Each returns an `AgentToolDefinition` you drop into the `tools` map:
   Workflow binding, polls to completion, and returns the child's final answer.
   Child `threadKey` + instance id derive from the parent's (replay-stable), so a
   retried step reuses the same child run (idempotent). Options: `name` (child
-  export name → `AGENT_<NAME>` binding), `description`, `maxPolls` (default 120),
-  `pollIntervalMs` (default 500).
+  export name → `AGENT_<NAME>` binding), `description`, `maxPolls` (default 600),
+  `pollIntervalMs` (default 500) — together a **five-minute** wall-clock budget,
+  past which the child is terminated and the parent is told it did not finish.
+  The child thread inherits the parent run's `owner`, so it stays under the same
+  RLS scope. A child that runs out of turns reports its turn cap rather than
+  returning an empty answer.
 - **`mcpTools`**: adapt the tools an MCP server lists. Pass a pre-connected
   `client` (the SSE/HTTP transport cannot run in workerd), optionally filtered
   with `only` and namespaced with `prefix`.
@@ -471,9 +475,13 @@ This is a **safe interpreted data-flow** between the whitelisted tools you hand
 `codeTool`, not arbitrary JavaScript, so there is no `eval` or isolate and it
 runs natively in workerd. Each composed tool still dispatches through the same
 durable context a normal call gets, keeping its RLS and its own `needsApproval`
-gate (a script can't smuggle a call past a sub-tool's approval). Scripts are
-capped at `maxSteps` (default 16). Running arbitrary model-authored _code_ in an
-isolate (the Cloudflare Worker Loader path) is a separate future mode.
+gate (a script can't smuggle a call past a sub-tool's approval), and each step's
+resolved input is validated against that tool's own `inputSchema` — the same
+check a top-level call gets. Scripts are capped at `maxSteps` (default 16); a
+longer script is **rejected** (`code_tool_too_many_steps`) rather than run as a
+prefix, so the model can split the work instead of silently losing its trailing
+steps. Running arbitrary model-authored _code_ in an isolate (the Cloudflare
+Worker Loader path) is a separate future mode.
 
 ## Skills
 

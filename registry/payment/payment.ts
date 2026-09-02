@@ -25,13 +25,19 @@
  *   1. Wire `payment: (env) => ({ adapter: ..., ... })` in your worker entry
  *      `createShardDO({ ... })` call — the adapter reads `STRIPE_SECRET_KEY`
  *      and `STRIPE_WEBHOOK_SECRET` from env.
- *   2. Add the webhook HTTP route via `httpRouter()`:
+ *   2. Add the webhook HTTP route via `httpRouter()`. Answer with
+ *      `webhookResponse(result)` — NOT `Response.json(result)`: only the JSON
+ *      payload crosses the `runAction` boundary, so the status has to be
+ *      re-applied at the edge. Otherwise an orphaned (out-of-order) event's
+ *      deliberate 500 becomes a 200, the provider never retries it, and the
+ *      update is lost for good.
  *      ```ts
+ *      import { webhookResponse } from "@lunora/payment";
+ *
  *      app.post("/payment/webhook", httpAction(async (ctx, request) => {
  *          const body = await request.text();
  *          const signature = request.headers.get("stripe-signature") ?? "";
- *          const result = await ctx.runAction(processWebhook, { body, signature });
- *          return Response.json(result);
+ *          return webhookResponse(await ctx.runAction(processWebhook, { body, signature }));
  *      }));
  *      ```
  *   3. Run `lunora codegen` to wire `ctx.payments` onto ActionCtx.

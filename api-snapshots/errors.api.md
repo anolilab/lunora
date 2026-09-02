@@ -137,6 +137,10 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Run depth exceeded";
     };
+    readonly RUN_KIND_FORBIDDEN: {
+        readonly status: 500;
+        readonly title: "Function kind may not be composed from a query";
+    };
     readonly TRANSACTION_LIMIT_EXCEEDED: {
         readonly hint: readonly [
             "A single mutation may only read and write a bounded amount before it is stopped.",
@@ -350,6 +354,15 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Storage signed URL not configured";
     };
+    readonly RAG_DIMENSION_MISMATCH: {
+        readonly hint: readonly [
+            "A stored vector and the query embedding have different widths, so they cannot be compared.",
+            "",
+            "This is what changing a RAG index's `embeddingModel` (or a provider's `dimensions` option) without reindexing looks like. Either put the previous model back, or reindex the namespace under the new one — bump `embeddingModelVersion` so the index rebuilds instead of mixing widths."
+        ];
+        readonly status: 409;
+        readonly title: "Embedding dimension mismatch";
+    };
     readonly VECTORS_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Vector index introspector not configured";
@@ -459,6 +472,11 @@ const ERROR_CATALOG: {
     readonly CROSS_SHARD_RANK_UNSUPPORTED: {
         readonly status: 400;
         readonly title: "Cross-shard rank() is unsupported";
+    };
+    readonly DISPATCH_UNAUTHENTICATED: {
+        readonly hint: "The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER_SECRET` matches on both sides, or that `LUNORA_ADMIN_TOKEN` is set and current.";
+        readonly status: 403;
+        readonly title: "Dispatch caller not authenticated";
     };
     readonly FORBIDDEN_FANOUT: {
         readonly status: 403;

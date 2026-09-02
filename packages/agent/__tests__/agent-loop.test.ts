@@ -1,8 +1,10 @@
-import { hasToolCall } from "ai";
+import { hasToolCall, jsonSchema } from "ai";
+import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it } from "vitest";
 
 import { runAgentLoop } from "../src/agent-loop";
 import { defineAgent, defineAgentTool } from "../src/define-agent";
+import { createAgentGenerate } from "../src/generate";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "../src/paths";
 import type {
     AgentCompact,
@@ -1688,5 +1690,112 @@ describe(runAgentLoop, () => {
 
         expect(replay).toStrictEqual(first);
         expect(events).toStrictEqual([]);
+    });
+});
+
+describe("a tool call whose input failed validation", () => {
+    it("is recorded as a recoverable tool result and the tool is never run", async () => {
+        const executed: unknown[] = [];
+        // The AI SDK validates the model's arguments against the tool's own schema,
+        // marks a failing call `invalid`, refuses to execute it itself — and still
+        // lists it in `result.toolCalls`, with the RAW unvalidated input.
+        const agent = defineAgent({
+            maxTurns: 1,
+            model: new MockLanguageModelV4({
+                doGenerate: async () => {
+                    return {
+                        content: [{ input: JSON.stringify({ amount: "not-a-number" }), toolCallId: "call-1", toolName: "charge", type: "tool-call" as const }],
+                        finishReason: { raw: "tool_calls", unified: "tool-calls" as const },
+                        usage: {
+                            inputTokens: { cacheRead: undefined, cacheWrite: undefined, noCache: undefined, total: 1 },
+                            outputTokens: { reasoning: undefined, text: undefined, total: 1 },
+                        },
+                        warnings: [],
+                    };
+                },
+            }),
+            tools: {
+                charge: defineAgentTool({
+                    description: "charge a card",
+                    execute: (input: unknown) => {
+                        executed.push(input);
+
+                        return "charged";
+                    },
+                    inputSchema: jsonSchema<{ amount: number }>(
+                        { additionalProperties: false, properties: { amount: { type: "number" } }, required: ["amount"], type: "object" },
+                        {
+                            validate: (value) => {
+                                if (typeof (value as { amount?: unknown }).amount === "number") {
+                                    return { success: true, value: value as { amount: number } };
+                                }
+
+                                return { error: new Error("amount must be a number"), success: false };
+                            },
+                        },
+                    ),
+                }),
+            },
+        });
+        const runtime = memoryRuntime();
+
+        await runAgentLoop(loopDefaults(agent, { generate: createAgentGenerate(agent, {}), run: runtime.run }));
+
+        expect(executed).toStrictEqual([]);
+
+        const toolRow = [...runtime.messages.values()].find((message) => message.role === "tool");
+
+        expect(toolRow?.content).toContain('Error: invalid input for tool "charge" — it was not run.');
+    });
+});
+
+describe("tool output size", () => {
+    it("caps what is persisted, and therefore what every later turn re-injects", async () => {
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                read: defineAgentTool({
+                    description: "read a file",
+                    // Well under `fsTool`'s 1 MB ceiling, and already 5x the cap.
+                    execute: () => "x".repeat(20_000),
+                    inputSchema: jsonSchema({ additionalProperties: true, type: "object" }),
+                }),
+            },
+        });
+        const runtime = memoryRuntime();
+
+        await runAgentLoop(loopDefaults(agent, { generate: scriptedGenerate([toolTurn("call-1", "read", {}), finalTurn("done")]), run: runtime.run }));
+
+        const toolRow = [...runtime.messages.values()].find((message) => message.role === "tool");
+
+        expect(toolRow?.content).toHaveLength(4000 + "… [truncated]".length);
+        expect(toolRow?.content.endsWith("… [truncated]")).toBe(true);
+    });
+});
+
+describe("a failing run-completion dispatch", () => {
+    it("propagates the ORIGINAL run failure, with the dispatch failure as its cause", async () => {
+        const agent = defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const runtime = memoryRuntime();
+        const run: AgentRunFunction = async (reference, args) => {
+            if (reference["__lunoraRef"] === DEFAULT_AGENT_FUNCTION_PATHS.completeRun) {
+                throw new Error("completeRun dispatch failed");
+            }
+
+            return runtime.run(reference, args);
+        };
+
+        const error = (await runAgentLoop(
+            loopDefaults(agent, {
+                generate: () => {
+                    throw new Error("the model provider is down");
+                },
+                run,
+            }),
+        ).catch((error_: unknown) => error_)) as Error;
+
+        // The bookkeeping failure used to REPLACE the real cause in the instance record.
+        expect(error.message).toBe("the model provider is down");
+        expect((error.cause as Error).message).toBe("completeRun dispatch failed");
     });
 });

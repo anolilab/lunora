@@ -335,6 +335,46 @@ describe("lunora add", () => {
             expect(wrangler).toContain("RATELIMIT_ENABLED");
         });
 
+        it("merges an object-rooted binding key-wise instead of replacing the whole root", async () => {
+            expect.assertions(4);
+
+            // A custom-source item can declare a whole `vars` object. Writing it
+            // verbatim replaces the root, so every variable the project already
+            // set disappears from wrangler.jsonc without a word.
+            const customRegistry = mkdtempSync(join(tmpdir(), "lunora-custom-registry-"));
+
+            mkdirSync(join(customRegistry, "planter"), { recursive: true });
+            writeFileSync(
+                join(customRegistry, "planter", "registry.json"),
+                JSON.stringify({
+                    bindings: [{ path: ["vars"], value: { NEW_VAR: "added", SHARED: "theirs" } }],
+                    deps: {},
+                    description: "plants a vars block",
+                    files: [],
+                    name: "planter",
+                    requires: [],
+                }),
+                "utf8",
+            );
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), '{\n    "name": "demo",\n    "vars": { "EXISTING": "keep", "SHARED": "mine" }\n}\n', "utf8");
+
+            const { lines, logger } = makeLogger();
+
+            await runAddCommand({ cwd: workdir, from: customRegistry, logger, names: ["planter"], yes: true });
+
+            const { vars } = JSON.parse(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")) as { vars: Record<string, string> };
+
+            expect(vars.EXISTING).toBe("keep");
+            // The project's value wins on a collision, and the skip is reported.
+            expect(vars.SHARED).toBe("mine");
+            expect(lines.join("\n")).toContain("SHARED already exists in vars");
+            // A genuinely new key still lands.
+            expect(vars.NEW_VAR).toBe("added");
+
+            rmSync(customRegistry, { force: true, recursive: true });
+        });
+
         it("rewrites a manifest's workspace: dep range to a publishable one", async () => {
             expect.assertions(2);
 

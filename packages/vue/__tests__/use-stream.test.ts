@@ -38,6 +38,23 @@ describe(useStream, () => {
         scope.stop();
     });
 
+    it("forwards `durable` to the client so a reconnect resumes the run", () => {
+        expect.hasAssertions();
+
+        const fake = createFakeClient();
+        const scope = effectScope();
+
+        scope.run(() => fake.provide(() => useStream(makeStreamRef(TICK_REF), { since: 0 }, { durable: true })));
+
+        // `{ durable: true }` is what makes a dropped socket resume the same run
+        // instead of failing with `STREAM_DISCONNECTED`. The client reads it off the
+        // stream options, so a primitive that does not forward it silently gives the
+        // caller a non-durable stream — which only shows up on a reconnect.
+        expect(fake.streamCalls[0]?.options.durable).toBe(true);
+
+        scope.stop();
+    });
+
     it('"skip" keeps the composable mounted without opening a stream', () => {
         expect.hasAssertions();
 

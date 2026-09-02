@@ -103,5 +103,26 @@ const raiseNonRetryable = (message: string, cause: unknown, NativeNonRetryableEr
     return convertNonRetryableError(nonRetryable, NativeNonRetryableError);
 };
 
+/** Matches Cloudflare Workflows' "instance already exists" rejection (hoisted). */
+const DUPLICATE_INSTANCE = /already[\s-]?exists/iu;
+
+/**
+ * Whether a `WorkflowBinding.create()` rejection is a duplicate-instance-id
+ * error — the idempotency signal that a *previous* attempt's create already
+ * applied — as opposed to a transient or config failure (Workflows service
+ * error, instance-creation quota, bad params).
+ *
+ * `step.do` memoizes a step's RESULT, not its side effects: a spawn body that
+ * fails after `create` landed is re-run, and only this rejection means the
+ * child is already there to attach to. Every other failure MUST surface, so the
+ * durable step retries or fails visibly rather than silently attaching to an
+ * unrelated instance.
+ *
+ * Lives here, in the package that owns the Workflows binding contract, so the
+ * fan-out spawn and `@lunora/agent`'s sub-agent/channel dispatch cannot drift
+ * apart on what counts as "already exists".
+ */
+const isDuplicateInstanceError = (error: unknown): boolean => DUPLICATE_INSTANCE.test(error instanceof Error ? error.message : String(error));
+
 export type { NativeNonRetryableErrorConstructor };
-export { convertNonRetryableError, isNonRetryableError, NonRetryableError, raiseNonRetryable, toNativeNonRetryableError };
+export { convertNonRetryableError, isDuplicateInstanceError, isNonRetryableError, NonRetryableError, raiseNonRetryable, toNativeNonRetryableError };

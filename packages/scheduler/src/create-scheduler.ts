@@ -33,6 +33,10 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
         // rides along only when `pool` is set (mirroring `createWorkpool`).
         const base = {
             args,
+            // Pre-minted id, when the caller decided it before the call could be
+            // made (see `RunOptions.id`). Absent for an ordinary schedule, and the
+            // DO mints one.
+            id: options_.id,
             instanceName: options.instanceName ?? "default",
             maxConcurrency: options_.pool === undefined ? undefined : options_.maxConcurrency,
             originUrl: options.originUrl,

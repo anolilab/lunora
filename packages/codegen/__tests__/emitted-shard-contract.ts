@@ -27,15 +27,13 @@
  */
 import type { TraceRefLike } from "@lunora/do";
 import { ShardDO } from "@lunora/do";
-import { flushDeferredDeletes } from "@lunora/server";
+import { beginDeferredSchedules, flushDeferredDeletes } from "@lunora/server";
 
 class EmittedShardContract extends ShardDO {
     public override async handleRpc(): Promise<unknown> {
-        // Mirrors the shape of the emitted mutation branch, so the flush below is
+        // Mirrors the shape of the emitted mutation branch, so the helper below is
         // reached from a real dispatch signature rather than sitting unreferenced.
-        await this.flushDeferredStorageDeletes({});
-
-        return undefined;
+        return await this.runMutationTransaction<unknown>({}, async () => undefined);
     }
 
     /**
@@ -81,12 +79,31 @@ class EmittedShardContract extends ShardDO {
     }
 
     /**
-     * Mirrors the post-commit flush the generated dispatches perform. It reaches
-     * one base member (`deferPastResponse`), which is `protected` for exactly this
-     * call — the host's `waitUntil` behind it is private.
+     * Mirrors the generated `runMutationTransaction` — the single helper the
+     * top-level RPC, `ctx.runMutation` and `runReactor` all dispatch a mutation
+     * handler through. It reaches three base members: `isInTransaction` (so a
+     * composed sub-mutation rides the enclosing span instead of opening an illegal
+     * nested one), `runInTransaction`, and `deferPastResponse`, which is
+     * `protected` for exactly this call — the host's `waitUntil` behind it is
+     * private.
      */
-    private async flushDeferredStorageDeletes(context: unknown): Promise<void> {
+    private async runMutationTransaction<T>(context: unknown, work: () => Promise<T>): Promise<T> {
+        const settleSchedules = beginDeferredSchedules(context as { scheduler?: unknown });
+
+        if (this.isInTransaction()) {
+            const nested = await work();
+
+            await settleSchedules(true);
+
+            return nested;
+        }
+
+        const result = await this.runInTransaction(work);
+
+        await settleSchedules(true);
         await this.deferPastResponse(flushDeferredDeletes(context));
+
+        return result;
     }
 }
 export default EmittedShardContract;

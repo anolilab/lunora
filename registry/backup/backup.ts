@@ -52,24 +52,28 @@ const TABLES: readonly string[] = [
 const BACKUP_PREFIX = "snapshots";
 
 /**
- * Serialise an array of rows as NDJSON (one JSON document per line). NDJSON is
- * the same line-delimited format `lunora backup` / the admin export endpoint
- * emit, so a snapshot written here is consumable by `lunora backup restore`.
+ * Serialise a table's rows as NDJSON in the import format: one
+ * `{"table":"<name>","doc":{…}}` object per line.
+ *
+ * The `table` is on **every** line rather than in a header line above the block.
+ * That is not a style choice: `lunora backup restore` streams the file through
+ * the admin `/apply` endpoint, whose reader rejects any line without its own
+ * `table` and `doc` (`BAD_ROW: row is missing \`table\``). A header-framed body
+ * therefore restored ZERO rows, and the operator found out at recovery time.
  */
-const toNdjson = (rows: ReadonlyArray<Record<string, unknown>>): string => rows.map((row) => JSON.stringify(row)).join("\n");
+const toNdjson = (table: string, rows: ReadonlyArray<Record<string, unknown>>): string => rows.map((doc) => JSON.stringify({ doc, table })).join("\n");
 
 /**
  * Snapshot the configured {@link TABLES} into one timestamped object in
  * `BACKUP_BUCKET`. Returns the written key plus per-table and total row counts.
  *
- * The object body is a single NDJSON stream framed by per-table header lines
- * (`{"__table":"<name>"}`) so a restorer can split rows back into their tables:
+ * The object body is a single NDJSON stream in the import format — one
+ * `{"table":…,"doc":…}` per row, which is exactly what `lunora backup restore`
+ * feeds to the admin `/apply` endpoint:
  *
  * ```ndjson
- * {"__table":"messages"}
- * {"_id":"…","body":"hi"}
- * {"__table":"users"}
- * {"_id":"…","name":"Ada"}
+ * {"table":"messages","doc":{"_id":"…","body":"hi"}}
+ * {"table":"users","doc":{"_id":"…","name":"Ada"}}
  * ```
  */
 export const snapshot = internalAction
@@ -105,7 +109,7 @@ export const snapshot = internalAction
             // eslint-disable-next-line no-await-in-loop -- ordered, bounded per-table reads (see above)
             const rows = await ctx.db.query(table).collect();
 
-            chunks.push(JSON.stringify({ __table: table }), toNdjson(rows));
+            chunks.push(toNdjson(table, rows));
             perTable[table] = rows.length;
             total += rows.length;
         }
