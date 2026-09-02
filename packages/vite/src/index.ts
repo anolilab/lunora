@@ -9,7 +9,7 @@ import agentRulesHintPlugin from "./agent-rules-hint-plugin";
 import { codegenPlugin } from "./codegen-plugin";
 import containerLogsPlugin from "./container-logs-plugin";
 import devStatePlugin from "./dev-state-plugin";
-import { devVariablesPlugin } from "./dev-variables-plugin";
+import devVariablesPlugin from "./dev-variables-plugin";
 import { frameworkComposePlugin } from "./framework-compose-plugin";
 import { createPluginContext, frameworkDetectPlugin } from "./framework-detect-plugin";
 import logStreamPlugin from "./log-stream-plugin";
@@ -224,7 +224,7 @@ export { reconcileWranglerCrons } from "./cron-sync";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
 export { detectFramework } from "./detect-framework";
 export { default as devStatePlugin } from "./dev-state-plugin";
-export { DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, devVariablesPlugin } from "./dev-variables-plugin";
+export { default as devVariablesPlugin } from "./dev-variables-plugin";
 // Class-A composition surface. `LUNORA_WORKER_VIRTUAL_ID` is the virtual entry a
 // class-A template points its wrangler `main` at (or re-exports) so the worker
 // composing the framework SSR handler under `composeWorker`'s `httpRouter` seam

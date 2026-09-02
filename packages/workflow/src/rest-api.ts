@@ -20,23 +20,10 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { capErrorBody } from "../../../shared/cap-error-body";
 import type { WorkflowInstanceStatus } from "./types";
 
 const API_BASE = "https://api.cloudflare.com/client/v4/accounts";
-
-/**
- * How much of the upstream body may be spliced into the error MESSAGE.
- *
- * `WORKFLOWS_REST_ERROR` is a catalogued, non-internal code, so `toErrorBody`
- * echoes its `message` verbatim to whoever called the action — an uncapped body
- * puts the Cloudflare API's auth/authorization error text or a multi-KB HTML
- * gateway page on the wire to a browser. The full body is kept on `cause`, which
- * `toErrorBody` never serialises, so a server-side log still has all of it.
- */
-const MAX_ERROR_BODY_CHARS = 256;
-
-/** Trim `body` to {@link MAX_ERROR_BODY_CHARS}, marking that it was cut. */
-const capErrorBody = (body: string): string => (body.length > MAX_ERROR_BODY_CHARS ? `${body.slice(0, MAX_ERROR_BODY_CHARS)}… (truncated)` : body);
 
 /**
  * The Cloudflare instance statuses as an exhaustive lookup. The `satisfies`
@@ -154,7 +141,14 @@ export interface WorkflowInstancePage {
     totalCount?: number;
 }
 
-/** Thrown when the REST API responds non-2xx or `success: false`; carries the status plus a capped body preview, with the full body on `cause`. */
+/**
+ * Thrown when the REST API responds non-2xx or `success: false`; carries the
+ * status plus a capped body preview, with the full body on `cause`.
+ *
+ * The preview is capped because the Cloudflare API's auth/authorization error
+ * text (and its HTML gateway pages) would otherwise ride out verbatim —
+ * `WORKFLOWS_REST_ERROR` is non-internal, so the message reaches the browser.
+ */
 export class WorkflowsRestError extends LunoraError {
     public constructor(status: number, body: string) {
         super("WORKFLOWS_REST_ERROR", `Cloudflare Workflows REST API returned ${String(status)}: ${capErrorBody(body)}`, {

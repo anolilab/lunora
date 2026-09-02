@@ -118,7 +118,7 @@ describe("emitShard — deferred scheduling", () => {
 
         const emitted = shard();
         const helper = methodBody(emitted, "private async runMutationTransaction<T>(");
-        const open = helper.indexOf("beginDeferredSchedules(ctx)");
+        const open = helper.indexOf("beginDeferredSchedules(ctx as { scheduler?: unknown })");
         const span = helper.indexOf("await this.runInTransaction(work)");
 
         expect(open).toBeGreaterThan(-1);

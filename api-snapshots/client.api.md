@@ -1396,6 +1396,14 @@ class TabCoordinator {
 }
 ```
 
+### `TransportError` (class)
+
+```ts
+class TransportError extends LunoraError {
+    constructor(message: string, data?: unknown);
+}
+```
+
 ### `Unsubscribe` (type)
 
 ```ts

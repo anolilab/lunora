@@ -790,6 +790,7 @@ interface ConformanceHost {
     cronTicks?: (functionPath: string) => number;
     directory: ShardDirectory;
     disposeTerminally?: () => void;
+    isolatesByDispatch?: true;
     kv?: ShardKvStore;
     readFrames?: (socket: SocketHandle) => string[];
     restoreSocket?: (id: string, attachment: unknown) => SocketHandle;

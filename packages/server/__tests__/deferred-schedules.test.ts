@@ -8,7 +8,7 @@
  * harness suite (`@lunora/testing`) pins the same guarantees end to end; this
  * suite pins the ordering itself, which a row count cannot see.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { beginDeferredSchedules, withDeferredSchedules } from "../src/index";
 
@@ -18,10 +18,13 @@ interface RecordedCall {
     when: number;
 }
 
+/** The signature `runAfter`/`runAt` share here; the 4th parameter is `RunOptions`, of which only `id` matters to this fake. */
+type RecordCall = (when: number, target: string, args?: unknown, options?: { id?: string }) => Promise<string>;
+
 /** A scheduler that records the calls it receives, in the order it receives them. */
 const recordingScheduler = (
     log: string[],
-): { calls: RecordedCall[]; scheduler: { cancel: (id: string) => Promise<unknown>; runAfter: unknown; runAt: unknown } } => {
+): { calls: RecordedCall[]; scheduler: { cancel: (id: string) => Promise<unknown>; runAfter: RecordCall; runAt: RecordCall } } => {
     const calls: RecordedCall[] = [];
     let next = 0;
 
@@ -46,11 +49,25 @@ const recordingScheduler = (
     };
 };
 
-type DeferrableScheduler = {
-    cancel: (id: string) => Promise<unknown>;
-    runAfter: (delayMs: number, target: string, args?: unknown) => Promise<string>;
-    runAt: (timestampMs: number, target: string, args?: unknown) => Promise<string>;
-};
+describe("withDeferredSchedules — types", () => {
+    it("hands back the scheduler type it was given", () => {
+        expect.assertions(1);
+
+        const scheduler = {
+            cancel: (id: string): Promise<{ cancelled: boolean; id: string }> => Promise.resolve({ cancelled: true, id }),
+            runAfter: (_delayMs: number, _target: string): Promise<string> => Promise.resolve("job-1"),
+            runAt: (_timestampMs: number, _target: string): Promise<string> => Promise.resolve("job-1"),
+        };
+
+        // `unknown` in / `unknown` out discarded the contract the docblock
+        // explains and forced every caller to cast the facade back — including
+        // the generated shard, where the cast is emitted as source.
+        expectTypeOf(withDeferredSchedules(scheduler)).toEqualTypeOf<typeof scheduler>();
+        expectTypeOf(beginDeferredSchedules({ scheduler })).toEqualTypeOf<(committed: boolean) => Promise<void>>();
+
+        expect(withDeferredSchedules(scheduler)).toHaveProperty("runAfter");
+    });
+});
 
 describe("withDeferredSchedules", () => {
     it("passes calls straight through when no window is open", async () => {
@@ -58,7 +75,7 @@ describe("withDeferredSchedules", () => {
 
         const log: string[] = [];
         const { calls, scheduler } = recordingScheduler(log);
-        const facade = withDeferredSchedules(scheduler) as DeferrableScheduler;
+        const facade = withDeferredSchedules(scheduler);
 
         await facade.runAfter(0, "mail:send");
 
@@ -72,7 +89,7 @@ describe("withDeferredSchedules", () => {
 
         const log: string[] = [];
         const { calls, scheduler } = recordingScheduler(log);
-        const facade = withDeferredSchedules(scheduler) as DeferrableScheduler;
+        const facade = withDeferredSchedules(scheduler);
         const settle = beginDeferredSchedules({ scheduler: facade });
 
         await facade.runAfter(0, "mail:send");
@@ -93,7 +110,7 @@ describe("withDeferredSchedules", () => {
 
         const log: string[] = [];
         const { calls, scheduler } = recordingScheduler(log);
-        const facade = withDeferredSchedules(scheduler) as DeferrableScheduler;
+        const facade = withDeferredSchedules(scheduler);
         const settle = beginDeferredSchedules({ scheduler: facade });
 
         await facade.runAfter(0, "mail:send");
@@ -115,7 +132,7 @@ describe("withDeferredSchedules", () => {
 
         const log: string[] = [];
         const { calls, scheduler } = recordingScheduler(log);
-        const facade = withDeferredSchedules(scheduler) as DeferrableScheduler;
+        const facade = withDeferredSchedules(scheduler);
         const settle = beginDeferredSchedules({ scheduler: facade });
 
         // A handler routinely stores this on the row it just wrote so it can
@@ -133,7 +150,7 @@ describe("withDeferredSchedules", () => {
 
         const log: string[] = [];
         const { scheduler } = recordingScheduler(log);
-        const facade = withDeferredSchedules(scheduler) as DeferrableScheduler;
+        const facade = withDeferredSchedules(scheduler);
         const settle = beginDeferredSchedules({ scheduler: facade });
 
         await facade.runAfter(0, "a");
@@ -149,7 +166,7 @@ describe("withDeferredSchedules", () => {
 
         const log: string[] = [];
         const { calls, scheduler } = recordingScheduler(log);
-        const facade = withDeferredSchedules(scheduler) as DeferrableScheduler;
+        const facade = withDeferredSchedules(scheduler);
         const outer = beginDeferredSchedules({ scheduler: facade });
         const inner = beginDeferredSchedules({ scheduler: facade });
 
@@ -170,7 +187,7 @@ describe("withDeferredSchedules", () => {
 
         const log: string[] = [];
         const { calls, scheduler } = recordingScheduler(log);
-        const facade = withDeferredSchedules(scheduler) as DeferrableScheduler;
+        const facade = withDeferredSchedules(scheduler);
         const settle = beginDeferredSchedules({ scheduler: facade });
 
         // Buffered, the underlying guard would not fire until after the commit —
@@ -187,7 +204,7 @@ describe("withDeferredSchedules", () => {
 
         const log: string[] = [];
         const { scheduler } = recordingScheduler(log);
-        const facade = withDeferredSchedules(scheduler) as DeferrableScheduler;
+        const facade = withDeferredSchedules(scheduler);
 
         await expect(facade.cancel("job-1")).resolves.toStrictEqual({ cancelled: true, id: "job-1" });
     });
@@ -199,7 +216,7 @@ describe("withDeferredSchedules", () => {
         const { calls, scheduler } = recordingScheduler(log);
         const settle = beginDeferredSchedules({ scheduler });
 
-        await (scheduler.runAfter as (delayMs: number, target: string) => Promise<string>)(0, "mail:send");
+        await scheduler.runAfter(0, "mail:send");
         await settle(true);
 
         // A query ctx (or an admin dispatch) gets the bare scheduler; the settle a

@@ -20,6 +20,8 @@ import type {
     SocketAttachment,
     SqlExec,
     StudioFeaturesResult,
+    TransactionHeadroomTracker,
+    TransactionLimits,
 } from "@lunora/shard-engine";
 import {
     ADMIN_FUNCTION_PREFIX,
@@ -3185,16 +3187,27 @@ const todosSchema: SchemaLike = {
  * override does, so an absent row raises rather than reaching a `.global()` twin.
  */
 class BulkOpsShard extends ShardDO {
+    /** The tracker each per-row write was charged to, in order — see `meters` assertions below. */
+    public readonly meters: TransactionHeadroomTracker[] = [];
+
     // eslint-disable-next-line class-methods-use-this -- override stub; admin RPCs never dispatch through it
     public override async handleRpc(): Promise<unknown> {
         throw new Error("handleRpc must not run for admin RPCs");
     }
 
-    protected override async runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
+    protected override async runShardWrite(args: RunShardWriteArgs, headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult> {
+        // `headroom ?? this.transactionHeadroom()` is codegen's exact fallback.
+        // The harness has to carry it or the metering behaviour of a bulk op —
+        // one budget for the batch, or a fresh one per row — is invisible here.
+        const meter = headroom ?? this.transactionHeadroom();
+
+        this.meters.push(meter);
+
         const writer: DatabaseWriterLike = createShardContextDatabase({
             broadcast: (delta) => {
                 this.recordChangedTable(delta.table);
             },
+            headroom: meter,
             schema: todosSchema,
             sql: this.sql as SqlExec,
         });
@@ -3208,6 +3221,14 @@ class BulkOpsShard extends ShardDO {
         }
 
         return { id: args.id ?? null, op: args.op };
+    }
+}
+
+/** A {@link BulkOpsShard} on a deliberately tiny write ceiling, so one batch can cross it. */
+class MeteredBulkShard extends BulkOpsShard {
+    // eslint-disable-next-line class-methods-use-this -- override seam; the base answer is deliberately constant
+    protected override transactionLimits(): Partial<TransactionLimits> {
+        return { maxWrittenRows: 10 };
     }
 }
 
@@ -3371,6 +3392,35 @@ describe("shardDO admin bulk delete", () => {
         expect(rowCount()).toBe(0);
         // The counter shadow table dropped to zero for both projects.
         await expect(seed.count("todos", { projectId: "p1" })).resolves.toBe(0);
+    });
+
+    it("meters a bulk op once for the whole batch, not once per row", async () => {
+        expect.assertions(3);
+
+        // 40 rows against a 10-document ceiling. The size is the test: with a
+        // fresh tracker per row every row starts at zero, so the batch runs to
+        // completion no matter how low the limit is — a two- or three-row
+        // fixture cannot tell the two shapes apart, and neither can a fixture
+        // that never crosses the ceiling.
+        const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+        await seedProject(seed, "p1", 40);
+
+        const shard = new MeteredBulkShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "projectId", operator: "eq", value: "p1" }], table: "todos" }));
+
+        // One budget, threaded by value into every per-row write. Per-row
+        // metering allocated a tracker (and re-ran `estimateBytes` against a
+        // fresh one) for each of the 40 rows.
+        expect(new Set(shard.meters).size).toBe(1);
+
+        // And because it IS one budget, it bounds the operation: the batch stops
+        // at the ceiling instead of writing every matching row. That is the
+        // whole point of metering a bulk op — a per-row meter costs the work and
+        // bounds nothing.
+        expect(shard.meters.length).toBeLessThanOrEqual(11);
+        expect(rowCount()).toBeGreaterThan(0);
     });
 
     it("rejects deleteRows without a table (400)", async () => {

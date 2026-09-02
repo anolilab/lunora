@@ -30,18 +30,6 @@ interface ClassAWiring {
 type CloudflarePluginOptions = Record<string, unknown>;
 ```
 
-### `DEV_WORKER_ENV_VALUE` (const)
-
-```ts
-const DEV_WORKER_ENV_VALUE = "development";
-```
-
-### `DEV_WORKER_ENV_VAR` (const)
-
-```ts
-const DEV_WORKER_ENV_VAR = "WORKER_ENV";
-```
-
 ### `DetectedFramework` (type)
 
 Re-exported from `@lunora/config` — signature tracked at its source.
