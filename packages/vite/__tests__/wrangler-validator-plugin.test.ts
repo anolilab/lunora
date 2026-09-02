@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -73,8 +73,22 @@ const writeSchema = (source: string): void => {
     writeFileSync(join(workdir, "lunora", "schema.ts"), source, "utf8");
 };
 
-const callConfigResolved = (plugin: ReturnType<typeof wranglerValidatorPlugin>): void => {
-    (plugin.configResolved as (this: unknown) => void).call(undefined);
+/**
+ * Drive the plugin through Vite's hook order: `config` (where `isPreview` lives)
+ * and then `configResolved` — the same sequence `resolveConfig` runs, so a test
+ * cannot accidentally validate in an order the dev server never uses.
+ */
+const runHooks = async (plugin: ReturnType<typeof wranglerValidatorPlugin>, isPreview = false): Promise<void> => {
+    (plugin.config as (this: unknown, userConfig: unknown, environment: { command: string; isPreview: boolean }) => void).call(
+        undefined,
+        {},
+        {
+            command: "serve",
+            isPreview,
+        },
+    );
+
+    await (plugin.configResolved as (this: unknown) => Promise<void>).call(undefined);
 };
 
 describe("wrangler-validator-plugin", () => {
@@ -87,7 +101,7 @@ describe("wrangler-validator-plugin", () => {
     });
 
     describe("wranglerValidatorPlugin", () => {
-        it("passes when wrangler.jsonc declares everything the schema implies", () => {
+        it("passes when wrangler.jsonc declares everything the schema implies", async () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_WITH_GLOBAL);
@@ -95,24 +109,20 @@ describe("wrangler-validator-plugin", () => {
 
             const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-            expect(() => {
-                callConfigResolved(plugin);
-            }).not.toThrow();
+            await expect(runHooks(plugin)).resolves.toBeUndefined();
         });
 
-        it("throws when wrangler.jsonc is missing entirely", () => {
+        it("throws when wrangler.jsonc is missing entirely", async () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_NO_GLOBAL);
 
             const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-            expect(() => {
-                callConfigResolved(plugin);
-            }).toThrow(WRANGLER_NOT_FOUND);
+            await expect(runHooks(plugin)).rejects.toThrow(WRANGLER_NOT_FOUND);
         });
 
-        it("throws when SHARD durable-object binding is missing", () => {
+        it("throws when SHARD durable-object binding is missing", async () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_NO_GLOBAL);
@@ -129,13 +139,11 @@ describe("wrangler-validator-plugin", () => {
 
             const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-            expect(() => {
-                callConfigResolved(plugin);
-            }).toThrow(SHARD_SHARDDO);
+            await expect(runHooks(plugin)).rejects.toThrow(SHARD_SHARDDO);
         });
 
-        it("throws when schema has .global() tables but D1 binding is missing", () => {
-            expect.assertions(1);
+        it("provisions the D1 binding a .global() schema implies instead of killing the dev server", async () => {
+            expect.assertions(2);
 
             writeSchema(SCHEMA_WITH_GLOBAL);
             writeFileSync(
@@ -146,7 +154,8 @@ describe("wrangler-validator-plugin", () => {
     "compatibility_flags": ["web_socket_auto_reply_to_close"],
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
-    }
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }]
 }
 `,
                 "utf8",
@@ -154,12 +163,16 @@ describe("wrangler-validator-plugin", () => {
 
             const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-            expect(() => {
-                callConfigResolved(plugin);
-            }).toThrow(D1_DATABASES);
+            // The binding this check requires is one Lunora writes itself, and its
+            // reconcile runs in `buildStart` — a hook Vite reaches only once
+            // `configResolved` succeeded. Validating first killed `vite dev` the
+            // first time a project added a `.global()` table, over a binding the
+            // very next hook would have added.
+            await expect(runHooks(plugin)).resolves.toBeUndefined();
+            expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toMatch(D1_DATABASES);
         });
 
-        it("does not require D1 when no table is global", () => {
+        it("does not require D1 when no table is global", async () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_NO_GLOBAL);
@@ -180,12 +193,10 @@ describe("wrangler-validator-plugin", () => {
 
             const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-            expect(() => {
-                callConfigResolved(plugin);
-            }).not.toThrow();
+            await expect(runHooks(plugin)).resolves.toBeUndefined();
         });
 
-        it("throws when compatibility_date is too old", () => {
+        it("throws when compatibility_date is too old", async () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_NO_GLOBAL);
@@ -205,12 +216,10 @@ describe("wrangler-validator-plugin", () => {
 
             const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-            expect(() => {
-                callConfigResolved(plugin);
-            }).toThrow(COMPATIBILITY_DATE);
+            await expect(runHooks(plugin)).rejects.toThrow(COMPATIBILITY_DATE);
         });
 
-        it("does not require web_socket_auto_reply_to_close when compatibility_date is recent enough", () => {
+        it("does not require web_socket_auto_reply_to_close when compatibility_date is recent enough", async () => {
             expect.assertions(1);
 
             // The flag became the default on 2026-04-07; workerd warns when it's set redundantly.
@@ -232,12 +241,10 @@ describe("wrangler-validator-plugin", () => {
 
             const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-            expect(() => {
-                callConfigResolved(plugin);
-            }).not.toThrow();
+            await expect(runHooks(plugin)).resolves.toBeUndefined();
         });
 
-        it("supports jsonc comments and trailing commas", () => {
+        it("supports jsonc comments and trailing commas", async () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_NO_GLOBAL);
@@ -259,9 +266,22 @@ describe("wrangler-validator-plugin", () => {
 
             const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-            expect(() => {
-                callConfigResolved(plugin);
-            }).not.toThrow();
+            await expect(runHooks(plugin)).resolves.toBeUndefined();
+        });
+    });
+
+    describe("vite preview", () => {
+        it("validates nothing under preview, which resolves as a `serve` command", async () => {
+            expect.assertions(1);
+
+            // `vite preview` resolves with `command: "serve"`, so `apply: "serve"`
+            // plugins run there too. Previewing a built app must not fail on the
+            // project's wrangler config — or shell out to `docker info`.
+            writeSchema(SCHEMA_NO_GLOBAL);
+
+            const plugin = wranglerValidatorPlugin(makeOptions(workdir));
+
+            await expect(runHooks(plugin, true)).resolves.toBeUndefined();
         });
     });
 
