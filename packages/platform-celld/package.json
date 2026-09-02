@@ -58,8 +58,8 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/platform": "1.0.0-alpha.14",
-        "@lunora/platform-cloudflare": "1.0.0-alpha.19"
+        "@lunora/platform": "1.0.0-alpha.24",
+        "@lunora/platform-cloudflare": "1.0.0-alpha.30"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",

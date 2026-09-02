@@ -179,32 +179,31 @@ describe("gatePlatformFeatures", () => {
     });
 
     // `celld` is the second spike target (see `@lunora/platform-celld`): a
-    // Workers-compatible self-hosted DO runtime whose matrix rates every
-    // gateable ctx.* feature "unsupported" — it carries no KV/R2/queues
-    // bindings and none of the managed platform services. Unlike the `node`
-    // test above there is no emulated survivor among the gateable keys; what
-    // celld does support (sharded state, alarms, sockets) is engine-internal
-    // and never gated here.
-    it("gates every declared ctx.* off for the celld target", async () => {
-        expect.assertions(5);
+    // Workers-compatible self-hosted Durable Objects runtime whose matrix
+    // (`CELLD_CAPABILITIES`, tracking celld v0.4.0) rates the bindings celld
+    // actually ships — KV, R2, D1, Workflows, Cron Triggers — as real support,
+    // so those must survive gating. What it gates is the managed Cloudflare
+    // services celld has no binding for (`ai`, `vectors`) plus the two blocked
+    // for a reason that is NOT a missing binding: `mail`, and the `queues` it
+    // rides on, because a celld queue consumer cannot also export `fetch()`
+    // and a Lunora app is one worker exporting both.
+    it("gates the celld target on what celld actually lacks, not on the whole surface", async () => {
+        expect.assertions(6);
 
         const { gatePlatformFeatures } = await import("../src/platform-target");
-        const usage: FeatureUsage = { ...ALL_OFF, kv: true, scheduler: true, storage: true };
+        const usage: FeatureUsage = { ...ALL_OFF, ai: true, kv: true, mail: true, scheduler: true, storage: true, vectors: true };
 
         const result = gatePlatformFeatures(usage, "celld");
 
-        expect(result.usage.kv).toBe(false);
-        expect(result.usage.scheduler).toBe(false);
-        expect(result.usage.storage).toBe(false);
-        expect(result.diagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual([
-            "platform_unsupported_feature",
-            "platform_unsupported_feature",
-            "platform_unsupported_feature",
-        ]);
+        expect(result.usage.kv).toBe(true);
+        expect(result.usage.storage).toBe(true);
+        expect(result.usage.scheduler).toBe(true);
+        expect(result.usage.mail).toBe(false);
+        expect(result.diagnostics.every((diagnostic) => diagnostic.name === "platform_unsupported_feature")).toBe(true);
         expect(result.diagnostics.map((diagnostic) => diagnostic.feature).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual([
-            "kv",
-            "scheduler",
-            "storage",
+            "ai",
+            "mail",
+            "vectors",
         ]);
     });
 });
