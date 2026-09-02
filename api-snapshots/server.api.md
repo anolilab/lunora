@@ -1951,6 +1951,14 @@ interface SearchIndexDefinition {
 }
 ```
 
+### `ServeStorageObjectOptions` (interface)
+
+```ts
+interface ServeStorageObjectOptions {
+    authorize: (context: StorageServeAuthzContext) => boolean | Promise<boolean>;
+}
+```
+
 ### `ShapeDefinition` (interface)
 
 ```ts
@@ -2180,6 +2188,15 @@ type StorageRuleDecision = boolean | undefined;
 ```ts
 interface StorageRulesOptions {
     readonly roles?: ReadonlyArray<Role>;
+}
+```
+
+### `StorageServeAuthzContext` (interface)
+
+```ts
+interface StorageServeAuthzContext {
+    key: string;
+    request: Request;
 }
 ```
 
@@ -3157,7 +3174,7 @@ const rls: <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray
 ### `serveStorageObject` (const)
 
 ```ts
-const serveStorageObject: (context: ContextWithStorage, key: string, request: Request) => Promise<Response>;
+const serveStorageObject: (context: ContextWithStorage, key: string, request: Request, options: ServeStorageObjectOptions) => Promise<Response>;
 ```
 
 ### `storageRules` (const)

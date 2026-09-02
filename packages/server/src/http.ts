@@ -803,22 +803,60 @@ const parseRange = (header: null | string, size: number): RangeResult => {
 };
 
 /**
+ * Content types safe to render inline on the serving origin. Raster images and
+ * media only: they carry no script and no same-origin DOM.
+ *
+ * `image/svg+xml` is deliberately ABSENT even though it is an image — an SVG is
+ * a scriptable document, so rendering an uploaded one inline is stored XSS.
+ * Everything else (documents, text, `text/html`, unknown types) gets
+ * `content-disposition: attachment`, which is what `examples/team-chat`'s
+ * hand-wired route does for every object.
+ */
+const INLINE_SAFE_CONTENT_TYPES: ReadonlySet<string> = new Set([
+    "audio/mpeg",
+    "audio/ogg",
+    "audio/wav",
+    "image/apng",
+    "image/avif",
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "video/mp4",
+    "video/webm",
+]);
+
+/**
  * The headers every representation of an object carries — its content-type, its
- * validator, and the RFC 9530 digest when R2 recorded a checksum.
+ * validator, the RFC 9530 digest when R2 recorded a checksum, and the two
+ * headers that keep an uploaded byte stream from executing on this origin.
  *
  * `contentType` originates from object metadata set at upload time, so it is
  * attacker-influenced. A value carrying CR/LF (or other control chars) would
  * either throw inside `Response`/`Headers` construction (→ unhandled 500) or,
  * on a permissive runtime, smuggle an injected response header. Reject any
  * unsafe value and fall back to the safe default rather than reflecting it.
+ *
+ * `x-content-type-options: nosniff` always rides along, and anything outside
+ * {@link INLINE_SAFE_CONTENT_TYPES} is forced to `content-disposition:
+ * attachment` — an uploader who pinned `text/html` or `image/svg+xml` into the
+ * signed PUT gets a download, not a same-origin script.
  */
 const storageObjectHeaders = (object: Omit<StorageObjectBody, "body">): Record<string, string> => {
     const rawContentType = object.httpMetadata?.contentType;
+    const contentType = rawContentType !== undefined && isSafeHeaderValue(rawContentType) ? rawContentType : "application/octet-stream";
     const headers: Record<string, string> = {
         "accept-ranges": "bytes",
-        "content-type": rawContentType !== undefined && isSafeHeaderValue(rawContentType) ? rawContentType : "application/octet-stream",
+        "content-type": contentType,
         etag: toHttpEtag(object.etag),
+        "x-content-type-options": "nosniff",
     };
+
+    // Match on the bare type: a parameterised `text/html; charset=utf-8` must
+    // not slip past the allowlist on its parameters.
+    if (!INLINE_SAFE_CONTENT_TYPES.has(contentType.split(";")[0]?.trim().toLowerCase() ?? "")) {
+        headers["content-disposition"] = "attachment";
+    }
 
     if (object.sha256Base64 !== undefined) {
         // RFC 9530 representation digest so clients can verify integrity. The
@@ -855,6 +893,41 @@ const serveWholeStorageObject = async (context: ContextWithStorage, key: string)
     });
 };
 
+/** The decision {@link ServeStorageObjectOptions.authorize} is asked to make. */
+interface StorageServeAuthzContext {
+    /** The object key the caller asked for — already resolved by the route. */
+    key: string;
+    /** The inbound request, so the gate can read the signed-URL query, a cookie, or a bearer. */
+    request: Request;
+}
+
+interface ServeStorageObjectOptions {
+    /**
+     * The authorization decision for THIS object — required, because the helper
+     * has no other way to know whether the caller may read `key`. Return `true`
+     * to stream, anything else for a **403**; a throwing gate is a denial too,
+     * never a 500 (fail closed, mirroring `@lunora/storage`'s
+     * `createUploadHandler`).
+     *
+     * For a signed-URL topology this is where `verifySignedUrl` goes:
+     * `authorize: async ({ request }) => (await verifySignedUrl(new URL(request.url), secret)).valid`.
+     */
+    authorize: (context: StorageServeAuthzContext) => boolean | Promise<boolean>;
+}
+
+/**
+ * Run the mandatory gate, fail-closed. Only an exact `true` allows: a gate that
+ * throws (a verifier blowing up on a malformed signature) or returns anything
+ * else denies, so a broken check can never become an open bucket.
+ */
+const isServeAuthorized = async (options: ServeStorageObjectOptions, key: string, request: Request): Promise<boolean> => {
+    try {
+        return await options.authorize({ key, request });
+    } catch {
+        return false;
+    }
+};
+
 /**
  * Stream a stored object as an HTTP {@link Response} from an `httpAction`
  * handler, with correct `Content-Type`, `ETag`, and `Accept-Ranges: bytes`.
@@ -862,6 +935,16 @@ const serveWholeStorageObject = async (context: ContextWithStorage, key: string)
  * `Content-Range` + `Content-Length`; otherwise **200**. A missing object is a
  * **404**; an out-of-bounds range is a **416** with a `Content-Range` of
  * `bytes` star-slash-size.
+ *
+ * `options.authorize` runs FIRST and is mandatory: this helper reads bytes out
+ * of a bucket and hands them to whoever asked, so without a gate every mounted
+ * route is an open object store. It does not verify signed URLs by itself —
+ * pass `verifySignedUrl` (or a session check) as the gate.
+ *
+ * Every response carries `x-content-type-options: nosniff`, and any object whose
+ * content type is not a raster image or media file also carries
+ * `content-disposition: attachment` — an uploader-pinned `text/html` or
+ * `image/svg+xml` must never render on the serving origin.
  *
  * A range request resolves its window against a body-free `head()`, then issues
  * ONE `download()` with the resolved `{ offset, length }` so R2 streams just
@@ -872,7 +955,13 @@ const serveWholeStorageObject = async (context: ContextWithStorage, key: string)
  * large objects a signed URL (`ctx.storage.getSignedUrl`) is still cheaper since
  * the client then ranges against R2/CDN directly with no Worker hop.
  */
-const serveStorageObject = async (context: ContextWithStorage, key: string, request: Request): Promise<Response> => {
+const serveStorageObject = async (context: ContextWithStorage, key: string, request: Request, options: ServeStorageObjectOptions): Promise<Response> => {
+    if (!(await isServeAuthorized(options, key, request))) {
+        // No reason, no distinction from a missing object's 404 shape beyond the
+        // status: a precise answer here is a signing / existence oracle.
+        return new Response("Forbidden", { status: 403 });
+    }
+
     const rangeHeader = request.headers.get("range");
 
     // No `Range`, or one that cannot produce a 206 anyway (multi-range, malformed):
@@ -951,4 +1040,6 @@ export type {
     LunoraHttpApp,
     LunoraHttpEnv,
     LunoraRouteHandler,
+    ServeStorageObjectOptions,
+    StorageServeAuthzContext,
 };

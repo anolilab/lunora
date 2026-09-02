@@ -73,8 +73,13 @@ The functions surface in the generated `api` as `api.storage.generateUploadUrl`,
 ## Step 4: Verify downloads in the Worker
 
 Signed URLs are only as safe as the route that checks them. Gate
-`GET /storage/:key` with `verifySignedUrl` before streaming the R2 body
-(`@lunora/server` also ships `serveStorageObject` to do this):
+`GET /storage/:key` with `verifySignedUrl` before streaming the R2 body.
+
+`@lunora/server`'s `serveStorageObject(ctx, key, request, { authorize })` handles
+the streaming half (`Range`/206, `ETag`, `nosniff`, and
+`content-disposition: attachment` for anything but a raster image) but verifies
+nothing on its own — its required `authorize` gate is where `verifySignedUrl`
+goes. Or wire it by hand:
 
 ```ts
 import { verifySignedUrl } from "@lunora/storage";

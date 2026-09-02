@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import type { ReadOnlyStorage, StorageObjectBody } from "../src/index";
+import type { ReadOnlyStorage, ServeStorageObjectOptions, StorageObjectBody } from "../src/index";
 import { serveStorageObject } from "../src/index";
 
 interface FakeObjectOptions {
@@ -85,12 +85,116 @@ const ctxWith = (bytes: Uint8Array | null, options: FakeObjectOptions = {}) => {
 
 const BODY = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
+/** The gate every non-authorization test passes: already-verified, serve it. */
+const ALLOW: ServeStorageObjectOptions = { authorize: () => true };
+
+describe("serveStorageObject — authorization", () => {
+    it("streams nothing and answers 403 when the gate denies — never touching storage", async () => {
+        expect.assertions(3);
+
+        const { calls, ctx } = ctxWith(BODY);
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k"), { authorize: () => false });
+
+        expect(response.status).toBe(403);
+        expect(calls.downloads).toHaveLength(0);
+        expect(calls.heads).toBe(0);
+    });
+
+    it("treats a throwing gate as a denial, not a 500 (fail closed)", async () => {
+        expect.assertions(2);
+
+        const { calls, ctx } = ctxWith(BODY);
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k"), {
+            authorize: () => {
+                throw new Error("verifier exploded");
+            },
+        });
+
+        expect(response.status).toBe(403);
+        expect(calls.downloads).toHaveLength(0);
+    });
+
+    it("hands the gate the key and the request so a signed-URL check can run", async () => {
+        expect.assertions(3);
+
+        const { ctx } = ctxWith(BODY);
+        const seen: { key: string; url: string }[] = [];
+
+        const response = await serveStorageObject(ctx, "avatars/1.png", new Request("https://x/avatars/1.png?sig=abc"), {
+            authorize: ({ key, request }) => {
+                seen.push({ key, url: request.url });
+
+                return new URL(request.url).searchParams.get("sig") === "abc";
+            },
+        });
+
+        expect(response.status).toBe(200);
+        expect(seen).toHaveLength(1);
+        expect(seen[0]).toStrictEqual({ key: "avatars/1.png", url: "https://x/avatars/1.png?sig=abc" });
+    });
+
+    // A gate is mandatory in the type — there is no "forgot to pass one" shape
+    // that still compiles, which is what keeps a mounted route from being an
+    // open object store.
+    it("requires the authorize option at the type level", () => {
+        expect.assertions(1);
+
+        expectTypeOf<Parameters<typeof serveStorageObject>[3]>().toEqualTypeOf<ServeStorageObjectOptions>();
+
+        expect(true).toBe(true);
+    });
+});
+
+describe("serveStorageObject — response hardening", () => {
+    it("forces a download for a renderable type and never lets the browser sniff", async () => {
+        expect.assertions(3);
+
+        const { ctx } = ctxWith(BODY, { contentType: "text/html; charset=utf-8" });
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k"), ALLOW);
+
+        // The uploader pinned `text/html` into the signed PUT; serving it inline
+        // on the app's own origin is stored XSS.
+        expect(response.headers.get("content-disposition")).toBe("attachment");
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+        expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    });
+
+    it("forces a download for image/svg+xml — an image that is also a scriptable document", async () => {
+        expect.assertions(1);
+
+        const { ctx } = ctxWith(BODY, { contentType: "image/svg+xml" });
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k"), ALLOW);
+
+        expect(response.headers.get("content-disposition")).toBe("attachment");
+    });
+
+    it("renders a raster image inline, still with nosniff", async () => {
+        expect.assertions(2);
+
+        const { ctx } = ctxWith(BODY, { contentType: "image/png" });
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k"), ALLOW);
+
+        expect(response.headers.get("content-disposition")).toBeNull();
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    });
+
+    it("hardens the 206 the same way as the 200", async () => {
+        expect.assertions(2);
+
+        const { ctx } = ctxWith(BODY, { contentType: "text/html" });
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=2-5" } }), ALLOW);
+
+        expect(response.status).toBe(206);
+        expect(response.headers.get("content-disposition")).toBe("attachment");
+    });
+});
+
 describe("serveStorageObject", () => {
     it("returns 200 with full body + metadata headers when no Range is sent", async () => {
         expect.assertions(5);
 
         const { ctx } = ctxWith(BODY, { contentType: "text/plain", etag: "abc", sha256Base64: "3q2+7w==" });
-        const response = await serveStorageObject(ctx, "k", new Request("https://x/k"));
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k"), ALLOW);
 
         expect(response.status).toBe(200);
         expect(response.headers.get("content-type")).toBe("text/plain");
@@ -106,7 +210,7 @@ describe("serveStorageObject", () => {
         expect.assertions(1);
 
         const { ctx } = ctxWith(BODY, { etag: 'W/"weak"' });
-        const response = await serveStorageObject(ctx, "k", new Request("https://x/k"));
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k"), ALLOW);
 
         expect(response.headers.get("etag")).toBe('W/"weak"');
     });
@@ -115,7 +219,7 @@ describe("serveStorageObject", () => {
         expect.assertions(2);
 
         const { ctx } = ctxWith(BODY, { contentType: "text/html\r\nset-cookie: pwned=1" });
-        const response = await serveStorageObject(ctx, "k", new Request("https://x/k"));
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k"), ALLOW);
 
         // Falls back to the safe default rather than reflecting the injected value.
         expect(response.headers.get("content-type")).toBe("application/octet-stream");
@@ -125,7 +229,7 @@ describe("serveStorageObject", () => {
     it("returns 404 when the object is absent", async () => {
         expect.assertions(1);
 
-        const response = await serveStorageObject(ctxWith(null).ctx, "missing", new Request("https://x/missing"));
+        const response = await serveStorageObject(ctxWith(null).ctx, "missing", new Request("https://x/missing"), ALLOW);
 
         expect(response.status).toBe(404);
     });
@@ -135,7 +239,7 @@ describe("serveStorageObject", () => {
 
         const { calls, ctx } = ctxWith(BODY);
 
-        await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=2-5" } }));
+        await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=2-5" } }), ALLOW);
 
         expect(calls.heads).toBe(1);
         // Exactly one download, and it is the window — not a full-object body
@@ -149,7 +253,7 @@ describe("serveStorageObject", () => {
 
         const { calls, ctx } = ctxWith(BODY);
 
-        await serveStorageObject(ctx, "k", new Request("https://x/k"));
+        await serveStorageObject(ctx, "k", new Request("https://x/k"), ALLOW);
 
         expect(calls.heads).toBe(0);
         expect(calls.downloads).toStrictEqual([undefined]);
@@ -164,7 +268,7 @@ describe("serveStorageObject", () => {
         const served = await Promise.all(
             ["bytes=0-1,4-5", "furlongs=1-2"].map(async (range) => {
                 const { calls, ctx } = ctxWith(BODY);
-                const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range } }));
+                const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range } }), ALLOW);
 
                 return { heads: calls.heads, status: response.status };
             }),
@@ -181,7 +285,7 @@ describe("serveStorageObject", () => {
 
         const { calls, ctx } = ctxWith(BODY);
 
-        await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=50-60" } }));
+        await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=50-60" } }), ALLOW);
 
         expect(calls.heads).toBe(1);
         expect(calls.downloads).toStrictEqual([]);
@@ -191,7 +295,7 @@ describe("serveStorageObject", () => {
         expect.assertions(2);
 
         const { calls, ctx } = ctxWith(null);
-        const response = await serveStorageObject(ctx, "gone", new Request("https://x/gone", { headers: { range: "bytes=0-1" } }));
+        const response = await serveStorageObject(ctx, "gone", new Request("https://x/gone", { headers: { range: "bytes=0-1" } }), ALLOW);
 
         expect(response.status).toBe(404);
         expect(calls.downloads).toStrictEqual([]);
@@ -215,7 +319,7 @@ describe("serveStorageObject", () => {
             },
         };
 
-        const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=2-5" } }));
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=2-5" } }), ALLOW);
 
         expect(response.headers.get("etag")).toBe('"old"');
         expect(response.headers.get("repr-digest")).toBe("sha-256=:3q2+7w==:");
@@ -226,7 +330,7 @@ describe("serveStorageObject", () => {
         expect.assertions(4);
 
         const { ctx } = ctxWith(BODY);
-        const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=2-5" } }));
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=2-5" } }), ALLOW);
 
         expect(response.status).toBe(206);
         expect(response.headers.get("content-range")).toBe("bytes 2-5/10");
@@ -241,7 +345,7 @@ describe("serveStorageObject", () => {
         expect.assertions(2);
 
         const { ctx } = ctxWith(BODY);
-        const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=7-" } }));
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=7-" } }), ALLOW);
 
         expect(response.status).toBe(206);
         expect(response.headers.get("content-range")).toBe("bytes 7-9/10");
@@ -251,7 +355,7 @@ describe("serveStorageObject", () => {
         expect.assertions(2);
 
         const { ctx } = ctxWith(BODY);
-        const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=-3" } }));
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=-3" } }), ALLOW);
 
         expect(response.status).toBe(206);
         expect(response.headers.get("content-range")).toBe("bytes 7-9/10");
@@ -261,7 +365,7 @@ describe("serveStorageObject", () => {
         expect.assertions(4);
 
         const { ctx } = ctxWith(BODY, { contentType: "video/mp4", sha256Base64: "3q2+7w==" });
-        const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=50-60" } }));
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=50-60" } }), ALLOW);
 
         expect(response.status).toBe(416);
         expect(response.headers.get("content-range")).toBe("bytes */10");
@@ -275,7 +379,7 @@ describe("serveStorageObject", () => {
         expect.assertions(1);
 
         const { ctx } = ctxWith(BODY);
-        const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=0-1,4-5" } }));
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=0-1,4-5" } }), ALLOW);
 
         expect(response.status).toBe(200);
     });

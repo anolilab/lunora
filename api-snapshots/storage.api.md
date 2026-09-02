@@ -124,6 +124,7 @@ interface SignedUrlOptions {
 
 ```ts
 interface Storage {
+    readonly bucketName: string;
     createMultipartUpload: (key: string, options?: {
         contentType?: string;
         customMetadata?: Record<string, string>;

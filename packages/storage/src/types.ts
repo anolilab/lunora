@@ -126,6 +126,18 @@ export interface ObjectMetadata {
 
 export interface Storage {
     /**
+     * The bucket name this accessor operates under — the same value
+     * {@link Storage.getSignedUrl} puts into the HMAC canonical.
+     *
+     * Exposed so everything downstream agrees on one name: `asBucketStorage`
+     * tags a single-bucket storage with it, and `storageRules(...)` matches
+     * `(bucket, operation)` rules against that tag. Without it a
+     * `createStorage({ bucketName: "avatars" })` signed URLs as `avatars` while
+     * the rules engine only ever saw `"default"`.
+     */
+    readonly bucketName: string;
+
+    /**
      * Begin a native R2 **multipart upload** for very large objects — upload
      * parts (each uniform in size except the last), then `complete` with the
      * returned parts (or `abort`). Wraps R2's `createMultipartUpload`; throws if

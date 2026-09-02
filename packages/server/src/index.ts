@@ -39,6 +39,8 @@ export type {
     LunoraHttpApp,
     LunoraHttpEnv,
     LunoraRouteHandler,
+    ServeStorageObjectOptions,
+    StorageServeAuthzContext,
 } from "./http";
 export { httpAction, httpRoute, httpRouter, isSafeHeaderValue, serveStorageObject } from "./http";
 export type { DefineIdentityOptions, IdentityContract, IdentityRejectMode, IdentityValidation, InferIdentity } from "./identity";

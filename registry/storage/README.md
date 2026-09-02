@@ -55,7 +55,21 @@ All four scope the key with `scopeKey(requireOwner(ctx.auth.userId), key)`, name
 
 ## Verify downloads in your Worker
 
-Signed URLs are only as good as the route that checks them. Gate `GET /storage/:key` with `verifySignedUrl` before streaming the R2 body. `@lunora/server` ships `serveStorageObject` to do exactly this, or wire it by hand:
+Signed URLs are only as good as the route that checks them. Gate `GET /storage/:key` with `verifySignedUrl` before streaming the R2 body.
+
+`@lunora/server`'s `serveStorageObject` does the streaming half — `Range`/206, `ETag`, `nosniff`, and `content-disposition: attachment` for anything but a raster image — but it does **not** verify anything by itself. Its `authorize` option is required and is where your check goes:
+
+```ts
+import { serveStorageObject } from "@lunora/server";
+import { verifySignedUrl } from "@lunora/storage";
+
+// inside an httpAction handler
+return serveStorageObject(ctx, key, request, {
+    authorize: async ({ request: r }) => (await verifySignedUrl(new URL(r.url), env.STORAGE_SIGNING_SECRET)).valid,
+});
+```
+
+Or wire the whole thing by hand:
 
 ```ts
 // in your Worker entry
