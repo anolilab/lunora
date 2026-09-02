@@ -268,8 +268,11 @@ interface InboundAttachment {
 ```ts
 interface InboundAuthentication {
     dkim: string | null;
+    dkimDomain: string | null;
     dmarc: string | null;
+    dmarcDomain: string | null;
     spf: string | null;
+    spfDomain: string | null;
 }
 ```
 

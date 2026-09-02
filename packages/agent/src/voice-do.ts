@@ -156,9 +156,8 @@ class VoiceSessionDO {
         this.sttModel = agent.voice?.stt ?? DEFAULT_STT_MODEL;
         this.ttsModel = agent.voice?.tts ?? DEFAULT_TTS_MODEL;
 
-        const configured = agent.voice?.maxTurns;
-
-        this.maxSessionTurns = Number.isInteger(configured) && (configured as number) > 0 ? (configured as number) : DEFAULT_MAX_SESSION_TURNS;
+        // `defineAgent` already rejected anything but a positive integer.
+        this.maxSessionTurns = agent.voice?.maxTurns ?? DEFAULT_MAX_SESSION_TURNS;
     }
 
     /** HTTP entry — only a WebSocket upgrade carrying a `threadKey` is accepted. */

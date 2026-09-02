@@ -188,7 +188,10 @@ throwing, so it bounces without being queued for a retry that can never succeed.
     Inbound mail is untrusted and dispatch is privileged. Cloudflare Email Routing authenticates only the recipient domain, not the sender (`email.from` and the
     body are trivially spoofable), and `dispatchToLunoraFunction` runs the target function in a system/admin context with RLS bypassed. Never make a trust
     decision on `email.from`. Gate on the DKIM/SPF/DMARC verdicts in `email.authentication` via the `verify` hook before dispatch, and treat the function input
-    as fully attacker-controlled.
+    as fully attacker-controlled. A bare `spf === "pass"` or `dkim === "pass"` is not enough: SPF vouches for the envelope `MAIL FROM` domain and DKIM for the
+    signing `d=`, both of which the sender picks. Each verdict carries the domain it is about (`spfDomain`, `dkimDomain`, `dmarcDomain`) — accept an SPF or DKIM
+    pass only when that domain equals the `From` address's domain, and treat a pass with a `null` domain as unauthenticated. A DMARC pass already checked
+    alignment.
 </Callout>
 
 The receiving function is an ordinary mutation/action (the default `resolveArgs`

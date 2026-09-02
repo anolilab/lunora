@@ -15,8 +15,10 @@
  * - Cloudflare Email Routing authenticates only the *recipient* domain, not the
  *   *sender*. The envelope `from`, subject, and body are trivially spoofable, so
  *   an `onEmail` mapper MUST NOT make trust/authorization decisions on
- *   `email.from`. Gate on `email.authentication` (DKIM/SPF/DMARC verdicts) and
- *   return `null` to drop an unauthenticated message.
+ *   `email.from`. The handler below drops a message whose `From` domain is not
+ *   vouched for by an aligned verdict before any mapper runs; a mapper that
+ *   needs a stricter policy (an allow-list of sender domains, say) checks
+ *   `email.authentication` itself and returns `null` to decline.
  * - The started run has no request identity: its thread owner is whatever the
  *   mapper puts in `AgentEmailRun.owner`, and its tools run RLS-bypassed. Derive
  *   `owner` from a verified signal (a DKIM-checked address mapped to an account),
@@ -88,6 +90,33 @@ const rejectPermanently = (context: { message: { setReject: (reason: string) => 
 };
 
 /**
+ * The angle-bracketed mailbox in a parsed `from` string. The parser renders
+ * `name <address>` with the mailbox LAST; anchor there so a display name that
+ * itself contains `<x@evil.example>` cannot stand in.
+ */
+const FROM_MAILBOX = /<([^<>]*)>$/;
+
+/**
+ * Domain of the parsed `From` mailbox (`Name <local@domain>` or a bare
+ * address), lowercased. `undefined` when there is no single mailbox to align
+ * against — an empty `From`, or an RFC 5322 group whose members the parser
+ * flattened to a comma list — so the caller fails closed.
+ */
+const fromDomain = (from: string): string | undefined => {
+    const address = FROM_MAILBOX.exec(from)?.[1] ?? from;
+    const at = address.indexOf("@");
+
+    if (at === -1 || at !== address.lastIndexOf("@")) {
+        return undefined;
+    }
+
+    return address
+        .slice(at + 1)
+        .trim()
+        .toLowerCase();
+};
+
+/**
  * Build the inbound `email()` handler for one or more `onEmail` agents. The
  * returned callback parses the message, then walks `targets` in order and starts
  * a durable run for the first agent whose `onEmail` mapper returns a run.
@@ -156,14 +185,29 @@ const dispatchAgentEmail = (targets: ReadonlyArray<AgentEmailTarget>): InboundAg
         // means the receiving MX stamped no `Authentication-Results` header at
         // all, which is "unknown", not "fine".
         //
+        // A bare `pass` is not enough either: SPF vouches for the envelope
+        // `MAIL FROM` domain and DKIM for the signing `d=`, both of which the
+        // attacker picks, so `spf=pass`+`dkim=pass` for evil.example is routine
+        // on a message whose `From` says ceo@victim.example. A verdict counts
+        // only when the domain it is about equals the `From` domain (RFC 7489
+        // strict alignment — there is no public-suffix list here, so
+        // `mail.example.com` does not vouch for `example.com`). A DMARC pass
+        // already checked alignment at the MX. A pass that reports no domain at
+        // all cannot be aligned and is rejected.
+        //
         // The header above tells mappers not to trust `email.from`. That is
         // advice each mapper has to remember; this is the guard every agent
         // routes through, so a mapper that forgets is not the only thing
         // standing between a forged sender and a privileged run.
         verify: (email) => {
-            const { dkim, dmarc, spf } = email.authentication;
+            const { dkim, dkimDomain, dmarc, dmarcDomain, spf, spfDomain } = email.authentication;
+            const from = fromDomain(email.from);
 
-            return dmarc === "pass" || (spf === "pass" && dkim === "pass");
+            if (from === undefined) {
+                return false;
+            }
+
+            return (dmarc === "pass" && dmarcDomain === from) || (spf === "pass" && spfDomain === from) || (dkim === "pass" && dkimDomain === from);
         },
     });
 

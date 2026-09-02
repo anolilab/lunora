@@ -35,6 +35,7 @@
  */
 import { getAuthTablesWithResolvedIndexes, getDatabaseFieldIndexName } from "@better-auth/core/db/internal";
 
+import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { LunoraAuthOptions } from "./create-auth";
 
 /** better-auth's resolved table map, read off the helper rather than re-declared. */
@@ -42,9 +43,6 @@ type ResolvedSchema = ReturnType<typeof getAuthTablesWithResolvedIndexes>;
 
 /** One field's attributes, as better-auth resolves them. */
 type AuthField = ResolvedSchema["tables"][string]["fields"][string];
-
-/** Quote a SQLite identifier, escaping any embedded double quote. */
-const quoteIdentifier = (identifier: string): string => `"${identifier.replaceAll(`"`, `""`)}"`;
 
 /**
  * The SQLite column type for a field, mirroring better-auth's `getType` SQLite arms:

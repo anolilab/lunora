@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 import { jsonSchema } from "ai";
 
+import isPositiveInteger from "./positive-integer";
 import type { AgentToolContext, AgentToolDefinition, AnyAgentTool } from "./types";
 
 /** Default cap on script steps so one code call can't fan out unboundedly. */
@@ -319,7 +320,7 @@ const codeTool = (tools: Record<string, AnyAgentTool>, options: CodeToolOptions 
         }
     }
 
-    if (options.maxSteps !== undefined && (!Number.isInteger(options.maxSteps) || options.maxSteps < 1)) {
+    if (options.maxSteps !== undefined && !isPositiveInteger(options.maxSteps)) {
         // `slice(0, maxSteps)` swallows every bad value silently: `0`, `0.5` and
         // `NaN` run NO step and still report success, `-1` drops the LAST step —
         // a script that looks like it committed its final side effect and did

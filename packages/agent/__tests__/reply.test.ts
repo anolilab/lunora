@@ -12,7 +12,7 @@ import { DurableStepJournal, finalTurn, loopDefaults, scriptedGenerate } from ".
 const fakeInboundEmail = (overrides: Partial<InboundEmail> = {}): InboundEmail => {
     return {
         attachments: [],
-        authentication: { dkim: "pass", dmarc: "pass", spf: "pass" },
+        authentication: { dkim: "pass", dkimDomain: "example.com", dmarc: "pass", dmarcDomain: "example.com", spf: "pass", spfDomain: "example.com" },
         from: "customer@example.com",
         headers: {},
         to: ["support@lunora.sh"],
