@@ -139,14 +139,21 @@ Flags: `--provider <auth\|clerk\|auth0>`, `--yes`, `--from <dir>` (local registr
 
 ### `lunora view`
 
-Opens the Lunora studio in your browser. Defaults to the local dev studio;
-`--remote` opens the deployed worker's studio instead (resolved from
-`.lunora/project.json`, see `lunora link`).
+Opens the Lunora studio in your browser. The studio is always local: the
+running dev server records where it is serving it in `.lunora/dev.json`, so
+`view` opens that — the embedded studio server for the wrangler flavor, or
+Vite's `/__lunora` route when `@lunora/vite` owns the dev server. With no dev
+server running it falls back to the studio server's default,
+`http://127.0.0.1:6173`.
 
 ```bash
-lunora view            # local dev studio
-lunora view --remote   # the deployed studio
+lunora view   # the running dev server's studio
 ```
+
+<Callout type="info">
+    A deployed worker serves no studio — its `/_lunora/*` routes are RPC, WebSocket, status, migrate and admin only — so there is no remote URL to open. The
+    `--remote` flag this command used to take opened a 404 and has been removed.
+</Callout>
 
 ### `lunora docs`
 
