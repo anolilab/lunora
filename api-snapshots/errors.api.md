@@ -460,6 +460,11 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Cross-shard rank() is unsupported";
     };
+    readonly DISPATCH_UNAUTHENTICATED: {
+        readonly hint: "The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER_SECRET` matches on both sides, or that `LUNORA_ADMIN_TOKEN` is set and current.";
+        readonly status: 403;
+        readonly title: "Dispatch caller not authenticated";
+    };
     readonly FORBIDDEN_FANOUT: {
         readonly status: 403;
         readonly title: "Fan-out forbidden";

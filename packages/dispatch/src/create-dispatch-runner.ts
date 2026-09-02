@@ -142,10 +142,23 @@ const toDispatchError = (label: string, status: number, rawBody: string, message
 const DETERMINISTIC_DISPATCH_STATUSES: ReadonlySet<number> = new Set([400, 403, 404, 422]);
 
 /**
+ * Codes that share a deterministic STATUS but describe the dispatch
+ * INFRASTRUCTURE rather than the call. `DISPATCH_UNAUTHENTICATED` is the
+ * dispatch endpoint refusing our own signature/bearer — a missing, wrong, or
+ * rotated `LUNORA_SCHEDULER_SECRET`/`LUNORA_ADMIN_TOKEN`. It is a 403 like an
+ * RLS `FORBIDDEN`, but it says nothing about the message: retrying after the
+ * secret is fixed succeeds, so classifying it as deterministic would ack every
+ * queued message one delivery at a time and drain the queue while the operator
+ * is still fixing the credential.
+ */
+const INFRASTRUCTURE_DISPATCH_CODES: ReadonlySet<string> = new Set(["DISPATCH_UNAUTHENTICATED"]);
+
+/**
  * True when `error` is a {@link LunoraError} {@link toDispatchError} rebuilt
  * from a real dispatch error envelope (carrying its
  * {@link DISPATCH_FAILURE_BRAND}) whose
- * `status` is in {@link DETERMINISTIC_DISPATCH_STATUSES} — i.e. a dispatch
+ * `status` is in {@link DETERMINISTIC_DISPATCH_STATUSES} and whose `code` is not
+ * one of {@link INFRASTRUCTURE_DISPATCH_CODES} — i.e. a dispatch
  * failure a consumer (`@lunora/workflow`'s `createRunStep`, `@lunora/queue`'s
  * consumer) should treat as non-retryable rather than rethrowing for the
  * platform's default retry-on-throw. The brand check is what keeps this
@@ -156,7 +169,8 @@ const DETERMINISTIC_DISPATCH_STATUSES: ReadonlySet<number> = new Set([400, 403, 
 const isDeterministicDispatchFailure = (error: unknown): error is LunoraError =>
     isLunoraError(error) &&
     (error as { [DISPATCH_FAILURE_BRAND]?: unknown })[DISPATCH_FAILURE_BRAND] === true &&
-    DETERMINISTIC_DISPATCH_STATUSES.has(error.status);
+    DETERMINISTIC_DISPATCH_STATUSES.has(error.status) &&
+    !INFRASTRUCTURE_DISPATCH_CODES.has(error.code);
 
 /**
  * Build the error a timed-out dispatch rejects with. Deliberately a 5xx-class

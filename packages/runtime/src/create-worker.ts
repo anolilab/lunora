@@ -2953,7 +2953,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         if (!authenticated) {
-            throw new LunoraError("Scheduler dispatch requires a valid signature or admin bearer", { code: "FORBIDDEN", status: 403 });
+            // `DISPATCH_UNAUTHENTICATED`, never a plain `FORBIDDEN`: this refusal
+            // is about the CALLER's credentials, not about the function it asked
+            // for. Dispatch consumers (`@lunora/queue`, `@lunora/workflow`) treat
+            // a 403 as deterministic and ack the message instead of retrying — so
+            // a rotated secret would silently drain the queue one message per
+            // delivery. The distinct code is what keeps this retryable.
+            throw new LunoraError("Scheduler dispatch requires a valid signature or admin bearer", { code: "DISPATCH_UNAUTHENTICATED", status: 403 });
         }
 
         let body: unknown;

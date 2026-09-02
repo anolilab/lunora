@@ -251,6 +251,30 @@ describe("createWorker — `authorizeShard` gates callers, never system dispatch
         expect(shard.calls[0]?.shardKey).toBe("tenant-7");
     });
 
+    it("refuses a wrong bearer with DISPATCH_UNAUTHENTICATED, not the per-call FORBIDDEN", async () => {
+        expect.assertions(3);
+
+        const shard = createShardSpy();
+        const worker = createWorker({ adminToken: "admin-secret", shardDO: shard.namespace });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/scheduler/dispatch", {
+                body: JSON.stringify({ args: {}, functionPath: "digests:flush", id: "job-1", shardKey: "tenant-7" }),
+                headers: { authorization: "Bearer stale-secret" }, // gitleaks:allow -- test fixture bearer, deliberately not the admin token above
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(403);
+        // The code is what dispatch consumers classify on: a rotated token fails
+        // every message identically, so it must stay retryable rather than being
+        // acked as a poison message.
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "DISPATCH_UNAUTHENTICATED" } });
+        expect(shard.calls).toHaveLength(0);
+    });
+
     it("still rejects an anonymous end user with that same gate", async () => {
         expect.assertions(3);
 

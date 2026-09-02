@@ -305,6 +305,23 @@ export const ERROR_CATALOG = {
     BAD_SUBSCRIPTION_ARGS: { status: 400, title: "Invalid subscription arguments" },
     BATCH_LIMIT_EXCEEDED: { status: 400, title: "Batch limit exceeded" },
     CROSS_SHARD_RANK_UNSUPPORTED: { status: 400, title: "Cross-shard rank() is unsupported" },
+
+    /**
+     * The `/_lunora/scheduler/dispatch` entry rejected the request's own
+     * signature/bearer — a worker/scheduler MISCONFIGURATION (missing, wrong, or
+     * rotated `LUNORA_SCHEDULER_SECRET` / `LUNORA_ADMIN_TOKEN`), not a verdict on
+     * the function being dispatched. Distinct from `FORBIDDEN`/`FORBIDDEN_SHARD`
+     * because dispatch consumers classify a 403 as deterministic and stop
+     * retrying: an auth failure clears the moment the secret is fixed, so it must
+     * stay retryable or every queued message drains into the void while the
+     * credential is wrong. See `isDeterministicDispatchFailure` in
+     * `@lunora/dispatch`.
+     */
+    DISPATCH_UNAUTHENTICATED: {
+        hint: "The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER_SECRET` matches on both sides, or that `LUNORA_ADMIN_TOKEN` is set and current.",
+        status: 403,
+        title: "Dispatch caller not authenticated",
+    },
     FORBIDDEN_FANOUT: { status: 403, title: "Fan-out forbidden" },
     GLOBAL_SEARCH_SCORES_UNSUPPORTED: { status: 400, title: "collectWithScores() is unsupported on a global table" },
     FORBIDDEN_ORIGIN: { status: 403, title: "Origin forbidden" },
