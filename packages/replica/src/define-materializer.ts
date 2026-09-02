@@ -449,7 +449,8 @@ class MaterializerRuntime {
      * This is a convenience over calling `doClient.append(...)` +
      * `runtime.applyEntries(...)` yourself — it persists the event
      * **then** applies the returned entry (with its assigned seq).
-     * @returns The persisted entry with its DO-assigned `seq`.
+     * @returns The persisted entry with its DO-assigned `seq` — always, whether
+     * or not the entry could be applied to the materializers (see below).
      */
     public async appendEvent(input: AppendEventInput): Promise<EventLogEntry> {
         if (!this.#doClient) {
@@ -471,11 +472,24 @@ class MaterializerRuntime {
         // and skips it permanently: the next `initialize()` starts after the
         // gap and nothing ever reads those entries. The walk re-fetches this
         // entry too; `applyEntries` skips it as already applied, so the call
-        // below stays correct either way. It closes the gap only UP TO
-        // MAX_CATCHUP_PAGES — `#catchUp` stops at the same bound `initialize()`
-        // does — so a backlog deeper than that is still stepped over here.
+        // below stays correct either way.
         if (this.#materializers.length > 0 && this.appliedSeq < entry.seq) {
             await this.#catchUp();
+
+            // `#catchUp` is bounded by MAX_CATCHUP_PAGES, so a backlog deeper
+            // than the bound leaves the gap OPEN. Applying the entry now would
+            // do exactly what the walk above exists to prevent — step every
+            // lagging watermark to `entry.seq + 1` over events nothing has read
+            // — and the resulting state is not "slightly behind" but
+            // permanently derived from a subset of the log, with no record that
+            // anything is missing. Leave the entry unapplied instead: it is
+            // durably persisted, the watermarks still point INTO the backlog,
+            // and the next catch-up (this method's own, or `initialize()`)
+            // applies the backlog and this entry in seq order. State converges
+            // late rather than settling wrong.
+            if (this.appliedSeq < entry.seq) {
+                return entry;
+            }
         }
 
         this.applyEntries([entry]);

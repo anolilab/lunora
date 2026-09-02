@@ -101,6 +101,21 @@ describe("requestSeedRows", () => {
         await expect(requestSeedRows(request)).resolves.toStrictEqual({ kind: "error", message: expect.any(String) });
     });
 
+    it("rejects a row list whose entries decode to non-plain objects", async () => {
+        expect.assertions(1);
+
+        // `decodeWire` turns tagged leaves into `Date`/`Map`/`Set`/`Uint8Array`,
+        // all of which are `typeof "object"` and none of which is a row
+        // document — `importShard`'s per-column validators would be handed a
+        // value that cannot satisfy `Record<string, unknown>`.
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => jsonResponse(true, { ok: true, rows: encodeWire([new Date(0), new Map([["a", 1]])]) })),
+        );
+
+        await expect(requestSeedRows(request)).resolves.toStrictEqual({ kind: "error", message: expect.any(String) });
+    });
+
     it("returns an error result when the wire payload cannot be decoded", async () => {
         expect.assertions(1);
 
@@ -111,6 +126,22 @@ describe("requestSeedRows", () => {
         );
 
         await expect(requestSeedRows(request)).resolves.toStrictEqual({ kind: "error", message: expect.any(String) });
+    });
+
+    it("names the parent tables an fk-parents-empty refusal lists", async () => {
+        expect.assertions(1);
+
+        // Only the string entries reach the message — the field is host-supplied
+        // and unvalidated, so a stray non-string must not render as `42`.
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => jsonResponse(false, { error: "fk-parents-empty", ok: false, tables: ["users", 42, "teams"] })),
+        );
+
+        await expect(requestSeedRows(request)).resolves.toStrictEqual({
+            kind: "error",
+            message: expect.stringContaining("users, teams"),
+        });
     });
 
     it("survives an fk-parents-empty refusal whose tables field is not an array", async () => {
@@ -150,5 +181,19 @@ describe("collectUnresolvableFkColumns", () => {
         );
 
         expect(blocked).toStrictEqual(["authorId"]);
+    });
+
+    it("clears an FK column once its parent has sampled rows, and blocks one whose parent was never sampled", () => {
+        expect.assertions(2);
+
+        const columns = [
+            { name: "authorId", optional: false, ref: "users", type: "id" },
+            { name: "teamId", optional: false, ref: "teams", type: "id" },
+        ] as const;
+
+        // `teams` is absent from the pools entirely — the same "nothing to link
+        // against" as an empty pool, so it blocks too.
+        expect(collectUnresolvableFkColumns([...columns], { users: ["u1"] })).toStrictEqual(["teamId"]);
+        expect(collectUnresolvableFkColumns([...columns], { teams: ["t1"], users: ["u1"] })).toStrictEqual([]);
     });
 });

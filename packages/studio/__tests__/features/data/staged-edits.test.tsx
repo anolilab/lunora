@@ -53,6 +53,34 @@ describe("useStagedEdits", () => {
         expect(result.current.count).toBe(2);
     });
 
+    it("keeps a cell staged as undefined that the patch never wrote", () => {
+        expect.assertions(2);
+
+        // `committed[column]` reads `undefined` for a column the patch never
+        // carried, so a value-only comparison cannot tell "absent from the
+        // patch" from "written as undefined" — and threw away a cell staged
+        // after the snapshot was taken. `stagedValue` already keys off
+        // `column in row`, so the buffer separates the two everywhere else.
+        const { result } = renderHook(() => useStagedEdits());
+
+        act(() => {
+            result.current.stage("m1", "text", "first");
+        });
+
+        const committed = result.current.staged["m1"] ?? {};
+
+        act(() => {
+            result.current.stage("m1", "author", undefined);
+        });
+
+        act(() => {
+            result.current.drop("m1", committed);
+        });
+
+        expect(result.current.stagedValue("m1", "author")).toStrictEqual({ value: undefined });
+        expect(result.current.count).toBe(1);
+    });
+
     it("leaves a partly-committed row where it was in the buffer", () => {
         expect.assertions(2);
 

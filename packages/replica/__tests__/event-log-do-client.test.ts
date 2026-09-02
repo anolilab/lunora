@@ -377,6 +377,61 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
         expect(runtime.appliedSeq).toBe(1501);
     });
 
+    it("appendEvent leaves its entry unapplied when the catch-up cannot close the gap", async () => {
+        expect.assertions(6);
+
+        // The gap the walk cannot close in one call. `#catchUp` is bounded by
+        // MAX_CATCHUP_PAGES (1000), so a backlog deeper than the bound is STILL
+        // open when the walk returns — the previous fixture kept the remainder
+        // under the bound and so could not tell the two behaviours apart.
+        // Applying the appended entry here would advance every lagging
+        // watermark to `entry.seq + 1`, and the events in between would never
+        // be fetched by anyone again. The entry is persisted either way; it
+        // waits for the backlog ahead of it instead.
+        const client = {
+            append: async () => [{ seq: 2500, type: "increment", payload: {}, timestamp: 2500 }],
+            getSince: async (sinceSeq: number) => {
+                return {
+                    cursor: sinceSeq + 1,
+                    entries: [{ seq: sinceSeq, type: "increment", payload: {}, timestamp: sinceSeq }],
+                    truncated: sinceSeq < 2500,
+                };
+            },
+        } as unknown as EventLogDOClient;
+
+        const counter = defineMaterializer({
+            name: "counter",
+            initial: () => {
+                return { total: 0 };
+            },
+            handle: (state, entry) => {
+                if (entry.type === "increment") {
+                    return { total: state.total + 1 };
+                }
+                return state;
+            },
+        });
+
+        const runtime = new MaterializerRuntime([counter], { doClient: client });
+
+        // First pass: 0..999, one page each, then the budget runs out.
+        await expect(runtime.initialize()).resolves.toBe(1000);
+
+        const entry = await runtime.appendEvent({ type: "increment", payload: {} });
+
+        // The append still persisted and still reports its seq.
+        expect(entry.seq).toBe(2500);
+        // A second budget carried 1000..1999. Seqs 2000..2500 are still ahead of
+        // the watermark — NOT stepped over — so nothing is lost.
+        expect(counter.state).toEqual({ total: 2000 });
+        expect(runtime.appliedSeq).toBe(2000);
+
+        // The backlog is still reachable: the next pass reads 2000..2500,
+        // including the appended entry, in seq order.
+        await expect(runtime.initialize()).resolves.toBe(501);
+        expect(counter.state).toEqual({ total: 2501 });
+    });
+
     it("appendEvent throws when no doClient configured", async () => {
         expect.assertions(1);
 
