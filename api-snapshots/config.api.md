@@ -1380,6 +1380,12 @@ const planDevVariablesScaffold: (input: {
 }) => ScaffoldPlan;
 ```
 
+### `projectUsesUmbrella` (const)
+
+```ts
+const projectUsesUmbrella: (root: string) => boolean;
+```
+
 ### `promptMultiSelect` (const)
 
 ```ts
@@ -1472,6 +1478,12 @@ const resolveDeployDriver: (target?: string) => DeployDriver;
 const resolveProjectTarget: (projectRoot: string, explicit?: string) => string;
 ```
 
+### `resolveServerModule` (const)
+
+```ts
+const resolveServerModule: (projectRoot: string) => string;
+```
+
 ### `resolveTargetOrThrow` (const)
 
 ```ts
@@ -1513,7 +1525,7 @@ const runnableTargetIds: () => ReadonlyArray<string>;
 ### `scaffoldPolicyFile` (const)
 
 ```ts
-const scaffoldPolicyFile: (edit: ScaffoldPolicyEdit) => ScaffoldFileResult;
+const scaffoldPolicyFile: (edit: ScaffoldPolicyEdit, serverModule: string) => ScaffoldFileResult;
 ```
 
 ### `secretsForPackages` (const)
@@ -1545,7 +1557,7 @@ const upsertDevVariableLine: (content: string, key: string, value: string) => st
 ### `wireRlsIntoProcedure` (const)
 
 ```ts
-const wireRlsIntoProcedure: (source: string, edit: WireRlsEdit) => WireResult;
+const wireRlsIntoProcedure: (source: string, edit: WireRlsEdit, serverModule: string) => WireResult;
 ```
 
 ### `writeDevServerState` (const)
@@ -2219,6 +2231,15 @@ const wranglerToAlchemy: (config: WranglerConfigShape) => AlchemyTranslation;
 const ALLOW_FORWARDED_ENV = "LUNORA_STUDIO_ALLOW_FORWARDED";
 ```
 
+### `LocalEndpointContext` (interface)
+
+```ts
+interface LocalEndpointContext {
+    readonly apiSpec?: CodegenOptions["apiSpec"];
+    readonly schemaDirectory?: string;
+}
+```
+
 ### `LocalEndpointHandler` (type)
 
 ```ts
@@ -2228,11 +2249,10 @@ type LocalEndpointHandler = (request: LocalEndpointRequest) => LocalEndpointResp
 ### `LocalEndpointRequest` (interface)
 
 ```ts
-interface LocalEndpointRequest {
+interface LocalEndpointRequest extends LocalEndpointContext {
     readonly body?: unknown;
     readonly method: string;
     readonly projectRoot: string;
-    readonly schemaDirectory?: string;
 }
 ```
 
@@ -2261,6 +2281,7 @@ type PolicyScaffoldBody = DestructivePolicyEdit | ScaffoldPolicyEdit | WirePolic
 
 ```ts
 interface PolicyScaffoldRequest {
+    readonly apiSpec?: CodegenOptions["apiSpec"];
     readonly body?: unknown;
     readonly method: string;
     readonly projectRoot: string;
@@ -2293,6 +2314,7 @@ const SEED_ENDPOINT = "/__lunora/seed";
 
 ```ts
 interface SchemaEditRequest {
+    readonly apiSpec?: CodegenOptions["apiSpec"];
     readonly body?: unknown;
     readonly method: string;
     readonly projectRoot: string;
@@ -2473,7 +2495,7 @@ const sendStudioDocument: (response: ServerResponse, body: Buffer | string) => v
 ### `serveJsonHandler` (const)
 
 ```ts
-const serveJsonHandler: (request: IncomingMessage, response: ServerResponse, handle: LocalEndpointHandler, projectRoot: string, schemaDirectory?: string) => void;
+const serveJsonHandler: (request: IncomingMessage, response: ServerResponse, handle: LocalEndpointHandler, projectRoot: string, context?: LocalEndpointContext) => void;
 ```
 
 ### `studioAssetsStamp` (const)
