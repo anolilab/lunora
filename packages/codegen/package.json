@@ -1,6 +1,6 @@
 {
     "name": "@lunora/codegen",
-    "version": "1.0.0-alpha.149",
+    "version": "1.0.0-alpha.150",
     "description": "Code generator for Lunora: emits _generated/{api,server,dataModel}.ts from your schema",
     "keywords": [
         "cloudflare",
@@ -62,7 +62,7 @@
     },
     "dependencies": {
         "@lunora/advisor": "1.0.0-alpha.105",
-        "@lunora/agent": "1.0.0-alpha.81",
+        "@lunora/agent": "1.0.0-alpha.82",
         "@lunora/container": "1.0.0-alpha.40",
         "@lunora/errors": "1.0.0-alpha.29",
         "@lunora/platform": "1.0.0-alpha.24",
