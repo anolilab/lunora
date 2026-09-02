@@ -20,7 +20,7 @@
 
 import type { SearchBackfillState } from "@lunora/search-core";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
-import { searchIndexField } from "@lunora/search-core";
+import { searchCoverageSurvives } from "@lunora/search-core";
 import { sql } from "drizzle-orm";
 
 import type { SqlDialect } from "./dialect";
@@ -158,13 +158,11 @@ const readSearchBackfillState = async (exec: SqlCtxExec, dialect: SqlDialect, co
  * a first walk. `covered = covered` is the portable no-op assignment; the three
  * dialects disagree about whether `MAX` is scalar or aggregate.
  *
- * The one thing that BREAKS the latch is re-pointing the index at another
- * FIELD. The latch's justification is that a rebuilding companion still holds
- * an answer about the column that was asked for, just under older rules. After
- * a field change it does not: every stored row holds the text of the abandoned
- * column, so a latched `covered` had the read path serve confidently wrong
- * matches for the whole re-walk. Only the FIELD half of the profile is
- * compared, so an analyzer-version or language bump keeps the latch as before.
+ * Whether the latch may carry into a given rebuild is
+ * {@link searchCoverageSurvives}'s call, shared with the DO twin so the two
+ * planes cannot answer it differently. That docblock carries the reasoning and
+ * the operational cost — including the 503 window an upgrade from before profile
+ * tracking pays once.
  */
 const writeSearchBackfillState = async (
     exec: SqlCtxExec,
@@ -181,22 +179,13 @@ const writeSearchBackfillState = async (
         dialect,
         sql`SELECT ${sql.identifier("profile")} FROM ${sql.identifier(SEARCH_STATE_TABLE)} WHERE ${sql.identifier("companion")} = ${companion}`,
     );
-    const recorded = existing[0]?.["profile"];
     // Only the FIRST page of a field-change rebuild sees a differing recorded
-    // profile — from the second page on, the recorded profile is already the new one.
-    //
-    // A NON-STRING recorded profile breaks the latch too. A row written before
-    // profile tracking existed can carry `covered = 1` and a NULL profile, and
-    // `planSearchBackfillPass` treats "no profile" as a mismatch: it wipes the
-    // companion and re-walks. Latching `covered` through that wipe reports an
-    // emptied companion as complete, and every read until the walk finishes
-    // returns partial matches as the whole answer. Nothing says what analyzed
-    // those rows or over which field, so the only sound reading is "unverified,
-    // reset".
-    const fieldUnverified = typeof recorded !== "string" || searchIndexField(recorded) !== searchIndexField(profile);
+    // profile — from the second page on, the recorded profile is already the new
+    // one. A NULL profile comes back typed differently per driver, which is why
+    // the predicate takes it unwidened.
+    const verified = searchCoverageSurvives(existing[0]?.["profile"], profile);
     const doneValue = done ? 1 : 0;
-    const coveredSet =
-        done || fieldUnverified ? sql`${sql.identifier("covered")} = ${doneValue}` : sql`${sql.identifier("covered")} = ${sql.identifier("covered")}`;
+    const coveredSet = done || !verified ? sql`${sql.identifier("covered")} = ${doneValue}` : sql`${sql.identifier("covered")} = ${sql.identifier("covered")}`;
     const update = sql`UPDATE ${sql.identifier(SEARCH_STATE_TABLE)} SET ${sql.identifier("cursor")} = ${cursorValue}, ${sql.identifier("done")} = ${doneValue}, ${sql.identifier("profile")} = ${profile}, ${coveredSet} WHERE ${sql.identifier("companion")} = ${companion}`;
 
     if (existing.length > 0) {

@@ -741,23 +741,24 @@ describe("global search provisioning", () => {
     });
 
     /**
-     * The `covered` latch is what lets a REBUILDING companion keep serving while
-     * a NEW one refuses, and it survives an analyzer bump on purpose. What it
-     * must not survive is a rebuild it cannot vouch for: a progress row written
-     * before profile tracking existed carries `covered = 1` and a NULL profile,
-     * `planSearchBackfillPass` reads that absence as a mismatch and wipes the
-     * companion, and latching through the wipe reported an emptied companion as
-     * complete — partial results served as the whole answer for the length of
-     * the re-walk.
+     * How this plane spells `searchCoverageSurvives`' answer in SQL — the
+     * `covered = covered` no-op assignment against the replace, over the
+     * portable UPDATE-or-INSERT the three dialects force.
+     *
+     * WHEN the latch may carry, and what it costs when it may not, is decided and
+     * argued once in `@lunora/search-core` (`searchCoverageSurvives`) and tested
+     * there. These cases exist because the two engines write the flag with
+     * different statements, and a shared policy spelled wrong on one plane is
+     * still wrong.
      */
-    describe("coverage across a legacy progress row", () => {
+    describe("coverage upsert", () => {
         /** A row as an earlier build left it: finished, latched, nothing recorded about what analyzed it. */
         const seedLegacyRow = async (): Promise<void> => {
             await migrateSearchState(exec, dialect);
             raw(`INSERT INTO "${SEARCH_STATE_TABLE}" ("companion", "cursor", "done", "profile", "covered") VALUES (?, NULL, 1, NULL, 1)`, COMPANION);
         };
 
-        it("drops coverage on the first incomplete page of the rewalk it forces", async () => {
+        it("replaces coverage on the first incomplete page of a rebuild it cannot vouch for", async () => {
             expect.assertions(2);
 
             await seedLegacyRow();
@@ -779,9 +780,11 @@ describe("global search provisioning", () => {
             await expect(readSearchIndexCoverage(exec, dialect, COMPANION)).resolves.toBe(true);
         });
 
-        it("still holds the latch through an analyzer bump that keeps the same field", async () => {
+        it("holds a latched 1 against an incomplete page of a rebuild it can vouch for", async () => {
             expect.assertions(1);
 
+            // `covered = covered` rather than the replace: the second write
+            // carries `done = 0`, and assigning it would drop the flag.
             await migrateSearchState(exec, dialect);
             await writeSearchBackfillState(exec, dialect, COMPANION, "d0249", true, "en-v1:body");
             await writeSearchBackfillState(exec, dialect, COMPANION, "d0100", false, "en-v2:body");

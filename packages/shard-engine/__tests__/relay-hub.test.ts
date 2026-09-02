@@ -646,3 +646,144 @@ describe("relay shape control frames vs. a resubscribe on the same subId", () =>
         expect(posts).toContain("relay_attach");
     });
 });
+
+/**
+ * That queue is scoped to a CONNECTION, not to the relay.
+ *
+ * The hazard it exists for is the `relayIndex:connectionId:subId` proxy key, one
+ * per connection. A relay only exists past the promotion threshold, so a single
+ * chain per member would put thousands of sockets in one line: every seed is a
+ * cross-DO round trip with no timeout, `shape_subscribe` awaits it, and
+ * `webSocketClose` awaits the release — so on a relay wake or a mass disconnect
+ * the last socket waits N x RTT, and one stalled owner POST stalls every
+ * subsequent subscribe and every socket close on that relay.
+ */
+describe("relay shape control queue scope", () => {
+    /** A relay member whose owner-bound posts are recorded as `type:connectionId`, with `stall` deciding which frames are held and for how long. */
+    const memberWithOwner = (
+        stall: (frame: { connectionId?: string; type: string }) => Promise<void> | undefined,
+    ): {
+        connections: WeakMap<ShardSocketLike, string>;
+        member: NonNullable<ReturnType<typeof createRelayLink>>;
+        posts: string[];
+    } => {
+        const posts: string[] = [];
+        const connections = new WeakMap<ShardSocketLike, string>();
+
+        const host = {
+            doName: () => `${OWNER_KEY}::relay::0`,
+            env: () => {
+                const stub = {
+                    fetch: async (_url: string, init?: { body?: string }) => {
+                        const frame = JSON.parse(init?.body ?? "{}") as { connectionId?: string; type: string };
+
+                        await stall(frame);
+                        posts.push(`${frame.type}:${frame.connectionId ?? "-"}`);
+
+                        return Response.json(
+                            { cursor: 5, epoch: "e1", frames: [] },
+                            {
+                                headers: { "content-type": "application/json" },
+                                status: 200,
+                            },
+                        );
+                    },
+                };
+
+                return { SHARD: { get: () => stub, getByName: () => stub, idFromName: (id: string) => id } };
+            },
+            getWebSockets: () => [],
+            readAttachment: (ws: ShardSocketLike) => ({ connectionId: connections.get(ws) }) as unknown as SocketAttachment,
+            shardBinding: () => "SHARD",
+        } as unknown as RelayHost;
+
+        const member = createRelayLink(host);
+
+        if (member === undefined) {
+            throw new Error("expected a relay link for a ::relay::-suffixed DO name");
+        }
+
+        return { connections, member, posts };
+    };
+
+    const IDENTITY = { identity: { org: "acme" }, userId: "u1" } as unknown as SubscriptionIdentity;
+
+    it("seeds a second socket while the first socket's seed is still waiting on the owner", async () => {
+        expect.assertions(3);
+
+        let openTheGate = (): void => {};
+        const gate = new Promise<void>((resolve) => {
+            openTheGate = resolve;
+        });
+        const { connections, member, posts } = memberWithOwner((frame) => (frame.connectionId === "c-alice" ? gate : undefined));
+
+        const first = {} as unknown as ShardSocketLike;
+        const alice = {} as unknown as ShardSocketLike;
+        const bob = {} as unknown as ShardSocketLike;
+
+        connections.set(first, "c-first");
+        connections.set(alice, "c-alice");
+        connections.set(bob, "c-bob");
+
+        // A warm relay: the announce latch is already set, so neither seed below
+        // pays the attach hop. Without this the two seeds would be spaced apart
+        // by their own `announce()` microtasks rather than by the queue, and the
+        // over-broad lock would go undetected.
+        await member.seedRelayShape(first, "s0", OPEN_SHAPE, IDENTITY);
+
+        // Alice's seed is stuck on an owner that has not answered — a relay wake,
+        // a reconnect storm, a slow owner. `requestRelayMessage` has no timeout,
+        // so it stays stuck for as long as the owner takes.
+        const stalled = member.seedRelayShape(alice, "s1", OPEN_SHAPE, IDENTITY);
+        const seeded = member.seedRelayShape(bob, "s1", OPEN_SHAPE, IDENTITY);
+
+        // Bob shares the relay, not the hazard: his proxy key is his own
+        // `connectionId`, so nothing about Alice's in-flight seed orders against
+        // it. One chain per member would hold him — and every socket behind him —
+        // until Alice's owner POST answered.
+        const outcome = await Promise.race([
+            seeded,
+            new Promise((resolve) => {
+                setTimeout(resolve, 50, "blocked");
+            }),
+        ]);
+
+        expect(outcome).toBe("ok");
+        expect(posts).toContain("relay_shape_subscribe:c-bob");
+
+        openTheGate();
+
+        await expect(stalled).resolves.toBe("ok");
+    });
+
+    it("keeps a subscribe ahead of the unsubscribe that followed it, across the announce hop", async () => {
+        expect.assertions(1);
+
+        // The relay has not announced yet, so the seed's first act is a real
+        // cross-DO `relay_attach`. Held long enough for the release the client
+        // sent afterwards to reach the queue while it is still in flight.
+        const { connections, member, posts } = memberWithOwner((frame) =>
+            frame.type === "relay_attach"
+                ? new Promise<void>((resolve) => {
+                      setTimeout(resolve, 5);
+                  })
+                : undefined,
+        );
+
+        const ws = {} as unknown as ShardSocketLike;
+
+        connections.set(ws, "c-alice");
+
+        const seeded = member.seedRelayShape(ws, "s1", OPEN_SHAPE, IDENTITY);
+        const released = member.releaseRelayShapes(ws, "s1");
+
+        await seeded;
+        await released;
+
+        // Taking the queue slot only AFTER `announce()` resolved put the
+        // unsubscribe ahead of the subscribe it followed, and the owner then
+        // deleted the proxy registration the subscribe had just written — the
+        // socket keeps its subscription and stops being poked until it detaches.
+        expect(posts.filter((post) => post.startsWith("relay_shape"))).toStrictEqual(["relay_shape_subscribe:c-alice", "relay_shape_unsubscribe:c-alice"]);
+    });
+});

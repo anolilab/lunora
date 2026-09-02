@@ -95,7 +95,7 @@ const INDEX_SORT_KEYS = dsql`_creationTime, id`;
  * are separate statements and the throw propagates), which is the safe
  * direction — a slower index is a working one.
  */
-const dropIndexIfShapeChanged = (sql: SqlExec, indexName: string, tableName: string, expressions: SQL, unique: boolean): void => {
+const dropIndexIfShapeChanged = (sql: SqlExec, indexName: string, tableName: string, expressions: SQL, unique: boolean, refs: ReadonlyArray<SQL>): void => {
     const existing = runDrizzle<{ sql: null | string }>(
         sql,
         dsql`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ${indexName} AND tbl_name = ${tableName}`,
@@ -129,12 +129,26 @@ const dropIndexIfShapeChanged = (sql: SqlExec, indexName: string, tableName: str
     // re-fails on every wake, so the gap never closes on its own. Refusing keeps
     // the old constraint in force and names what has to be de-duplicated.
     //
-    // Kept identical to the sql-store twin (`packages/sql-store/src/ctx-db.ts`)
-    // deliberately: the two already carry the same catalog-parsing logic, and a
-    // guard on one destructive DDL path but not the other is worse than the
-    // duplication.
+    // Kept identical to the sql-store twin
+    // (`packages/sql-store/src/ctx-db-migrations.ts`) deliberately: the two
+    // already carry the same catalog-parsing logic, and a guard on one
+    // destructive DDL path but not the other is worse than the duplication.
     if (unique) {
-        const duplicates = runDrizzle(sql, dsql`SELECT 1 FROM ${dsql.identifier(tableName)} GROUP BY ${expressions} HAVING COUNT(*) > 1 LIMIT 1`);
+        // Restricted to rows where EVERY indexed column is non-NULL, because the
+        // two sides disagree about NULL: `GROUP BY` treats NULLs as equal, a
+        // SQLite UNIQUE index treats them as distinct. `json_extract` yields NULL
+        // for an unset optional field, so without the filter two rows that simply
+        // never set an optional `.unique()` column read as a duplicate, this
+        // throws, and a `CREATE UNIQUE INDEX` that would have SUCCEEDED is
+        // refused — inside the shard migration, so the shard never opens again.
+        const nonNull = dsql.join(
+            refs.map((reference) => dsql`${reference} IS NOT NULL`),
+            dsql` AND `,
+        );
+        const duplicates = runDrizzle(
+            sql,
+            dsql`SELECT 1 FROM ${dsql.identifier(tableName)} WHERE ${nonNull} GROUP BY ${expressions} HAVING COUNT(*) > 1 LIMIT 1`,
+        );
 
         if (duplicates.toArray().length > 0) {
             throw new LunoraError(
@@ -159,13 +173,11 @@ const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: Ta
     for (const index of definition.indexes) {
         const indexName = `${tableName}_${index.name}`;
         const unique = index.unique ?? false;
-        const fields = dsql.join(
-            index.fields.map((field) => jsonPathSql(field)),
-            dsql`, `,
-        );
+        const refs = index.fields.map((field) => jsonPathSql(field));
+        const fields = dsql.join(refs, dsql`, `);
         const expressions = unique ? fields : dsql`${fields}, ${INDEX_SORT_KEYS}`;
 
-        dropIndexIfShapeChanged(sql, indexName, tableName, expressions, unique);
+        dropIndexIfShapeChanged(sql, indexName, tableName, expressions, unique, refs);
         runDrizzle(sql, createIndexSql(indexName, tableName, expressions, unique));
     }
 
