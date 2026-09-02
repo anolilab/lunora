@@ -77,6 +77,19 @@ interface LunoraMcpServerOptions {
     allowAgents?: boolean;
 
     /**
+     * Expose the observability tools (`lunora_get_logs`, `lunora_get_issues`,
+     * `lunora_get_advisories`, `lunora_get_query_insights`,
+     * `lunora_get_migration_status`). Defaults to `false`, mirroring
+     * `allowWrites`: they are read-only, but every row they return — log lines,
+     * request metadata, grouped error messages — is production user data that
+     * lands in the model's context and therefore at its provider. Holding the
+     * admin bearer is not consent to ship that, so it is a separate opt-in;
+     * without it the tools are omitted from the advertised list AND refused at
+     * dispatch. Only takes effect when a `token` resolved.
+     */
+    allowObservability?: boolean;
+
+    /**
      * Expose the write tools (`lunora_run_mutation` / `lunora_run_action`).
      * Defaults to `false`: the server is READ-ONLY unless explicitly opted in,
      * so a prompt-injected or misaligned agent can't mutate the deployment with
@@ -155,16 +168,18 @@ const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
     const allowWrites = options.allowWrites ?? false;
     const allowAgents = options.allowAgents ?? false;
     const agents = options.agents ?? [];
-    // The observability tools' gate. Every tool needs the admin bearer, so the
-    // `url` path above already refused a tokenless server and this reads `true`
-    // there. It stays a real gate only for the `client` injection seam, where
-    // this server has not been told what the injected client can reach — and the
+    // The observability tools' gate: BOTH an explicit opt-in and a resolved admin
+    // bearer. The bearer alone is not enough — every tool already needs it, so
+    // deriving the gate from it made the privileged reads on by default on every
+    // server. The token half still matters for the `client` injection seam, where
+    // this server has not been told what the injected client can reach and the
     // fail-closed reading of "unknown" is "no privileged tools".
     const hasAdminToken = typeof options.token === "string" && options.token.length > 0;
+    const allowObservability = options.allowObservability === true && hasAdminToken;
     const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
 
     server.setRequestHandler(ListToolsRequestSchema, () => {
-        return { tools: [...toolDefinitions(allowWrites, hasAdminToken), ...agentToolDefinitions(agents, allowAgents)] };
+        return { tools: [...toolDefinitions(allowWrites, allowObservability), ...agentToolDefinitions(agents, allowAgents)] };
     });
 
     server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
@@ -180,7 +195,7 @@ const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
                   ...(options.agentMaxWaitMs === undefined ? {} : { maxWaitMs: options.agentMaxWaitMs }),
                   ...(options.agentPollIntervalMs === undefined ? {} : { pollIntervalMs: options.agentPollIntervalMs }),
               })
-            : await callTool(client, name, input, allowWrites, hasAdminToken);
+            : await callTool(client, name, input, allowWrites, allowObservability);
 
         return result as CallToolResult;
     });

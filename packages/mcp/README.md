@@ -75,11 +75,13 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 The five `lunora_get_*` observability tools are read-only, but they surface the
 deployment's **operational data** — log lines, request metadata, and grouped
 error messages, all of which may contain user data, and all of which land in the
-model's context (and therefore at its provider). They are exposed **only when an
-admin token resolved**: without one they are omitted from `ListTools` entirely
-and refused at dispatch, the same omit-don't-refuse rule the write tools use.
-They are independent of `--allow-writes`, which is about changing data, not
-reading operational data.
+model's context (and therefore at its provider). They are therefore **off by
+default**: set `LUNORA_MCP_ALLOW_OBSERVABILITY=1` (or pass
+`allowObservability: true`) to expose them. Without it they are omitted from
+`ListTools` entirely and refused at dispatch, the same omit-don't-refuse rule the
+write tools use. They are independent of `--allow-writes`, which is about
+changing data, not reading operational data — and independent of the admin
+bearer, which every tool already needs, so holding it is not the opt-in.
 
 They return `structuredContent` alongside the usual text block, described by each
 tool's `outputSchema` (MCP revision `2025-06-18` and later; older clients keep
@@ -239,6 +241,8 @@ await connectLocalStdio({
 ```
 
 The deployment tools are advertised even when the resolver currently returns nothing — MCP clients cache the tool list, so a surface that appeared only when the dev server happened to be up would stay invisible for the rest of the session. Calling one with nothing running returns an actionable error instead.
+
+The observability tools are the exception: their gate is snapshotted when the tool list is built, so a session started before `lunora dev` never advertises them (and the cached list keeps them absent afterwards). Restart the MCP server once the dev server is up.
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs)**.
 

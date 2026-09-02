@@ -5,10 +5,11 @@
  *
  * A THIRD tier, distinct from the always-on read tools and the `allowWrites`
  * write tools. These are read-only in the `readOnlyHint` sense, but they
- * surface production logs, request metadata, and grouped errors, so they are
- * advertised ONLY when an admin token resolved — the same omit-don't-refuse
- * rule the write gate uses, plus a refusal at dispatch. See `./tools`, which
- * owns both halves of that gate.
+ * surface production logs, request metadata, and grouped errors — user data that
+ * lands at the model provider — so they are advertised ONLY when
+ * `allowObservability` is set: the same omit-don't-refuse rule the write gate
+ * uses, plus a refusal at dispatch. See `./tools`, which owns both halves of
+ * that gate. The admin bearer is NOT the gate; every tool already needs it.
  *
  * Every read is an existing `__lunora_admin__:*` RPC, reached through the same
  * `LunoraClient` (and therefore the same `/_lunora/rpc` transport and bearer)
