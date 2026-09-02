@@ -289,6 +289,35 @@ describe("createScheduler", () => {
         await expect(scheduler.runAfter(0, fnRef, {})).rejects.toThrow(SCHEDULER_DO_PATTERN);
     });
 
+    it("propagates the SchedulerDO's coded refusal instead of re-wrapping it as INTERNAL", async () => {
+        expect.assertions(3);
+
+        const stub = {
+            fetch: vi.fn<DurableObjectStubLike["fetch"]>(async () =>
+                Response.json({ error: { code: "DUPLICATE_SCHEDULE_ID", message: 'a job with id "invoice-42" is already scheduled' } }, { status: 409 }),
+            ),
+        };
+        const namespace: DurableObjectNamespaceLike = {
+            get: () => stub,
+            idFromName: () => {
+                return { toString: () => "default" };
+            },
+        };
+        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+
+        // Flattened to `INTERNAL`, the message is what `toErrorBody` redacts — so
+        // the developer who named a job id twice was shown "Internal error" and
+        // nothing else.
+        const thrown = await scheduler.runAfter(0, fnRef, {}).then(
+            () => undefined,
+            (error: unknown) => error,
+        );
+
+        expect(thrown).toMatchObject({ code: "DUPLICATE_SCHEDULE_ID", status: 409 });
+        expect(thrown).toHaveProperty("message", 'a job with id "invoice-42" is already scheduled');
+        expect(thrown).not.toMatchObject({ code: "INTERNAL" });
+    });
+
     it("createCronTrigger emits a wrangler.jsonc snippet + dispatcher metadata", () => {
         expect.assertions(3);
 

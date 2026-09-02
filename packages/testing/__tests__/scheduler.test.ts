@@ -775,6 +775,21 @@ describe("fake scheduler production parity", () => {
         );
     });
 
+    it("rejects a non-finite runAt instant, and accepts an overdue one", async () => {
+        expect.assertions(2);
+
+        const t = start();
+
+        // The fake is a THIRD `runAt` alongside `createScheduler` and the deferral
+        // facade; a harness that took a value production refuses would tell a test
+        // the opposite of what ships.
+        await expect(t.run(async (ctx) => ctx.scheduler.runAt(Number.NaN, "log:appendLog", { message: "x" }))).rejects.toThrow(
+            "`date` must be a non-negative finite number",
+        );
+        // An instant that has already passed is an overdue job, not a bad argument.
+        await expect(t.run(async (ctx) => ctx.scheduler.runAt(1, "log:appendLog", { message: "x" }))).resolves.toMatch(/\S/u);
+    });
+
     it("rejects args the scheduler cannot serialize", async () => {
         expect.assertions(1);
 

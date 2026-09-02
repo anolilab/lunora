@@ -1585,6 +1585,27 @@ const CALL_REGISTERED_HELPER = `const callRegistered = async <R>(context: Caller
         throw new LunoraError("FUNCTION_NOT_FOUND", \`function not registered: \${functionPath}\`);
     }
 
+    // A mutation is routed through the caller's own \`ctx.runMutation\` rather than
+    // invoked directly, so \`createCaller(ctx).ns.someMutation()\` gets exactly what
+    // \`ctx.runMutation(api.ns.someMutation)\` gets: the BEGIN/COMMIT span (or the
+    // enclosing one, when the caller is already inside a transaction), the jobs it
+    // schedules held until that span commits, and the deferred object deletes
+    // flushed only once it has. Called straight, a mutation composed from an action
+    // or a stream had none of the three — its writes autocommitted one row at a
+    // time and its \`ctx.scheduler\` calls dispatched immediately, so a mid-handler
+    // throw left the earlier writes durable and the job already enqueued.
+    //
+    // The fallback covers a context that is not a shard dispatch (\`runMutation\` is
+    // installed by \`buildCtx\` on every kind but a query's TYPE omits it); there is
+    // no transaction to join in that case, so a direct call is all there is.
+    if (registered.kind === "mutation") {
+        const { runMutation } = context as { runMutation?: (reference: { __lunoraRef: string }, args: Record<string, unknown>) => Promise<unknown> };
+
+        if (typeof runMutation === "function") {
+            return (await runMutation.call(context, { __lunoraRef: functionPath }, args ?? {})) as R;
+        }
+    }
+
     return (await registered.handler(context, args ?? {})) as R;
 };`;
 
@@ -5561,17 +5582,25 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // documented as the deterministic equivalent of an \`afterCommit\` hook,
             // so the job must be enqueued after the commit, and a failure to enqueue
             // it must be visible rather than swallowed.
-            await settleSchedules(true);
-
-            // Then the objects whose rows are now durably gone. Deliberately AFTER
-            // the span, never inside it: an R2 delete cannot roll back, so a delete
-            // issued from within a transaction that later aborts destroys data the
-            // surviving row still points at.
             //
-            // \`flushDeferredDeletes\` never rejects — the mutation has already
-            // succeeded, so a failed cleanup must not turn into a failed response.
-            // A leaked object is reported through \`ctx.log\` instead, with its key.
-            await this.deferPastResponse(flushDeferredDeletes(ctx));
+            // In a \`finally\`, because both halves of this are post-commit cleanup
+            // and neither is allowed to cancel the other. \`settleSchedules\` drains
+            // its whole queue and then rethrows what failed, so a SchedulerDO that
+            // refused one job used to take the object cleanup down with it — the
+            // rows were durably gone and their objects leaked with nothing logged.
+            try {
+                await settleSchedules(true);
+            } finally {
+                // Then the objects whose rows are now durably gone. Deliberately AFTER
+                // the span, never inside it: an R2 delete cannot roll back, so a delete
+                // issued from within a transaction that later aborts destroys data the
+                // surviving row still points at.
+                //
+                // \`flushDeferredDeletes\` never rejects — the mutation has already
+                // succeeded, so a failed cleanup must not turn into a failed response.
+                // A leaked object is reported through \`ctx.log\` instead, with its key.
+                await this.deferPastResponse(flushDeferredDeletes(ctx));
+            }
 
             return result;
         }
@@ -5943,8 +5972,18 @@ ${vectorsBuild}${aiBuild}${everyContextBuild}${containersBuild}${workflowsBuild}
             // An action's own schedules stay immediate — the window is only open
             // while a transaction is (see \`runMutationTransaction\`).
             //
+            // Every kind but \`query\` is wrapped, because \`runMutationTransaction\`
+            // is installed on \`ctx.runMutation\` for every kind but \`query\`: a
+            // STREAM ctx, and an admin/lifecycle ctx with no registered kind at all,
+            // both get the BEGIN/COMMIT span for a mutation they compose, and used
+            // to get it with the deferral missing — so that mutation's job reached
+            // the SchedulerDO while its transaction was still open, and survived the
+            // rollback. A query cannot host a mutation handler (\`dispatchRun\`
+            // refuses it) and its ctx is built on the hot subscription path, so it
+            // stays unwrapped.
+            //
             // Wrapped OUTSIDE the read-stamping facade so \`get\`/\`list\` stay stamped.
-            const scheduler = contextKind === "mutation" || contextKind === "action" ? withDeferredSchedules(schedulerBase) : schedulerBase;
+            const scheduler = contextKind === "query" ? schedulerBase : withDeferredSchedules(schedulerBase);
             // Build the storage adapter once and share it between \`ctx.storage\`
             // and \`ctx.db.system._storage\` so both read the same R2 binding. The
             // \`storageStub\` fallback satisfies SystemReaderStorageLike structurally

@@ -97,9 +97,27 @@ describe("emitShard — deferred scheduling", () => {
         const emitted = shard();
 
         // Not mutations alone, for the same reason the deferred-delete queue is not:
-        // `ctx.runMutation` hands the CALLER's ctx to the callee.
-        expect(emitted).toContain('contextKind === "mutation" || contextKind === "action" ? withDeferredSchedules(schedulerBase) : schedulerBase');
+        // `ctx.runMutation` hands the CALLER's ctx to the callee. And not
+        // mutation+action alone either: `buildCtx` installs the transaction-wrapped
+        // `ctx.runMutation` on EVERY kind but a query, so a stream ctx — and an
+        // admin/lifecycle ctx with no registered kind — got the BEGIN/COMMIT span
+        // for a mutation they composed with the schedule buffer missing, and the
+        // job reached the SchedulerDO while that span was still open.
+        expect(emitted).toContain('const scheduler = contextKind === "query" ? schedulerBase : withDeferredSchedules(schedulerBase);');
         expect(emitted).toContain("scheduler,");
+    });
+
+    it("flushes the deferred deletes even when the schedule settle throws", () => {
+        expect.assertions(2);
+
+        const helper = methodBody(shard(), "private async runMutationTransaction<T>(");
+        const commit = helper.indexOf("await settleSchedules(true);");
+
+        // Both halves are post-commit cleanup and neither may cancel the other: a
+        // SchedulerDO that refused one job used to take the whole object cleanup
+        // down with it, leaking every key the mutation queued with nothing logged.
+        expect(helper.slice(commit)).toContain("} finally {");
+        expect(helper.indexOf("flushDeferredDeletes(ctx)", commit)).toBeGreaterThan(commit);
     });
 
     it("wraps outside the read-stamping facade so get/list stay stamped", () => {
