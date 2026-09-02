@@ -328,19 +328,23 @@ const devVariablesPinningPort = (cwd: string, port: number): string[] => {
         return [];
     }
 
-    return parseDevVariableEntries(content)
-        .filter((entry) => {
-            let parsed: URL;
+    const pinned: string[] = [];
 
-            try {
-                parsed = new URL(entry.value);
-            } catch {
-                return false;
-            }
+    for (const entry of parseDevVariableEntries(content)) {
+        let parsed: URL;
 
-            return LOOPBACK_ORIGIN_HOSTS.has(parsed.hostname) && parsed.port === String(port);
-        })
-        .map((entry) => entry.key);
+        try {
+            parsed = new URL(entry.value);
+        } catch {
+            continue;
+        }
+
+        if (LOOPBACK_ORIGIN_HOSTS.has(parsed.hostname) && parsed.port === String(port)) {
+            pinned.push(entry.key);
+        }
+    }
+
+    return pinned;
 };
 
 /**
