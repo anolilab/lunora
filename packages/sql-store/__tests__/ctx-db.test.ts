@@ -304,21 +304,84 @@ describe("createSqlCtxDb — the column ceiling", () => {
     it("provisions a table that exactly fills the budget", async () => {
         expect.assertions(1);
 
-        // 98 declared fields + the id/_creationTime framework columns = 100.
+        // 97 declared fields + the id/_creationTime/_version framework columns = 100.
         const atLimit: SchemaLike = {
             tables: {
                 atLimit: {
                     indexes: [],
-                    shape: Object.fromEntries(Array.from({ length: 98 }, (_unused, index) => [`f${String(index)}`, col("string")])),
+                    shape: Object.fromEntries(Array.from({ length: 97 }, (_unused, index) => [`f${String(index)}`, col("string")])),
                     shardMode: { kind: "global" },
                 },
             },
         } as never;
 
         const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: atLimit });
-        const row = Object.fromEntries(Array.from({ length: 98 }, (_unused, index) => [`f${String(index)}`, "x"]));
+        const row = Object.fromEntries(Array.from({ length: 97 }, (_unused, index) => [`f${String(index)}`, "x"]));
 
         expect(typeof (await writer.insert("atLimit", row))).toBe("string");
+    });
+
+    /**
+     * D1 runs Workerd's SQLite build, which caps a statement at 100 BOUND
+     * PARAMETERS as well as at 100 columns. The optimistic-concurrency guard used
+     * to bind one parameter per physical column of the snapshot on top of one per
+     * `SET` field, so an `UPDATE` bound `2N+2` — over the ceiling from 50 declared
+     * fields up. `INSERT` at the same width binds `N+2` and succeeded, so the
+     * table provisioned, rows went in, and only the first `patch`/`replace`/soft-
+     * `delete` failed, with a raw `too many SQL variables` that redacts to
+     * "Internal error" on the way out.
+     *
+     * `node:sqlite` allows 32,766 parameters, so nothing here throws on either
+     * side of the fix — the assertion has to be on the parameter COUNT the store
+     * binds, which is why this counts through a recording exec rather than
+     * waiting for an engine to complain.
+     */
+    it("keeps every guarded write on a maximum-width table inside D1's 100-bound-parameter budget", async () => {
+        expect.assertions(2);
+
+        const FIELDS = 96;
+        const shape: Record<string, unknown> = { deletedAt: optionalCol("number") };
+
+        for (let index = 0; index < FIELDS; index += 1) {
+            shape[`f${String(index)}`] = col("string");
+        }
+
+        const wide: SchemaLike = {
+            tables: { wide: { indexes: [], shape, shardMode: { kind: "global" }, softDeleteMode: { field: "deletedAt" } } },
+        } as never;
+
+        const bound: number[] = [];
+        const recording: SqlCtxExec = {
+            all: (query, parameters) => {
+                bound.push(parameters.length);
+
+                return harness.exec.all(query, parameters);
+            },
+            run: (query, parameters) => {
+                bound.push(parameters.length);
+
+                return harness.exec.run(query, parameters);
+            },
+        };
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: recording, schema: wide });
+        const row = Object.fromEntries(Array.from({ length: FIELDS }, (_unused, index) => [`f${String(index)}`, "x"]));
+
+        const softId = await writer.insert("wide", row);
+        const hardId = await writer.insert("wide", row);
+
+        bound.length = 0;
+
+        await writer.patch(softId, { f0: "changed" });
+        await writer.replace(softId, row);
+        // Soft delete (the marker field is declared) and a forced hard delete —
+        // both route through the same guard.
+        await writer.delete(softId);
+        await writer.delete(hardId, undefined, { hard: true });
+
+        expect(Math.max(...bound)).toBeLessThanOrEqual(100);
+        // …and the writes actually landed rather than being silently skipped.
+        await expect(writer.get(hardId)).resolves.toBeNull();
     });
 });
 
@@ -820,6 +883,34 @@ describe("createSqlCtxDb — cross-dialect SQL rendering", () => {
         // in agreement. MySQL has no `NULLS` clause in its grammar at all, and
         // SQLite already agrees, so neither may be given one.
         expect(listed).toMatch(engine === "postgres" ? /desc nulls last/iu : /desc(?! nulls)/iu);
+    });
+
+    /**
+     * `KEY` is a reserved word in MySQL 8 and cannot be an unquoted alias, so the
+     * enumerate statement the indexed `groupBy` fast path emits died with
+     * `ER_PARSE_ERROR` on every `groupBy` whose `by` matches an `aggregateIndex`
+     * and carries no `where` — the most common grouped-count shape there is. The
+     * companion tables are always provisioned, so the SQL `GROUP BY` fallback
+     * never ran and the whole call was a 500.
+     *
+     * `sql.identifier` was applied to the source column but not to the alias;
+     * routing the alias through it too lets drizzle quote it the way each engine
+     * expects (backticks on MySQL, double quotes elsewhere).
+     */
+    it.each(["postgres", "mysql", "sqlite"] as const)("quotes the indexed groupBy enumerate aliases on %s", async (engine) => {
+        expect.assertions(2);
+
+        // One companion row, which also answers the `tableExists` probe so the
+        // indexed path is taken rather than the SQL `GROUP BY` fallback.
+        const { exec, statements } = recordingExec([{ count: 1, key: JSON.stringify(["a", "active"]), value: null }]);
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(engine), exec, schema: groupSchema });
+
+        await writer.groupBy("events", { agg: { op: "count" }, by: ["tenant", "status"] });
+
+        const enumerated = statements.find((statement) => /^select .*__agg_bytenantstatus/iu.test(statement));
+
+        expect(enumerated).toBeDefined();
+        expect(enumerated).toMatch(engine === "mysql" ? /as `key`/iu : /as "key"/iu);
     });
 
     it("leaves a notNull ordered column's ORDER BY bare on Postgres", async () => {

@@ -120,6 +120,7 @@ import {
     decodeRow,
     decodeRows,
     forEachRowPaged,
+    OCC_VERSION_COLUMN,
     queryAll,
     queryBatch,
     queryRun,
@@ -1130,11 +1131,16 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     const whereSqlStrategy: WhereSqlStrategy = {
         fieldRef: columnRefSql,
         serialize: serializeColumnValue,
-        // `contains` must fold case the way each engine's `LIKE` does, since that is
-        // the behaviour callers already have: SQLite's is ASCII-case-insensitive
-        // (the compiler's `instr(lower(…), lower(…))` default), MySQL's follows the
-        // column collation (`LOCATE`, case-insensitive by default), Postgres' is
-        // case-sensitive (`strpos`).
+        // `contains` keeps whatever case behaviour each engine's substring test
+        // already gives callers, which is NOT the same across the three: SQLite is
+        // ASCII-case-insensitive (the compiler's `instr(lower(…), lower(…))`
+        // default), while Postgres (`strpos`) and MySQL (`LOCATE`) are both
+        // byte-exact. MySQL's `LOCATE` follows the column collation and
+        // `@lunora/hyperdrive`'s dialect pins every character column to
+        // `utf8mb4_0900_bin` — a column's collation beats a bound literal's — so it
+        // is case-SENSITIVE there, not case-insensitive as this comment used to say.
+        // Left as-is deliberately: there is no majority to fold toward, and making
+        // MySQL insensitive would silently widen every shipped `contains` filter.
         ...(dialect.name === "mysql" ? { containsExpr: (reference, term) => sql`LOCATE(${term}, ${reference}) > 0` } : {}),
         ...(dialect.name === "postgres" ? { containsExpr: (reference, term) => sql`strpos(${reference}, ${term}) > 0` } : {}),
         // The compiler defaults `inList` to SQLite's bounded `json_each` form,
@@ -1422,7 +1428,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             conditions.push(value === null ? sql`${columnRefSql(key)} IS NULL` : sql`${columnRefSql(key)} = ${value}`);
         }
 
-        const query = sql`SELECT ${sql.raw(sqlFunction)}(${columnRefSql(field)}) AS value FROM ${sql.identifier(tableName)}`;
+        const query = sql`SELECT ${sql.raw(sqlFunction)}(${columnRefSql(field)}) AS ${sql.identifier("value")} FROM ${sql.identifier(tableName)}`;
         const rows = await queryAll(exec, dialect, conditions.length > 0 ? sql`${query} WHERE ${sql.join(conditions, sql` AND `)}` : query);
 
         return aggregateScalar(rows[0]?.["value"]);
@@ -1538,7 +1544,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const existingRows = await queryAll(
                 exec,
                 dialect,
-                sql`SELECT ${sql.identifier("__value__")} AS value, ${sql.identifier("__count__")} AS count FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
+                sql`SELECT ${sql.identifier("__value__")} AS ${sql.identifier("value")}, ${sql.identifier("__count__")} AS ${sql.identifier("count")} FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
             );
             const existing = existingRows[0] as { count: number; value: null | number } | undefined;
             const existingValue = aggregateScalar(existing?.value);
@@ -1921,12 +1927,26 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * Run an optimistic-concurrency-guarded write — the D1 twin of the DO
      * dialect's `runGuardedWrite`. D1 stores rows as real columns (no `__doc__`
      * blob) and `SqlCtxExec.run` returns no rows-affected count, so the CAS is
-     * expressed as `WHERE "id" IS ? AND "<col>" IS ? ... RETURNING "id"` run via
-     * `exec.all` (both D1 and node:sqlite support `RETURNING`). The bound values
-     * are the RAW column values captured at read time ({@link rawRow}) so the
-     * comparison is faithful; `IS` gives NULL-safe equality. An empty RETURNING
-     * set means a concurrent write committed during the intervening `await` and
-     * changed the row — surfaced as a {@link ConflictError}.
+     * expressed as `WHERE "id" IS ? AND "_version" IS ? ... RETURNING "id"` run
+     * via `exec.all` (both D1 and node:sqlite support `RETURNING`). The bound
+     * values are the RAW column values captured at read time ({@link rawRow});
+     * `IS` gives NULL-safe equality, which is what makes a row written before
+     * {@link OCC_VERSION_COLUMN} existed (version `NULL`) still guardable. An
+     * empty RETURNING set means a concurrent write committed during the
+     * intervening `await` and changed the row — surfaced as a
+     * {@link ConflictError}.
+     *
+     * The guard binds TWO parameters at any table width. Comparing every
+     * physical column instead — which is what this did — cost `2N+2` parameters
+     * on an `UPDATE` and blew D1's 100-per-statement ceiling from 50 declared
+     * fields up, so a table that provisioned and inserted fine lost every update
+     * to a redacted "Internal error". The version bump rides in the `SET` list
+     * as `COALESCE("_version", 0) + 1`, an expression rather than a bound value,
+     * so it costs nothing against that budget either.
+     *
+     * Bumping on every guarded write also gives MySQL a real affected-rows
+     * signal: a `patch` that writes back identical field values would otherwise
+     * report 0 rows changed and read as a phantom conflict.
      *
      * `snapshot` of `undefined` means there was nothing on disk at read time
      * (only happens on the delete path when the row was already gone); the
@@ -1942,13 +1962,18 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return;
         }
 
+        const versionRef = sql`${sql.identifier(OCC_VERSION_COLUMN)}`;
         const guardClause = sql.join(
-            Object.keys(snapshot).map((column) => nullSafeEquals(sql`${sql.identifier(column)}`, snapshot[column])),
+            [
+                nullSafeEquals(sql`${sql.identifier("id")}`, snapshot["id"]),
+                // eslint-disable-next-line unicorn/no-null -- SQL bind value: `?? null` so a row written before this column existed (or a driver that omits it) compares against SQL NULL.
+                nullSafeEquals(versionRef, snapshot[OCC_VERSION_COLUMN] ?? null),
+            ],
             sql` AND `,
         );
         const base =
             verb === "UPDATE"
-                ? sql`UPDATE ${sql.identifier(table)} SET ${setClause} WHERE ${guardClause}`
+                ? sql`UPDATE ${sql.identifier(table)} SET ${setClause}, ${versionRef} = COALESCE(${versionRef}, 0) + 1 WHERE ${guardClause}`
                 : sql`DELETE FROM ${sql.identifier(table)} WHERE ${guardClause}`;
 
         const occConflict = (): never => {
@@ -2034,7 +2059,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const rowsIndexed = await queryAll(
                 exec,
                 dialect,
-                sql`SELECT ${sql.identifier("__value__")} AS value, ${sql.identifier("__count__")} AS count FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
+                sql`SELECT ${sql.identifier("__value__")} AS ${sql.identifier("value")}, ${sql.identifier("__count__")} AS ${sql.identifier("count")} FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
             );
 
             if (rowsIndexed.length === 0) {
@@ -2064,7 +2089,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         const rowsIndexed = await queryAll(
             exec,
             dialect,
-            sql`SELECT ${sql.identifier("__key__")} AS key, ${sql.identifier("__value__")} AS value, ${sql.identifier("__count__")} AS count FROM ${sql.identifier(aggTable)}`,
+            sql`SELECT ${sql.identifier("__key__")} AS ${sql.identifier("key")}, ${sql.identifier("__value__")} AS ${sql.identifier("value")}, ${sql.identifier("__count__")} AS ${sql.identifier("count")} FROM ${sql.identifier(aggTable)}`,
         );
 
         return rowsIndexed.map((row) => {
@@ -2294,7 +2319,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         const rows = await queryAll(
                             exec,
                             dialect,
-                            sql`SELECT ${sql.identifier("__value__")} AS value, ${sql.identifier("__count__")} AS count FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
+                            sql`SELECT ${sql.identifier("__value__")} AS ${sql.identifier("value")}, ${sql.identifier("__count__")} AS ${sql.identifier("count")} FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
                         );
                         const row = rows[0] as { count: number; value: null | number } | undefined;
 
@@ -2307,7 +2332,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             const whereCondition = compileWhereSql(resolved, whereSqlStrategy);
             const aggregateFunction = sql.raw(aggregateSqlFunction(aggOptions.op));
-            const query = sql`SELECT ${aggregateFunction}(${columnRefSql(aggOptions.field)}) AS value FROM ${sql.identifier(tableName)}`;
+            const query = sql`SELECT ${aggregateFunction}(${columnRefSql(aggOptions.field)}) AS ${sql.identifier("value")} FROM ${sql.identifier(tableName)}`;
             const rows = await queryAll(exec, dialect, whereCondition ? sql`${query} WHERE ${whereCondition}` : query);
             const value = rows[0]?.["value"];
 
@@ -2356,7 +2381,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         const rows = await queryAll(
                             exec,
                             dialect,
-                            sql`SELECT ${sql.identifier("__value__")} AS value FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
+                            sql`SELECT ${sql.identifier("__value__")} AS ${sql.identifier("value")} FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
                         );
 
                         return Number(rows[0]?.["value"] ?? 0);
@@ -2365,7 +2390,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             }
 
             const whereCondition = compileWhereSql(resolved, whereSqlStrategy);
-            const query = sql`SELECT COUNT(*) AS count FROM ${sql.identifier(tableName)}`;
+            const query = sql`SELECT COUNT(*) AS ${sql.identifier("count")} FROM ${sql.identifier(tableName)}`;
             const rows = await queryAll(exec, dialect, whereCondition ? sql`${query} WHERE ${whereCondition}` : query);
 
             return Number(rows[0]?.["count"] ?? 0);
@@ -2584,7 +2609,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 // `physicalColumn` maps `_id`/`id` → `id`; all other fields are themselves.
                 const fieldRef = columnRefSql(whereField);
 
-                let groupQuery = sql`SELECT ${fieldRef} AS __fk__, COUNT(*) AS count FROM ${sql.identifier(childTable)}`;
+                let groupQuery = sql`SELECT ${fieldRef} AS __fk__, COUNT(*) AS ${sql.identifier("count")} FROM ${sql.identifier(childTable)}`;
 
                 if (whereCondition) {
                     groupQuery = sql`${groupQuery} WHERE ${whereCondition}`;
@@ -2768,7 +2793,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const select: SQL[] = groupOptions.by.map((field) => sql`${columnRefSql(field)} AS ${sql.identifier(field)}`);
 
             if (agg.op === "count") {
-                select.push(sql`COUNT(*) AS value`);
+                select.push(sql`COUNT(*) AS ${sql.identifier("value")}`);
             } else {
                 // `agg.field` is asserted present for non-count reducers by the
                 // guard above; re-check locally so the column ref stays typed
@@ -2777,7 +2802,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                     throw new LunoraError("INTERNAL", `groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
                 }
 
-                select.push(sql`${sql.raw(aggregateSqlFunction(agg.op))}(${columnRefSql(agg.field)}) AS value`);
+                select.push(sql`${sql.raw(aggregateSqlFunction(agg.op))}(${columnRefSql(agg.field)}) AS ${sql.identifier("value")}`);
             }
 
             const groupBy = sql.join(

@@ -24,7 +24,7 @@ import { sql } from "drizzle-orm";
 
 import type { SqlDialect } from "./dialect";
 import type { SqlCtxExec } from "./sql-exec";
-import { columnRefSql, createIndexIfNotExists, queryAll, queryBatch, queryRun, tableColumns } from "./sql-exec";
+import { columnRefSql, createIndexIfNotExists, OCC_VERSION_COLUMN, queryAll, queryBatch, queryRun, tableColumns } from "./sql-exec";
 import { BIGINT_KEY_LENGTH, bigintSqlKey, effectiveColumnKind } from "./value-codec";
 
 /**
@@ -51,7 +51,15 @@ const globalTableColumnsDdl = (tableName: string, definition: SchemaLike["tables
         fieldColumns.push(sql`${sql.identifier(field)} ${sql.raw(`${globalColumnAffinity(validator, dialect)}${notNull}`)}`);
     }
 
-    const frameworkColumns = dialect.frameworkColumns().map((column) => sql`${sql.identifier(column.name)} ${sql.raw(column.type)}`);
+    const frameworkColumns = [
+        ...dialect.frameworkColumns().map((column) => sql`${sql.identifier(column.name)} ${sql.raw(column.type)}`),
+        // The optimistic-concurrency row version (see `OCC_VERSION_COLUMN`).
+        // Nullable and untyped by the dialect's `frameworkColumns` on purpose:
+        // it is the store core's own bookkeeping, not part of the physical
+        // contract the D1/Hyperdrive dialects publish, and `INSERT` never binds
+        // it.
+        sql`${sql.identifier(OCC_VERSION_COLUMN)} ${sql.raw(dialect.companionTypes.integer)}`,
+    ];
     const total = frameworkColumns.length + fieldColumns.length;
 
     // `VALIDATION_ERROR`, not `INTERNAL`: a table too wide is the schema
@@ -490,11 +498,15 @@ const rewriteLegacyBigintColumns = async (
  * explicit migration.
  */
 const alterGlobalTableDrift = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
-    const fields = Object.entries(definition.shape).filter(([, validator]) => validator._meta?.column !== undefined);
-
-    if (fields.length === 0) {
-        return;
-    }
+    // The OCC version column leads the list: a table provisioned before it
+    // existed carries none, and the guarded-write CAS reads it on every
+    // `patch`/`replace`/`delete`.
+    const wanted: [column: string, type: string][] = [
+        [OCC_VERSION_COLUMN, dialect.companionTypes.integer],
+        ...Object.entries(definition.shape)
+            .filter(([, validator]) => validator._meta?.column !== undefined)
+            .map(([field, validator]): [string, string] => [field, globalColumnAffinity(validator, dialect)]),
+    ];
 
     const probe = async (columns: ReadonlyArray<string>): Promise<boolean> => {
         try {
@@ -513,22 +525,18 @@ const alterGlobalTableDrift = async (exec: SqlCtxExec, tableName: string, defini
         }
     };
 
-    if (await probe(fields.map(([field]) => field))) {
+    if (await probe(wanted.map(([column]) => column))) {
         return;
     }
 
-    for (const [field, validator] of fields) {
+    for (const [column, type] of wanted) {
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared connection; each probe gates its own ALTER.
-        if (await probe([field])) {
+        if (await probe([column])) {
             continue;
         }
 
         // eslint-disable-next-line no-await-in-loop -- same connection, and a failure here must surface rather than race the next ALTER.
-        await queryRun(
-            exec,
-            dialect,
-            sql`ALTER TABLE ${sql.identifier(tableName)} ADD COLUMN ${sql.identifier(field)} ${sql.raw(globalColumnAffinity(validator, dialect))}`,
-        );
+        await queryRun(exec, dialect, sql`ALTER TABLE ${sql.identifier(tableName)} ADD COLUMN ${sql.identifier(column)} ${sql.raw(type)}`);
     }
 };
 
