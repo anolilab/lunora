@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn as nodeSpawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { runCodegen } from "@lunora/codegen";
@@ -28,6 +28,7 @@ import {
     inferLunoraBindings,
     isInteractive,
     packageNamesFromBindings,
+    parseDevVariableEntries,
     readLiveDevServerState,
     readProjectRemotePreference,
     resolveDeployDriver,
@@ -308,18 +309,59 @@ const resolveLoopbackArgs = (cwd: string, hasLoopback: () => boolean, sidecarCon
     return hasLoopback() ? [] : ["--ip", "127.0.0.1"];
 };
 
+/** Hosts a `.dev.vars` origin can name that resolve to this machine. */
+const LOOPBACK_ORIGIN_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "::1", "[::1]", "localhost"]);
+
+/**
+ * `.dev.vars` keys whose value is a loopback origin on `port` — i.e. the keys
+ * that pin the project to the worker serving there. `AUTH_URL`,
+ * `BETTER_AUTH_URL` and the templates' app-origin vars are all written as
+ * `http://localhost:8787` by the scaffolds.
+ */
+const devVariablesPinningPort = (cwd: string, port: number): string[] => {
+    let content: string;
+
+    try {
+        content = readFileSync(join(cwd, DEV_VARS_FILE), "utf8");
+    } catch {
+        // No `.dev.vars` (or unreadable) — nothing is pinned.
+        return [];
+    }
+
+    return parseDevVariableEntries(content)
+        .filter((entry) => {
+            let parsed: URL;
+
+            try {
+                parsed = new URL(entry.value);
+            } catch {
+                return false;
+            }
+
+            return LOOPBACK_ORIGIN_HOSTS.has(parsed.hostname) && parsed.port === String(port);
+        })
+        .map((entry) => entry.key);
+};
+
 /**
  * Resolve the port `wrangler dev` binds, so Lunora knows the worker origin up
  * front (the studio proxies to it). Precedence — an explicit choice always wins:
  *
- * 1. `--port` / `--worker-port` on the CLI (`options.workerPort`).
+ * 1. `--worker-port` on the CLI (`options.workerPort`).
  * 2. `dev.port` pinned in the project's wrangler config.
  * 3. The first free port at/above 8787.
  *
- * Step 3 restores the free-port fallback that a fixed `--port` would otherwise
+ * Step 3 restores the free-port fallback that a fixed port would otherwise
  * disable: `wrangler dev` only auto-probes for an open port when none is passed,
  * so without this two projects both defaulting to 8787 would collide (the second
  * crashing with `EADDRINUSE`) instead of the second one landing on 8788.
+ *
+ * That fallback is silent, though, and a project whose `.dev.vars` names
+ * `http://localhost:8787` has committed to that port: OAuth callbacks and the
+ * client's own origin are registered against it, and a worker on 8788 answers
+ * none of them. Refuse rather than drift, naming the keys that disagree —
+ * `--worker-port` is the escape when the operator means it. Projects that pin
+ * nothing keep the silent fallback, which is the case it was added for.
  */
 const resolveWorkerPort = async (options: DevCommandOptions, cwd: string): Promise<number> => {
     if (options.workerPort !== undefined) {
@@ -336,7 +378,23 @@ const resolveWorkerPort = async (options: DevCommandOptions, cwd: string): Promi
         }
     }
 
-    return (options.findFreePort ?? findAvailablePort)(DEFAULT_WORKER_PORT);
+    const port = await (options.findFreePort ?? findAvailablePort)(DEFAULT_WORKER_PORT);
+
+    if (port === DEFAULT_WORKER_PORT) {
+        return port;
+    }
+
+    const pinned = devVariablesPinningPort(cwd, DEFAULT_WORKER_PORT);
+
+    if (pinned.length > 0) {
+        throw new Error(
+            `port ${String(DEFAULT_WORKER_PORT)} is in use, but ${DEV_VARS_FILE} pins the worker origin to it (${pinned.join(", ")}). ` +
+                `Serving on ${String(port)} would leave those URLs pointing at nothing. Stop whatever holds ${String(DEFAULT_WORKER_PORT)}, ` +
+                `or run \`lunora dev --worker-port ${String(port)}\` and update those values to match.`,
+        );
+    }
+
+    return port;
 };
 
 /**

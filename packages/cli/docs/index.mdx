@@ -285,10 +285,17 @@ In a project on `@lunora/vite` it spawns `vite dev` instead: the Vite plugin
 already runs the worker, studio, and codegen inside the Vite dev server.
 
 ```bash
-lunora dev                # default ports: studio 6173, worker 8787
-lunora dev --port 7000    # custom studio port
-lunora dev --no-studio    # Worker + codegen only
+lunora dev                     # default ports: studio 6173, worker 8787
+lunora dev --port 7000         # custom studio port
+lunora dev --worker-port 8790  # custom wrangler dev port
+lunora dev --no-studio         # Worker + codegen only
 ```
+
+When 8787 is taken, the worker lands on the next free port so two projects can
+run side by side. That silent move is refused when `.dev.vars` pins the worker
+origin to 8787 — an `AUTH_URL`/`BETTER_AUTH_URL` (or any other loopback origin
+on that port) would be left pointing at nothing. Free 8787, or pass
+`--worker-port` and update the pinned values to match.
 
 #### Background mode (AI agents)
 
