@@ -3429,10 +3429,12 @@ class LunoraClient {
      * `subscribe` for the same triple joins the existing registration and shares
      * its value, cursor and optimistic layers.
      *
-     * Not available on a `crossTabSync` FOLLOWER tab: the cross-tab channel only
-     * carries the LEADER's own subscriptions outward, so a follower would receive
-     * this query's frames only if the leader happened to hold it too. Throws
-     * `NOT_IMPLEMENTED` there — see {@link LunoraClientOptions.crossTabSync}.
+     * Available on a `crossTabSync` FOLLOWER tab, unlike the other socket-backed
+     * surfaces: registering here is exactly what lets the cross-tab relay deliver
+     * the leader's broadcasts (see the note in the body). The caveat is that the
+     * channel only carries the LEADER's own subscriptions outward, so a follower
+     * sees this query's frames only while the leader holds it too — see
+     * {@link LunoraClientOptions.crossTabSync}.
      */
     public subscribe<F extends FunctionReference>(
         function_: F,
@@ -4391,11 +4393,22 @@ class LunoraClient {
     }
 
     /**
-     * Load every cached query into {@link hydratedQueryCache} so the next
-     * `subscribe()` for each key seeds its initial value off disk. A
-     * subscription created before this resolves simply misses the cache (it
-     * gets a live snapshot as before); the gate at seed time also drops any
-     * entry whose stamped identity no longer matches the current one.
+     * Load every cached query so a `subscribe()` for the key seeds its initial
+     * value off disk.
+     *
+     * The load is asynchronous but every framework adapter subscribes
+     * SYNCHRONOUSLY at mount, so the subscriptions that most want the cache
+     * already exist by the time it lands. Those are seeded here and their entry
+     * is dropped: an entry that stayed in {@link hydratedQueryCache} behind a
+     * live subscription would be consumed by the NEXT subscribe of the same key
+     * (a remount after navigating away) and replay the previous session's value
+     * over whatever the socket had since delivered. A cache entry therefore
+     * never outlives a live subscription for its key — it is either handed to
+     * that subscription or discarded.
+     *
+     * Only keys with no live subscription are held for a later `subscribe()`;
+     * the identity gate applies to both paths, so a signed-out cache never leaks
+     * into a new session.
      */
     private async hydrateQueryCache(): Promise<void> {
         if (!this.queryCache) {
@@ -4404,6 +4417,14 @@ class LunoraClient {
 
         try {
             const entries = await this.queryCache.load();
+
+            // Index the already-open subscriptions by READ-CACHE key (the
+            // registry keys on the raw args object, the cache on `argsKey`).
+            const live = new Map<string, SubscriptionState>();
+
+            for (const state of this.subscriptions.all()) {
+                live.set(queryCacheKey(state.fn.__lunoraRef, state.argsKey, state.shardKey), state);
+            }
 
             for (const { key, ...entry } of entries) {
                 // Version gate: a value persisted under a different app/schema
@@ -4414,11 +4435,47 @@ class LunoraClient {
                     continue;
                 }
 
+                const openSubscription = live.get(key);
+
+                if (openSubscription) {
+                    this.seedSubscriptionFromCache(openSubscription, entry);
+
+                    continue;
+                }
+
                 this.hydratedQueryCache.set(key, entry);
             }
         } catch {
             /* durable store unavailable — boot without restored reads */
         }
+    }
+
+    /**
+     * Hand a loaded read-cache entry to a subscription that was opened before
+     * the load resolved — the same value, cursor and epoch {@link subscribe}
+     * would have taken from {@link takeHydratedCache} had the load finished
+     * first, so the cursor still rides the `subscribe` frame as `sinceSeq` (that
+     * frame only goes out once the socket opens, well after this microtask).
+     *
+     * A no-op once the socket has delivered anything for this key: a live value
+     * always beats the cache. Identity-gated exactly like `takeHydratedCache`.
+     */
+    private seedSubscriptionFromCache(state: SubscriptionState, entry: CachedQuery): void {
+        if (state.serverBase !== undefined || state.lastValue !== undefined || entry.identity !== this.identityFingerprint()) {
+            return;
+        }
+
+        // eslint-disable-next-line no-param-reassign -- in-place seed of the shared subscription state, mirroring `notifySubscription`
+        state.serverBase = entry.value;
+        // eslint-disable-next-line no-param-reassign -- in-place seed of the shared subscription state
+        state.serverCursor = entry.serverCursor;
+
+        if (entry.serverEpoch !== undefined) {
+            // eslint-disable-next-line no-param-reassign -- in-place seed of the shared subscription state
+            state.serverEpoch = entry.serverEpoch;
+        }
+
+        notifySubscription(state, foldOptimistic(entry.value, state.optimisticLayers));
     }
 
     /**

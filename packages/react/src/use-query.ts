@@ -87,8 +87,7 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
         queryFn: () => client.query<F>(function_, argsRecord as ArgsOf<F>, { shardKey }),
         queryKey,
         // Lunora is push-driven: once the initial fetch resolves, the WS owns
-        // freshness. Staleness only matters when the subscription is missing,
-        // and the registry handles that with a polling fallback.
+        // freshness, so the value never goes stale on a timer.
         staleTime: Number.POSITIVE_INFINITY,
     });
 

@@ -1254,4 +1254,35 @@ describe("schedulerDO — per-record drain isolation (storage throw)", () => {
 
         expect(indexKeys).toHaveLength(0);
     });
+
+    it("re-fires a job whose time-index claim was deleted by a dispatch its instance did not survive", async () => {
+        expect.assertions(5);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "messages.send", scheduledFor: Date.now() - 1000 })));
+
+        // The eviction. `drainRecordGuarded` deletes the `t:` claim and AWAITS
+        // it — the output gate holds the outbound fetch until that delete is
+        // durable — so a Durable Object lost during the dispatch leaves the
+        // `id:` header behind with no index entry. Nothing re-indexes it:
+        // `rescheduleAlarm` derives the clock from `t:` alone and `alarm()`
+        // reconciles only the inverse orphan.
+        const claimKey = [...state.storageMap.keys()].find((key) => key.startsWith("t:"));
+
+        state.storageMap.delete(claimKey ?? "");
+
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("t:"))).toHaveLength(0);
+        expect(state.storageMap.has(`id:${id}`)).toBe(true);
+
+        // A FRESH instance: the crash ended the one that minted the orphan.
+        const revived = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        await revived.alarm();
+
+        expect(revived.dispatched.map((record) => record.id)).toEqual([id]);
+        // Settled, so both the header and the re-put claim are gone again.
+        expect(state.storageMap.has(`id:${id}`)).toBe(false);
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("t:"))).toHaveLength(0);
+    });
 });
