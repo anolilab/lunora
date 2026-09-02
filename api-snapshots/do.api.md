@@ -275,7 +275,8 @@ interface SessionRecord {
 ```ts
 abstract class ShardDO {
     protected static readonly MAX_STREAMS_PER_SOCKET = 8;
-    protected static readonly MAX_SUBSCRIPTIONS_PER_SOCKET = 8;
+    protected static readonly MAX_ATTACHMENT_BYTES = 16384;
+    protected static readonly MAX_SUBSCRIPTIONS_PER_SOCKET = 32;
     protected static readonly MAX_REACTOR_RUNS_PER_DRAIN = 8;
     protected static readonly GLOBAL_SHAPE_POLL_INTERVAL_MS = 2e3;
     protected static readonly GLOBAL_SHAPE_MAX_ROWS = 5e4;

@@ -1,16 +1,20 @@
 /**
  * The per-socket subscription cap against the budget it claims to respect.
  *
- * `MAX_SUBSCRIPTIONS_PER_SOCKET` is documented as a derivation — 2048 bytes of
- * `serializeAttachment`, ~200 bytes per registration, so a full attachment fits
- * at 8 and could not at the old ceiling of 32. None of that arithmetic was
- * asserted anywhere, so the number was free to drift away from its own
- * justification (or the justification away from the runtime's limit).
+ * Two numbers, and the file exists because they had drifted apart:
+ * `MAX_ATTACHMENT_BYTES` is the runtime's hard ceiling on a hibernation
+ * attachment, and `MAX_SUBSCRIPTIONS_PER_SOCKET` is a coarse fan-out backstop
+ * that must sit comfortably UNDER it for a realistic socket. The cap was once
+ * derived from a 2048-byte budget the runtime does not impose, which put it at
+ * 8 — low enough to break an app holding a dozen live queries on one socket,
+ * and low enough that the derivation could not be checked against anything.
  *
  * Measured with `node:v8`'s serializer, which writes the same V8
  * structured-clone format workerd's `serializeAttachment` does — the byte count
- * here is the one the runtime checks against 2048, give or take a few bytes of
- * envelope.
+ * here is the one the runtime checks, give or take a few bytes of envelope. The
+ * ceiling itself is measured against the live runtime in
+ * `__tests__/workerd/shard-do.workerd.test.ts`; this file only has to agree
+ * with it.
  */
 import { serialize } from "node:v8";
 
@@ -19,10 +23,10 @@ import { describe, expect, it } from "vitest";
 
 import { ShardDO } from "../src/shard-do";
 
-/** The runtime's hard ceiling on a hibernation attachment. */
-const SERIALIZE_ATTACHMENT_BUDGET_BYTES = 2048;
+const internals = ShardDO as unknown as { MAX_ATTACHMENT_BYTES: number; MAX_SUBSCRIPTIONS_PER_SOCKET: number };
 
-const cap = (ShardDO as unknown as { MAX_SUBSCRIPTIONS_PER_SOCKET: number }).MAX_SUBSCRIPTIONS_PER_SOCKET;
+const cap = internals.MAX_SUBSCRIPTIONS_PER_SOCKET;
+const budget = internals.MAX_ATTACHMENT_BYTES;
 
 /**
  * A realistic registration: a `<file>:<function>` path, one id argument, a
@@ -65,15 +69,17 @@ const decoratedSocket = (count: number): SocketAttachment => {
     };
 };
 
-describe("mAX_SUBSCRIPTIONS_PER_SOCKET", () => {
-    it("leaves a plain socket's full attachment inside the serializeAttachment budget", () => {
-        expect.assertions(2);
+describe("subscription budget", () => {
+    it("agrees with the ceiling the runtime actually enforces", () => {
+        expect.assertions(1);
 
-        expect(cap).toBe(8);
-        expect(serialize(plainSocket(cap)).byteLength).toBeLessThanOrEqual(SERIALIZE_ATTACHMENT_BUDGET_BYTES);
+        // Not a doc-page number: 16385 bytes throws in workerd and 8192 does
+        // not. The workerd leg measures it; this pins what the shard was built
+        // against so the two cannot drift apart silently.
+        expect(budget).toBe(16_384);
     });
 
-    it("costs the ~200 bytes per registration the ceiling is derived from", () => {
+    it("costs the ~200 bytes per registration the cap is sized against", () => {
         expect.assertions(2);
 
         const perRecord = (serialize(plainSocket(cap + 4)).byteLength - serialize(plainSocket(cap)).byteLength) / 4;
@@ -82,22 +88,39 @@ describe("mAX_SUBSCRIPTIONS_PER_SOCKET", () => {
         expect(perRecord).toBeLessThan(250);
     });
 
-    it("is why the previous ceiling of 32 was unreachable", () => {
-        expect.assertions(1);
+    it("leaves a fully decorated socket filled to the cap well inside the budget", () => {
+        expect.assertions(2);
 
-        // A socket allowed 32 registrations would have failed the serialize long
-        // before reaching them, one `SUBSCRIPTION_PERSIST_FAILED` at a time.
-        expect(serialize(plainSocket(32)).byteLength).toBeGreaterThan(SERIALIZE_ATTACHMENT_BUDGET_BYTES);
+        // The justification for the number, stated as an assertion. The worst
+        // realistic socket — identity claims, app `context`, whisper topics AND
+        // a full set of paginated registrations — has to fit, or the cap is a
+        // wall an app meets in production with no way around it.
+        const worst = serialize(decoratedSocket(cap)).byteLength;
+
+        expect(cap).toBe(32);
+        expect(worst).toBeLessThan(budget / 2);
     });
 
-    it("does not on its own bound a socket carrying identity, context and whispers", () => {
+    it("would not have fitted a dozen live queries at the old ceiling of 8", () => {
+        expect.assertions(2);
+
+        // The regression this file exists to prevent. 12 live queries on one
+        // socket is an ordinary dashboard, it costs ~2.8 KB, and the runtime
+        // takes it without complaint — the only thing that ever refused it was
+        // the count cap.
+        expect(serialize(plainSocket(12)).byteLength).toBeLessThan(budget);
+        expect(cap).toBeGreaterThanOrEqual(12);
+    });
+
+    it("is a backstop, not the bound — the byte budget is what binds", () => {
         expect.assertions(1);
 
-        // The count cap is a guard, not the bound: enough fixed fields and the
-        // attachment overflows before the 8th registration. That case is caught
-        // where it actually binds — `subscribe`/`shapeSubscribe` roll the
-        // registry back on a serialize throw and answer
+        // No fixed count can bound a record whose `args` the client chooses:
+        // enough of them, or fat enough, and the attachment overflows at any
+        // cap. That case is caught where it actually binds —
+        // `persistAttachment` refuses over `MAX_ATTACHMENT_BYTES`, and
+        // `subscribe`/`shapeSubscribe` roll the registry back and answer
         // `SUBSCRIPTION_PERSIST_FAILED`.
-        expect(serialize(decoratedSocket(cap)).byteLength).toBeGreaterThan(SERIALIZE_ATTACHMENT_BUDGET_BYTES);
+        expect(serialize(plainSocket(cap * 4)).byteLength).toBeGreaterThan(budget);
     });
 });

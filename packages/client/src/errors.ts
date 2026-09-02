@@ -30,10 +30,14 @@ const KNOWN_ERROR_CODES = new Set<string>(Object.keys(ERROR_CATALOG));
  * TransportError`.
  *
  * Still `INTERNAL` on the wire, so nothing that switches on `code` changes.
+ *
+ * `data` carries the structured payload such an error can still have — the
+ * `{ retryAfterMs }` a `Retry-After` on the unreadable response named, which
+ * {@link getRetryAfterMs} reads back and the outbox paces its retry on.
  */
 class TransportError extends LunoraError {
-    public constructor(message: string) {
-        super("INTERNAL", message);
+    public constructor(message: string, data?: unknown) {
+        super("INTERNAL", message, { data });
     }
 }
 

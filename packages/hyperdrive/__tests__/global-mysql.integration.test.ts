@@ -367,7 +367,7 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
 
                 expect(
                     groups
-                        .map((group) => [(group.key as { projectId: string }).projectId, group.value] as const)
+                        .map((group) => [(group.key as { projectId: string }).projectId, group.value] as const) // secret-scanner:allow -- `projectId` is a group-by column name, not a credential
                         .toSorted((left, right) => left[0].localeCompare(right[0])),
                 ).toEqual([
                     ["p1", 6],
