@@ -92,6 +92,7 @@ const createTodosTable = (): void => {
         `CREATE TABLE "todos" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
+            "_version" INTEGER,
             "projectId" TEXT,
             "seq" INTEGER
         )`,
@@ -103,6 +104,7 @@ const createDocsTable = (exec: D1Exec) =>
         `CREATE TABLE "docs" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
+            "_version" INTEGER,
             "body" TEXT,
             "channel" TEXT,
             "title" TEXT

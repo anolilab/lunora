@@ -62,6 +62,7 @@ const setupDocs = (): DatabaseWriterLike => {
         `CREATE TABLE "docs" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
+            "_version" INTEGER,
             "active" INTEGER,
             "big" TEXT,
             "count" INTEGER,
@@ -75,6 +76,7 @@ const setupDocs = (): DatabaseWriterLike => {
         `CREATE TABLE "other" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
+            "_version" INTEGER,
             "label" TEXT
         )`,
     );
@@ -188,6 +190,7 @@ const setupOptional = (): DatabaseWriterLike => {
         `CREATE TABLE "opt" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
+            "_version" INTEGER,
             "active" INTEGER,
             "big" TEXT,
             "meta" TEXT,

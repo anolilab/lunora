@@ -71,7 +71,6 @@ const renderDeploySummary = (inputs: DeploySummaryInputs): void => {
             logger.info(`  secrets: generated value(s) recorded in ${mintedSecretsFile}`);
         }
 
-        logger.info("  studio:  lunora view --remote");
         logger.info("  logs:    lunora logs");
     } catch {
         // A cosmetic summary must never fail an otherwise-successful deploy.

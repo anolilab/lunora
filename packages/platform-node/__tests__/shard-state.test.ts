@@ -92,4 +92,42 @@ describe("createNodeShardState", () => {
             expect(sockets.getSockets("room-b")).toHaveLength(0);
         });
     });
+
+    it("enumerates the same socket object it accepted, so fan-out reaches the wire", async () => {
+        expect.assertions(6);
+
+        await withShard((state) => {
+            const sockets = createSocketHost(state as never);
+            const sent: unknown[] = [];
+            let closed = false;
+            const raw = {
+                close: () => {
+                    closed = true;
+                },
+                send: (frame: unknown) => sent.push(frame),
+            };
+
+            const accepted = sockets.accept(raw, { connectionId: "c-1" }, ["room-a"]);
+            const listed = sockets.getSockets();
+
+            // One socket, one identity. `accept` and `handleFor` answer the
+            // transport (the adapter's contract); a `getSockets` that answered
+            // anything else makes per-socket memos and every `ws !== closing`
+            // comparison — `announceDrain`'s, a whisper sender's self-exclusion
+            // — miss on the fan-out path.
+            expect(listed[0]).toBe(accepted);
+            expect(sockets.handleFor(raw)).toBe(listed[0]);
+            expect(sockets.idFor(listed[0] as never)).toBe(sockets.idFor(accepted));
+
+            // The frame every poke/delta/relay broadcast writes.
+            listed[0]?.send("shape_poke");
+
+            expect(sent).toStrictEqual(["shape_poke"]);
+
+            listed[0]?.close(1000, "bye");
+
+            expect(closed).toBe(true);
+            expect(sockets.getSockets()).toHaveLength(0);
+        });
+    });
 });

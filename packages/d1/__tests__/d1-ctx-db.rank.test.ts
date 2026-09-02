@@ -50,6 +50,7 @@ const setupWriter = async (schema: SchemaLike): Promise<DatabaseWriterLike> => {
         `CREATE TABLE "messages" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
+            "_version" INTEGER,
             "archived" INTEGER,
             "channelId" TEXT,
             "score" INTEGER
@@ -167,6 +168,7 @@ describe("d1 rankIndex parity", () => {
             `CREATE TABLE "messages" (
                 "id" TEXT PRIMARY KEY,
                 "_creationTime" INTEGER NOT NULL,
+                "_version" INTEGER,
                 "archived" INTEGER,
                 "channelId" TEXT,
                 "score" INTEGER

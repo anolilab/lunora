@@ -297,14 +297,6 @@ interface PitrRequest {
 
 /** Validate the guards and resolve the token / URL / fetch for a `pitr` call. Logs and returns `undefined` on any failure. */
 const resolvePitrRequest = (options: BackupCommandOptions): PitrRequest | undefined => {
-    const token = options.token ?? process.env.LUNORA_ADMIN_TOKEN;
-
-    if (!token) {
-        options.logger.error("admin token required — pass --token or set LUNORA_ADMIN_TOKEN");
-
-        return undefined;
-    }
-
     if (options.prod && options.url === undefined) {
         options.logger.error("--prod requires an explicit --url (refusing to target the implicit localhost worker)");
 
@@ -328,6 +320,17 @@ const resolvePitrRequest = (options: BackupCommandOptions): PitrRequest | undefi
     // operator remembered to also declare the flag.
     if (options.restore === true && targetsRemoteWorker({ prod: options.prod, url: baseUrl }) && options.yes !== true) {
         options.logger.error(`pitr --restore restores data in place at ${baseUrl}, which is not local. Re-run with --yes to confirm.`);
+
+        return undefined;
+    }
+
+    // Through the shared resolver, like this file's other two admin paths, and
+    // after `baseUrl` because the `.dev.vars` fallback is loopback-gated. `pitr`
+    // was the one leg still reading `--token`/the environment only.
+    const { token } = resolveAdminBearer({ cwd: options.cwd ?? process.cwd(), token: options.token, url: baseUrl });
+
+    if (!token) {
+        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
 
         return undefined;
     }

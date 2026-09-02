@@ -21,9 +21,11 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'errors.dart';
+import 'wire.dart';
 
 /// Whether two shard keys name the same shard.
 ///
@@ -53,6 +55,16 @@ class PersistedMutation {
   /// committed is deduplicated server-side rather than applied twice.
   final String id;
   final String functionPath;
+
+  /// The write's arguments in their WIRE form, not their native one.
+  ///
+  /// Every real adapter serialises — a file, a SQLite text column, a preferences
+  /// store — and the native form carries the codec's own wrappers ([WireBigInt],
+  /// [WireBytes], [WireDate], [WireMap]). Persisting those either fails to
+  /// serialise, reporting the write "queued" while nothing durable was written,
+  /// or serialises as whatever the adapter makes of an opaque object and replays
+  /// after a restart with CORRUPTED args. So the encode happens here, once, and
+  /// [OfflineQueue.hydrate] decodes on the way back.
   final Object? args;
   final String? shardKey;
 
@@ -144,19 +156,30 @@ abstract class LunoraPersistence {
 /// wants the queue's ordering and bounds without the storage. It does record
 /// FIFO order faithfully, so a suite can exercise the hydrate path against it.
 class MemoryPersistence implements LunoraPersistence {
-  final List<PersistedMutation> _records = <PersistedMutation>[];
+  /// Records held as the JSON a real adapter would have written, never as the
+  /// object handed in.
+  ///
+  /// The round trip is the point rather than an implementation detail: an
+  /// adapter that keeps references makes a suite blind to everything durability
+  /// actually costs — a record whose args are the codec's native wrappers
+  /// survives here and dies against a file, and a corrupted record read back is
+  /// unreachable. Every store this stands in for serialises, so this one does.
+  final List<Map<String, Object?>> _records = <Map<String, Object?>>[];
 
   /// The records currently held, in FIFO order.
-  List<PersistedMutation> get records => List<PersistedMutation>.unmodifiable(_records);
+  List<PersistedMutation> get records =>
+      List<PersistedMutation>.unmodifiable(<PersistedMutation>[for (final record in _records) PersistedMutation.fromJson(record)]);
+
+  static Map<String, Object?> _roundTrip(Map<String, Object?> json) => jsonDecode(jsonEncode(json)) as Map<String, Object?>;
 
   @override
-  Future<void> append(PersistedMutation mutation) async => _records.add(mutation);
+  Future<void> append(PersistedMutation mutation) async => _records.add(_roundTrip(mutation.toJson()));
 
   @override
-  Future<List<PersistedMutation>> load() async => List<PersistedMutation>.of(_records);
+  Future<List<PersistedMutation>> load() async => <PersistedMutation>[for (final record in _records) PersistedMutation.fromJson(_roundTrip(record))];
 
   @override
-  Future<void> remove(String id) async => _records.removeWhere((record) => record.id == id);
+  Future<void> remove(String id) async => _records.removeWhere((record) => record['id'] == id);
 
   @override
   Future<void> clear() async => _records.clear();
@@ -249,10 +272,14 @@ class QueuedMutation {
     }
   }
 
+  /// The durable form. Throws [WireFormatException] for args outside the codec,
+  /// which [OfflineQueue.enqueue] reports as the failed append it is — the write
+  /// stays in memory with its REAL args rather than being persisted as a
+  /// substitute.
   PersistedMutation toPersisted(String? version) => PersistedMutation(
         id: id,
         functionPath: functionPath,
-        args: args,
+        args: encodeWire(args ?? const <String, Object?>{}),
         shardKey: shardKey,
         clientId: clientId,
         identity: identity,
@@ -370,13 +397,28 @@ class OfflineQueue {
     // leave the record in durable storage forever, to be replayed by a later
     // session as a write this one already rejected.
     if (store != null && _items.contains(entry)) {
+      final PersistedMutation record;
+
+      try {
+        record = entry.toPersisted(version);
+      } on Object catch (error) {
+        // Args outside the codec. Reported as the append it PREVENTED, and the
+        // entry keeps its real args in memory — persisting a substitute would
+        // replay a different write than the caller made, and the flush already
+        // settles an unencodable write terminally.
+        onPersistenceError?.call(PersistenceOperation.append, error, entry.id);
+        _notifySize();
+
+        return;
+      }
+
       // Fire-and-forget with an explicit error hop: awaiting here would make
       // every queued write pay a storage round-trip before its caller's Future
       // resolves, and the in-memory queue is already authoritative for this
       // session. A failure means "queued but not durable", which is what the
       // handler is told.
       unawaited(
-        store.append(entry.toPersisted(version)).catchError((Object error) {
+        store.append(record).catchError((Object error) {
           onPersistenceError?.call(PersistenceOperation.append, error, entry.id);
         }),
       );
@@ -432,11 +474,40 @@ class OfflineQueue {
         continue;
       }
 
+      final Object? args;
+
+      try {
+        args = decodeWire(record.args);
+      } on Object catch (error) {
+        // Purged and REPORTED, never replayed with substitute args: a record
+        // whose args do not decode has no correct replay, and sending it with an
+        // empty argument object would commit a DIFFERENT write than the caller
+        // made. Throwing instead would kill the whole restart path over one bad
+        // row.
+        unpersist(record.id);
+        // Settled where it is found, exactly as an overflow eviction is: a
+        // restored write has no awaiter, so `onSettled` is the only place its
+        // verdict can be heard at all.
+        QueuedMutation(
+          id: record.id,
+          functionPath: record.functionPath,
+          args: null,
+          shardKey: record.shardKey,
+          clientId: record.clientId,
+          identity: record.identity,
+          identityStamped: record.identityStamped,
+        )
+          ..onSettled = onSettled
+          ..reject(LunoraApiException(offlineWriteUndecodable, 'offline mutation restored from storage cannot be wire-decoded: $error'));
+
+        continue;
+      }
+
       restored.add(
         QueuedMutation(
           id: record.id,
           functionPath: record.functionPath,
-          args: record.args,
+          args: args,
           shardKey: record.shardKey,
           clientId: record.clientId,
           identity: record.identity,
