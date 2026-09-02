@@ -137,6 +137,10 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Run depth exceeded";
     };
+    readonly RUN_KIND_FORBIDDEN: {
+        readonly status: 500;
+        readonly title: "Function kind may not be composed from a query";
+    };
     readonly TRANSACTION_LIMIT_EXCEEDED: {
         readonly hint: readonly [
             "A single mutation may only read and write a bounded amount before it is stopped.",

@@ -76,9 +76,13 @@ The two contexts schedule identically, but the intent differs:
 
 - From a **mutation**, scheduling moves a side effect _out_ of the transactional
   read/write scope. A mutation can't call `fetch()` or write to R2, so it
-  schedules an **action** to do that once the write has committed.
+  schedules an **action** to do that once the write has committed. The job is
+  held until the commit and dropped if the mutation rolls back, so it can never
+  fire for a write that never landed — you still get the job id back
+  synchronously, so you can store it on the row and `cancel` it later.
 - From an **action**, scheduling chains further async work: retry an external
-  call later, or fan a long job out into stages.
+  call later, or fan a long job out into stages. An action has no transaction to
+  wait for, so its jobs are enqueued immediately.
 
 ```ts
 import { mutation, v } from "@/lunora/_generated/server";
@@ -91,7 +95,8 @@ export const orderPlaced = mutation.input({ orderId: v.id("orders") }).mutation(
 ```
 
 `runAfter(0, ...)` is the idiomatic "do this right after I commit, but not in my
-transaction" hand-off.
+transaction" hand-off — literally so: the job reaches the scheduler after the
+`COMMIT`, in the order the handler scheduled them.
 
 ### Inspecting and cancelling
 

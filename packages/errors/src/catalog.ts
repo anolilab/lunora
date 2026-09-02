@@ -110,6 +110,17 @@ export const ERROR_CATALOG = {
     },
 
     RUN_DEPTH_EXCEEDED: { internal: true, status: 500, title: "Run depth exceeded" },
+
+    /**
+     * A `query` context reached for `ctx.runMutation` / `ctx.runAction`. The
+     * generated context object installs all three `run*` methods on every kind, so
+     * the TYPE is the only thing that stops a read-only handler from writing — and
+     * a cast walks straight past it, inside a subscription re-run that may execute
+     * many times per write. Deliberately NOT `internal`: the message names the
+     * function that was reached for, and it is a programming error the developer
+     * needs to read.
+     */
+    RUN_KIND_FORBIDDEN: { status: 500, title: "Function kind may not be composed from a query" },
     TRANSACTION_LIMIT_EXCEEDED: {
         hint: [
             "A single mutation may only read and write a bounded amount before it is stopped.",
