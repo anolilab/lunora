@@ -287,6 +287,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `WebhookOutcome` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `addMoney` (const)
 
 ```ts
@@ -442,6 +446,10 @@ const verifyCreemSignature: (input: VerifyCreemSignatureInput) => Promise<void>;
 ```ts
 const verifyStandardWebhook: (input: VerifyStandardWebhookInput) => Promise<void>;
 ```
+
+### `webhookResponse` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `zeroMoney` (const)
 

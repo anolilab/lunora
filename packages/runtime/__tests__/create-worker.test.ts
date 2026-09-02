@@ -2325,6 +2325,25 @@ describe("createWorker auth-metrics instrumentation (PLAN3 §2.3)", () => {
         expect(body.args.outcome).toBe("ok");
     });
 
+    it("applies the shared 1 MiB body cap to `/api/auth/*`, so the docs cannot claim a bypass", async () => {
+        expect.assertions(2);
+
+        const authHandler = vi.fn<(request: Request) => Promise<Response>>(async () => new Response("ok", { status: 200 }));
+
+        const worker = createWorker({ adminToken: "s3cret", authHandler, shardDO: shard.namespace });
+
+        // The pre-check reads `content-length` only, so no body is needed to trip it.
+        const res = await worker.fetch(
+            new Request("https://app.example/api/auth/scim/v2/Bulk", { headers: { "content-length": String(2 * 1024 * 1024) }, method: "POST" }),
+            {},
+            collectingContext,
+        );
+
+        expect(res.status).toBe(413);
+        // Rejected BEFORE dispatch, so better-auth never sees the request.
+        expect(authHandler).not.toHaveBeenCalled();
+    });
+
     it("does NOT record for a non-attempt auth route (get-session)", async () => {
         expect.assertions(2);
 

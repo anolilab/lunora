@@ -53,3 +53,9 @@ export const derivedIdempotencyKey = async (operation: string, provider: string,
  */
 export const localRefundKey = (sessionId: string, refundId: string | undefined, amount: Money): string =>
     refundId === undefined ? `local-refund:${sessionId}:${amount.currency}:${String(amount.minorUnits)}` : `local-refund:${sessionId}:id:${refundId}`;
+
+/**
+ * Claim `type` recorded for a {@link localRefundKey} marker. Internal bookkeeping, not a provider
+ * delivery — the `marker.` prefix is what separates the two in the `events` audit log.
+ */
+export const LOCAL_REFUND_CLAIM_TYPE = "marker.local_refund";

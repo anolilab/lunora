@@ -302,6 +302,65 @@ describe("dispatchToLunoraFunction", () => {
         expect(envelope.args).toMatchObject({ from: "alice@example.com", subject: "Hi" });
     });
 
+    /**
+     * Mirrors the generated shard's `handleRpc` visibility gate: an `internal`
+     * target answers `FUNCTION_NOT_FOUND` unless the dispatch is marked system
+     * (`x-lunora-system: "1"`) — the marker a client RPC can never carry.
+     */
+    const stubVisibilityGatedShard = (visibility: "internal" | "public") => {
+        type GatedFetch = (url: string, init?: { headers?: Record<string, string> }) => Promise<{ json: () => Promise<unknown>; ok: boolean }>;
+
+        const fetch = vi.fn<GatedFetch>(async (_url, init) => {
+            const denied = visibility === "internal" && init?.headers?.["x-lunora-system"] !== "1";
+
+            return {
+                json: async () => (denied ? { error: { code: "FUNCTION_NOT_FOUND", message: "function not registered: inbound:onEmail" } } : { result: "ok" }),
+                ok: true,
+            };
+        });
+
+        return {
+            fetch,
+            shard: {
+                get: () => {
+                    return { fetch };
+                },
+                idFromName: (name: string) => `id:${name}`,
+            },
+        };
+    };
+
+    it("marks the dispatch a trusted system call, not an anonymous bearer RPC", async () => {
+        expect.assertions(2);
+
+        const { fetch, shard } = stubShard({
+            json: async () => {
+                return { result: "ok" };
+            },
+            ok: true,
+        });
+
+        const dispatch = dispatchToLunoraFunction({ functionPath: "inbound:onEmail", shard });
+
+        await dispatch(fixture, { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() });
+
+        const [, init] = fetch.mock.calls[0] as unknown as [string, { headers: Record<string, string> }];
+
+        expect(init.headers["x-lunora-system"]).toBe("1");
+        expect(init.headers.authorization).toBe("Bearer secret");
+    });
+
+    it("reaches an internal target, and still reaches a public one", async () => {
+        expect.assertions(2);
+
+        const context = { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() };
+        const internalShard = stubVisibilityGatedShard("internal");
+        const publicShard = stubVisibilityGatedShard("public");
+
+        await expect(dispatchToLunoraFunction({ functionPath: "inbound:onEmail", shard: internalShard.shard })(fixture, context)).resolves.toBeUndefined();
+        await expect(dispatchToLunoraFunction({ functionPath: "inbound:onEmail", shard: publicShard.shard })(fixture, context)).resolves.toBeUndefined();
+    });
+
     it("base64-encodes binary attachment content so it survives JSON serialisation", async () => {
         expect.assertions(3);
 

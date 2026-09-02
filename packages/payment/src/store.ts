@@ -40,8 +40,13 @@ export interface PaymentStore {
     /**
      * Claims a provider event id for processing. Resolves `true` the first time an event is seen
      * and `false` for a duplicate — the inbound-idempotency primitive.
+     *
+     * `type` is recorded on the claim row so the `events` table is a readable audit log rather than
+     * bare ids and timestamps: a real delivery passes its `WebhookActionType`, and the
+     * internal claim markers (`sync.ts`'s orphan-retry bound, the local-refund ledger) pass a
+     * `marker.*` label so they are distinguishable from provider traffic in the studio.
      */
-    markEventProcessed: (provider: ProviderId, eventId: string) => Promise<boolean>;
+    markEventProcessed: (provider: ProviderId, eventId: string, type: string) => Promise<boolean>;
     /** Flag a recorded usage event as forwarded to the provider's metering API. */
     markUsageReported: (provider: ProviderId, idempotencyKey: string) => Promise<void>;
 
@@ -151,7 +156,7 @@ export class MemoryPaymentStore implements PaymentStore {
         return Promise.resolve(pending.slice(0, Math.max(0, limit)));
     }
 
-    public markEventProcessed(provider: ProviderId, eventId: string): Promise<boolean> {
+    public markEventProcessed(provider: ProviderId, eventId: string, _type: string): Promise<boolean> {
         const key = recordKey(provider, eventId);
 
         if (this.processedEvents.has(key)) {
