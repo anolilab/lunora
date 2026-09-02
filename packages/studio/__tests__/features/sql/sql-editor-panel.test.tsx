@@ -172,6 +172,29 @@ describe("sqlEditorPanel", () => {
         expect(screen.getByTestId("sql-statement-2").getAttribute("aria-pressed")).toBe("true");
     });
 
+    it("does not double-prefix EXPLAIN onto a draft that already asks for a plan", async () => {
+        expect.assertions(2);
+
+        // The read-only gate ALLOWS a leading `EXPLAIN [QUERY PLAN]`, so wrapping
+        // one again sends `EXPLAIN QUERY PLAN EXPLAIN QUERY PLAN …`, which SQLite
+        // refuses with `near "EXPLAIN": syntax error` — while Run executes the
+        // very same draft.
+        const mock = createMockClient({ query: oneRowResult });
+
+        render(renderPanel(mock));
+
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "EXPLAIN QUERY PLAN SELECT 1" } });
+        fireEvent.click(screen.getByTestId("sql-tab-explain"));
+
+        await waitFor(() => {
+            expect(mock.query.mock.calls.some((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.runSql)).toBe(true);
+        });
+
+        const sent = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.runSql).map((call) => (call[1] as { sql: string }).sql);
+
+        expect(sent).toStrictEqual(["EXPLAIN QUERY PLAN SELECT 1"]);
+    });
+
     it("reports a statement the gate refuses without sending it, and still runs the rest", async () => {
         expect.assertions(3);
 

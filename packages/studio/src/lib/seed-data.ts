@@ -15,6 +15,7 @@
  * studio's `basePath` — so the client targets it directly. Keep this in sync
  * with `SEED_ENDPOINT` in `@lunora/config/studio-host`.
  */
+import { decodeWire } from "../../../../shared/wire-codec";
 import type { ColumnMeta } from "./admin";
 
 /** Endpoint both dev hosts mount the seed-data handler at. */
@@ -50,37 +51,51 @@ interface SeedRowsRequest {
 type SeedRowsResult = { kind: "error"; message: string } | { kind: "ok"; rows: ReadonlyArray<Record<string, unknown>> };
 
 /**
- * Collect the names of FK columns whose pool is empty so they can be surfaced
- * in the UI. The planner links FK columns only when the parent table has
- * sampled ids; an empty pool means that relation won't be populated.
+ * Collect the names of FK columns whose parent table has no rows to link
+ * against, so the UI can say which relations block generation.
+ *
+ * Generation cannot proceed for these: the planner has no id to point the
+ * column at, and the endpoint refuses rather than fabricate a parent it would
+ * then drop. The parent has to be seeded first.
  */
-const collectSkippedFkColumns = (columns: ReadonlyArray<ColumnMeta>, fkPools: Readonly<Record<string, ReadonlyArray<string>>>): string[] => {
-    const skipped: string[] = [];
+const collectUnresolvableFkColumns = (columns: ReadonlyArray<ColumnMeta>, fkPools: Readonly<Record<string, ReadonlyArray<string>>>): string[] => {
+    const blocked: string[] = [];
 
     for (const column of columns) {
         if (column.pk !== true && column.ref !== undefined && column.type === "id" && (fkPools[column.ref] ?? []).length === 0) {
-            skipped.push(column.name);
+            blocked.push(column.name);
         }
     }
 
-    return skipped;
+    return blocked;
 };
 
-/** Request generated rows from the dev host, normalising every outcome. */
+/**
+ * Request generated rows from the dev host, normalising every outcome.
+ *
+ * The rows come back `encodeWire`d, so they are `decodeWire`d here: that is what
+ * turns a `v.bigint()` cell back into a real `bigint` and a `v.bytes()` cell back
+ * into an `ArrayBuffer` before the caller hands them to `importShard`, whose
+ * per-column validators reject the JSON-narrowed forms. Identity for pure JSON.
+ */
 const requestSeedRows = async (request: SeedRowsRequest): Promise<SeedRowsResult> => {
     const response = await fetch(SEED_ENDPOINT, {
         body: JSON.stringify(request),
         headers: { "Content-Type": "application/json" },
         method: "POST",
     });
-    const body = (await response.json()) as { error?: string; ok?: boolean; rows?: ReadonlyArray<Record<string, unknown>> };
+    const body = (await response.json()) as { error?: string; ok?: boolean; rows?: unknown; tables?: ReadonlyArray<string> };
 
     if (response.ok && body.rows !== undefined) {
-        return { kind: "ok", rows: body.rows };
+        return { kind: "ok", rows: decodeWire(body.rows) as ReadonlyArray<Record<string, unknown>> };
+    }
+
+    if (body.error === "fk-parents-empty") {
+        return { kind: "error", message: `no rows to reference in ${(body.tables ?? []).join(", ")} — seed those tables first` };
     }
 
     return { kind: "error", message: body.error ?? `seed request failed (${String(response.status)})` };
 };
 
 export type { SeedRowsRequest, SeedRowsResult };
-export { collectSkippedFkColumns, MAX_FK_SAMPLE, MAX_GENERATE_ROWS, requestSeedRows, SEED_ENDPOINT };
+export { collectUnresolvableFkColumns, MAX_FK_SAMPLE, MAX_GENERATE_ROWS, requestSeedRows, SEED_ENDPOINT };

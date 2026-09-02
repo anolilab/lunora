@@ -42,7 +42,9 @@ the `ctx.db.system` reader for `_scheduled_functions` / `_storage`). Storage
 and vectors are present but read-only (`ReadOnlyStorage`, `VectorSearchReader`).
 A query may compose other **queries** with `ctx.runQuery`, observing the same
 transaction snapshot. There is no `runMutation`/`runAction`, because a query is
-not allowed to write.
+not allowed to write — and the dispatch enforces it at runtime, so casting past
+the type gets a `RUN_KIND_FORBIDDEN` error rather than a write smuggled into a
+subscription re-run.
 
 ### `MutationCtx`
 
@@ -52,7 +54,13 @@ shard's transactional scope. Adds `ctx.scheduler` (enqueue deferred work) and
 `ctx.workflows` (start/inspect durable workflows), and upgrades `ctx.vectors`
 to the mutating `VectorSearch`. `ctx.storage` stays read-only; R2 writes are a
 side effect reserved for actions. A mutation can compose other mutations and
-queries (`ctx.runMutation`, `ctx.runQuery`), both reusing the same `db` writer.
+queries (`ctx.runMutation`, `ctx.runQuery`), both reusing the same `db` writer and
+riding the same transaction — a composed mutation does not open a second one.
+
+`ctx.scheduler` is transactional too: a `runAfter`/`runAt` issued inside a
+mutation is held until the mutation commits, and discarded if it rolls back. You
+still get the job id back synchronously, so you can store it on the row you just
+wrote and `cancel` it later.
 
 ### `ActionCtx`
 
@@ -62,7 +70,10 @@ The escape hatch. An action can do anything a Worker can: it gets `ctx.fetch`
 `ctx.workflows`, and the mutating `ctx.vectors`. It composes other functions of
 every kind: `ctx.runQuery`, `ctx.runMutation`, `ctx.runAction`. An action's
 `ctx.db` writes are **not** part of a single mutation transaction. Do
-transactional reads and writes inside a `mutation` and call it from the action.
+transactional reads and writes inside a `mutation` and call it from the action:
+that composed mutation runs in its own all-or-nothing span, so a throw halfway
+through it rolls back every write it made — the action sees the error with
+nothing half-applied behind it.
 
 ## Surfaces on every `ctx`
 

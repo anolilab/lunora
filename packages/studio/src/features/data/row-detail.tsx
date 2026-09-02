@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 
 import { ModalShell } from "../../components/ui/modal-shell";
-import { formatCell, formatTimestamp } from "../../lib/internal";
+import { formatCell, formatTimestamp, jsonRowReplacer } from "../../lib/internal";
 import type { MaskView } from "../../lib/mask-preview";
 
 interface RowDetailDrawerProps {
@@ -84,8 +84,15 @@ const FieldValue = ({
         );
     }
 
+    // A `v.bytes()` column decodes to an ArrayBuffer, which is `typeof "object"`
+    // and pretty-prints as `{}` — the grid cell shows its size instead, and the
+    // drawer has to agree with the grid it expands.
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+        return <span data-testid={`rd-bytes-${column}`}>{formatCell(value)}</span>;
+    }
+
     if (typeof value === "object") {
-        return <pre className="m-0 overflow-auto rounded-md bg-muted/50 p-2 text-xs">{JSON.stringify(value, null, 2)}</pre>;
+        return <pre className="m-0 overflow-auto rounded-md bg-muted/50 p-2 text-xs">{JSON.stringify(value, jsonRowReplacer, 2)}</pre>;
     }
 
     return <span>{formatCell(value)}</span>;

@@ -3,7 +3,7 @@
     "name": "storage",
     "title": "Storage",
     "description": "R2-backed file storage for Lunora — direct-upload + worker-signed-URL helpers built on @lunora/storage over an R2 bucket binding, exposed as actions/queries so codegen surfaces them as api.storage.*.",
-    "docs": "Add an R2 bucket named in wrangler.jsonc (binding UPLOADS) and set STORAGE_SIGNING_SECRET + STORAGE_PUBLIC_BASE_URL, then re-export the functions from lunora/storage/index.ts so codegen emits api.storage.generateUploadUrl / api.storage.getDownloadUrl / api.storage.deleteObject / api.storage.listObjects. Gate GET /storage/:key in your Worker with verifySignedUrl (see the README).",
+    "docs": "Add an R2 bucket named in wrangler.jsonc (binding UPLOADS) and set STORAGE_SIGNING_SECRET (>= 32 chars) + STORAGE_PUBLIC_BASE_URL (a bare origin, no path), then re-export the functions from lunora/storage/index.ts so codegen emits api.storage.generateUploadUrl / api.storage.getDownloadUrl / api.storage.deleteObject / api.storage.listObjects. Add the /storage/* route to your Worker entry — it verifies signed URLs and handles both the PUT the browser uploads with and the GET it downloads with (see the README).",
     "requires": [],
     "deps": {
         "@lunora/storage": "workspace:*",
@@ -24,8 +24,8 @@
         },
         {
             "name": "STORAGE_PUBLIC_BASE_URL",
-            "description": "Public base URL that fronts the R2 bucket (the Worker route or CDN host that serves GET /storage/:key). Used to mint getUrl()/getSignedUrl() outputs.",
-            "value": "http://localhost:8787/storage",
+            "description": "Bare origin that fronts the R2 bucket (the Worker or CDN host that serves the signed URLs). MUST NOT carry a path: the key is verified from the whole URL pathname, so a subpath base makes every minted URL fail verification. Every key this item mints is prefixed `storage/`, so the minted URLs land on `/storage/:key` at this origin.",
+            "value": "http://localhost:8787",
             "secret": false
         }
     ],

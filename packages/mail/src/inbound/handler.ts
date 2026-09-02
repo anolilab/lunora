@@ -21,10 +21,14 @@
  *   *sender*. The envelope `from` and message body are trivially spoofable, so a
  *   handler MUST NOT make trust/authorization decisions on `email.from`. Gate on
  *   `email.authentication` (DKIM/SPF/DMARC verdicts) and/or the `verify` hook.
- * - `dispatchToLunoraFunction` authenticates the shard RPC with the admin bearer
- *   (`LUNORA_ADMIN_TOKEN`), so the target function runs in a **system/admin
- *   context with RLS bypassed**. Combined with the spoofable sender, this means
- *   an inbound function must treat its input as fully attacker-controlled.
+ * - `dispatchToLunoraFunction` marks the shard RPC a **trusted system dispatch**
+ *   (the same marker the scheduler/cron path sets), so the target may be an
+ *   `internalMutation`/`internalAction` — and it should be, because a public
+ *   `mutation` reachable this way is equally reachable from any browser client,
+ *   which can forge the whole message. The dispatch carries no caller identity,
+ *   so an `rls()` policy on the target sees an anonymous caller rather than
+ *   being bypassed. Combined with the spoofable sender, an inbound function must
+ *   treat its input as fully attacker-controlled and do its own authorization.
  * - `onError` reasons are delivered to the (attacker-controlled) sender as a
  *   bounce, so the default never reflects internal error detail (see
  *   `rejectOnError`).
@@ -371,10 +375,11 @@ const toJsonSafeEmail = (email: InboundEmail): InboundEmail => {
  * and then hands the message to `retain` if one is configured, bouncing only
  * when there is nowhere durable to put it (see {@link createInboundEmailHandler}).
  *
- * SECURITY: the RPC carries the admin bearer, so the target function runs with
- * RLS bypassed over fully attacker-controlled, spoofable input — see the module
- * docstring. Verify the sender (`verify` hook / `email.authentication`) before
- * making any trust decision in the target function.
+ * SECURITY: the RPC is marked a trusted system dispatch, so `functionPath` may
+ * (and should) name an `internalMutation`/`internalAction` — a public `mutation`
+ * target is callable by any browser client with a forged message. The input is
+ * fully attacker-controlled and spoofable; verify the sender (`verify` hook /
+ * `email.authentication`) before making any trust decision in the target.
  */
 const dispatchToLunoraFunction = <TEnv extends Record<string, unknown> = Record<string, unknown>>(
     options: DispatchToLunoraFunctionOptions<TEnv>,

@@ -524,6 +524,7 @@ type StreamStatus = "complete" | "error" | "idle" | "streaming";
 
 ```ts
 interface StreamStoreOptions {
+    durable?: boolean;
     maxBuffer?: number;
     shardKey?: string;
 }

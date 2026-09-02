@@ -63,16 +63,19 @@ createShardDO({
 `processWebhook` is an `internalAction`, so it runs inside the shard where `ctx.payments` and its store exist. The HTTP route at the Worker edge forwards the raw body and the provider signature header to it:
 
 ```ts
+import { webhookResponse } from "@lunora/payment";
+
 app.post(
     "/payment/webhook",
     httpAction(async (ctx, request) => {
         const body = await request.text();
         const signature = request.headers.get("stripe-signature") ?? "";
-        const result = await ctx.runAction(processWebhook, { body, signature });
-        return Response.json(result);
+        return webhookResponse(await ctx.runAction(processWebhook, { body, signature }));
     }),
 );
 ```
+
+Answer with `webhookResponse`, never `Response.json(result)`: only the JSON payload crosses the `runAction` boundary, so the HTTP status has to be re-applied at the edge. Without it an **orphaned** event — one patching a row whose create event has not arrived yet — answers `200` instead of its deliberate `500`, the provider never retries it, and the out-of-order update is lost for good.
 
 ## 4. Set the env vars
 

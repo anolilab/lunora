@@ -562,7 +562,9 @@ interface DoAuthWiring {
     auditReader: AuthAuditReader;
     authHandler: (request: Request) => Promise<Response | undefined>;
     resolveIdentity: (request: Request) => Promise<null | {
+        email?: string;
         expiresAtMs?: number;
+        name?: string;
         role?: string;
         userId: string;
     }>;

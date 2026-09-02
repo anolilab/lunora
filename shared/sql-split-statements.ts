@@ -1,6 +1,6 @@
-import { maskSqlNonCode } from "../../../../../shared/sql-mask";
-import type { SqlRejection } from "../../../../../shared/sql-readonly";
-import { classifyStatement } from "../../../../../shared/sql-readonly";
+import { maskSqlNonCode } from "./sql-mask";
+import type { SqlRejection } from "./sql-readonly";
+import { classifyStatement } from "./sql-readonly";
 
 /** One statement from a script: its text, where it starts in the draft, and why the gate refused it. */
 interface ScriptStatement {

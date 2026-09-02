@@ -2828,6 +2828,12 @@ const anyApi: AnyApi;
 const asBucketStorage: (raw: unknown) => unknown;
 ```
 
+### `beginDeferredSchedules` (const)
+
+```ts
+const beginDeferredSchedules: (context: unknown) => ((committed: boolean) => Promise<void>);
+```
+
 ### `bindOrm` (const)
 
 ```ts
@@ -3197,6 +3203,12 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 
 ```ts
 const withDeferredDeletes: (storage: unknown) => unknown;
+```
+
+### `withDeferredSchedules` (const)
+
+```ts
+const withDeferredSchedules: (scheduler: unknown) => unknown;
 ```
 
 ## `@lunora/server/data-model`

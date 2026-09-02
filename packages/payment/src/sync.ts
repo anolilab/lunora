@@ -9,7 +9,7 @@
  * would burn the event id while the change it carries is still unapplied.
  */
 import { LunoraPaymentError } from "./errors";
-import { localRefundKey } from "./idempotency";
+import { LOCAL_REFUND_CLAIM_TYPE, localRefundKey } from "./idempotency";
 import { addMoney, compareMoney, zeroMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
@@ -37,6 +37,9 @@ const SUBSCRIPTION_STATE_BY_TYPE: Partial<Record<WebhookActionType, Subscription
  * dedupe store as real event ids, so the bound survives isolate restarts without a second store.
  */
 const ORPHAN_RETRY_MARKER = "orphan-retry:";
+
+/** Claim `type` recorded for an {@link ORPHAN_RETRY_MARKER} row — internal bookkeeping, not a provider delivery. */
+const ORPHAN_RETRY_CLAIM_TYPE = "marker.orphan_retry";
 
 const SUBSCRIPTION_ACTION_BY_TYPE: Partial<Record<WebhookActionType, SubscriptionAction>> = {
     "subscription.active": "activate",
@@ -76,7 +79,7 @@ const withoutLocallyRecordedRefund = async (store: PaymentStore, action: Webhook
     }
 
     const key = localRefundKey(action.sessionId, action.refundId, action.amount);
-    const unclaimed = await store.markEventProcessed(action.provider, key);
+    const unclaimed = await store.markEventProcessed(action.provider, key, LOCAL_REFUND_CLAIM_TYPE);
 
     await store.releaseEvent(action.provider, key);
 
@@ -196,6 +199,33 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
     return { applied: true, reason: "ok" };
 };
 
+/**
+ * Pick the FSM action a webhook implies, given where the row already is.
+ *
+ * Two arrivals at `active` are not the same transition, and no adapter can tell them
+ * apart — every provider (Stripe, Creem, Dodo) reports both a renewal and a resume as
+ * the same `subscription.active` event, so the current state is what disambiguates:
+ *
+ * Already `active` means `renew` (a period roll, a legal self-loop). `paused` means
+ * `resume`, the only edge out of `paused` back to `active` — mapping it to `activate`
+ * (illegal from `paused`) rejected every resume as `illegal_transition`, so a customer
+ * who resumed and paid stayed denied by `check`/`hasActivePrice` until somebody ran
+ * `reconcile` by hand.
+ */
+const resolveSubscriptionAction = (from: SubscriptionState, targetState: SubscriptionState, type: WebhookActionType): SubscriptionAction | undefined => {
+    if (targetState === "active") {
+        if (from === "active") {
+            return "renew";
+        }
+
+        if (from === "paused") {
+            return "resume";
+        }
+    }
+
+    return SUBSCRIPTION_ACTION_BY_TYPE[type];
+};
+
 const applySubscription = async (store: PaymentStore, action: WebhookAction): Promise<ApplyResult> => {
     if (!action.subscriptionId) {
         return { applied: false, reason: "unhandled" };
@@ -250,9 +280,7 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
         return { applied: true, reason: "ok" };
     }
 
-    // A repeated "active" (renewal/period roll) is a legal self-loop; otherwise use the mapped action.
-    const subscriptionAction: SubscriptionAction | undefined =
-        existing.state === "active" && targetState === "active" ? "renew" : SUBSCRIPTION_ACTION_BY_TYPE[action.type];
+    const subscriptionAction = resolveSubscriptionAction(existing.state, targetState, action.type);
 
     const nextState = subscriptionAction ? nextSubscriptionState(existing.state, subscriptionAction) : undefined;
 
@@ -293,7 +321,7 @@ const applyWebhookAction = async (store: PaymentStore, action: WebhookAction, ob
         throw new LunoraPaymentError("WEBHOOK_EVENT_ID_MISSING", `webhook event id is missing or blank for provider "${action.provider}"`);
     }
 
-    const fresh = await store.markEventProcessed(action.provider, action.eventId);
+    const fresh = await store.markEventProcessed(action.provider, action.eventId, action.type);
 
     if (!fresh) {
         notifyObserver(observer, { eventId: action.eventId, provider: action.provider, type: "webhook.duplicate" });
@@ -330,7 +358,7 @@ const applyWebhookAction = async (store: PaymentStore, action: WebhookAction, ob
         // every other event down with it. A companion marker in the same claim store records that the
         // event has already had its retry; the second sighting keeps the claim and acknowledges, so
         // the event stops rather than the endpoint. The observer sees `reason: "unhandled"` for it.
-        const retryable = await store.markEventProcessed(action.provider, `${ORPHAN_RETRY_MARKER}${action.eventId}`);
+        const retryable = await store.markEventProcessed(action.provider, `${ORPHAN_RETRY_MARKER}${action.eventId}`, ORPHAN_RETRY_CLAIM_TYPE);
 
         if (retryable) {
             await store.releaseEvent(action.provider, action.eventId);

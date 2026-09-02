@@ -52,9 +52,11 @@ describe("emitShard — untracked ctx.runQuery", () => {
         const emitted = shard();
 
         // The default path is unchanged — no second ctx, no behaviour change for
-        // every call site that does not opt in.
-        expect(emitted).toContain(": ctx,\n                );");
-        expect(emitted).toContain('dispatchRun("mutation", reference.__lunoraRef, fnArgs, ctx)');
-        expect(emitted).toContain('dispatchRun("action", reference.__lunoraRef, fnArgs, ctx)');
+        // every call site that does not opt in. (The trailing arguments carry the
+        // caller's kind, and for a mutation its transaction wrapper; the ctx the
+        // callee runs on is still the caller's.)
+        expect(emitted).toContain(": ctx,\n                    contextKind,\n                );");
+        expect(emitted).toContain('dispatchRun("mutation", reference.__lunoraRef, fnArgs, ctx, contextKind,');
+        expect(emitted).toContain('dispatchRun("action", reference.__lunoraRef, fnArgs, ctx, contextKind)');
     });
 });

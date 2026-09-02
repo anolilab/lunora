@@ -85,7 +85,18 @@ const postShardRpc = async (namespace: ShardNamespaceLike, options: PostShardRpc
     const stub = scoped.get(scoped.idFromName(options.shardKey));
     const response = await stub.fetch("https://shard.internal/rpc", {
         body: JSON.stringify(options.envelope),
-        headers: { authorization: `Bearer ${options.adminToken}`, "content-type": "application/json" },
+        headers: {
+            authorization: `Bearer ${options.adminToken}`,
+            "content-type": "application/json",
+            // Marks the dispatch trusted server-initiated, exactly as the runtime's
+            // scheduler/cron path does. The shard's `/rpc` never inspects the bearer
+            // for a user function, so without this header the call is shaped like an
+            // anonymous browser RPC: an `internalAction`/`internalMutation` target
+            // answers FUNCTION_NOT_FOUND. Both callers here run inside the Worker's
+            // trust boundary and already hold the admin token; the header is never
+            // copied off an inbound request (the runtime strips a client-sent copy).
+            "x-lunora-system": "1",
+        },
         method: "POST",
     });
 
