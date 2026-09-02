@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { PaymentAdapter } from "../src/adapter";
-import { createPayment } from "../src/create-payment";
+import type { WebhookOutcome } from "../src/create-payment";
+import { createPayment, webhookResponse } from "../src/create-payment";
 import { money } from "../src/money";
 import { MemoryPaymentStore } from "../src/store";
 import applyWebhookAction from "../src/sync";
@@ -863,6 +864,44 @@ describe("createPayment", () => {
         // The row this event patches doesn't exist yet — the provider must retry it.
         expect(response.status).toBe(500);
         await expect(response.json()).resolves.toEqual({ applied: false, reason: "orphaned" });
+    });
+
+    it("carries the orphan 500 through the documented route, which cannot see `handleWebhook`'s Response", async () => {
+        expect.assertions(4);
+
+        // The documented wiring: an `httpAction` at the edge forwards the raw body into an
+        // `internalAction`, which calls `handleWebhook` inside the shard. Only JSON crosses
+        // that `ctx.runAction` hop, so the Response — and the deliberate 500 on an orphaned
+        // event — is reconstructed at the edge or lost. It used to be lost: the route
+        // answered `Response.json(result)`, every provider saw 200, and the out-of-order
+        // event was acknowledged, its claim released, never redelivered.
+        const orphan: WebhookAction = {
+            eventId: "evt_orphan_route",
+            priceId: "price_2",
+            provider: "stripe",
+            subscriptionId: "sub_absent",
+            type: "subscription.updated",
+        };
+        const accepted: WebhookAction = { eventId: "evt_noop_route", provider: "stripe", type: "unhandled" };
+
+        /** `processWebhook`, exactly as docs / registry / example declare it. */
+        const processWebhook = async (action: WebhookAction): Promise<WebhookOutcome> => {
+            const payment = createPayment({ adapter: fakeAdapter({ parseWebhook: async () => action }), store: new MemoryPaymentStore() });
+            const response = await payment.handleWebhook(new Request("https://internal/payment/webhook", { body: "{}", method: "POST" }));
+            const result: { applied?: boolean } = await response.json();
+
+            return { applied: result.applied ?? false, status: response.status };
+        };
+
+        const orphaned = webhookResponse(await processWebhook(orphan));
+
+        expect(orphaned.status).toBe(500);
+        await expect(orphaned.json()).resolves.toStrictEqual({ applied: false });
+
+        const acknowledged = webhookResponse(await processWebhook(accepted));
+
+        expect(acknowledged.status).toBe(200);
+        await expect(acknowledged.json()).resolves.toStrictEqual({ applied: false });
     });
 
     it("still acknowledges a genuinely unhandled event with 200", async () => {

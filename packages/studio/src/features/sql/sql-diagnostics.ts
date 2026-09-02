@@ -23,7 +23,7 @@
  * back to the operator's text exactly and both features agree on what a
  * qualifier means.
  */
-import { splitStatements } from "./split-statements";
+import { splitStatements } from "../../../../../shared/sql-split-statements";
 import type { SqlSchema } from "./sql-autocomplete";
 import { sqlContextOf } from "./sql-context";
 
