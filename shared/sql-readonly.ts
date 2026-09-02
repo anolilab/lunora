@@ -175,5 +175,25 @@ const classifyStatement = (query: string): SqlRejection | undefined => {
     return undefined;
 };
 
-export { classifyStatement };
+/** A statement that already leads with `EXPLAIN` (optionally `EXPLAIN QUERY PLAN`). */
+const EXPLAIN_LEAD = /^explain\b/iu;
+
+/**
+ * Wrap `query` in `EXPLAIN QUERY PLAN` — unless it already leads with `EXPLAIN`.
+ *
+ * {@link READONLY_LEAD} deliberately admits an `EXPLAIN [QUERY PLAN]` prefix, so
+ * an operator can type one; prefixing another produces
+ * `EXPLAIN QUERY PLAN EXPLAIN …`, which SQLite refuses with
+ * `near "EXPLAIN": syntax error`. Both the server lint and the studio's Explain
+ * tab wrap, so both went red on a draft that Run executed happily — the exact
+ * warn/reject disagreement this file exists to prevent.
+ *
+ * Leading whitespace and comments are skipped the same way {@link
+ * classifyStatement} skips them, so a commented-out preamble does not hide the
+ * `EXPLAIN`.
+ * @returns the query itself when it already explains, else the wrapped form
+ */
+const explainQueryPlan = (query: string): string => (EXPLAIN_LEAD.test(query.slice(leadingNoiseEnd(query))) ? query : `EXPLAIN QUERY PLAN ${query}`);
+
+export { classifyStatement, explainQueryPlan };
 export type { SqlRejection, SqlRejectionCode };

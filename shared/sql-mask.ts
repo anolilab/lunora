@@ -1,7 +1,7 @@
 /**
  * The canonical "where is this character actually code?" scanner for SQL, shared
  * by the read-only gate (`shared/sql-readonly.ts`) and the Studio's statement
- * splitter (`@lunora/studio`'s `split-statements.ts`).
+ * splitter (`shared/sql-split-statements.ts`).
  *
  * Its one job is BOUNDARY DETECTION: deciding whether a given `;` starts a new
  * statement or is content inside a literal, a quoted identifier, or a comment.

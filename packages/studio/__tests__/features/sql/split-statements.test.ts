@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { splitStatements } from "../../../src/features/sql/split-statements";
+import { splitStatements } from "../../../../../shared/sql-split-statements";
 
 describe("splitStatements", () => {
     it("splits a script into its statements, dropping the empty trailing one", () => {

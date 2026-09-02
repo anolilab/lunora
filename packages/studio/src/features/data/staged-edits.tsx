@@ -20,6 +20,8 @@ interface StagedEditsModel {
     readonly clear: () => void;
     /** Total number of staged (row, column) cells. */
     readonly count: number;
+    /** Drop one row's pending edits — used as each row's patch commits, so a mid-batch failure leaves only the rows still unwritten staged. */
+    readonly drop: (rowId: string) => void;
     /** Stage (or overwrite) one cell's pending value. */
     readonly stage: (rowId: string, column: string, value: unknown) => void;
     /** The raw buffer, for commit. */
@@ -49,6 +51,10 @@ const useStagedEdits = (): StagedEditsModel => {
         setStaged({});
     };
 
+    const drop = (rowId: string): void => {
+        setStaged((previous) => Object.fromEntries(Object.entries(previous).filter(([id]) => id !== rowId)));
+    };
+
     const stagedValue = (rowId: string, column: string): undefined | { value: unknown } => {
         const row = staged[rowId];
 
@@ -57,7 +63,7 @@ const useStagedEdits = (): StagedEditsModel => {
 
     const count = Object.values(staged).reduce((sum, columns) => sum + Object.keys(columns).length, 0);
 
-    return { clear, count, stage, staged, stagedValue };
+    return { clear, count, drop, stage, staged, stagedValue };
 };
 
 /**

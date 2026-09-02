@@ -860,8 +860,14 @@ const useDataBrowser = ({
     };
 
     // Commit every staged cell edit as a per-row patch (the writer merges the
-    // changed fields into the existing doc), then reload the page and clear the
-    // buffer. Sequential so a failure pins the offending row.
+    // changed fields into the existing doc), then reload the page. Sequential so
+    // a failure pins the offending row.
+    //
+    // Each row leaves the buffer as ITS OWN patch lands, never all of them after
+    // the loop: the writer commits per row, so a failure on row k had already
+    // written rows 1..k-1 — clearing at the end never ran, and the panel went on
+    // showing an old→new diff for changes that were already on disk. The refetch
+    // runs on both paths for the same reason.
     const commitStaged = async (): Promise<void> => {
         if (selectedTable === null) {
             return;
@@ -874,15 +880,14 @@ const useDataBrowser = ({
             for (const [id, columns] of Object.entries(stagedEdits.staged)) {
                 // eslint-disable-next-line no-await-in-loop -- one patch per edited row; sequential so a failure pins the offending row
                 (await client.query(WRITE_ROW, { doc: columns, id, op: "patch", table: selectedTable }, callOptions(debouncedShard))) as WriteRowResult;
+                stagedEdits.drop(id);
             }
-
-            stagedEdits.clear();
-            setEditingCell(null);
-            pageQuery.refetch();
         } catch (error) {
             setWriteError((error as Error).message);
         }
 
+        setEditingCell(null);
+        pageQuery.refetch();
         setCommitting(false);
     };
 
@@ -1080,7 +1085,11 @@ const useDataBrowser = ({
     const hasPrevious = offset > 0;
 
     // The predicate the bulk ops actually send — see `DataBrowserModel.hasPredicate`.
-    const hasPredicate = search !== "" || filters.length > 0;
+    // Measured through `toFilterClauses`, the same transform the request uses:
+    // a filter row the operator has added but not yet given a column to is
+    // DROPPED there, so counting raw `filters.length` offered "Delete N matching"
+    // over the whole table and then sent `filters: []`, which the server refuses.
+    const hasPredicate = search !== "" || toFilterClauses(filters).length > 0;
     const hasNext = page !== null && offset + page.rows.length < total;
     const rangeStart = page === null || page.rows.length === 0 ? 0 : offset + 1;
     const rangeEnd = page === null ? 0 : offset + page.rows.length;
