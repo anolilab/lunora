@@ -168,6 +168,22 @@ const ERROR_CATALOG: {
         readonly status: 503;
         readonly title: "Shard unavailable";
     };
+    readonly SHARD_TIMEOUT: {
+        readonly status: 504;
+        readonly title: "Shard timeout";
+    };
+    readonly SHARD_HTTP_ERROR: {
+        readonly status: 502;
+        readonly title: "Shard HTTP error";
+    };
+    readonly SUBSCRIPTION_PERSIST_FAILED: {
+        readonly status: 500;
+        readonly title: "Subscription persist failed";
+    };
+    readonly TOO_MANY_SUBSCRIPTIONS: {
+        readonly status: 429;
+        readonly title: "Too many subscriptions";
+    };
     readonly OFFLINE_IDENTITY_CHANGED: {
         readonly status: 409;
         readonly title: "Offline identity changed";
