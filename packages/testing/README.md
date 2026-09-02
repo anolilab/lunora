@@ -167,8 +167,9 @@ The virtual clock is **per-harness** — advancing one harness's clock does not
 affect other harnesses, so tests running in parallel are isolated.
 
 Provide a `functions` map (`{ "path:name": registeredFn }`) so the scheduler
-can dispatch jobs. Paths not in the map produce a `console.warn` and are
-silently dropped (matching production behaviour for unknown paths).
+can dispatch jobs. A path not in the map fails the job with `FUNCTION_NOT_FOUND`,
+which then walks the retry budget into `t.scheduler.failures()` — matching
+production, where the DO fires the job at the Worker and dead-letters it.
 
 #### Subscription testing
 

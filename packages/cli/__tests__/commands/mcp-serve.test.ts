@@ -125,6 +125,19 @@ describe("lunora mcp serve", () => {
                 url: "http://127.0.0.1:8788",
             });
         });
+
+        // `.lunora/dev.json` is read without being asked for, so it is the
+        // *less* trusted of the two sources, not the more trusted one.
+        it("does NOT send the project's admin token to a non-local url recorded in .lunora/dev.json", () => {
+            expect.assertions(1);
+
+            recordDevServer({ url: "https://someone-elses.workers.dev" });
+            // eslint-disable-next-line no-secrets/no-secrets -- a throwaway .dev.vars fixture in a temp directory, not a credential
+            writeFileSync(join(workdir, ".dev.vars"), 'LUNORA_ADMIN_TOKEN="local"\n', "utf8");
+            vi.stubEnv("LUNORA_ADMIN_TOKEN", "");
+
+            expect(resolveDeployment({ cwd: workdir, version: "1.0.0" })).toStrictEqual({ url: "https://someone-elses.workers.dev" });
+        });
     });
 
     describe("startup", () => {
@@ -300,6 +313,41 @@ describe("dev tools", () => {
 
         expect(result.isError).toBe(true);
         expect(textOf(result)).toContain("--background");
+    });
+
+    // The recorded path is data off disk, not an argument: an absolute path
+    // outside `.lunora/` names any file on the machine, and the tool pastes what
+    // it reads straight into the model's context.
+    it("refuses to tail a log file recorded outside the project's .lunora directory", async () => {
+        expect.assertions(3);
+
+        const outsider = join(workdir, "secrets.txt");
+
+        writeFileSync(outsider, "AWS_SECRET=hunter2", "utf8");
+        recordDevServer({ logFile: outsider });
+
+        const result = await toolNamed("lunora_dev_logs").handle({});
+
+        expect(result.isError).toBe(true);
+        expect(textOf(result)).not.toContain("hunter2");
+
+        const parsed = JSON.parse(textOf(await toolNamed("lunora_dev_status").handle({}))) as Record<string, unknown>;
+
+        expect(parsed.logFile).toBeUndefined();
+    });
+
+    it("refuses a log path that escapes .lunora with a traversal", async () => {
+        expect.assertions(2);
+
+        const outsider = join(workdir, "secrets.txt");
+
+        writeFileSync(outsider, "AWS_SECRET=hunter2", "utf8");
+        recordDevServer({ logFile: ".lunora/../secrets.txt" });
+
+        const result = await toolNamed("lunora_dev_logs").handle({});
+
+        expect(result.isError).toBe(true);
+        expect(textOf(result)).not.toContain("hunter2");
     });
 
     it("says so when no server is running at all", async () => {

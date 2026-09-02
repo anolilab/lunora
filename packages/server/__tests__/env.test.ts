@@ -260,17 +260,19 @@ describe("redactSecrets", () => {
         expect(redactSecrets("Api_Key=abc")).toBe("Api_Key=[redacted]");
     });
 
-    it("over-redacts ordinary words ending in a secret suffix, by design", () => {
-        expect.assertions(3);
+    it("leaves an ordinary word merely ending in `key` alone, while still masking the run-together secret forms", () => {
+        expect.assertions(5);
 
-        // `MONKEY` and `APIKEY` are structurally identical — all-caps compound,
-        // suffix at the end, no separator — so no rule can mask one and not the
-        // other. Masking `MONKEY` costs a confusing log line; missing `APITOKEN`
-        // costs the credential, so redaction fails toward masking. See
-        // shared/secret-key.ts.
-        expect(redactSecrets("MONKEY=banana")).toBe("MONKEY=[redacted]");
-        expect(redactSecrets("monkey: banana")).toBe("monkey=[redacted]");
-        expect(redactSecrets("sortKey=created_at")).toBe("sortKey=[redacted]");
+        // Bare `key` is NOT a secret word: the classifier splits on `_`/`-`/camelCase
+        // and matches whole words, so `MONKEY`, `sortKey` and `PARTITION_KEY` are
+        // ordinary config. The forms an earlier bare-`key$` rule existed to catch
+        // are covered by name instead (`apikey`, `password`, `token`, …), so
+        // nothing that is actually a credential is lost. See shared/secret-key.ts.
+        expect(redactSecrets("MONKEY=banana")).toBe("MONKEY=banana");
+        expect(redactSecrets("sortKey=created_at")).toBe("sortKey=created_at");
+        expect(redactSecrets("PARTITION_KEY=tenant-1")).toBe("PARTITION_KEY=tenant-1");
+        expect(redactSecrets("APIKEY=abc")).toBe("APIKEY=[redacted]");
+        expect(redactSecrets("apiToken=abc")).toBe("apiToken=[redacted]");
     });
 
     it("masks bare high-entropy >=24-char tokens", () => {

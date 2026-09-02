@@ -32,6 +32,20 @@ const SQL_API_BASE = "https://api.cloudflare.com/client/v4/accounts";
  */
 const DEFAULT_SQL_TIMEOUT_MS = 60_000;
 
+/**
+ * How much of the upstream body may be spliced into the error MESSAGE.
+ *
+ * `ANALYTICS_SQL_ERROR` is a catalogued, non-internal code, so `toErrorBody`
+ * echoes its `message` verbatim to whoever called the action — an uncapped body
+ * puts AE's SQL error text (which quotes the query) or a multi-KB HTML gateway
+ * page on the wire to a browser. The full body is kept on `cause`, which
+ * `toErrorBody` never serialises, so a server-side log still has all of it.
+ */
+const MAX_ERROR_BODY_CHARS = 256;
+
+/** Trim `body` to {@link MAX_ERROR_BODY_CHARS}, marking that it was cut. */
+const capErrorBody = (body: string): string => (body.length > MAX_ERROR_BODY_CHARS ? `${body.slice(0, MAX_ERROR_BODY_CHARS)}… (truncated)` : body);
+
 /** Configuration for an {@link AnalyticsSqlClient}. */
 export interface AnalyticsSqlConfig {
     /** Cloudflare account id that owns the dataset. */
@@ -77,10 +91,14 @@ export interface AnalyticsSqlResult {
     rows: Record<string, unknown>[];
 }
 
-/** Thrown when the SQL API responds with a non-2xx status; a `LunoraError` subclass carrying the HTTP `status` + body for the caller to surface. */
+/** Thrown when the SQL API responds with a non-2xx status; a `LunoraError` subclass carrying the HTTP `status` + a capped body preview, with the full body on `cause`. */
 export class AnalyticsSqlError extends LunoraError {
     public constructor(status: number, body: string) {
-        super("ANALYTICS_SQL_ERROR", `Analytics Engine SQL API returned ${String(status)}: ${body}`, { name: "AnalyticsSqlError", status });
+        super("ANALYTICS_SQL_ERROR", `Analytics Engine SQL API returned ${String(status)}: ${capErrorBody(body)}`, {
+            cause: body,
+            name: "AnalyticsSqlError",
+            status,
+        });
     }
 }
 

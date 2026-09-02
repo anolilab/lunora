@@ -73,7 +73,14 @@ const FNV1A_DIGESTS: ReadonlyArray<readonly [input: string, digest: string]> = [
     ["9007199254740993", "aeb18cd1"],
     ["ada@example.com", "bef5cfd2"],
     ["x".repeat(4096), "e01bddc5"],
-    ["\u{1F642} masked", "9b551f7a"],
+    // An astral character is folded ONCE, over its two UTF-16 code units — the
+    // standard FNV-1a walk, and byte-for-byte what `@lunora/client`'s `hashToken`
+    // and the Dart SDK's `_hashToken` produce. An earlier `codePointAt`-per-index
+    // walk folded it twice (full code point, then the trailing low surrogate) and
+    // pinned `9b551f7a` / `0faeabcd` here, digests no other implementation of the
+    // algorithm agrees with.
+    ["\u{1F642} masked", "3e19aa73"],
+    ["\u{1F600}", "cb31c4b8"],
 ];
 
 /** Mask coverage the worker would serve: `users.email` redacted, `users.name` hashed. */
@@ -552,7 +559,7 @@ describe("maskValue — 'hash'", () => {
 
 describe("fnv1aHex", () => {
     it("pins the digest for the algorithm's edge-case inputs", () => {
-        expect.assertions(5);
+        expect.assertions(6);
 
         for (const [input, digest] of FNV1A_DIGESTS) {
             expect(fnv1aHex(input)).toBe(digest);

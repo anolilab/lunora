@@ -703,10 +703,11 @@ interface GeoPointInput {
 ### `HttpActionCtx` (type)
 
 ```ts
-type HttpActionCtx = Pick<ActionCtx, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery"> & {
+type HttpActionCtx = {
     readonly scheduler?: ActionCtx["scheduler"];
     readonly storage?: ActionCtx["storage"];
-};
+    readonly waitUntil?: (promise: Promise<unknown>) => void;
+} & Pick<ActionCtx, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery">;
 ```
 
 ### `HttpActionHandler` (type)

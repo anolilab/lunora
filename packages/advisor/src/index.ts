@@ -8,7 +8,6 @@
  * later, observed runtime signal) rather than Postgres catalog views.
  */
 import { dedupeCacheKeys } from "./dedupe-cache-keys";
-import constraintValidator from "./lints/runtime/constraint-validator";
 import fanOutBreadth from "./lints/runtime/fan-out-breadth";
 import hotShard from "./lints/runtime/hot-shard";
 import indexUtilization from "./lints/runtime/index-utilization";
@@ -149,7 +148,6 @@ export type { AdvisorImageDeliveryUrlAccess } from "./image-delivery-url-accesse
 export type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 export type { AdvisorInsertWrite } from "./inserts";
 export type { AdvisorKvKeyAccess } from "./kv-key-accesses";
-export { default as constraintValidator } from "./lints/runtime/constraint-validator";
 export { default as fanOutBreadth } from "./lints/runtime/fan-out-breadth";
 export { default as hotShard } from "./lints/runtime/hot-shard";
 export { default as indexUtilization } from "./lints/runtime/index-utilization";
@@ -290,7 +288,6 @@ export type { AdvisorSqlInterpolation } from "./sql-interpolation";
 export type { AdvisorStaleMigrationImport } from "./stale-migration-imports";
 export type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
 export type { AdvisorStorageUpload } from "./storage-uploads";
-export type { AdvisorTableSample } from "./table-samples";
 export type { Category, Facing, Finding, Level, Lint, LintContext, LintSource } from "./types";
 export type { AdvisorVectorNamespaceAccess } from "./vector-namespace-accesses";
 export type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
@@ -413,7 +410,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
  * no-op. Run them with `runAdvisor(ctx, { source: "runtime" })` against a live
  * deployment's aggregated metrics.
  */
-export const RUNTIME_LINTS: ReadonlyArray<Lint> = [hotShard, indexUtilization, constraintValidator, fanOutBreadth];
+export const RUNTIME_LINTS: ReadonlyArray<Lint> = [hotShard, indexUtilization, fanOutBreadth];
 
 /** The default lint set: the static lints, then the runtime lints. A caller filters by `source` to run one tier. */
 export const ALL_LINTS: ReadonlyArray<Lint> = [...STATIC_LINTS, ...RUNTIME_LINTS];

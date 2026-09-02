@@ -215,6 +215,14 @@ interface RegisterToolOptions {
 }
 ```
 
+### `ServeStatelessOptions` (interface)
+
+```ts
+interface ServeStatelessOptions extends HandleRequestOptions {
+    maxRequestBytes?: number;
+}
+```
+
 ### `ToolDefinition` (interface)
 
 ```ts
@@ -349,7 +357,7 @@ const parseAgentsEnv: (raw: string | undefined) => McpAgentExposure[];
 ### `serveStateless` (const)
 
 ```ts
-const serveStateless: (server: Server, request: Request, options?: HandleRequestOptions) => Promise<Response>;
+const serveStateless: (server: Server, request: Request, options?: ServeStatelessOptions) => Promise<Response>;
 ```
 
 ### `toolDefinitions` (const)

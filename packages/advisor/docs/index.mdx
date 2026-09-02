@@ -184,11 +184,10 @@ Storage, AI, containers & payments:
 These read observed signal off a live deployment, so they only fire once a
 worker has traffic.
 
-| Lint                   | Level  | Category      | Flags                                              |
-| ---------------------- | ------ | ------------- | -------------------------------------------------- |
-| `hot_shard`            | `WARN` | `PERFORMANCE` | A shard taking a disproportionate share of traffic |
-| `index_utilization`    | `INFO` | `PERFORMANCE` | A declared index that observed queries never use   |
-| `constraint_validator` | `WARN` | `SCHEMA`      | A constraint violated by rows already in the store |
+| Lint                | Level  | Category      | Flags                                              |
+| ------------------- | ------ | ------------- | -------------------------------------------------- |
+| `hot_shard`         | `WARN` | `PERFORMANCE` | A shard taking a disproportionate share of traffic |
+| `index_utilization` | `INFO` | `PERFORMANCE` | A declared index that observed queries never use   |
 
 ## Run the lints yourself
 
@@ -219,16 +218,8 @@ order. Each finding has `level`, `name`, `title`, `detail`, `description`,
 
 ### Feeding the runtime lints
 
-The runtime tier reads `shardTraffic`, `tableScans`, `indexHits`, and
-`tableSamples` off the `LintContext`. The Studio backend fills `shardTraffic`,
-`tableScans`, and `indexHits` from the shards' admin signal.
-
-`tableSamples` has **no shipped feeder**. Nothing in the runtime or the Studio
-reads bounded row samples out of a shard, so `constraint_validator` is a no-op
-unless the caller supplies samples of its own — the Studio drops it from the
-lint set it runs rather than running it against an input it cannot fill. The
-lint and its `AdvisorTableSample` input shape are exported, so you can drive it
-from your own sampling read; there is no built-in one to turn on.
+The runtime tier reads `shardTraffic`, `tableScans`, and `indexHits` off the
+`LintContext`. The Studio backend fills all three from the shards' admin signal.
 
 An Analytics-Engine-backed alternative feeder, `loadAnalyticsRuntimeMetrics`,
 exists in source (`src/ae-metrics.ts`) but is **quarantined**: not exported from

@@ -21,7 +21,9 @@
  * browser half needs an offset to underline and the server half needs an error
  * code to serialize. Callers add their own error type.
  *
- * The boundary scanner it uses lives in `shared/sql-mask.ts` — promoted out of
+ * The boundary scanner it uses lives in `shared/sql-mask.ts`, along with the
+ * line- and block-comment skippers this file's leading-token scan shares with it
+ * — promoted out of
  * this file when a third consumer (the Studio's statement splitter) appeared,
  * exactly as the note that used to sit here instructed. It stays separate from
  * the studio's own `maskNonCode` in `features/sql/sql-context.ts`, which
@@ -29,7 +31,7 @@
  * finding statement boundaries.
  */
 
-import { maskSqlNonCode } from "./sql-mask";
+import { maskSqlNonCode, skipBlockComment, skipLineComment } from "./sql-mask";
 
 /** Why a statement was rejected. Mirrors the codes the DO serializes to the client. */
 type SqlRejectionCode = "SQL_EMPTY" | "SQL_MULTIPLE_STATEMENTS" | "SQL_NOT_READONLY";
@@ -72,24 +74,6 @@ const TRAILING_SEMICOLON = /;\s*$/u;
 
 /** Unicode whitespace, tested one code point at a time (no backtracking). */
 const WHITESPACE = /\s/u;
-
-/** Index just past a `-- …` line comment at `from` (skips to the newline, left as whitespace). */
-const skipLineComment = (sql: string, from: number): number => {
-    let index = from + 2;
-
-    while (index < sql.length && sql[index] !== "\n") {
-        index += 1;
-    }
-
-    return index;
-};
-
-/** Index just past a block comment at `from`, or `-1` when it never closes. */
-const skipBlockComment = (sql: string, from: number): number => {
-    const close = sql.indexOf("*/", from + 2);
-
-    return close === -1 ? -1 : close + 2;
-};
 
 /**
  * Index of the first character that is neither whitespace nor a SQL comment, so

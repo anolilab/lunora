@@ -50,7 +50,6 @@ import type { AdvisorSqlInterpolation } from "./sql-interpolation";
 import type { AdvisorStaleMigrationImport } from "./stale-migration-imports";
 import type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
 import type { AdvisorStorageUpload } from "./storage-uploads";
-import type { AdvisorTableSample } from "./table-samples";
 import type { AdvisorUnrestrictedWhereBranch } from "./unrestricted-where-branches";
 import type { AdvisorVectorNamespaceAccess } from "./vector-namespace-accesses";
 import type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
@@ -644,22 +643,6 @@ export interface LintContext {
      * nothing.
      */
     storageUploads?: ReadonlyArray<AdvisorStorageUpload>;
-
-    /**
-     * Bounded row samples per table — the `constraint_validator` lint input.
-     * There is NO shipped feeder: neither the runtime nor the studio reads row
-     * samples out of a shard, so this is absent for every caller in-tree and the
-     * constraint lint finds nothing. Supply it yourself (a paged read per table,
-     * plus the existing-id set for the FK referential-integrity checks) to drive
-     * that lint.
-     *
-     * Each entry carries `existingIds` (every `_id` in the sample window) so
-     * FK columns can be cross-checked across tables in O(1) per value. When
-     * `truncated` is `true`, violations on rows beyond the cap are not reported
-     * — the finding description notes the sample cap so the operator understands
-     * the bounded window.
-     */
-    tableSamples?: ReadonlyArray<AdvisorTableSample>;
 
     /**
      * Per-table full-scan volume observed at runtime (the hot-scan half of the

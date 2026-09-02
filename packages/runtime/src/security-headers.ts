@@ -17,6 +17,7 @@
  * `Headers`/`URL`, so it unit-tests under plain Node without workerd.
  */
 
+import { isEnvDisabled, isEnvEnabled } from "../../../shared/env-flag";
 import { LunoraError } from "./errors";
 
 /** Per-header overrides for {@link SecurityHeadersOptions}. `false` omits the header. */
@@ -325,18 +326,6 @@ const resolveCsrf = (input: boolean | CsrfOptions | undefined): ResolvedCsrf => 
 
     return { allowLoopback: options.allowLoopback ?? true, enabled: true, trustedOrigins: options.trustedOrigins ?? [] };
 };
-
-/** Env values that read as "disable this layer" for the `LUNORA_SECURITY_*` opt-out vars. */
-const DISABLED_ENV_VALUES = new Set(["0", "disabled", "false", "no", "off"]);
-
-/** Env values that read as "on" for a boolean-ish flag like `LUNORA_CORS_ALLOW_CREDENTIALS`. */
-const ENABLED_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
-
-/** True when an env var is explicitly set to a disable value (`off`, `false`, `0`, …). */
-const isEnvDisabled = (value: unknown): boolean => typeof value === "string" && DISABLED_ENV_VALUES.has(value.trim().toLowerCase());
-
-/** True when an env var is explicitly set to an enable value (`on`, `true`, `1`, …). */
-const isEnvEnabled = (value: unknown): boolean => typeof value === "string" && ENABLED_ENV_VALUES.has(value.trim().toLowerCase());
 
 /**
  * Build a {@link CorsOptions} from the deployment env when CORS isn't configured
