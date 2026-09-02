@@ -95,7 +95,17 @@ const accessAdminGate = (options: AccessAdminGateOptions): ((request: Request, c
     return async (request: Request, context?: ExecutionContextLike): Promise<boolean> => {
         const claims = jwtOptions === undefined ? await readPlatformIdentity(context) : await verifyRequest(request, jwtOptions);
 
-        return claims === undefined ? false : options.isAdmin(claims);
+        if (claims === undefined) {
+            return false;
+        }
+
+        // Narrowed to an exact `true`, not returned as-is. `isAdmin` is the whole
+        // admin boundary and it is app code: an untyped caller returning the
+        // matched group object, a truthy count, or `{ ok: false }` would otherwise
+        // be handed to the runtime's gate as a grant.
+        const verdict: unknown = await options.isAdmin(claims);
+
+        return verdict === true;
     };
 };
 

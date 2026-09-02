@@ -668,9 +668,16 @@ export const support = defineAgent({
     model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     onEmail: (email) => {
         // The handler has already bounced any message whose `From` domain is not
-        // vouched for by an aligned DMARC, SPF or DKIM pass. Add your own policy on
-        // top — here, only a full DMARC pass is trusted.
-        if (!email.authentication.dmarc.some((result) => result.result === "pass")) {
+        // vouched for by an ALIGNED DMARC, SPF or DKIM pass — that gate is
+        // `authenticatesFrom` from `@lunora/mail/inbound`, the same helper to reach
+        // for in a handler of your own. Never hand-roll it as "did any clause
+        // pass?": an attacker gets a genuine pass for the domain they control.
+        //
+        // Layer your own policy on top of that gate — this is NOT the gate. Here:
+        // narrow to a full DMARC pass, stricter than the handler's
+        // DMARC-or-SPF-or-DKIM. It needs no alignment check of its own because a
+        // DMARC pass already checked alignment at the MX.
+        if (!email.authentication.dmarc.some((entry) => entry.result === "pass")) {
             return null; // declined — no run, no bounce
         }
 

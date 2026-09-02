@@ -135,10 +135,13 @@ env, ctx)` export, a sibling of `fetch`/`scheduled`. Export one built by
 `createInboundEmailHandler`:
 
 ```ts
-import { createInboundEmailHandler, dispatchToLunoraFunction, parseInboundEmail } from "@lunora/mail/inbound";
+import { authenticatesFrom, createInboundEmailHandler, dispatchToLunoraFunction, parseInboundEmail } from "@lunora/mail/inbound";
 
 export const email = createInboundEmailHandler({
     parse: parseInboundEmail,
+    // The sender gate. `authenticatesFrom` accepts only a DMARC/SPF/DKIM pass
+    // that is ALIGNED with the `From` domain — see the warning below.
+    verify: authenticatesFrom,
     dispatch: dispatchToLunoraFunction({
         shard: env.SHARD,
         functionPath: "inbound:onEmail",
@@ -195,8 +198,10 @@ throwing, so it bounces without being queued for a retry that can never succeed.
     `email.authentication` via the `verify` hook before dispatch, and treat the function input as fully attacker-controlled. A bare `pass` is not enough: SPF
     vouches for the envelope `MAIL FROM` domain and DKIM for the signing `d=`, both of which the sender picks. `authentication.dkim` / `.spf` / `.dmarc` are
     **lists** — one header legitimately reports a method more than once (an ESP-relayed message is DKIM-signed twice) — and each entry carries the `domain` it
-    is about. Accept when ANY entry has `result === "pass"` and a `domain` equal to the `From` address's domain; treat an entry with a `null` domain as
-    unauthenticated, and an empty list as "not reported". A DMARC pass already checked alignment.
+    is about. Do not hand-roll that check: pass `verify: authenticatesFrom` and let `@lunora/mail` answer it. It accepts only when ANY entry has `result ===
+    "pass"` **and** a `domain` equal to the `From` address's domain, treating an entry with a `null` domain as unauthenticated and an empty list as "not
+    reported" (a DMARC pass already checked alignment). Every copy of this predicate written by hand has been one `&&` away from accepting a genuine `spf=pass`
+    + `dkim=pass` for the attacker's OWN domain on a message forging someone else's `From`.
 </Callout>
 
 The receiving function is an ordinary internal mutation/action (the default
@@ -252,8 +257,10 @@ rules; that lifecycle stays in Cloudflare.
 | Type-only                             | `Mailer`, `MailTransport`, `SendOptions`, `SendPayload`, `QueueLike`, `LunoraMailOptions`, `QueuedSend`, `CapturedMail`, `MailboxSink`, `CloudflareSend`, `CloudflareTransportOptions`, `FromEnvOptions`, `MailEnv` |
 
 `@lunora/mail/inbound`: `createInboundEmailHandler(options)`,
-`dispatchToLunoraFunction(options)`, `parseInboundEmail(raw)`, and the inbound
-types (`InboundEmail`, `InboundAttachment`, `InboundAuthentication`,
+`dispatchToLunoraFunction(options)`, `parseInboundEmail(raw)`,
+`authenticatesFrom(email)` (the canonical `verify` gate — true only for a
+DMARC/SPF/DKIM pass aligned with the `From` domain), and the inbound types
+(`InboundEmail`, `InboundAttachment`, `InboundAuthentication`,
 `InboundEmailHandlerOptions`, `InboundDispatch`, `InboundVerify`, …).
 
 `@lunora/mail/testing` (dev/test-only): `waitForMail(options)`,

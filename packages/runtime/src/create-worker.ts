@@ -1610,6 +1610,19 @@ const STATUS_PATH = "/_lunora/status";
 const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
 
 /**
+ * Narrow an app-supplied authorization verdict to an exact `true`.
+ *
+ * SECURITY: every `WorkerOptions` gate below (`authorizeShard`,
+ * `authorizeFanOut`, `adminGate`) is DECLARED to answer a boolean, but it is app
+ * code and untyped JavaScript reaches it — `catch`-less `as` casts too. The
+ * canonical mistake is `authorize: async ({ request }) => verifySignedUrl(url,
+ * secret)` with `.valid` forgotten: it hands back `{ valid: false }`, a DENIAL
+ * that is TRUTHY, and a `if (!allowed)` test then grants. Awaiting into `unknown`
+ * and comparing to `true` means a broken gate can only ever deny.
+ */
+const grants = async (verdict: unknown): Promise<boolean> => (await verdict) === true;
+
+/**
  * Read the optional caller identity a server-initiated dispatch may forward on
  * the `x-lunora-userid` / `x-lunora-identity` headers, returning the shape
  * `dispatchToShard` threads to the shard (or `undefined` when neither is set).
@@ -2638,7 +2651,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      */
     const assertShardAuthorized = async (identity: ResolvedIdentity | null, shardKey: string): Promise<void> => {
         if (options.authorizeShard) {
-            const allowed = await options.authorizeShard({ identity, shardKey });
+            const allowed = await grants(options.authorizeShard({ identity, shardKey }));
 
             if (!allowed) {
                 throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
@@ -3702,7 +3715,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // path default-denies unconditionally. Routing it through the helper would
         // admit a caller who names the default shard as their `threadKey`.
         if (options.authorizeShard) {
-            const allowed = await options.authorizeShard({ identity, shardKey: threadKey });
+            const allowed = await grants(options.authorizeShard({ identity, shardKey: threadKey }));
 
             if (!allowed) {
                 // The same typed error the helper throws, so a denied voice caller
@@ -3744,7 +3757,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         identity: ResolvedIdentity | null,
     ): Promise<void> => {
         if (options.authorizeFanOut) {
-            const allowed = await options.authorizeFanOut(identity, fanOut.table, functionPath);
+            const allowed = await grants(options.authorizeFanOut(identity, fanOut.table, functionPath));
 
             if (!allowed) {
                 throw new LunoraError("Forbidden fan-out", { code: "FORBIDDEN_FANOUT", status: 403 });
@@ -4843,7 +4856,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         try {
-            if (await options.adminGate(request, executionContextByRequest.get(request))) {
+            // Polarity here is INVERTED — truthy GRANTS admin — so an unnarrowed
+            // verdict is the worst of the three: a gate returning a claims object,
+            // a `Response`, or `{ ok: false }` would unlock every `/_lunora/admin/*`
+            // route. `grants` requires the exact `true`.
+            if (await grants(options.adminGate(request, executionContextByRequest.get(request)))) {
                 accessAdminGrants.add(request);
             }
         } catch {

@@ -34,7 +34,7 @@
  */
 /* eslint-enable jsdoc/check-indentation, jsdoc/no-multi-asterisks */
 import type { ForwardableEmailMessageLike } from "@lunora/mail/inbound";
-import { createInboundEmailHandler, parseInboundEmail } from "@lunora/mail/inbound";
+import { authenticatesFrom, createInboundEmailHandler, parseInboundEmail } from "@lunora/mail/inbound";
 
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import type { AgentDefinition, AgentWorkflowBindingLike } from "./types";
@@ -87,33 +87,6 @@ const rejectPermanently = (context: { message: { setReject: (reason: string) => 
     console.error("@lunora/agent/inbound: bouncing message —", detail);
 
     context.message.setReject(GENERIC_REJECT_REASON);
-};
-
-/**
- * The angle-bracketed mailbox in a parsed `from` string. The parser renders
- * `name <address>` with the mailbox LAST; anchor there so a display name that
- * itself contains `<x@evil.example>` cannot stand in.
- */
-const FROM_MAILBOX = /<([^<>]*)>$/;
-
-/**
- * Domain of the parsed `From` mailbox (`Name <local@domain>` or a bare
- * address), lowercased. `undefined` when there is no single mailbox to align
- * against — an empty `From`, or an RFC 5322 group whose members the parser
- * flattened to a comma list — so the caller fails closed.
- */
-const fromDomain = (from: string): string | undefined => {
-    const address = FROM_MAILBOX.exec(from)?.[1] ?? from;
-    const at = address.indexOf("@");
-
-    if (at === -1 || at !== address.lastIndexOf("@")) {
-        return undefined;
-    }
-
-    return address
-        .slice(at + 1)
-        .trim()
-        .toLowerCase();
 };
 
 /**
@@ -181,45 +154,21 @@ const dispatchAgentEmail = (targets: ReadonlyArray<AgentEmailTarget>): InboundAg
         // SECURITY: fails closed BEFORE any mapper sees the message, because a
         // claimed message starts a durable run whose tools execute RLS-bypassed.
         // Cloudflare Email Routing authenticates the recipient domain, never the
-        // sender, so `from`/subject/body are attacker-chosen; a `null` verdict
-        // means the receiving MX stamped no `Authentication-Results` header at
-        // all, which is "unknown", not "fine".
+        // sender, so `from`/subject/body are attacker-chosen.
         //
-        // A bare `pass` is not enough either: SPF vouches for the envelope
-        // `MAIL FROM` domain and DKIM for the signing `d=`, both of which the
-        // attacker picks, so `spf=pass`+`dkim=pass` for evil.example is routine
-        // on a message whose `From` says ceo@victim.example. A verdict counts
-        // only when the domain it is about equals the `From` domain (RFC 7489
-        // strict alignment — there is no public-suffix list here, so
-        // `mail.example.com` does not vouch for `example.com`). A DMARC pass
-        // already checked alignment at the MX. A pass that reports no domain at
-        // all cannot be aligned and is rejected.
+        // `authenticatesFrom` is `@lunora/mail`'s single implementation of the
+        // rule (it owns `InboundAuthResult`, so it owns what counts as an aligned
+        // pass) — deliberately NOT re-derived here. This predicate was hand-rolled
+        // in three places and one copy dropped the alignment half, accepting any
+        // passing clause whatever domain it vouched for; there is now one to get
+        // wrong. See its docblock for why alignment and "every clause" are both
+        // load-bearing.
         //
         // The header above tells mappers not to trust `email.from`. That is
         // advice each mapper has to remember; this is the guard every agent
         // routes through, so a mapper that forgets is not the only thing
         // standing between a forged sender and a privileged run.
-        verify: (email) => {
-            const { dkim, dmarc, spf } = email.authentication;
-            const from = fromDomain(email.from);
-
-            if (from === undefined) {
-                return false;
-            }
-
-            // EVERY reported clause of a method is considered, not just the
-            // first. One header legitimately reports a method more than once —
-            // an ESP-relayed message is DKIM-signed by both the relay and the
-            // author domain — and reading only the first threw away the aligned
-            // pass whenever the MX happened to list the other one ahead of it,
-            // bouncing mail it had fully authenticated. "Any clause passes AND
-            // aligns" is still strictly narrower than a bare pass: a clause that
-            // vouches for some other domain contributes nothing.
-            const alignedPass = (results: ReadonlyArray<{ domain: null | string; result: string }>): boolean =>
-                results.some((entry) => entry.result === "pass" && entry.domain === from);
-
-            return alignedPass(dmarc) || alignedPass(spf) || alignedPass(dkim);
-        },
+        verify: authenticatesFrom,
     });
 
     // `createInboundEmailHandler` types `message` as `ForwardableEmailMessageLike`;

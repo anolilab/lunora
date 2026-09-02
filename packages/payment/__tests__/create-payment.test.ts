@@ -174,6 +174,29 @@ describe("createPayment", () => {
         await expect(keyFor()).resolves.toBe(baseline);
     });
 
+    it("denies when the authorizer returns a truthy non-boolean", async () => {
+        expect.assertions(1);
+
+        // An untyped authorizer that hands back the looked-up row (or an
+        // `{ allowed: false }` verdict object) must not authorize a charge against
+        // someone else's reference — only an exact `true` does.
+        const payment = createPayment({
+            adapter: fakeAdapter(),
+            authorize: () => ({ allowed: false }) as unknown as boolean,
+            store: new MemoryPaymentStore(),
+        });
+
+        await expect(
+            payment.createCheckout({
+                cancelUrl: "https://x/cancel",
+                mode: "payment",
+                priceId: "price_1",
+                referenceId: "user_1",
+                successUrl: "https://x/ok",
+            }),
+        ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
     it("enforces authorization on the referenceId", async () => {
         expect.assertions(1);
 

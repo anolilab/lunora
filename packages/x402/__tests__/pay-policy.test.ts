@@ -312,6 +312,21 @@ describe("buildPaymentGuard", () => {
         expect(state.spentAtomic).toBe(0n);
     });
 
+    it("aborts when the confirmation gate returns a truthy non-boolean", async () => {
+        // A confirmation hook returning its UI result (`{ confirmed: false }`, a
+        // dialog handle) is not an approval. `onPaymentRequired`'s mere presence
+        // also satisfies the "bounded spend policy" check, so treating a truthy
+        // non-`true` as approval would auto-approve every payment on a wallet whose
+        // owner believes it is gated.
+        const state = createSpendState();
+        const guard = buildPaymentGuard({ maxPerRun: "$1", onPaymentRequired: () => ({ confirmed: false }) as unknown as boolean }, state);
+
+        const result = await guard(guardContext(requirement()));
+
+        expect(result).toEqual({ abort: true, reason: expect.stringMatching(/declined by onPaymentRequired/) });
+        expect(state.spentAtomic).toBe(0n);
+    });
+
     it("proceeds when the confirmation gate approves, keeping the reservation", async () => {
         const state = createSpendState();
         const guard = buildPaymentGuard({ maxPerRun: "$1", onPaymentRequired: () => true }, state);

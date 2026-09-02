@@ -274,8 +274,16 @@ const resolveCors = (input: CorsOptions | false | undefined): ResolvedCors => {
     if (typeof origins === "function") {
         // A custom predicate is an explicit developer decision, so it counts for CSRF
         // trust in both directions.
-        isAllowed = origins;
-        isExplicitlyAllowed = origins;
+        //
+        // Wrapped ONCE here rather than at the three consumers (preflight, header
+        // reflection, and the CSRF trusted-origin decision), all of which test it
+        // truthily. It is app code: a predicate written as `origins.indexOf(o)` or
+        // `TRUSTED.find(...)` returns a number or an object, and every non-`true`
+        // truthy value would allow the origin.
+        const allowsOrigin = (origin: string): boolean => (origins(origin) as unknown) === true;
+
+        isAllowed = allowsOrigin;
+        isExplicitlyAllowed = allowsOrigin;
 
         // A predicate bypasses the array path's wildcard+credentials guard, and it
         // is also assigned to `isExplicitlyAllowed` above — meaning the CSRF and

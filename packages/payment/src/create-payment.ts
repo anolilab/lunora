@@ -179,7 +179,11 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             return;
         }
 
-        let allowed: boolean;
+        // `unknown`, compared to an exact `true`. The authorizer is app code and
+        // untyped JavaScript reaches it, so a verdict object (`{ allowed: false }`,
+        // a settled promise result, a row) would be TRUTHY and authorize a charge
+        // against someone else's reference. A throw denies too.
+        let allowed: unknown;
 
         try {
             allowed = await options.authorize(referenceId);
@@ -188,7 +192,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             throw new LunoraPaymentError("FORBIDDEN", `caller not authorized for reference "${referenceId}"`);
         }
 
-        if (!allowed) {
+        if (allowed !== true) {
             throw new LunoraPaymentError("FORBIDDEN", `caller not authorized for reference "${referenceId}"`);
         }
     };

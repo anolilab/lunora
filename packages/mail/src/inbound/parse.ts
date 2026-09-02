@@ -159,6 +159,40 @@ const formatAddress = (entry: { address?: string; group?: { address?: string; na
 };
 
 /**
+ * A CFWS comment or a quoted-string, whichever opens first — matched in ONE
+ * left-to-right scan by {@link neutralizeClauseSeparators}. Both alternatives
+ * honour `\` quoted-pairs and both accept an unterminated run (`|$`).
+ */
+const CFWS_OR_QUOTED_STRING = /"(?:[^"\\]|\\.)*(?:"|$)|\((?:[^()\\]|\\.)*(?:\)|$)/g;
+
+/**
+ * Blind the clause splitter to every `;` that is not a clause separator.
+ *
+ * SECURITY: a `;` inside a **quoted-string** belongs to a value, not to the
+ * grammar. RFC 8601 lets a property value be a quoted-string and RFC 5321 lets a
+ * local part be quoted, so the receiving MX echoes sender-chosen bytes —
+ * semicolons included — into `smtp.mailfrom=` verbatim. Splitting there
+ * manufactures a whole extra clause the MX never asserted: a crafted `MAIL FROM`
+ * of `"x;spf=pass smtp.mailfrom=root@victim.example"@evil.example` turns one
+ * `spf=fail` into a `fail` plus a `pass` that vouches for the forged `From`
+ * domain, and a consumer asking "does ANY clause pass and align?" then accepts a
+ * message that authenticated nothing.
+ *
+ * Comments are dropped (they are pure CFWS) and a quoted-string's `;` becomes a
+ * space (the value itself must survive so the property reader still finds it).
+ * ONE scan, not two passes: parens inside a quoted-string are literal and quotes
+ * inside a comment are literal, so stripping either kind first can unbalance the
+ * other and re-expose the `;` it was about to protect. Whichever token opens
+ * first wins, exactly as an RFC 5322 lexer reads it.
+ *
+ * An unterminated comment or quote runs to the end of the header. That swallows
+ * any clause after it, which is the safe direction: clauses are LOST, never
+ * manufactured, and this only happens on a header no conformant MX emits.
+ */
+const neutralizeClauseSeparators = (authResults: string): string =>
+    authResults.replaceAll(CFWS_OR_QUOTED_STRING, (token) => (token.startsWith('"') ? token.replaceAll(";", " ") : " "));
+
+/**
  * Pull EVERY one of a method's `method=result [ptype.property=value …]` clauses
  * out of an `Authentication-Results` header value (RFC 8601: clauses are
  * `;`-separated, the first being the `authserv-id`). Each entry carries the
@@ -168,13 +202,18 @@ const formatAddress = (entry: { address?: string; group?: { address?: string; na
  *
  * All of them, not the first: one header may report a method repeatedly — an
  * ESP-relayed message is DKIM-signed twice — and the aligned clause is not
- * reliably the first one. Case-insensitive; CFWS comments are dropped first so a
- * `;` or `=` inside one cannot split a clause, and the remaining CFWS (optional
+ * reliably the first one. Case-insensitive; comments and quoted-strings are
+ * neutralised first (see {@link neutralizeClauseSeparators}) so a `;` or `=`
+ * inside either cannot split a clause, and the remaining CFWS (optional
  * whitespace) is accepted around both `=` separators, since RFC 8601 permits
  * `dkim = pass header.d = sender.example` just as much as the tight form.
+ *
+ * The identifier read back out of a quoted value stops at the quote
+ * (`"?([^\s;"]+)`), so a crafted local part yields a garbage domain rather than a
+ * real one — which is the point: garbage aligns with nothing.
  */
 const authVerdicts = (authResults: string, method: string, property: string): InboundAuthResult[] => {
-    const clauses = authResults.replaceAll(/\([^()]*\)/g, "").matchAll(new RegExp(String.raw`(?:^|;)\s*${method}\s*=\s*([a-z]+)([^;]*)`, "gi"));
+    const clauses = neutralizeClauseSeparators(authResults).matchAll(new RegExp(String.raw`(?:^|;)\s*${method}\s*=\s*([a-z]+)([^;]*)`, "gi"));
     const propertyRe = new RegExp(String.raw`\b${property.replaceAll(".", String.raw`\.`)}\s*=\s*"?([^\s;"]+)`, "i");
 
     return [...clauses].map((clause) => {
@@ -268,5 +307,76 @@ const parseInboundEmail = async (raw: RawInboundEmail): Promise<InboundEmail> =>
     };
 };
 
-export { parseInboundEmail };
+/**
+ * The angle-bracketed mailbox in a rendered `from` string. {@link formatAddress}
+ * puts the mailbox LAST (`name <address>`), so anchoring at the end stops a
+ * display name that itself contains `<ceo@victim.example>` standing in for it.
+ */
+const FROM_MAILBOX = /<([^<>]*)>$/;
+
+/**
+ * Domain of the `From` mailbox (`Name <local@domain>` or a bare address),
+ * lowercased. `undefined` when there is no single mailbox to align against — an
+ * empty `From`, or an RFC 5322 group the parser flattened to a comma list — so
+ * the caller fails closed.
+ */
+const fromDomain = (from: string): string | undefined => {
+    const address = FROM_MAILBOX.exec(from)?.[1] ?? from;
+    const at = address.indexOf("@");
+
+    if (at === -1 || at !== address.lastIndexOf("@")) {
+        return undefined;
+    }
+
+    return address
+        .slice(at + 1)
+        .trim()
+        .toLowerCase();
+};
+
+/**
+ * THE inbound sender-authentication gate: does the receiving MX vouch for this
+ * message's `From` domain? Pass it as the `verify` hook of
+ * `createInboundEmailHandler` (or call it from your own) — it is one exported
+ * helper precisely so the insecure variants cannot be hand-rolled again.
+ *
+ * True when ANY reported DMARC, SPF or DKIM clause both **passes** and names a
+ * `domain` equal to the `From` address's domain. False otherwise — including for
+ * an empty verdict list (the MX stamped no `Authentication-Results` header at
+ * all, which is "unknown", not "fine") and for a `From` with no single mailbox
+ * to align against.
+ *
+ * SECURITY — the two halves are each load-bearing.
+ *
+ * **Alignment.** A bare `pass` proves nothing about `From`. SPF authenticates the
+ * envelope `MAIL FROM` domain and DKIM the signing `d=`, both attacker-chosen, so
+ * `spf=pass`+`dkim=pass` for `evil.example` is routine on a message whose `From`
+ * says `ceo@victim.example`. Only a clause whose own `domain` equals the `From`
+ * domain vouches for it. Alignment is STRICT (RFC 7489): there is no
+ * public-suffix list here, so `mail.example.com` does not vouch for
+ * `example.com`. A pass reporting no domain (`null`) cannot be aligned and is
+ * rejected. A DMARC pass already checked alignment at the MX.
+ *
+ * **Every clause, not the first.** One header legitimately reports a method more
+ * than once (an ESP-relayed message is DKIM-signed by both the relay and the
+ * author domain), and the aligned clause is not reliably the first, so reading
+ * only the first bounced fully authenticated mail. "Any clause passes AND aligns"
+ * stays strictly narrower than a bare pass: a clause vouching for some other
+ * domain contributes nothing.
+ */
+const authenticatesFrom = (email: InboundEmail): boolean => {
+    const from = fromDomain(email.from);
+
+    if (from === undefined) {
+        return false;
+    }
+
+    const alignedPass = (results: ReadonlyArray<InboundAuthResult>): boolean => results.some((entry) => entry.result === "pass" && entry.domain === from);
+
+    const { dkim, dmarc, spf } = email.authentication;
+
+    return alignedPass(dmarc) || alignedPass(spf) || alignedPass(dkim);
+};
+
+export { authenticatesFrom, parseInboundEmail };
 export type { InboundAttachment, InboundAuthentication, InboundAuthResult, InboundEmail, RawInboundEmail };

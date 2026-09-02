@@ -382,6 +382,12 @@ interface ShardStubLike {
 }
 ```
 
+### `authenticatesFrom` (const)
+
+```ts
+const authenticatesFrom: (email: InboundEmail) => boolean;
+```
+
 ### `createInboundEmailHandler` (const)
 
 ```ts

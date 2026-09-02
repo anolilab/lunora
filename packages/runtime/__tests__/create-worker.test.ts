@@ -1059,6 +1059,31 @@ describe("createWorker", () => {
         expect(shard.calls).toHaveLength(0);
     });
 
+    it("denies a single-shard RPC when authorizeShard returns a truthy non-boolean", async () => {
+        expect.assertions(2);
+
+        // The gate is app code and untyped JS reaches it. The canonical slip is
+        // returning the verifier's result object instead of its boolean field —
+        // `{ valid: false }` is a DENIAL that reads TRUTHY. Only an exact `true`
+        // may open a shard.
+        const worker = createWorker({
+            authorizeShard: () => ({ valid: false }) as unknown as boolean,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list", shardKey: "channel-42" }),
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(res.status).toBe(403);
+        expect(shard.calls).toHaveLength(0);
+    });
+
     it("exempts a reserved `__lunora_admin__:*` RPC from authorizeShard (the DO's admin-bearer gate authorizes it)", async () => {
         expect.assertions(4);
 

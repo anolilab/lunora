@@ -41,6 +41,25 @@ describe("resolveSecurity", () => {
         warn.mockRestore();
     });
 
+    it("denies an origin when the custom predicate returns a truthy non-boolean", () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        // The predicate is consumed truthily at three security decision points —
+        // preflight, header reflection, and the CSRF trusted-origin check — so it is
+        // narrowed once at resolve time. `indexOf` is the classic slip: it returns
+        // `-1` for "not found", which is TRUTHY and would have allowed every origin.
+        const resolved = resolveSecurity({
+            cors: { allowedOrigins: (origin) => ["https://app.example"].indexOf(origin) as unknown as boolean },
+        });
+
+        expect(resolved.cors.isAllowed("https://evil.example")).toBe(false);
+        expect(resolved.cors.isExplicitlyAllowed("https://evil.example")).toBe(false);
+
+        warn.mockRestore();
+    });
+
     it("allows a wildcard origin without credentials", () => {
         expect.hasAssertions();
 

@@ -38,6 +38,24 @@ describe("accessAdminGate", () => {
         await expect(gate(requestWithHeader(token))).resolves.toBe(false);
     });
 
+    it("denies when isAdmin returns a truthy non-boolean", async () => {
+        expect.assertions(1);
+
+        // `isAdmin` is the whole authorization boundary and its verdict feeds the
+        // runtime's `adminGate`, which GRANTS on truthy. An untyped predicate
+        // returning the matched group (`claims.groups.find(...)`) rather than a
+        // boolean must not become a grant.
+        const gate = accessAdminGate({
+            aud: AUD,
+            isAdmin: (claims) => claims.groups?.find((group) => group === "admins") as unknown as boolean,
+            keySet: publicKey,
+            teamDomain: TEAM,
+        });
+        const token = await sign({ groups: ["admins"], sub: "user-3" });
+
+        await expect(gate(requestWithHeader(token))).resolves.toBe(false);
+    });
+
     it("awaits an async isAdmin predicate", async () => {
         expect.assertions(1);
 

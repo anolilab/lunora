@@ -25,5 +25,5 @@ export type {
 } from "./handler";
 export { createInboundEmailHandler, dispatchToLunoraFunction } from "./handler";
 export type { InboundAttachment, InboundAuthentication, InboundAuthResult, InboundEmail, RawInboundEmail } from "./parse";
-export { parseInboundEmail } from "./parse";
+export { authenticatesFrom, parseInboundEmail } from "./parse";
 export type { ShardNamespaceLike, ShardStubLike } from "./shard";
