@@ -70,7 +70,7 @@ describe("retry hint channel", () => {
         // and reads `data.retryAfterMs` only — a hint written anywhere else is a
         // hint no app can see.
         expect(getRetryAfterMs(error)).toBe(3000);
-        expect(replayRetryDelayMs(error)).toBe(3000);
+        expect(replayRetryDelayMs(error, 1)).toBe(3000);
     });
 
     it("lets the envelope's own hint win over the header", async () => {
@@ -95,7 +95,51 @@ describe("retry hint channel", () => {
         expect.assertions(2);
 
         expect(retryAfterHeaderMs("3600")).toBe(3_600_000);
-        expect(replayRetryDelayMs({ data: { retryAfterMs: 3_600_000 } })).toBe(60_000);
+        expect(replayRetryDelayMs({ data: { retryAfterMs: 3_600_000 } }, 1)).toBe(60_000);
+    });
+
+    it("parses both `Retry-After` forms RFC 9110 defines", () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+
+        // delta-seconds (what the runtime's REST limiter sends)...
+        expect(retryAfterHeaderMs("2")).toBe(2000);
+        // ...and the HTTP-date a proxy in front of it sends instead.
+        expect(retryAfterHeaderMs("Thu, 01 Jan 2026 00:00:02 GMT")).toBe(2000);
+        // A date already in the past asks for nothing, and an unparseable value
+        // must read as "no hint" rather than as `NaN`, which every downstream
+        // comparison silently answers `false` to.
+        expect(retryAfterHeaderMs("Thu, 01 Jan 2026 00:00:00 GMT")).toBeUndefined();
+        expect(retryAfterHeaderMs("soon-ish")).toBeUndefined();
+
+        vi.useRealTimers();
+    });
+});
+
+describe("hintless backoff", () => {
+    it("still schedules a retry for a refusal that carried no hint", () => {
+        expect.assertions(4);
+
+        const half = (): number => 0.5;
+
+        // 1000ms base * (0.5 + 0.5 * 0.5); the second consecutive failure
+        // doubles the ceiling, and the whole ramp is capped.
+        expect(replayRetryDelayMs({ code: "TOO_MANY_REQUESTS" }, 1, half)).toBe(750);
+        expect(replayRetryDelayMs({ code: "SHARD_UNAVAILABLE" }, 2, half)).toBe(1500);
+        expect(replayRetryDelayMs(new TransportError("502 page"), 99, half)).toBe(45_000);
+        // Jittered, not fixed: two clients refused at the same instant do not
+        // come back at the same instant.
+        expect(replayRetryDelayMs({ code: "RATE_LIMITED" }, 1, () => 0)).toBe(500);
+    });
+
+    it("schedules nothing for a `fetch` that never reached a server", () => {
+        expect.assertions(1);
+
+        // Offline: the reconnect that follows flushes the queue anyway, so a
+        // timer here would only re-run a request that cannot leave the device.
+        expect(replayRetryDelayMs(new TypeError("Failed to fetch"), 1)).toBeUndefined();
     });
 });
 

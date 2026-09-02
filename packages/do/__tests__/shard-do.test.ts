@@ -25,8 +25,12 @@ interface FakeWebSocket {
     serializeAttachment: (value: unknown) => void;
 }
 
-/** Cloudflare's documented `serializeAttachment` ceiling. */
-const ATTACHMENT_LIMIT_BYTES = 2048;
+/**
+ * workerd's real `serializeAttachment` ceiling, measured rather than read off a
+ * doc page — 16385 bytes throws, 8192 does not. Pinned against the live runtime
+ * in `__tests__/workerd/shard-do.workerd.test.ts`.
+ */
+const ATTACHMENT_LIMIT_BYTES = 16_384;
 
 const createFakeWebSocket = (): FakeWebSocket => {
     const ws: FakeWebSocket = {
@@ -44,12 +48,12 @@ const createFakeWebSocket = (): FakeWebSocket => {
         sent: [],
         serializeAttachment(value: unknown) {
             // The runtime structured-clones the attachment and refuses anything
-            // over 2048 bytes. Enforced here because the per-socket
+            // over its ceiling. Enforced here because the per-socket
             // subscription cap is only honest if the attachment it produces
             // actually fits — a fake that accepts any size lets the cap drift
-            // back above the budget with every test still green.
+            // above the budget with every test still green.
             if (serialize(value).byteLength > ATTACHMENT_LIMIT_BYTES) {
-                throw new RangeError("Attachment too large");
+                throw new RangeError(`A WebSocket 'attachment' cannot be larger than ${String(ATTACHMENT_LIMIT_BYTES)} bytes.`);
             }
 
             this.attachment = value as SocketAttachment | undefined;
@@ -1054,13 +1058,16 @@ describe("shardDO subscription re-execution", () => {
 
         expect(JSON.parse(ws.sent[0]!)).toEqual({
             code: "TOO_MANY_SUBSCRIPTIONS",
-            error: { code: "TOO_MANY_SUBSCRIPTIONS", message: `subscription cap of ${String(SUBSCRIPTION_CAP)} reached on this socket` },
+            error: {
+                code: "TOO_MANY_SUBSCRIPTIONS",
+                message: `subscription cap of ${String(SUBSCRIPTION_CAP)} reached on this socket (live queries and shapes share it); unsubscribe an idle one, or open a second socket`,
+            },
             id: "sub-1",
             type: "error",
         });
     });
 
-    it("keeps a socket filled to the cap inside the runtime's 2048-byte attachment budget", async () => {
+    it("keeps a socket filled to the cap inside the runtime's attachment budget", async () => {
         expect.assertions(3);
 
         const shard = new ReexecShard(state, {});
@@ -1097,7 +1104,7 @@ describe("shardDO subscription re-execution", () => {
         }
 
         // Every registration up to the cap persisted — none of them was refused
-        // by the fake's 2048-byte serialize gate.
+        // by the fake's serialize gate.
         expect(Object.keys(ws.attachment?.subs ?? {})).toHaveLength(SUBSCRIPTION_CAP);
         expect(serialize(ws.attachment).byteLength).toBeLessThanOrEqual(ATTACHMENT_LIMIT_BYTES);
 
@@ -1107,10 +1114,47 @@ describe("shardDO subscription re-execution", () => {
 
         expect(JSON.parse(ws.sent.at(-1)!)).toEqual({
             code: "TOO_MANY_SUBSCRIPTIONS",
-            error: { code: "TOO_MANY_SUBSCRIPTIONS", message: `subscription cap of ${String(SUBSCRIPTION_CAP)} reached on this socket` },
+            error: {
+                code: "TOO_MANY_SUBSCRIPTIONS",
+                message: `subscription cap of ${String(SUBSCRIPTION_CAP)} reached on this socket (live queries and shapes share it); unsubscribe an idle one, or open a second socket`,
+            },
             id: `sub-${String(SUBSCRIPTION_CAP)}`,
             type: "error",
         });
+    });
+
+    it("refuses an attachment over the byte budget with the limit and a way out", async () => {
+        expect.assertions(2);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { subs: {} });
+
+        // One registration, well under the count cap, whose args alone blow the
+        // attachment budget. The count cap cannot see this — args are the
+        // client's to choose — so the byte budget is the only thing between it
+        // and a socket that can never be persisted again.
+        await shard.driveMessage(ws, {
+            id: "sub-huge",
+            query: { args: { blob: "x".repeat(ATTACHMENT_LIMIT_BYTES * 2) }, functionPath: "messages:listByChannel", table: "messages" },
+            type: "subscribe",
+        });
+
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({
+            code: "SUBSCRIPTION_PERSIST_FAILED",
+            error: {
+                code: "SUBSCRIPTION_PERSIST_FAILED",
+                message:
+                    `failed to persist the socket attachment, which must stay under the ${String(ATTACHMENT_LIMIT_BYTES)}-byte hibernation limit ` +
+                    `(live queries and shapes share it); shrink the subscription's arguments, unsubscribe an idle one, or open a second socket`,
+            },
+            id: "sub-huge",
+            type: "error",
+        });
+
+        // Rolled back, not half-registered: the socket is still usable.
+        expect(ws.attachment?.subs).toEqual({});
     });
 
     it("re-executes but does not re-send when the result is byte-identical", async () => {
