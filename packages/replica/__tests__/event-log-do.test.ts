@@ -292,6 +292,18 @@ describe(EventLogDO, () => {
         await expect(doFetch(do_, "GET", "/since?seq=0&limit=1001").then((r) => r.status)).resolves.toBe(400);
     });
 
+    it("rejects non-integral /since pagination parameters", async () => {
+        expect.assertions(2);
+
+        const do_ = createDO();
+
+        // Both are finite, so the old range checks let them through: a fractional
+        // `limit` reaches SQLite's `LIMIT ?` as a 500, and a fractional `seq`
+        // silently shifts the `seq >= ?` boundary past a real entry.
+        await expect(doFetch(do_, "GET", "/since?seq=0&limit=1.5").then((r) => r.status)).resolves.toBe(400);
+        await expect(doFetch(do_, "GET", "/since?seq=1.5").then((r) => r.status)).resolves.toBe(400);
+    });
+
     it("rejects append with empty events array", async () => {
         expect.assertions(1);
 

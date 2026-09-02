@@ -30,6 +30,14 @@ import type { AppendEventInput, EventLogDOClient } from "./event-log-do-client";
 import type { EventReducer, UnknownEventHandling } from "./event-source";
 import type { SnapshotStore } from "./snapshot-store";
 
+/**
+ * Pages {@link MaterializerRuntime.initialize} walks before yielding, however
+ * much log is left. A live writer keeps `truncated` true forever, so an
+ * unbounded walk never returns; the budget leaves the remainder to the next
+ * call, at the advanced watermark.
+ */
+const MAX_CATCHUP_PAGES = 1000;
+
 // ── Types ────────────────────────────────────────────────────────────────
 
 /**
@@ -376,6 +384,12 @@ class MaterializerRuntime {
      * dropping `truncated`) would silently leave every materializer short of
      * the log's head whenever the backlog exceeds a page.
      *
+     * The walk is bounded by {@link MAX_CATCHUP_PAGES}: against a log written
+     * faster than it is read, "until the log is exhausted" never arrives and
+     * startup would never finish. Hitting the budget returns what was applied
+     * with every materializer's watermark advanced, so a later `initialize()`
+     * (or the ordinary append path) picks up exactly where this left off.
+     *
      * Call this once on startup / after the DO binding is available.
      * @returns The number of entries applied during catch-up.
      */
@@ -393,7 +407,7 @@ class MaterializerRuntime {
         let sinceSeq = this.#watermarks.length > 0 ? Math.min(...this.#watermarks) : 0;
         let applied = 0;
 
-        for (;;) {
+        for (let pages = 0; pages < MAX_CATCHUP_PAGES; pages += 1) {
             // eslint-disable-next-line no-await-in-loop -- each page's cursor comes from the previous page, so the round-trips are inherently sequential
             const page = await client.getSince(sinceSeq);
 
@@ -406,6 +420,8 @@ class MaterializerRuntime {
 
             sinceSeq = page.cursor;
         }
+
+        return applied;
     }
 
     /**

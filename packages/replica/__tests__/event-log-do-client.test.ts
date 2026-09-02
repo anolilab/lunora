@@ -294,6 +294,44 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
         expect(counter.state).toEqual({ total: 2 });
     });
 
+    it("materializerRuntime initialize yields instead of chasing a log that keeps growing", async () => {
+        expect.assertions(2);
+
+        // A writer faster than the reader keeps `truncated` true on every page,
+        // so "walk until the log is exhausted" never terminates and startup
+        // never completes. The log stops growing here at 1500 only so an
+        // unbounded walk terminates and reports the overrun instead of hanging
+        // the suite.
+        const client = {
+            getSince: async (sinceSeq: number) => {
+                return {
+                    cursor: sinceSeq + 1,
+                    entries: [{ seq: sinceSeq, type: "increment", payload: {}, timestamp: sinceSeq }],
+                    truncated: sinceSeq < 1500,
+                };
+            },
+        } as unknown as EventLogDOClient;
+
+        const counter = defineMaterializer({
+            name: "counter",
+            initial: () => {
+                return { total: 0 };
+            },
+            handle: (state, entry) => {
+                if (entry.type === "increment") {
+                    return { total: state.total + 1 };
+                }
+                return state;
+            },
+        });
+
+        const runtime = new MaterializerRuntime([counter], { doClient: client });
+
+        await expect(runtime.initialize()).resolves.toBe(1000);
+        // The watermark carries the progress, so a later call resumes from here.
+        expect(runtime.appliedSeq).toBe(1000);
+    });
+
     it("appendEvent throws when no doClient configured", async () => {
         expect.assertions(1);
 

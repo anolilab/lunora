@@ -614,6 +614,92 @@ describe(EventsSync, () => {
         expect(mirroredRows).toStrictEqual(["row0", "row1", "row2", "row3"]);
     });
 
+    it("does NOT replay a batch through applyEvents when only the mirror fan-out failed", async () => {
+        expect.assertions(4);
+
+        // The replay succeeded; the mirror threw afterwards. The watermark holds
+        // (correctly — the diffs are not mirrored yet), so the next poll re-fetches
+        // the same batch. Handing it to the state machine again applies the same
+        // events twice, and unlike `getTableDiffs`, `applyEvents` is not required
+        // to be idempotent and has nothing to roll back.
+        const applied: unknown[] = [];
+        const { fetchEventsSince } = createMockLog([
+            { seq: 0, type: "ok", payload: "a", timestamp: 10 },
+            { seq: 1, type: "ok", payload: "b", timestamp: 20 },
+        ]);
+
+        let failMirror = true;
+
+        const mirror = {
+            applyDiff: vi.fn<(diff: TableDiff) => void>(() => {
+                if (failMirror) {
+                    throw new Error("mirror write failed");
+                }
+            }),
+            onChange: vi.fn<() => () => void>(),
+            get eventLog(): EventLog {
+                return new EventLog();
+            },
+        } as unknown as LocalMirror;
+
+        const sync = new EventsSync({
+            fetchEventsSince,
+            applyEvents: (events) => {
+                for (const event of events) {
+                    applied.push(event.payload);
+                }
+            },
+            getTableDiffs: () => [createTableDiff("rows", [{ type: "insert", data: { id: "x" } }])],
+            mirror,
+            onError: () => {},
+        });
+
+        await sync.sync();
+
+        expect(applied).toStrictEqual(["a", "b"]);
+        expect(sync.watermark).toBe(0);
+
+        failMirror = false;
+
+        const count = await sync.sync();
+
+        // The retry re-derives the diffs (that is `getTableDiffs`' idempotency
+        // contract) but must not re-run the state machine over "a" and "b".
+        expect(applied).toStrictEqual(["a", "b"]);
+        expect(count).toBe(2);
+    });
+
+    it("yields a poll cycle instead of chasing a log that keeps growing", async () => {
+        expect.assertions(3);
+
+        const { mirror } = createMockMirror();
+
+        // A writer faster than the reader: every fetch answers with one more
+        // event, so the batch is never empty. Against a genuinely live log an
+        // unbounded cycle never returns at all — and `#inFlight`, which every
+        // concurrent `sync()` awaits, never settles. The writer stops here at
+        // 1500 only so an unbounded loop terminates and reports the overrun
+        // instead of hanging the suite.
+        const sync = new EventsSync({
+            fetchEventsSince: async (sinceSeq) => {
+                return sinceSeq >= 1500 ? [] : [{ seq: sinceSeq, type: "ok", payload: sinceSeq, timestamp: sinceSeq }];
+            },
+            applyEvents: () => {},
+            getTableDiffs: () => [],
+            mirror,
+            onError: () => {},
+        });
+
+        const count = await sync.sync();
+
+        expect(count).toBe(1000);
+        // The watermark carries the cycle's progress, so the next one resumes
+        // exactly where this stopped rather than repeating any of it.
+        expect(sync.watermark).toBe(1000);
+
+        await expect(sync.sync()).resolves.toBe(500);
+    });
+
     it("sync() awaits an in-flight poll instead of no-op'ing for a concurrent call", async () => {
         expect.assertions(4);
 

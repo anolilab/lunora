@@ -443,11 +443,15 @@ export class EventLogDO {
         const limitParameter = url.searchParams.get("limit");
         const limit = limitParameter === null ? DEFAULT_PAGE_SIZE : Number(limitParameter);
 
-        if (!Number.isFinite(sinceSeq) || sinceSeq < 0) {
+        // Integral, not merely finite: `seq` indexes rows, and a fractional one silently moves the
+        // `seq >= ?` boundary (`?seq=1.5` skips seq 1 while reporting the page it asked for), while a
+        // fractional `limit` reaches SQLite's `LIMIT ?` — which rejects it — and surfaces as an
+        // unexplained 500 rather than the 400 the request has earned.
+        if (!Number.isSafeInteger(sinceSeq) || sinceSeq < 0) {
             return errorResponse(400, "BAD_REQUEST", "invalid seq");
         }
 
-        if (!Number.isFinite(limit) || limit < 1 || limit > MAX_PAGE_SIZE) {
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_PAGE_SIZE) {
             return errorResponse(400, "BAD_REQUEST", "invalid limit");
         }
 
