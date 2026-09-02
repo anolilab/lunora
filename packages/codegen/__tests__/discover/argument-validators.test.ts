@@ -32,6 +32,45 @@ const BOUNDED = `
     });
 `;
 
+/**
+ * Everything the text-matching predicate accepted as a "length bound" and the
+ * runtime does not enforce.
+ *
+ * `.meta()` is documented in `@lunora/values` as carrying pure metadata with no
+ * effect on parsing — it reuses the parser unchanged — so a `maxLength` there is
+ * a claim about the emitted JSON Schema, not a bound. The other three are the
+ * bare substrings `length` and `max` turning up somewhere that is not a call on
+ * the validator at all: a comment, a nested field NAME, a default value.
+ */
+const FALSE_BOUNDS = `
+    import { mutation } from "@lunora/server";
+
+    export const claimed = mutation({
+        args: {
+            viaMeta: v.string().meta({ schema: { maxLength: 200 } }),
+            viaComment: v.string(), // max length enforced upstream
+            viaSiblingName: v.object({ maxItems: v.number() , note: v.string() }),
+            viaDefault: v.string().default("max"),
+        },
+        handler: async () => null,
+    });
+`;
+
+/** The real bounds, in every spelling the runtime actually enforces. */
+const REAL_BOUNDS = `
+    import { mutation } from "@lunora/server";
+
+    export const bounded = mutation({
+        args: {
+            viaMax: v.string().max(200),
+            viaLength: v.string().length(8),
+            viaOptional: v.optional(v.string().max(64)),
+            viaChain: v.string().min(1).max(200),
+        },
+        handler: async () => null,
+    });
+`;
+
 /** An internal mutation — server-trusted input, never recorded. */
 const INTERNAL = `
     import { internalMutation } from "@lunora/server";
@@ -72,6 +111,24 @@ describe("discoverArgumentValidators", () => {
         expect.assertions(1);
 
         writeFileSync(join(workdir, "lunora", "rename.ts"), BOUNDED, "utf8");
+
+        expect(discoverArgumentValidators(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("flags a string the runtime does not actually bound", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "claimed.ts"), FALSE_BOUNDS, "utf8");
+
+        const found = discoverArgumentValidators(project, join(workdir, "lunora"));
+
+        expect(found[0]?.unboundedStringArgs).toStrictEqual(["viaMeta", "viaComment", "viaSiblingName", "viaDefault"]);
+    });
+
+    it("does NOT flag the bounds the runtime does enforce", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "bounded.ts"), REAL_BOUNDS, "utf8");
 
         expect(discoverArgumentValidators(project, join(workdir, "lunora"))).toHaveLength(0);
     });

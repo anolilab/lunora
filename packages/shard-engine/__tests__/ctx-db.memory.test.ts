@@ -248,6 +248,36 @@ describe("ctx-db memory tables", () => {
         }).not.toThrow();
     });
 
+    it("refuses a shape whose relation predicate JOINS a memory table", () => {
+        expect.assertions(3);
+
+        // Reason 1 one hop away, and the same freeze: a write to `presence`
+        // produces no changed key, so `rooms` is never re-probed and the shape
+        // keeps whatever membership it seeded with. The guard only rejected
+        // `.shardBy()` targets, so this passed. Nested under `NOT` because the
+        // walk has to carry the check through every boolean branch, not just the
+        // top level.
+        const related: SchemaLike = {
+            tables: {
+                ...schema.tables,
+                rooms: {
+                    ...schema.tables["rooms"]!,
+                    relationMap: { members: { field: "id", kind: "many", references: "roomId", table: "presence" } },
+                },
+            },
+        };
+
+        expect(() => {
+            assertShapeShardable({ some: { roomId: "r1" } }, related, "rooms");
+        }).not.toThrow();
+        expect(() => {
+            assertShapeShardable({ members: { some: { roomId: "r1" } } }, related, "rooms");
+        }).toThrow(expect.objectContaining({ code: "SHAPE_MEMORY_TABLE" }));
+        expect(() => {
+            assertShapeShardable({ NOT: { members: { some: { roomId: "r1" } } } }, related, "rooms");
+        }).toThrow(expect.objectContaining({ code: "SHAPE_MEMORY_TABLE" }));
+    });
+
     it("leaves the table usable after a clear", async () => {
         expect.assertions(1);
 

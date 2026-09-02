@@ -64,8 +64,8 @@ export const list = query.query(async ({ ctx }): Promise<MessageRow[]> => {
  */
 export const send = mutation
     .input({
-        authorName: v.string().meta({ schema: { maxLength: 256 } }),
-        text: v.string().meta({ schema: { maxLength: 4096 } }),
+        authorName: v.string().max(256),
+        text: v.string().max(4096),
     })
     .use(rateLimit(limiter, "send", byUser))
     .mutation(async ({ args: { authorName, text }, ctx }): Promise<Id<"messages">> => {

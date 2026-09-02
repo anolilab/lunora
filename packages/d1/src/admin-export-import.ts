@@ -204,9 +204,15 @@ const FRAMEWORK_FIELDS = new Set(["_creationTime", "_id"]);
  * import still answered 200 with `errors: []`. A snapshot taken before a
  * `title → heading` rename restored as `{"heading": null}` and reported success:
  * the column was gone and nothing said so.
+ *
+ * `Object.hasOwn` rather than `in`: `in` walks the prototype chain, so a snapshot
+ * key named `constructor`/`toString`/`valueOf` read as declared. The validation
+ * loop below iterates `Object.entries(definition.shape)` and never sees such a
+ * key, so it reached `writer.insert` unvalidated — the exact case this guard
+ * exists to close.
  */
 const undeclaredField = (definition: SchemaLike["tables"][string], document: Record<string, unknown>): string | undefined =>
-    Object.keys(document).find((key) => !FRAMEWORK_FIELDS.has(key) && !(key in definition.shape));
+    Object.keys(document).find((key) => !FRAMEWORK_FIELDS.has(key) && !Object.hasOwn(definition.shape, key));
 
 const validateRow = (schema: SchemaLike, table: string, document: Record<string, unknown>): string | undefined => {
     const definition = schema.tables[table];

@@ -55,8 +55,8 @@ export const listMine = query.query(async ({ ctx }): Promise<DraftDoc[]> => {
 export const save = mutation
     .input({
         id: v.optional(v.id("drafts")),
-        title: v.string().meta({ schema: { maxLength: 256 } }),
-        body: v.string().meta({ schema: { maxLength: 100_000 } }),
+        title: v.string().max(256),
+        body: v.string().max(100_000),
     })
     .use(rateLimit(mutationLimiter, "autosave", byUser))
     .mutation(async ({ args: { id, title, body }, ctx }): Promise<Id<"drafts">> => {

@@ -31,11 +31,26 @@ const DEFAULT_MAX_SESSION_TURNS = 100;
 /** Cap on a `text` frame's length. Beyond this the frame is refused before it reaches the model. */
 const MAX_TEXT_FRAME_CHARS = 4000;
 
+/**
+ * Cap on the RAW control frame, checked before `JSON.parse`.
+ *
+ * The `text` bound below is measured on the parsed frame, so a 32MiB string
+ * message — Cloudflare's own delivery ceiling — was fully parsed before anything
+ * looked at its size, once per frame, on the DO's single thread. The margin over
+ * {@link MAX_TEXT_FRAME_CHARS} is the JSON envelope plus room for escaping: a
+ * frame past it cannot carry an acceptable `text` under any encoding, so there is
+ * nothing to answer and the socket is closed rather than left to repeat it.
+ */
+const MAX_CONTROL_FRAME_CHARS = MAX_TEXT_FRAME_CHARS * 4 + 1024;
+
 /** Close code for a socket that exhausted its turn budget (reconnect for a fresh one). */
 const TURN_LIMIT_CLOSE_CODE = 4002;
 
 /** Close code for a socket that overran the utterance buffer without committing. */
 const UTTERANCE_LIMIT_CLOSE_CODE = 4003;
+
+/** Close code for a socket that sent a control frame past {@link MAX_CONTROL_FRAME_CHARS}. */
+const CONTROL_FRAME_LIMIT_CLOSE_CODE = 4004;
 
 /** Outbound-audio backpressure: pause synthesis when the socket send buffer exceeds ~256KB so a slow client can't balloon DO memory. */
 const MAX_SOCKET_BUFFER_BYTES = 256 * 1024;
@@ -284,6 +299,16 @@ class VoiceSessionDO {
 
     /** Route a JSON control frame (`commit` / `interrupt` / `text`). */
     private async handleControl(ws: WebSocket, attachment: VoiceSocketAttachment, raw: string): Promise<void> {
+        // Before the parse, not after: the `text` bound further down is measured
+        // on the parsed frame, so the 32MiB message Cloudflare will deliver was
+        // parsed in full first.
+        if (raw.length > MAX_CONTROL_FRAME_CHARS) {
+            this.send(ws, { message: `control frame exceeds the maximum of ${String(MAX_CONTROL_FRAME_CHARS)} characters`, type: "error" });
+            this.closeSocket(ws, CONTROL_FRAME_LIMIT_CLOSE_CODE, "control_frame_limit");
+
+            return;
+        }
+
         let frame: VoiceClientFrame;
 
         try {

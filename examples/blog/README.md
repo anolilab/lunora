@@ -62,7 +62,7 @@ ceiling. `authorId` holds the better-auth user id as a plain string; there is no
 
 ```ts
 export const requestImageUpload = action
-    .input({ contentType: v.string().meta({ schema: { maxLength: 128 } }) })
+    .input({ contentType: v.string().max(128) })
     .use(rateLimit(actionLimiter, "upload", byUser))
     .action(async ({ args: { contentType }, ctx }) => {
         const key = `posts/${ctx.auth.userId}/${crypto.randomUUID()}`;

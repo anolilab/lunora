@@ -67,9 +67,9 @@ export const heartbeat = mutation
         // Awareness payload (cursor, status, color, …) — a bounded map of scalar
         // values rather than `v.any()`, so a public client can't smuggle an
         // unvalidated/oversized blob. Widen the value union if you need more.
-        data: v.optional(v.record(v.string(), v.union(v.string().meta({ schema: { maxLength: 1024 } }), v.number(), v.boolean()))),
-        roomId: v.string().meta({ schema: { maxLength: 256 } }),
-        sessionId: v.string().meta({ schema: { maxLength: 256 } }),
+        data: v.optional(v.record(v.string(), v.union(v.string().max(1024), v.number(), v.boolean()))),
+        roomId: v.string().max(256),
+        sessionId: v.string().max(256),
     })
     // Keyed by the authenticated caller, falling back to the server-trusted
     // `ctx.ip` (Cloudflare's `CF-Connecting-IP`, forwarded server-side, never read
@@ -113,37 +113,35 @@ export const heartbeat = mutation
  * Live query: the non-expired members of `roomId`, newest heartbeat first.
  * Subscribe to it for a reactive present-list.
  */
-export const listPresent = query
-    .input({ roomId: v.string().meta({ schema: { maxLength: 256 } }) })
-    .query(async ({ args: { roomId }, ctx }): Promise<PresenceMember[]> => {
-        const cutoff = ctx.now - PRESENCE_TTL_MS;
+export const listPresent = query.input({ roomId: v.string().max(256) }).query(async ({ args: { roomId }, ctx }): Promise<PresenceMember[]> => {
+    const cutoff = ctx.now - PRESENCE_TTL_MS;
 
-        const rows = await ctx.db
-            .query(PRESENCE_TABLE)
-            .withIndex("byRoomSession", (q) => q.eq("roomId", roomId))
-            .collect();
+    const rows = await ctx.db
+        .query(PRESENCE_TABLE)
+        .withIndex("byRoomSession", (q) => q.eq("roomId", roomId))
+        .collect();
 
-        return rows
-            .filter((row) => (row["lastSeen"] as number) > cutoff)
-            .map((row) => {
-                const member: PresenceMember = {
-                    lastSeen: row["lastSeen"] as number,
-                    roomId: row["roomId"] as string,
-                    sessionId: row["sessionId"] as string,
-                };
+    return rows
+        .filter((row) => (row["lastSeen"] as number) > cutoff)
+        .map((row) => {
+            const member: PresenceMember = {
+                lastSeen: row["lastSeen"] as number,
+                roomId: row["roomId"] as string,
+                sessionId: row["sessionId"] as string,
+            };
 
-                if (row["userId"] !== undefined) {
-                    member.userId = row["userId"] as string;
-                }
+            if (row["userId"] !== undefined) {
+                member.userId = row["userId"] as string;
+            }
 
-                if (row["data"] !== undefined) {
-                    member.data = row["data"] as Record<string, unknown>;
-                }
+            if (row["data"] !== undefined) {
+                member.data = row["data"] as Record<string, unknown>;
+            }
 
-                return member;
-            })
-            .toSorted((a, b) => b.lastSeen - a.lastSeen);
-    });
+            return member;
+        })
+        .toSorted((a, b) => b.lastSeen - a.lastSeen);
+});
 
 /**
  * Hard-delete every expired row for `roomId`. Internal (server-only) — schedule

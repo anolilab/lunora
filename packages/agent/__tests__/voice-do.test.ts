@@ -541,6 +541,20 @@ describe("voice session resource bounds", () => {
         expect(JSON.parse(sent[0] as string)).toMatchObject({ type: "error" });
     });
 
+    it("rejects an oversized RAW control frame before parsing it", async () => {
+        const instance = new TestVoiceDO(fakeState(), env, agent, "support");
+        const { getClosed, sent, ws } = createFakeSocket({ connectionId: "c1", threadKey: "t1", turn: 0 });
+
+        // Not valid JSON, so the only thing that can react to it is a check that
+        // runs BEFORE `JSON.parse`. The `text` bound is measured on the parsed
+        // frame, so the 32MiB string message Cloudflare will deliver was parsed
+        // in full first — once per frame, on the DO's single thread.
+        await instance.webSocketMessage(ws, `{"type":"text","text":"${"x".repeat(32 * 1024 * 1024)}`);
+
+        expect(JSON.parse(sent[0] as string)).toMatchObject({ type: "error" });
+        expect(getClosed()).toStrictEqual({ code: 4004, reason: "control_frame_limit" });
+    });
+
     it("still runs a text frame within the cap", async () => {
         const instance = new TestVoiceDO(fakeState(), env, agent, "support");
         const { ws } = createFakeSocket({ connectionId: "c1", threadKey: "t1", turn: 0 });

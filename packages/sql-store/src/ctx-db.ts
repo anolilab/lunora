@@ -112,7 +112,7 @@ import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
 import type { SearchStage } from "./ctx-db-search";
 import { createSearchSync, runSqlSearch, runSqlSearchMigrations } from "./ctx-db-search";
-import { migrateSearchState } from "./ctx-db-search-state";
+import { migrateSearchState, readSearchBackfillState, writeSearchBackfillState } from "./ctx-db-search-state";
 import type { SqlDialect } from "./dialect";
 import { createPointReadBatcher } from "./point-read-batcher";
 import type { SqlCtxExec } from "./sql-exec";
@@ -919,8 +919,15 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
  * characters of padding. All three look like answers, and `SUM` past 2^53 used
  * instead to escape as a raw driver `RangeError`.
  *
- * The maintained `__agg_` companion is exact for these, so the error names it
- * rather than just refusing. Applied at every SQL-reducing entry point —
+ * The maintained `__agg_` companion answers these numerically, so the error names
+ * it rather than just refusing. Exact per CONTRIBUTION, not per total: `__value__`
+ * is a DOUBLE, and `applyAggregateDelta` accumulates coerced values into it — so
+ * a `sum` of individually safe `bigint` amounts loses integer precision once the
+ * running total passes 2^53, and a `min`/`max` over values past it compares the
+ * nearest doubles. A caller who needs an exact total over that range reads the
+ * rows and reduces them in JS, where the values are `bigint` again.
+ *
+ * Applied at every SQL-reducing entry point —
  * `aggregate`'s scan and both halves of `groupBy` — matching the shard twin's
  * `assertReducibleBySql`, which shipped guarding one and not its sibling.
  * @throws LunoraError `BAD_REQUEST` when `field` is stored as an order-preserving key
@@ -965,6 +972,22 @@ const assertGroupByReducibleBySql = (
 const BIGINT_REWRITE_PAGE = 100;
 
 /**
+ * Migration-state key for one table's `bigint` re-encoding pass.
+ *
+ * Recorded in the same reserved table the search backfill uses — it is a
+ * `key → {cursor, done, profile}` map, and this pass needs exactly that. The
+ * `:` namespace cannot collide with a search companion name (`companionFor`
+ * emits `<table>__search_<index>`).
+ */
+const bigintRewriteStateKey = (tableName: string): string => `bigint-rewrite:${tableName}`;
+
+/**
+ * Stamped alongside a recorded completion, so widening {@link BIGINT_KEY_LENGTH}
+ * one day re-runs the pass instead of reading a marker for the old width.
+ */
+const BIGINT_REWRITE_PROFILE = `bigint-key/${String(BIGINT_KEY_LENGTH)}`;
+
+/**
  * The declared fields of `table` that are stored as a `bigint` key.
  */
 const bigintFields = (definition: SchemaLike["tables"][string]): string[] =>
@@ -986,7 +1009,12 @@ const legacyBigintAssignments = (row: Record<string, unknown>, fields: ReadonlyA
     for (const field of fields) {
         const raw = row[field];
 
-        if (typeof raw !== "string" || raw.length === BIGINT_KEY_LENGTH) {
+        // "Already a key", not "already 40 characters" — the same distinction the
+        // `legacy` predicate makes. A key is a `"0"`/`"1"` sign character plus 39
+        // digits; `"-"` plus a 39-digit magnitude is 40 characters too, and a
+        // length-only test skipped exactly those, leaving a convertible negative
+        // stored as decimal text that `eq` no longer matches.
+        if (typeof raw !== "string" || (raw.length === BIGINT_KEY_LENGTH && !raw.startsWith("-"))) {
             continue;
         }
 
@@ -998,6 +1026,42 @@ const legacyBigintAssignments = (row: Record<string, unknown>, fields: ReadonlyA
     }
 
     return assignments;
+};
+
+/**
+ * Rows still holding decimal text, expressed so the rows the encoding can never
+ * hold stop matching permanently.
+ *
+ * A convertible legacy value is at most a signed 39-digit decimal — 40
+ * characters with the sign — so anything longer is past the encoding's digit
+ * ceiling and is left as stored. That leaves the one overlap with a real key, which is
+ * also 40 characters: a key's first character is its `"0"`/`"1"` sign, never
+ * `"-"`, so `SUBSTR(col, 1, 1) = '-'` separates them. A plain `LENGTH(col) <> 40`
+ * matched neither, which silently skipped every negative 39-digit value.
+ */
+const legacyBigintPredicate = (fields: ReadonlyArray<string>): SQL =>
+    sql.join(
+        fields.map(
+            (field) =>
+                sql`(${columnRefSql(field)} IS NOT NULL AND (LENGTH(${columnRefSql(field)}) < ${BIGINT_KEY_LENGTH} OR (LENGTH(${columnRefSql(field)}) = ${BIGINT_KEY_LENGTH} AND SUBSTR(${columnRefSql(field)}, 1, 1) = ${"-"})))`,
+        ),
+        sql` OR `,
+    );
+
+/** One `UPDATE` per row of a page that has something to convert; rows without a usable `id`, and values the encoding cannot hold, are skipped. */
+const legacyBigintUpdates = (rows: ReadonlyArray<Record<string, unknown>>, fields: ReadonlyArray<string>, tableName: string): SQL[] => {
+    const updates: SQL[] = [];
+
+    for (const row of rows) {
+        const { id } = row;
+        const assignments = typeof id === "string" ? legacyBigintAssignments(row, fields) : [];
+
+        if (assignments.length > 0) {
+            updates.push(sql`UPDATE ${sql.identifier(tableName)} SET ${sql.join(assignments, sql`, `)} WHERE ${columnRefSql("id")} = ${id}`);
+        }
+    }
+
+    return updates;
 };
 
 /**
@@ -1014,12 +1078,21 @@ const legacyBigintAssignments = (row: Record<string, unknown>, fields: ReadonlyA
  * stragglers is what keeps that from being a silent read break, so it runs from
  * the same provisioning pass that creates the table.
  *
- * Self-terminating and free once done: the probe is one
- * `WHERE LENGTH(col) <> 40 … LIMIT` per table carrying a bigint column, which
- * matches nothing on a converted (or freshly created) table. It pages on a
- * keyset cursor over `id` so a value it cannot convert — a non-numeric string no
- * encoder here ever wrote, or one past the 39-digit ceiling — is stepped over
- * rather than retried forever.
+ * Self-terminating, and recorded once done. It pages on a keyset cursor over
+ * `id`, so a value the encoding cannot hold is stepped over rather than retried
+ * forever within a pass — but the cursor is not durable, so without a marker the
+ * next `ensureMigrated` restarted at the top. `ensureMigrated` is memoised per
+ * ctx-db (per REQUEST on a Hyperdrive binding), and the probe is a scan: on a
+ * converted table it matches nothing only after reading every row. So completion
+ * goes in the shared migration-state table and the steady state is one
+ * primary-key lookup, not a full-table scan per request.
+ *
+ * The predicate skips what the encoding provably cannot hold — anything longer
+ * than a signed 39-digit decimal — so an oversized legacy value stops matching
+ * permanently rather than pinning the pass open. It does still match a sign
+ * character: `"-"` plus 39 digits is 40 characters, so a plain `LENGTH <> 40`
+ * left exactly the negative 39-digit values unconverted, and a converted key
+ * never starts with `-`.
  */
 const rewriteLegacyBigintColumns = async (
     exec: SqlCtxExec,
@@ -1033,10 +1106,14 @@ const rewriteLegacyBigintColumns = async (
         return;
     }
 
-    const legacy = sql.join(
-        fields.map((field) => sql`(${columnRefSql(field)} IS NOT NULL AND LENGTH(${columnRefSql(field)}) <> ${BIGINT_KEY_LENGTH})`),
-        sql` OR `,
-    );
+    const stateKey = bigintRewriteStateKey(tableName);
+    const recorded = await readSearchBackfillState(exec, dialect, stateKey);
+
+    if (recorded.done && recorded.profile === BIGINT_REWRITE_PROFILE) {
+        return;
+    }
+
+    const legacy = legacyBigintPredicate(fields);
     const selected = sql.join([columnRefSql("id"), ...fields.map((field) => columnRefSql(field))], sql`, `);
     let cursor = "";
 
@@ -1049,31 +1126,24 @@ const rewriteLegacyBigintColumns = async (
         );
 
         if (rows.length === 0) {
-            return;
-        }
-
-        const updates: SQL[] = [];
-
-        for (const row of rows) {
-            const { id } = row;
-            const assignments = typeof id === "string" ? legacyBigintAssignments(row, fields) : [];
-
-            if (assignments.length > 0) {
-                updates.push(sql`UPDATE ${sql.identifier(tableName)} SET ${sql.join(assignments, sql`, `)} WHERE ${columnRefSql("id")} = ${id}`);
-            }
+            break;
         }
 
         // eslint-disable-next-line no-await-in-loop -- one round trip per page; the rows are keyed by distinct `id`, so order across them doesn't matter.
-        await queryBatch(exec, dialect, updates);
+        await queryBatch(exec, dialect, legacyBigintUpdates(rows, fields, tableName));
 
         const last = rows.at(-1)?.["id"];
 
         if (typeof last !== "string") {
+            // The cursor cannot advance, so this pass did NOT reach the end of
+            // the table and must not be recorded as converged.
             return;
         }
 
         cursor = last;
     }
+
+    await writeSearchBackfillState(exec, dialect, stateKey, undefined, true, BIGINT_REWRITE_PROFILE);
 };
 
 /**
@@ -1158,6 +1228,12 @@ const alterGlobalTableDrift = async (exec: SqlCtxExec, tableName: string, defini
  * an explicit migration.
  */
 const runSqlGlobalTableMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
+    // The bigint re-encoding pass below records its completion there, and this is
+    // also the entry point a dev host calls on its own — "the migration throws
+    // unless you happened to run the search one first" is not a contract.
+    // Idempotent, so the later call from `ensureMigrated` costs nothing.
+    await migrateSearchState(exec, dialect);
+
     for (const [tableName, definition] of Object.entries(schema.tables)) {
         if (definition.shardMode?.kind !== "global") {
             continue;

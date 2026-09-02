@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -47,6 +47,17 @@ describe("lunora data-transfer", () => {
                 controller.close();
             },
         });
+    };
+
+    /** A worker that answers one NDJSON row carrying something worth not disclosing. */
+    const oneRowFetch = (): StreamingFetchLike => async (): ReturnType<StreamingFetchLike> => {
+        return {
+            body: stringStream(`${JSON.stringify({ doc: { _id: "u1", ssn: "000-00-0000" }, table: "users" })}\n`),
+            json: async () => undefined,
+            ok: true,
+            status: 200,
+            text: async () => "",
+        };
     };
 
     describe("runExportCommand", () => {
@@ -172,21 +183,38 @@ describe("lunora data-transfer", () => {
 
             mkdirSync(outPath, { recursive: true });
 
-            const fetchImpl: StreamingFetchLike = async () => {
-                return {
-                    body: stringStream(`${JSON.stringify({ doc: { _id: "u1", ssn: "000-00-0000" }, table: "users" })}\n`),
-                    json: async () => undefined,
-                    ok: true,
-                    status: 200,
-                    text: async () => "",
-                };
-            };
-
-            await expect(runExportCommand({ fetchImpl, logger: silentLogger(), out: outPath, token: "t", url: "http://localhost:8787" })).rejects.toThrow(
-                /EISDIR/u,
-            );
+            await expect(
+                runExportCommand({ fetchImpl: oneRowFetch(), logger: silentLogger(), out: outPath, token: "t", url: "http://localhost:8787" }),
+            ).rejects.toThrow(/EISDIR/u);
 
             expect(readdirSync(workDir).filter((entry) => entry.endsWith(".partial"))).toStrictEqual([]);
+        });
+
+        it("keeps the exported dump private under a permissive umask", async () => {
+            expect.assertions(1);
+
+            const outPath = join(workDir, "private.ndjson");
+
+            // `createWriteStream` opens at 0666 before the umask, so without an
+            // explicit mode the dump is world-readable on any box that does not
+            // narrow it — and a dump is every row of every table.
+            // eslint-disable-next-line sonarjs/file-permissions -- widening the umask IS the test: it is what makes an unset `mode` observable, and it is restored in the `finally`
+            const previousUmask = process.umask(0o000);
+
+            try {
+                await runExportCommand({
+                    fetchImpl: oneRowFetch(),
+                    logger: silentLogger(),
+                    out: outPath,
+                    token: "t",
+                    url: "http://localhost:8787",
+                });
+
+                // eslint-disable-next-line no-bitwise -- reading the permission bits IS the assertion
+                expect(statSync(outPath).mode & 0o777).toBe(0o600);
+            } finally {
+                process.umask(previousUmask);
+            }
         });
 
         it("refuses to target localhost with --prod", async () => {

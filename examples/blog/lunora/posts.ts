@@ -42,7 +42,7 @@ export const get = query.input({ id: v.id("posts") }).query(async ({ args: { id 
  * Vectorize metadata, so a result preview needs no extra DB read.
  */
 export const search = query
-    .input({ text: v.string().meta({ schema: { maxLength: 1000 } }), topK: v.optional(v.number()) })
+    .input({ text: v.string().max(1000), topK: v.optional(v.number()) })
     .query(async ({ args: { text, topK }, ctx }): Promise<Array<{ id: Id<"posts">; score: number; title: string }>> => {
         // Bound user-supplied inputs: clamp `topK` to a sane ceiling and cap the
         // query text length so a caller can't ask for unbounded work.
@@ -70,7 +70,7 @@ const ALLOWED_IMAGE_TYPES = new Set(["image/avif", "image/gif", "image/jpeg", "i
  * to a real user and the client-supplied content type is on the allowlist.
  */
 export const requestImageUpload = action
-    .input({ contentType: v.string().meta({ schema: { maxLength: 128 } }) })
+    .input({ contentType: v.string().max(128) })
     .use(rateLimit(actionLimiter, "upload", byUser))
     .action(async ({ args: { contentType }, ctx }): Promise<{ key: string; url: string }> => {
         if (!ctx.auth.userId) {
@@ -103,9 +103,9 @@ export const requestImageUpload = action
  */
 export const publish = mutation
     .input({
-        title: v.string().meta({ schema: { maxLength: 256 } }),
-        body: v.string().meta({ schema: { maxLength: 100_000 } }),
-        imageKey: v.optional(v.string().meta({ schema: { maxLength: 512 } })),
+        title: v.string().max(256),
+        body: v.string().max(100_000),
+        imageKey: v.optional(v.string().max(512)),
     })
     .use(rateLimit(mutationLimiter, "write", byUser))
     .mutation(async ({ args: { title, body, imageKey }, ctx }): Promise<Id<"posts">> => {

@@ -243,6 +243,57 @@ const ensureSearchCompanions = async (exec: SqlCtxExec, schema: SchemaLike, dial
 };
 
 /**
+ * Record the starting point of a `staged: true` index the first time it is seen.
+ *
+ * `staged` defers the backfill of rows that PREDATE the index — and a table
+ * holding none has nothing to defer. But with no progress row written at all,
+ * `planSearchBackfillPass` says "not finished" and `readSearchIndexCoverage` says
+ * "not covered", so {@link runSqlSearch} refuses every query on the index with
+ * `SEARCH_INDEX_BUILDING`. Nothing lifts it: the migration pass never backfills a
+ * staged index, so declaring one alongside a new table took search on that table
+ * permanently offline, including for the rows `createSearchSync` indexed on every
+ * write after the deploy.
+ *
+ * So: an empty table is recorded as covered (`done`, which latches `covered`),
+ * and a non-empty one is recorded as at-the-top (`done: false`) and left to
+ * {@link backfillSqlSearchIndexes} as documented. Writing the profile either way
+ * is what makes this a one-time probe — the next migration sees a recorded row
+ * and returns on the read above.
+ */
+const recordStagedIndexBaseline = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    definition: TableDefinitionLike,
+    tableName: string,
+    index: SearchIndexDefinitionLike,
+): Promise<void> => {
+    const companion = companionFor(tableName, index);
+    const recorded = await readSearchBackfillState(exec, dialect, companion);
+
+    if (recorded.profile !== undefined) {
+        return;
+    }
+
+    let rows = 0;
+    const sourceRows = await queryAll(exec, dialect, dialect.tableExists(tableName));
+
+    if (sourceRows.length > 0) {
+        await forEachRowPaged(
+            exec,
+            dialect,
+            definition,
+            tableName,
+            () => {
+                rows += 1;
+            },
+            { limit: 1 },
+        );
+    }
+
+    await writeSearchBackfillState(exec, dialect, companion, undefined, rows === 0, companionProfile(index, dialect));
+};
+
+/**
  * Provision the search companions, then index one bounded page of the rows that
  * predate each index — unless it is declared `staged: true`, which leaves the
  * whole backfill to {@link backfillSqlSearchIndexes}.
@@ -255,6 +306,9 @@ const runSqlSearchMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dial
 
     for (const [tableName, definition, index] of globalSearchIndexes(schema)) {
         if (index.staged) {
+            // eslint-disable-next-line no-await-in-loop -- one indexed probe per staged index, on the shared connection.
+            await recordStagedIndexBaseline(exec, dialect, definition, tableName, index);
+
             continue;
         }
 

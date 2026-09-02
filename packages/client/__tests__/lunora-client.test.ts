@@ -2769,7 +2769,11 @@ describe("lunoraClient", () => {
             const page2 = [{ args: {}, enqueuedAt: 1, functionPath: "email:send", id: "d100", scheduledFor: 2000 }];
 
             const fetchMock = vi.fn<typeof fetch>(async (input) => {
-                const requested = input instanceof URL ? input.href : input;
+                // `RequestInfo` is `string | URL | Request` under the Workers
+                // types this package compiles against, so the `Request` arm needs
+                // its own read — `.includes` does not exist on it.
+                const stringOrRequest = input instanceof URL ? input.href : input;
+                const requested = typeof stringOrRequest === "string" ? stringOrRequest : stringOrRequest.url;
 
                 return requested.includes("cursor=")
                     ? jsonResponse({ records: page2, truncated: false })

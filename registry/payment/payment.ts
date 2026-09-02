@@ -70,25 +70,23 @@ const appOrigin = (): string => {
  * The authenticated user (from `ctx.auth.userId`) is the payment reference,
  * so the resulting subscription/customer is linked to them. Requires auth.
  */
-export const checkout = action
-    .input({ priceId: v.string().meta({ schema: { maxLength: 512 } }) })
-    .action(async ({ args: { priceId }, ctx }): Promise<{ url: string }> => {
-        const referenceId = ctx.auth.userId;
+export const checkout = action.input({ priceId: v.string().max(512) }).action(async ({ args: { priceId }, ctx }): Promise<{ url: string }> => {
+    const referenceId = ctx.auth.userId;
 
-        if (!referenceId) {
-            throw new Error("@lunora/payment: checkout requires an authenticated user — pass `resolveIdentity` to `createWorker`");
-        }
+    if (!referenceId) {
+        throw new Error("@lunora/payment: checkout requires an authenticated user — pass `resolveIdentity` to `createWorker`");
+    }
 
-        const result = await ctx.payments.createCheckout({
-            cancelUrl: `${appOrigin()}/payment/cancel`,
-            mode: "subscription",
-            priceId,
-            referenceId,
-            successUrl: `${appOrigin()}/payment/success`,
-        });
-
-        return { url: result.url };
+    const result = await ctx.payments.createCheckout({
+        cancelUrl: `${appOrigin()}/payment/cancel`,
+        mode: "subscription",
+        priceId,
+        referenceId,
+        successUrl: `${appOrigin()}/payment/success`,
     });
+
+    return { url: result.url };
+});
 
 /**
  * Record one metered usage event for the authenticated user. `track` writes the

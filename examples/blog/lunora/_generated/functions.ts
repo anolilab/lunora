@@ -73,7 +73,9 @@ __val1 = source["id"];
 __has1 = true;
 }
 if (typeof source["title"] !== "string") return DEFER;
+if (source["title"].length > 256) return DEFER;
 if (typeof source["body"] !== "string") return DEFER;
+if (source["body"].length > 100000) return DEFER;
 return { ...(__has1 ? { "id": __val1 } : {}), "title": source["title"], "body": source["body"] };
 });
 installCompiledValidatorMap(lunora_posts_2.get.args, (source) => {
@@ -86,11 +88,14 @@ installCompiledValidatorMap(lunora_posts_2.publish.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["title"] !== "string") return DEFER;
+if (source["title"].length > 256) return DEFER;
 if (typeof source["body"] !== "string") return DEFER;
+if (source["body"].length > 100000) return DEFER;
 let __has1 = false;
 let __val1;
 if (source["imageKey"] !== undefined) {
 if (typeof source["imageKey"] !== "string") return DEFER;
+if (source["imageKey"].length > 512) return DEFER;
 __val1 = source["imageKey"];
 __has1 = true;
 }
@@ -100,12 +105,14 @@ installCompiledValidatorMap(lunora_posts_2.requestImageUpload.args, (source) => 
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["contentType"] !== "string") return DEFER;
+if (source["contentType"].length > 128) return DEFER;
 return { "contentType": source["contentType"] };
 });
 installCompiledValidatorMap(lunora_posts_2.search.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["text"] !== "string") return DEFER;
+if (source["text"].length > 1000) return DEFER;
 let __has1 = false;
 let __val1;
 if (source["topK"] !== undefined) {

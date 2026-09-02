@@ -141,7 +141,7 @@ const assertAllowedTarget = (url: string): string => {
 export const screenshot = action
     .input({
         height: v.optional(v.number()),
-        url: v.string().meta({ schema: { maxLength: 2048 } }),
+        url: v.string().max(2048),
         width: v.optional(v.number()),
     })
     .use(rateLimit(limiter, "render", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
@@ -157,7 +157,7 @@ export const screenshot = action
 
 /** Capture a PDF of an allowlisted URL. */
 export const pdf = action
-    .input({ url: v.string().meta({ schema: { maxLength: 2048 } }) })
+    .input({ url: v.string().max(2048) })
     .use(rateLimit(limiter, "render", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .action(async ({ args: { url }, ctx }) => {
         requireUser(ctx.auth.userId);

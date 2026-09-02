@@ -75,7 +75,7 @@ const connect = (): SqlClient => {
  *
  * Note the shape to copy: fixed SQL text, every value bound positionally.
  */
-export const queryUsers = internalAction.input({ email: v.string().meta({ schema: { maxLength: 320 } }) }).action(async ({ args: { email } }) => {
+export const queryUsers = internalAction.input({ email: v.string().max(320) }).action(async ({ args: { email } }) => {
     const rows = await connect().query<{ email: string; id: string; name: string }>("select id, name, email from users where email = $1", [email]);
 
     return { users: rows };

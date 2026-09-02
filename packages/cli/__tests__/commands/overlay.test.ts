@@ -170,7 +170,7 @@ describe("applyLunoraOverlay", () => {
     });
 
     it("scaffolds an advisor-clean messages.ts (rate limit, bounded args, real insert) + the ratelimit dep", async () => {
-        expect.assertions(5);
+        expect.assertions(6);
 
         writeReactBase(base);
         await applyLunoraOverlay({ adapter: ADAPTERS.react, distTag: "alpha", logger: silentLogger(), name: "my-app", target: base });
@@ -181,8 +181,11 @@ describe("applyLunoraOverlay", () => {
         expect(messages).toContain('rateLimit(limiter, "send"');
         // table_without_insert → `send` writes a row.
         expect(messages).toContain('ctx.db.insert("messages"');
-        // unbounded_string_arg → the string args are length-bounded.
-        expect(messages).toContain("maxLength");
+        // unbounded_string_arg → the string args are length-bounded, and bounded
+        // by `.max()` rather than a `.meta({ schema: { maxLength } })` the runtime
+        // does not enforce.
+        expect(messages).toContain(".max(");
+        expect(messages).not.toContain("maxLength");
 
         // The rate limiter the starter imports must be installed.
         const pkg = JSON.parse(readFileSync(join(base, "package.json"), "utf8")) as { dependencies: Record<string, string> };

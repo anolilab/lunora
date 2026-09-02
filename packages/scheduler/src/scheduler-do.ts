@@ -633,12 +633,15 @@ class SchedulerDO {
      * A throw reaching here always means the job was NOT dispatched:
      * {@link drainRecord} swallows its own post-dispatch cleanup errors and
      * returns instead of throwing once a kick succeeds, so every escaping throw
-     * comes from the pre-dispatch or failed-dispatch paths. We therefore always
-     * re-assert the time-index claim so a later alarm re-attempts it
-     * (at-least-once): the claim delete may have removed it and
-     * recordRetry()/requeuePooled() may not have re-armed it before throwing, and
-     * re-inserting the same key is idempotent, so a surviving claim is simply
-     * rewritten to its prior value.
+     * comes from the pre-dispatch or failed-dispatch paths. We therefore re-assert
+     * the time-index claim so a later alarm re-attempts it (at-least-once): the
+     * claim delete may have removed it and recordRetry()/requeuePooled() may not
+     * have re-armed it before throwing, and re-inserting the same key is
+     * idempotent, so a surviving claim is simply rewritten to its prior value.
+     *
+     * With one exception, checked first: a record that already has a durable
+     * `dead:` row is TERMINAL, and re-claiming it would re-dispatch a job the
+     * dead-letter says is finished. See the comment on that branch.
      */
     private async drainRecordGuarded(record: ScheduleRecord): Promise<void> {
         try {
@@ -646,6 +649,19 @@ class SchedulerDO {
             await this.drainRecord(record);
         } catch {
             try {
+                // `parkDead` writes `dead:<id>` and THEN clears the pending rows.
+                // If that clear is what threw, the park is already durable and
+                // re-asserting the claim would dispatch a job that has a terminal
+                // dead-letter record — a duplicate run of a workflow or any other
+                // non-idempotent job, which at-least-once does not license. Finish
+                // the park's cleanup instead; the delete is idempotent, so a later
+                // pass retries it if this one throws too.
+                if ((await this.state.storage.get(`${DEAD_PREFIX}${record.id}`)) !== undefined) {
+                    await this.state.storage.delete([`${RETRY_PREFIX}${record.id}`, `${HEADER_PREFIX}${record.id}`]);
+
+                    return;
+                }
+
                 await this.state.storage.put(SchedulerDO.indexKey(record.scheduledFor, record.id), record.id);
             } catch {
                 // The infra is failing hard enough that even the re-claim put

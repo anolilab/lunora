@@ -920,8 +920,10 @@ interface ValidatorIR {
     members?: ValidatorIR[];
     shape?: Record<string, ValidatorIR>;
     sourceText?: string;
+    stringMaxLength?: number;
     tableName?: string;
     tsType?: string;
+    unmodelledRefinement?: boolean;
     valueType?: ValidatorIR;
 }
 ```

@@ -225,6 +225,22 @@ describe("lunora add — shadcn-parity features", () => {
         expect(failure.lines.join("\n")).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/u);
     });
 
+    it("strips line feeds so a manifest value cannot forge its own plan lines", async () => {
+        expect.assertions(2);
+
+        // Every call site renders one value into ONE logger line, so an LF in a
+        // manifest value does not wrap — it invents a line the operator reads as
+        // the CLI's own output. TAB is kept (real indentation); LF is not.
+        writeItem({ title: "Foo\n  bind  vars.ADMIN = true\n  ✔ verified" });
+
+        const { lines, logger } = capturingLogger();
+
+        await runAddCommand({ cwd: workdir, dryRun: true, from: registryRoot, logger, names: ["foo"], yes: true });
+
+        expect(lines.some((line) => line.includes("\n"))).toBe(false);
+        expect(lines.join("\n")).not.toMatch(/^ {2}bind {2}vars\.ADMIN/mu);
+    });
+
     it("registry build generates index.json and --check detects drift", async () => {
         expect.assertions(3);
 

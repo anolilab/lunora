@@ -61,25 +61,23 @@ export const comments = query.input({ feedbackId: v.id("feedback") }).query(asyn
 });
 
 /** Which of these posts the given voter has already upvoted — one query for the whole page, rather than one per card. */
-export const myVotes = query
-    .input({ voterEmail: v.string().meta({ schema: { maxLength: 254 } }) })
-    .query(async ({ args: { voterEmail }, ctx }): Promise<Id<"feedback">[]> => {
-        const rows = await ctx.db
-            .query("votes")
-            .withIndex("by_voter", (q) => q.eq("voterEmail", voterEmail))
-            .collect();
+export const myVotes = query.input({ voterEmail: v.string().max(254) }).query(async ({ args: { voterEmail }, ctx }): Promise<Id<"feedback">[]> => {
+    const rows = await ctx.db
+        .query("votes")
+        .withIndex("by_voter", (q) => q.eq("voterEmail", voterEmail))
+        .collect();
 
-        return rows.map((vote) => vote.feedbackId);
-    });
+    return rows.map((vote) => vote.feedbackId);
+});
 
 export const create = mutation
     .use(rateLimit(limiter, "write", byCaller))
     .input({
-        title: v.string().meta({ schema: { maxLength: 200 } }),
-        description: v.string().meta({ schema: { maxLength: 4000 } }),
-        authorName: v.string().meta({ schema: { maxLength: 80 } }),
-        authorEmail: v.optional(v.string().meta({ schema: { maxLength: 254 } })),
-        tags: v.optional(v.array(v.string().meta({ schema: { maxLength: 40 } }))),
+        title: v.string().max(200),
+        description: v.string().max(4000),
+        authorName: v.string().max(80),
+        authorEmail: v.optional(v.string().max(254)),
+        tags: v.optional(v.array(v.string().max(40))),
     })
     .mutation(async ({ args: { authorEmail, authorName, description, tags, title }, ctx }): Promise<Id<"feedback">> => {
         const id = await ctx.db.insert("feedback", { authorEmail, authorName, commentCount: 0, description, status: "open", tags, title, upvoteCount: 0 });
@@ -107,7 +105,7 @@ export const setStatus = mutation
  */
 export const toggleVote = mutation
     .use(rateLimit(limiter, "write", byCaller))
-    .input({ feedbackId: v.id("feedback"), voterEmail: v.string().meta({ schema: { maxLength: 254 } }) })
+    .input({ feedbackId: v.id("feedback"), voterEmail: v.string().max(254) })
     .mutation(async ({ args: { feedbackId, voterEmail }, ctx }): Promise<{ voted: boolean }> => {
         const post = await ctx.db.get(feedbackId);
 
@@ -139,9 +137,9 @@ export const addComment = mutation
     .use(rateLimit(limiter, "write", byCaller))
     .input({
         feedbackId: v.id("feedback"),
-        authorName: v.string().meta({ schema: { maxLength: 80 } }),
-        authorEmail: v.optional(v.string().meta({ schema: { maxLength: 254 } })),
-        content: v.string().meta({ schema: { maxLength: 4000 } }),
+        authorName: v.string().max(80),
+        authorEmail: v.optional(v.string().max(254)),
+        content: v.string().max(4000),
         isOfficial: v.optional(v.boolean()),
     })
     .mutation(async ({ args: { authorEmail, authorName, content, feedbackId, isOfficial }, ctx }): Promise<Id<"comments">> => {

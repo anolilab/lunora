@@ -37,7 +37,11 @@ const hasIndexMetadata = (metadata: Record<string, unknown>): metadata is IndexF
 
     const { fields, name } = suggestedIndex as Record<string, unknown>;
 
-    if (!Array.isArray(fields) || fields.length === 0) {
+    // Every MEMBER, not just the array: `[null]` / `[42]` satisfied
+    // `Array.isArray` and the predicate then exposed them as strings, so the
+    // advisory action handed one to `sqlIdentifier`, which calls `.replaceAll`
+    // on it — a TypeError thrown while rendering rather than a hidden action.
+    if (!Array.isArray(fields) || fields.length === 0 || !fields.every((field) => typeof field === "string" && field.length > 0)) {
         return false;
     }
 

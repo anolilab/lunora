@@ -95,6 +95,19 @@ describe("describeValue", () => {
         expect(describeValue(hostile)).toBe("object");
     });
 
+    it("truncates a client-supplied constructor name", () => {
+        expect.assertions(2);
+
+        // A JSON body carrying its OWN `constructor` property is a plain object
+        // whose `constructor.name` is whatever was sent — so this branch is
+        // client-sized, and `received` goes back on the wire and into logs.
+        // Every other branch truncates; this one did not.
+        const described = describeValue(structuredClone({ constructor: { name: "A".repeat(100_000) } }));
+
+        expect(described.endsWith("…")).toBe(true);
+        expect(described.length).toBeLessThan(100);
+    });
+
     it("falls through to typeof for other values (undefined, symbol, function)", () => {
         expect.assertions(3);
 

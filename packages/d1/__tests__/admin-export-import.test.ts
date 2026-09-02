@@ -289,6 +289,24 @@ describe("d1 admin export/import globals", () => {
             });
         });
 
+        it("rejects a prototype-named field the table does not declare", async () => {
+            expect.assertions(2);
+
+            // `key in definition.shape` walks the prototype chain, so `constructor`
+            // (and `toString`, `valueOf`) passed as "declared". The validation loop
+            // iterates `Object.entries(shape)` and never sees such a key, so it went
+            // straight to `writer.insert` — dropped on the floor, still answered 200.
+            const result = await importGlobalRows(writer, schema, {
+                rows: [{ doc: { _id: "s3", constructor: "injected", name: "ok", value: "x" }, table: "settings" }],
+            });
+
+            expect(result.inserted).toEqual({});
+            expect(result.errors[0]).toMatchObject({
+                message: 'unexpected field "constructor": not declared in table "settings"',
+                table: "settings",
+            });
+        });
+
         it("attributes errors to each row's own `line` when non-contiguous (interspersed shard-local rows filtered out upstream)", async () => {
             expect.assertions(1);
 

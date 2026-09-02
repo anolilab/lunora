@@ -44,27 +44,25 @@ const assertSignedIn = (userId: null | string): string => {
  * organizationId } })` there before trusting the org id. A production app wants
  * that check in addition to the owner scoping below.
  */
-export const list = query
-    .input({ organizationId: v.string().meta({ schema: { maxLength: 128 } }) })
-    .query(async ({ args: { organizationId }, ctx }): Promise<DocumentRow[]> => {
-        const userId = assertSignedIn(ctx.auth.userId);
+export const list = query.input({ organizationId: v.string().max(128) }).query(async ({ args: { organizationId }, ctx }): Promise<DocumentRow[]> => {
+    const userId = assertSignedIn(ctx.auth.userId);
 
-        // The equality prefix pins the row set to this caller's own documents; the
-        // index's trailing `createdAt` supplies the ordering, so nothing is sorted
-        // (or over-read) in JS.
-        return ctx.db
-            .query("documents")
-            .withIndex("by_org_owner_created", (range) => range.eq("organizationId", organizationId).eq("ownerId", userId))
-            .order("desc")
-            .collect();
-    });
+    // The equality prefix pins the row set to this caller's own documents; the
+    // index's trailing `createdAt` supplies the ordering, so nothing is sorted
+    // (or over-read) in JS.
+    return ctx.db
+        .query("documents")
+        .withIndex("by_org_owner_created", (range) => range.eq("organizationId", organizationId).eq("ownerId", userId))
+        .order("desc")
+        .collect();
+});
 
 /** File a new document. `ownerId` comes from the session, never from `args`. */
 export const create = mutation
     .input({
-        organizationId: v.string().meta({ schema: { maxLength: 128 } }),
-        title: v.string().meta({ schema: { maxLength: 256 } }),
-        body: v.string().meta({ schema: { maxLength: 100_000 } }),
+        organizationId: v.string().max(128),
+        title: v.string().max(256),
+        body: v.string().max(100_000),
     })
     .mutation(async ({ args: { organizationId, title, body }, ctx }): Promise<Id<"documents">> => {
         const userId = assertSignedIn(ctx.auth.userId);

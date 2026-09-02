@@ -22,12 +22,11 @@ export interface ValidatorIR {
     column?: ColumnMetaIR;
 
     /**
-     * `true` when this validator carries a `.check(...)` refinement. The predicate
-     * is a runtime closure the AST→IR step can't represent, so the node keeps its
-     * base `kind` but records the refinement's presence here. The AOT args-validator
-     * compiler declines any node with this flag (compiling it would silently skip
-     * the predicate). `.meta(...)` is pure metadata with no parse effect and does
-     * NOT set this.
+     * `true` when this validator carries a refinement (`.check(...)`, `.max(n)`,
+     * `.email()`, …) — anything that narrows the accepted values without changing
+     * the kind. `schema-drift` hashes this, so a bound counts here even when it is
+     * modelled below. `.meta(...)` is pure metadata with no parse effect and does
+     * NOT set it.
      */
     hasRefinement?: boolean;
     /** For `v.optional(inner)` / `v.array(inner)`. */
@@ -44,6 +43,14 @@ export interface ValidatorIR {
     shape?: Record<string, ValidatorIR>;
     /** Verbatim source text — used in emitted code when we can't reconstruct from AST. */
     sourceText?: string;
+
+    /**
+     * The `n` of a `v.string().max(n)` written with a numeric literal — the one
+     * refinement predicate the IR can represent exactly (`value.length <= n`).
+     * The AOT compiler emits it as a guard instead of declining the node, which
+     * is what keeps a length-bounded public argument on the fast path.
+     */
+    stringMaxLength?: number;
     /** For `v.id("table")` — the table name. */
     tableName?: string;
 
@@ -55,6 +62,14 @@ export interface ValidatorIR {
      * type falls back to `unknown`.
      */
     tsType?: string;
+
+    /**
+     * `true` when this validator carries a refinement the IR could NOT model — a
+     * `.check(...)` closure, `.email()`, `.pattern(re)`, a `.max()` whose bound is
+     * not a literal. The AOT args-validator compiler declines any node with this
+     * flag, because compiling it would silently skip the predicate.
+     */
+    unmodelledRefinement?: boolean;
     valueType?: ValidatorIR;
 }
 
