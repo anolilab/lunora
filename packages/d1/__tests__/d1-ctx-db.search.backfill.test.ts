@@ -107,6 +107,26 @@ describe("d1 ctx-db search backfill", () => {
         expect(after.map((document) => String(document["_id"])).toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["new", "old"]);
     });
 
+    it("keeps a staged index searchable when it was declared over an empty table", async () => {
+        expect.assertions(1);
+
+        // `staged` exists to keep a large table's row walk out of the cold start.
+        // An EMPTY table has no walk to keep out — and skipping it records no
+        // progress at all, so the index reported no coverage and the read path
+        // refused every search until an operator ran the backfill by hand, on a
+        // table the write path had covered from its first row.
+        const staged = writerFor(stagedSchema);
+
+        await staged.insert("docs", { _id: "new", body: "ancient news", channel: "x" }, { allowExplicitId: true });
+
+        const found = await staged
+            .query("docs")
+            .withSearchIndex("by_body", (q) => q.search("body", "ancient"))
+            .collect();
+
+        expect(found.map((document) => String(document["_id"]))).toStrictEqual(["new"]);
+    });
+
     it("resumes across pages until the whole table is indexed", async () => {
         expect.assertions(2);
 

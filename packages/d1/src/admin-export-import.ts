@@ -204,9 +204,14 @@ const FRAMEWORK_FIELDS = new Set(["_creationTime", "_id"]);
  * import still answered 200 with `errors: []`. A snapshot taken before a
  * `title → heading` rename restored as `{"heading": null}` and reported success:
  * the column was gone and nothing said so.
+ *
+ * `Object.hasOwn`, never `key in shape`: `in` walks the prototype chain, so
+ * `constructor`, `toString` and `__proto__` passed as declared fields and then
+ * fell out of the column tuple below — the exact "answered 200 and dropped the
+ * field" case this guard exists to close, reachable from any snapshot line.
  */
 const undeclaredField = (definition: SchemaLike["tables"][string], document: Record<string, unknown>): string | undefined =>
-    Object.keys(document).find((key) => !FRAMEWORK_FIELDS.has(key) && !(key in definition.shape));
+    Object.keys(document).find((key) => !FRAMEWORK_FIELDS.has(key) && !Object.hasOwn(definition.shape, key));
 
 const validateRow = (schema: SchemaLike, table: string, document: Record<string, unknown>): string | undefined => {
     const definition = schema.tables[table];

@@ -1089,7 +1089,7 @@ const assertReducibleBySql = (definition: TableDefinitionLike, field: string, la
     if (isProjectedField(definition, field)) {
         throw new LunoraError(
             "BAD_REQUEST",
-            `${label}: "${field}" is stored as an order-preserving key, which SQL cannot reduce or group — declare an aggregateIndex covering this (by, field, op) so the maintained companion answers it`,
+            `${label}: "${field}" is stored as an order-preserving key, which SQL cannot reduce or group — declare an aggregateIndex covering this (by, field, op) so the maintained companion answers it instead (its running total is a REAL, so it stays exact only while the total is inside 2^53)`,
         );
     }
 };

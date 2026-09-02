@@ -18,12 +18,10 @@ export {
     readSqlCdcChangedTables,
     readSqlCdcChanges,
     readSqlCdcFloor,
-    runSqlAggregateMigrations,
     runSqlCdcMigration,
-    runSqlGlobalTableMigrations,
-    runSqlRankMigrations,
     sweepSqlCdcRetention,
 } from "./ctx-db";
+export { runSqlAggregateMigrations, runSqlGlobalTableMigrations, runSqlRankMigrations } from "./ctx-db-migrations";
 export { backfillSqlSearchIndexes, runSqlSearchMigrations } from "./ctx-db-search";
 export { migrateSearchState, SEARCH_STATE_TABLE } from "./ctx-db-search-state";
 export type { SqlDialect, SqlExec, SqlRunResult } from "./dialect";

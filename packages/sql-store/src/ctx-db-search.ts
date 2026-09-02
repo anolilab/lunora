@@ -243,9 +243,27 @@ const ensureSearchCompanions = async (exec: SqlCtxExec, schema: SchemaLike, dial
 };
 
 /**
+ * Does `tableName` hold at least one row? `false` when the table is not there at
+ * all — a host may manage its own DDL, and "no table" is "no rows to walk",
+ * which is exactly how the caller below wants it treated.
+ */
+const tableHasRows = async (exec: SqlCtxExec, dialect: SqlDialect, tableName: string): Promise<boolean> => {
+    const present = await queryAll(exec, dialect, dialect.tableExists(tableName));
+
+    if (present.length === 0) {
+        return false;
+    }
+
+    const first = await queryAll(exec, dialect, sql`SELECT 1 FROM ${sql.identifier(tableName)} LIMIT 1`);
+
+    return first.length > 0;
+};
+
+/**
  * Provision the search companions, then index one bounded page of the rows that
- * predate each index — unless it is declared `staged: true`, which leaves the
- * whole backfill to {@link backfillSqlSearchIndexes}.
+ * predate each index — unless it is declared `staged: true` over a table that
+ * has rows to walk, which leaves the whole backfill to
+ * {@link backfillSqlSearchIndexes}.
  *
  * Idempotent (`CREATE … IF NOT EXISTS` throughout, and the backfill resumes
  * from recorded progress).
@@ -254,7 +272,15 @@ const runSqlSearchMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dial
     await ensureSearchCompanions(exec, schema, dialect);
 
     for (const [tableName, definition, index] of globalSearchIndexes(schema)) {
-        if (index.staged) {
+        // `staged` keeps the row walk out of the cold start, for tables too large
+        // to walk there. A table with no rows is not one of those, and skipping it
+        // records NOTHING — so the index reports no coverage and {@link runSqlSearch}
+        // refuses every search until an operator runs the backfill by hand, on a
+        // table the write path had covered all along. The page below walks nothing
+        // and records that completion, which is the whole cost. The shard plane
+        // guards this in `ctx-db-backfill.ts`; this one did not.
+        // eslint-disable-next-line no-await-in-loop -- one indexed probe per staged index, on the shared connection.
+        if (index.staged && (await tableHasRows(exec, dialect, tableName))) {
             continue;
         }
 

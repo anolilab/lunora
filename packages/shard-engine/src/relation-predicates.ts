@@ -488,10 +488,15 @@ const resolveRelationPredicates = async (where: WhereInput | undefined, options:
     });
 };
 
-type ShardedRelationHit = { relation: string; target: string };
+/**
+ * A relation predicate a live shape cannot be poked from, and why: its target
+ * table lives in another Durable Object (`shardBy`), or its writes never reach
+ * the changelog the poke loop replicates from (`memory`).
+ */
+type UnpokeableRelationHit = { kind: "memory" | "shardBy"; relation: string; target: string };
 
-/** First sharded hit across a set of sibling sub-wheres (each scanned under `tableName`). */
-const firstShardedHit = (branches: Iterable<WhereInput>, schema: ResolveContext["schema"], tableName: string): ShardedRelationHit | undefined => {
+/** First unpokeable hit across a set of sibling sub-wheres (each scanned under `tableName`). */
+const firstShardedHit = (branches: Iterable<WhereInput>, schema: ResolveContext["schema"], tableName: string): UnpokeableRelationHit | undefined => {
     for (const branch of branches) {
         // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: a branch is itself a where to re-scan.
         const hit = findShardedRelationTarget(branch, schema, tableName);
@@ -504,8 +509,8 @@ const firstShardedHit = (branches: Iterable<WhereInput>, schema: ResolveContext[
     return undefined;
 };
 
-/** Scan one `where` key (boolean branch or relation predicate) for a sharded-join hit. */
-const inspectKey = (key: string, value: WhereInput[string], schema: ResolveContext["schema"], tableName: string): ShardedRelationHit | undefined => {
+/** Scan one `where` key (boolean branch or relation predicate) for an unpokeable-join hit. */
+const inspectKey = (key: string, value: WhereInput[string], schema: ResolveContext["schema"], tableName: string): UnpokeableRelationHit | undefined => {
     if (key === "AND" || key === "OR") {
         return firstShardedHit(branchesOf(value), schema, tableName);
     }
@@ -520,8 +525,19 @@ const inspectKey = (key: string, value: WhereInput[string], schema: ResolveConte
         return undefined;
     }
 
-    if (schema.tables[relation.table]?.shardMode?.kind === "shardBy") {
-        return { relation: key, target: relation.table };
+    const target = schema.tables[relation.table];
+
+    if (target?.shardMode?.kind === "shardBy") {
+        return { kind: "shardBy", relation: key, target: relation.table };
+    }
+
+    // Same freeze as a shape declared ON a memory table, one join away: the
+    // joined table's writes never enter `__cdc_log`, so membership that turns on
+    // one of its rows can change without a single poke. `.global()` tables are
+    // exempt — they are served by the D1 snapshot-diff tier, which reads the
+    // rows rather than the log.
+    if (isMemoryTable(target) && target?.shardMode?.kind !== "global") {
+        return { kind: "memory", relation: key, target: relation.table };
     }
 
     // The relation target isn't sharded itself, but its OWN nested predicate may
@@ -532,11 +548,12 @@ const inspectKey = (key: string, value: WhereInput[string], schema: ResolveConte
 /**
  * Walk every relation predicate reachable from `where` (descending through
  * `AND`/`OR`/`NOT` branches and the nested where of each relation operator),
- * returning the first one whose target table is `.shardBy()`. Relations to a
- * `root` (same Durable Object) or `.global()` (D1) table are fine — only a hop
- * into another shard's DO is unreachable from a live poke loop.
+ * returning the first one whose target table the poke loop cannot observe:
+ * `.shardBy()` (the rows live in another DO) or `.memory()` (the rows never
+ * reach the changelog). Relations to a `root` (same Durable Object) or
+ * `.global()` (D1) table are fine.
  */
-const findShardedRelationTarget = (where: WhereInput, schema: ResolveContext["schema"], tableName: string): ShardedRelationHit | undefined => {
+const findShardedRelationTarget = (where: WhereInput, schema: ResolveContext["schema"], tableName: string): UnpokeableRelationHit | undefined => {
     for (const key of Object.keys(where)) {
         const hit = inspectKey(key, where[key], schema, tableName);
 
@@ -554,7 +571,7 @@ const findShardedRelationTarget = (where: WhereInput, schema: ResolveContext["sc
  * `resolveShape` override the moment a socket subscribes — the first point the
  * compiled predicate and the schema are both in hand.
  *
- * **1. The shape's own table is `.memory()`.** A shard-local shape replicates FROM
+ * **1. The shape's own table is `.memory()` — or a relation predicate joins one.** A shard-local shape replicates FROM
  * `__cdc_log`, and `recordCdc` deliberately never appends a memory table (see
  * `ctx-db.ts`: its rows do not survive the next eviction, and log retention is
  * opt-in, so a heartbeat-rate presence table would grow the log without bound).
@@ -569,6 +586,11 @@ const findShardedRelationTarget = (where: WhereInput, schema: ResolveContext["sc
  * this for `.global()` tables (`diffGlobalMembership` against
  * `__global_shape_snapshot`) is wired to the D1 read path.
  *
+ * A JOINED memory table freezes the same way and was the sibling this guard
+ * originally missed: `where: { session: { some: { online: true } }}` over a
+ * durable table whose `session` target is `.memory()` passes every check on the
+ * shape's own table, and then no write to `session` ever moves the membership.
+ *
  * **2. The predicate joins a `.shardBy()` table.** A live shape can only be poked
  * from the op-log of its OWN Durable Object, so an `effectiveWhere` that joins to
  * a sharded table reaches rows that live in other DOs the poke loop can never
@@ -576,11 +598,9 @@ const findShardedRelationTarget = (where: WhereInput, schema: ResolveContext["sc
  */
 const assertShapeShardable = (effectiveWhere: WhereInput | undefined, schema: ResolveContext["schema"], table: string): void => {
     if (isMemoryTable(schema.tables[table])) {
-        throw Object.assign(
-            new Error(
-                `shape on "${table}" replicates from the changelog, which never records a .memory() table — the shape would seed once and never update again. Fix it by (a) dropping .memory() from "${table}" so its writes reach the changelog, or (b) reading it through a live query (\`useQuery\`), which refreshes off the changed-table set rather than the log.`,
-            ),
-            { code: "SHAPE_MEMORY_TABLE", name: "LunoraError", status: 400 },
+        throw new LunoraError(
+            "SHAPE_MEMORY_TABLE",
+            `shape on "${table}" replicates from the changelog, which never records a .memory() table — the shape would seed once and never update again. Fix it by (a) dropping .memory() from "${table}" so its writes reach the changelog, or (b) reading it through a live query (\`useQuery\`), which refreshes off the changed-table set rather than the log.`,
         );
     }
 
@@ -594,11 +614,16 @@ const assertShapeShardable = (effectiveWhere: WhereInput | undefined, schema: Re
         return;
     }
 
-    throw Object.assign(
-        new Error(
-            `shape on "${table}" joins the sharded table "${offending.target}" via relation "${offending.relation}" — a live shape cannot replicate rows that live in another shard's Durable Object. Fix it by (a) denormalizing the joined columns into "${table}", or (b) moving "${offending.target}" to .global() so it is served through the latency-tiered D1 shape tier.`,
-        ),
-        { code: "SHAPE_CROSS_SHARD_JOIN", name: "LunoraError", status: 400 },
+    if (offending.kind === "memory") {
+        throw new LunoraError(
+            "SHAPE_MEMORY_TABLE",
+            `shape on "${table}" joins the .memory() table "${offending.target}" via relation "${offending.relation}" — memory writes never reach the changelog, so membership that depends on them would freeze after the first seed. Fix it by (a) dropping .memory() from "${offending.target}", or (b) reading this through a live query (\`useQuery\`), which refreshes off the changed-table set rather than the log.`,
+        );
+    }
+
+    throw new LunoraError(
+        "SHAPE_CROSS_SHARD_JOIN",
+        `shape on "${table}" joins the sharded table "${offending.target}" via relation "${offending.relation}" — a live shape cannot replicate rows that live in another shard's Durable Object. Fix it by (a) denormalizing the joined columns into "${table}", or (b) moving "${offending.target}" to .global() so it is served through the latency-tiered D1 shape tier.`,
     );
 };
 

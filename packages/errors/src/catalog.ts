@@ -127,6 +127,14 @@ export const ERROR_CATALOG = {
 
     SHARD_ERROR: { status: 503, title: "Shard error" },
     SHARD_UNAVAILABLE: { status: 503, title: "Shard unavailable" },
+    /** A fan-out shard call exceeded the coordinator's per-shard deadline. */
+    SHARD_TIMEOUT: { status: 504, title: "Shard timeout" },
+    /** A fan-out shard call answered with a non-2xx status; the status is in the message, the body is not. */
+    SHARD_HTTP_ERROR: { status: 502, title: "Shard HTTP error" },
+    /** The shard could not write a subscription's attachment to storage, so the subscription was refused. */
+    SUBSCRIPTION_PERSIST_FAILED: { status: 500, title: "Subscription persist failed" },
+    /** A connection asked for more concurrent subscriptions than the shard allows. */
+    TOO_MANY_SUBSCRIPTIONS: { status: 429, title: "Too many subscriptions" },
     OFFLINE_IDENTITY_CHANGED: { status: 409, title: "Offline identity changed" },
 
     /** Package-specific codes. Build-time-only — never cross the RPC wire, so deliberately not `internal`. */
@@ -329,7 +337,7 @@ export const ERROR_CATALOG = {
     SERVICE_UNAVAILABLE: { status: 503, title: "Service unavailable" },
 
     /**
-     * A shape was declared over a `.memory()` table. Refused at subscribe, because
+     * A shape was declared over, or whose predicate joins, a `.memory()` table. Refused at subscribe, because
      * the poke path replicates from `__cdc_log` and a memory table is deliberately
      * never appended to it — so the shape would seed once and then stay frozen
      * while the table changed underneath it. Same registration-time refusal as

@@ -248,6 +248,33 @@ describe("ctx-db memory tables", () => {
         }).not.toThrow();
     });
 
+    it("refuses a shape on a DURABLE table whose predicate joins a memory table", () => {
+        expect.assertions(2);
+
+        // The sibling of the case above, one join away: the shape's own table is
+        // durable and logged, so every check on it passes — but membership turns
+        // on `presence`, whose writes never reach the changelog, so the diff can
+        // never move for a room that empties or fills.
+        const joined: SchemaLike = {
+            tables: {
+                ...schema.tables,
+                rooms: {
+                    ...schema.tables["rooms"]!,
+                    relationMap: { presence: { field: "roomId", kind: "many", references: "_id", table: "presence" } },
+                },
+            },
+        };
+
+        expect(() => {
+            assertShapeShardable({ presence: { some: { userId: "u1" } } }, joined, "rooms");
+        }).toThrow(expect.objectContaining({ code: "SHAPE_MEMORY_TABLE" }));
+
+        // A predicate over the durable table's own columns still passes.
+        expect(() => {
+            assertShapeShardable({ name: "general" }, joined, "rooms");
+        }).not.toThrow();
+    });
+
     it("leaves the table usable after a clear", async () => {
         expect.assertions(1);
 

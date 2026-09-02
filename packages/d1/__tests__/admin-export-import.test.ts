@@ -289,6 +289,32 @@ describe("d1 admin export/import globals", () => {
             });
         });
 
+        /**
+         * The same guard, against the key every `Object` already answers to.
+         * `key in shape` walks the prototype chain, so `constructor` reported
+         * itself declared, sailed past validation, and was then dropped by the
+         * column tuple — a 200 with the field silently missing, which is exactly
+         * what the check above exists to prevent.
+         */
+        it("rejects an inherited Object key as undeclared rather than dropping it", async () => {
+            expect.assertions(3);
+
+            const result = await importGlobalRows(writer, schema, {
+                rows: [
+                    { doc: { _id: "s1", constructor: "surprise", name: "ok", value: "x" }, table: "settings" },
+                    { doc: { _id: "s2", name: "ok2", value: "y" }, table: "settings" },
+                ],
+            });
+
+            expect(result.inserted).toEqual({ settings: 1 });
+            expect(result.errors).toHaveLength(1);
+            expect(result.errors[0]).toMatchObject({
+                code: "VALIDATION_ERROR",
+                message: 'unexpected field "constructor": not declared in table "settings"',
+                table: "settings",
+            });
+        });
+
         it("attributes errors to each row's own `line` when non-contiguous (interspersed shard-local rows filtered out upstream)", async () => {
             expect.assertions(1);
 

@@ -9,7 +9,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError, TABLE_FIRST_METHODS } from "../src/rls-guard";
+import { guardWriter, LOOP_GATED_METHODS, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "../src/rls-guard";
 
 /** A spy writer: every gated method records its table/id and returns a sentinel. */
 const createFakeWriter = () => {
@@ -107,19 +107,19 @@ describe("guardWriter — table-named methods under .rls('required')", () => {
 
     const byName = (a: string, b: string): number => a.localeCompare(b);
 
-    it("covers every method the guard gates by table name", () => {
+    it("covers every method the guard gates in its uniform loop", () => {
         expect.assertions(1);
 
         // Tripwire for the FIRST structural half: this hand-written list drifting
-        // below `TABLE_FIRST_METHODS` is what let `insertMany` /
+        // below `LOOP_GATED_METHODS` is what let `insertMany` /
         // `insertManyUnsafe` be gated in source and unreachable here, so deleting
         // them from the guard left all 61 tests passing. The guard's own list is
         // now derived from an exhaustive `keyof DatabaseWriterLike` map, so a new
-        // table-first method on the real writer reaches this assertion.
-        expect([...tableMethods].toSorted(byName)).toStrictEqual([...TABLE_FIRST_METHODS].toSorted(byName));
+        // loop-gated method on the real writer reaches this assertion.
+        expect([...tableMethods].toSorted(byName)).toStrictEqual([...LOOP_GATED_METHODS].toSorted(byName));
     });
 
-    it("the fake writer declares every table-first method, so it.each actually reaches them", () => {
+    it("the fake writer declares every loop-gated method, so it.each actually reaches them", () => {
         expect.assertions(1);
 
         // The SECOND structural half: `it.each` silently no-ops for a method the
@@ -127,7 +127,7 @@ describe("guardWriter — table-named methods under .rls('required')", () => {
         // `it.each` proves nothing unless the fake implements the whole set.
         const raw = createFakeWriter() as unknown as Record<string, unknown>;
 
-        expect(TABLE_FIRST_METHODS.filter((name) => typeof raw[name] !== "function")).toStrictEqual([]);
+        expect(LOOP_GATED_METHODS.filter((name) => typeof raw[name] !== "function")).toStrictEqual([]);
     });
 
     it.each(tableMethods)("denies %s against the protected table", (method) => {
