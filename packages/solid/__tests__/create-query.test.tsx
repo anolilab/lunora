@@ -50,7 +50,7 @@ describe(createQuery, () => {
         const fake = createFakeClient();
         const [channelId, setChannelId] = createSignal("channel:a");
 
-        render(
+        const { container } = render(
             () => {
                 const data = createQuery(listRef, () => {
                     return { channelId: channelId() };
@@ -65,9 +65,16 @@ describe(createQuery, () => {
         expect(fake.subscriptions[0]?.args).toStrictEqual({ channelId: "channel:a" });
         expect(fake.subscriptions[0]?.unsubscribed).toBe(false);
 
+        fake.subscriptions[0]?.push(["from-a"]);
+
+        expect(container.textContent).toBe(JSON.stringify(["from-a"]));
+
         // Change the reactive args: the old subscription must be torn down and a
-        // fresh one opened for the new args.
+        // fresh one opened for the new args — and the old args' value must not
+        // render under the new args until the new subscription's first frame.
         setChannelId("channel:b");
+
+        expect(container.textContent).toBe("loading");
 
         expect(fake.subscriptions).toHaveLength(2);
         expect(fake.subscriptions[0]?.unsubscribed).toBe(true);

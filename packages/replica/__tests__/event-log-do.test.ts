@@ -14,6 +14,13 @@ interface StoredRow {
     type: string;
 }
 
+/** Body of a `GET /since` response. */
+interface SincePage {
+    cursor?: number;
+    entries: { seq: number; type: string }[];
+    truncated: boolean;
+}
+
 const createMockSql = () => {
     const tables = new Map<string, StoredRow[]>([["events", []]]);
 
@@ -79,16 +86,15 @@ const createMockSql = () => {
                     table = table.filter((r) => r.seq >= since);
                 }
 
-                // ORDER BY seq ASC
-                // LIMIT
-                const limitMatch = query.match(/LIMIT\s+(\d+)/i);
+                // ORDER BY seq ASC — applied BEFORE the limit, as SQLite does.
+                table.sort((a, b) => a.seq - b.seq);
+
+                // LIMIT ? (bound — the handlers' form) or LIMIT <n>
+                const limitMatch = query.match(/LIMIT\s+(\?|\d+)/i);
                 if (limitMatch) {
-                    const limit = Number(limitMatch[1]);
+                    const limit = limitMatch[1] === "?" ? Number(params.at(-1)) : Number(limitMatch[1]);
                     table = table.slice(0, limit);
                 }
-
-                // ORDER BY seq ASC (default sort)
-                table.sort((a, b) => a.seq - b.seq);
 
                 return { toArray: () => table };
             }
@@ -208,8 +214,8 @@ describe(EventLogDO, () => {
         expect(data.entries[1]!.type).toBe("e.3");
     });
 
-    it("supports paginated range queries", async () => {
-        expect.assertions(11);
+    it("pages /since with an explicit limit", async () => {
+        expect.assertions(12);
 
         const do_ = createDO();
 
@@ -225,30 +231,65 @@ describe(EventLogDO, () => {
         });
 
         // Get first page of 2
-        const page1 = await doFetch(do_, "GET", "/range?from=0&limit=2");
-        const d1 = (await page1.json()) as { entries: { seq: number }[]; hasMore: boolean };
+        const page1 = await doFetch(do_, "GET", "/since?seq=0&limit=2");
+        const d1 = (await page1.json()) as SincePage;
 
         expect(d1.entries).toHaveLength(2);
         expect(d1.entries[0]!.seq).toBe(0);
         expect(d1.entries[1]!.seq).toBe(1);
-        expect(d1.hasMore).toBe(true);
+        expect(d1.truncated).toBe(true);
+        expect(d1.cursor).toBe(2);
 
-        // Get second page
-        const page2 = await doFetch(do_, "GET", "/range?from=2&limit=2");
-        const d2 = (await page2.json()) as { entries: { seq: number }[]; hasMore: boolean };
+        // Get second page from the cursor the first one handed back
+        const page2 = await doFetch(do_, "GET", `/since?seq=${String(d1.cursor)}&limit=2`);
+        const d2 = (await page2.json()) as SincePage;
 
         expect(d2.entries).toHaveLength(2);
         expect(d2.entries[0]!.seq).toBe(2);
-        expect(d2.entries[1]!.seq).toBe(3);
-        expect(d2.hasMore).toBe(true);
+        expect(d2.truncated).toBe(true);
+        expect(d2.cursor).toBe(4);
 
-        // Get last page (should have 1 entry, hasMore false)
-        const page3 = await doFetch(do_, "GET", "/range?from=4&limit=2");
-        const d3 = (await page3.json()) as { entries: { seq: number }[]; hasMore: boolean };
+        // Last page — one entry, and the walk ends here.
+        const page3 = await doFetch(do_, "GET", `/since?seq=${String(d2.cursor)}&limit=2`);
+        const d3 = (await page3.json()) as SincePage;
 
         expect(d3.entries).toHaveLength(1);
         expect(d3.entries[0]!.seq).toBe(4);
-        expect(d3.hasMore).toBe(false);
+        expect(d3.truncated).toBe(false);
+    });
+
+    it("bounds /since to 500 entries when no limit is given", async () => {
+        expect.assertions(4);
+
+        const do_ = createDO();
+
+        await doFetch(do_, "POST", "/append", {
+            events: Array.from({ length: 501 }, () => {
+                return { type: "e", payload: {} };
+            }),
+        });
+
+        // A catch-up from 0 must NOT serialize the whole log into one response.
+        const page1 = await doFetch(do_, "GET", "/since?seq=0");
+        const d1 = (await page1.json()) as SincePage;
+
+        expect(d1.entries).toHaveLength(500);
+        expect(d1.truncated).toBe(true);
+        expect(d1.cursor).toBe(500);
+
+        const page2 = await doFetch(do_, "GET", `/since?seq=${String(d1.cursor)}`);
+        const d2 = (await page2.json()) as SincePage;
+
+        expect(d2.entries).toHaveLength(1);
+    });
+
+    it("rejects an out-of-range /since limit", async () => {
+        expect.assertions(2);
+
+        const do_ = createDO();
+
+        await expect(doFetch(do_, "GET", "/since?seq=0&limit=0").then((r) => r.status)).resolves.toBe(400);
+        await expect(doFetch(do_, "GET", "/since?seq=0&limit=1001").then((r) => r.status)).resolves.toBe(400);
     });
 
     it("rejects append with empty events array", async () => {

@@ -1,4 +1,4 @@
-import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, Unsubscribe } from "@lunora/client";
+import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
 import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
 import type { Readable } from "svelte/store";
@@ -22,10 +22,19 @@ type PageItemOf<F extends FunctionReference> = ReturnOf<F> extends { page: (infe
 interface PaginatedQueryOptions {
     /** Page size for the first page (and the default for `loadMore`). */
     initialNumItems: number;
+    /** Called when a page subscription reports an error (also surfaced on the `error` store). */
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 
 interface PaginatedQueryHandle<T> {
+    /**
+     * The last page subscription error, or `undefined`. A tail page that fails
+     * before its first frame is dropped so `status` returns to `"CanLoadMore"`
+     * and `loadMore` can retry it; cleared by the next successful frame,
+     * `loadMore`, or an args emission.
+     */
+    error: Readable<SubscriptionError | undefined>;
     /** `true` while the first page or a `loadMore` page is in flight. */
     isLoading: Readable<boolean>;
     /** Request the next page. A no-op unless `status === "CanLoadMore"`. */
@@ -38,10 +47,14 @@ interface PaginatedQueryHandle<T> {
 interface InfiniteQueryOptions {
     /** Page size for the first page (and the default for `fetchNextPage`). */
     initialNumItems: number;
+    /** Called when a page subscription reports an error (also surfaced on the `error` store). */
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 
 interface InfiniteQueryHandle<T> {
+    /** The last page subscription error, or `undefined` — see `PaginatedQueryHandle.error`. */
+    error: Readable<SubscriptionError | undefined>;
     /** Request the next page. A no-op unless `status === "CanLoadMore"`. */
     fetchNextPage: (numberItems?: number) => void;
     /** `true` when the loaded tail reports it can load another page. */
@@ -84,15 +97,17 @@ const createPaginatedEngine = <T>(
     client: LunoraClient,
     function_: FunctionReference,
     baseArgs: "skip" | Record<string, unknown> | Readable<"skip" | Record<string, unknown>>,
-    options: { initialNumItems: number; shardKey?: string },
+    options: { initialNumItems: number; onError?: SubscriptionErrorCallback; shardKey?: string },
 ): {
+    error: Readable<SubscriptionError | undefined>;
     loadMore: (numberItems: number) => void;
     pageResults: Readable<(PaginationResult<T> | undefined)[]>;
     status: Readable<PaginationStatus>;
 } => {
-    const { initialNumItems, shardKey } = options;
+    const { initialNumItems, onError, shardKey } = options;
 
     const pagesStore = writable<Page[]>(initialPages(initialNumItems));
+    const errorStore = writable<SubscriptionError | undefined>();
     // pageResultsStore is a writable used as the source; pageResults is the
     // public Readable that the lazy start/stop callback wires up.
     const pageResultsInternal = writable<(PaginationResult<T> | undefined)[]>([]);
@@ -222,6 +237,7 @@ const createPaginatedEngine = <T>(
 
                     // This page has resolved; remove from the pending set.
                     pendingPageKeys.delete(key);
+                    errorStore.set(undefined);
 
                     rebuildPageResults();
 
@@ -245,7 +261,34 @@ const createPaginatedEngine = <T>(
                         }
                     }
                 },
-                { shardKey },
+                {
+                    onError: (subscriptionError) => {
+                        pendingPageKeys.delete(key);
+                        errorStore.set(subscriptionError);
+
+                        // A tail that fails before its first frame is dropped so
+                        // the feed leaves `LoadingMore` (status falls back to the
+                        // previous page's cursor) and `loadMore` can retry it. The
+                        // first page has nothing to fall back to and stays.
+                        const current = get(pagesStore);
+                        const tail = current.at(-1);
+
+                        if (
+                            current.length > 1 &&
+                            tail &&
+                            !resultsByKey.has(key) &&
+                            buildPageKey(function_["__lunoraRef"], buildPageArgs(tail, baseArgsRecord)) === key
+                        ) {
+                            pagesStore.set(current.slice(0, -1));
+                            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- runs inside a deferred subscription callback, after syncSubscriptions is defined
+                            syncSubscriptions();
+                            rebuildPageResults();
+                        }
+
+                        onError?.(subscriptionError);
+                    },
+                    shardKey,
+                },
             );
 
             activeSubs.set(key, unsub);
@@ -315,6 +358,7 @@ const createPaginatedEngine = <T>(
             return () => {
                 teardownAll();
                 pagesStore.set(initialPages(initialNumItems));
+                errorStore.set(undefined);
             };
         });
 
@@ -373,12 +417,13 @@ const createPaginatedEngine = <T>(
             }
         }
 
+        errorStore.set(undefined);
         pagesStore.set(next);
         syncSubscriptions();
         rebuildPageResults();
     };
 
-    return { loadMore, pageResults, status };
+    return { error: { subscribe: errorStore.subscribe }, loadMore, pageResults, status };
 };
 
 /**
@@ -416,7 +461,7 @@ export function paginatedQuery<F extends FunctionReference>(
     const args = (hasExplicitClient ? argumentsOrOptions : functionOrArguments) as ReactivePaginatedArgs<F>;
     const options = (hasExplicitClient ? maybeOptions : argumentsOrOptions) as PaginatedQueryOptions;
 
-    const { loadMore, pageResults, status } = createPaginatedEngine<PageItemOf<F>>(client, functionRef, args, options);
+    const { error, loadMore, pageResults, status } = createPaginatedEngine<PageItemOf<F>>(client, functionRef, args, options);
 
     const results = derived<Readable<(PaginationResult<PageItemOf<F>> | undefined)[]>, PageItemOf<F>[]>(pageResults, (currentResults) =>
         currentResults.flatMap((page) => page?.page ?? []),
@@ -427,7 +472,7 @@ export function paginatedQuery<F extends FunctionReference>(
         (currentStatus) => currentStatus === "LoadingFirstPage" || currentStatus === "LoadingMore",
     );
 
-    return { isLoading, loadMore, results, status };
+    return { error, isLoading, loadMore, results, status };
 }
 
 /**
@@ -461,7 +506,7 @@ export function infiniteQuery<F extends FunctionReference>(
     const options = (hasExplicitClient ? maybeOptions : argumentsOrOptions) as InfiniteQueryOptions;
     const { initialNumItems } = options;
 
-    const { loadMore, pageResults, status } = createPaginatedEngine<PageItemOf<F>>(client, functionRef, args, options);
+    const { error, loadMore, pageResults, status } = createPaginatedEngine<PageItemOf<F>>(client, functionRef, args, options);
 
     const pages = derived<Readable<(PaginationResult<PageItemOf<F>> | undefined)[]>, PageItemOf<F>[][]>(pageResults, (currentResults) =>
         currentResults.flatMap((page) => (page ? [page.page] : [])),
@@ -475,7 +520,7 @@ export function infiniteQuery<F extends FunctionReference>(
         loadMore(numberItems ?? initialNumItems);
     };
 
-    return { fetchNextPage, hasNextPage, isFetchingNextPage, isLoading, pages, status };
+    return { error, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading, pages, status };
 }
 
 export type { InfiniteQueryHandle, InfiniteQueryOptions, PageItemOf, PaginatedArgs, PaginatedQueryHandle, PaginatedQueryOptions, ReactivePaginatedArgs };

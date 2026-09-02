@@ -111,7 +111,7 @@ describe("query store", () => {
 
 describe("query store with reactive args", () => {
     it("re-subscribes with the new args when the args store emits", () => {
-        const { client, subscribe, unsubscribe } = createFakeClient();
+        const { client, emit, subscribe, unsubscribe } = createFakeClient();
         const argsStore = writable<unknown>({ room: "general" });
         const store = query(client, fnRef, argsStore);
 
@@ -120,7 +120,15 @@ describe("query store with reactive args", () => {
         expect(subscribe).toHaveBeenCalledTimes(1);
         expect(subscribe.mock.calls[0]?.[1]).toStrictEqual({ room: "general" });
 
+        emit([{ id: 1 }]);
+
+        expect(get(store)).toStrictEqual([{ id: 1 }]);
+
         argsStore.set({ room: "random" });
+
+        // The previous args' value does not survive the switch: the store reads
+        // `undefined` until the new subscription's first frame lands.
+        expect(get(store)).toBeUndefined();
 
         // The previous subscription is torn down before the new one opens.
         expect(unsubscribe).toHaveBeenCalledTimes(1);

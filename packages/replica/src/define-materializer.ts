@@ -364,33 +364,48 @@ class MaterializerRuntime {
      *
      * 1. Recover materialized state from snapshots (if a snapshotStore is
      * configured).
-     * 2. Fetch all entries since the MINIMUM per-materializer watermark from
+     * 2. Fetch entries since the MINIMUM per-materializer watermark from
      * the DO — not the maximum — so a materializer with no snapshot (or a
      * lower one) still receives every event it hasn't seen (REPLICA-04).
      * 3. Apply them through the materializers; `applyEntries` skips each
      * entry for any materializer already past it, so nothing is double-applied.
      *
+     * The DO answers one BOUNDED page per request, so step 2/3 walk pages until
+     * the log is exhausted — applying each page as it arrives, rather than
+     * holding the whole backlog in memory. Taking only the first page (and
+     * dropping `truncated`) would silently leave every materializer short of
+     * the log's head whenever the backlog exceeds a page.
+     *
      * Call this once on startup / after the DO binding is available.
      * @returns The number of entries applied during catch-up.
      */
     public async initialize(): Promise<number> {
-        if (!this.#doClient) {
+        const client = this.#doClient;
+
+        if (!client) {
             return 0;
         }
 
         // 1. Recover from snapshots — sets each materializer's own watermark.
         await this.recoverFromSnapshots();
 
-        // 2. Fetch entries since the LOWEST watermark across materializers.
-        const minWatermark = this.#watermarks.length > 0 ? Math.min(...this.#watermarks) : 0;
-        const entries = await this.#doClient.getSince(minWatermark);
+        // 2. Walk pages from the LOWEST watermark across materializers.
+        let sinceSeq = this.#watermarks.length > 0 ? Math.min(...this.#watermarks) : 0;
+        let applied = 0;
 
-        if (entries.length === 0) {
-            return 0;
+        for (;;) {
+            // eslint-disable-next-line no-await-in-loop -- each page's cursor comes from the previous page, so the round-trips are inherently sequential
+            const page = await client.getSince(sinceSeq);
+
+            // 3. Apply this page through the materializers.
+            applied += this.applyEntries(page.entries);
+
+            if (!page.truncated || page.cursor === undefined || page.cursor <= sinceSeq) {
+                return applied;
+            }
+
+            sinceSeq = page.cursor;
         }
-
-        // 3. Apply through materializers
-        return this.applyEntries(entries);
     }
 
     /**
