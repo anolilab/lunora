@@ -223,6 +223,25 @@ describe("withX402", () => {
         expect(fetch).toHaveBeenCalledTimes(1);
     });
 
+    it("forwards the context's waitUntil so the receipt sink survives the response", async () => {
+        stubFacilitator();
+        vi.spyOn(X402HTTPResourceServer.prototype, "processHTTPRequest").mockResolvedValue(paymentVerifiedResult as never);
+        vi.spyOn(X402HTTPResourceServer.prototype, "processSettlement").mockResolvedValue(successSettlement as never);
+
+        const onReceipt = vi.fn<() => Promise<void>>(() => Promise.resolve());
+        const waitUntil = vi.fn<(promise: Promise<unknown>) => void>();
+        const gated = withX402({ ...chargeConfig, onReceipt }, () => new Response("secret"));
+
+        const response = await gated({ waitUntil }, new Request("https://api.example/report"));
+
+        expect(response.status).toBe(200);
+        expect(onReceipt).toHaveBeenCalledTimes(1);
+        expect(waitUntil).toHaveBeenCalledTimes(1);
+        expect(waitUntil.mock.calls[0]?.[0]).toBeInstanceOf(Promise);
+
+        vi.restoreAllMocks();
+    });
+
     it("does not cache a failed initialisation", async () => {
         const failing = vi.fn<() => Promise<Response>>(() => Promise.reject(new Error("facilitator down")));
 

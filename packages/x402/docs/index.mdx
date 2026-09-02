@@ -118,6 +118,16 @@ having settled. Once settlement succeeds the payment is final (on-chain); a
 function failure after that point is a normal application error, not a payment
 to unwind.
 
+**A lost response is paid twice.** Settle-first (both rails) consumes the
+payment's nonce before the handler runs, so if the response never reaches the
+client — a dropped connection, a timeout — re-sending the same `X-PAYMENT` fails
+verification and earns a fresh `402`; `@x402/fetch` then signs a new payload and
+pays again. Where a double charge matters, make the handler idempotent (key it on
+something the client controls, e.g. an `Idempotency-Key` header or a client-minted
+id in the args) and cache the receipt client-side so a retry replays the result
+rather than the payment — or, on the HTTP-action rail, opt into settle-after,
+which never settles until the handler has produced a response.
+
 ### Paid MCP tools
 
 `@lunora/mcp`'s `createPaidMcpServer` lets free `tool()` and `paidTool()`

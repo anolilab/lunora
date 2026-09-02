@@ -88,6 +88,20 @@ describe("rateLimit middleware", () => {
         await expect(invoke(middleware, { userId: "bob" })).resolves.toMatchObject({ called: true });
     });
 
+    it("fails closed when the key resolver returns undefined instead of pooling callers", async () => {
+        expect.assertions(3);
+
+        // Anonymous callers resolve to no key; silently falling back to the
+        // global bucket would let one of them drain the limit for all.
+        const middleware = rateLimit<Context>(makeLimiter(), "api", { key: (context) => context.userId });
+
+        const error = await catchError(() => invoke(middleware, {}));
+
+        expect(error.name).toBe("LunoraError");
+        expect(error.code).toBe("INTERNAL");
+        expect(error.message).toMatch(/key resolver returned undefined/u);
+    });
+
     it("accepts a per-ctx limiter resolver", async () => {
         expect.assertions(1);
 

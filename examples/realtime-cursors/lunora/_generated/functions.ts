@@ -38,6 +38,11 @@ export interface RegisteredLunoraFunction {
     lifecycle?: "connect" | "disconnect" | "init" | "reactor";
     /** `"internal"` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
+    /**
+     * `.x402({ price })` tag on a paid public procedure. The origin worker
+     * paywalls it; the shard refuses to subscribe it (`isPaidFunction`).
+     */
+    x402?: { readonly price: number | string };
 }
 
 /**
@@ -59,22 +64,29 @@ installCompiledValidatorMap(lunora_cursors_0.joinRoom.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["roomId"] !== "string") return DEFER;
+if (source["roomId"].length > 64) return DEFER;
 if (typeof source["sessionId"] !== "string") return DEFER;
+if (source["sessionId"].length > 64) return DEFER;
 if (typeof source["name"] !== "string") return DEFER;
+if (source["name"].length > 80) return DEFER;
 if (typeof source["color"] !== "string") return DEFER;
+if (source["color"].length > 32) return DEFER;
 return { "roomId": source["roomId"], "sessionId": source["sessionId"], "name": source["name"], "color": source["color"] };
 });
 installCompiledValidatorMap(lunora_cursors_0.listCursors.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["roomId"] !== "string") return DEFER;
+if (source["roomId"].length > 64) return DEFER;
 return { "roomId": source["roomId"] };
 });
 installCompiledValidatorMap(lunora_cursors_0.updateCursor.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["roomId"] !== "string") return DEFER;
+if (source["roomId"].length > 64) return DEFER;
 if (typeof source["sessionId"] !== "string") return DEFER;
+if (source["sessionId"].length > 64) return DEFER;
 if (typeof source["x"] !== "number" || !Number.isFinite(source["x"])) return DEFER;
 if (typeof source["y"] !== "number" || !Number.isFinite(source["y"])) return DEFER;
 return { "roomId": source["roomId"], "sessionId": source["sessionId"], "x": source["x"], "y": source["y"] };

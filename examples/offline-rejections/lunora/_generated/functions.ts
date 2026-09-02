@@ -38,6 +38,11 @@ export interface RegisteredLunoraFunction {
     lifecycle?: "connect" | "disconnect" | "init" | "reactor";
     /** `"internal"` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
+    /**
+     * `.x402({ price })` tag on a paid public procedure. The origin worker
+     * paywalls it; the shard refuses to subscribe it (`isPaidFunction`).
+     */
+    x402?: { readonly price: number | string };
 }
 
 /**
@@ -58,7 +63,9 @@ installCompiledValidatorMap(lunora_messages_0.send.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["text"] !== "string") return DEFER;
+if (source["text"].length > 4096) return DEFER;
 if (typeof source["author"] !== "string") return DEFER;
+if (source["author"].length > 80) return DEFER;
 return { "text": source["text"], "author": source["author"] };
 });
 

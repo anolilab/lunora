@@ -444,6 +444,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return LUNORA_FUNCTIONS[functionPath]?.kind === "query";
         }
 
+        protected override isPaidFunction(functionPath: string): boolean {
+            return LUNORA_FUNCTIONS[functionPath]?.x402 !== undefined;
+        }
+
         private migrated = false;
 
         public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope): Promise<unknown> {

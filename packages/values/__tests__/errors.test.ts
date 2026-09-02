@@ -77,6 +77,19 @@ describe("describeValue", () => {
         expect(describeValue(Object.create(null))).toBe("object");
     });
 
+
+    it("caps a genuine constructor name like every primitive branch", () => {
+        expect.assertions(1);
+
+        class Long {
+            public readonly id = 0;
+        }
+
+        Object.defineProperty(Long, "name", { value: "X".repeat(200) });
+
+        expect(describeValue(new Long()).length).toBeLessThan(100);
+    });
+
     it("does not throw on a hostile object whose constructor getter throws", () => {
         expect.assertions(2);
 

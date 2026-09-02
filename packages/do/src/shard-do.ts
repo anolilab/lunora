@@ -3863,15 +3863,35 @@ abstract class ShardDO {
     }
 
     /**
+     * Whether `functionPath` is a paid (`.x402({ price })`) procedure. The paywall
+     * lives at the origin worker (`/_lunora/rpc`, REST, `serverQuery`), which a
+     * WebSocket subscription never crosses — so the shard must refuse to seed or
+     * poke a paid query itself, or it is served free. The base class has no
+     * function registry, so the default is `false`; the codegen-generated
+     * subclass overrides it with the real `LUNORA_FUNCTIONS` lookup.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to consult `LUNORA_FUNCTIONS`
+    protected isPaidFunction(_functionPath: string): boolean {
+        return false;
+    }
+
+    /**
      * Register a subscription on the given socket. Stored via
      * `ws.serializeAttachment` so it survives hibernation.
      *
      * Returns a status so the caller can surface a structured error frame
-     * when the cap is hit or the attachment fails to serialize. We never
-     * throw out of this path — the WS hibernation API treats a thrown
-     * `webSocketMessage` as a fatal-channel error.
+     * when the query is paid, the cap is hit or the attachment fails to
+     * serialize. We never throw out of this path — the WS hibernation API
+     * treats a thrown `webSocketMessage` as a fatal-channel error.
+     *
+     * The `paid` refusal sits here rather than at the envelope so every
+     * registration path — not only the `subscribe` frame — goes through it.
      */
-    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "serialize_failed" | "too_many" {
+    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "paid" | "serialize_failed" | "too_many" {
+        if (query.functionPath !== undefined && this.isPaidFunction(query.functionPath)) {
+            return "paid";
+        }
+
         const attachment = this.readAttachment(ws);
 
         if (Object.keys(attachment.subs).length >= ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET) {
@@ -5382,11 +5402,20 @@ abstract class ShardDO {
             const status = this.subscribe(ws, envelope.id, query);
 
             if (status !== "ok") {
-                const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
-                const errorMessage =
-                    status === "too_many"
-                        ? `subscription cap of ${String(ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET)} reached on this socket`
-                        : "failed to persist subscription attachment";
+                // The `paid` refusal mirrors the origin's batch gate (`BAD_REQUEST`):
+                // a paid query is one payment for one call, which a live
+                // subscription (seed + every poke) cannot be.
+                const { code, message: errorMessage } = {
+                    paid: {
+                        code: "BAD_REQUEST",
+                        message: `paid (\`.x402\`) function "${String(functionPath)}" cannot be subscribed; call it individually over /_lunora/rpc`,
+                    },
+                    serialize_failed: { code: "SUBSCRIPTION_PERSIST_FAILED", message: "failed to persist subscription attachment" },
+                    too_many: {
+                        code: "TOO_MANY_SUBSCRIPTIONS",
+                        message: `subscription cap of ${String(ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET)} reached on this socket`,
+                    },
+                }[status];
 
                 trySendFrame(ws, JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }));
 

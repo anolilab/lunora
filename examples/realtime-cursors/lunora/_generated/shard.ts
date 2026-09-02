@@ -195,139 +195,6 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Public write without a rate limit"
     },
     {
-        "cacheKey": "unbounded_string_arg:cursors:listCursors:roomId",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `roomId` of public procedure `listCursors` (cursors:21) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "roomId",
-            "exportName": "listCursors",
-            "file": "cursors",
-            "line": 21
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:cursors:joinRoom:roomId",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `roomId` of public procedure `joinRoom` (cursors:34) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "roomId",
-            "exportName": "joinRoom",
-            "file": "cursors",
-            "line": 34
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:cursors:joinRoom:sessionId",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `sessionId` of public procedure `joinRoom` (cursors:34) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "sessionId",
-            "exportName": "joinRoom",
-            "file": "cursors",
-            "line": 34
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:cursors:joinRoom:name",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `name` of public procedure `joinRoom` (cursors:34) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "name",
-            "exportName": "joinRoom",
-            "file": "cursors",
-            "line": 34
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:cursors:joinRoom:color",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `color` of public procedure `joinRoom` (cursors:34) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "color",
-            "exportName": "joinRoom",
-            "file": "cursors",
-            "line": 34
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:cursors:updateCursor:roomId",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `roomId` of public procedure `updateCursor` (cursors:68) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "roomId",
-            "exportName": "updateCursor",
-            "file": "cursors",
-            "line": 68
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:cursors:updateCursor:sessionId",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `sessionId` of public procedure `updateCursor` (cursors:68) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "sessionId",
-            "exportName": "updateCursor",
-            "file": "cursors",
-            "line": 68
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
         "cacheKey": "procedure_without_structured_event:cursors:joinRoom",
         "categories": [
             "SCHEMA"
@@ -588,6 +455,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
         protected override isQueryFunction(functionPath: string): boolean {
             return LUNORA_FUNCTIONS[functionPath]?.kind === "query";
+        }
+
+        protected override isPaidFunction(functionPath: string): boolean {
+            return LUNORA_FUNCTIONS[functionPath]?.x402 !== undefined;
         }
 
         private migrated = false;
