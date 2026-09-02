@@ -190,9 +190,25 @@ describe("createDatabasePaymentStore", () => {
 
         const store = createDatabasePaymentStore(makeDb());
 
-        await expect(store.markEventProcessed("stripe", "evt_1")).resolves.toBe(true);
-        await expect(store.markEventProcessed("stripe", "evt_1")).resolves.toBe(false);
-        await expect(store.markEventProcessed("stripe", "evt_2")).resolves.toBe(true);
+        await expect(store.markEventProcessed("stripe", "evt_1", "payment.captured")).resolves.toBe(true);
+        await expect(store.markEventProcessed("stripe", "evt_1", "payment.captured")).resolves.toBe(false);
+        await expect(store.markEventProcessed("stripe", "evt_2", "payment.captured")).resolves.toBe(true);
+    });
+
+    it("records the event type on the claim so `events` is a readable audit log", async () => {
+        expect.assertions(2);
+
+        // The `events` table is documented as the audit log the studio renders. Every claim
+        // used to be written with `type: ""`, so it carried ids and timestamps and nothing
+        // that said what had happened.
+        const database = makeDb();
+        const store = createDatabasePaymentStore(database);
+
+        await store.markEventProcessed("stripe", "evt_1", "subscription.active");
+        await store.markEventProcessed("stripe", "evt_2", "payment.refunded");
+
+        await expect(database.findFirst("events", { provider: "stripe", providerEventId: "evt_1" })).resolves.toMatchObject({ type: "subscription.active" });
+        await expect(database.findFirst("events", { provider: "stripe", providerEventId: "evt_2" })).resolves.toMatchObject({ type: "payment.refunded" });
     });
 
     it("sumUsage folds a `set` marker the same way the in-memory store does", async () => {
@@ -344,12 +360,12 @@ describe("createDatabasePaymentStore", () => {
 
         const store = createDatabasePaymentStore(makeDb());
 
-        await expect(store.markEventProcessed("stripe", "evt_1")).resolves.toBe(true);
+        await expect(store.markEventProcessed("stripe", "evt_1", "payment.captured")).resolves.toBe(true);
 
         await store.releaseEvent("stripe", "evt_1");
 
         // After release the claim is gone, so a retry wins the claim again.
-        await expect(store.markEventProcessed("stripe", "evt_1")).resolves.toBe(true);
+        await expect(store.markEventProcessed("stripe", "evt_1", "payment.captured")).resolves.toBe(true);
         // Releasing an unknown id is a harmless no-op.
         await expect(store.releaseEvent("stripe", "never_claimed")).resolves.toBeUndefined();
     });

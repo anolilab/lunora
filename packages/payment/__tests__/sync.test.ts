@@ -277,6 +277,34 @@ describe("applyWebhookAction", () => {
         expect(session?.refundedAmount.minorUnits).toBe(0n);
     });
 
+    it("resumes a paused subscription from the provider's `subscription.active` event", async () => {
+        expect.assertions(4);
+
+        // Every provider that supports pause/resume (Stripe, Creem, Dodo) reports the resume
+        // as the same `subscription.active` event it reports a renewal with. Mapping that to
+        // the FSM's `activate` — illegal from `paused` — rejected every resume, so a customer
+        // who resumed and paid stayed denied by `check`/`hasActivePrice` until somebody ran
+        // `reconcile` by hand.
+        const store = new MemoryPaymentStore();
+        const base = { priceId: "price_1", provider: "stripe" as const, quantity: 1, referenceId: "user_1", subscriptionId: "sub_1" };
+
+        await applyWebhookAction(store, { ...base, eventId: "e1", type: "subscription.active" });
+        await applyWebhookAction(store, { ...base, eventId: "e2", type: "subscription.paused" });
+
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "paused" });
+
+        const resumed = await applyWebhookAction(store, { ...base, eventId: "e3", type: "subscription.active" });
+
+        expect(resumed).toStrictEqual({ applied: true, reason: "ok" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active" });
+
+        // …and the renewal self-loop it shares an event type with still works.
+        await expect(applyWebhookAction(store, { ...base, eventId: "e4", type: "subscription.active" })).resolves.toStrictEqual({
+            applied: true,
+            reason: "ok",
+        });
+    });
+
     it("creates then cancels a subscription", async () => {
         expect.assertions(5);
 

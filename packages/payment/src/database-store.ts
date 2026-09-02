@@ -291,7 +291,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             return events;
         },
 
-        markEventProcessed: async (provider, eventId) => {
+        markEventProcessed: async (provider, eventId, type) => {
             const existing = await database.findFirst("events", { provider, providerEventId: eventId });
 
             if (existing) {
@@ -300,7 +300,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
 
             // The unique `by_provider_event` index is the real race guard in the DO; a concurrent
             // insert of the same event id fails its OCC commit, so at most one caller wins.
-            await database.insert("events", { processedAt: Date.now(), provider, providerEventId: eventId, type: "" });
+            await database.insert("events", { processedAt: Date.now(), provider, providerEventId: eventId, type });
 
             return true;
         },
