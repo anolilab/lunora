@@ -12,8 +12,8 @@ import type { PaymentAdapter } from "./adapter";
 import type { Entitlements, EntitlementsConfig } from "./entitlements";
 import { featureNames, hasActivePrice, resolveEntitlements, usagePeriodStart } from "./entitlements";
 import { LunoraPaymentError } from "./errors";
-import { derivedIdempotencyKey, idempotencyKey } from "./idempotency";
-import { addMoney, compareMoney } from "./money";
+import { derivedIdempotencyKey, idempotencyKey, localRefundKey } from "./idempotency";
+import { addMoney, compareMoney, subtractMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
@@ -491,7 +491,10 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
             // Resolve the resulting refunded total BEFORE moving money: a mismatched currency or an
             // over-refund must fail with nothing issued, not leave a refund the ledger can't record.
-            const refunded = input.amount ? addMoney(existing.refundedAmount, input.amount) : existing.capturedAmount;
+            // A full refund issues whatever is left unrefunded, which is also the amount the provider
+            // will report on the confirming webhook.
+            const issued = input.amount ?? subtractMoney(existing.capturedAmount, existing.refundedAmount);
+            const refunded = addMoney(existing.refundedAmount, issued);
 
             if (compareMoney(refunded, existing.capturedAmount) > 0) {
                 throw new LunoraPaymentError(
@@ -506,14 +509,28 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 input.idempotencyKey ??
                 (await derivedIdempotencyKey("refund_payment", adapter.identifier, input.sessionId, amountPart(input.amount), input.reason ?? ""));
 
-            await adapter.refundPayment({ ...input, idempotencyKey: key });
+            const issuedRefund = await adapter.refundPayment({ ...input, idempotencyKey: key });
 
-            // Deliberately no `refundedAmount` here: the provider's refund webhook owns the running
-            // total, because only it knows whether that provider reports refunds as a delta or as a
-            // cumulative total (`sync.ts`). Writing it here too would double-count on a delta provider.
-            // The state IS derived locally — from the amount this call refunds, not from the adapter's
-            // own state, which Polar pins to "refunded" for a partial refund too.
-            return persistSession(existing, { state: compareMoney(refunded, existing.capturedAmount) < 0 ? "partially_refunded" : "refunded" });
+            // Record the refund on the row NOW rather than waiting for the provider's webhook. This
+            // ledger is the only thing standing between a retried (or repeated) call and a second
+            // real refund: Polar's refund endpoint accepts no idempotency key at all, so the key
+            // above cannot dedupe it on the wire (`idempotency.ts`). With the total written, the
+            // over-refund guard above rejects the retry before the adapter is reached.
+            //
+            // The confirming webhook then restates the same money. `sync.ts` folds it in without
+            // double-counting: a cumulative-total provider resolves to `max(...)`, and a per-refund
+            // (delta) provider's event consumes this marker and contributes nothing. The marker is keyed
+            // on the provider's id for THIS refund, so two in-flight refunds of the same amount on one
+            // session leave two markers and each confirming event consumes its own.
+            //
+            // The state is derived locally too — from the amount this call refunds, not from the
+            // adapter's own state, which Polar pins to "refunded" for a partial refund as well.
+            await store.markEventProcessed(adapter.identifier, localRefundKey(input.sessionId, issuedRefund.refundId, issued));
+
+            return persistSession(existing, {
+                refundedAmount: refunded,
+                state: compareMoney(refunded, existing.capturedAmount) < 0 ? "partially_refunded" : "refunded",
+            });
         },
 
         store,

@@ -157,6 +157,10 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 ...base,
                 amount: money(BigInt(Math.round(readNumber(object, "amount") ?? 0)), currency),
                 referenceId: referenceFromMetadata(object),
+                // Per-refund identity for the sync layer's marker match. A lost dispute is not a refund
+                // the facade issued, so `dispute_id` stands in: distinct from every refund id, it can
+                // never consume a marker and have its reversal silently dropped.
+                refundId: readString(object, "refund_id") ?? readString(object, "dispute_id"),
                 sessionId: readString(object, "payment_id"),
                 type: "payment.refunded",
             };
@@ -336,6 +340,8 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
                 provider: "dodopayments",
                 referenceId: "",
                 refundedAmount,
+                // The same id Dodo's confirming `refund.succeeded` carries.
+                refundId: readString(refund, "refund_id"),
                 state,
                 updatedAt: Date.now(),
             };

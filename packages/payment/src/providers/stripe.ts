@@ -382,7 +382,7 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
         },
 
         refundPayment: async (input: RefundInput) => {
-            await client.refunds.create(
+            const refund = await client.refunds.create(
                 {
                     amount: input.amount ? Number(input.amount.minorUnits) : undefined,
                     payment_intent: input.sessionId,
@@ -396,7 +396,7 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
             const refundedAmount = input.amount ?? session.capturedAmount;
             const partial = input.amount !== undefined && compareMoney(input.amount, session.capturedAmount) < 0;
 
-            return { ...session, refundedAmount, state: partial ? "partially_refunded" : "refunded" };
+            return { ...session, refundedAmount, refundId: refund.id, state: partial ? "partially_refunded" : "refunded" };
         },
 
         reportUsage: async (input: ReportUsageInput) => {

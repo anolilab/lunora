@@ -14,6 +14,7 @@ import type {
     ProviderCapabilities,
     ProviderId,
     RefundInput,
+    RefundResult,
     ReportUsageInput,
     Subscription,
     SubscriptionPatch,
@@ -81,7 +82,8 @@ export interface PaymentAdapter {
     readonly identifier: ProviderId;
     /** Verify the signature over the raw body, then normalize the event. Throws on invalid signature. */
     parseWebhook: (input: WebhookInput) => Promise<WebhookAction>;
-    refundPayment: (input: RefundInput) => Promise<PaymentSession>;
+    /** Issue the refund and report the provider's id for it (see {@link RefundResult.refundId}). */
+    refundPayment: (input: RefundInput) => Promise<RefundResult>;
 
     /**
      * Forward metered usage to the provider's billing API. Optional — present only on providers

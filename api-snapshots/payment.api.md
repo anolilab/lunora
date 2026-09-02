@@ -207,6 +207,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `RefundResult` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `ReportUsageInput` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._

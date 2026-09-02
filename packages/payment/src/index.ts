@@ -65,6 +65,7 @@ export type {
     ProviderId,
     RefundAmountKind,
     RefundInput,
+    RefundResult,
     ReportUsageInput,
     Subscription,
     SubscriptionPatch,
