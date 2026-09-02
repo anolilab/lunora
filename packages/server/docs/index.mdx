@@ -116,12 +116,23 @@ delete), `restore(id)` clears it, and `hardDelete(id)` physically removes the ro
 
 ### Transactions & atomicity
 
-There is no explicit `transaction()` API: a **mutation _is_ a transaction**.
-Every `ctx.db` write in a single mutation commits atomically and rolls back
-together if the handler throws. To run a side effect only after the write
-commits, schedule it: `ctx.scheduler.runAfter(0, internalFn, args)`, the
-deterministic equivalent of an `afterCommit` hook (a registered function with
-serializable args, not an inline closure).
+There is no explicit `transaction()` API: a **mutation _is_ a transaction** —
+for the tables that live in the shard. Every shard-local `ctx.db` write in a
+single mutation commits atomically and rolls back together if the handler
+throws, because they share one Durable Object storage transaction.
+
+That transaction does **not** reach a [`.global()` table](/docs/tutorial/scaling):
+those rows live in D1, which has no interactive transactions, so a mutation
+that writes both a shard-local row and a global one is writing them
+separately. If the handler throws after the global write, the global write
+stays. Treat a global write as a step that can fail on its own, and order it
+last — or move the pair into a workflow step, whose replay you can make
+idempotent.
+
+To run a side effect only after the write commits, schedule it:
+`ctx.scheduler.runAfter(0, internalFn, args)`, the deterministic equivalent of
+an `afterCommit` hook (a registered function with serializable args, not an
+inline closure).
 
 ### Determinism: what actually replays
 
