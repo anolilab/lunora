@@ -22,12 +22,20 @@ export const importLogo = action.input({ key: v.string() }).action(async ({ ctx,
 
 ## Which contexts expose what
 
-`ctx.storage` is **read-only inside a `query` or a `mutation`**, and the **full
-read/write surface inside an `action`**. The split is deliberate: queries are
-pure reads, and mutations run inside a transactional scope. Neither is allowed
-to perform a side-effectful R2 write or delete, because those can't participate
-in the transaction or be rolled back. Both can still read existing objects and
-mint signed URLs, since signing is an HMAC computation with no R2 round-trip.
+`ctx.storage` is **typed read-only inside a `query` or a `mutation`**, and with
+the **full read/write surface inside an `action`**. The split is deliberate:
+queries are pure reads, and mutations run inside a transactional scope. Neither
+should perform a side-effectful R2 write or delete, because those can't
+participate in the transaction or be rolled back. Both can still read existing
+objects and mint signed URLs, since signing is an HMAC computation with no R2
+round-trip.
+
+The split is enforced by **TypeScript**, not by the runtime: one object is built
+per context and the type is what narrows it, so a `mutation` that casts past its
+type still reaches `delete`. Where you need the narrowing to hold against more
+than a compiler, add [`storageRules(...)`](/docs/packages/server) — it rebuilds
+`ctx.storage` as an allowlist of the gated surface and drops every ungated
+sibling, so nothing can route around a rule.
 
 | Operation                           | Query | Mutation | Action |
 | ----------------------------------- | :---: | :------: | :----: |
@@ -39,9 +47,9 @@ mint signed URLs, since signing is an HMAC computation with no R2 round-trip.
 | `delete`                            |   —   |    —     |   ✓    |
 
 In short: serve and inspect files from anywhere; mint an **upload** URL or
-write and delete bytes only from an action. A mutation cannot delete bytes, but
-it can **queue** a delete that runs once its transaction commits — see
-[Deleting](#deleting).
+write and delete bytes only from an action. A mutation is not typed to delete
+bytes, but it can **queue** a delete that runs once its transaction commits —
+see [Deleting](#deleting).
 
 ## Uploading
 
@@ -123,6 +131,13 @@ Select a non-default bucket with `ctx.storage.bucket("name")`; the returned
 accessor scopes every operation to that bucket and keeps the same read-only /
 full split as the bare `ctx.storage`. Bucket names are typed when you declare
 them in your schema, so a typo is a compile error.
+
+The typed names come from the **schema** — every `v.storage("exports")` column —
+plus any `defineStorageRule({ bucket: "exports" })`, and `"default"` is always
+there. `.storage({ buckets })` on the app config binds the bucket at runtime but
+is invisible to codegen (it is a runtime object of `(env) => …` selectors), so a
+bucket declared only there needs a `v.storage(...)` column or a rule as well
+before `ctx.storage.bucket("exports")` compiles.
 
 ```ts
 await ctx.storage.bucket("exports").store(key, csv, { contentType: "text/csv" }); // action

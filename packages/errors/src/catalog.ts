@@ -110,6 +110,17 @@ export const ERROR_CATALOG = {
     },
 
     RUN_DEPTH_EXCEEDED: { internal: true, status: 500, title: "Run depth exceeded" },
+
+    /**
+     * A `query` context reached for `ctx.runMutation` / `ctx.runAction`. The
+     * generated context object installs all three `run*` methods on every kind, so
+     * the TYPE is the only thing that stops a read-only handler from writing — and
+     * a cast walks straight past it, inside a subscription re-run that may execute
+     * many times per write. Deliberately NOT `internal`: the message names the
+     * function that was reached for, and it is a programming error the developer
+     * needs to read.
+     */
+    RUN_KIND_FORBIDDEN: { status: 500, title: "Function kind may not be composed from a query" },
     TRANSACTION_LIMIT_EXCEEDED: {
         hint: [
             "A single mutation may only read and write a bounded amount before it is stopped.",
@@ -253,6 +264,15 @@ export const ERROR_CATALOG = {
     STORAGE_OBJECT_NOT_FOUND: { status: 404, title: "Storage object not found" },
     STORAGE_UPLOAD_NOT_CONFIGURED: { status: 400, title: "Storage upload not configured" },
     STORAGE_URL_NOT_CONFIGURED: { status: 400, title: "Storage signed URL not configured" },
+    RAG_DIMENSION_MISMATCH: {
+        hint: [
+            "A stored vector and the query embedding have different widths, so they cannot be compared.",
+            "",
+            "This is what changing a RAG index's `embeddingModel` (or a provider's `dimensions` option) without reindexing looks like. Either put the previous model back, or reindex the namespace under the new one — bump `embeddingModelVersion` so the index rebuilds instead of mixing widths.",
+        ],
+        status: 409,
+        title: "Embedding dimension mismatch",
+    },
     VECTORS_NOT_CONFIGURED: { status: 400, title: "Vector index introspector not configured" },
     VECTOR_QUERY_UNSUPPORTED: { status: 400, title: "Vector index querying not enabled" },
     WORKFLOWS_NOT_CONFIGURED: { status: 501, title: "Workflows not configured" },

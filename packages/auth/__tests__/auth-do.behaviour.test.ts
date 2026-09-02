@@ -194,8 +194,8 @@ describe("lunoraAuthDO", () => {
         expect(body.role).toBe("user");
     });
 
-    it("drives the real worker-side wiring end to end, expiry and role intact", async () => {
-        expect.assertions(2);
+    it("drives the real worker-side wiring end to end, expiry, role and profile claims intact", async () => {
+        expect.assertions(4);
 
         const { authDo } = createDo({ emailAndPassword: { enabled: true }, plugins: [admin()] });
 
@@ -225,6 +225,13 @@ describe("lunoraAuthDO", () => {
 
         expect(identity?.expiresAtMs).toBeGreaterThan(Date.now());
         expect(identity?.role).toBe("user");
+
+        // `email` / `name` are what `ctx.auth.getIdentity()` is documented to carry
+        // ("email, name, roles, custom claims"). Dropping them here made the
+        // documented `me` query — `identity?.email` — resolve `undefined` on every
+        // app using the built-in DO wiring.
+        expect(identity?.["email"]).toBe("linus@acme.test");
+        expect(identity?.["name"]).toBe("Linus");
     });
 
     it("serves the audit log to a trusted caller, creating its table on demand", async () => {

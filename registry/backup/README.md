@@ -36,13 +36,11 @@ Both actions surface in the generated `api` as `backup/snapshot` and `backup/pru
 - **snapshot** (internal action) reads every table listed in `TABLES` via `ctx.db.query(table).collect()` and writes a single timestamped object — `snapshots/lunora-backup-<iso>.ndjson` — to the `BACKUP_BUCKET` R2 bucket using `@lunora/storage`'s `createStorage(...).store(...)`.
 - **prune** (internal action) lists everything under the `snapshots/` prefix via `createStorage(...).list("snapshots/", …)` (paginating R2's cursor until `truncated` is false) and `.delete(...)`s the objects outside your retention window. See [Retention](#retention) for the semantics.
 
-The object is **NDJSON framed by per-table header lines**, the same line-delimited format the `lunora backup` CLI and the admin export endpoint emit:
+The object is **NDJSON in the import format** — one `{"table":…,"doc":…}` object per row, the same line-delimited shape the `lunora backup` CLI and the admin export endpoint emit, and the only shape the admin `/apply` reader accepts (a line without its own `table` is rejected as `BAD_ROW`):
 
 ```ndjson
-{"__table":"messages"}
-{"_id":"…","body":"hi"}
-{"__table":"users"}
-{"_id":"…","name":"Ada"}
+{"table":"messages","doc":{"_id":"…","body":"hi"}}
+{"table":"users","doc":{"_id":"…","name":"Ada"}}
 ```
 
 `snapshot` returns `{ key, bytes, rows, tables }` (per-table row counts) and `prune` returns `{ deleted, kept }` (the snapshot keys it removed and retained) so a wrapping job can log or alert on the result.
@@ -111,13 +109,15 @@ Both `snapshot` and `prune` in `lunora/backup/index.ts` read the bucket via `imp
 
 ## Restore
 
-Snapshots are plain NDJSON, so recovery is a straight import — download the object you want from the bucket and feed it to the restore CLI:
+Snapshots are plain NDJSON in the import format, so recovery is a straight import — download the object you want from the bucket and feed it to the restore CLI:
 
 ```bash
 lunora backup restore ./lunora-backup-2026-06-07T03-00-00-000Z.ndjson
 ```
 
-For **in-place time-travel to an arbitrary moment** (rather than to a snapshot boundary), use **native PITR** — `lunora backup pitr` / the studio — which restores the shard from the platform's own change log to any point in the last 30 days (see below). This off-platform snapshot path is for portable, cross-deployment, or >30-day recovery; `prune`'s retention window is your recovery floor here. See [`lunora backup`](../../packages/cli/src/commands/backup.ts) (`create | list | restore`) and Cloudflare D1 Time Travel for the `.global()` plane.
+Two things this tier does **not** give you, both of which `lunora backup create` does: these snapshots go to the `snapshots/` prefix rather than the `backups/` history `lunora backup list` reads, and they are written without a `.manifest.json` sidecar — so they do not appear in `list`, and `restore --verify` has no recorded checksum to check them against. Point `restore` at the file (or the object key) directly and leave `--verify` off.
+
+For **in-place time-travel to an arbitrary moment** (rather than to a snapshot boundary), use **native PITR** — `lunora backup pitr` / the studio — which restores the shard from the platform's own change log to any point in the last 30 days (see below). This off-platform snapshot path is for portable, cross-deployment, or >30-day recovery; `prune`'s retention window is your recovery floor here. See [`lunora backup`](../../packages/cli/src/commands/backup/handler.ts) (`create | list | restore | prune | retention | pitr`) and Cloudflare D1 Time Travel for the `.global()` plane.
 
 ## Two recovery tiers
 

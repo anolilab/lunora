@@ -12,7 +12,7 @@ import type { PaymentAdapter } from "./adapter";
 import type { Entitlements, EntitlementsConfig } from "./entitlements";
 import { featureNames, hasActivePrice, resolveEntitlements, usagePeriodStart } from "./entitlements";
 import { LunoraPaymentError } from "./errors";
-import { derivedIdempotencyKey, idempotencyKey, localRefundKey } from "./idempotency";
+import { derivedIdempotencyKey, idempotencyKey, LOCAL_REFUND_CLAIM_TYPE, localRefundKey } from "./idempotency";
 import { addMoney, compareMoney, isZeroMoney, subtractMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
@@ -67,6 +67,32 @@ const amountPart = (amount: Money | undefined): string => (amount ? `${amount.cu
 /** Drop a caller-supplied `referenceId` from checkout metadata — it's framework-controlled, never caller-set. */
 const stripReferenceId = (metadata: Record<string, string> | undefined): Record<string, string> | undefined =>
     metadata && "referenceId" in metadata ? Object.fromEntries(Object.entries(metadata).filter(([key]) => key !== "referenceId")) : metadata;
+
+/**
+ * What a `processWebhook`-shaped internal action hands back to the HTTP route: the
+ * outcome plus the HTTP status the provider must actually see.
+ * @experimental
+ */
+export interface WebhookOutcome {
+    /** Whether the event advanced a row. A verified no-op/duplicate is `false`. */
+    applied: boolean;
+    /** The status {@link LunoraPayment.handleWebhook} answered — 500 for an orphaned event. */
+    status: number;
+}
+
+/**
+ * Turn a {@link WebhookOutcome} back into the HTTP response the provider must see.
+ *
+ * The webhook endpoint runs at the Worker edge (signature verification needs the raw
+ * body) and forwards into the shard via `ctx.runAction`, so `handleWebhook`'s own
+ * `Response` cannot cross the action boundary — only its JSON payload can. A route
+ * that answers `Response.json(result)` therefore collapses every outcome to `200`,
+ * including the deliberate `500` on an orphaned (out-of-order) event: the provider
+ * stops retrying and that event is lost for good. Call this from the route instead
+ * of building the response by hand.
+ * @experimental
+ */
+export const webhookResponse = (result: WebhookOutcome): Response => jsonResponse({ applied: result.applied }, result.status);
 
 /**
  * Returns whether the current caller may act on `referenceId`. Throwing is also treated as denial.
@@ -563,7 +589,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             //
             // The state is derived locally too — from the amount this call refunds, not from the
             // adapter's own state, which Polar pins to "refunded" for a partial refund as well.
-            await store.markEventProcessed(adapter.identifier, marker);
+            await store.markEventProcessed(adapter.identifier, marker, LOCAL_REFUND_CLAIM_TYPE);
 
             try {
                 return await persistSession(existing, {

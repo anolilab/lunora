@@ -211,6 +211,8 @@ export const refreshTenant = action.input({ orgId: v.string() }).action(async ({
         map: (row) => ({ body: row.body, orgId: row.orgId, title: row.title }),
     });
 
+    // One mutation, so the whole slice materializes atomically: a failure part
+    // way through leaves the tenant's DO on its previous snapshot, not half-updated.
     await ctx.runMutation(api.documents.ingest, { orgId, docs });
 });
 

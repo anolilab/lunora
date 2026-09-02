@@ -1061,6 +1061,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `beginDeferredSchedules` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `bindOrm` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1298,6 +1302,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/values` — signature tracked at its source.
 
 ### `withDeferredDeletes` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `withDeferredSchedules` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5763,6 +5771,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `beginDeferredSchedules` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `bindOrm` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6000,6 +6012,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/values` — signature tracked at its source.
 
 ### `withDeferredDeletes` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `withDeferredSchedules` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

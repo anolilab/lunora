@@ -1,20 +1,22 @@
 import { LunoraError } from "@lunora/errors";
-import { jsonSchema } from "ai";
+import { asSchema, jsonSchema } from "ai";
 
 import isPositiveInteger from "./positive-integer";
+import { capToolOutputText, MAX_TOOL_OUTPUT_CHARS } from "./tool-output";
 import type { AgentToolContext, AgentToolDefinition, AnyAgentTool } from "./types";
 
 /** Default cap on script steps so one code call can't fan out unboundedly. */
 const DEFAULT_MAX_STEPS = 16;
-
-/** Max serialized chars kept per step output in the returned/persisted result (bounds re-injected token cost). */
-const MAX_STEP_OUTPUT_CHARS = 4000;
 
 /**
  * Cap a step output for the RETURNED result: a small value passes through
  * unchanged; a large one is truncated to a string (with an ellipsis) so a script
  * chaining big-output tools can't balloon the persisted, re-injected tool message.
  * The full output is still available to later `$from` refs (kept separately).
+ *
+ * The limit and the marker come from `tool-output.ts`, shared with the loop's
+ * top-level tool dispatch — the two paths persist into the same thread, so one
+ * capping and the other not just moved the overflow.
  */
 const capOutput = (output: unknown): unknown => {
     if (output === undefined) {
@@ -23,11 +25,7 @@ const capOutput = (output: unknown): unknown => {
 
     const serialized = typeof output === "string" ? output : JSON.stringify(output);
 
-    if (serialized.length <= MAX_STEP_OUTPUT_CHARS) {
-        return output;
-    }
-
-    return `${serialized.slice(0, MAX_STEP_OUTPUT_CHARS)}… [truncated]`;
+    return serialized.length <= MAX_TOOL_OUTPUT_CHARS ? output : capToolOutputText(serialized);
 };
 
 /**
@@ -149,6 +147,36 @@ const resolveReferences = (value: unknown, results: Record<string, unknown>): un
 };
 
 /**
+ * Validate a resolved step input against the composed tool's own `inputSchema`.
+ *
+ * The model-facing schema declares a step's `input` as
+ * `{ additionalProperties: true }` — it cannot describe every composed tool's
+ * shape — so a script step could hand a `defineAgentTool` anything: wrong types,
+ * extra keys, a `$from` that resolved to a scalar. Nothing between
+ * `resolveReferences` and `tool.execute` looked at the schema, while a
+ * TOP-LEVEL call to the same tool goes through the AI SDK's validation first.
+ *
+ * `asSchema(...).validate` is exactly what the SDK uses for that top-level
+ * check, so the two paths accept and reject the same inputs — including the case
+ * of a bare `jsonSchema(...)` with no validator, which neither path can check.
+ */
+const validatedStepInput = async (step: ToolScriptStep, tool: AnyAgentTool, input: unknown): Promise<unknown> => {
+    const { validate } = asSchema(tool.inputSchema);
+
+    if (validate === undefined) {
+        return input;
+    }
+
+    const result = await validate(input);
+
+    if (result.success) {
+        return result.value;
+    }
+
+    throw new LunoraError("BAD_REQUEST", `@lunora/agent: code step "${step.id}" input is invalid for tool "${step.tool}": ${result.error.message}`);
+};
+
+/**
  * Interpret a {@link ToolScript}: run each step in order, dispatching its `tool`
  * through the same {@link AgentToolContext} the loop hands a normal tool call
  * (so a composed tool inherits the durable step, RLS, and its own approval gate),
@@ -162,7 +190,19 @@ const runToolScript = async (
     context: AgentToolContext,
     maxSteps: number,
 ): Promise<ToolScriptResult> => {
-    const steps = Array.isArray(script.steps) ? script.steps.slice(0, maxSteps) : [];
+    const steps = Array.isArray(script.steps) ? script.steps : [];
+
+    // Refuse an over-long script rather than running its prefix. Slicing to
+    // `maxSteps` dropped the trailing steps — typically the writes the earlier
+    // reads were gathered for — and still reported success, so the model saw a
+    // completed script and moved on. Failing hands the cap back to the model,
+    // which can split the work across turns.
+    if (steps.length > maxSteps) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `@lunora/agent: code_tool_too_many_steps — the script has ${String(steps.length)} steps, over the cap of ${String(maxSteps)}. Split it across several code calls.`,
+        );
+    }
     const byId: Record<string, unknown> = {};
     const results: { id: string; output: unknown }[] = [];
 
@@ -190,7 +230,8 @@ const runToolScript = async (
             throw new LunoraError("BAD_REQUEST", `@lunora/agent: code step calls unknown tool "${step.tool}" (available: ${Object.keys(tools).join(", ")})`);
         }
 
-        const input = resolveReferences(step.input ?? {}, byId);
+        // eslint-disable-next-line no-await-in-loop -- same sequential loop as the dispatch below: a later step's input can reference an earlier output
+        const input = await validatedStepInput(step, tool, resolveReferences(step.input ?? {}, byId));
         // Give each sub-call its OWN idempotency key / tool-call id (derived from
         // the code tool's, suffixed by the step id) so two side-effecting sub-calls
         // in one script don't collide on a shared key when they dedupe on it.

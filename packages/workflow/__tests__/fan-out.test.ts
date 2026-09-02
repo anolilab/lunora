@@ -200,6 +200,60 @@ describe("createParallel", () => {
         expect(compensations[0]?.params).toStrictEqual({ branch: "second", error: { message: "boom", name: "Error" }, index: 1, output: { b: 2 } });
     });
 
+    it("group saga: fails as soon as ANY branch fails, and compensates every sibling that had completed", async () => {
+        expect.assertions(4);
+
+        // The documented shape: a fast branch completes, a slow one is still running, and a
+        // third fails. Under a declaration-order join the group waited for branch #0 before it
+        // could even see #2's failure (not fail-fast), and branch #1 — which finished ahead of
+        // #0 — was absent from the completed set, so its rollback never ran.
+        const settled: string[] = [];
+        const resolvers = new Map<string, (outcome: BranchOutcome) => void>();
+        const step = {
+            do: vi.fn<(name: string, callback: (context: unknown) => Promise<unknown>) => Promise<unknown>>(async (_name, callback) => callback({})),
+            sleep: vi.fn<() => Promise<void>>(),
+            sleepUntil: vi.fn<() => Promise<void>>(),
+            waitForEvent: vi.fn<(name: string, options: { type: string }) => Promise<{ payload: unknown; type: string }>>(
+                async (_name, options) =>
+                    await new Promise((resolve) => {
+                        resolvers.set(options.type, (payload: BranchOutcome) => {
+                            settled.push(options.type);
+                            resolve({ payload, type: options.type });
+                        });
+                    }),
+            ),
+        } as unknown as WorkflowStepLike;
+        const { create, deps } = makeDeps(step);
+
+        const group = createParallel(deps)([
+            branch("slow", undefined, { compensateWith: "undoSlow" }),
+            branch("fast", undefined, { compensateWith: "undoFast" }),
+            branch("doomed"),
+        ]).catch((error_: unknown) => error_);
+
+        // Let the spawn phase and all three joins register, then land "fast" (out of declaration
+        // order) and fail "doomed". "slow" never reports — the group must not wait on it.
+        for (let tick = 0; tick < 50 && resolvers.size < 3; tick += 1) {
+            // eslint-disable-next-line no-await-in-loop -- drain the microtask queue until every join has registered
+            await Promise.resolve();
+        }
+
+        resolvers.get("lunora:branch:parent-1-c1")?.(okOutcome({ b: 2 }));
+        resolvers.get("lunora:branch:parent-1-c2")?.(errorOutcome(new Error("boom")));
+
+        const error = await group;
+
+        expect((error as Error).name).toBe("NonRetryableError");
+        // Fail-fast: the group rejected without branch #0 ever signalling back.
+        expect(settled).toStrictEqual(["lunora:branch:parent-1-c1", "lunora:branch:parent-1-c2"]);
+
+        const compensations = create.mock.calls.map((call) => call[0]).filter((options) => String(options?.id).endsWith(":compensate"));
+
+        // The out-of-order sibling that HAD completed is rolled back; the one still running is not.
+        expect(compensations.map((options) => options?.id)).toStrictEqual(["parent-1-c1:compensate"]);
+        expect(compensations[0]?.params).toStrictEqual({ branch: "fast", error: { message: "boom", name: "Error" }, index: 1, output: { b: 2 } });
+    });
+
     it("group saga: a group with no compensateWith fails fast with zero compensation spawns", async () => {
         expect.assertions(2);
 
@@ -404,6 +458,117 @@ describe("branch marker helpers", () => {
     });
 });
 
+describe("spawn create-or-attach (a step body that failed after `create` landed)", () => {
+    /** A `step.do` double that RETRIES its callback the way Cloudflare does — a completed step is memoized, a failed one is re-run. */
+    const retryingStep = (): WorkflowStepLike => {
+        const memoized = new Map<string, unknown>();
+
+        return {
+            do: vi.fn<(name: string, callback: (context: unknown) => Promise<unknown>) => Promise<unknown>>(async (name, callback) => {
+                if (memoized.has(name)) {
+                    return memoized.get(name);
+                }
+
+                let lastError: unknown;
+
+                for (let attempt = 1; attempt <= 3; attempt += 1) {
+                    try {
+                        // eslint-disable-next-line no-await-in-loop -- the point of the double is a serial retry loop
+                        const value = await callback({ attempt });
+
+                        memoized.set(name, value);
+
+                        return value;
+                    } catch (error: unknown) {
+                        lastError = error;
+                    }
+                }
+
+                throw lastError;
+            }),
+            sleep: vi.fn<() => Promise<void>>(),
+            sleepUntil: vi.fn<() => Promise<void>>(),
+            waitForEvent: vi.fn<(name: string, options: { type: string }) => Promise<{ payload: unknown; type: string }>>(async (_name, options) => {
+                return { payload: { status: "ok", value: 1 }, type: options.type };
+            }),
+        } as unknown as WorkflowStepLike;
+    };
+
+    /** A binding whose FIRST `create` applies and then throws (transport died after the side effect), and which rejects a repeated id. */
+    const flakyBinding = (): { created: string[]; resolveBinding: FanOutDeps["resolveBinding"] } => {
+        const created: string[] = [];
+        let failedOnce = false;
+
+        const create = vi.fn<(options?: { id?: string }) => Promise<WorkflowInstanceLike>>(async (options) => {
+            const id = options?.id ?? "auto";
+
+            if (created.includes(id)) {
+                throw new Error(`instance.create: instance with id "${id}" already exists`);
+            }
+
+            created.push(id);
+
+            if (!failedOnce) {
+                failedOnce = true;
+
+                throw new Error("RPC transport closed after create was applied");
+            }
+
+            return makeInstance(id);
+        });
+        const read = vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async (id) => makeInstance(id));
+
+        return {
+            created,
+            resolveBinding: () => {
+                return { create, get: read };
+            },
+        };
+    };
+
+    it("ctx.spawn returns the existing child instead of failing on 'already exists'", async () => {
+        expect.assertions(2);
+
+        const binding = flakyBinding();
+        const { deps } = makeDeps(retryingStep());
+
+        const instance = await createSpawn({ ...deps, resolveBinding: binding.resolveBinding })("child");
+
+        expect(instance.id).toBe("parent-1-c0");
+        // Exactly one child ran — the retry attached to it rather than starting a second.
+        expect(binding.created).toEqual(["parent-1-c0"]);
+    });
+
+    it("ctx.parallel joins the branch whose create had already landed", async () => {
+        expect.assertions(2);
+
+        const binding = flakyBinding();
+        const { deps } = makeDeps(retryingStep());
+
+        await expect(createParallel({ ...deps, resolveBinding: binding.resolveBinding })([branch("child")])).resolves.toEqual([1]);
+        expect(binding.created).toEqual(["parent-1-c0"]);
+    });
+
+    it("a non-duplicate create rejection still fails the spawn", async () => {
+        expect.assertions(1);
+
+        const create = vi.fn<() => Promise<WorkflowInstanceLike>>(async () => {
+            throw new Error("Workflows service unavailable");
+        });
+        const read = vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async (id) => makeInstance(id));
+        const { deps } = makeDeps(retryingStep());
+
+        await expect(
+            createSpawn({
+                ...deps,
+                resolveBinding: () => {
+                    return { create, get: read };
+                },
+            })("child"),
+        ).rejects.toThrow("Workflows service unavailable");
+    });
+});
+
 describe("signalBranchParent", () => {
     const marker = { eventType: "lunora:branch:c0", index: 0, parentBinding: "WORKFLOW_PARENT", parentId: "parent-1" };
 
@@ -417,6 +582,29 @@ describe("signalBranchParent", () => {
 
         expect(env.WORKFLOW_PARENT.get).toHaveBeenCalledWith("parent-1");
         expect(parent.sendEvent).toHaveBeenCalledWith({ payload: { status: "ok", value: { done: true } }, type: "lunora:branch:c0" });
+    });
+
+    it("replaces an over-the-limit outcome with a bounded failure the parent can actually receive", async () => {
+        expect.assertions(2);
+
+        const parent = makeInstance("parent-1");
+        const env = { WORKFLOW_PARENT: { get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async () => parent) } };
+
+        // Just over Cloudflare's 1 MiB event-payload cap. Sent verbatim it rejects on
+        // every retry, so the parent hibernated to its join timeout (24 h by default)
+        // and then compensated a branch that had actually succeeded.
+        await signalBranchParent({ env, step: makeStep() }, marker, okOutcome({ blob: "x".repeat(1_048_576) }));
+
+        const sent = (parent.sendEvent as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as { payload: BranchOutcome };
+
+        expect(sent.payload).toStrictEqual({
+            error: {
+                message: expect.stringContaining("over Cloudflare's 1048576-byte event payload limit"),
+                name: "BranchOutputTooLarge",
+            },
+            status: "error",
+        });
+        expect(JSON.stringify(sent.payload).length).toBeLessThan(1024);
     });
 
     it("is a no-op when the parent binding is absent (parent falls back to its timeout)", async () => {

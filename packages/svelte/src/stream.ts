@@ -9,6 +9,13 @@ import { isFunctionReference } from "./is-function-reference";
 type StreamStatus = "complete" | "error" | "idle" | "streaming";
 
 interface StreamStoreOptions {
+    /**
+     * Opt into resume-on-reconnect for a stream the server declared `durable`.
+     * The chunks already received are kept and the socket re-attaches to the same
+     * run, so a dropped connection mid-generation continues instead of surfacing
+     * `STREAM_DISCONNECTED`. Has no effect on an ephemeral stream.
+     */
+    durable?: boolean;
     /** Forwarded to `client.stream()` — caps the in-flight chunk buffer. */
     maxBuffer?: number;
     shardKey?: string;
@@ -68,7 +75,7 @@ function stream<F extends FunctionReference<"stream">>(
     const args = (hasExplicitClient ? argsOrOptions : functionOrArgs) as ArgsOf<F> | "skip";
     const options = (hasExplicitClient ? maybeOptions : (argsOrOptions as StreamStoreOptions | undefined)) ?? {};
 
-    const { maxBuffer, shardKey } = options;
+    const { durable, maxBuffer, shardKey } = options;
 
     // Writable status/error stores the chunks store's start/stop callback drives,
     // so all three stores mirror the one underlying stream.
@@ -98,7 +105,7 @@ function stream<F extends FunctionReference<"stream">>(
 
         let active = true;
         let current: ReadonlyArray<ReturnOf<F>> = [];
-        const iterable = client.stream(functionRef, args, { maxBuffer, shardKey });
+        const iterable = client.stream(functionRef, args, { durable, maxBuffer, shardKey });
         const cancelIterable = (): void => {
             iterable.cancel();
         };

@@ -9,10 +9,11 @@
  * (i.e. `api.storage.generateUploadUrl` and friends).
  *
  *   - **generateUploadUrl** (action) — mint a short-lived signed `PUT` URL the
- *     browser can upload directly to (R2 never proxies bytes through the Worker).
+ *     browser uploads to. It points at YOUR Worker, not at R2: the `/storage/*`
+ *     route (see the README) verifies the signature and writes the body to R2.
  *   - **getDownloadUrl** (action) — mint a short-lived signed `GET` URL for a
- *     stored object. Gate the matching `GET /storage/:key` route in your Worker
- *     with {@link verifySignedUrl} before streaming the R2 body.
+ *     stored object. The same `/storage/*` route verifies it with
+ *     {@link verifySignedUrl} before streaming the R2 body.
  *   - **deleteObject** (mutation) — delete a stored object by key.
  *   - **listObjects** (action) — list stored objects under an optional prefix.
  *     An action, not a query: R2 is not a reactive source, so a query would never
@@ -34,7 +35,9 @@
  * wrangler.jsonc / .dev.vars on add):
  *   - `env.UPLOADS`                 — the R2 bucket binding.
  *   - `env.STORAGE_SIGNING_SECRET`  — HMAC secret for signed URLs (secret).
- *   - `env.STORAGE_PUBLIC_BASE_URL` — public base URL fronting the bucket.
+ *   - `env.STORAGE_PUBLIC_BASE_URL` — bare origin serving the `/storage/*` route
+ *                                     (no path: the key is verified from the
+ *                                     whole URL pathname).
  */
 import { env } from "cloudflare:workers";
 
@@ -73,16 +76,41 @@ const limiter = new RateLimiter({
  * (`cloudflare:workers`' `env` values are typed `unknown`, so we narrow here —
  * a missing `STORAGE_SIGNING_SECRET` fails loudly instead of producing an opaque
  * HMAC error deep in `@lunora/storage`.)
+ *
+ * `minLength` is the signing secret's floor. HMAC accepts a key of any length,
+ * so a one-character secret signs perfectly well and every URL it mints is
+ * brute-forceable — the documented "min 32 chars" has to be enforced here or it
+ * is only advice.
  */
-const requireEnv = (name: string): string => {
+const requireEnv = (name: string, minLength = 0): string => {
     const value = env[name];
 
     if (typeof value !== "string" || value === "") {
         throw new Error(`@lunora/storage registry item: missing env var \`${name}\` — set it in .dev.vars (and \`wrangler secret put ${name}\` for secrets).`);
     }
 
+    if (value.length < minLength) {
+        throw new Error(
+            `@lunora/storage registry item: \`${name}\` is only ${String(value.length)} characters — use at least ${String(minLength)} so signed URLs are not brute-forceable (generate one with \`openssl rand -base64 32\`).`,
+        );
+    }
+
     return value;
 };
+
+/** Minimum length of the HMAC signing secret. */
+const MIN_SIGNING_SECRET_LENGTH = 32;
+
+/**
+ * Key prefix every object this item stores lives under.
+ *
+ * A worker-signed URL is `${STORAGE_PUBLIC_BASE_URL}/<key>?…` and
+ * `verifySignedUrl` reconstructs the key from the WHOLE pathname — so the base
+ * must be a bare origin and the route that serves the bytes has to match on the
+ * key's own first segment. Prefixing every key with `storage/` is what makes the
+ * documented `/storage/*` route match without a base-path the signer rejects.
+ */
+const KEY_PREFIX = "storage";
 
 /**
  * Build a {@link Storage} bound to the R2 bucket + signing config from the
@@ -104,13 +132,15 @@ const makeStorage = (): Storage => {
         // tag a single-bucket app's bare `ctx.storage` carries.
         bucketName: "default",
         publicBaseUrl: requireEnv("STORAGE_PUBLIC_BASE_URL"),
-        signingSecret: requireEnv("STORAGE_SIGNING_SECRET"),
+        signingSecret: requireEnv("STORAGE_SIGNING_SECRET", MIN_SIGNING_SECRET_LENGTH),
     });
 };
 
 /**
- * Per-tenant key prefix: one folder per authenticated user, so a client-supplied
- * `key` is always namespaced under the caller (no cross-user IDOR).
+ * Per-tenant key prefix: `storage/<userId>`, one folder per authenticated user,
+ * so a client-supplied `key` is always namespaced under the caller (no
+ * cross-user IDOR) and the minted URL's pathname starts `/storage/` — which is
+ * what the Worker route in the README matches on (see {@link KEY_PREFIX}).
  *
  * Fails closed for unauthenticated callers instead of bucketing them into a
  * shared `public/` namespace. A shared anonymous prefix would let any anonymous
@@ -126,14 +156,14 @@ const requireOwner = (userId: string | null): string => {
         );
     }
 
-    return userId;
+    return `${KEY_PREFIX}/${userId}`;
 };
 
 /**
- * Content-Types a client may request for a direct upload. The browser PUTs
- * straight to R2 with the `Content-Type` pinned into the signed URL, so this
- * allowlist is the only place to reject it — `@lunora/storage`'s server-side
- * `upload()` allowlist is never in the path for direct uploads. Deliberately
+ * Content-Types a client may request for an upload. The browser PUTs with the
+ * `Content-Type` pinned into the signed URL and the route stores exactly that
+ * pinned value, so this allowlist is the only place to reject it —
+ * `@lunora/storage`'s server-side `upload()` allowlist is never in the path. Deliberately
  * excludes types a browser may render inline (`text/html`, `image/svg+xml`, …)
  * to avoid stored-XSS if you ever serve these objects same-origin. Edit to taste,
  * and when serving objects set `X-Content-Type-Options: nosniff` +
@@ -142,8 +172,9 @@ const requireOwner = (userId: string | null): string => {
 const ALLOWED_UPLOAD_CONTENT_TYPES: ReadonlySet<string> = new Set(["application/pdf", "image/gif", "image/jpeg", "image/png", "image/webp", "text/plain"]);
 
 /**
- * Mint a short-lived signed `PUT` URL the client uploads directly to. The key is
- * scoped to the caller, so two users uploading `"avatar.png"` never collide.
+ * Mint a short-lived signed `PUT` URL the client uploads to (your `/storage/*`
+ * route, which verifies it and writes to R2). The key is scoped to the caller,
+ * so two users uploading `"avatar.png"` never collide.
  * `contentType` is required and must be in {@link ALLOWED_UPLOAD_CONTENT_TYPES}
  * — it's pinned into the signature, so an unconstrained value would let a caller
  * store renderable HTML/SVG (stored-XSS risk when served same-origin).
@@ -169,9 +200,9 @@ export const generateUploadUrl = action
     });
 
 /**
- * Mint a short-lived signed `GET` URL for a stored object. Verify it in your
- * Worker's `GET /storage/:key` route with {@link verifySignedUrl} before
- * streaming the R2 body.
+ * Mint a short-lived signed `GET` URL for a stored object. Your Worker's
+ * `/storage/*` route verifies it with {@link verifySignedUrl} before streaming
+ * the R2 body — without that route the URL 404s on the Lunora catch-all.
  */
 export const getDownloadUrl = action
     .input({

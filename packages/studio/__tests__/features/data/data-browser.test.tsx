@@ -1031,6 +1031,57 @@ describe("dataBrowser — editable", () => {
         expect(call[1]).toMatchObject({ doc: { text: "edited" }, id: "m1", op: "patch", table: "messages" });
     });
 
+    it("drops each row from the staged buffer as its own patch lands, so a mid-batch failure leaves only the unwritten ones", async () => {
+        expect.assertions(3);
+
+        // The writer commits per row, so a failure on row k has ALREADY written
+        // rows 1..k-1. Clearing the buffer only after the loop never ran on that
+        // path, and the panel went on showing an old→new diff for changes that
+        // were already on disk.
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return TABLES;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.writeRow) {
+                    const { id, op } = args as { id?: string; op: string };
+
+                    if (id === "m2") {
+                        throw new Error("row write failed");
+                    }
+
+                    return { id: id ?? null, op };
+                }
+
+                const { limit = 50, offset = 0 } = args as PageArgs;
+
+                return { columns: ["__id__", "text"], rows: MESSAGE_ROWS.slice(offset, offset + limit), total: MESSAGE_ROWS.length };
+            },
+        });
+
+        await openMessages(mock);
+
+        // Stage an edit on m1 and on m2 in one paste.
+        pasteIntoGrid("ignored\tfirst\nignored\tsecond");
+
+        const before = await screen.findByTestId("db-staged-list");
+
+        expect(within(before).getAllByRole("listitem")).toHaveLength(2);
+
+        fireEvent.click(screen.getByTestId("db-staged-commit"));
+
+        const error = await screen.findByTestId("db-write-error");
+
+        expect(error.textContent).toContain("row write failed");
+
+        // m1's patch landed and left the buffer; only the row that never wrote
+        // is still pending.
+        await waitFor(() => {
+            expect(within(screen.getByTestId("db-staged-list")).getAllByRole("listitem")).toHaveLength(1);
+        });
+    });
+
     it("reports invalid JSON without calling the server", async () => {
         expect.assertions(2);
 
@@ -1501,6 +1552,42 @@ describe("dataBrowser — structured filters and bulk delete", () => {
 
         expect(screen.queryByTestId("db-bulk-delete")).toBeNull();
         expect(screen.queryByTestId("db-bulk-patch")).toBeNull();
+    });
+
+    it('does not offer "Delete N matching" for a filter row that carries no column', async () => {
+        expect.assertions(4);
+
+        // `addFilter` seeds the row from `columns[0] ?? ""`, and `columns` is
+        // `page?.columns ?? []` — so a page whose columns have not resolved adds a
+        // column-less row. `toFilterClauses` DROPS such a row, so the request
+        // carries `filters: []` (a whole-table predicate the server refuses) while
+        // the button counted raw filter rows and offered "Delete 3 matching".
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return TABLES;
+                }
+
+                const { limit = 50, offset = 0 } = args as PageArgs;
+
+                return { columns: [], rows: MESSAGE_ROWS.slice(offset, offset + limit), total: MESSAGE_ROWS.length };
+            },
+        });
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        expect(screen.queryByTestId("db-bulk-delete")).toBeNull();
+
+        fireEvent.click(screen.getByTestId("db-add-filter"));
+        await screen.findByTestId("db-filter-row");
+
+        expect(screen.queryByTestId("db-bulk-delete")).toBeNull();
+        expect(screen.queryByTestId("db-bulk-patch")).toBeNull();
+        // The whole-table action stays the one on offer, behind its own confirm.
+        expect(screen.getByTestId("db-clear-table")).toBeDefined();
     });
 
     it("loops the bounded deleteRows call until the server reports no more", async () => {

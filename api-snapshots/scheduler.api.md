@@ -335,6 +335,7 @@ interface RetryPolicy {
 
 ```ts
 interface RunOptions {
+    id?: string;
     maxConcurrency?: number;
     pool?: string;
     retry?: RetryPolicy;

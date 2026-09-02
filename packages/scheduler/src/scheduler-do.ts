@@ -145,6 +145,19 @@ const isIndexableTime = (value: number): boolean => Number.isInteger(value) && v
 
 const generateId = (): string => toBase64Url(crypto.getRandomValues(new Uint8Array(12)));
 
+/**
+ * Shape a caller-supplied job id must have to be accepted: the alphabet shared by
+ * base64url ids and UUIDs, and nothing that could collide with the `:` separators
+ * in `id:<id>` / `t:<padded>:<id>`.
+ */
+const SCHEDULE_ID_PATTERN = /^[\w-]{1,64}$/u;
+
+/**
+ * The id to store a new record under: the caller's, when it is a safe key
+ * segment, and otherwise a freshly minted one.
+ */
+const resolveScheduleId = (requested: unknown): string => (typeof requested === "string" && SCHEDULE_ID_PATTERN.test(requested) ? requested : generateId());
+
 interface ScheduleRequestBody {
     args: Record<string, unknown>;
 
@@ -154,6 +167,16 @@ interface ScheduleRequestBody {
      * {@link ScheduleRequestBody.workflow}. Exactly one of the two is set.
      */
     functionPath?: string;
+
+    /**
+     * Job id chosen by the caller instead of minted here. Set by
+     * `@lunora/server`'s deferred-schedule facade, which has to hand a mutation
+     * handler the id synchronously while holding the call back until the
+     * transaction commits. Ignored unless it matches {@link SCHEDULE_ID_PATTERN}
+     * — the id becomes part of two storage keys, so a value carrying a `:` would
+     * corrupt the time index.
+     */
+    id?: string;
 
     /**
      * The scheduler/workpool instance name the enqueuing client routed to
@@ -1173,7 +1196,7 @@ class SchedulerDO {
         const pool = typeof body.pool === "string" && body.pool.length > 0 ? body.pool : undefined;
         const instanceName = typeof body.instanceName === "string" && body.instanceName.length > 0 ? body.instanceName : undefined;
         const retry = SchedulerDO.normalizeRetry(body.retry);
-        const id = generateId();
+        const id = resolveScheduleId(body.id);
         const record: ScheduleRecord = {
             // body is parsed from an untrusted request; args may be absent at runtime
             // despite the type, so the ?? fallback is a real guard.

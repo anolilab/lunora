@@ -286,9 +286,14 @@ class LunoraAuthDO {
      * Resolve the identity behind a request's headers — the worker's
      * `resolveIdentity` in DO mode.
      *
-     * Answers `{ expiresAtMs, role, userId }`, or `{}` for an anonymous request;
-     * never the session record itself. The worker only needs those three, and a
-     * narrow reply keeps session material inside the object.
+     * Answers `{ email, expiresAtMs, name, role, userId }`, or `{}` for an
+     * anonymous request; never the session record itself. The narrow reply keeps
+     * the rest of the session material inside the object.
+     *
+     * `email` and `name` are the claims `ctx.auth.getIdentity()` is documented to
+     * carry ("email, name, roles, custom claims"). Dropping them made the
+     * documented `me` query — `identity?.email` — resolve `undefined` on both
+     * built-in wirings, so the doc and the built-in resolver disagreed.
      *
      * `expiresAtMs` is the socket credential expiry the runtime forwards as
      * `x-lunora-identity-exp`: without it the DO's expiry check never fires and a
@@ -315,10 +320,13 @@ class LunoraAuthDO {
         // better-auth hands back a `Date`; anything else means the adapter did not
         // hydrate it, and a missing expiry is safer to omit than to guess at.
         const expiresAt = session?.session.expiresAt;
-        const role = (session?.user as { role?: unknown } | undefined)?.role;
+        const user = session?.user as { email?: unknown; name?: unknown; role?: unknown } | undefined;
+        const role = user?.role;
 
         return Response.json({
+            ...(typeof user?.email === "string" && user.email.length > 0 ? { email: user.email } : {}),
             ...(expiresAt instanceof Date ? { expiresAtMs: expiresAt.getTime() } : {}),
+            ...(typeof user?.name === "string" && user.name.length > 0 ? { name: user.name } : {}),
             ...(typeof role === "string" && role.length > 0 ? { role } : {}),
             userId,
         });

@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ApplyIndexButton } from "../../../src/features/advisors/apply-index-button";
-import { composeCreateIndex, hasIndexMetadata } from "../../../src/features/advisors/compose-index-sql";
+import { composeIndexDeclaration, hasIndexMetadata } from "../../../src/features/advisors/compose-index-declaration";
 import { InsightsPanel } from "../../../src/features/advisors/insights-panel";
 import type { AdvisoryFinding, FunctionStatsResult, ShardMetrics } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
@@ -11,39 +11,33 @@ import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 import wrapInRouter from "../../render-with-router";
 
-// ── unit tests: composeCreateIndex ──────────────────────────────────────────
+// ── unit tests: composeIndexDeclaration ─────────────────────────────────────
 
-describe("composeCreateIndex", () => {
-    it("composes a CREATE INDEX IF NOT EXISTS statement with quoted identifiers", () => {
-        expect.assertions(1);
+describe("composeIndexDeclaration", () => {
+    it("composes the `.index(...)` chain call the schema declares, NOT raw CREATE INDEX DDL", () => {
+        expect.assertions(2);
 
-        expect(composeCreateIndex("posts", "byAuthorId", ["authorId"])).toBe(`CREATE INDEX IF NOT EXISTS "byAuthorId" ON "posts" ("authorId");`);
+        // A shard table is `(id, _creationTime, __doc__)` — user fields live in the
+        // JSON blob — so `CREATE INDEX … ON "posts" ("authorId")` fails with
+        // `no such column: authorId` wherever it is pasted, and the migration
+        // system tracks only what `schema.ts` declares.
+        const declaration = composeIndexDeclaration("byAuthorId", ["authorId"]);
+
+        expect(declaration).toBe(`.index("byAuthorId", ["authorId"])`);
+        expect(declaration).not.toContain("CREATE INDEX");
     });
 
     it("handles a composite index (multiple columns)", () => {
         expect.assertions(1);
 
-        expect(composeCreateIndex("posts", "byAuthorCreated", ["authorId", "createdAt"])).toBe(
-            `CREATE INDEX IF NOT EXISTS "byAuthorCreated" ON "posts" ("authorId", "createdAt");`,
-        );
+        expect(composeIndexDeclaration("byAuthorCreated", ["authorId", "createdAt"])).toBe(`.index("byAuthorCreated", ["authorId", "createdAt"])`);
     });
 
-    it("uses IF NOT EXISTS so the statement is idempotent", () => {
-        expect.assertions(1);
+    it("escapes a quote in a name as a JS string literal, since the output is TypeScript source", () => {
+        expect.assertions(2);
 
-        expect(composeCreateIndex("users", "byEmail", ["email"])).toContain("IF NOT EXISTS");
-    });
-
-    it("escapes a double quote embedded in the table name by doubling it", () => {
-        expect.assertions(1);
-
-        expect(composeCreateIndex('po"sts', "byAuthorId", ["authorId"])).toBe(`CREATE INDEX IF NOT EXISTS "byAuthorId" ON "po""sts" ("authorId");`);
-    });
-
-    it("escapes a double quote embedded in a column name by doubling it", () => {
-        expect.assertions(1);
-
-        expect(composeCreateIndex("posts", "byWeird", ['we"ird'])).toBe(`CREATE INDEX IF NOT EXISTS "byWeird" ON "posts" ("we""ird");`);
+        expect(composeIndexDeclaration("byWeird", ['we"ird'])).toBe(String.raw`.index("byWeird", ["we\"ird"])`);
+        expect(composeIndexDeclaration('by"Name', ["a"])).toBe(String.raw`.index("by\"Name", ["a"])`);
     });
 });
 
@@ -178,7 +172,7 @@ describe("applyIndexButton", () => {
         // "copied to clipboard".
         await screen.findByTestId("test-apply-applied");
 
-        expect(writeText).toHaveBeenCalledWith(`CREATE INDEX IF NOT EXISTS "byAuthorId" ON "posts" ("authorId");`);
+        expect(writeText).toHaveBeenCalledWith(`.index("byAuthorId", ["authorId"])`);
     });
 
     it("does not claim a copy when the clipboard write rejects", async () => {
@@ -199,7 +193,7 @@ describe("applyIndexButton", () => {
         // the rejection.
         const fallback = await screen.findByTestId("test-apply-manual");
 
-        expect(fallback.textContent).toContain(`CREATE INDEX IF NOT EXISTS "byAuthorId" ON "posts" ("authorId");`);
+        expect(fallback.textContent).toContain(`.index("byAuthorId", ["authorId"])`);
         expect(screen.queryByTestId("test-apply-applied")).toBeNull();
     });
 
@@ -217,7 +211,7 @@ describe("applyIndexButton", () => {
 
         const fallback = await screen.findByTestId("test-apply-manual");
 
-        expect(fallback.textContent).toContain(`CREATE INDEX IF NOT EXISTS "byAuthorId" ON "posts" ("authorId");`);
+        expect(fallback.textContent).toContain(`.index("byAuthorId", ["authorId"])`);
         expect(screen.queryByTestId("test-apply-applied")).toBeNull();
     });
 

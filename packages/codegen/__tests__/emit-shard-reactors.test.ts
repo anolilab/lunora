@@ -46,9 +46,11 @@ describe("emitShard — runReactor override", () => {
     it("runs the dispatch inside a transaction", () => {
         expect.assertions(1);
 
-        // A reactor handler is a mutation; its writes commit all-or-nothing. Safe
-        // to open here because the refresh drain is post-flush background work.
-        expect(reactorBlock()).toContain("await this.runInTransaction(");
+        // A reactor handler is a mutation, so it goes through the same helper the
+        // top-level RPC and `ctx.runMutation` do: an all-or-nothing span, its
+        // scheduled jobs held until the commit, its deferred deletes flushed after.
+        // Safe to open here because the refresh drain is post-flush background work.
+        expect(reactorBlock()).toContain("await this.runMutationTransaction(ctx, async () =>");
     });
 
     it("builds the context trusted and threads no identity", () => {
