@@ -472,6 +472,76 @@ private fun shapeSubscribeFrame() {
     )
 }
 
+/**
+ * A reconnect re-subscribes the SHAPES as well as the queries.
+ *
+ * A resend that walks only the query registry leaves every shape view subscribed
+ * to a socket that no longer exists — silently, and for the rest of the process's
+ * life, because a shape only ever learns of new rows through a poke.
+ */
+private fun shapeSubscriptionsResendAfterReconnect() {
+    covers("shape_subscriptions_resend_after_reconnect")
+
+    val client = Client("https://app.example")
+    val args = WireValue.Obj(listOf("room" to WireValue.Text("general")))
+
+    client.attachSocket { }
+    client.subscribe("messages:list", WireValue.Obj(listOf("channel" to WireValue.Text("general"))), { })
+    client.subscribeShape("roomMessages", args, { })
+
+    // The cursors a resume carries are written by the frame handler, so they have
+    // to exist before the resend is built.
+    client.handleFrame(Json.write(mapOf("cursor" to 9, "data" to emptyList<Any?>(), "epoch" to "e1", "id" to "sub_1", "type" to "data")))
+    client.handleFrame(Json.write(mapOf("epoch" to "e1", "pokeId" to "poke-1", "type" to "pokeStart")))
+    client.handleFrame(Json.write(mapOf("pokeId" to "poke-1", "reset" to true, "rowsPatch" to emptyList<Any?>(), "shapeId" to "shape_1", "type" to "pokePart")))
+    client.handleFrame(Json.write(mapOf("checkpoint" to 5, "epoch" to "e1", "pokeId" to "poke-1", "type" to "pokeEnd")))
+
+    val resent = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { resent.add(it) }
+    client.resendSubscriptions()
+
+    check(resent.map { it["type"] } == listOf("subscribe", "shape_subscribe"), "both registries resend, queries first")
+    check(((resent[0]["query"] as Map<*, *>)["sinceSeq"] as Number).toInt() == 9, "the query resumes from its tracked cursor")
+    check(resent[1]["id"] == "shape_1", "the shape frame carries the registered id")
+
+    val shape = resent[1]["shape"] as Map<*, *>
+
+    // Name and args are only available because `subscribeShape` keeps them; a
+    // registry holding the callbacks alone cannot build this frame at all.
+    check(shape["name"] == "roomMessages", "and the shape's name")
+    check(canonical(shape["args"]) == canonical(Wire.encode(args)), "and its args")
+    check((resent[1]["sinceCheckpoint"] as Number).toInt() == 5, "resuming from the tracked checkpoint")
+    check(resent[1]["sinceEpoch"] == "e1", "and the tracked epoch")
+}
+
+/**
+ * A payload the codec refuses reaches the addressed subscription's error
+ * callback, and goes no further.
+ *
+ * Thrown out of [Client.handleFrame] it ends the caller's read loop, taking every
+ * OTHER subscription on the client down with it — one malformed row on one query
+ * silences the whole client.
+ */
+private fun refusedPayloadStaysOnItsOwnSubscription() {
+    val errors = mutableListOf<SubscriptionError>()
+    val second = mutableListOf<WireValue>()
+    val client = Client("https://app.example")
+
+    client.attachSocket { }
+    client.subscribe("messages:list", null, { }, { errors.add(it) })
+    client.subscribe("messages:other", null, { second.add(it) })
+
+    val kind = client.handleFrame("{\"data\":[\"${Wire.TAG}\",\"bigint\",\"not-a-number\"],\"id\":\"sub_1\",\"type\":\"data\"}")
+
+    check(kind == "error", "the refused frame is reported as an error rather than thrown")
+    check(errors.map { it.code } == listOf("INVALID_FRAME"), "the addressed subscription's error callback fires")
+
+    client.handleFrame("{\"data\":[1],\"id\":\"sub_2\",\"type\":\"data\"}")
+
+    check(second.size == 1, "and a later good frame on another subscription still delivers")
+}
+
 private fun pokeSequenceMaterialisesRows() {
     covers("poke_sequence_materialises_rows")
 
@@ -665,6 +735,8 @@ fun main() {
     serverFrameConsumer()
     subscriptionStreamYieldsFrameValuesInOrder()
     shapeSubscribeFrame()
+    shapeSubscriptionsResendAfterReconnect()
+    refusedPayloadStaysOnItsOwnSubscription()
     pokeSequenceMaterialisesRows()
     pokePartsDoNotApplyBeforePokeEnd()
     resetPokeReplacesShapeMembership()

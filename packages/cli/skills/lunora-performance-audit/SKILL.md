@@ -14,7 +14,7 @@ apply it across sibling functions consistently.
 ## When to Use
 
 - Queries feel slow or read far more rows than they return.
-- Mutations retry or conflict under load (OCC).
+- Mutations conflict (409 `CONFLICT`) under load (OCC).
 - Subscriptions fan out updates too broadly or re-run too often.
 - The Lunora Studio **Advisors** tab or `@lunora/advisor` flags a table.
 
@@ -98,10 +98,13 @@ column. Fix every sibling query on the table the same way.
 
 ## Problem Class: Write Conflicts (OCC)
 
-**Symptom:** mutations on hot rows retry or fail under concurrency, or the
-function tops the write-conflict section of `lunora insights`. ShardDO uses
-optimistic concurrency control — concurrent writes to the same DO that touch
-overlapping state conflict and retry.
+**Symptom:** mutations on hot rows fail under concurrency, or the function tops
+the write-conflict section of `lunora insights`. ShardDO uses optimistic
+concurrency control — concurrent writes to the same DO that touch overlapping
+state conflict. There is **no server-side retry loop**: the loser throws
+`ConflictError` (code `CONFLICT`, HTTP 409) and the caller decides, so a client
+that never handles it (`isConflictError` from `@lunora/client`) just surfaces
+409s to the user.
 
 **Fixes, in order of preference:**
 

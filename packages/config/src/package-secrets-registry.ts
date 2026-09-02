@@ -26,6 +26,8 @@
  * scaffold-dev-variables).
  */
 
+import { isSecretKeyName } from "../../../shared/secret-key";
+
 /** A single secret variable required by a package. */
 interface SecretEntry {
     /** One sentence describing what this secret is and how to obtain it. */
@@ -61,6 +63,21 @@ const CORE_SECRETS: ReadonlyArray<SecretEntry> = [
         key: "LUNORA_ADMIN_TOKEN",
         placeholderValue: "replace-with-openssl-rand-hex-32",
     },
+];
+
+/**
+ * Secret keys Lunora mints locally that no PACKAGE declares, so
+ * {@link MINTABLE_SECRET_KEYS} cannot derive them from the map below: they
+ * arrive with a copy-in registry item (`lunora registry add storage`) or under a
+ * dependency's own env-var name. Keep this list next to the map — a key Lunora
+ * scaffolds but never lists here is one nothing will ever fill in.
+ */
+const EXTRA_MINTABLE_SECRET_KEYS: ReadonlyArray<string> = [
+    // better-auth reads its signing secret under its own name in projects that
+    // configure it directly rather than through `AUTH_SECRET`.
+    "BETTER_AUTH_SECRET",
+    // `registry/storage` — the HMAC secret for signed R2 URLs.
+    "STORAGE_SIGNING_SECRET",
 ];
 
 /**
@@ -205,6 +222,26 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
  * unknown package names are silently ignored — this makes the call site resilient
  * to future capability flags whose packages have no secrets.
  */
+
+/**
+ * Every secret key Lunora can mint a value for locally (a random 32-byte hex,
+ * like `openssl rand -hex 32`) — the registry entries whose placeholder is that
+ * marker rather than an angle-bracket `<your-…>` one (which means the value comes
+ * from a provider's dashboard), plus {@link EXTRA_MINTABLE_SECRET_KEYS}.
+ *
+ * This set, not a key's NAME, is what makes a value safe to generate. A
+ * secret-LOOKING key nothing here declares (`OPENAI_API_KEY`, a project's own
+ * `*_CLIENT_SECRET`) is provider-issued as far as Lunora knows: minting for it
+ * writes a value the provider rejects at runtime and hides the gap from
+ * `lunora env doctor`, whose job is to report it as unfilled.
+ */
+const MINTABLE_SECRET_KEYS: ReadonlySet<string> = new Set([
+    ...EXTRA_MINTABLE_SECRET_KEYS,
+    ...[...CORE_SECRETS, ...Object.values(PACKAGE_SECRETS_REGISTRY).flat()]
+        .filter((entry) => isSecretKeyName(entry.key) && !entry.placeholderValue.startsWith("<"))
+        .map((entry) => entry.key),
+]);
+
 const secretsForPackages = (packageNames: ReadonlyArray<string>): SecretEntry[] => {
     const result: SecretEntry[] = [];
 
@@ -220,4 +257,4 @@ const secretsForPackages = (packageNames: ReadonlyArray<string>): SecretEntry[] 
 };
 
 export type { SecretEntry };
-export { CORE_SECRETS, PACKAGE_SECRETS_REGISTRY, secretsForPackages };
+export { CORE_SECRETS, MINTABLE_SECRET_KEYS, PACKAGE_SECRETS_REGISTRY, secretsForPackages };

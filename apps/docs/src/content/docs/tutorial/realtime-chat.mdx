@@ -186,10 +186,14 @@ Durable Object back to every subscriber.
 pnpm lunora deploy
 ```
 
-`lunora deploy` runs codegen, validates `wrangler.jsonc`, applies any pending
-D1 migrations through `MigrationRunner`, and finally invokes
-`wrangler deploy`. Your chat is now live on Cloudflare's edge: one DO per
-channel, hibernated when idle, billed by the millisecond.
+`lunora deploy` runs codegen, validates `wrangler.jsonc`, and invokes
+`wrangler deploy`. It applies no SQL of its own: this chat's tables are
+sharded, so the DO provisions them on demand, and a `lunora migrate generate`
+file is applied by hand with `wrangler d1 execute --file`. Data migrations
+(`defineMigration`) run after a deploy only when you ask for them, with
+`lunora deploy --migrate --migrate-yes --migrate-url <url>`. Your chat is now
+live on Cloudflare's edge: one DO per channel, hibernated when idle, billed by
+the millisecond.
 
 </Step>
 

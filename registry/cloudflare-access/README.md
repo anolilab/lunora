@@ -36,7 +36,7 @@ export const resolveIdentity = createAccessResolver({
 
 - **`teamDomain`** — your Cloudflare Access team domain, e.g. `"acme"` (which resolves to `acme.cloudflareaccess.com`). This is used to fetch the JWKS public key for JWT verification.
 - **`aud`** — the Access Application AUD (audience) tag from the Zero Trust dashboard. This must match the `aud` claim in the JWT.
-- **`isAdmin`** (optional) — a function `(claims) => boolean` that determines whether the user is an admin. Admin users get access to the Studio's admin features.
+  There is no `isAdmin` option here: `createAccessResolver` resolves identity, it does not authorize the admin plane. That is a separate gate — see [Admin gate](#admin-gate) below.
 
 Wire it into your Worker entry:
 
@@ -61,17 +61,23 @@ export default createWorker({
 
 ### Admin gate
 
-Pass an `isAdmin` function to control Studio admin access:
+Gating the Studio is a **separate, opt-in** wiring — this item does not scaffold it, so out of the box the admin bearer (`LUNORA_ADMIN_TOKEN`) remains the only way in. Build the gate with `accessAdminGate` from the `/admin` subpath and pass it as the worker's `adminGate`:
 
 ```ts
-export const resolveIdentity = createAccessResolver({
-    teamDomain: env.CF_ACCESS_TEAM_DOMAIN as string,
-    aud: env.CF_ACCESS_AUD as string,
-    isAdmin: (claims) => claims.groups?.includes("lunora-admins") ?? false,
+import { accessAdminGate } from "@lunora/cloudflare-access/admin";
+
+export default createWorker({
+    resolveIdentity,
+    adminGate: accessAdminGate({
+        teamDomain: env.CF_ACCESS_TEAM_DOMAIN as string,
+        aud: env.CF_ACCESS_ADMIN_AUD as string, // a dedicated Access app over /_lunora/admin
+        isAdmin: (claims) => claims.groups?.includes("lunora-admins") ?? false,
+    }),
+    // ...
 });
 ```
 
-Users in the `lunora-admins` Access group will see the admin UI in Studio; everyone else gets read-only.
+`isAdmin` is required — it is the entire boundary, so there is no implicit grant, and omitting it throws at wiring time. A member of the `lunora-admins` Access group can then reach the Studio's admin **HTTP** routes (`/_lunora/admin/*`, `/_lunora/migrate`) without the shared bearer. The Studio's live WebSocket views still need `LUNORA_ADMIN_TOKEN` configured: the gate does not cover `/_lunora/ws`, and the short-lived WS sub-token is signed with the admin token, so minting refuses without one.
 
 ## Environment variables
 

@@ -40,6 +40,7 @@ const setup = (auth?: ServerDefaultContextLike["auth"]): DatabaseWriterLike => {
         `CREATE TABLE "notes" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
+            "_version" INTEGER,
             "ownerId" TEXT,
             "title" TEXT
         )`,

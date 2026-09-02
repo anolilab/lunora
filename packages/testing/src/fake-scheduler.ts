@@ -187,11 +187,23 @@ const createFakeScheduler = (
         return id;
     };
 
-    // A schedule target is a function-path string or a generated workflow/agent
-    // ref (`workflows.<name>` / `agents.<name>`); reduce it to the string key the
-    // fake registry dispatches on. A string passes through unchanged, so existing
-    // function-scheduling tests are untouched.
-    const targetPath = (target: Parameters<Scheduler["runAfter"]>[1]): string => (typeof target === "string" ? target : (target.name ?? target.binding ?? ""));
+    // A schedule target is a function-path string, a generated `internal.<file>.<fn>`
+    // / `api.<file>.<fn>` reference (which carries its `<file>:<fn>` id in
+    // `__lunoraRef`, exactly as `@lunora/scheduler` reads it), or a generated
+    // workflow/agent ref (`workflows.<name>` / `agents.<name>`); reduce it to the
+    // string key the fake registry dispatches on. A string passes through
+    // unchanged, so existing function-scheduling tests are untouched.
+    const targetPath = (target: Parameters<Scheduler["runAfter"]>[1]): string => {
+        if (typeof target === "string") {
+            return target;
+        }
+
+        if ("__lunoraRef" in target) {
+            return target.__lunoraRef;
+        }
+
+        return target.name ?? target.binding ?? "";
+    };
 
     const scheduler: Scheduler = {
         cancel: (id: string) => {

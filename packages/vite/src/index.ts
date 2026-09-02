@@ -6,11 +6,10 @@ import errorOverlayPlugin from "@visulima/vite-overlay";
 import type { Plugin } from "vite";
 
 import agentRulesHintPlugin from "./agent-rules-hint-plugin";
-import codegenPlugin from "./codegen-plugin";
+import { codegenPlugin } from "./codegen-plugin";
 import containerLogsPlugin from "./container-logs-plugin";
 import devStatePlugin from "./dev-state-plugin";
-import devVariablesPlugin from "./dev-variables-plugin";
-import { createCommandProbe, withDevWorkerEnv } from "./dev-worker-env";
+import { devVariablesPlugin } from "./dev-variables-plugin";
 import { frameworkComposePlugin } from "./framework-compose-plugin";
 import { createPluginContext, frameworkDetectPlugin } from "./framework-detect-plugin";
 import logStreamPlugin from "./log-stream-plugin";
@@ -133,23 +132,21 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     // Shared, mutable context threaded through every Lunora sub-plugin so the
     // detected meta-framework is computed once and readable downstream.
     const context = createPluginContext();
-    // Captures `serve` vs `build` so the dev worker var below is injected only
-    // in `vite`, never a production build. `enforce: "pre"` → captured first.
-    const { isServe, plugin: commandProbe } = createCommandProbe();
     // `devVariablesPlugin` is `enforce: "pre"` + `apply: "serve"`: it offers to
     // scaffold `.dev.vars` before `@cloudflare/vite-plugin` boots the worker.
     // The framework-detect plugin runs early (its `config` hook) so the
     // detection result is available to later hooks; it's a no-op beyond a dev
     // log for the standalone (class-C) flow.
     const plugins: Plugin[] = [
-        commandProbe,
         frameworkDetectPlugin(resolved, context),
         // Reads the detected framework off `context` and, for a class-A
-        // framework (and only when the CF integration is on), resolves the
-        // `virtual:lunora/worker` entry to a `composeWorker`-based worker that
-        // routes `/_lunora/*` to Lunora and falls through to the framework SSR
-        // handler — so the template never hand-wires `createWorker({ httpRouter })`.
-        // A strict no-op for class-C and the `cloudflare: false` BYO path.
+        // framework, resolves the `virtual:lunora/worker` entry to a
+        // `composeWorker`-based worker that routes `/_lunora/*` to Lunora and
+        // falls through to the framework SSR handler — so the template never
+        // hand-wires `createWorker({ httpRouter })`. A no-op for class-C only:
+        // the `cloudflare: false` BYO path still resolves the virtual entry (the
+        // vinext template's wrangler `main` points at it), because who adds the
+        // Cloudflare plugin says nothing about who composes the worker.
         frameworkComposePlugin(resolved, context),
         devVariablesPlugin(resolved),
         codegenPlugin(resolved),
@@ -165,7 +162,7 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     ];
 
     if (resolved.studio) {
-        plugins.push(studioPlugin());
+        plugins.push(studioPlugin(resolved));
     }
 
     if (resolved.validateWrangler) {
@@ -176,35 +173,35 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         plugins.push(errorOverlayPlugin(resolved.overlay));
     }
 
-    if (resolved.cloudflare !== false) {
-        // Only the Cloudflare plugin builds + runs the dev containers, so tail
-        // their logs only when it's active — the BYO (`cloudflare: false`) path
-        // never starts containers, so Docker polling would be pointless.
-        plugins.push(containerLogsPlugin(resolved));
+    // Docker runs the dev containers for whoever started them, so tailing their
+    // logs is independent of WHO added the Cloudflare plugin. Under
+    // `cloudflare: false` the project adds it itself and still runs containers —
+    // gating this on the option left that path with silent containers. A project
+    // that declares none never imports `dockerode` either way.
+    plugins.push(containerLogsPlugin(resolved));
 
-        // Honor remote-binding dev (`LUNORA_REMOTE` / `lunora.json` `remote`) on
-        // the `vite dev` path too, exactly like `lunora dev`: materialize a temp
-        // wrangler config with `"remote": true` on each eligible binding and
-        // point the cloudflare plugin's `configPath` at it. DO shards stay local.
-        const remotePlan = planViteRemoteBindings({ projectRoot: resolved.projectRoot });
+    // Honor remote-binding dev (`LUNORA_REMOTE` / `lunora.json` `remote`) on the
+    // `vite dev` path too, exactly like `lunora dev`: materialize a temp wrangler
+    // config with `"remote": true` on each eligible binding. DO shards stay local.
+    const remotePlan = planViteRemoteBindings({ projectRoot: resolved.projectRoot });
 
-        // The dev worker env var (`WORKER_ENV=development`) is deferred correctly
-        // inside its own `config` customizer; the remote `configPath` injection is
-        // deferred to `remoteBindingsConfigPlugin`'s `config` hook below (the
-        // resolved `serve`/`build` command is unknown at this factory-time call).
-        const cloudflareOptions = withDevWorkerEnv(resolved.cloudflare, isServe);
+    if (remotePlan.enabled && remotePlan.configPath !== undefined) {
+        // Register a cleanup that unlinks the temp config when the dev server closes.
+        plugins.push(remoteBindingsCleanupPlugin(remotePlan.cleanup));
+    }
 
-        if (remotePlan.enabled) {
-            if (remotePlan.configPath !== undefined) {
-                // Register a cleanup that unlinks the temp config when the dev server closes.
-                plugins.push(remoteBindingsCleanupPlugin(remotePlan.cleanup));
-            }
+    // The Cloudflare plugin Lunora adds, or `undefined` on the BYO path — where
+    // the same plugin reports the materialized config instead of injecting it.
+    const cloudflareOptions = resolved.cloudflare === false ? undefined : { ...resolved.cloudflare };
 
-            // Injects `configPath` at hook time (serve only) by mutating
-            // `cloudflareOptions` in place before the cloudflare plugin reads it.
-            plugins.push(remoteBindingsConfigPlugin(cloudflareOptions, remotePlan));
-        }
+    if (remotePlan.enabled) {
+        // Injects `configPath` at hook time (serve only) by mutating
+        // `cloudflareOptions` in place before the cloudflare plugin reads it —
+        // the resolved `serve`/`build` command is unknown at this factory-time call.
+        plugins.push(remoteBindingsConfigPlugin(cloudflareOptions, remotePlan));
+    }
 
+    if (cloudflareOptions !== undefined) {
         // Wrap the Cloudflare plugins' startup hooks so a Worker-entry evaluation
         // failure (e.g. a circular import in `lunora/`) surfaces an actionable
         // hint instead of a bare, file-less `runner-worker` TypeError.
@@ -220,15 +217,14 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
 // from both `src/index.ts` (tsc/vitest) and the bundled `dist/index.mjs`.
 const VERSION: string = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 
-export { default as codegenPlugin } from "./codegen-plugin";
+export { codegenPlugin } from "./codegen-plugin";
 export { default as containerLogsPlugin } from "./container-logs-plugin";
 export type { ReconcileResult } from "./cron-sync";
 export { reconcileWranglerCrons } from "./cron-sync";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
 export { detectFramework } from "./detect-framework";
 export { default as devStatePlugin } from "./dev-state-plugin";
-export { default as devVariablesPlugin } from "./dev-variables-plugin";
-export { createCommandProbe, DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, withDevWorkerEnv } from "./dev-worker-env";
+export { DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, devVariablesPlugin } from "./dev-variables-plugin";
 // Class-A composition surface. `LUNORA_WORKER_VIRTUAL_ID` is the virtual entry a
 // class-A template points its wrangler `main` at (or re-exports) so the worker
 // composing the framework SSR handler under `composeWorker`'s `httpRouter` seam

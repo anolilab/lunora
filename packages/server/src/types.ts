@@ -1371,6 +1371,20 @@ interface SchedulableWorkflowReference {
     readonly name?: string;
 }
 
+/**
+ * What `ctx.scheduler.runAfter` / `runAt` accept as a target:
+ *
+ * - a generated `internal.<file>.<fn>` / `api.<file>.<fn>` reference to a
+ * mutation or action — the form the docs and the setup skills use, and the one
+ * `@lunora/scheduler` has always resolved at runtime (it reads `__lunoraRef`);
+ * - the equivalent `"file:fn"` path string;
+ * - a generated `workflows.<name>` / `agents.<name>` reference, which starts a
+ * fresh durable instance on fire.
+ *
+ * A `query` is not schedulable — a deferred job exists to have an effect.
+ */
+type SchedulableTarget = FunctionHandle<"action" | "mutation", unknown, unknown> | SchedulableWorkflowReference | string;
+
 interface Scheduler {
     /** Cancel a pending job by id. `cancelled` is `false` when no such job exists. */
     cancel: (id: string) => Promise<{ cancelled: boolean }>;
@@ -1380,14 +1394,13 @@ interface Scheduler {
     list: () => Promise<ScheduledJob[]>;
 
     /**
-     * Schedule a one-shot run `delayMs` from now. `target` is a function path
-     * (`"ns:fn"`) dispatched as a one-shot, or a generated `workflows.<name>` /
-     * `agents.<name>` reference which starts a fresh durable instance on fire
-     * (the args become its `params`).
+     * Schedule a one-shot run `delayMs` from now; see {@link SchedulableTarget}
+     * for the accepted targets. A workflow/agent reference starts a fresh
+     * durable instance on fire (the args become its `params`).
      */
-    runAfter: (delayMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
     /** Like {@link Scheduler.runAfter} but fires at an absolute epoch-ms timestamp. */
-    runAt: (timestampMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
+    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
 }
 
 // --- Durable workflows -------------------------------------------------------
@@ -2455,9 +2468,13 @@ interface ActionCtx {
 
     /**
      * Programmatic Workers Cache purge; see {@link CachePurge}.
-     * **Action-only** — actions run in the Worker, which has a `cache` binding.
-     * Queries and mutations run inside the Durable Object and do not expose this.
-     * Optional at runtime because Workers Cache is only present when enabled.
+     *
+     * **HTTP actions only.** It is the Worker that holds the `cache` binding, and
+     * only `HttpActionCtx` is built there — an `action` reached over RPC runs
+     * inside the Durable Object like a query or a mutation, so `ctx.cache` is
+     * `undefined` for it. Declared here because `HttpActionCtx` is a `Pick` of
+     * this interface. Optional because Workers Cache is only present when
+     * enabled in `wrangler.jsonc`; always branch on it.
      */
     readonly cache?: CachePurge;
 

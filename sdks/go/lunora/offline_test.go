@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"reflect"
 	"sort"
 	"strings"
@@ -33,6 +34,12 @@ func fixtureStrings(value any) []string {
 }
 
 // memoryStore is a persistence adapter that records every call.
+//
+// It JSON round-trips every record, which an adapter holding the maps by
+// reference does not — and that is the whole point: a file, a SQLite text column
+// or a preferences store all serialise, so a record carrying the codec's native
+// wrappers either fails here or is written as something that does not read back.
+// Holding references made this suite blind to both.
 type memoryStore struct {
 	records  []map[string]any
 	appended []map[string]any
@@ -41,20 +48,40 @@ type memoryStore struct {
 	failWith error
 }
 
+// roundTrip is what every real adapter does to a record on its way to storage.
+func roundTrip(record map[string]any) map[string]any {
+	payload, err := json.Marshal(record)
+	if err != nil {
+		panic("memoryStore: a durable record must serialise: " + err.Error())
+	}
+
+	var restored map[string]any
+
+	if err := json.Unmarshal(payload, &restored); err != nil {
+		panic("memoryStore: a durable record must deserialise: " + err.Error())
+	}
+
+	return restored
+}
+
 func (s *memoryStore) Append(record map[string]any) error {
 	if s.failWith != nil {
 		return s.failWith
 	}
 
-	s.appended = append(s.appended, record)
-	s.records = append(s.records, record)
+	serialised := roundTrip(record)
+	s.appended = append(s.appended, serialised)
+	s.records = append(s.records, serialised)
 
 	return nil
 }
 
 func (s *memoryStore) Load() ([]map[string]any, error) {
-	snapshot := make([]map[string]any, len(s.records))
-	copy(snapshot, s.records)
+	snapshot := make([]map[string]any, 0, len(s.records))
+
+	for _, record := range s.records {
+		snapshot = append(snapshot, roundTrip(record))
+	}
 
 	return snapshot, nil
 }
@@ -916,6 +943,314 @@ func TestFlushBatchesTwoOrMoreWrites(t *testing.T) {
 
 	if want := int64(scenario["confirmedCommitCursor"].(float64)); len(confirmed) != 1 || confirmed[0] != want {
 		t.Fatalf("confirmed cursors: got %v, want [%d]", confirmed, want)
+	}
+}
+
+// TestAQueuedWriteWithTypedArgsSurvivesASerialisingStore pins the durable form.
+// Persisting the NATIVE args means the codec's own wrappers reach the adapter:
+// every real one serialises, so the record either fails to write (while the
+// caller was told "queued") or is stored as whatever the adapter made of an
+// opaque struct and replays after a restart with corrupted args.
+func TestAQueuedWriteWithTypedArgsSurvivesASerialisingStore(t *testing.T) {
+	covers("offline_queue_hydrates_persisted_writes")
+
+	// Each of these is a native wrapper the codec understands and encoding/json
+	// does not round-trip on its own.
+	args := map[string]any{
+		"amount": BigInt{Value: big.NewInt(7)},
+		"blob":   Bytes{Ctor: "Int32Array", Data: []byte{1, 2, 3, 4}},
+		"when":   Date{EpochMs: 1700000000000},
+	}
+
+	store := &memoryStore{}
+
+	var failures []string
+
+	queue := NewOfflineQueue(OfflineQueueOptions{
+		OnPersistenceError: func(operation string, _ error, mutationID string) {
+			failures = append(failures, operation+":"+mutationID)
+		},
+		Persistence: store,
+	})
+
+	queue.Enqueue(&QueuedMutation{Args: args, FunctionPath: "ledger:add", ID: "m-typed"})
+
+	if len(failures) != 0 {
+		t.Fatalf("persistence errors: got %v, want none — the record must serialise", failures)
+	}
+
+	stored, _ := store.appended[0]["args"].(map[string]any)
+	if got, want := fmt.Sprintf("%v", stored["amount"]), `[$lunora.wire$ bigint 7]`; got != want {
+		t.Fatalf("stored args.amount = %s, want the wire form %s", got, want)
+	}
+
+	restored := NewOfflineQueue(OfflineQueueOptions{Persistence: store})
+
+	if _, _, err := restored.Hydrate(); err != nil {
+		t.Fatalf("hydrate: %v", err)
+	}
+
+	if got, want := queuedIDs(restored.Items()), []string{"m-typed"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after hydrate: got %v, want %v", got, want)
+	}
+
+	// Decoded back to the SAME native values, so the replay sends the write that
+	// was made rather than whatever the adapter's stringification left.
+	if got := restored.Items()[0].Args; !reflect.DeepEqual(got, args) {
+		t.Fatalf("restored args: got %#v, want %#v", got, args)
+	}
+}
+
+// TestAPersistedRecordThatCannotBeDecodedSettlesRejected drives the failure
+// through the CLIENT, which is the only place it is visible: a restored record
+// has no per-write handler, so its only report is the client's settle listener.
+func TestAPersistedRecordThatCannotBeDecodedSettlesRejected(t *testing.T) {
+	covers("offline_queue_hydrates_persisted_writes")
+
+	// A bigint tag whose literal is not one: the store was corrupted, or written
+	// by an incompatible build. Replaying it with substitute args would commit a
+	// DIFFERENT write than the caller made, which is corruption rather than
+	// failure.
+	store := &memoryStore{records: []map[string]any{{
+		"args":         map[string]any{"amount": []any{Tag, "bigint", "not-a-number"}},
+		"functionPath": "ledger:add",
+		"id":           "m-bad",
+	}}}
+
+	client := NewClient("https://app.example", nil)
+	client.SetOfflineQueue(NewOfflineQueue(OfflineQueueOptions{Persistence: store}))
+
+	var settled []MutationSettled
+
+	client.OnMutationSettled(func(event MutationSettled) { settled = append(settled, event) })
+
+	if _, err := client.HydrateOfflineQueue(); err != nil {
+		t.Fatalf("hydrate: %v", err)
+	}
+
+	if got := queuedIDs(client.OfflineQueue().Items()); len(got) != 0 {
+		t.Fatalf("queued after hydrate: got %v, want none", got)
+	}
+
+	var offline OfflineError
+
+	if len(settled) != 1 || settled[0].MutationID != "m-bad" || settled[0].Status != MutationRejected {
+		t.Fatalf("settled: got %#v, want one rejected m-bad", settled)
+	}
+
+	if !errors.As(settled[0].Err, &offline) || offline.Code != CodeOfflineWriteUndecodable {
+		t.Fatalf("settled error: got %v, want code %s", settled[0].Err, CodeOfflineWriteUndecodable)
+	}
+
+	// Purged, not left to fail every restart.
+	if got, want := store.removed, []string{"m-bad"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("purged: got %v, want %v", got, want)
+	}
+}
+
+// TestABatchTheWorkerRefusesForSizeIsSplitAndRetried pins the byte dimension of
+// the chunker. The worker reads a batch body under a 1 MiB budget
+// (packages/runtime/src/body-readers.ts) and answers 413 PAYLOAD_TOO_LARGE past
+// it; a whole-batch coded envelope is a verdict on every entry, so a count-only
+// chunker settled the whole chunk rejected.
+func TestABatchTheWorkerRefusesForSizeIsSplitAndRetried(t *testing.T) {
+	covers("offline_flush_batch_splits_on_payload_too_large")
+
+	const budget = 400
+
+	var bodies []int
+
+	client := NewClient("https://app.example", func(_ string, _ map[string]string, body []byte) (int, []byte, error) {
+		bodies = append(bodies, len(body))
+
+		if len(body) > budget {
+			return 413, []byte(`{"error":{"code":"PAYLOAD_TOO_LARGE","message":"Body too large"}}`), nil
+		}
+
+		var envelope struct {
+			Calls []struct {
+				ID int `json:"id"`
+			} `json:"calls"`
+		}
+
+		if err := json.Unmarshal(body, &envelope); err != nil {
+			return 0, nil, err
+		}
+
+		answers := make([]string, 0, len(envelope.Calls))
+		for _, call := range envelope.Calls {
+			answers = append(answers, fmt.Sprintf(`{"id":%d,"body":{"commitCursor":1,"result":null}}`, call.ID))
+		}
+
+		return 200, []byte(`{"results":[` + strings.Join(answers, ",") + `]}`), nil
+	})
+
+	client.SetClientID("c-1")
+	client.SetOfflineQueue(NewOfflineQueue(OfflineQueueOptions{Persistence: &memoryStore{}}))
+
+	queued := []string{"m-0", "m-1", "m-2", "m-3"}
+	for _, id := range queued {
+		client.OfflineQueue().Enqueue(&QueuedMutation{
+			Args:         map[string]any{"text": strings.Repeat("x", 120)},
+			FunctionPath: "messages:send",
+			ID:           id,
+		})
+	}
+
+	report := client.FlushOfflineQueue("")
+
+	// Every write commits; none is dropped for the size of the batch it shared.
+	if got := report.Committed; !reflect.DeepEqual(got, queued) {
+		t.Fatalf("committed: got %v, want %v", got, queued)
+	}
+
+	if len(report.Rejected) != 0 {
+		t.Fatalf("rejected: got %v, want none", report.Rejected)
+	}
+
+	if got := queuedIDs(client.OfflineQueue().Items()); len(got) != 0 {
+		t.Fatalf("queued after flush: got %v, want none", got)
+	}
+
+	over := false
+	for _, size := range bodies {
+		if size > budget {
+			over = true
+		}
+	}
+
+	if !over {
+		t.Fatalf("attempt sizes %v: none exceeded the %d-byte budget, so nothing was split", bodies, budget)
+	}
+}
+
+// TestALoneQueuedWriteSurvivesAnEnvelopeLess502 pins the single-write replay
+// path. The same response on the batch path (two or more writes) was already
+// classified transient, so whether a gateway blip LOST a durable write depended
+// on the queue's depth.
+func TestALoneQueuedWriteSurvivesAnEnvelopeLess502(t *testing.T) {
+	covers("non_2xx_without_error_envelope_fails")
+
+	client := NewClient("https://app.example", func(string, map[string]string, []byte) (int, []byte, error) {
+		return 502, []byte(`{"message":"bad gateway"}`), nil
+	})
+
+	store := &memoryStore{}
+	client.SetOfflineQueue(NewOfflineQueue(OfflineQueueOptions{Persistence: store}))
+
+	var settled []MutationSettled
+
+	client.OnMutationSettled(func(event MutationSettled) { settled = append(settled, event) })
+	client.OfflineQueue().Enqueue(&QueuedMutation{Args: map[string]any{}, FunctionPath: "messages:send", ID: "m-502"})
+
+	report := client.FlushOfflineQueue("")
+
+	if len(report.Rejected) != 0 {
+		t.Fatalf("rejected: got %v, want none — nothing reached a verdict", report.Rejected)
+	}
+
+	if got, want := report.Requeued, []string{"m-502"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("requeued: got %v, want %v", got, want)
+	}
+
+	if got, want := queuedIDs(client.OfflineQueue().Items()), []string{"m-502"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("queued after flush: got %v, want %v", got, want)
+	}
+
+	if len(settled) != 0 {
+		t.Fatalf("settled: got %#v, want none", settled)
+	}
+
+	// The durable record stays, because the write is still good.
+	if len(store.removed) != 0 {
+		t.Fatalf("un-persisted: got %v, want none", store.removed)
+	}
+}
+
+// TestARateLimitedReplayRequeuesAndDefersTheNextFlush pins "not now" against
+// "no": the write is valid and the server asked for it later, so dropping it
+// loses data for being punctual — and replaying it immediately just earns the
+// same 429 forever.
+func TestARateLimitedReplayRequeuesAndDefersTheNextFlush(t *testing.T) {
+	covers("offline_flush_replays_and_confirms_optimistic")
+
+	posts := 0
+
+	client := NewClient("https://app.example", func(string, map[string]string, []byte) (int, []byte, error) {
+		posts++
+
+		return 429, []byte(`{"error":{"code":"TOO_MANY_REQUESTS","data":{"retryAfterMs":60000},"message":"slow down"}}`), nil
+	})
+
+	client.SetOfflineQueue(NewOfflineQueue(OfflineQueueOptions{Persistence: &memoryStore{}}))
+	client.OfflineQueue().Enqueue(&QueuedMutation{Args: map[string]any{}, FunctionPath: "messages:send", ID: "m-429"})
+
+	report := client.FlushOfflineQueue("")
+
+	if len(report.Rejected) != 0 {
+		t.Fatalf("rejected: got %v, want none", report.Rejected)
+	}
+
+	if got, want := report.Requeued, []string{"m-429"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("requeued: got %v, want %v", got, want)
+	}
+
+	if report.RetryAfterMs != 60000 {
+		t.Fatalf("retryAfterMs = %d, want 60000", report.RetryAfterMs)
+	}
+
+	again := client.FlushOfflineQueue("")
+
+	if posts != 1 {
+		t.Fatalf("HTTP calls = %d, want 1 — the second flush must wait out the delay", posts)
+	}
+
+	if again.RetryAfterMs <= 0 {
+		t.Fatalf("second report retryAfterMs = %d, want the remaining delay", again.RetryAfterMs)
+	}
+
+	if got, want := queuedIDs(client.OfflineQueue().Items()), []string{"m-429"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("queued after the deferred flush: got %v, want %v", got, want)
+	}
+}
+
+// TestARateLimitedBatchSlotIsRetriedNotRejected pins protocol/README.md §4.3's
+// per-slot rule. A slot is classified by the same predicate as a whole batch and
+// a single call, so a durable write's fate never depends on how many siblings
+// were queued alongside it — a second code set here is how the three drift.
+func TestARateLimitedBatchSlotIsRetriedNotRejected(t *testing.T) {
+	covers("offline_flush_batches_multiple_writes")
+
+	client := NewClient("https://app.example", func(string, map[string]string, []byte) (int, []byte, error) {
+		return 200, []byte(`{"results":[` +
+			`{"id":0,"body":{"commitCursor":4,"result":null}},` +
+			`{"id":1,"body":{"error":{"code":"TOO_MANY_REQUESTS","data":{"retryAfterMs":90000},"message":"slow down"}}}` +
+			`]}`), nil
+	})
+
+	client.SetOfflineQueue(NewOfflineQueue(OfflineQueueOptions{Persistence: &memoryStore{}}))
+
+	for _, id := range []string{"m-ok", "m-limited"} {
+		client.OfflineQueue().Enqueue(&QueuedMutation{Args: map[string]any{}, FunctionPath: "messages:send", ID: id})
+	}
+
+	report := client.FlushOfflineQueue("")
+
+	if got, want := report.Committed, []string{"m-ok"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("committed: got %v, want %v", got, want)
+	}
+
+	if len(report.Rejected) != 0 {
+		t.Fatalf("rejected: got %v, want none — a limiter reached no verdict", report.Rejected)
+	}
+
+	if got, want := report.Requeued, []string{"m-limited"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("requeued: got %v, want %v", got, want)
+	}
+
+	// The slot's hint defers the next flush, clamped: 90s asked, a minute honoured.
+	if report.RetryAfterMs != MaxRetryAfterMs {
+		t.Fatalf("retryAfterMs = %d, want %d (the clamp)", report.RetryAfterMs, MaxRetryAfterMs)
 	}
 }
 

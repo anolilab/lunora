@@ -130,11 +130,29 @@ const withRemoteBindings = (options: CloudflarePluginOptions, plan: ViteRemotePl
  * When remote mode was requested but nothing materialized (no eligible binding,
  * no wrangler file, …), the plan's `reason` is logged so the degradation isn't
  * silent.
+ *
+ * `options` is `undefined` on the BYO path (`cloudflare: false`), where the
+ * project constructs `cloudflare()` itself and Lunora has no options object to
+ * inject into: the materialized path is printed with what to do with it, rather
+ * than leaving `LUNORA_REMOTE` looking like it took effect.
  */
-const remoteBindingsConfigPlugin = (options: CloudflarePluginOptions, plan: ViteRemotePlan): Plugin => {
+const remoteBindingsConfigPlugin = (options: CloudflarePluginOptions | undefined, plan: ViteRemotePlan): Plugin => {
     return {
         config(_userConfig, env) {
             if (env.command !== "serve") {
+                return;
+            }
+
+            if (options === undefined) {
+                if (plan.enabled && plan.configPath !== undefined) {
+                    // eslint-disable-next-line no-console -- surface the degradation; the dev server's logger isn't available in the `config` hook.
+                    console.info(
+                        lunoraLine(
+                            `remote bindings are materialized at ${plan.configPath} — this project adds @cloudflare/vite-plugin itself (\`cloudflare: false\`), so pass that path as its \`configPath\` to use them.`,
+                        ),
+                    );
+                }
+
                 return;
             }
 

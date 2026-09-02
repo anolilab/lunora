@@ -62,7 +62,7 @@ const ids = (documents: ReadonlyArray<Record<string, unknown>>): unknown[] => do
 
 /** The `entries` table as a build that predates the key encoding left it: plain decimal text in the bigint column. */
 const seedLegacyLedger = (rows: ReadonlyArray<[string, string]>): void => {
-    harness.ddl(`CREATE TABLE "entries" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "cents" TEXT)`);
+    harness.ddl(`CREATE TABLE "entries" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "cents" TEXT)`);
 
     for (const [id, legacy] of rows) {
         harness.ddl(`INSERT INTO "entries" ("id", "_creationTime", "cents") VALUES ('${id}', 1700000000000, '${legacy}')`);
@@ -117,7 +117,13 @@ describe("d1 ctx-db reshapes an existing .global() table", () => {
 
         const columns = await harness.exec.all(`PRAGMA table_info("posts")`, []);
 
-        expect(columns.map((column) => String(column["name"])).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["_creationTime", "id", "slug", "title"]);
+        expect(columns.map((column) => String(column["name"])).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+            "_creationTime",
+            "_version",
+            "id",
+            "slug",
+            "title",
+        ]);
 
         // The row that predates the column reads back with the field absent, not
         // as a failure: an added column is nullable whatever the field declares,

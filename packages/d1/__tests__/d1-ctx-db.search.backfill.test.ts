@@ -53,7 +53,7 @@ let harness: ReturnType<typeof createD1Exec>;
 let exec: D1Exec;
 
 const createDocsTable = (): void => {
-    harness.ddl(`CREATE TABLE "docs" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "body" TEXT, "channel" TEXT)`);
+    harness.ddl(`CREATE TABLE "docs" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "body" TEXT, "channel" TEXT)`);
 };
 
 const writerFor = (schema: SchemaLike): DatabaseWriterLike => createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect: invertedDialect, exec, schema });

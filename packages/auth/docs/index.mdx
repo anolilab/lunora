@@ -668,8 +668,9 @@ export const signUp = mutation.input({ email: v.string(), password: v.string() }
     ```
 
     `ctx.args` is typed from the input validator declared **so far**, so `.use()` placed before `.input()` sees an empty `args` and the selector will not
-    type-check. It is a frozen shallow copy taken after validation — middleware cannot rewrite what the handler then receives, and the gate never sees input
-    that has not crossed the validator.
+    type-check. It is a frozen **shallow** copy taken after validation, so a middleware cannot rebind a top-level field the handler then reads, and the gate
+    never sees input that has not crossed the validator. Shallow is literal: nested objects and arrays are the same references the handler gets, so
+    `ctx.args.profile.email = …` from a middleware does reach it. Don't rely on `ctx.args` for deep immutability.
 
     Calling `assertEmailAllowed` in the handler, as above, stays equally valid — prefer it when the check depends on something the handler computes.
 
@@ -716,8 +717,12 @@ const signIns = await readAuthAuditLog(executor, { event: "sign-in", limit: 100 
 ```
 
 Each row captures the actor (id + email), event type, client IP/User-Agent,
-timestamp, and outcome. The free-form `detail` payload is scrubbed with
-`@visulima/redact` before it is persisted, so a token/password that leaks into an
-event's context never reaches the durable table. The trail lives in the reserved
+timestamp, and outcome. The built-in better-auth hook records only the request
+path in `detail` — deliberately, since the surrounding better-auth context is
+where credentials live. `detail` is free-form for entries you append yourself
+with `appendAuthAuditEntry`, and every payload is scrubbed with
+`@visulima/redact` before it is persisted (pass `redactDetail: false` to opt
+out), so a token or password that leaks into one never reaches the durable
+table. The trail lives in the reserved
 `__lunora_auth_audit__` table (auto-hidden from the data browser); retention is
 configurable via `retention` and defaults to unbounded.

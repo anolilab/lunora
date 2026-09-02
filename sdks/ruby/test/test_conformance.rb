@@ -178,6 +178,38 @@ class TestWsFrames < Minitest::Test
     assert_equal canonical(frames["unsubscribe"]), canonical(Lunora.build_unsubscribe_frame("sub_1"))
   end
 
+  def test_shape_subscriptions_resend_after_reconnect
+    ConformanceManifest.covers("shape_subscriptions_resend_after_reconnect")
+
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(_frame) {})
+    client.subscribe("messages:list", { "channel" => "general" }, ->(_rows) {})
+    client.subscribe_shape("roomMessages", { "room" => "general" }, ->(_rows) {})
+
+    # The cursors a resume carries are written by the frame handler, so they have
+    # to exist before the resend is built.
+    client.handle_frame(JSON.generate({ "cursor" => 9, "data" => [], "epoch" => "e1", "id" => "sub_1", "type" => "data" }))
+    client.handle_frame(JSON.generate({ "epoch" => "e1", "pokeId" => "poke-1", "type" => "pokeStart" }))
+    client.handle_frame(JSON.generate({ "pokeId" => "poke-1", "reset" => true, "rowsPatch" => [],
+                                        "shapeId" => "shape_1", "type" => "pokePart" }))
+    client.handle_frame(JSON.generate({ "checkpoint" => 5, "epoch" => "e1", "pokeId" => "poke-1", "type" => "pokeEnd" }))
+
+    resent = []
+    client.attach_socket(->(frame) { resent << frame })
+    client.resend_subscriptions
+
+    # BOTH registries. A resend that walks only the queries leaves every shape
+    # view subscribed to a socket that no longer exists — silently, and for the
+    # rest of the process's life.
+    assert_equal(%w[subscribe shape_subscribe], resent.map { |frame| frame["type"] })
+    assert_equal 9, resent[0]["query"]["sinceSeq"]
+    assert_equal "shape_1", resent[1]["id"]
+    assert_equal "roomMessages", resent[1]["shape"]["name"]
+    assert_equal({ "room" => "general" }, resent[1]["shape"]["args"])
+    assert_equal 5, resent[1]["sinceCheckpoint"]
+    assert_equal "e1", resent[1]["sinceEpoch"]
+  end
+
   def test_server_frames
     ConformanceManifest.covers("server_frame_consumer")
 
@@ -204,6 +236,37 @@ class TestWsFrames < Minitest::Test
         assert_equal expect["code"], errors.first.code
       end
     end
+  end
+
+  # A payload the codec refuses belongs on the addressed subscription's error
+  # callback, not on the socket read loop's stack: raising out of +handle_frame+
+  # ended that loop, and with it every OTHER subscription on the client, over one
+  # bad frame.
+  def test_a_refused_payload_errors_one_subscription_and_leaves_the_rest_reading
+    ConformanceManifest.covers("server_frame_consumer")
+
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(_frame) {})
+    first = []
+    second = []
+    errors = []
+    client.subscribe("messages:list", { "channel" => "a" }, ->(value) { first << value }, ->(error) { errors << error })
+    client.subscribe("messages:list", { "channel" => "b" }, ->(value) { second << value })
+
+    kind = client.handle_frame(JSON.generate({
+                                               "cursor" => 1, "data" => { "n" => [Lunora::TAG, "bigint", "not-a-number"] },
+                                               "id" => "sub_1", "type" => "data"
+                                             }))
+
+    assert_equal "error", kind
+    assert_equal 1, errors.length
+    assert_equal "INVALID_FRAME", errors.first.code
+    assert_empty first
+
+    # The second subscription is still live, which is the whole point.
+    client.handle_frame(JSON.generate({ "cursor" => 2, "data" => %w[ok], "id" => "sub_2", "type" => "data" }))
+
+    assert_equal [%w[ok]], second
   end
 
   # The Enumerator form of a live query: same subscription, same decode, same
