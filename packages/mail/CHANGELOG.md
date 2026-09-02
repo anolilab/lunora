@@ -1,3 +1,9 @@
+## @lunora/mail [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.59...@lunora/mail@1.0.0-alpha.60) (2026-09-02)
+
+### Bug Fixes
+
+* **mail:** align inbound auth verdicts with the From domain ([#546](https://github.com/anolilab/lunora/issues/546)) ([44be01f](https://github.com/anolilab/lunora/commit/44be01f4b69a8ac03aa65c1530a55302c341825f))
+
 ## @lunora/mail [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.58...@lunora/mail@1.0.0-alpha.59) (2026-09-02)
 
 
