@@ -35,14 +35,35 @@ export default defineApp<Env>()
     .build();
 ```
 
+<Callout type="warn">
+    **`buckets` binds the bucket; it does not name it to the type system.** `.storage()` is a runtime object, so codegen never reads it: the
+    `StorageBucketName` union that types `ctx.storage.bucket(name)` is built from your **schema** — every `v.storage("avatars")` column — plus any
+    `defineStorageRule({ bucket: "avatars" })`, and always contains `"default"`. Declare the bucket in one of those two places as well, or
+    `ctx.storage.bucket("avatars")` is a compile error even though the binding resolves at runtime:
+
+    ```ts
+    // lunora/schema.ts — this is what puts "avatars" in StorageBucketName
+    export const schema = defineSchema({ profiles: defineTable({ image: v.storage("avatars") }) });
+    ```
+
+</Callout>
+
 `ctx.storage` is a narrower projection of the API below: `query` and `mutation`
-handlers get a read-only surface (`download`, `head`, `getMetadata`,
-`getSignedUrl`, `getUrl`), and only `action` handlers get the full read/write
-surface (`store`, `delete`, `generateUploadUrl`, multipart, presigned). `list` is
-NOT on the read-only surface — it is dropped along with the other ungated methods
-so it cannot sidestep `storageRules`; call it on the `Storage` instance itself.
-`download(key)` resolves to the R2 object (its metadata plus a `body` stream), not
-to a bare `ReadableStream`.
+handlers are typed with a read-only surface (`download`, `head`, `getMetadata`,
+`getSignedUrl`, `getUrl`; a mutation also gets `deleteAfterCommit`), and only
+`action` handlers are typed with the full read/write surface (`store`, `delete`,
+`generateUploadUrl`, `getPresignedUrl`). Multipart (`createMultipartUpload` /
+`resumeMultipartUpload`), `upload`, and `list` are on **no** `ctx.storage`
+surface — call them on a `createStorage` instance (below). `download(key)`
+resolves to the R2 object (its metadata plus a `body` stream), not to a bare
+`ReadableStream`.
+
+<Callout>
+    **The read-only / action-only split is a type-level one.** The object behind `ctx.storage` is the same in every context, so a `mutation` that casts past its
+    type — or plain JavaScript — can still reach `delete`. TypeScript is the guardrail; it is not a sandbox. The runtime allowlist is `storageRules(...)`, which
+    rebuilds `ctx.storage` as exactly the gated surface and drops every ungated sibling (`upload`, multipart, `getPresignedUrl`, `list`) so nothing can route
+    around a rule. Reach for it whenever the split has to hold against more than a compiler.
+</Callout>
 
 ## Deleting an object with the row that owns it
 
