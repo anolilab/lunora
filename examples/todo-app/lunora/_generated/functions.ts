@@ -65,6 +65,7 @@ installCompiledValidatorMap(lunora_todos_0.add.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["text"] !== "string") return DEFER;
+if (source["text"].length > 4096) return DEFER;
 return { "text": source["text"] };
 });
 installCompiledValidatorMap(lunora_todos_0.remove.args, (source) => {
