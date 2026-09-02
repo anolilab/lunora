@@ -6,7 +6,7 @@ import { readDevServerState, writeDevServerState } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DevCommandOptions } from "../../src/commands/dev/handler";
-import { detectDevFlavor, planDevCommand, resolveWorkerPort, runDevCommand } from "../../src/commands/dev/handler";
+import { defaultWorkerSpawner, detectDevFlavor, planDevCommand, resolveWorkerPort, runDevCommand } from "../../src/commands/dev/handler";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {
@@ -1188,6 +1188,27 @@ describe("lunora dev", () => {
             const { origins } = await runWithProbe({ flavor: "vite" });
 
             expect(origins).toHaveLength(0);
+        });
+    });
+
+    describe("defaultWorkerSpawner", () => {
+        it("reports a signal-killed worker as a failure, not exit 0", async () => {
+            expect.assertions(1);
+
+            const worker = defaultWorkerSpawner(
+                { args: ["-e", "process.kill(process.pid, 'SIGKILL')"], command: process.execPath, cwd: workdir, tag: "wrangler" },
+                silentLogger(),
+            );
+
+            await expect(worker.exited).resolves.toBe(1);
+        });
+
+        it("passes a real exit code through", async () => {
+            expect.assertions(1);
+
+            const worker = defaultWorkerSpawner({ args: ["-e", "process.exit(0)"], command: process.execPath, cwd: workdir, tag: "wrangler" }, silentLogger());
+
+            await expect(worker.exited).resolves.toBe(0);
         });
     });
 });

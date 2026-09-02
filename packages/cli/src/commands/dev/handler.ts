@@ -546,8 +546,13 @@ const defaultWorkerSpawner: WorkerSpawner = (descriptor, logger) => {
                 logger.error(`[${descriptor.tag}] failed to start: ${error.message}`);
                 resolve(1);
             });
-            child.on("exit", (code) => {
-                resolve(code ?? 0);
+            child.on("exit", (code, signal) => {
+                // A signal-killed child reports `code === null`; treat that as a
+                // failure rather than a clean exit, matching `util/spawn.ts` and
+                // `lifecycle.ts`. An OOM-SIGKILLed or segfaulting `wrangler dev`
+                // used to make `lunora dev` exit 0, so a task runner supervising
+                // it saw a crashed worker as a successful run.
+                resolve(code ?? (signal ? 1 : 0));
             });
         }),
         kill: (signal) => {
@@ -1374,4 +1379,4 @@ export type { DevCommandOptions, DevCommandPlan, DevRemotePlan, WorkerProcess, W
 // planning surface (`planDevCommand` and friends) stays importable from one module.
 export type { DevFlavor } from "./lifecycle";
 export { detectDevFlavor } from "./lifecycle";
-export { planDevCommand, resolveWorkerPort, runDevCommand };
+export { defaultWorkerSpawner, planDevCommand, resolveWorkerPort, runDevCommand };
