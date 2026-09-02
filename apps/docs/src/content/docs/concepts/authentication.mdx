@@ -52,8 +52,9 @@ different user (see [real-time](/docs/concepts/realtime)).
 configures a better-auth instance and Lunora forwards requests to it. Out of the
 box that gives you:
 
-- **Email / password**: PBKDF2-SHA-256 hashing that runs in WebCrypto, with no
-  Node polyfills.
+- **Email / password**: better-auth's scrypt hashing, which runs on Workers with
+  no Node polyfills. Swap the algorithm by passing
+  `emailAndPassword.password: { hash, verify }` to `createAuth`.
 - **OAuth**: GitHub and Google social providers (real code → token → userinfo
   exchanges, with `id_token` signatures verified against the provider's JWKS),
   plus any other provider via `genericOAuth`.
@@ -76,9 +77,15 @@ export const buildAuth = (env: { AUTH_SECRET: string; DB: unknown }) =>
     });
 ```
 
-User records live in D1; session lifecycle lives in a dedicated `SessionDO`. The
-full configuration surface (providers, rate limiting, migrations, the studio
-user dashboard) is in the [package reference](/docs/packages/auth).
+User **and session** records live in D1 — better-auth's `session` table, through
+the D1 adapter. (`SessionDO` is a standalone TTL'd token store that ships with
+`@lunora/do`; `@lunora/auth` has never called it, so binding it gets you a
+correctly-configured object nothing uses. Back up and export the auth database,
+not that DO.) The Durable Object path for auth is `LunoraAuthDO` /
+`.auth({ namespace })`, which puts the whole better-auth schema in one object
+with real transactions. The full configuration surface (providers, rate
+limiting, migrations, the studio user dashboard) is in the
+[package reference](/docs/packages/auth).
 
 ## Routing `/api/auth/*`
 

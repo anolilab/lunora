@@ -317,4 +317,45 @@ export default crons;
         expect(reblessed.code).toBe(0);
         expect(JSON.parse(readFileSync(baselinePath, "utf8")).tables.users.fields.role).toBeDefined();
     });
+
+    describe("advisory gate", () => {
+        /** `index_references_unknown_field` is an ERROR-level advisory. */
+        const addBogusIndexToSchema = (): void => {
+            const schemaPath = join(workdir, "lunora", "schema.ts");
+            const schema = readFileSync(schemaPath, "utf8");
+            const patched = schema.replace(
+                `.searchIndex("by_text", { field: "text", filterFields: ["channelId"] }),`,
+                `.searchIndex("by_text", { field: "text", filterFields: ["channelId"] })\n        .index("by_bogus", ["doesNotExist"]),`,
+            );
+
+            expect(patched).not.toBe(schema);
+
+            writeFileSync(schemaPath, patched, "utf8");
+        };
+
+        it("blocks on an ERROR-level advisory under --strict-advisories", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            addBogusIndexToSchema();
+
+            const { logger } = silentLogger();
+            const result = await runPrepareCommand({ cwd: workdir, logger, strictAdvisories: true });
+
+            expect(result.code).toBe(1);
+            expect(result.error).toContain("ERROR-level");
+        });
+
+        it("passes the same project under --no-strict-advisories, the opt-out the docs name", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            addBogusIndexToSchema();
+
+            const { logger } = silentLogger();
+            const result = await runPrepareCommand({ cwd: workdir, logger, strictAdvisories: false });
+
+            expect(result.code).toBe(0);
+        });
+    });
 });

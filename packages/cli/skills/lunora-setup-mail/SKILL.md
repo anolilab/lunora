@@ -84,7 +84,7 @@ The functions surface in the generated **`internal`** (server-only) namespace as
 I/O). From a mutation, schedule it as a follow-up so the request is not blocked:
 
 ```ts
-import { internalMutation, v } from "./_generated/server";
+import { internalMutation, v } from "#lunora/_generated/server.js";
 
 import { internal } from "./_generated/api";
 

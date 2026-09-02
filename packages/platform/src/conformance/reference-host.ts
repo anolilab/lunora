@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 // eslint-disable-next-line n/no-unsupported-features/node-builtins -- `node:sqlite` is stable on Node ^22.15 || >=24.10 and is the deliberate in-memory engine for this Node-only reference host
 import { DatabaseSync } from "node:sqlite";
 
@@ -257,8 +258,34 @@ const createReferenceHost = (): ReferenceHost => {
     const durableAttachments = new Map<string, unknown>();
     const durableTags = new Map<string, Set<string>>();
 
+    /**
+     * Whether the caller owns the transaction currently open on this host.
+     *
+     * Cloudflare's isolation is the input gate: while a mutation holds
+     * `blockConcurrencyWhile`, no other event is delivered to the object, so
+     * nothing else can read the open transaction's uncommitted rows. Neither
+     * this host nor `@lunora/platform-node` has such a gate — dispatch never
+     * enters a host — and both run every caller over one connection, on which
+     * an open transaction's writes are visible to any read another task issues
+     * while the mutation awaits. `ShardSqlExec.exec` is synchronous and so
+     * cannot be queued behind the closure the way Cloudflare queues the whole
+     * dispatch; what it CAN do is refuse, which keeps `ShardHost`'s "no partial
+     * writes are observable" true instead of answering with rows that are about
+     * to roll back.
+     */
+    const transactionScope = new AsyncLocalStorage<true>();
+    let transactionOpen = false;
+
+    const assertOwnTurn = (): void => {
+        if (transactionOpen && transactionScope.getStore() !== true) {
+            throw new Error("shard busy: cannot run SQL while another task holds this shard's transaction");
+        }
+    };
+
     const sql: ShardSqlExec = {
         exec: (query, ...bindings) => {
+            assertOwnTurn();
+
             const statement = database.prepare(query);
             const normalized = bindings.map(normalizeBinding) as import("node:sqlite").SQLInputValue[];
             const trimmed = query.trim().toLowerCase();
@@ -347,12 +374,18 @@ const createReferenceHost = (): ReferenceHost => {
 
     const runTransaction = async <T>(function_: () => Promise<T>): Promise<T> => {
         database.exec("BEGIN");
+        transactionOpen = true;
+
         try {
-            const result = await function_();
+            const result = await transactionScope.run(true, function_);
+
             database.exec("COMMIT");
+            transactionOpen = false;
 
             return result;
         } catch (error) {
+            transactionOpen = false;
+
             try {
                 database.exec("ROLLBACK");
             } catch {

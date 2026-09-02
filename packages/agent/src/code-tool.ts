@@ -179,8 +179,10 @@ const validatedStepInput = async (step: ToolScriptStep, tool: AnyAgentTool, inpu
 /**
  * Interpret a {@link ToolScript}: run each step in order, dispatching its `tool`
  * through the same {@link AgentToolContext} the loop hands a normal tool call
- * (so a composed tool inherits the durable step, RLS, and its own approval gate),
- * and bind the output to the step `id` for later `$from` references. Safe by
+ * (so a composed tool inherits the durable step and RLS — but NOT its own
+ * approval gate: a script cannot hibernate mid-way, so a tool declaring
+ * `needsApproval` is refused at construction instead), and bind the output to
+ * the step `id` for later `$from` references. Safe by
  * construction — this is data-flow between whitelisted tool calls, NOT arbitrary
  * code, so there is no `eval`/isolate and it runs natively in workerd.
  */

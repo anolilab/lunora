@@ -97,21 +97,26 @@ const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set(WRITE_TOOL_DEFINITIONS.map
  * The tools this server advertises, in three tiers:
  *
  * - the read-only surface, always exposed;
- * - the observability surface, exposed only when an admin token resolved —
- * read-only, but it surfaces production logs and grouped errors, so an
- * unauthenticated server must not even advertise that it exists;
+ * - the observability surface, exposed only when `allowObservability` is set —
+ * read-only, but every row it returns (log lines, request metadata, grouped
+ * error messages) is user data that lands in the model's context and therefore
+ * at its provider, so it is opt-in rather than implied by holding a token;
  * - the write surface, exposed only when `allowWrites` is set.
  *
  * Both gates OMIT rather than refuse: an AI agent can't invoke what it can't
  * see. Dispatch re-checks both in {@link callTool}, so the guarantee does not
  * depend on a client honouring the advertised list.
  */
-const toolDefinitions = (allowWrites: boolean, hasAdminToken = false): ReadonlyArray<ToolDefinition> =>
+const toolDefinitions = (allowWrites: boolean, allowObservability = false): ReadonlyArray<ToolDefinition> =>
     // Fail closed: only the boolean `true` opts in. These are exported helpers, so
     // an env-plumbed/JS caller could pass a truthy string like `"false"`/`"0"` —
     // the explicit `=== true` guards that despite the declared `boolean` type.
     /* eslint-disable @typescript-eslint/no-unnecessary-boolean-literal-compare -- intentional runtime guard at an exported API boundary against non-boolean callers */
-    [...READ_ONLY_TOOL_DEFINITIONS, ...(hasAdminToken === true ? OBSERVABILITY_TOOL_DEFINITIONS : []), ...(allowWrites === true ? WRITE_TOOL_DEFINITIONS : [])];
+    [
+        ...READ_ONLY_TOOL_DEFINITIONS,
+        ...(allowObservability === true ? OBSERVABILITY_TOOL_DEFINITIONS : []),
+        ...(allowWrites === true ? WRITE_TOOL_DEFINITIONS : []),
+    ];
 
 /* eslint-enable @typescript-eslint/no-unnecessary-boolean-literal-compare */
 /** Extract and validate `functionPath` from an MCP `arguments` bag. */
@@ -253,17 +258,17 @@ const assertRunnable = async (client: LunoraClient, functionPath: string, expect
  * returned as `isError` results (rather than rejections) so the calling model
  * sees the failure as tool output, per the MCP convention.
  *
- * `allowWrites` gates the mutation/action tools and `hasAdminToken` gates the
- * observability tools: when either is false a call to the gated tool is refused
- * even if the client somehow names it, so both guarantees hold at dispatch, not
- * just in the advertised tool list.
+ * `allowWrites` gates the mutation/action tools and `allowObservability` gates
+ * the observability tools: when either is false a call to the gated tool is
+ * refused even if the client somehow names it, so both guarantees hold at
+ * dispatch, not just in the advertised tool list.
  */
 const callTool = async (
     client: LunoraClient,
     name: string,
     input: Record<string, unknown>,
     allowWrites = false,
-    hasAdminToken = false,
+    allowObservability = false,
 ): Promise<ToolResult> => {
     try {
         /* eslint-disable @typescript-eslint/no-unnecessary-boolean-literal-compare -- intentional runtime guard at an exported API boundary against non-boolean callers */
@@ -272,9 +277,9 @@ const callTool = async (
         }
 
         if (OBSERVABILITY_TOOL_NAMES.has(name)) {
-            if (hasAdminToken !== true) {
+            if (allowObservability !== true) {
                 return errorResult(
-                    `tool "${name}" is unavailable: it reads the deployment's logs and errors, which needs an admin token. Set LUNORA_ADMIN_TOKEN (or pass --token) and reconnect.`,
+                    `tool "${name}" is disabled: it reads the deployment's logs, request metadata and grouped errors — user data that would land at the model provider. Enable it with the LUNORA_MCP_ALLOW_OBSERVABILITY env var.`,
                 );
             }
 

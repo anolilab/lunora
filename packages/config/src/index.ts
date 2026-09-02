@@ -39,7 +39,7 @@ export type {
     ToolchainCommand,
 } from "./deploy-driver";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
-export { detectFramework, readProjectDependencyNames } from "./detect-framework";
+export { detectFramework, projectUsesUmbrella, readProjectDependencyNames } from "./detect-framework";
 export type { ClaimDevServerStateResult, DevServerMode, DevServerState } from "./dev-server-state";
 export {
     claimDevServerState,
@@ -141,7 +141,7 @@ export type {
     WireResult,
     WireRlsEdit,
 } from "./schema-edit/policy-scaffold";
-export { classifyPolicyEdit, scaffoldPolicyFile, wireRlsIntoProcedure } from "./schema-edit/policy-scaffold";
+export { classifyPolicyEdit, resolveServerModule, scaffoldPolicyFile, wireRlsIntoProcedure } from "./schema-edit/policy-scaffold";
 export type { DiscoverSchemaInfoResult, SchemaInfo } from "./schema-info";
 export { discoverSchemaInfo } from "./schema-info";
 export type { BadgeName, BadgeSpec, LevelBadgeName, StepBadgeName } from "./tui-theme";

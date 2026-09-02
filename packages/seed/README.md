@@ -36,7 +36,7 @@
 
 `@lunora/seed` populates a Lunora database with realistic, production-like fake data derived from your `defineSchema`. It introspects every table, maps each field to a generator (field-name aware — a `string` column called `email` becomes an email address, `firstName` a first name, and so on), resolves foreign keys by inserting parent tables before their children, and lets you override any value.
 
-Generation is **deterministic**: it is built on a vendored, input-hashed generator (a rebuilt [`copycat`](https://github.com/supabase-community/copycat)) layered over [`@faker-js/faker`](https://fakerjs.dev). The same `seed` value and schema always produce the same rows, so fixtures are reproducible across runs and machines.
+Generation is **deterministic**: it is built on a vendored, input-hashed generator (a rebuilt [`copycat`](https://github.com/supabase-community/copycat)) layered over [`@faker-js/faker`](https://fakerjs.dev). Generation is deterministic in `seed` alone for every column except the time-valued ones: a `number` column named like a timestamp (`createdAt`, `expiresAt`, …) is generated relative to the wall clock, so two runs with the same `seed` differ unless you also pin `now` (`--now` on the CLI). Ids are unaffected. Pin the `(seed, now)` pair and a plan is byte-identical across runs and machines.
 
 Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
@@ -121,7 +121,7 @@ Supply a `persist` hook (`SeedClientOptions.persist`) to write each batch as it 
 ```bash
 lunora seed --count 25                  # 25 rows per table (default 10)
 lunora seed --table posts --count 100   # one table (FK parents seeded automatically)
-lunora seed --seed 42                    # reproducible run
+lunora seed --seed 42 --now 1750000000000  # byte-identical run (pin both)
 lunora seed --reset                      # wipe local .wrangler/state first (local dev only)
 lunora seed --dry-run                    # print NDJSON, write nothing
 ```
@@ -130,7 +130,7 @@ Also: `--batch-size` (rows per HTTP request, default 500), `--url` (worker URL, 
 
 ## Limitations
 
-- **`.unique()` columns are not enforced.** Each value is hashed independently, so a unique column over a small value space (a bounded integer, a boolean, a short enum) can collide across rows. Strings such as emails and uuids are effectively unique in practice. Colliding rows are rejected by the import path rather than silently overwritten.
+- **`.unique()` columns are dealt distinct values by construction.** Each value is a function of the row's absolute index, not a hash of the row, so two rows in the same run never collide — including across the several calls `indexOffset` exists to support. A column whose domain is too small to cover the requested count (a boolean, a three-literal `v.union()`) is refused at plan time, with the column named, before anything is inserted.
 - **Seeding is deterministic by design.** Re-running with the same `--seed` regenerates identical `_id`s, which the import path skips as conflicts. Use a different `--seed` for fresh rows, or `--reset` to wipe local state first.
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/seed)**.

@@ -34,9 +34,12 @@ const unsubscribe = client.subscribe(api.messages.list, { channelId: "general" }
 - **Queries / mutations / actions**: `POST /_lunora/rpc`, JSON body
   `{ functionPath, args, shardKey? }`. Response: `{ result }` or `{ error }`.
 - **Subscriptions**: single multiplexed WebSocket at `/_lunora/ws`. The
-  client sends `subscribe` / `unsubscribe` / `connect` / `ack` / `stream`
-  frames; the server pushes `delta` (and `resume`) frames back, each tagged
-  with the originating subscription `id`.
+  client sends `connect` / `subscribe` / `shape_subscribe` / `unsubscribe` /
+  `stream` / `whisper` frames; the server pushes `ack`, `data`, `delta`,
+  `resume`, `settled`, `chunk`, `error`, `complete` and `whisper` frames back,
+  each tagged with the originating subscription `id`. The normative frame table
+  is [`protocol/README.md`](https://github.com/anolilab/lunora/blob/alpha/protocol/README.md)
+  §5.
 
 ### Supported value types
 
@@ -70,7 +73,10 @@ one is caught by the peer that reads it rather than by the sender.
 
 ## Reconnect & bookmarks
 
-Reconnect uses decorrelated-jitter backoff (`reconnect` option). The client
+Reconnect uses exponential backoff with equal jitter (`reconnect` option): the
+delay doubles per attempt from `initialDelayMs` (default 250 ms) up to
+`maxDelayMs` (default 30 s), and each attempt then picks uniformly from
+`[delay/2, delay]` (`jitter`, on by default). The client
 keeps a per-session monotonic bookmark in `BookmarkStorage` (in-memory by
 default), sent on the `x-d1-bookmark` request header of each HTTP RPC and
 refreshed from the response, so D1 reads are read-your-writes consistent across
@@ -189,10 +195,19 @@ const call = createCallRunner((args, options) => client.action(api.commands.run,
 });
 ```
 
-The adapters agree on one lifecycle contract on top of it: a success clears
+The adapters that use it agree on one lifecycle contract: a success clears
 `error`, a failure leaves the previous `data` in place (a transient error does
 not blank the view), and `reset()` clears both without cancelling an in-flight
 call — a call that settles after a reset repopulates.
+
+**React's `useMutation` is the exception.** It is TanStack Query's
+`useMutation` with a ref-counted `pending` on top, not this runner, so `data`
+and `error` follow TanStack's reducer: `data` is cleared when a call starts
+**and** when one fails. A component that renders the previous `data` as a
+fallback during a retry keeps it on Vue/Solid/Svelte and blanks on React — hold
+the last value yourself if you need it on both. `useAction` and every other
+adapter's mutation/action handle are runner-backed and follow the contract
+above.
 
 You only reach for it when writing a custom adapter; app code uses the adapter
 primitive for its framework.

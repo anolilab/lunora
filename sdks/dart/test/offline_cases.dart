@@ -4,6 +4,8 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:lunora/lunora.dart';
 
@@ -902,4 +904,265 @@ Future<void> caseCloseRejectsPendingWrites() async {
   } on LunoraApiException catch (error) {
     equals(error.code, clientClosed, 'the pending write names why it will not land');
   }
+}
+
+/// A queued write whose args carry `bigint`, `bytes` and a `Date` must survive
+/// a store that SERIALISES — which every real adapter does.
+///
+/// Persisting the native wrappers reported the write "queued" while the adapter
+/// either raised (nothing durable written) or stringified them into something
+/// that does not read back, so a restart replayed corrupted args.
+Future<void> caseTypedArgsSurviveASerialisingStore() async {
+  covers('offline_queue_hydrates_persisted_writes');
+
+  final args = <String, Object?>{
+    'amount': BigInt.from(7),
+    'blob': WireBytes(Uint8List.fromList(<int>[1, 2, 3, 4]), 'Int32Array'),
+    'when': const WireDate(1700000000),
+  };
+  final store = _RecordingPersistence();
+  final failures_ = <String>[];
+  final queue = OfflineQueue(persistence: store, onPersistenceError: (operation, error, id) => failures_.add('$operation'));
+
+  queue.enqueue(QueuedMutation(id: 'm-typed', functionPath: 'ledger:add', args: args));
+
+  await Future<void>.delayed(Duration.zero);
+
+  equals(canonical(failures_), canonical(<String>[]), 'the record serialises, so nothing is reported as a failed append');
+  equals(store.records.length, 1, 'the write reached durable storage');
+  equals(
+    canonical(store.records.isEmpty ? null : (store.records.first.args! as Map<String, Object?>)['amount']),
+    canonical(<Object?>[wireTag, 'bigint', '7']),
+    'the durable record holds the WIRE form',
+  );
+
+  final restored = OfflineQueue(persistence: store);
+
+  await restored.hydrate();
+
+  equals(canonical(_ids(restored.items)), canonical(<String>['m-typed']), 'the write comes back');
+  // Decoded back to the SAME native values, so the replay sends the write that
+  // was made rather than whatever the adapter's stringification left.
+  equals(
+    canonical(restored.items.isEmpty ? null : encodeWire(restored.items.first.args)),
+    canonical(encodeWire(args)),
+    'and decodes back to the same native values',
+  );
+}
+
+/// A persisted record whose args do not decode is purged and settled, never
+/// replayed with substitute args and never allowed to kill the restart path.
+Future<void> caseUndecodableRecordSettlesRejected() async {
+  covers('offline_queue_hydrates_persisted_writes');
+
+  final store = _RecordingPersistence();
+
+  // A wire tag with no valid payload: the store was corrupted, or written by an
+  // incompatible build.
+  await store.append(
+    PersistedMutation(
+      id: 'm-bad',
+      functionPath: 'ledger:add',
+      args: <String, Object?>{
+        'amount': <Object?>[wireTag, 'bigint', 'not-a-number'],
+      },
+    ),
+  );
+  store.removed.clear();
+
+  final settled = <String>[];
+  final codes = <String, String?>{};
+  final client = LunoraClient(
+    url: 'https://app.example',
+    post: Poster().call,
+    offlineQueue: OfflineQueue(
+      persistence: store,
+      onSettled: (entry, error) {
+        settled.add(entry.id);
+        codes[entry.id] = error is LunoraApiException ? error.code : null;
+      },
+    ),
+  );
+
+  equals(await client.hydrate(), 0, 'nothing unreadable is restored');
+  await Future<void>.delayed(Duration.zero);
+
+  equals(client.pendingWrites, 0, 'the queue is empty');
+  equals(canonical(settled), canonical(<String>['m-bad']), 'the unreadable record is reported, not dropped in silence');
+  equals(codes['m-bad'], offlineWriteUndecodable, 'and names why it can never replay');
+  equals(canonical(store.removed), canonical(<String>['m-bad']), 'it is purged, not left to fail every restart');
+}
+
+/// A batch the worker refuses for SIZE is split and retried, not settled
+/// `rejected` entry by entry.
+///
+/// The worker reads a batch body under a 1 MiB budget
+/// (`packages/runtime/src/body-readers.ts`) and answers `413 PAYLOAD_TOO_LARGE`
+/// past it. A whole-batch coded envelope is a verdict on every entry, so a
+/// count-only chunker settled the lot terminally.
+Future<void> caseBatchSplitsOnPayloadTooLarge() async {
+  covers('offline_flush_batch_splits_on_payload_too_large');
+
+  const budget = 400;
+  final sizes = <int>[];
+
+  Future<LunoraHttpResponse> post(String url, Map<String, String> headers, String body) async {
+    sizes.add(body.length);
+
+    if (body.length > budget) {
+      return const LunoraHttpResponse(413, '{"error":{"code":"PAYLOAD_TOO_LARGE","message":"Body too large"}}');
+    }
+
+    final calls = (jsonDecode(body) as Map<String, Object?>)['calls']! as List<Object?>;
+    final slots = <String>[
+      for (final call in calls) '{"id":${(call! as Map<String, Object?>)['id']},"body":{"result":null,"commitCursor":1}}',
+    ];
+
+    return LunoraHttpResponse(200, '{"results":[${slots.join(',')}]}');
+  }
+
+  final client = LunoraClient(url: 'https://app.example', post: post, clientId: 'c-1', offlineQueue: OfflineQueue(persistence: MemoryPersistence()))
+    ..attachSocket((_) {})
+    ..setConnected(true)
+    ..setConnected(false);
+
+  final queued = <String>['m-0', 'm-1', 'm-2', 'm-3'];
+  final settled = <String, Settled>{
+    for (final id in queued) id: Settled(client.mutation('messages:send', args: <String, Object?>{'text': 'x' * 120}, mutationId: id)),
+  };
+
+  client.setConnected(true);
+
+  for (final entry in settled.values) {
+    await entry.done;
+  }
+
+  for (final id in queued) {
+    equals(settled[id]!.error, null, 'every write commits; none is dropped for the size of the batch it shared ($id)');
+  }
+
+  equals(client.pendingWrites, 0, 'the queue is empty');
+  check(sizes.any((size) => size > budget), 'the first attempt has to be the over-budget one, or nothing was split');
+}
+
+/// A lone queued write must survive an envelope-less 502.
+///
+/// `parseRpcResponse` codes it `INTERNAL` per protocol §4.2, and every coded
+/// error was a verdict on the single-call path — so whether a gateway blip LOST
+/// a durable write depended on how deep the queue happened to be.
+Future<void> caseLoneQueuedWriteSurvivesAnEnvelopeLess502() async {
+  covers('non_2xx_without_error_envelope_fails');
+
+  var posts = 0;
+
+  Future<LunoraHttpResponse> post(String url, Map<String, String> headers, String body) async {
+    posts += 1;
+
+    return const LunoraHttpResponse(502, '{"message":"bad gateway"}');
+  }
+
+  final store = _RecordingPersistence();
+  final settled = <String>[];
+  final client = LunoraClient(
+    url: 'https://app.example',
+    post: post,
+    offlineQueue: OfflineQueue(persistence: store, onSettled: (entry, error) => settled.add(entry.id)),
+  )
+    ..attachSocket((_) {})
+    ..setConnected(true)
+    ..setConnected(false);
+
+  final pending = Settled(client.mutation('messages:send', mutationId: 'm-502'));
+
+  store.removed.clear();
+  client.setConnected(true);
+
+  await Future<void>.delayed(Duration.zero);
+  await Future<void>.delayed(Duration.zero);
+
+  equals(posts, 1, 'the write was attempted');
+  equals(pending.error, null, 'nothing settled: no verdict was ever reached');
+  equals(canonical(settled), canonical(<String>[]), 'and nothing reached the observer either');
+  equals(canonical(_ids(client.offlineQueue.items)), canonical(<String>['m-502']), 'the write is still queued');
+  equals(canonical(store.removed), canonical(<String>[]), 'the durable record stays, because the write is still good');
+}
+
+/// A rate-limited replay re-queues and holds the NEXT flush off until the delay
+/// the envelope named has passed.
+///
+/// "Not now", not "no": the write is valid and the server asked for it later, so
+/// dropping it loses data for being punctual — and replaying it immediately only
+/// earns the same 429.
+Future<void> caseRateLimitedReplayRequeuesAndDefers() async {
+  covers('offline_flush_replays_and_confirms_optimistic');
+
+  var posts = 0;
+
+  Future<LunoraHttpResponse> post(String url, Map<String, String> headers, String body) async {
+    posts += 1;
+
+    return const LunoraHttpResponse(429, '{"error":{"code":"TOO_MANY_REQUESTS","message":"slow down","data":{"retryAfterMs":60000}}}');
+  }
+
+  final settled = <String>[];
+  final client = LunoraClient(
+    url: 'https://app.example',
+    post: post,
+    offlineQueue: OfflineQueue(persistence: MemoryPersistence(), onSettled: (entry, error) => settled.add(entry.id)),
+  )
+    ..attachSocket((_) {})
+    ..setConnected(true)
+    ..setConnected(false);
+
+  final pending = Settled(client.mutation('messages:send', mutationId: 'm-429'));
+
+  client.setConnected(true);
+  await Future<void>.delayed(Duration.zero);
+  await Future<void>.delayed(Duration.zero);
+
+  equals(pending.error, null, 'a rate limit is not a verdict, so nothing is rejected');
+  equals(canonical(_ids(client.offlineQueue.items)), canonical(<String>['m-429']), 'the write is re-queued');
+  equals(canonical(settled), canonical(<String>[]), 'and nothing settled');
+
+  final again = await client.flushOfflineQueue();
+
+  equals(posts, 1, 'the second flush waits out the delay rather than earning the same 429');
+  check(again != null && again > 0, 'and reports how long is left to wait');
+  equals(canonical(_ids(client.offlineQueue.items)), canonical(<String>['m-429']), 'the write is still queued');
+}
+
+/// A rate-limited SLOT is transient and its delay is honoured, clamped.
+///
+/// A slot's `body` is exactly a §4.2 envelope, so it runs through the SAME
+/// predicate the whole-batch and single-call paths use — a durable write's fate
+/// must not depend on how many siblings were queued alongside it. The server's
+/// hint is capped at [maxRetryAfterMs]: the delay is the server's, the ceiling is
+/// ours.
+Future<void> caseRateLimitedBatchSlotIsTransient() async {
+  covers('offline_flush_batches_multiple_writes');
+
+  final poster = Poster(result: 'null')
+    ..batchReply = '{"results":['
+        '{"id":0,"body":{"error":{"code":"TOO_MANY_REQUESTS","message":"slow down","data":{"retryAfterMs":90000}}}},'
+        '{"id":1,"body":{"result":null,"commitCursor":7}}'
+        ']}';
+  // Queued without ever connecting, so this case owns the only flush: the
+  // `setConnected(true)` the sibling cases use starts one of its own, and a
+  // second call then coalesces into it and returns before anything is sent.
+  final client = LunoraClient(
+    url: 'https://app.example',
+    post: poster.call,
+    offlineQueue: OfflineQueue(persistence: MemoryPersistence(), queueBeforeFirstConnect: true),
+  )..attachSocket((_) {});
+
+  final limited = Settled(client.mutation('messages:send', mutationId: 'm-limited'));
+  final committed = Settled(client.mutation('messages:send', mutationId: 'm-committed'));
+  final retryAfter = await client.flushOfflineQueue();
+
+  await committed.done;
+
+  equals(limited.error, null, 'a rate-limited slot is not a verdict, so nothing is rejected');
+  equals(committed.error, null, 'and its sibling still commits');
+  equals(canonical(_ids(client.offlineQueue.items)), canonical(<String>['m-limited']), 'only the rate-limited write is re-queued');
+  equals(retryAfter, maxRetryAfterMs, 'the delay is honoured but clamped: 90000 asked, 60000 held');
 }

@@ -1,3 +1,4 @@
+import { resolveAdminBearer } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -186,8 +187,8 @@ const resolveLimit = (raw: number | undefined): number => {
 
 /**
  * `lunora insights` core: read the live worker's per-function metrics over the
- * `__lunora_admin__:getFunctionStats` admin RPC (bearer-gated by
- * `LUNORA_ADMIN_TOKEN`), then print the {@link buildInsightsReport} report as
+ * `__lunora_admin__:getFunctionStats` admin RPC (bearer-gated, resolved by
+ * `resolveAdminBearer`), then print the {@link buildInsightsReport} report as
  * text (default) or JSON (`--json`). The admin bearer rides the same
  * `/_lunora/rpc` transport the studio uses; `resolveAdminBaseUrl` refuses to
  * send it in cleartext to a non-loopback host.
@@ -199,17 +200,21 @@ const runInsightsCommand = async (options: InsightsCommandOptions): Promise<Insi
         return { code: 1 };
     }
 
-    const token = options.token ?? process.env.LUNORA_ADMIN_TOKEN;
-
-    if (!token) {
-        options.logger.error("admin token required — pass --token or set LUNORA_ADMIN_TOKEN");
-
-        return { code: 1 };
-    }
-
     const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
     if (baseUrl === undefined) {
+        return { code: 1 };
+    }
+
+    // Resolved after `baseUrl`, and through the shared resolver: the `.dev.vars`
+    // fallback is loopback-gated, so it needs the target first. `insights`
+    // otherwise demanded a flag against the local worker while `run`, `export`
+    // and `import` read the same token straight out of `.dev.vars`.
+    const { token } = resolveAdminBearer({ cwd: options.cwd ?? process.cwd(), token: options.token, url: baseUrl });
+
+    if (!token) {
+        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
+
         return { code: 1 };
     }
 

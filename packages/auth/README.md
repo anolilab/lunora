@@ -141,7 +141,7 @@ const auth = createAuth({
 const recent = await readAuthAuditLog(executor, { event: "sign-in", limit: 100 });
 ```
 
-The free-form `detail` payload is scrubbed with `@visulima/redact` before it is persisted, so a token/password that leaks into an event's context never reaches the durable table. Retention defaults to unbounded (set `retention` to bound it). The store lives in the reserved `__lunora_auth_audit__` table (auto-hidden from the data browser).
+The built-in hook records only the request path in `detail`; it is free-form for entries you append yourself. Either way the payload is scrubbed with `@visulima/redact` before it is persisted, so a token/password that leaks into one never reaches the durable table. Retention defaults to unbounded (set `retention` to bound it). The store lives in the reserved `__lunora_auth_audit__` table (auto-hidden from the data browser).
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/auth)**.
 

@@ -180,7 +180,14 @@ Either way, an anonymous request gets the anonymous facade (`authenticated: fals
 
 ## Gating the Studio behind Access
 
-`@lunora/cloudflare-access/admin` ships `accessAdminGate()`, which builds a value for the runtime's `WorkerOptions.adminGate`, an async authorization gate for the `/_lunora/admin/*` plane (the Studio's HTTP + WebSocket endpoints), OR-ed with the static `adminToken` bearer. It applies your `isAdmin(claims)` predicate, so an Access identity in the right group can reach the Studio without a shared token. It is fail-closed: no identity, a token that fails verification, or an `isAdmin` returning `false` all deny (the bearer stays the only other path). It runs only on admin routes, never on the RPC/WebSocket data path.
+`@lunora/cloudflare-access/admin` ships `accessAdminGate()`, which builds a value for the runtime's `WorkerOptions.adminGate`, an async authorization gate for the admin **HTTP** plane (`/_lunora/admin/*` plus `/_lunora/migrate`), OR-ed with the static `adminToken` bearer. It applies your `isAdmin(claims)` predicate, so an Access identity in the right group can reach those routes without a shared token. It is fail-closed: no identity, a token that fails verification, or an `isAdmin` returning `false` all deny (the bearer stays the only other path). It runs only on admin routes, never on the RPC/WebSocket data path.
+
+<Callout type="warn">
+    **The gate does not replace `LUNORA_ADMIN_TOKEN` for the Studio's live views.** `/_lunora/ws` is not an admin path, so the gate never runs on it; the Studio
+    authenticates its socket with a short-lived sub-token minted at `/_lunora/admin/ws-token`, and that token is **signed with the admin token itself**. With no
+    static token configured, minting refuses (`ADMIN_TOKEN_NOT_CONFIGURED`) and every live panel — Logs, Metrics, realtime — fails while the HTTP pages work.
+    Configure `LUNORA_ADMIN_TOKEN` as well and treat the Access gate as the extra factor on the HTTP plane, not as the whole story.
+</Callout>
 
 Wire it on the generated app builder via `.extend((env) => …)`:
 
@@ -210,4 +217,4 @@ export default defineApp()
 - `accessContext()` _(`@lunora/cloudflare-access/context`)_: the explicit per-procedure middleware form of the same `ctx.access` facade.
 - `accessFacade(identity, userId)` _(`@lunora/cloudflare-access/context`)_: the pure factory both forms build on; returns the anonymous facade when no identity is present.
 - `accessRoles(options)` _(`@lunora/cloudflare-access/roles`)_: middleware mapping the verified `groups` claim into `ctx.auth.roles` for RLS.
-- `accessAdminGate(options)` _(`@lunora/cloudflare-access/admin`)_: a `WorkerOptions.adminGate` that authorizes the `/_lunora/admin/*` plane from a verified Access identity. `isAdmin` is required; supplying the JWT config makes the JWT the only accepted proof, omitting it accepts the Worker's Access identity.
+- `accessAdminGate(options)` _(`@lunora/cloudflare-access/admin`)_: a `WorkerOptions.adminGate` that authorizes the admin HTTP plane (`/_lunora/admin/*`, `/_lunora/migrate`) from a verified Access identity — not `/_lunora/ws`. `isAdmin` is required and enforced at wiring time (a missing one throws, rather than denying every request silently); supplying the JWT config makes the JWT the only accepted proof, omitting it accepts the Worker's Access identity.

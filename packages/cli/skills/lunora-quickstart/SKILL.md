@@ -207,7 +207,7 @@ Create a schema and a query/mutation to verify the full loop.
 `lunora/schema.ts`:
 
 ```ts
-import { defineSchema, defineTable, v } from "@lunora/server";
+import { defineSchema, defineTable, v } from "lunorash/server";
 
 export default defineSchema({
     todos: defineTable({
@@ -221,8 +221,8 @@ export default defineSchema({
 `lunora/todos.ts`:
 
 ```ts
-import type { Id } from "@lunora/server";
-import { mutation, query, v } from "@lunora/server";
+import type { Id } from "#lunora/_generated/server.js";
+import { mutation, query, v } from "#lunora/_generated/server.js";
 
 export const list = query.query(async ({ ctx }) => ctx.db.query("todos").withIndex("by_creation").collect());
 

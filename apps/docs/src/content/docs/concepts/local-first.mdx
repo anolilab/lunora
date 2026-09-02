@@ -39,12 +39,13 @@ export default defineApp()
     .build();
 ```
 
-It is off by default because it costs a changelog row per write. Without it a
-shard has no `__cdc_log`, so every reconnect re-seeds a shape's full membership
-instead of resuming with a delta — the engine still works, it just never does
-the "delta" half. With `.global()` tables the same switch turns on the global
-changelog the poll tick asks which tables moved, so a `.global()` shape has no
-fast path at all until you set it.
+It is off by default because it costs a changelog row per write, but the engine
+does not degrade without it: a shard has no `__cdc_log` to diff, so every
+shard-local `shape_subscribe` is **refused** with `SHAPE_REQUIRES_CDC` and the
+subscription never seeds at all. `.global()` shapes are driven by the poll loop
+instead and work either way — the same switch also turns on the global changelog
+the poll tick asks which tables moved, so they are latency-tiered rather than
+poke-live until you set it.
 
 ## Why the DO topology fits
 

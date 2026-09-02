@@ -65,7 +65,8 @@ await scheduler.cancel(id);
 Pass `instanceName` to isolate a tenant's jobs into a separate DO instance.
 
 Per-job `RunOptions` cover `shardKey` (routing hint) and `retry`, a retry
-policy with `maxAttempts` (default 5), `backoff` (`"exponential"` | `"linear"`),
+policy with `maxAttempts` (default 5 — retries **after** the first dispatch, so
+six deliveries in all), `backoff` (`"exponential"` | `"linear"`),
 `baseMs` (default 30_000), and an optional `maxMs` ceiling. On exhaustion the job
 is parked under a dead-letter key rather than dropped.
 
@@ -100,8 +101,10 @@ function reference (a one-shot dispatch) or a durable workflow reference
 fire, and its `args` are type-checked against the workflow's `params`.
 
 <Callout type="info">
-    `interval` takes exactly one of `{seconds | minutes | hours}`. `hourly`, `daily`, `weekly`, and `monthly` schedule at a fixed UTC wall-clock time. Use
-    `.cron` for the raw 5- or 6-field grammar when the ergonomic forms don't fit.
+    `interval` takes exactly one of `{minutes | hours}`. `{ seconds }` is **rejected at definition time**: Cloudflare Cron Triggers have a one-minute floor,
+    and the 6-field expression it would compile to is refused by `wrangler deploy`. For sub-minute recurrence use `ctx.scheduler.runAfter`/`runAt` (via a
+    workpool for bounded concurrency); `{ minutes: 1 }` is the fastest cron-native cadence. `hourly`, `daily`, `weekly`, and `monthly` schedule at a fixed UTC
+    wall-clock time. Use `.cron` for the raw 5- or 6-field grammar when the ergonomic forms don't fit.
 </Callout>
 
 <Callout type="warn">
@@ -194,4 +197,13 @@ status; that's the trade for letting Cloudflare own retries and backoff.
 
 When the alarm fires the DO POSTs to `${originUrl}/_lunora/scheduler/dispatch`
 with `{ functionPath, args, shardKey, scheduledFor, id }`. The runtime unwraps
-that and runs the function exactly as if it were an RPC call.
+that and runs the function on the same code path as an RPC call — with one
+difference: the dispatch is **server-initiated**, so it carries no end-user
+identity. `ctx.auth.userId` is `null` and `ctx.ip` is `undefined`, which is also
+what lets a job target an `internal` function. Pass anything the job needs to
+know about a user in its `args`; never gate a scheduled function on `ctx.auth`.
+
+A **cron trigger** takes a different route: the worker's `scheduled()` handler
+dispatches it straight to the shard, without touching the `SchedulerDO`. So the
+retry ladder, backoff, and dead-letter park above apply to `runAfter`/`runAt`
+jobs only — a failed cron tick is logged as `CRON_JOB_FAILED` and not retried.

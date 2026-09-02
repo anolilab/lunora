@@ -14,6 +14,9 @@ public enum LunoraOfflineCode {
     public static let identityChanged = "OFFLINE_IDENTITY_CHANGED"
     /// The write's arguments cannot be wire-encoded, so it can never replay.
     public static let writeUnencodable = "OFFLINE_WRITE_UNENCODABLE"
+    /// A restored record's args are not readable as wire values — the store was
+    /// corrupted, or written by an incompatible build.
+    public static let writeUndecodable = "OFFLINE_WRITE_UNDECODABLE"
     /// The client was closed while the write was still queued.
     public static let clientClosed = "CLIENT_CLOSED"
 
@@ -25,6 +28,20 @@ public enum LunoraOfflineCode {
     /// verdict: replaying it would only re-trigger the same failure, a
     /// poison-message loop.
     public static let transient: Set<String> = ["SHARD_ERROR", "SHARD_UNAVAILABLE"]
+
+    /// Codes that say "not now" rather than "no".
+    ///
+    /// A rate-limited replay is the one verdict a durable queue must never
+    /// honour: the write is perfectly valid and the server is asking for it
+    /// later, so dropping it loses data for being punctual. The delay comes from
+    /// the envelope's `data.retryAfterMs` (see `protocol/fixtures/rpc.json`'s
+    /// `responseError.with-data`).
+    public static let rateLimited: Set<String> = ["RATE_LIMITED", "TOO_MANY_REQUESTS"]
+
+    /// The worker's answer to a body over its cap. Coded, so it arrives as a
+    /// whole-batch envelope — which every other coded envelope is a verdict on
+    /// every entry, and this one is not.
+    public static let payloadTooLarge = "PAYLOAD_TOO_LARGE"
 }
 
 /// Whether two shard keys name the same shard.
@@ -47,6 +64,25 @@ public let lunoraDefaultMaxQueuedMutations = 1000
 /// sequentially, so an unbounded one could pin a shard for tens of thousands of
 /// dispatches. A flush with a larger backlog chunks itself.
 public let lunoraMaxBatchEntries = 500
+
+/// Byte budget for one batch body, under the worker's own 1 MiB body cap
+/// (`packages/runtime/src/body-readers.ts`).
+///
+/// The entry cap alone is blind to size: 500 writes carrying bytes or long text
+/// exceed a megabyte, the worker answers `413 PAYLOAD_TOO_LARGE`, and a
+/// whole-batch coded envelope is terminal for every entry — so a count-only
+/// chunker settles 500 durable writes `rejected` that would each have committed
+/// alone. The headroom covers the request line, the headers and the JSON framing
+/// this estimate does not weigh.
+public let lunoraMaxBatchBytes = 1_048_576 - 65_536
+
+/// The longest rate-limit delay this client will sit out, matching
+/// `@lunora/client`.
+///
+/// A server that names an hour is asking a durable queue to stall for an hour;
+/// the write is still safe to retry sooner under its idempotency key, and a
+/// caller that wants the full wait has ``LunoraFlushReport/retryAfterMs``.
+public let lunoraMaxRetryAfterMs = 60_000
 
 /// Who made a queued write.
 ///
@@ -138,6 +174,17 @@ public final class LunoraQueuedMutation {
     }
 
     /// The durable form. Callback fields are deliberately not persisted.
+    ///
+    /// `args` is the WIRE form, not the native one. A real adapter serialises — a
+    /// file, a SQLite text column, a preferences store — and the native form
+    /// carries the codec's own wrappers, so a queued write with a `bigint`,
+    /// `bytes`, `Date` or `Map` argument either fails to serialise (and is
+    /// reported "queued" while nothing durable was written) or serialises as
+    /// whatever the adapter makes of an opaque value and replays after a restart
+    /// with CORRUPTED args. Encoding here also throws for args outside the codec
+    /// entirely, which ``LunoraOfflineQueue/enqueue(_:)`` reports as the failed
+    /// append it is — the write stays in memory with its real args and settles
+    /// terminally on the next flush, never persisted as a substitute.
     public func record(version: String?) throws -> [String: Any] {
         var record: [String: Any] = [
             "args": try Wire.encode(args ?? [String: Any]()),
@@ -165,11 +212,16 @@ public final class LunoraQueuedMutation {
     /// did not survive the restart. A missing `identity` key restores as `.absent`
     /// (a legacy record) while a stored null restores as `.signedOut` — the
     /// distinction the identity gate turns on.
-    public static func fromRecord(_ record: [String: Any]) -> LunoraQueuedMutation {
+    ///
+    /// Throws when the stored args are not wire values. It never substitutes: a
+    /// record hydrated with empty args replays SUCCESSFULLY with the wrong
+    /// arguments, which is corruption rather than failure.
+    /// ``LunoraOfflineQueue/hydrate()`` settles such a record terminally instead.
+    public static func fromRecord(_ record: [String: Any]) throws -> LunoraQueuedMutation {
         let entry = LunoraQueuedMutation(
             id: record["id"] as? String ?? "",
             functionPath: record["functionPath"] as? String ?? "",
-            args: (try? Wire.decode(record["args"])) ?? [String: Any](),
+            args: try Wire.decode(record["args"]),
             shardKey: record["shardKey"] as? String
         )
 
@@ -326,6 +378,7 @@ public final class LunoraOfflineQueue {
         let persisted = try persistence.load()
         var seen = Set(entries.map(\.id))
         var restored: [LunoraQueuedMutation] = []
+        var undecodable: [LunoraDiscarded] = []
 
         for record in persisted {
             let id = record["id"] as? String ?? ""
@@ -340,7 +393,27 @@ public final class LunoraOfflineQueue {
                 continue
             }
 
-            restored.append(LunoraQueuedMutation.fromRecord(record))
+            do {
+                restored.append(try LunoraQueuedMutation.fromRecord(record))
+            } catch {
+                // Purged and REPORTED, never replayed with substitute args: a
+                // record whose args do not decode has no correct replay, and
+                // sending it with an empty argument object would commit a
+                // different write than the one the caller made.
+                persist("remove", id) { try persistence.remove(id) }
+                undecodable.append(
+                    LunoraDiscarded(
+                        entry: LunoraQueuedMutation(
+                            id: id,
+                            functionPath: record["functionPath"] as? String ?? "",
+                            args: nil,
+                            shardKey: record["shardKey"] as? String
+                        ),
+                        code: LunoraOfflineCode.writeUndecodable,
+                        message: "offline mutation restored from storage cannot be wire-decoded: \(error)"
+                    )
+                )
+            }
         }
 
         let restoredIDs = restored.map(\.id)
@@ -349,7 +422,7 @@ public final class LunoraOfflineQueue {
 
         // A store holding more than `maxItems` (the cap was lowered between
         // sessions, or writes piled up across restarts) must not bypass it.
-        let evicted = evictOverflow()
+        let evicted = undecodable + evictOverflow()
 
         notifySize()
 

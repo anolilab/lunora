@@ -96,19 +96,19 @@ afterEach(() => {
 
 `lunoraTest(schema)` returns a `TestHarness`:
 
-| Method                       | Description                                                                            |
-| ---------------------------- | -------------------------------------------------------------------------------------- |
-| `query(reference, args)`     | Run a registered `query`. Internal queries are rejected on this external surface.      |
-| `mutation(reference, args)`  | Run a registered `mutation`. Internal mutations are rejected on this external surface. |
-| `action(reference, args)`    | Run a registered `action`. Internal actions are rejected on this external surface.     |
-| `query(inline)`              | Run an inline `(ctx) => …` with a read-only `QueryCtx`.                                |
-| `mutation(inline)`           | Run an inline `(ctx) => …` with a read-write `MutationCtx`.                            |
-| `action(inline)`             | Run an inline `(ctx) => …` with an `ActionCtx`.                                        |
-| `run(fn)`                    | Direct db access at mutation level (read + write), mirroring `convexTest`'s `run`.     |
-| `subscribe(reference, args)` | Async iterable yielding the query result now, then re-emitting after each mutation.    |
-| `scheduler`                  | Controls for the in-memory scheduler (`list` / `advance` / `runPending`).              |
-| `withIdentity(identity)`     | Return a harness view sharing this db but reporting the given identity on `ctx.auth`.  |
-| `close()`                    | Close the underlying in-memory SQLite database. Idempotent.                            |
+| Method                       | Description                                                                                                                                                                                                       |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `query(reference, args)`     | Run a registered `query`. Internal queries are rejected on this external surface.                                                                                                                                 |
+| `mutation(reference, args)`  | Run a registered `mutation`. Internal mutations are rejected on this external surface.                                                                                                                            |
+| `action(reference, args)`    | Run a registered `action`. Internal actions are rejected on this external surface.                                                                                                                                |
+| `query(inline)`              | Run an inline `(ctx) => …` with a `QueryCtx`. Read-only in the type only — at runtime it holds the same writer `mutation` gets, so a cast can write (outside any transaction, and without notifying `subscribe`). |
+| `mutation(inline)`           | Run an inline `(ctx) => …` with a read-write `MutationCtx`.                                                                                                                                                       |
+| `action(inline)`             | Run an inline `(ctx) => …` with an `ActionCtx`.                                                                                                                                                                   |
+| `run(fn)`                    | Direct db access at mutation level (read + write), mirroring `convexTest`'s `run`.                                                                                                                                |
+| `subscribe(reference, args)` | Async iterable yielding the query result now, then re-emitting after each mutation.                                                                                                                               |
+| `scheduler`                  | Controls for the in-memory scheduler (`list` / `advance` / `runPending`).                                                                                                                                         |
+| `withIdentity(identity)`     | Return a harness view sharing this db but reporting the given identity on `ctx.auth`.                                                                                                                             |
+| `close()`                    | Close the underlying in-memory SQLite database. Idempotent.                                                                                                                                                       |
 
 Each `query` / `mutation` / `action` accepts **either** a registered function
 reference plus its args, **or** a bare inline handler:
@@ -241,16 +241,32 @@ test("scheduled mutation runs after advance", async () => {
 });
 ```
 
-| Control                    | Description                                                                                                    |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `t.scheduler.list()`       | Snapshot of pending jobs in enqueue order.                                                                     |
-| `t.scheduler.advance(ms)`  | Advance the virtual clock by `ms`, running every job due at or before the new now. Returns the count executed. |
-| `t.scheduler.runPending()` | Run all pending jobs regardless of `scheduledFor`. Returns the count executed.                                 |
+| Control                             | Description                                                                                                    |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `t.scheduler.list()`                | Snapshot of pending jobs in enqueue order.                                                                     |
+| `t.scheduler.advance(ms, options?)` | Advance the virtual clock by `ms`, running every job due at or before the new now. Returns the count executed. |
+| `t.scheduler.runPending(options?)`  | Run all pending jobs regardless of `scheduledFor`. Returns the count executed.                                 |
 
 The virtual clock is per-harness, so parallel tests are isolated. A path not in
 the `functions` map (or pointing at a query) fails the job with
 `FUNCTION_NOT_FOUND`; it is then retried and finally recorded on
-`t.scheduler.failures()`, matching production's dead-letter park. Jobs run through
+`t.scheduler.failures()`, matching production's dead-letter park.
+
+Two things that catch tests out. A failure with retries left is **silently
+re-enqueued** with exponential backoff on the virtual clock, so `failures()`
+stays empty until the whole schedule has elapsed — 30s + 60s + 120s + 240s +
+480s = 930s of virtual clock at today's defaults, not one tick. And once it does
+land, `advance()` / `runPending()` **reject**: a terminal failure is re-thrown
+verbatim (several become an `AggregateError`). Pass
+`{ throwOnError: false }` to suppress the re-throw and inspect `failures()`
+instead:
+
+```ts
+await t.scheduler.advance(1_000_000, { throwOnError: false });
+expect(t.scheduler.failures()).toHaveLength(1);
+```
+
+Jobs run through
 the same dispatch as `ctx.runMutation`, so they share the harness database, and
 `ctx.now` inside a job is the virtual clock at fire time.
 

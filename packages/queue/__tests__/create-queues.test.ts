@@ -43,6 +43,22 @@ describe("createQueues", () => {
         expect(email.batches[0]).toEqual({ messages: [{ body: 1 }, { body: 2 }], options: undefined });
     });
 
+    it("refuses a delaySeconds over the 12-hour Cloudflare ceiling on send, sendBatch and a batch entry", async () => {
+        expect.assertions(4);
+
+        const email = fakeBinding();
+        const queues = createQueues({ bindings: { emailQueue: email } });
+
+        // 43_200 is the ceiling itself — accepted.
+        await queues.emailQueue!.send({}, { delaySeconds: 43_200 });
+
+        await expect(queues.emailQueue!.send({}, { delaySeconds: 43_201 })).rejects.toThrow(/43201.*ceiling of 43200 \(12 hours\)/su);
+        await expect(queues.emailQueue!.sendBatch([{ body: 1 }], { delaySeconds: 64_800 })).rejects.toThrow(/ceiling of 43200/u);
+        await expect(queues.emailQueue!.sendBatch([{ body: 1 }, { body: 2, delaySeconds: 86_400 }])).rejects.toThrow(/message 1 delaySeconds is 86400/u);
+
+        expect(email.batches).toHaveLength(0);
+    });
+
     it("throws a directed error for an unknown queue", async () => {
         expect.assertions(1);
 

@@ -29,9 +29,16 @@ D1 database, R2 buckets, and secrets — so the work is mostly making
 
 `lunora deploy` runs a fixed pipeline:
 
-1. **Codegen** — regenerates `lunora/_generated/` and typechecks.
-2. **Validate `wrangler.jsonc`** — required `compatibility_date`, the
-   `nodejs_compat` flag, and the `SHARD` Durable Object binding.
+1. **Codegen** — regenerates `lunora/_generated/`. It does **not** run
+   `tsc`: nothing in the deploy pipeline type-checks, and wrangler/esbuild
+   strips types, so a project with a TS error deploys. Run `lunora verify`
+   (which does run `tsc --noEmit`) as the CI type gate before this.
+2. **Validate `wrangler.jsonc`** — a `compatibility_date` at or past the
+   minimum the runtime needs, the `SHARD` Durable Object binding and its
+   SQLite migration tag, and the shape of every declared binding. It does
+   **not** check `compatibility_flags`: `nodejs_compat` is what every
+   template ships and what dependencies reaching for `node:` builtins need,
+   but no Lunora package requires it, so nothing fails when it is missing.
 3. **Schema-drift gate** — blocks if the committed baseline
    (`lunora/.lunora-schema.json`) drifted with a breaking change and no
    accompanying migration. The baseline is re-blessed only after the deploy
@@ -40,9 +47,23 @@ D1 database, R2 buckets, and secrets — so the work is mostly making
    images).
 
 Useful flags: `--env <name>` (Cloudflare environment), `--migrate` (run pending
-data migrations against the live worker after deploy, with `--migrate-token` /
-`--migrate-url`), `--allow-schema-drift` (override the gate — use sparingly), and
-`--update-schema-baseline` (re-bless the baseline with the current shape).
+data migrations against the live worker after deploy), `--allow-schema-drift`
+(override the gate — use sparingly), and `--update-schema-baseline` (re-bless
+the baseline with the current shape).
+
+`--migrate` has three hard requirements, checked **before** `wrangler deploy`,
+so missing one aborts the whole deploy rather than skipping the migration:
+
+- `--migrate-yes` — confirms running production data migrations. Always
+  required; there is no environment variable for it.
+- `--migrate-url <https://…>` — the deploy target URL is only known after
+  wrangler runs, so it cannot be inferred. Omit it only when the checkout is
+  linked (`lunora link`) for this same `--env`.
+- an admin token — `--migrate-token` or `LUNORA_ADMIN_TOKEN`.
+
+```bash
+lunora deploy --migrate --migrate-yes --migrate-url https://app.example.com
+```
 
 ## Preflight: `lunora doctor`
 
@@ -119,10 +140,19 @@ before the first request hits production.
 - **Production:** `lunora deploy`. Separate D1 database / R2 buckets / secrets
   from dev. Never point a dev worker at prod resources.
 
-For `.global()` table DDL, generate and commit SQL migrations with `lunora
-migrate generate` before deploying; `@lunora/d1`'s runner applies them. For data
-backfills, deploy first, then `lunora deploy --migrate` (or `lunora migrate up
---prod`). See `lunora-migration-helper`.
+For `.global()` table DDL, `lunora migrate generate` emits a reviewable SQL
+file — but **no command applies it**, `lunora deploy` included. What actually
+provisions a global table is the runtime, from the schema rather than from the
+file: on first use it runs `CREATE TABLE IF NOT EXISTS` plus additive
+`ADD COLUMN`, so additive changes land whether or not the file exists.
+Anything the generator cannot express — a backfilling `UPDATE`, a rename
+written as add/copy/drop, an index the schema does not declare — must be
+applied by hand:
+`wrangler d1 execute <DB> --remote --file=lunora/migrations/<file>.sql`. The
+file is multi-statement, so it is not a `@lunora/d1` `Migration` either.
+For data backfills, deploy first, then `lunora deploy --migrate --migrate-yes
+--migrate-url <url>` (or `lunora migrate up --prod`). See
+`lunora-migration-helper`.
 
 ## Common Pitfalls
 
@@ -147,4 +177,5 @@ secret put` for every prod secret.
 - [ ] DO + container `class_name`s exported by the worker entry.
 - [ ] Production secrets set via `wrangler secret put`.
 - [ ] Schema changes migrated; the drift gate is green (no `--allow-schema-drift`).
-- [ ] `lunora deploy` succeeded; `--migrate` run if data backfills were pending.
+- [ ] `lunora deploy` succeeded; `--migrate --migrate-yes --migrate-url <url>` run
+      if data backfills were pending.

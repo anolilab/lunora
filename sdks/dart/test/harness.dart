@@ -44,6 +44,12 @@ Future<void> run(FutureOr<void> Function() body) async {
   } on TimeoutException {
     failures.add('case #$ordinal did not complete within ${caseTimeout.inSeconds}s '
         '(count the `await run(...)` lines in conformance.dart to name it)');
+  } on Object catch (error, stack) {
+    // A case that THROWS is one failure, not the end of the run. Letting it
+    // escape abandoned `main()` part-way: every case after it went unexecuted
+    // and the manifest check never ran, so a regression in one area silently
+    // stopped testing all the others.
+    failures.add('case #$ordinal threw: $error\n$stack');
   }
 }
 

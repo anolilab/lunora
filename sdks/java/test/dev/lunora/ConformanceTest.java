@@ -52,6 +52,7 @@ public final class ConformanceTest {
         serverFrameConsumer();
         subscriptionStreamYieldsFrameValuesInOrder();
         shapeSubscribeFrame();
+        shapeSubscriptionsResendAfterReconnect();
         pokeSequenceMaterialisesRows();
         pokePartsDoNotApplyBeforePokeEnd();
         resetPokeReplacesShapeMembership();
@@ -704,6 +705,63 @@ public final class ConformanceTest {
                                         "shape_1", "roomMessages", args, null, null))
                         .equals(canonical(shape.get("shape-subscribe-cold"))),
                 "shape-subscribe-cold");
+    }
+
+    /**
+     * A reconnect re-subscribes SHAPES as well as queries, each carrying its resume checkpoint.
+     *
+     * <p>A resend that walks only the query registry leaves every shape view subscribed to a socket
+     * that no longer exists — silently, and for the rest of the process's life, because a shape
+     * only ever hears from the server through a poke.
+     */
+    @SuppressWarnings("unchecked")
+    private static void shapeSubscriptionsResendAfterReconnect() {
+        covers("shape_subscriptions_resend_after_reconnect");
+
+        Client client = new Client("https://app.example", null);
+        Map<String, Object> args = new LinkedHashMap<>();
+
+        args.put("room", "general");
+        client.attachSocket(frame -> {});
+        client.subscribe("messages:list", new LinkedHashMap<>(), value -> {}, null, null);
+        client.subscribeShape("roomMessages", args, rows -> {}, null);
+
+        // The cursors a resume carries are written by the frame handler, so they have to exist
+        // before the resend is built.
+        client.handleFrame(
+                "{\"cursor\":9,\"data\":[],\"epoch\":\"e1\",\"id\":\"sub_1\",\"type\":\"data\"}");
+        client.handleFrame("{\"epoch\":\"e1\",\"pokeId\":\"poke-1\",\"type\":\"pokeStart\"}");
+        client.handleFrame(
+                "{\"pokeId\":\"poke-1\",\"reset\":true,\"rowsPatch\":[],\"shapeId\":\"shape_1\",\"type\":\"pokePart\"}");
+        client.handleFrame(
+                "{\"checkpoint\":5,\"epoch\":\"e1\",\"pokeId\":\"poke-1\",\"type\":\"pokeEnd\"}");
+
+        List<Map<String, Object>> resent = new ArrayList<>();
+
+        client.attachSocket(resent::add);
+        client.resendSubscriptions();
+
+        check(resent.size() == 2, "both registries are walked");
+        check("subscribe".equals(resent.get(0).get("type")), "the query frame goes out first");
+        check(
+                ((Number) ((Map<String, Object>) resent.get(0).get("query")).get("sinceSeq"))
+                                .intValue()
+                        == 9,
+                "carrying the tracked query cursor");
+
+        Map<String, Object> frame = resent.get(1);
+        Map<String, Object> shape = (Map<String, Object>) frame.get("shape");
+
+        check("shape_subscribe".equals(frame.get("type")), "and the shape frame after it");
+        check("shape_1".equals(frame.get("id")), "addressed at the live shape id");
+        check("roomMessages".equals(shape.get("name")), "naming the shape it subscribed to");
+        check(
+                canonical(shape.get("args")).equals(canonical(Wire.encode(args))),
+                "with the args it subscribed under");
+        check(
+                ((Number) frame.get("sinceCheckpoint")).intValue() == 5,
+                "resuming from the tracked checkpoint");
+        check("e1".equals(frame.get("sinceEpoch")), "and the tracked epoch");
     }
 
     @SuppressWarnings("unchecked")
