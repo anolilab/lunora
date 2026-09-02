@@ -653,6 +653,41 @@ describe("schema-drift", () => {
             expect(narrowed.changes.map((change) => change.severity)).toStrictEqual(["breaking"]);
         });
 
+        it("does not call a union widened when a retained member gained a refinement or lost its optional", () => {
+            expect.assertions(2);
+
+            // Both narrow what the column accepts while keeping the member SET
+            // identical. The widening check compared members with their column
+            // flags stripped, so each read as an unchanged member set and was
+            // reported `widenedFieldShape` — "every stored value stays valid" —
+            // for a change that invalidates stored rows.
+            const refined = compare(
+                { value: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] } },
+                { value: { kind: "union", members: [{ hasRefinement: true, kind: "string" }, { kind: "number" }] } },
+            );
+            const deoptionalized = compare(
+                { value: { kind: "union", members: [{ inner: { kind: "string" }, kind: "optional" }, { kind: "number" }] } },
+                { value: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] } },
+            );
+
+            expect(refined.changes.map((change) => change.severity)).toStrictEqual(["breaking"]);
+            expect(deoptionalized.changes.map((change) => change.severity)).toStrictEqual(["breaking"]);
+        });
+
+        it("still reads an added union member as a widening when the column is optional", () => {
+            expect.assertions(1);
+
+            // The column's own `optional` is diffed on its own and is unchanged
+            // here, so it must not stop the shape comparison from matching
+            // `v.string()` against the `string` member it became one of.
+            const { changes } = compare(
+                { value: { inner: { kind: "string" }, kind: "optional" } },
+                { value: { inner: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] }, kind: "optional" } },
+            );
+
+            expect(changes.map((change) => [change.severity, change.type])).toStrictEqual([["safe", "widenedFieldShape"]]);
+        });
+
         it("treats a reordered union as no change at all — a union is a set", () => {
             expect.assertions(2);
 

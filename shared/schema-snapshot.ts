@@ -368,9 +368,36 @@ const shapeForm = ({ nullable, optional, refined, unique, ...shape }: FieldSnaps
     return JSON.stringify(sortKeys(shape as Record<string, unknown>));
 };
 
-/** A field's accepted shapes as a set of canonical forms: a union contributes its members, anything else itself. */
+/**
+ * One accepted form: a value shape plus the VALIDATION state attached to it.
+ *
+ * `shapeForm` alone is wrong here. It strips `optional`/`nullable`/`refined`
+ * because a COLUMN's flags are diffed on their own, but a union MEMBER's are
+ * diffed nowhere — the only comparison that ever sees them is this one. Stripped,
+ * `v.union(v.string(), v.number())` → `v.union(v.string().check(…), v.number())`
+ * read as an unchanged member set and was reported `widenedFieldShape` ("every
+ * stored value stays valid") for a change that narrows the accepted strings;
+ * dropping `v.optional(…)` from a member did the same. `unique` is left out: it
+ * is a storage constraint on the column, not part of the value a member accepts.
+ */
+const acceptedForm = ({ nullable, optional, refined, unique, ...shape }: FieldSnapshot): string =>
+    JSON.stringify([sortKeys(shape as Record<string, unknown>), optional, nullable === true, refined === true]);
+
+/**
+ * A field's accepted shapes as a set of canonical forms: a union contributes its
+ * members, anything else itself.
+ *
+ * A non-union field is normalized to a member's neutral flags first. Its
+ * `optional`/`nullable`/`refined` belong to the column and are diffed there —
+ * unchanged across the pair by the time this runs, or already reported — while
+ * the union member it is being matched against carries no column metadata at
+ * all. Left in, `v.optional(v.string())` → `v.optional(v.union(v.string(),
+ * v.number()))` failed to match its own member and lost a real widening.
+ */
 const memberForms = (field: FieldSnapshot): string[] =>
-    field.kind === "union" && field.members ? field.members.map((member) => shapeForm(member)) : [shapeForm(field)];
+    field.kind === "union" && field.members
+        ? field.members.map((member) => acceptedForm(member))
+        : [acceptedForm({ ...field, nullable: false, optional: false, refined: false })];
 
 /**
  * Is `field` a widening of `old` — does it still accept everything `old` did?

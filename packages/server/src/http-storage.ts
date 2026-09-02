@@ -181,6 +181,13 @@ const storageObjectHeaders = (object: Omit<StorageObjectBody, "body">): Record<s
     const contentType = rawContentType !== undefined && isSafeHeaderValue(rawContentType) ? rawContentType : "application/octet-stream";
     const headers: Record<string, string> = {
         "accept-ranges": "bytes",
+        // Every response this helper produces passed a MANDATORY per-request
+        // `authorize` gate keyed on the caller's session or signature, so the
+        // bytes are private to that identity. Without `no-store` the browser
+        // (and any shared proxy) may keep them and replay the cached copy after
+        // a logout or an account switch — a second identity reading the first
+        // one's object with `authorize` never called again.
+        "cache-control": "no-store",
         "content-type": contentType,
         etag: toHttpEtag(object.etag),
         "x-content-type-options": "nosniff",
@@ -254,7 +261,15 @@ type StorageServeAuthorizer = (context: StorageServeAuthzContext) => boolean | P
  */
 const isServeAuthorized = async (authorize: StorageServeAuthorizer, key: string, request: Request): Promise<boolean> => {
     try {
-        return await authorize({ key, request });
+        // Read back as `unknown` and compared to `true`, not returned as-is. The
+        // gate is DECLARED to answer a boolean, but it is app code and untyped
+        // JavaScript reaches it: an `async ({ request }) => verifySignedUrl(…)`
+        // that forgot its `.valid` hands back `{ valid: false }`, which is
+        // TRUTHY. Passing that through turned a denial into an open bucket at the
+        // one check that decides whether the bytes are streamed.
+        const verdict: unknown = await authorize({ key, request });
+
+        return verdict === true;
     } catch {
         return false;
     }

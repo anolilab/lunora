@@ -114,10 +114,20 @@ interface DeferredScheduleContext {
  * here, and their `target`/`args` parameters disagree. `never` parameters accept
  * every one of them while still pinning the shape and the `Promise<string>` a
  * caller depends on.
+ *
+ * `args` is REQUIRED here and that is load-bearing, not a typo. A parameter
+ * declared optional widens to `never | undefined` — i.e. `undefined` — and
+ * `undefined` is not assignable to the `ScheduleTargetArgs<T>` that
+ * `@lunora/scheduler`'s `Scheduler.runAfter`/`runAt` require, so with `args?`
+ * the one scheduler this facade exists to wrap was the one scheduler that could
+ * not be passed to it: `withDeferredSchedules(createScheduler(env))` failed to
+ * compile and every real call site had to cast. Required, `never` is assignable
+ * to anything, so the real `Scheduler`, the shard-engine mirror (whose `args` IS
+ * optional) and the harness fake all satisfy it.
  */
 interface SchedulerLike {
-    runAfter: (delayMs: number, target: never, args?: never, options?: never) => Promise<string>;
-    runAt: (timestampMs: number, target: never, args?: never, options?: never) => Promise<string>;
+    runAfter: (delayMs: number, target: never, args: never, options?: never) => Promise<string>;
+    runAt: (timestampMs: number, target: never, args: never, options?: never) => Promise<string>;
 }
 
 /**
