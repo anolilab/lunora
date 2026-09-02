@@ -144,11 +144,20 @@ const writeSearchBackfillState = (sql: SqlExec, companion: string, cursor: strin
     // eslint-disable-next-line unicorn/no-null -- SQL bind value: "no page has run yet" is a NULL column, not undefined
     const cursorValue = cursor ?? null;
     const recorded = readSearchBackfillState(sql, companion).profile;
-    const fieldChanged = recorded !== undefined && searchIndexField(recorded) !== searchIndexField(profile);
+    // An ABSENT recorded profile breaks the latch too. A row written before
+    // profile tracking existed can carry `covered = 1` and no profile, and
+    // `planSearchBackfillPass` treats "no profile" as a mismatch: it wipes the
+    // companion and re-walks. Latching `covered` through that wipe reports an
+    // emptied companion as complete, and every read until the walk finishes
+    // returns partial matches as the whole answer. Nothing says what analyzed
+    // those rows or over which field, so the only sound reading is "unverified,
+    // reset". A companion with no state row at all takes this branch as well and
+    // is unaffected: its INSERT writes `covered = done` either way.
+    const fieldUnverified = recorded === undefined || searchIndexField(recorded) !== searchIndexField(profile);
     // `MAX(...)` latches; `excluded.covered` (which is `done`) replaces. Only the
     // FIRST page of a field-change rebuild sees a differing recorded profile —
     // from the second page on, the recorded profile is already the new one.
-    const coveredValue = fieldChanged
+    const coveredValue = fieldUnverified
         ? dsql`excluded.${dsql.identifier("covered")}`
         : dsql`MAX(${dsql.identifier(SEARCH_STATE_TABLE)}.${dsql.identifier("covered")}, excluded.${dsql.identifier("covered")})`;
 

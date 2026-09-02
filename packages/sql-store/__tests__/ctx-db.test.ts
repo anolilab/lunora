@@ -1460,3 +1460,111 @@ describe("global table index sort keys", () => {
         await expect(provisionedIndex("posts_by_status")).resolves.toMatch(/_creationTime/u);
     });
 });
+
+describe("global table companion provisioning", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    /** A table whose sole UNIQUE index is over `field`; both columns are optional, so either can hold NULL. */
+    const uniqueOver = (field: string): SchemaLike =>
+        ({
+            tables: {
+                drafts: {
+                    indexes: [{ fields: [field], name: "by_uniq", unique: true }],
+                    shape: { note: optionalCol("string"), slug: optionalCol("string") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        }) as never;
+
+    it("re-creates a UNIQUE index over a column whose unset rows SQLite would accept", async () => {
+        expect.assertions(3);
+
+        // Provision `drafts_by_uniq` over `note`.
+        const seeder = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: uniqueOver("note") });
+
+        await seeder.findMany("drafts", { limit: 1 });
+
+        // Two rows that leave the OPTIONAL `slug` unset. SQLite's UNIQUE index
+        // treats NULLs as distinct and accepts both, but `GROUP BY` treats them
+        // as equal — so an unfiltered duplicate probe reads them as one group of
+        // two and refuses a `CREATE UNIQUE INDEX` that would have succeeded, on
+        // every wake, for the life of the deployment.
+        await harness.exec.run(`INSERT INTO "drafts" ("id", "_creationTime", "note") VALUES (?, ?, ?)`, ["d1", 1, "a"]);
+        await harness.exec.run(`INSERT INTO "drafts" ("id", "_creationTime", "note") VALUES (?, ?, ?)`, ["d2", 2, "b"]);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: uniqueOver("slug") });
+
+        await expect(writer.findMany("drafts", { limit: 1 })).resolves.toBeDefined();
+
+        const rows = await harness.exec.all(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`, ["drafts_by_uniq"]);
+
+        expect(String(rows[0]?.["sql"])).toContain(`"slug"`);
+
+        // And the re-created constraint actually enforces on non-NULL values.
+        await writer.insert("drafts", { slug: "x" });
+
+        await expect(writer.insert("drafts", { slug: "x" })).rejects.toThrow(/unique constraint violation/iu);
+    });
+
+    it("still refuses a UNIQUE index whose non-NULL rows really are duplicates", async () => {
+        expect.assertions(1);
+
+        const seeder = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: uniqueOver("note") });
+
+        await seeder.findMany("drafts", { limit: 1 });
+        await harness.exec.run(`INSERT INTO "drafts" ("id", "_creationTime", "note", "slug") VALUES (?, ?, ?, ?)`, ["d1", 1, "a", "same"]);
+        await harness.exec.run(`INSERT INTO "drafts" ("id", "_creationTime", "note", "slug") VALUES (?, ?, ?, ?)`, ["d2", 2, "b", "same"]);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: uniqueOver("slug") });
+
+        await expect(writer.findMany("drafts", { limit: 1 })).rejects.toThrow(/cannot be re-created/u);
+    });
+
+    it("creates no aggregate or rank companion for an explicitly non-global table", async () => {
+        expect.assertions(4);
+
+        const mixed: SchemaLike = {
+            tables: {
+                metrics: {
+                    aggregateIndexes: [{ by: ["archived"], name: "byArchived", on: "metrics", op: "count" }],
+                    indexes: [],
+                    rankIndexes: [{ name: "byPriority", on: "metrics", partitionBy: ["archived"], sortBy: [{ direction: "desc", field: "priority" }] }],
+                    shape: { archived: col("boolean"), priority: col("number") },
+                    shardMode: { kind: "global" },
+                },
+                // Its rows live in the Durable Objects, so a companion here is an
+                // orphan: nothing on this plane ever writes to it or reads it.
+                sessions: {
+                    aggregateIndexes: [{ by: ["archived"], name: "byArchived", on: "sessions", op: "count" }],
+                    indexes: [],
+                    rankIndexes: [{ name: "byPriority", on: "sessions", partitionBy: ["archived"], sortBy: [{ direction: "desc", field: "priority" }] }],
+                    shape: { archived: col("boolean"), priority: col("number") },
+                    shardMode: { key: "archived", kind: "shardBy" },
+                },
+            },
+        } as never;
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: mixed });
+
+        await writer.findMany("metrics", { limit: 1 });
+
+        const named = async (name: string): Promise<boolean> => {
+            const rows = await harness.exec.all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, [name]);
+
+            return rows.length > 0;
+        };
+
+        await expect(named("metrics__agg_byArchived")).resolves.toBe(true);
+        await expect(named("metrics__rank_byPriority")).resolves.toBe(true);
+        await expect(named("sessions__agg_byArchived")).resolves.toBe(false);
+        await expect(named("sessions__rank_byPriority")).resolves.toBe(false);
+    });
+});

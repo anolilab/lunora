@@ -144,7 +144,7 @@ const indexSortKeys = (dialect: SqlDialect): SQL | undefined => {
 const dropIndexIfShapeChanged = async (
     exec: SqlCtxExec,
     dialect: SqlDialect,
-    spec: { columns: SQL; name: string; table: string; unique: boolean },
+    spec: { columns: SQL; name: string; refs: SQL[]; table: string; unique: boolean },
 ): Promise<void> => {
     if (dialect.name !== "sqlite") {
         return;
@@ -188,10 +188,20 @@ const dropIndexIfShapeChanged = async (
     // fields actually changed, and losing the race costs a failed migration
     // rather than a silently unprotected table.
     if (spec.unique) {
+        // Restricted to rows where EVERY indexed column is non-NULL, because the
+        // two sides disagree about NULL: `GROUP BY` treats NULLs as equal, a
+        // SQLite UNIQUE index treats them as distinct. Without the filter, an
+        // optional `.unique()` field with two unset rows reads as a duplicate,
+        // this throws, and a `CREATE UNIQUE INDEX` that would have SUCCEEDED is
+        // refused — on every wake, since the migration re-runs and re-fails.
+        const nonNull = sql.join(
+            spec.refs.map((reference) => sql`${reference} IS NOT NULL`),
+            sql` AND `,
+        );
         const duplicates = await queryAll(
             exec,
             dialect,
-            sql`SELECT ${spec.columns} FROM ${sql.identifier(spec.table)} GROUP BY ${spec.columns} HAVING COUNT(*) > 1 LIMIT 1`,
+            sql`SELECT ${spec.columns} FROM ${sql.identifier(spec.table)} WHERE ${nonNull} GROUP BY ${spec.columns} HAVING COUNT(*) > 1 LIMIT 1`,
         );
 
         if (duplicates.length > 0) {
@@ -222,14 +232,16 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
     const sortKeys = indexSortKeys(dialect);
 
     for (const index of definition.indexes) {
-        const fields = sql.join(
-            index.fields.map((field) => indexRef(field)),
-            sql`, `,
-        );
+        const refs = index.fields.map((field) => indexRef(field));
+        const fields = sql.join(refs, sql`, `);
         const unique = index.unique ?? false;
         const spec = {
             columns: unique || sortKeys === undefined ? fields : sql`${fields}, ${sortKeys}`,
             name: `${tableName}_${index.name}`,
+            // The columns UNJOINED, for the NULL filter on the duplicate probe in
+            // `dropIndexIfShapeChanged` — it needs one predicate per column, which
+            // the joined list cannot be taken apart into.
+            refs,
             table: tableName,
             unique,
         };
@@ -590,6 +602,21 @@ const runSqlGlobalTableMigrations = async (exec: SqlCtxExec, schema: SchemaLike,
 };
 
 /**
+ * Whether a table's companion tables belong in the `.global()` database.
+ *
+ * Deliberately looser than `runSqlGlobalTableMigrations`, which provisions base
+ * tables only for `shardMode.kind === "global"`: a `SchemaLike` caller may
+ * legitimately omit `shardMode` altogether, and excluding those would silently
+ * stop provisioning companions a table does want. What it DOES exclude is an
+ * explicit `root` or `shardBy` table — its rows live in the Durable Objects, so
+ * a `__agg_`/`__rank_` table created for it here is an orphan nothing ever
+ * writes to and nothing ever reads. Same rule, same reasoning, as
+ * `globalSearchIndexes`.
+ */
+const companionsBelongHere = (definition: SchemaLike["tables"][string]): boolean =>
+    definition.shardMode === undefined || definition.shardMode.kind === "global";
+
+/**
  * Materialize the `__agg_<index>` companion tables for every declared
  * `aggregateIndex` on a global table. Global tables in Lunora ship their own
  * DDL — counter tables are opt-in so production hosts can decide where they
@@ -604,7 +631,7 @@ const runSqlAggregateMigrations = async (exec: SqlCtxExec, schema: SchemaLike, d
     for (const [tableName, definition] of Object.entries(schema.tables)) {
         const indexes = definition.aggregateIndexes;
 
-        if (!indexes || indexes.length === 0) {
+        if (!indexes || indexes.length === 0 || !companionsBelongHere(definition)) {
             continue;
         }
 
@@ -696,7 +723,7 @@ const runSqlRankMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialec
     for (const [tableName, definition] of Object.entries(schema.tables)) {
         const indexes = definition.rankIndexes;
 
-        if (!indexes || indexes.length === 0) {
+        if (!indexes || indexes.length === 0 || !companionsBelongHere(definition)) {
             continue;
         }
 

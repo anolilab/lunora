@@ -394,24 +394,42 @@ class MaterializerRuntime {
      * @returns The number of entries applied during catch-up.
      */
     public async initialize(): Promise<number> {
-        const client = this.#doClient;
-
-        if (!client) {
+        if (!this.#doClient) {
             return 0;
         }
 
         // 1. Recover from snapshots — sets each materializer's own watermark.
         await this.recoverFromSnapshots();
 
-        // 2. Walk pages from the LOWEST watermark across materializers.
-        let sinceSeq = this.#watermarks.length > 0 ? Math.min(...this.#watermarks) : 0;
+        // 2/3. Walk pages from the LOWEST watermark across materializers,
+        // applying each page as it arrives.
+        return this.#catchUp();
+    }
+
+    /**
+     * Walk the log from the lowest per-materializer watermark, applying each
+     * bounded page as it arrives, until the log is exhausted or
+     * {@link MAX_CATCHUP_PAGES} pages have been read.
+     *
+     * Shared by `initialize()` and `appendEvent()` — the second needs the walk
+     * WITHOUT `recoverFromSnapshots()`, which would overwrite the state the
+     * runtime has already materialized.
+     * @returns The number of entries applied to at least one materializer.
+     */
+    async #catchUp(): Promise<number> {
+        const client = this.#doClient;
+
+        if (!client) {
+            return 0;
+        }
+
+        let sinceSeq = this.appliedSeq;
         let applied = 0;
 
         for (let pages = 0; pages < MAX_CATCHUP_PAGES; pages += 1) {
             // eslint-disable-next-line no-await-in-loop -- each page's cursor comes from the previous page, so the round-trips are inherently sequential
             const page = await client.getSince(sinceSeq);
 
-            // 3. Apply this page through the materializers.
             applied += this.applyEntries(page.entries);
 
             if (!page.truncated || page.cursor === undefined || page.cursor <= sinceSeq) {
@@ -443,6 +461,19 @@ class MaterializerRuntime {
 
         if (!entry) {
             throw new Error("MaterializerRuntime.appendEvent: DO returned empty result");
+        }
+
+        // Close any gap between the runtime and this entry BEFORE applying it.
+        // `applyEntries` advances every behind materializer's watermark to
+        // `entry.seq + 1`, so applying an appended entry over an unfinished
+        // catch-up — `initialize()` stopping at MAX_CATCHUP_PAGES, or a runtime
+        // that never initialized at all — steps the watermark past the backlog
+        // and skips it permanently: the next `initialize()` starts after the
+        // gap and nothing ever reads those entries. The walk re-fetches this
+        // entry too; `applyEntries` skips it as already applied, so the call
+        // below stays correct either way.
+        if (this.#materializers.length > 0 && this.appliedSeq < entry.seq) {
+            await this.#catchUp();
         }
 
         this.applyEntries([entry]);

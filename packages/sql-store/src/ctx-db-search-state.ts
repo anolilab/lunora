@@ -184,10 +184,19 @@ const writeSearchBackfillState = async (
     const recorded = existing[0]?.["profile"];
     // Only the FIRST page of a field-change rebuild sees a differing recorded
     // profile — from the second page on, the recorded profile is already the new one.
-    const fieldChanged = typeof recorded === "string" && searchIndexField(recorded) !== searchIndexField(profile);
+    //
+    // A NON-STRING recorded profile breaks the latch too. A row written before
+    // profile tracking existed can carry `covered = 1` and a NULL profile, and
+    // `planSearchBackfillPass` treats "no profile" as a mismatch: it wipes the
+    // companion and re-walks. Latching `covered` through that wipe reports an
+    // emptied companion as complete, and every read until the walk finishes
+    // returns partial matches as the whole answer. Nothing says what analyzed
+    // those rows or over which field, so the only sound reading is "unverified,
+    // reset".
+    const fieldUnverified = typeof recorded !== "string" || searchIndexField(recorded) !== searchIndexField(profile);
     const doneValue = done ? 1 : 0;
     const coveredSet =
-        done || fieldChanged ? sql`${sql.identifier("covered")} = ${doneValue}` : sql`${sql.identifier("covered")} = ${sql.identifier("covered")}`;
+        done || fieldUnverified ? sql`${sql.identifier("covered")} = ${doneValue}` : sql`${sql.identifier("covered")} = ${sql.identifier("covered")}`;
     const update = sql`UPDATE ${sql.identifier(SEARCH_STATE_TABLE)} SET ${sql.identifier("cursor")} = ${cursorValue}, ${sql.identifier("done")} = ${doneValue}, ${sql.identifier("profile")} = ${profile}, ${coveredSet} WHERE ${sql.identifier("companion")} = ${companion}`;
 
     if (existing.length > 0) {

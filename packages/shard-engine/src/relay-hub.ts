@@ -1240,6 +1240,27 @@ class RelayMember extends RelayLink {
     /** Per-socket cohort memo `ws → subId → { cursor, epoch }`: the relay delivers a poke to a socket only while its memo matches the poke's `fromCursor`+`epoch`. */
     private readonly shapeRelayMemos = new WeakMap<ShardSocketLike, Map<string, { cursor: number; epoch?: string }>>();
 
+    /**
+     * Serialises this relay's shape control frames to the owner, so the owner
+     * sees them in the order the client sent them.
+     *
+     * `releaseRelayShapes` runs under `waitUntil` (the unsubscribe handler must
+     * not block on a cross-DO POST) while `seedRelayShape` is awaited by the
+     * `shape_subscribe` handler — two independent posts, arriving in whichever
+     * order the network settles on. Both address the same
+     * `relayIndex:connectionId:subId` proxy key, and `onShapeUnsubscribe`
+     * deletes by that key with no version check, so an unsubscribe that lands
+     * AFTER the resubscribe it preceded removes the replacement registration.
+     * The socket then keeps its subscription and simply stops being poked, for
+     * the life of that subscription, with nothing logged on either side.
+     *
+     * A queue rather than a registration incarnation on the frames: the owner's
+     * proxy entries are durable, so an incarnation has to be persisted, matched
+     * and reclaimed on both planes to fix an ordering problem the sender can
+     * just not create.
+     */
+    private shapeControl: Promise<unknown> = Promise.resolve();
+
     public constructor(host: RelayHost, ownerKey: string, relayIndex: number) {
         super(host, { ownerKey, relayIndex });
     }
@@ -1294,7 +1315,7 @@ class RelayMember extends RelayLink {
             userId: identity.userId,
         };
 
-        const response = await this.requestRelayMessage(this.roleId.ownerKey, request);
+        const response = await this.queueShapeControl(async () => this.requestRelayMessage(this.roleId.ownerKey, request));
 
         if (response === undefined) {
             return { code: "RELAY_SEED_FAILED", message: "owner did not answer the shape seed" };
@@ -1382,12 +1403,14 @@ class RelayMember extends RelayLink {
             return;
         }
 
-        await this.postRelayMessage(this.roleId.ownerKey, {
-            connectionId,
-            relayIndex: this.roleId.relayIndex as number,
-            ...(subId === undefined ? {} : { subId }),
-            type: "relay_shape_unsubscribe",
-        });
+        await this.queueShapeControl(async () =>
+            this.postRelayMessage(this.roleId.ownerKey, {
+                connectionId,
+                relayIndex: this.roleId.relayIndex as number,
+                ...(subId === undefined ? {} : { subId }),
+                type: "relay_shape_unsubscribe",
+            }),
+        );
     }
 
     // eslint-disable-next-line class-methods-use-this -- role hook: a relay never spreads connections (flat single tier)
@@ -1432,6 +1455,22 @@ class RelayMember extends RelayLink {
 
     protected override onShapePoke(poke: RelayShapePoke): number {
         return this.deliverShapePoke(poke);
+    }
+
+    /**
+     * Run `send` after every shape control frame already queued on this relay,
+     * whatever their outcome — a failed post must not stall the queue behind it,
+     * and `requestRelayMessage` already swallows the transient cross-DO failure.
+     */
+    private async queueShapeControl<T>(send: () => Promise<T>): Promise<T> {
+        const next = this.shapeControl.then(send, send);
+
+        this.shapeControl = next.then(
+            () => undefined,
+            () => undefined,
+        );
+
+        return next;
     }
 
     /** Record a relay socket's cohort cursor + epoch for `subId` (creating the per-socket map lazily). */

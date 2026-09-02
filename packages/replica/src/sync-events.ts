@@ -86,6 +86,16 @@ export interface EventsSyncOptions {
      * consumer should feed these events into their state machine
      * (e.g. an {@link import("@lunora/replica").EventSource | EventSource})
      * so that the machine's state reflects the latest log position.
+     *
+     * **Must be atomic across the batch: apply every event, or none.** There is
+     * no rollback here and none is possible — the state machine is the
+     * consumer's. A call that mutates derived state and then throws partway is
+     * re-delivered WHOLE on the next poll (the watermark only advances past a
+     * batch that fully succeeded, and a replay that threw is not recorded), so a
+     * non-atomic implementation applies the events before the throw twice. A
+     * call that RETURNS is never re-delivered: {@link EventsSync} tracks the
+     * highest applied `seq` separately from the watermark, so a batch whose
+     * replay succeeded and whose mirror fan-out then failed is not replayed.
      */
     applyEvents: (events: ReadonlyArray<EventLogEntry>) => void;
 

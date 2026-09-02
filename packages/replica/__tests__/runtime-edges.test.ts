@@ -456,6 +456,51 @@ describe(subscribeToMirror, () => {
         expect(double.applied[1]?.changes).toStrictEqual([{ id: "1", type: "delete" }]);
     });
 
+    it("reconciles a frame that repeats a primary key against its LAST row", () => {
+        expect.assertions(3);
+
+        const { double, push } = wire();
+
+        push([{ id: "1", title: "b" }]);
+
+        expect(double.applied[0]?.changes).toStrictEqual([{ data: { id: "1", title: "b" }, type: "insert" }]);
+
+        // The server repeats key "1", and the LAST of the two matches what the
+        // mirror already holds. Diffing row by row queued the first ("a" differs
+        // from the held "b") and then skipped the second ("b" matches), leaving
+        // the mirror on "a" while the recorded frame said "b" — a divergence no
+        // later frame could correct, because every subsequent frame of "b" looks
+        // unchanged.
+        push([
+            { id: "1", title: "a" },
+            { id: "1", title: "b" },
+        ]);
+
+        expect(double.applied).toHaveLength(1);
+
+        // The recorded frame really is the last row, so a genuine edit still lands.
+        push([{ id: "1", title: "c" }]);
+
+        expect(double.applied[1]?.changes).toStrictEqual([{ data: { id: "1", title: "c" }, type: "insert" }]);
+    });
+
+    it("upserts a repeated primary key once, from its last row", () => {
+        expect.assertions(1);
+
+        const { double, push } = wire();
+
+        push([
+            { id: "1", title: "first" },
+            { id: "2", title: "other" },
+            { id: "1", title: "last" },
+        ]);
+
+        expect(double.applied[0]?.changes).toStrictEqual([
+            { data: { id: "1", title: "last" }, type: "insert" },
+            { data: { id: "2", title: "other" }, type: "insert" },
+        ]);
+    });
+
     it("treats a single-object frame as one row and numeric ids as strings", () => {
         expect.assertions(2);
 

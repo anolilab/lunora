@@ -332,6 +332,51 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
         expect(runtime.appliedSeq).toBe(1000);
     });
 
+    it("appendEvent closes an unfinished catch-up before applying its own entry", async () => {
+        expect.assertions(3);
+
+        // The same faster-than-the-reader log as above, plus an append. A
+        // bounded `initialize()` stops at 1000 with 500 entries still
+        // unprocessed; applying an appended entry over that gap advances every
+        // watermark to its `seq + 1`, so the next `initialize()` starts past the
+        // backlog and those 500 entries are never read by anyone.
+        const client = {
+            append: async () => [{ seq: 1500, type: "increment", payload: {}, timestamp: 1500 }],
+            getSince: async (sinceSeq: number) => {
+                return {
+                    cursor: sinceSeq + 1,
+                    entries: [{ seq: sinceSeq, type: "increment", payload: {}, timestamp: sinceSeq }],
+                    truncated: sinceSeq < 1500,
+                };
+            },
+        } as unknown as EventLogDOClient;
+
+        const counter = defineMaterializer({
+            name: "counter",
+            initial: () => {
+                return { total: 0 };
+            },
+            handle: (state, entry) => {
+                if (entry.type === "increment") {
+                    return { total: state.total + 1 };
+                }
+                return state;
+            },
+        });
+
+        const runtime = new MaterializerRuntime([counter], { doClient: client });
+
+        await expect(runtime.initialize()).resolves.toBe(1000);
+
+        await runtime.appendEvent({ type: "increment", payload: {} });
+
+        // 0..1500 inclusive — the backlog the first pass could not reach, then
+        // the appended entry itself (re-fetched by the walk, so `applyEntries`
+        // skips it as already applied).
+        expect(counter.state).toEqual({ total: 1501 });
+        expect(runtime.appliedSeq).toBe(1501);
+    });
+
     it("appendEvent throws when no doClient configured", async () => {
         expect.assertions(1);
 

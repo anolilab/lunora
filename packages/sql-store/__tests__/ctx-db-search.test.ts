@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSqlCtxDb } from "../src/ctx-db";
 import type { SearchStage } from "../src/ctx-db-search";
 import { backfillSqlSearchIndexes, createSearchSync, runSqlSearch, runSqlSearchMigrations } from "../src/ctx-db-search";
+import { migrateSearchState, readSearchIndexCoverage, SEARCH_STATE_TABLE, writeSearchBackfillState } from "../src/ctx-db-search-state";
 import type { SqlDialect } from "../src/dialect";
 import { companionFor } from "../src/search-layout";
 import type { SqlCtxExec } from "../src/sql-exec";
@@ -736,6 +737,56 @@ describe("global search provisioning", () => {
                     [Symbol.asyncIterator]() // eslint-disable-line no-unexpected-multiline -- continues the chain above, not a new statement; Prettier owns this line-wrap
                     .next(),
             ).rejects.toThrow(/legacy query\(\)\/withIndex\(\) reader is not available/u);
+        });
+    });
+
+    /**
+     * The `covered` latch is what lets a REBUILDING companion keep serving while
+     * a NEW one refuses, and it survives an analyzer bump on purpose. What it
+     * must not survive is a rebuild it cannot vouch for: a progress row written
+     * before profile tracking existed carries `covered = 1` and a NULL profile,
+     * `planSearchBackfillPass` reads that absence as a mismatch and wipes the
+     * companion, and latching through the wipe reported an emptied companion as
+     * complete — partial results served as the whole answer for the length of
+     * the re-walk.
+     */
+    describe("coverage across a legacy progress row", () => {
+        /** A row as an earlier build left it: finished, latched, nothing recorded about what analyzed it. */
+        const seedLegacyRow = async (): Promise<void> => {
+            await migrateSearchState(exec, dialect);
+            raw(`INSERT INTO "${SEARCH_STATE_TABLE}" ("companion", "cursor", "done", "profile", "covered") VALUES (?, NULL, 1, NULL, 1)`, COMPANION);
+        };
+
+        it("drops coverage on the first incomplete page of the rewalk it forces", async () => {
+            expect.assertions(2);
+
+            await seedLegacyRow();
+
+            await expect(readSearchIndexCoverage(exec, dialect, COMPANION)).resolves.toBe(true);
+
+            await writeSearchBackfillState(exec, dialect, COMPANION, "d0100", false, "en-v1:body");
+
+            await expect(readSearchIndexCoverage(exec, dialect, COMPANION)).resolves.toBe(false);
+        });
+
+        it("re-latches coverage once that rewalk reaches the end of the table", async () => {
+            expect.assertions(1);
+
+            await seedLegacyRow();
+            await writeSearchBackfillState(exec, dialect, COMPANION, "d0100", false, "en-v1:body");
+            await writeSearchBackfillState(exec, dialect, COMPANION, "d0249", true, "en-v1:body");
+
+            await expect(readSearchIndexCoverage(exec, dialect, COMPANION)).resolves.toBe(true);
+        });
+
+        it("still holds the latch through an analyzer bump that keeps the same field", async () => {
+            expect.assertions(1);
+
+            await migrateSearchState(exec, dialect);
+            await writeSearchBackfillState(exec, dialect, COMPANION, "d0249", true, "en-v1:body");
+            await writeSearchBackfillState(exec, dialect, COMPANION, "d0100", false, "en-v2:body");
+
+            await expect(readSearchIndexCoverage(exec, dialect, COMPANION)).resolves.toBe(true);
         });
     });
 });

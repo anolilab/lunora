@@ -92,6 +92,11 @@ const subscribeToMirror = (
         args,
         (data: unknown) => {
             const next = new Map<string, string>();
+            // The row behind each surviving encoding. Filled in the same pass as
+            // `next`, so a repeated primary key leaves the LAST row for that key
+            // in both — which is what makes the diff below agree with the frame
+            // this hands to `known`.
+            const records = new Map<string, Record<string, unknown>>();
             const changes: RowChange[] = [];
 
             for (const row of asRowArray(data)) {
@@ -117,12 +122,23 @@ const subscribeToMirror = (
                 const encoded = stableWireKey(record);
 
                 next.set(id, encoded);
+                records.set(id, record);
+            }
 
+            // Diffed only AFTER the frame is deduplicated, never row by row.
+            // A frame may repeat a primary key, and `known` is replaced with
+            // `next` — the LAST row per key. Comparing each row as it arrived
+            // let `[id=1: A, id=1: B]` over a prior frame of `id=1: B` queue A
+            // (differs from `known`) and then skip B (matches `known`), leaving
+            // the mirror on A while `known` claimed B: a divergence no later
+            // frame could correct, because every subsequent frame of B looks
+            // unchanged.
+            for (const [id, encoded] of next) {
                 // A changed row is upserted (`insert` → INSERT OR REPLACE), not
                 // `update`d: a snapshot row is the WHOLE row, and UPDATE would
                 // leave a column the server dropped at its stale value.
                 if (known.get(id) !== encoded) {
-                    changes.push({ type: "insert", data: record });
+                    changes.push({ data: records.get(id) as Record<string, unknown>, type: "insert" });
                 }
             }
 

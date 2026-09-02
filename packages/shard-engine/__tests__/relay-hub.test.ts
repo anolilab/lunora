@@ -559,3 +559,87 @@ describe("owner seed reply", () => {
         expect(reply.frames).toBeUndefined();
     });
 });
+
+/**
+ * A relay's shape control frames reach the owner in the order the client sent
+ * them.
+ *
+ * `releaseRelayShapes` runs under `waitUntil` — the unsubscribe handler must not
+ * block on a cross-DO POST — while `seedRelayShape` is awaited by the
+ * `shape_subscribe` handler. Two independent posts, so an unsubscribe the client
+ * sent FIRST can reach the owner second, and `onShapeUnsubscribe` deletes the
+ * `relayIndex:connectionId:subId` proxy entry the resubscribe just wrote. The
+ * socket keeps its subscription and simply stops being poked, for the life of
+ * that subscription, with nothing logged on either side.
+ */
+describe("relay shape control frames vs. a resubscribe on the same subId", () => {
+    /** A relay member whose owner-bound posts are recorded, with `relay_shape_unsubscribe` held back by a tick. */
+    const memberWithSlowUnsubscribe = (): { member: NonNullable<ReturnType<typeof createRelayLink>>; posts: string[] } => {
+        const posts: string[] = [];
+
+        const host = {
+            doName: () => `${OWNER_KEY}::relay::0`,
+            env: () => {
+                const stub = {
+                    fetch: async (_url: string, init?: { body?: string }) => {
+                        const frame = JSON.parse(init?.body ?? "{}") as { type: string };
+
+                        // The unsubscribe takes the slow path to the owner. One
+                        // macrotask is enough: the seed's own `announce()` hop
+                        // already gives the subscribe a head start of several
+                        // microtasks, which is exactly the real race.
+                        if (frame.type === "relay_shape_unsubscribe") {
+                            await new Promise((resolve) => {
+                                setTimeout(resolve, 5);
+                            });
+                        }
+
+                        posts.push(frame.type);
+
+                        return Response.json({ cursor: 5, epoch: "e1", frames: [] }, {
+                            headers: { "content-type": "application/json" },
+                            status: 200,
+                        });
+                    },
+                };
+
+                return { SHARD: { get: () => stub, getByName: () => stub, idFromName: (id: string) => id } };
+            },
+            getWebSockets: () => [],
+            readAttachment: () => {
+                return { connectionId: "c-alice" };
+            },
+            shardBinding: () => "SHARD",
+        } as unknown as RelayHost;
+
+        const member = createRelayLink(host);
+
+        if (member === undefined) {
+            throw new Error("expected a relay link for a ::relay::-suffixed DO name");
+        }
+
+        return { member, posts };
+    };
+
+    it("does not let a slow unsubscribe overtake the resubscribe that followed it", async () => {
+        expect.assertions(2);
+
+        const { member, posts } = memberWithSlowUnsubscribe();
+        const ws = {} as unknown as ShardSocketLike;
+        const identity = { identity: { org: "acme" }, userId: "u1" } as unknown as SubscriptionIdentity;
+
+        // The client unsubscribes and immediately resubscribes on the same
+        // `subId`. `shard-do` hands the release to `waitUntil` and does not await
+        // it, so both are in flight at once.
+        const released = member.releaseRelayShapes(ws, "s1");
+
+        await member.seedRelayShape(ws, "s1", OPEN_SHAPE, identity);
+        await released;
+
+        expect(posts.filter((type) => type.startsWith("relay_shape"))).toStrictEqual(["relay_shape_unsubscribe", "relay_shape_subscribe"]);
+
+        // …and the seed still returns the owner's answer rather than being
+        // starved by the frame queued ahead of it.
+        expect(posts).toContain("relay_attach");
+    });
+});
