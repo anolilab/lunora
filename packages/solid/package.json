@@ -1,6 +1,6 @@
 {
     "name": "@lunora/solid",
-    "version": "1.0.0-alpha.73",
+    "version": "1.0.0-alpha.74",
     "description": "SolidJS adapter for Lunora — live queries, optimistic mutations, and reactive loaders",
     "keywords": [
         "cloudflare",
@@ -68,9 +68,9 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/client": "1.0.0-alpha.70",
-        "@lunora/errors": "1.0.0-alpha.28",
-        "@lunora/ratelimit": "1.0.0-alpha.34",
+        "@lunora/client": "1.0.0-alpha.71",
+        "@lunora/errors": "1.0.0-alpha.29",
+        "@lunora/ratelimit": "1.0.0-alpha.35",
         "@visulima/storage-client": "catalog:storage"
     },
     "devDependencies": {
