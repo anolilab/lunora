@@ -24,7 +24,7 @@ import { sql } from "drizzle-orm";
 
 import type { SqlDialect } from "./dialect";
 import type { SqlCtxExec } from "./sql-exec";
-import { columnRefSql, createIndexIfNotExists, queryAll, queryBatch, queryRun, tableColumns } from "./sql-exec";
+import { columnRefSql, createIndexIfNotExists, OCC_VERSION_COLUMN, queryAll, queryBatch, queryRun, tableColumns } from "./sql-exec";
 import { BIGINT_KEY_LENGTH, bigintSqlKey, effectiveColumnKind } from "./value-codec";
 
 /**
@@ -51,7 +51,15 @@ const globalTableColumnsDdl = (tableName: string, definition: SchemaLike["tables
         fieldColumns.push(sql`${sql.identifier(field)} ${sql.raw(`${globalColumnAffinity(validator, dialect)}${notNull}`)}`);
     }
 
-    const frameworkColumns = dialect.frameworkColumns().map((column) => sql`${sql.identifier(column.name)} ${sql.raw(column.type)}`);
+    const frameworkColumns = [
+        ...dialect.frameworkColumns().map((column) => sql`${sql.identifier(column.name)} ${sql.raw(column.type)}`),
+        // The optimistic-concurrency row version (see `OCC_VERSION_COLUMN`).
+        // Nullable and untyped by the dialect's `frameworkColumns` on purpose:
+        // it is the store core's own bookkeeping, not part of the physical
+        // contract the D1/Hyperdrive dialects publish, and `INSERT` never binds
+        // it.
+        sql`${sql.identifier(OCC_VERSION_COLUMN)} ${sql.raw(dialect.companionTypes.integer)}`,
+    ];
     const total = frameworkColumns.length + fieldColumns.length;
 
     // `VALIDATION_ERROR`, not `INTERNAL`: a table too wide is the schema
@@ -60,10 +68,26 @@ const globalTableColumnsDdl = (tableName: string, definition: SchemaLike["tables
     // what to do. `ensureMigrated` does not cache the rejection, so every
     // request re-runs this; an opaque 500 forever is a bad way to learn a table
     // has too many columns.
-    if (dialect.maxTableColumns !== undefined && total > dialect.maxTableColumns) {
+    const limit = dialect.maxTableColumns;
+
+    if (limit !== undefined && total > limit) {
+        // Exactly one column over is the case that reads as an accusation
+        // rather than a diagnosis: `_version` joined the framework set after
+        // this table was provisioned, so a table that fit at the engine's limit
+        // yesterday is one column over today, and its rows are real. The limit
+        // is hard — no `ALTER` can widen a table already at it — so the
+        // difference between the two cases is worth a sentence: one is "your
+        // schema is too wide", the other is "your data needs moving first".
+        const displacedByRowVersion = total - 1 === limit;
+        const path = `Move one or more fields into a single object field, or split the table — either way the existing rows need a data migration (\`defineMigration\` + \`lunora migrate up\`); there is no in-place path.`;
+
         throw new LunoraError(
             "VALIDATION_ERROR",
-            `@lunora/sql-store: global table "${tableName}" needs ${String(total)} columns, over this engine's ${String(dialect.maxTableColumns)}-column limit — split the table, or move the extra fields into one object field`,
+            `@lunora/sql-store: global table "${tableName}" needs ${String(total)} columns, over this engine's ${String(limit)}-column limit. ${
+                displacedByRowVersion
+                    ? `One of them is "${OCC_VERSION_COLUMN}", the row version every guarded write reads, which caps declared fields at ${String(limit - frameworkColumns.length)}. A table provisioned at ${String(limit)} columns before that column existed cannot be widened to hold it. `
+                    : ""
+            }${path}`,
         );
     }
 
@@ -490,11 +514,15 @@ const rewriteLegacyBigintColumns = async (
  * explicit migration.
  */
 const alterGlobalTableDrift = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
-    const fields = Object.entries(definition.shape).filter(([, validator]) => validator._meta?.column !== undefined);
-
-    if (fields.length === 0) {
-        return;
-    }
+    // The OCC version column leads the list: a table provisioned before it
+    // existed carries none, and the guarded-write CAS reads it on every
+    // `patch`/`replace`/`delete`.
+    const wanted: [column: string, type: string][] = [
+        [OCC_VERSION_COLUMN, dialect.companionTypes.integer],
+        ...Object.entries(definition.shape)
+            .filter(([, validator]) => validator._meta?.column !== undefined)
+            .map(([field, validator]): [string, string] => [field, globalColumnAffinity(validator, dialect)]),
+    ];
 
     const probe = async (columns: ReadonlyArray<string>): Promise<boolean> => {
         try {
@@ -513,22 +541,18 @@ const alterGlobalTableDrift = async (exec: SqlCtxExec, tableName: string, defini
         }
     };
 
-    if (await probe(fields.map(([field]) => field))) {
+    if (await probe(wanted.map(([column]) => column))) {
         return;
     }
 
-    for (const [field, validator] of fields) {
+    for (const [column, type] of wanted) {
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared connection; each probe gates its own ALTER.
-        if (await probe([field])) {
+        if (await probe([column])) {
             continue;
         }
 
         // eslint-disable-next-line no-await-in-loop -- same connection, and a failure here must surface rather than race the next ALTER.
-        await queryRun(
-            exec,
-            dialect,
-            sql`ALTER TABLE ${sql.identifier(tableName)} ADD COLUMN ${sql.identifier(field)} ${sql.raw(globalColumnAffinity(validator, dialect))}`,
-        );
+        await queryRun(exec, dialect, sql`ALTER TABLE ${sql.identifier(tableName)} ADD COLUMN ${sql.identifier(column)} ${sql.raw(type)}`);
     }
 };
 

@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import readPlatformIdentity from "./platform-identity";
 import type { AccessClaims, AccessJwtFallbackOptions } from "./types";
@@ -18,9 +20,16 @@ interface AccessAdminGateOptions extends AccessJwtFallbackOptions {
  * Build an admin gate for `@lunora/runtime`'s `WorkerOptions.adminGate`: a
  * predicate that authenticates the caller through Cloudflare Access and applies
  * your `isAdmin(claims)` test. When it resolves `true` the request authorizes the
- * `/_lunora/admin/*` plane (the Studio's HTTP + WS endpoints) in addition to — or
- * instead of — the static admin bearer, so the Studio can sit behind Cloudflare
- * Access.
+ * admin **HTTP** plane (`/_lunora/admin/*` plus `/_lunora/migrate`) in addition
+ * to — or instead of — the static admin bearer, so the Studio's pages can sit
+ * behind Cloudflare Access.
+ *
+ * It does NOT cover `/_lunora/ws`, which is not an admin path: the runtime never
+ * evaluates the gate there. The Studio's live views authenticate their socket
+ * with a sub-token minted at `/_lunora/admin/ws-token`, signed with the static
+ * admin token — so with no `LUNORA_ADMIN_TOKEN` configured, minting refuses
+ * (`ADMIN_TOKEN_NOT_CONFIGURED`) and every live panel fails while the HTTP pages
+ * work. Configure both.
  *
  * It accepts exactly one proof, and **which one is your choice, not the
  * platform's**:
@@ -64,6 +73,19 @@ interface AccessAdminGateOptions extends AccessJwtFallbackOptions {
  * ```
  */
 const accessAdminGate = (options: AccessAdminGateOptions): ((request: Request, context?: ExecutionContextLike) => Promise<boolean>) => {
+    // `isAdmin` is the whole authorization boundary, and the type alone does not
+    // enforce it: JS callers and `as` casts reach here without one, and a missing
+    // one used to throw a bare TypeError *inside* the gate — which the runtime
+    // catches and degrades to "no grant". The Studio then silently fell back to
+    // the bearer with nothing logged. Fail at wiring time, by name, instead.
+    if (typeof options.isAdmin !== "function") {
+        throw new LunoraError(
+            "INTERNAL",
+            "accessAdminGate: `isAdmin` is required and must be a function — it is the entire admin boundary, so there is no implicit grant. " +
+                'Pass e.g. `isAdmin: (claims) => claims.groups?.includes("lunora-admins") ?? false`.',
+        );
+    }
+
     // Validate the static config eagerly so a half-configured deployment fails
     // fast here at wiring time instead of denying every admin request with no
     // signal. `undefined` means "no JWT configured", which selects the platform

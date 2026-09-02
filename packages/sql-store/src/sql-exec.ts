@@ -342,3 +342,5 @@ export {
     serializeColumnValue,
     tableColumns,
 };
+
+export { OCC_VERSION_COLUMN } from "../../../shared/occ-version-column";

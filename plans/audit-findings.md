@@ -24,12 +24,6 @@ PR groups (each stacked on `fix/audit-round-5`, reviewed separately):
 | R8a        | client core + React (round 8)                                                                    | #554 |
 | R8b        | Durable Object, scheduler, stream identity (round 8)                                             | #555 |
 | R8c (#556) | templates, init scaffold, queue auth, storage serving (round 8)                                  |      |
-| R11a       | round-11 branch audit: ratelimit, platform-node, scheduler, sql-store                            | #573 |
-| R11b       | round-11 code quality: module splits, duplicated helpers                                         | #574 |
-| R11c       | round-11 repo gates: prettier, secret scanner                                                    | #575 |
-| R11d       | round-11 shard DO: conformance deadlock, subscription cap, headroom metering                     | #576 |
-| R11e       | round-11 client outbox: replay classification and retry hints                                    | #577 |
-| R11f       | round-11 deferred schedules: transaction scoping, guards, flush                                  | #578 |
 
 ## Round 7 — thermos review of round 6 commits (c7dfc94a7..8795b40f9)
 
@@ -418,43 +412,6 @@ PR groups (each stacked on `fix/audit-round-5`, reviewed separately):
 | V12 | L   | packages/config/src/studio-host/schema-edit-handler.ts:149, policy-scaffold-handler.ts:91 vs packages/vite/src | The studio endpoints call `runCodegen({ lunoraDirectory, projectRoot })` without the project's `apiSpec`/`wranglerVariables`                                                                             | fixed  | R10g  |
 | V13 | L   | packages/vite/src/dev-variables-plugin.ts:28-42, wrangler-validator-plugin.ts:69-96, Vite resolveConfig(inline | `vite preview` resolves with `command: "serve"`, so `apply: "serve"` + `configResolved` plugins run there too: `vite preview` prompts to scaffold `.dev.vars`, runs `fillDevSecrets` (writes the file),  | fixed  | R10g  |
 | V14 | L   | packages/vite/src/index.ts:147-153 vs framework-compose-plugin.ts:257-260, templates/vinext/wrangler.jsonc:13  | Docblock contradiction: `index.ts` says the compose plugin is "a strict no-op for … the `cloudflare: false` BYO path"; the plugin's own docblock (and the code, which never reads the option) says the o | fixed  | R10g  |
-
-## Round 11 — thermos review of the round 7-10 stack (branch audit + code quality)
-
-Reviewed the accumulated stack rather than a single commit range, so several
-rows are defects the stack itself introduced.
-
-| ID  | Sev | Where                                                                                | Finding                                                                                                                                                                      | Status | Group |
-| --- | --- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ----- |
-| H1  | H   | packages/platform-node/src/node-shard-host.ts:442, packages/platform/src/conformance | A mid-transaction read refused with a bare `Error`, which every transport edge redacts to an `INTERNAL` 500 that no client retries; now `SHARD_UNAVAILABLE`/503              | fixed  | R11a  |
-| H2  | H   | packages/ratelimit/src/middleware.ts:129-135                                         | The retry hint was sent under a key the client does not read, so a rate-limited write had no delay to retry from                                                             | fixed  | R11a  |
-| H3  | H   | packages/do/**tests**/workerd, packages/platform/src/conformance/suite.ts:124        | A conformance case added by this stack deadlocks the real Cloudflare host: gated timer continuations deliver in scheduling order, so outer-shorter-than-inner never advances | fixed  | R11d  |
-| H4  | H   | packages/do/src/shard-do.ts (MAX_SUBSCRIPTIONS_PER_SOCKET)                           | The 32 to 8 cap cut was derived from a 2048-byte attachment budget; the measured workerd ceiling is 16384, so the cliff was real and unnecessary                             | fixed  | R11d  |
-| M1  | M   | packages/scheduler/src/scheduler-do.ts                                               | A reused caller-supplied job id silently overwrote the existing record; now refused with `409 DUPLICATE_SCHEDULE_ID`                                                         | fixed  | R11a  |
-| M2  | M   | packages/server/src/deferred-schedules.ts                                            | The deferred-schedule queue hung off the shared ctx, so a sibling drained a rolled-back mutation's jobs and a committed window lost its own                                  | fixed  | R11f  |
-| M3  | M   | packages/scheduler/src/validate-instant.ts, create-worker.ts                         | `runAt` had no bound at all, so a non-finite instant produced a record no alarm can fire                                                                                     | fixed  | R11f  |
-| M4  | M   | packages/server/src/deferred-schedules.ts, packages/codegen emit                     | A mid-flush dispatch failure abandoned the remaining jobs and skipped the deferred-delete flush that follows it                                                              | fixed  | R11f  |
-| M5  | M   | packages/do/src/shard-do.ts                                                          | The subscription cap cut was a user-visible cliff with no diagnostic and no migration path                                                                                   | fixed  | R11d  |
-| M6  | M   | packages/scheduler/src/scheduler-do.ts                                               | Orphaned records were only reindexed from the alarm path, never from `fetch`                                                                                                 | fixed  | R11a  |
-| M7  | M   | packages/server (buildCtx, callRegistered)                                           | The transaction covered `stream` and `createCaller` paths where the schedule deferral did not; `createCaller` had no span at all                                             | fixed  | R11f  |
-| M8  | M   | packages/do/src/shard-do.ts (transactionHeadroom)                                    | Admin bulk ops minted one headroom tracker per row, so the ceiling reset every row and bounded nothing                                                                       | fixed  | R11d  |
-| L1  | L   | packages/sql-store/src/ctx-db-migrations.ts:53-66                                    | The framework-column ceiling dropped 98 to 97 with `_version` and the error named no way forward                                                                             | fixed  | R11a  |
-| L2  | L   | packages/scheduler/src/resolve-schedule-id.ts                                        | A caller's `options.id` was honoured outside a mutation but replaced by a generated UUID inside one                                                                          | fixed  | R11f  |
-| L3  | L   | packages/client/src/replay.ts                                                        | `replayRetryDelay` was one field while flushes are per shard key, so one limited shard stalled every other                                                                   | fixed  | R11e  |
-| L4  | L   | packages/client/src/replay.ts                                                        | The `Retry-After` HTTP-date form (RFC 9110) was unparsed and yielded `NaN`                                                                                                   | fixed  | R11e  |
-| L5  | L   | packages/client/src/replay.ts, protocol/README.md 4.3                                | An envelope-less non-2xx from a proxy wedged the outbox head forever; the spec required exactly this                                                                         | fixed  | R11e  |
-| L6  | L   | packages/scheduler/src/do-client.ts:44                                               | Every non-2xx was wrapped in `INTERNAL`, whose message is redacted, so coded refusals reached developers as "Internal error"                                                 | fixed  | R11f  |
-| L7  | L   | packages/cli/skills, packages/values, protocol, packages/hyperdrive                  | The prettier and secret-scanner CI gates were red across the stack and are covered by no other gate                                                                          | fixed  | R11c  |
-| Q1  | L   | packages/server/src/http.ts, packages/client/src/lunora-client.ts, shared/           | Two modules over 1,000 lines and four duplicated helpers (cap-error-body, OCC column, write-error catch, five schedule-delay guards)                                         | fixed  | R11b  |
-
-### Round 11 — rejected or deliberately deferred
-
-- **M2 half (a)** — "an action's own job is dropped by a composed mutation's rollback" is not fixable at the facade: `ctx.runMutation` hands the _same ctx object_ to the callee by design, so nothing there can attribute the call. Needs async-context propagation, which is a much larger change than the finding implies.
-- **M7's `createCaller` premise** — it was not "transactional writes but non-deferred schedules"; handlers were invoked directly with no span at all. The larger adjacent gap was fixed instead.
-- **The deferred-_delete_ facade has M7's gap too** — deliberately not widened: without adding a flush to the stream and subscription paths it would swap a loud `TypeError` for a silent leak.
-- **A `runAt` guard in `@lunora/testing`'s fake scheduler** — written, then reverted as unreachable: the facade's guard answers first, proven by stashing only the fake's change and watching the test still pass.
-- **A pre-flight attachment size check** — built, then removed: `JSON.stringify` is the only sizer in a Worker and a `bigint` in `args` made it refuse valid subscribes.
-- **The eight non-JS SDKs share all four outbox gaps** and none can read `Retry-After` at all, because every port's poster returns status and body without headers. Recorded in the divergence table; widening the poster contract is the one change that fixes it for all eight.
 
 ## Follow-ups (not defects, decided)
 

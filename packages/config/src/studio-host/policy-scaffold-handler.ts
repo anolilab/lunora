@@ -21,12 +21,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, relative } from "node:path";
 
+import type { CodegenOptions } from "@lunora/codegen";
 import { CodegenDiagnosticError, runCodegen } from "@lunora/codegen";
 import { LunoraError } from "@lunora/errors";
 
 import join from "../path";
 import type { DestructivePolicyEdit, PolicyEdit, PolicyScaffoldFailureReason, ScaffoldPolicyEdit, WireRlsEdit } from "../schema-edit/policy-scaffold";
-import { classifyPolicyEdit, scaffoldPolicyFile, wireRlsIntoProcedure } from "../schema-edit/policy-scaffold";
+import { classifyPolicyEdit, resolveServerModule, scaffoldPolicyFile, wireRlsIntoProcedure } from "../schema-edit/policy-scaffold";
+import { studioCodegenOptions } from "./codegen-options";
 import writeFileAtomic from "./write-atomic";
 
 /**
@@ -47,6 +49,8 @@ type PolicyScaffoldBody = DestructivePolicyEdit | ScaffoldPolicyEdit | WirePolic
 
 /** A request adapted from the host transport. */
 interface PolicyScaffoldRequest {
+    /** API-spec mode the host runs codegen with; forwarded to the regeneration. */
+    readonly apiSpec?: CodegenOptions["apiSpec"];
     /** Parsed JSON body of the `POST`. */
     readonly body?: unknown;
     /** HTTP method — only `POST` is handled. */
@@ -88,7 +92,7 @@ const runCodegenForResponse = (request: PolicyScaffoldRequest, okBody: Record<st
     let diagnostics: ReadonlyArray<string> = [];
 
     try {
-        runCodegen({ lunoraDirectory: request.schemaDirectory ?? "lunora", projectRoot: request.projectRoot });
+        runCodegen(studioCodegenOptions(request));
     } catch (error: unknown) {
         if (error instanceof CodegenDiagnosticError) {
             diagnostics = [error.message];
@@ -116,7 +120,7 @@ const refuseDestructive = (edit: PolicyEdit): PolicyScaffoldResponse => {
 
 /** Handle a `scaffoldPolicy` request: write a new stub file, refusing to overwrite. */
 const handleScaffoldPolicy = (request: PolicyScaffoldRequest, edit: ScaffoldPolicyEdit): PolicyScaffoldResponse => {
-    const result = scaffoldPolicyFile(edit);
+    const result = scaffoldPolicyFile(edit, resolveServerModule(request.projectRoot));
 
     if (!result.ok) {
         return { body: { error: result.reason, ok: false }, status: statusForFailure(result.reason) };
@@ -164,7 +168,7 @@ const handleWireRls = (request: PolicyScaffoldRequest, edit: WirePolicyEdit): Po
         return { body: { error: "unknown-procedure", ok: false }, status: 404 };
     }
 
-    const wired = wireRlsIntoProcedure(readFileSync(procedurePath, "utf8"), edit);
+    const wired = wireRlsIntoProcedure(readFileSync(procedurePath, "utf8"), edit, resolveServerModule(request.projectRoot));
 
     if (!wired.ok) {
         return { body: { error: wired.reason, ok: false }, status: statusForFailure(wired.reason) };

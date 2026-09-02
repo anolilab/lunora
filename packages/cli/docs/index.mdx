@@ -49,7 +49,8 @@ lunora reset [--all] [--yes]            # clear local Miniflare state
 lunora prepare [--api-spec <spec>]      # every pre-deploy gate, without deploying — for CI
 lunora build [--out-dir <dir>]          # bundle the worker to disk without deploying
 lunora deploy [--env <name>]            # codegen, validate wrangler, then wrangler deploy
-              [--migrate] [--prebuilt]  #   --preview uploads a version (no live traffic)
+              [--migrate --migrate-yes] #   --migrate also needs --migrate-url unless linked
+              [--prebuilt]              #   --preview uploads a version (no live traffic)
               [--preview] [--dry-run]   #   --dry-run validates + bundles, never publishes
               [--temporary]             #   --temporary deploys with no account (~60min, then claim)
               [--health-check]          #   --health-check probes /_lunora/health/ready after deploying
@@ -138,14 +139,21 @@ Flags: `--provider <auth\|clerk\|auth0>`, `--yes`, `--from <dir>` (local registr
 
 ### `lunora view`
 
-Opens the Lunora studio in your browser. Defaults to the local dev studio;
-`--remote` opens the deployed worker's studio instead (resolved from
-`.lunora/project.json`, see `lunora link`).
+Opens the Lunora studio in your browser. The studio is always local: the
+running dev server records where it is serving it in `.lunora/dev.json`, so
+`view` opens that — the embedded studio server for the wrangler flavor, or
+Vite's `/__lunora` route when `@lunora/vite` owns the dev server. With no dev
+server running it falls back to the studio server's default,
+`http://127.0.0.1:6173`.
 
 ```bash
-lunora view            # local dev studio
-lunora view --remote   # the deployed studio
+lunora view   # the running dev server's studio
 ```
+
+<Callout type="info">
+    A deployed worker serves no studio — its `/_lunora/*` routes are RPC, WebSocket, status, migrate and admin only — so there is no remote URL to open. The
+    `--remote` flag this command used to take opened a 404 and has been removed.
+</Callout>
 
 ### `lunora docs`
 
@@ -277,10 +285,17 @@ In a project on `@lunora/vite` it spawns `vite dev` instead: the Vite plugin
 already runs the worker, studio, and codegen inside the Vite dev server.
 
 ```bash
-lunora dev                # default ports: studio 6173, worker 8787
-lunora dev --port 7000    # custom studio port
-lunora dev --no-studio    # Worker + codegen only
+lunora dev                     # default ports: studio 6173, worker 8787
+lunora dev --port 7000         # custom studio port
+lunora dev --worker-port 8790  # custom wrangler dev port
+lunora dev --no-studio         # Worker + codegen only
 ```
+
+When 8787 is taken, the worker lands on the next free port so two projects can
+run side by side. That silent move is refused when `.dev.vars` pins the worker
+origin to 8787 — an `AUTH_URL`/`BETTER_AUTH_URL` (or any other loopback origin
+on that port) would be left pointing at nothing. Free 8787, or pass
+`--worker-port` and update the pinned values to match.
 
 #### Background mode (AI agents)
 
@@ -338,12 +353,17 @@ JSON log lines are available to everyone via `lunora dev --json` or
 
 Runs codegen, validates `wrangler.jsonc`, then invokes `wrangler deploy`.
 Pass `--migrate` to apply pending data migrations against the live worker
-immediately after a successful deploy.
+immediately after a successful deploy. It also requires `--migrate-yes` (an
+explicit confirmation; there is no environment variable for it), an admin token
+(`--migrate-token` or `LUNORA_ADMIN_TOKEN`), and `--migrate-url` unless this
+checkout is linked for the same `--env`. All three are checked **before**
+`wrangler deploy`, so a missing one aborts the deploy rather than skipping the
+migration.
 
 ```bash
 lunora deploy
 lunora deploy --env staging
-lunora deploy --migrate --migrate-token $LUNORA_ADMIN_TOKEN
+lunora deploy --migrate --migrate-yes --migrate-url https://app.example.com --migrate-token $LUNORA_ADMIN_TOKEN
 lunora deploy --temporary     # no Cloudflare account needed
 lunora deploy --dry-run       # run every pre-deploy gate, publish nothing
 lunora deploy --health-check  # …then prove the new version answers
@@ -540,17 +560,30 @@ Manages both schema migrations (D1 SQL) and online data migrations (row
 transforms that run against a live worker):
 
 ```bash
-lunora migrate generate add_email_index   # diff schema.ts → emit D1 SQL
-lunora migrate create --name backfill_at  # scaffold a data-migration stub
-lunora migrate up                         # run pending data migrations (dev)
-lunora migrate up --prod --url <url>      # run against production (requires --yes)
-lunora migrate status                     # show pending / applied / failed
+lunora migrate generate add_email_index        # diff schema.ts → emit D1 SQL
+lunora migrate create --name backfill_at       # scaffold a data-migration stub
+lunora migrate up backfill_at                  # run one data migration (dev)
+lunora migrate up backfill_at --prod --url <url>  # against production (requires --yes)
+lunora migrate down backfill_at                # run its `down` direction
+lunora migrate status backfill_at              # applied / pending / failed
 ```
+
+`up`, `down` and `status` each take the migration id declared in
+`lunora/migrations.ts` — there is no "run everything pending" mode here;
+`lunora deploy --migrate` is what iterates the declared ids in order.
 
 `generate` parses `lunora/schema.ts`, filters to `.global()` tables (sharded
 tables live in per-DO SQLite, so they need no migration), diffs against
 `lunora/migrations/.snapshot.json`, and emits a timestamped SQL file. Commit
 both the SQL and the snapshot: they are deterministic.
+
+Apply the SQL with `wrangler d1 execute <database> --file
+lunora/migrations/<file>.sql`. It is a multi-statement file, so it is not a
+`@lunora/d1` `Migration` — that API takes one statement per entry. In practice
+most of the file is redundant: the worker provisions every `.global()` table on
+first use, idempotently and additively. What it will never do is drop or
+retype, so the `DROP TABLE` / `DROP INDEX` statements and the hand-written
+block under "NOT auto-generated" are the parts worth applying.
 
 ### `lunora run`
 
@@ -711,8 +744,10 @@ snapshot format, restore drills, and moving data between deployments.
 
 Generates deterministic fake data from `lunora/schema.ts` and bulk-inserts it
 through the worker's admin endpoint. Rows are derived from a seed number, so the
-same `--seed` always produces identical data, which makes seeded fixtures
-reproducible across machines and CI runs.
+same `--seed` always produces identical ids and non-time columns. Columns named
+like a timestamp (`createdAt`, `expiresAt`, …) are generated relative to the
+wall clock, so a fixture that must be byte-identical across machines and CI runs
+needs `--now <epoch-ms>` pinned alongside `--seed`.
 
 ```bash
 lunora seed                          # every table, default 10 rows each
@@ -796,8 +831,8 @@ Copilot) how to use Lunora. `lunora dev`, the Vite plugin, and the studio nudge
 you to run this when the rules are missing.
 
 ```bash
-lunora rules install              # copy the skills into .agents/skills/ (skips edited files)
-lunora rules install --overwrite  # reinstall, replacing local edits
+lunora rules install              # copy the skills into .agents/skills/ (skips files that exist)
+lunora rules install --overwrite  # reinstall, replacing every existing file
 lunora rules check                # report which skills are present
 lunora rules check --strict       # exit non-zero when missing (CI gate)
 ```
@@ -928,5 +963,6 @@ loop.
 - `server.ts`: `internalQuery`, `internalMutation` exports re-typed against your schema
 - `dataModel.ts`: `Doc<"messages">`, `Id<"users">`, etc.
 
-These files are deterministic, so commit them. CI re-runs codegen and diffs
-the result to catch drift.
+These files are deterministic, so commit them. Nothing checks the committed
+copy for you — `verify` runs codegen as a dry run and `prepare` overwrites it —
+so gate it explicitly: `lunora codegen && git diff --exit-code lunora/_generated`.

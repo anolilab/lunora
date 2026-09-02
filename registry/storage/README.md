@@ -59,16 +59,14 @@ All four scope the key with `scopeKey(requireOwner(ctx.auth.userId), key)` — `
 
 **This route is required, not optional.** Without it a minted URL resolves to your Worker's catch-all and every upload and download 404s. It is also the only thing checking the signature, so a missing check means anyone can read any key.
 
-`@lunora/server`'s `serveStorageObject` does the download half — `Range`/206, `ETag`, `nosniff`, and `content-disposition: attachment` for anything outside a small inline-safe set (raster images plus `audio/mpeg`, `audio/ogg`, `audio/wav`, `video/mp4`, `video/webm`; `image/svg+xml` is deliberately excluded) — but it does **not** verify anything by itself, and it does not handle the upload. Its `authorize` option is required and is where your check goes:
+`@lunora/server`'s `serveStorageObject` does the download half — `Range`/206, `ETag`, `nosniff`, and `content-disposition: attachment` for anything outside a small inline-safe set (raster images plus `audio/mpeg`, `audio/ogg`, `audio/wav`, `video/mp4`, `video/webm`; `image/svg+xml` is deliberately excluded) — but it does **not** verify anything by itself, and it does not handle the upload. Its fourth argument, the `authorize` gate, is required and is where your check goes:
 
 ```ts
 import { serveStorageObject } from "@lunora/server";
 import { verifySignedUrl } from "@lunora/storage";
 
 // inside an httpAction handler
-return serveStorageObject(ctx, key, request, {
-    authorize: async ({ request: r }) => (await verifySignedUrl(new URL(r.url), env.STORAGE_SIGNING_SECRET)).valid,
-});
+return serveStorageObject(ctx, key, request, async ({ request: r }) => (await verifySignedUrl(new URL(r.url), env.STORAGE_SIGNING_SECRET)).valid);
 ```
 
 `serveStorageObject` covers `GET` only. The upload half has no helper, so wire both verbs by hand:

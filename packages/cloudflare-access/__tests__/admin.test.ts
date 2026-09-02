@@ -74,6 +74,17 @@ describe("accessAdminGate", () => {
         expect(() => accessAdminGate({ aud: "", isAdmin: () => true, keySet: publicKey, teamDomain: TEAM })).toThrow(/aud/);
     });
 
+    it("throws at factory time when isAdmin is missing (the whole boundary, not an implicit grant)", () => {
+        expect.assertions(1);
+
+        // The type requires it; an untyped caller or an `as` cast does not. Without
+        // this the gate threw a bare TypeError per request, which the runtime
+        // degrades to "no grant" — a silent fallback to the bearer with no log.
+        expect(() => accessAdminGate({ aud: AUD, keySet: publicKey, teamDomain: TEAM } as unknown as Parameters<typeof accessAdminGate>[0])).toThrow(
+            /`isAdmin` is required/,
+        );
+    });
+
     it("throws at factory time when teamDomain is empty", () => {
         expect.assertions(1);
 

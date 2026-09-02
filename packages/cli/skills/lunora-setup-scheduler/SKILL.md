@@ -31,11 +31,13 @@ which owns the alarm and durable storage.
 
 ## Deferred dispatch — `runAfter` / `runAt`
 
-Available on `ctx.scheduler` in any function. Target functions are passed by
-reference from the generated `api` / `internal` proxy:
+Available on `ctx.scheduler` in a **mutation or an action** — never a `query`,
+which is deterministic and re-runs. Target functions are passed by reference
+from the generated `api` / `internal` proxy (a `"file:fn"` path string also
+works):
 
 ```ts
-import { mutation, v } from "@lunora/server";
+import { mutation, v } from "#lunora/_generated/server.js";
 
 import { internal } from "./_generated/api";
 
@@ -47,15 +49,18 @@ export const startTrial = mutation.input({ userId: v.string() }).mutation(async 
 });
 ```
 
-- `runAfter(delayMs, fnRef, args, options?)` — run after a delay (`delayMs` must
-  be a non-negative finite number). `runAt(date, fnRef, args, options?)` — run at
-  a `Date` or epoch-ms timestamp.
+- `runAfter(delayMs, fnRef, args?)` — run after a delay (`delayMs` must be a
+  non-negative finite number). `runAt(timestampMs, fnRef, args?)` — run at an
+  epoch-ms timestamp.
 - Both resolve the job id. Cancel with `ctx.scheduler.cancel(id)`;
   inspect with `ctx.scheduler.get(id)` / `ctx.scheduler.list()`.
-- `options` accepts a `retry` policy (`{ maxAttempts, backoff, baseMs, maxMs }`;
-  DO defaults: `maxAttempts: 5`, `backoff: "exponential"`, `baseMs: 30_000`) and
-  a `shardKey` routing hint. On retry exhaustion the job is dead-lettered, never
-  silently dropped.
+- Those three arguments are the whole `ctx.scheduler` surface. Per-job
+  `RunOptions` — a `retry` policy (`{ maxAttempts, backoff, baseMs, maxMs }`), a
+  `shardKey` routing hint, `pool` — live on `@lunora/scheduler`'s own
+  `createScheduler(...)` client, which you construct yourself when you need them.
+  Jobs scheduled through `ctx.scheduler` take the DO defaults: 5 retries,
+  `backoff: "exponential"`, `baseMs: 30_000`. On retry exhaustion the job is
+  dead-lettered, never silently dropped.
 - The `SchedulerDO` binding (`SCHEDULER`) is **auto-inferred and reconciled**
   into `wrangler.jsonc` by `@lunora/config` once `@lunora/scheduler` is in use —
   run `lunora codegen` / `lunora doctor` to confirm. Scheduled jobs run with no

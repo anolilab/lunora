@@ -26,6 +26,18 @@ const String lunoraRpcBatchPath = '/_lunora/rpc-batch';
 /// would pin a shard; a longer flush is chunked.
 const int lunoraMaxBatchEntries = 500;
 
+/// Byte budget for one batch body: the worker's own 1 MiB cap
+/// (`packages/runtime/src/body-readers.ts`) less 64 KiB of headroom, written as
+/// the subtraction so the derivation stays visible.
+///
+/// The entry cap alone is blind to size: 500 writes carrying bytes or long text
+/// exceed a megabyte, the worker answers `413 PAYLOAD_TOO_LARGE`, and a
+/// whole-batch coded envelope is a verdict on every entry — so a count-only
+/// chunker settles 500 durable writes `rejected` that would each have committed
+/// alone. The headroom covers the request line, the headers and the JSON framing
+/// the per-entry estimate does not weigh. See `protocol/README.md` §4.3.
+const int lunoraMaxBatchBytes = 1048576 - 65536;
+
 /// The live-subscription endpoint.
 const String lunoraWsPath = '/_lunora/ws';
 
@@ -119,11 +131,20 @@ class LunoraTransport {
         envelope['code'] is String ? envelope['code'] as String : 'INTERNAL',
         envelope['message'] is String ? envelope['message'] as String : 'request failed',
         data == null ? null : decodeWire(data),
+        // A 5xx is the shard or the edge failing UNDER the call, not a verdict
+        // on it, so a queued write replayed under the same idempotency key is
+        // still good. See `isTransientFailure`.
+        status >= 500,
       );
     }
 
     if (status < 200 || status > 299) {
-      throw LunoraApiException('INTERNAL', 'HTTP $status without an error envelope');
+      // No envelope at all, so this body never came from a Lunora function: an
+      // edge error page, a WAF block, a proxy. Nothing reached the shard, which
+      // makes it transport rather than a verdict — the batch path already
+      // classified the identical response that way, and a lone queued write must
+      // not be dropped for being alone.
+      throw LunoraApiException('INTERNAL', 'HTTP $status without an error envelope', null, true);
     }
 
     return decodeWire(body['result']);

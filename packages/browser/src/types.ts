@@ -199,8 +199,13 @@ export interface LunoraBrowserOptions {
      * trailing-dot-normalized, IPv6 brackets stripped). This is the only guard
      * that fully closes DNS rebinding: a public hostname that resolves to a
      * private/metadata IP can still be pinned out if it isn't on the list. Set it
-     * whenever you pass client-controlled URLs to the browser. Leave it unset (the
-     * default) to keep the previous behavior (only the string-based SSRF guard).
+     * whenever you pass client-controlled URLs to the browser.
+     *
+     * Leaving it unset (the default) is NOT unguarded: it turns
+     * {@link LunoraBrowserOptions.resolveDns} on, so every host is resolved over
+     * DoH and refused if it maps to a private address. Setting an allowlist turns
+     * that re-check off (the allowlist is the stronger guard, and may deliberately
+     * name an internal host); `resolveDns: true` forces both.
      */
     allowedHosts?: string[];
 

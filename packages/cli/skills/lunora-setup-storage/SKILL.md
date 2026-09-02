@@ -84,7 +84,7 @@ The functions surface in the generated `api` as `api.storage.generateUploadUrl`,
 every upload and download 404s — and it is the only thing checking the signature,
 so skipping the check lets anyone read any key.
 
-`@lunora/server`'s `serveStorageObject(ctx, key, request, { authorize })` handles
+`@lunora/server`'s `serveStorageObject(ctx, key, request, authorize)` handles
 the download half (`Range`/206, `ETag`, `nosniff`, and
 `content-disposition: attachment` for anything outside a small inline-safe set —
 raster images plus `audio/mpeg`, `audio/ogg`, `audio/wav`, `video/mp4`,

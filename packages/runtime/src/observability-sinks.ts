@@ -21,8 +21,13 @@
  * human-readable error string and MAY contain user input. The
  * {@link webhookSink} ships the full event — including `error.message` — to a
  * third party. Scrub or redact before enabling it against an external service
- * if that is a concern.
+ * if that is a concern. {@link otlpSink} is the exception: its log records go
+ * through the same default redaction the console/Logpush line and the span
+ * pipeline already apply (see {@link OtlpSinkOptions.redactLogs}).
  */
+import { LunoraError } from "@lunora/errors";
+import { redactArgs } from "@lunora/observability";
+
 import type { OtlpResourceAttributes } from "../../../shared/otlp";
 import { mergeHeaders, wrapResourceLogs, wrapResourceMetrics, wrapResourceSpans } from "../../../shared/otlp";
 import { createSignalBatcher } from "../../../shared/otlp-batch";
@@ -178,9 +183,29 @@ const postProcess = <T>(event: T, hook: ((event: T) => null | T | undefined) | u
  * Post-process and encode one buffered signal, tagged with the OTLP endpoint
  * bucket it belongs to. `undefined` when the post-processor dropped it.
  */
+
+/**
+ * Apply the default redaction to one `ctx.log` event before it leaves for a
+ * collector: the structured `fields` bag and the rendered `message`, through the
+ * SAME `redactArgs` (`@visulima/redact` standard rules) the console/Logpush line
+ * and the request-log columns use.
+ *
+ * Without this the three sinks fed one `ctx.log` event disagreed:
+ * `ctx.log.info("charged", { email })` was masked on the console line the SIEM
+ * is told to trust, and shipped in the clear to the OTLP collector.
+ */
+const redactLogEvent = (event: LogEvent): LogEvent => {
+    return {
+        ...event,
+        ...(event.fields === undefined ? {} : { fields: redactArgs(event.fields) as LogEvent["fields"] }),
+        message: redactArgs(event.message) as string,
+    };
+};
+
 const encodeSignal = (
     signal: BufferedSignal,
     postProcessor: OtlpPostProcessor | undefined,
+    redactLogs: boolean,
 ): { bucket: "logs" | "metrics" | "spans"; encoded: unknown } | undefined => {
     if (signal.kind === "rpc") {
         const processed = postProcess(signal.event, postProcessor?.rpc);
@@ -195,7 +220,10 @@ const encodeSignal = (
     }
 
     if (signal.kind === "log") {
-        const processed = postProcess(signal.event, postProcessor?.log);
+        // Redact BEFORE the user hook, so `postProcessor.log` sees what will
+        // actually ship and remains a further narrowing rather than a way to
+        // accidentally re-widen it; `redactLogs: false` is the documented opt-out.
+        const processed = postProcess(redactLogs ? redactLogEvent(signal.event) : signal.event, postProcessor?.log);
 
         return processed === undefined ? undefined : { bucket: "logs", encoded: otlpLogBody(processed) };
     }
@@ -390,6 +418,18 @@ export interface SentrySinkOptions extends OnlyErrorsOption {
  */
 export const sentrySink = (options: SentrySinkOptions): ObservabilitySink => {
     const { capture, captureLog } = options;
+
+    // Fail at construction, not per event. `capture` is the whole sink: without
+    // it every `onRpc` throws inside the try/catch below, which swallows — so a
+    // misconfigured sink (`sentrySink({ dsn })`, the shape the docs used to
+    // show) reports nothing and logs nothing, losing the error feed silently.
+    // A worker that boots with a broken sink is worse than one that refuses to.
+    if (typeof capture !== "function") {
+        throw new TypeError(
+            "sentrySink requires a `capture` callback — wire your own Sentry client, e.g. `sentrySink({ capture: (event) => Sentry.captureMessage(event.name) })`. There is no `dsn` option; the runtime bundles no Sentry client.",
+        );
+    }
+
     // Sentry defaults to error-only — capturing every successful RPC as an
     // event would flood the project. Callers opt into all events explicitly.
     const onlyErrors = options.onlyErrors ?? true;
@@ -600,10 +640,21 @@ export const pipelineLogSink = (options: PipelineLogSinkOptions): ObservabilityS
  * Everything the exporter buffered for one flush window, grouped so a
  * {@link TailSampler} can judge a trace as a whole.
  *
- * This is what makes it *tail* sampling rather than another head decision: by
- * flush time the trace's spans have all settled, so "keep it if anything in it
- * was slow or failed" is answerable — which it is not at the moment the first
- * span starts.
+ * This is what makes it *tail* sampling rather than another head decision: the
+ * signals in the window have settled by the time it is judged, so "keep it if
+ * anything here was slow or failed" is answerable — which it is not at the
+ * moment the first span starts.
+ *
+ * **It is one sink instance's window, not the whole trace.** A batcher lives in
+ * the isolate that created it, so in production a request's signals are split
+ * across at least two of them: the worker's sink holds the SERVER `rpc` event,
+ * and the shard's sink holds that dispatch's `ctx.trace` spans, `ctx.log` lines
+ * and metrics. The sampler therefore runs once per isolate over its own half,
+ * and the halves can disagree — the worker keeping the SERVER span while the
+ * Durable Object drops its children, or the reverse — leaving a partial trace at
+ * the collector. Write a predicate that reaches the same verdict from either
+ * half (judge on `traceId`, on any `ok: false`, on a duration threshold), and
+ * treat it as a cost control rather than a guarantee that a trace arrives whole.
  */
 export interface TailSamplerInput {
     /** Log records emitted under this trace. */
@@ -654,7 +705,7 @@ export interface OtlpBatchOptions {
      * with no invocation boundary. Default 200ms.
      */
     maxDelayMs?: number;
-    /** Flush as soon as this many events are buffered. Default 512. */
+    /** Flush as soon as this many events are buffered. Default 512. Must be a positive integer — `otlpSink` throws `ENV_INVALID` otherwise. */
     maxItems?: number;
 }
 
@@ -717,6 +768,26 @@ export interface OtlpSinkOptions extends OnlyErrorsOption {
      * see {@link postProcess}.
      */
     postProcessor?: OtlpPostProcessor;
+
+    /**
+     * Default-redact `ctx.log` records (the structured `fields` bag and the
+     * rendered `message`) before they are exported. Default `true`.
+     *
+     * On because the alternative is the sinks disagreeing about one event: the
+     * console/Logpush line already redacts `fields`, and the span pipeline
+     * already redacts error messages, precisely because a developer can attach
+     * anything to a fields bag — `ctx.log.info("charged", { email, cardLast4 })`.
+     * A collector is the sink with third-party fan-out, so it is the last place
+     * that should see more than the others.
+     *
+     * Set `false` ONLY when the collector is as trusted as the worker itself and
+     * you need verbatim values (a self-hosted collector behind your own
+     * network). The masking is `@visulima/redact`'s standard rules — key-name
+     * matches on the bag plus PII patterns in text — so it is a net, not a
+     * general secret scrubber; see `redactArgs` in `@lunora/observability`.
+     * `postProcessor.log` still runs either way, and runs after this.
+     */
+    redactLogs?: boolean;
 
     /**
      * Additional resource attributes to attach to every exported signal. These
@@ -809,6 +880,17 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
         token,
     } = options;
     const serviceName = options.serviceName ?? "lunora";
+    const redactLogs = options.redactLogs ?? true;
+
+    // Operator config, validated at construction because both bad shapes are
+    // unrecoverable at runtime rather than merely wrong: a negative cap makes the
+    // batcher's drop-oldest `while` spin forever on the first telemetry event
+    // (the isolate hangs on its first `ctx.log`), and `0` / a fraction empties the
+    // buffer before the drain reads it, so every signal is discarded in silence.
+    // Failing here names the option; failing there looks like a dead collector.
+    if (batch !== false && batch?.maxItems !== undefined && (!Number.isInteger(batch.maxItems) || batch.maxItems < 1)) {
+        throw new LunoraError("ENV_INVALID", `otlpSink: \`batch.maxItems\` must be a positive integer, received ${String(batch.maxItems)}.`);
+    }
 
     // The explicit half of the resource, built once per sink. Convenience fields
     // first, then `resourceAttributes`, so a caller can override anything.
@@ -919,7 +1001,7 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
         const groups = new Map<string, { logs: unknown[]; metrics: unknown[]; resource: OtlpResourceAttributes; spans: unknown[] }>();
 
         for (const signal of kept) {
-            const encoded = encodeSignal(signal, postProcessor);
+            const encoded = encodeSignal(signal, postProcessor, redactLogs);
 
             if (encoded === undefined) {
                 continue;
@@ -959,7 +1041,7 @@ export const otlpSink = (options: OtlpSinkOptions): ObservabilitySink => {
         // inapplicable here (there is no buffered trace to judge) and documented
         // as such; `postProcessor` still applies (inside `encodeSignal`).
         const postOne = (signal: BufferedSignal, context?: ObservabilitySinkContext): void => {
-            const encoded = encodeSignal(signal, postProcessor);
+            const encoded = encodeSignal(signal, postProcessor, redactLogs);
 
             if (encoded !== undefined) {
                 const { url, wrap } = endpointFor[encoded.bucket];

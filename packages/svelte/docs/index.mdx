@@ -372,10 +372,12 @@ are `api.*` references. The handle is `{ present, sessionId, setData, teardown }
         listPresent: api.presence.listPresent,
         data: { name: "Ada" },
     });
+    // `room` is a plain handle, not a store — `present` is the readable on it.
+    const { present } = room;
     onDestroy(room.teardown);
 </script>
 
-{#each $room.present ?? [] as p (p.userId)}<span>{p.data?.name}</span>{/each}
+{#each $present ?? [] as p (p.userId)}<span>{p.data?.name}</span>{/each}
 ```
 
 ### `rateLimit(config, options?)`

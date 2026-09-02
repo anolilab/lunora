@@ -34,9 +34,24 @@ touches the change log.
 Everything below talks to admin-gated endpoints on a running worker, so each
 command needs an admin bearer token. Prefer the `LUNORA_ADMIN_TOKEN` environment
 variable over `--token`, which is visible to other local processes through the
-process table. Targeting anything other than localhost requires `--prod`
-together with an explicit `--url`, the guardrail that stops a production script
-from quietly hitting `http://localhost:8787`.
+process table.
+
+Two separate guardrails apply to the target, and neither is `--prod` on its own:
+
+- `--prod` requires an explicit `--url`. It never _grants_ a remote target and
+  never _gates_ one — a `--url https://…` is accepted with or without it.
+- A non-loopback `--url` must be `https:`, so the admin bearer is never sent in
+  the clear.
+
+What gates a destructive verb is the resolved URL, not the flag: a PITR
+`--restore` against any non-loopback worker refuses without `--yes`, whether or
+not `--prod` was passed. `prune` always confirms — `--yes` or an interactive
+prompt — because an object-store delete has no undo.
+
+<Callout type="warn">
+    Omitting `--prod` does **not** keep a script off production. `lunora backup create --url https://prod.example.com` exports production with no extra flag. If
+    you need a script that can only ever hit local state, withhold the production URL and the admin token, not `--prod`.
+</Callout>
 
 ## Point-in-time recovery
 

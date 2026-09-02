@@ -48,8 +48,8 @@ let unsubscribe = client.subscribe("messages:list", args: args, onData: render)
 ```
 
 `handleFrame(raw)` is what you call with each inbound WebSocket message;
-`resendSubscriptions()` re-subscribes everything after a reconnect, carrying each
-subscription's resume cursor.
+`resendSubscriptions()` re-subscribes everything after a reconnect — queries and
+shape views alike — carrying each one's resume cursor or checkpoint.
 
 ## Optimistic updates and offline writes
 
@@ -90,9 +90,19 @@ writes when its socket returns, and `client.hydrateOfflineQueue()` restores what
 a prior session persisted, returning the shard keys to flush.
 
 A queued write whose args cannot be wire-encoded settles terminally on the first
-flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and every
-discard — including one the capacity cap evicts out of a _restored_ queue, which
-has no caller left to tell — reaches `client.onMutationSettled`.
+flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, a restored
+record whose stored args no longer decode is purged and settled
+(`OFFLINE_WRITE_UNDECODABLE`) rather than replayed with substitute arguments, and
+every discard — including one the capacity cap evicts out of a _restored_ queue,
+which has no caller left to tell — reaches `client.onMutationSettled`.
+
+A flush that comes back rate-limited — whole response or one batch slot —
+re-queues rather than dropping, reports the server's `error.data.retryAfterMs` as
+`LunoraFlushReport.retryAfterMs` (clamped at `lunoraMaxRetryAfterMs`, 60 s), and
+holds the next flush off until it passes. The `Retry-After` HEADER is not read:
+`LunoraHTTPPoster` surfaces `(status, body)` only. A batch the worker refuses for size (`413 PAYLOAD_TOO_LARGE`) is
+split in half and retried, so no write is dropped for the size of the batch it
+shared.
 
 `client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write

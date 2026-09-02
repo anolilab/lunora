@@ -71,6 +71,26 @@ describe("flagshipProvider", () => {
             expect(constructed[0]).toEqual({ accountId: "acct", appId: "app-abc", authToken: "tok" });
         });
 
+        it("resolves an `authToken` thunk against the Worker env", () => {
+            expect.assertions(2);
+
+            const factory = flagshipProvider({ accountId: "acct", appId: "app-abc", authToken: (env) => env.FLAGSHIP_TOKEN });
+
+            factory({ FLAGSHIP_TOKEN: "from-env" });
+
+            expect(constructed).toHaveLength(1);
+            expect(constructed[0]).toEqual({ accountId: "acct", appId: "app-abc", authToken: "from-env" });
+        });
+
+        it("throws when an `authToken` thunk resolves to nothing rather than sending `Bearer undefined`", () => {
+            expect.assertions(2);
+
+            const factory = flagshipProvider({ appId: "app-abc", authToken: (env) => env.FLAGSHIP_TOKEN });
+
+            expect(() => factory({})).toThrow(/`authToken` resolved to an empty or non-string value/);
+            expect(constructed).toHaveLength(0);
+        });
+
         it("constructs from a full endpoint override", () => {
             expect.assertions(2);
 

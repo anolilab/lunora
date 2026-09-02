@@ -694,7 +694,7 @@ const MESSAGE_IDS = [
     "Wildcard CORS with credentials",
     "CSRF/origin guard is off",
     "Security headers are off",
-    "Live admin subscriptions are ungated",
+    "User subscriptions are ungated",
     "Request log keeps un-redacted args",
     "Unknown security finding",
     "Update your worker to a version of Lunora that describes this finding.",
@@ -709,7 +709,7 @@ const MESSAGE_IDS = [
     "Copy?",
     "Index declaration copied — add it to {table} in lunora/schema.ts.",
     "Could not reach the clipboard — add this to {table} in lunora/schema.ts:",
-    "LUNORA_WS_BEARER is unset, so the WebSocket upgrade gate is open: live admin subscriptions need no credential. Set it to gate them like the HTTP admin RPCs.",
+    "LUNORA_WS_BEARER is unset, so the WebSocket upgrade gate is open: anyone who can reach the worker can open a socket and run ordinary user subscriptions. Admin subscriptions are unaffected — they need the admin token. Set it if subscribers should present a shared credential.",
     "This worker reports a development environment, so the request log stores raw args and identity. Confirm it isn't a mislabeled production deploy.",
     // Audit panel.
     "Audit",

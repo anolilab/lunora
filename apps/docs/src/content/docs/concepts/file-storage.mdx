@@ -183,8 +183,13 @@ response wherever the host can defer it, so the caller never waits on R2; the
 trade is that an object can briefly outlive its row, and a failed delete leaks
 the object (logged with its key) rather than failing a mutation that already
 committed. `ctx.storage.bucket("avatars").deleteAfterCommit(key)` queues against
-that bucket. See [@lunora/storage](/docs/packages/storage) for the full
-treatment.
+that bucket.
+
+The pairing holds for a **top-level mutation**. Queue a delete inside a mutation
+an action called through `ctx.runMutation` and the flush waits until the action
+returns — so an action that throws afterwards leaves the row deleted (it
+committed on its own) and the object in place, with nothing logged. See
+[@lunora/storage](/docs/packages/storage) for the full treatment.
 
 ## See also
 

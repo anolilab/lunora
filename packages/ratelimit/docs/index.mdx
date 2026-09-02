@@ -15,7 +15,8 @@ one `RateLimiter` per app from a config map, then either attach the `rateLimit`
 middleware to a procedure's `.use(...)` chain or call `limiter.limit(...)`
 directly. On rejection the middleware throws a structural `LunoraError` that the
 runtime maps to `429 Too Many Requests` (or `403 Forbidden` for a deny-list hit),
-carrying `retryAfter` in milliseconds.
+carrying `data.retryAfterMs` — the retry hint the client and every SDK read off
+a `TOO_MANY_REQUESTS` envelope (`protocol/README.md` §4.3).
 
 ```ts
 import type { RateLimitConfigMap } from "@lunora/ratelimit";
@@ -130,12 +131,19 @@ export const login = action.action(async ({ ctx, args }) => {
 
 Per-call `RateLimitArgs`:
 
-| Option    | Type      | Default | Notes                                                                                                                                                            |
-| --------- | --------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `key`     | `string`  | —       | Sub-key isolating the limit (per user/team/IP). Omit for a global limit.                                                                                         |
-| `count`   | `number`  | `1`     | Units to consume. Must be a positive integer.                                                                                                                    |
-| `reserve` | `boolean` | `false` | Permit now and reserve future capacity (the stored value goes negative); `retryAfter` reports when the debt clears. Rejected only when `count` exceeds capacity. |
-| `throws`  | `boolean` | `false` | Throw `RateLimitError` instead of returning a failing status.                                                                                                    |
+| Option    | Type      | Default | Notes                                                                                                                                                                        |
+| --------- | --------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `key`     | `string`  | —       | Sub-key isolating the limit (per user/team/IP). Omit for a global limit.                                                                                                     |
+| `count`   | `number`  | `1`     | Units to consume. Must be a positive integer.                                                                                                                                |
+| `reserve` | `boolean` | `false` | Permit now and reserve future capacity (the stored value goes negative); `retryAfter` reports when the debt clears. A `count` above capacity is never permitted — see below. |
+| `throws`  | `boolean` | `false` | Throw `RateLimitError` instead of returning a failing status.                                                                                                                |
+
+<Callout type="warn">
+    **A `count` larger than the limit's capacity is caller misuse, not a rate rejection.** It can never succeed no matter how long you wait, so it does not
+    return `{ ok: false }` and does not honour `throws: false` — it throws an `INTERNAL` `LunoraError` (a 500), with or without `reserve`. `rateLimit(...)`
+    middleware re-throws it as-is rather than masking it behind the fail-open/fail-closed policy, which is reserved for genuine store outages. Clamp the
+    `count`, or raise the limit's `capacity`.
+</Callout>
 
 ## Procedure middleware
 

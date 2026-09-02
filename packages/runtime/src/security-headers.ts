@@ -375,8 +375,16 @@ const parseEnvCors = (env: Record<string, unknown> | undefined): CorsOptions | u
  * and `LUNORA_ALLOWED_ORIGINS` / `LUNORA_CORS_ALLOW_CREDENTIALS` configure CORS
  * when it isn't set in code. **Code config wins** — an explicit `security.*` in
  * {@link SecurityOptions} overrides the matching env knob — so the env var only
- * relaxes or fills the secure default, and the DO security audit (which reads the
- * same vars) and the running worker stay in agreement.
+ * relaxes or fills the secure default.
+ *
+ * That precedence is exactly why the two can disagree, so pick one place per
+ * layer. The Durable Object's security audit (`buildSecurityAudit`) sees only
+ * `env` — the DO has no view of what was passed to `createWorker` — so
+ * `security: { headers: true }` in code plus an `off` value for
+ * `LUNORA_SECURITY_HEADERS` in env leaves the worker applying the headers while the audit reports
+ * `security-headers-disabled`, and the same holds for `csrf`. The audit is
+ * reporting the deployment var honestly; it is not a claim about the resolved
+ * worker. Setting a layer in code means leaving its env var unset.
  */
 const resolveSecurity = (security: SecurityOptions | undefined, env?: Record<string, unknown>): ResolvedSecurity => {
     const headers = security?.headers ?? (isEnvDisabled(env?.["LUNORA_SECURITY_HEADERS"]) ? false : undefined);

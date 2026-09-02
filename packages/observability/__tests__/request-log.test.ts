@@ -13,6 +13,7 @@ import {
     REQUEST_LOG_RETENTION,
     REQUEST_LOG_TABLE,
 } from "../src/request-log";
+import freshHandleOver from "./_helpers/fresh-handle";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -908,5 +909,89 @@ describe("emitLogEvent (ctx.log → console)", () => {
         const event = JSON.parse(log.mock.calls.at(0)?.at(0) as string) as Record<string, unknown>;
 
         expect(event.fields).toEqual({ email: "a@b.com" });
+    });
+});
+
+describe("sinceSeq forward paging", () => {
+    it("returns a contiguous run from the cursor so advancing it never skips a row", () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            for (let index = 0; index < 10; index += 1) {
+                appendRequestLogEntry(database.sql, entry({ ts: 1000 + index }));
+            }
+
+            // A consumer polling with a limit SMALLER than what accumulated
+            // between polls: descending, this answered with the NEWEST 3 after the
+            // cursor (seq 8,9,10) and advancing to 10 silently dropped 2..7.
+            const page = readRequestLog(database.sql, { limit: 3, sinceSeq: 1 });
+
+            expect(page.map((row) => row.seq)).toStrictEqual([2, 3, 4]);
+
+            const next = readRequestLog(database.sql, { limit: 3, sinceSeq: page.at(-1)!.seq });
+
+            expect(next.map((row) => row.seq)).toStrictEqual([5, 6, 7]);
+
+            // The un-cursored read is a "show me the tail" query and stays
+            // newest-first — that is what the studio's Logs tab renders.
+            expect(readRequestLog(database.sql, { limit: 3 }).map((row) => row.seq)).toStrictEqual([10, 9, 8]);
+        } finally {
+            database.close();
+        }
+    });
+});
+
+describe("ensureRequestLogTable per-handle memoization", () => {
+    it("issues no CREATE TABLE and no ALTER TABLE on a second append against the same handle", () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            // Warm the handle.
+            appendRequestLogEntry(database.sql, entry());
+
+            const original = database.sql.exec.bind(database.sql);
+            const seen: string[] = [];
+
+            vi.spyOn(database.sql, "exec").mockImplementation((query: string, ...parameters: unknown[]) => {
+                seen.push(query);
+
+                return (original as (q: string, ...p: unknown[]) => ReturnType<typeof original>)(query, ...parameters);
+            });
+
+            appendRequestLogEntry(database.sql, entry());
+
+            // Every one of these ran on every single dispatch, and each ALTER
+            // threw `duplicate column` and was swallowed — two SQLite errors
+            // constructed per RPC, forever.
+            expect(seen.some((query) => query.includes("CREATE TABLE"))).toBe(false);
+            expect(seen.some((query) => query.includes("ALTER TABLE"))).toBe(false);
+        } finally {
+            vi.restoreAllMocks();
+            database.close();
+        }
+    });
+
+    it("re-ensures on a fresh post-hibernation handle over the same storage", () => {
+        expect.assertions(1);
+
+        const database = createSqliteExec();
+
+        try {
+            appendRequestLogEntry(database.sql, entry());
+
+            // A new isolate's handle has a cold WeakSet; the memo must not be
+            // global, or a genuinely new handle would skip a needed CREATE.
+            const fresh = freshHandleOver(database);
+
+            appendRequestLogEntry(fresh, entry());
+
+            expect(readRequestLog(fresh)).toHaveLength(2);
+        } finally {
+            database.close();
+        }
     });
 });

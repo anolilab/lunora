@@ -75,11 +75,14 @@ with a uniform `{ kind, args, handler }` shape consumed by codegen.
 ## `ctx` shape
 
 `QueryCtx`, `MutationCtx`, and `ActionCtx` share `auth`, `scheduler`, and
-`storage`. `MutationCtx.db` extends `QueryCtx.db` with mutating methods;
-`ActionCtx` drops `db` entirely; actions must read/write via mutations or
-queries called through `ctx.runQuery` / `ctx.runMutation`. A mutation dispatched
-that way gets the same transaction a top-level one gets, which is what makes the
-"do the transactional part in a mutation, call it from the action" split safe.
+`storage`. `MutationCtx.db` extends `QueryCtx.db` with mutating methods.
+`ActionCtx` carries a `DatabaseWriter` too — it does not drop `db` — but an
+action's own writes are **not** transactional: each autocommits as it runs, and
+a later throw rolls nothing back. A mutation dispatched through
+`ctx.runMutation` does get the same transaction a top-level one gets, which is
+what makes the "do the transactional part in a mutation, call it from the
+action" split safe. See [function context](/docs/concepts/function-context) for
+the full per-kind matrix.
 
 ### Client-supplied ids
 

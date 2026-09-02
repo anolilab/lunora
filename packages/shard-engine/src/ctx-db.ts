@@ -2018,6 +2018,32 @@ const assertNoExplicitUndefined = (op: "patch" | "replace", document: Record<str
 const UNIQUE_VIOLATION_RE = /unique constraint failed/i;
 const isUniqueViolation = (error: unknown): boolean => error instanceof Error && UNIQUE_VIOLATION_RE.test(error.message);
 
+/**
+ * SQLite phrases `SQLITE_TOOBIG` as "string or blob too big"; the same wording
+ * reaches us from workerd and `node:sqlite` alike. Matches the recogniser the
+ * solutions catalog keys `lunora-row-too-big` on (`@lunora/errors`).
+ */
+const ROW_TOO_BIG_RE = /string or blob too big/iu;
+
+/**
+ * Row-size overflow is the one storage-engine limit a caller can act on, so it
+ * must survive the wire. A raw `SQLITE_TOOBIG` is not a `LunoraError`, and
+ * `toErrorBody` redacts every foreign throw to `INTERNAL` / "Internal error" /
+ * 500 — leaving the operator a redacted 500 for a document they can simply move
+ * to R2. `PAYLOAD_TOO_LARGE` is catalogued non-internal (413), so this message
+ * reaches the client with the limit named.
+ */
+const throwIfRowTooBig = (error: unknown, table: string): void => {
+    if (!(error instanceof Error) || !ROW_TOO_BIG_RE.test(error.message)) {
+        return;
+    }
+
+    throw new LunoraError(
+        "PAYLOAD_TOO_LARGE",
+        `document is too large to store in "${table}": a single row cannot exceed the storage engine's per-row ceiling (2 MB on a Durable Object's SQLite). The limit is on the STORED bytes, which are UTF-8, and v.bytes()/v.bigint() columns are stored twice on a shard-local table. Keep the payload in R2 (ctx.storage) and store a reference on the row.`,
+    );
+};
+
 /** Run a write, remapping a UNIQUE-index breach to a {@link ConflictError} (code `CONFLICT`, 409). */
 
 /**
@@ -2036,6 +2062,8 @@ const runWrite = (sql: SqlExec, table: string, text: string, params: ReadonlyArr
         if (isUniqueViolation(error)) {
             throw new ConflictError(`unique constraint violation on "${table}"`, "unique");
         }
+
+        throwIfRowTooBig(error, table);
 
         throw error;
     }

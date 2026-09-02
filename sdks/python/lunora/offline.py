@@ -34,6 +34,8 @@ import time
 from collections.abc import Sequence
 from typing import Any, Callable, Optional, Protocol, Union
 
+from .wire import decode_wire, encode_wire
+
 #: The oldest write was dropped because the queue is at capacity.
 OFFLINE_QUEUE_OVERFLOW = "OFFLINE_QUEUE_OVERFLOW"
 #: The write's precondition no longer held when the flush reached it.
@@ -42,6 +44,9 @@ OFFLINE_PRECONDITION_FAILED = "OFFLINE_PRECONDITION_FAILED"
 OFFLINE_IDENTITY_CHANGED = "OFFLINE_IDENTITY_CHANGED"
 #: The write's args cannot be wire-encoded, so no replay of it can ever succeed.
 OFFLINE_WRITE_UNENCODABLE = "OFFLINE_WRITE_UNENCODABLE"
+#: A restored record's args are not readable as wire values — the store was
+#: corrupted, or written by an incompatible build.
+OFFLINE_WRITE_UNDECODABLE = "OFFLINE_WRITE_UNDECODABLE"
 #: The client was closed while the write was still queued.
 CLIENT_CLOSED = "CLIENT_CLOSED"
 
@@ -231,9 +236,21 @@ class QueuedMutation:
         self.live_awaiter = live_awaiter
 
     def to_record(self, version: Optional[str] = None) -> dict:
-        """The durable form. Callback fields are deliberately not persisted."""
+        """The durable form. Callback fields are deliberately not persisted.
 
-        record: dict = {"args": self.args, "functionPath": self.function_path, "id": self.id}
+        ``args`` is the WIRE form, not the native one. A real adapter serialises
+        — a file, a SQLite text column, a preferences store — and the native form
+        carries the codec's own wrappers, so a queued write with a ``bigint``,
+        ``bytes``, ``Date`` or ``Map`` argument either fails to serialise (and is
+        reported "queued" while nothing durable was written) or serialises as
+        whatever the adapter makes of an opaque object and replays after a
+        restart with CORRUPTED args. Encoding here also raises for args outside
+        the codec entirely, which :meth:`OfflineQueue.enqueue` reports as the
+        failed append it is — the write stays in memory with its real args and
+        settles terminally on the next flush, never persisted as a substitute.
+        """
+
+        record: dict = {"args": encode_wire(self.args if self.args is not None else {}), "functionPath": self.function_path, "id": self.id}
         if self.client_id is not None:
             record["clientId"] = self.client_id
         if self.identity is not ABSENT_IDENTITY:
@@ -253,10 +270,16 @@ class QueuedMutation:
         :data:`ABSENT_IDENTITY` (a legacy record), while a stored ``null``
         restores as ``None`` (queued signed out) — the distinction the identity
         gate turns on.
+
+        Raises :class:`~lunora.wire.WireFormatError` when the stored args are not
+        wire values. Never substitutes: a record hydrated as empty args replays
+        SUCCESSFULLY with the wrong arguments, which is corruption rather than
+        failure. :meth:`OfflineQueue.hydrate` settles such a record terminally
+        instead.
         """
 
         return QueuedMutation(
-            args=record.get("args"),
+            args=decode_wire(record.get("args")),
             client_id=record.get("clientId"),
             function_path=record.get("functionPath", ""),
             identity=record.get("identity", ABSENT_IDENTITY),
@@ -376,6 +399,7 @@ class OfflineQueue:
 
         persisted = self.persistence.load()
         restored: list[QueuedMutation] = []
+        undecodable: list = []
         seen = {item.id for item in self._items}
 
         for record in persisted:
@@ -388,13 +412,27 @@ class OfflineQueue:
                 self._persist("remove", record_id, lambda rid=record_id: self.persistence.remove(rid))
                 continue
 
-            restored.append(QueuedMutation.from_record(record))
+            try:
+                restored.append(QueuedMutation.from_record(record))
+            except Exception as error:
+                # Purged and REPORTED, never replayed with substitute args: a
+                # record whose args do not decode has no correct replay, and
+                # sending it with an empty argument object would commit a
+                # different write than the one the caller made.
+                self._persist("remove", record_id, lambda rid=record_id: self.persistence.remove(rid))
+                undecodable.append(
+                    Discarded(
+                        QueuedMutation(args=None, function_path=record.get("functionPath", ""), mutation_id=record_id, shard_key=record.get("shardKey")),
+                        OFFLINE_WRITE_UNDECODABLE,
+                        f"offline mutation restored from storage cannot be wire-decoded: {error}",
+                    )
+                )
 
         self._items[:0] = restored
 
         # A store holding more than ``max_items`` (the cap was lowered between
         # sessions, or writes piled up across restarts) must not bypass it.
-        evicted = self._evict_overflow()
+        evicted = undecodable + self._evict_overflow()
         self._notify_size()
 
         # Shard keys are read AFTER eviction, from the entries that actually

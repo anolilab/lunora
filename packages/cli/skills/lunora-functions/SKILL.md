@@ -70,15 +70,22 @@ Each function declares its inputs with `.input(...)` (a `v.*` map) and ends with
 terminal `.query` / `.mutation` / `.action` handler. Export them as named
 consts from `lunora/*.ts`; codegen surfaces them as `api.<file>.<name>`.
 
-| Kind       | Reads `ctx.db`                    | Writes `ctx.db` | Side effects / `fetch` | Reactive |
-| ---------- | --------------------------------- | --------------- | ---------------------- | -------- |
-| `query`    | yes                               | no              | no                     | yes      |
-| `mutation` | yes                               | yes             | no                     | —        |
-| `action`   | no (use `runQuery`/`runMutation`) | no              | yes                    | —        |
+| Kind       | Reads `ctx.db` | Writes `ctx.db`     | Side effects / `fetch` | Reactive |
+| ---------- | -------------- | ------------------- | ---------------------- | -------- |
+| `query`    | yes            | no                  | no                     | yes      |
+| `mutation` | yes            | yes, transactional  | no                     | —        |
+| `action`   | yes            | yes, autocommitting | yes                    | —        |
+
+The builders are **generated**, not imported from `@lunora/server`: codegen binds
+them to your schema, so `ctx.db`, `v.id("channels")`, and index names are all
+typed. `@lunora/server` exports the schema/HTTP/validator surface and
+`LunoraError`, never `query` / `mutation` / `action`.
 
 ```ts
-import type { Id } from "@lunora/server";
-import { action, LunoraError, mutation, query, v } from "@lunora/server";
+import { LunoraError } from "lunorash/server";
+
+import type { Id } from "#lunora/_generated/server.js";
+import { action, mutation, query, v } from "#lunora/_generated/server.js";
 
 // `api` / `internal` come from codegen:
 // import { api, internal } from "./_generated/api";
@@ -112,10 +119,12 @@ export const notifySlack = action.input({ messageId: v.id("messages") }).action(
 
 - **Pick the right kind.** Reactive read → `query`. Transactional write →
   `mutation`. External I/O (`fetch`, third-party SDKs, calling other functions)
-  → `action`. An action has no `ctx.db`; it reaches data via `ctx.runQuery` /
-  `ctx.runMutation`. A mutation called that way runs in its own all-or-nothing
-  transaction, so put every write that has to land together in ONE mutation
-  rather than sequencing several from the action.
+  → `action`. An action has a `ctx.db`, but its own writes are not
+  transactional: each autocommits as it runs, so a later throw rolls nothing
+  back. Reach data through `ctx.runQuery` / `ctx.runMutation` — a mutation
+  called that way runs in the same all-or-nothing transaction a top-level one
+  gets, so put every write that has to land together in ONE mutation rather
+  than sequencing several from the action.
 - **`internal*` variants** (`internalQuery`, `internalMutation`,
   `internalAction`) are not exposed to clients — use them for server-only logic
   called from actions, crons, or other functions.
@@ -188,23 +197,40 @@ Two exceptions to the usage scan, and one extra requirement:
   action — see `lunora-setup-hyperdrive`. Bindings codegen can provision on its
   own (e.g. `BROWSER` for `ctx.browser`) need no manual wrangler step.
 
-`ctx.browser` and `ctx.sql` are **action-only** by design — they are
-non-deterministic and would break query reactivity and mutation replay.
+`ctx.browser` and `ctx.sql` are **action-only** by design. They are external,
+non-deterministic I/O: a query is re-run on every subscription re-evaluation, so
+a non-deterministic read makes reactivity wrong, and a mutation's writes are
+transactional — a rollback cannot un-send a network call.
 
 ## HTTP endpoints
 
 For webhooks or non-RPC HTTP, use `httpRouter` / `httpRoute` + `httpAction`:
 
+`httpRouter()` takes **no arguments** — it returns a [Hono](https://hono.dev)
+app you mount routes on, and you export the app. Passing it a routes object is a
+type error (`Expected 0 arguments`), and from untyped code the routes simply
+never mount.
+
 ```ts
+// lunora/http.ts
 import { httpAction, httpRouter } from "@lunora/server";
 
-export default httpRouter({
-    "/webhooks/stripe": httpAction(async (ctx, request) => {
+import { internal } from "./_generated/api";
+
+const app = httpRouter();
+
+app.post(
+    "/webhooks/stripe",
+    httpAction(async (ctx, request) => {
         const event = await request.json();
+
         await ctx.runMutation(internal.billing.record, { event });
+
         return new Response("ok");
     }),
-});
+);
+
+export default app;
 ```
 
 ## Checklist

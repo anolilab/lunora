@@ -86,7 +86,12 @@ export interface RetryPolicy {
     backoff?: "exponential" | "linear";
     /** Base delay in milliseconds for the first retry. Default `30_000`. */
     baseMs?: number;
-    /** Maximum number of dispatch attempts before dead-lettering. Default `5`. */
+
+    /**
+     * Maximum number of **retries** after the initial dispatch. Default `5`, so
+     * a job that keeps failing is dispatched 6 times in total before it is
+     * dead-lettered (the park happens once `attempts > maxAttempts`).
+     */
     maxAttempts?: number;
     /** Optional ceiling clamping the computed backoff delay. */
     maxMs?: number;
@@ -102,6 +107,13 @@ export interface RunOptions {
      * the call is made. Callers that are not deferring should leave it unset and
      * take the minted id from the return value. The DO ignores anything that is
      * not a plain `[A-Za-z0-9_-]` id.
+     *
+     * **Not an idempotency key.** An id that is already scheduled is REFUSED
+     * (`409 DUPLICATE_SCHEDULE_ID`), not replaced or de-duplicated: the time
+     * index is keyed by time as well as id, so an overwrite would fire the new
+     * job at the old job's instant and drop the slot it was actually scheduled
+     * for. Cancel the existing job first if you mean to reschedule it. The id
+     * is free again once the job has fired or been cancelled.
      */
     id?: string;
 

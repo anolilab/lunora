@@ -11,7 +11,7 @@
  * Usage:
  *   const png = await ctx.browser.screenshot("https://example.com");
  *   const pdf = await ctx.browser.pdf("https://example.com/report");
- *   const text = await ctx.browser.scrape("https://example.com", (page) => page.innerText("body"));
+ *   const text = await ctx.browser.scrape("https://example.com", () => document.body.innerText);
  *
  * **Rendering a caller-supplied URL is a server-side request forgery (SSRF)
  * sink, and a metered one.** Lunora `action`s are public RPC, so an unguarded
@@ -152,7 +152,10 @@ export const screenshot = action
             viewport: width !== undefined && height !== undefined ? { width, height } : undefined,
         });
 
-        return { png: [...png] };
+        // The Uint8Array itself, NOT `[...png]`: the wire codec carries a typed
+        // array as base64, while spreading it turns every byte into its own JSON
+        // number — 3-4x the payload for a screenshot that is already megabytes.
+        return { png };
     });
 
 /** Capture a PDF of an allowlisted URL. */
@@ -164,5 +167,6 @@ export const pdf = action
 
         const pdfBytes = await ctx.browser.pdf(assertAllowedTarget(url), { format: "A4" });
 
-        return { pdf: [...pdfBytes] };
+        // See `screenshot`: return the typed array, not a JSON number array.
+        return { pdf: pdfBytes };
     });

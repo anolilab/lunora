@@ -1,5 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import { MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS } from "@lunora/scheduler";
+import { assertScheduleDelay, MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS } from "@lunora/scheduler";
 import type { ScheduledJob, Scheduler } from "@lunora/server";
 
 /** A pending job entry in the fake scheduler queue. */
@@ -187,11 +187,23 @@ const createFakeScheduler = (
         return id;
     };
 
-    // A schedule target is a function-path string or a generated workflow/agent
-    // ref (`workflows.<name>` / `agents.<name>`); reduce it to the string key the
-    // fake registry dispatches on. A string passes through unchanged, so existing
-    // function-scheduling tests are untouched.
-    const targetPath = (target: Parameters<Scheduler["runAfter"]>[1]): string => (typeof target === "string" ? target : (target.name ?? target.binding ?? ""));
+    // A schedule target is a function-path string, a generated `internal.<file>.<fn>`
+    // / `api.<file>.<fn>` reference (which carries its `<file>:<fn>` id in
+    // `__lunoraRef`, exactly as `@lunora/scheduler` reads it), or a generated
+    // workflow/agent ref (`workflows.<name>` / `agents.<name>`); reduce it to the
+    // string key the fake registry dispatches on. A string passes through
+    // unchanged, so existing function-scheduling tests are untouched.
+    const targetPath = (target: Parameters<Scheduler["runAfter"]>[1]): string => {
+        if (typeof target === "string") {
+            return target;
+        }
+
+        if ("__lunoraRef" in target) {
+            return target.__lunoraRef;
+        }
+
+        return target.name ?? target.binding ?? "";
+    };
 
     const scheduler: Scheduler = {
         cancel: (id: string) => {
@@ -213,12 +225,10 @@ const createFakeScheduler = (
         // deferred-schedule facade, which needs the id decided before the call is
         // made so a mutation handler can be handed it synchronously.
         runAfter: (delayMs: number, target: Parameters<Scheduler["runAfter"]>[1], args?: Record<string, unknown>, options?: { id?: string }) => {
-            // Verbatim mirror of `@lunora/scheduler`'s `createScheduler().runAfter`,
-            // which rejects a negative/non-finite delay before it reaches the DO.
-            // The guard is inline there (not exported), so it is restated here.
-            if (!Number.isFinite(delayMs) || delayMs < 0) {
-                throw new LunoraError("INTERNAL", "@lunora/scheduler: `delayMs` must be a non-negative finite number");
-            }
+            // The same guard `@lunora/scheduler`'s `createScheduler().runAfter`
+            // runs before the call reaches the DO — imported, not restated, so a
+            // test cannot pass on a delay production refuses.
+            assertScheduleDelay(delayMs, "ctx.scheduler.runAfter");
 
             const id = enqueue(nowMs + delayMs, targetPath(target), args, options?.id);
 

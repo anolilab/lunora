@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+import { toErrorBody } from "@lunora/errors";
 import type { Middleware, MiddlewareNext } from "@lunora/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -37,6 +41,25 @@ const catchError = async (function_: () => Promise<unknown>): Promise<Record<str
 
 const makeLimiter = (denyList?: string[]) => new RateLimiter({ config: { api: { kind: "token bucket", period: 1000, rate: 1 } }, denyList, now: () => 0 });
 
+/**
+ * The normative `TOO_MANY_REQUESTS` error data from `protocol/fixtures/rpc.json`
+ * — the same golden frame `@lunora/client`'s protocol-conformance suite and all
+ * eight SDK ports decode. Read from the fixture rather than restated here, so
+ * the producer cannot drift away from every consumer again.
+ */
+const fixtureRateLimitData = (): Record<string, unknown> => {
+    const fixture = JSON.parse(readFileSync(fileURLToPath(new URL("../../../protocol/fixtures/rpc.json", import.meta.url)), "utf8")) as {
+        responseError: { code: string; dataWire?: Record<string, unknown> }[];
+    };
+    const testCase = fixture.responseError.find((entry) => entry.code === "TOO_MANY_REQUESTS" && entry.dataWire !== undefined);
+
+    if (!testCase?.dataWire) {
+        throw new Error("protocol/fixtures/rpc.json no longer carries a TOO_MANY_REQUESTS case with data");
+    }
+
+    return testCase.dataWire;
+};
+
 describe("rateLimit middleware", () => {
     it("calls next when under the limit", async () => {
         expect.assertions(2);
@@ -60,10 +83,29 @@ describe("rateLimit middleware", () => {
         expect(error.name).toBe("LunoraError");
         expect(error.code).toBe("TOO_MANY_REQUESTS");
         expect(error.status).toBe(429);
-        expect((error as Record<string, { retryAfter: number }>).data?.retryAfter).toBeTypeOf("number");
+        expect((error as Record<string, { retryAfterMs: number }>).data?.retryAfterMs).toBeTypeOf("number");
     });
 
-    it("maps a deny-list hit to FORBIDDEN (403) without a retryAfter", async () => {
+    it("serializes the denial with the retry-hint key the protocol fixture and every client read", async () => {
+        expect.assertions(2);
+
+        const middleware = rateLimit<Context>(makeLimiter(), "api");
+
+        await invoke(middleware, {});
+        const thrown = await catchError(() => invoke(middleware, {}));
+
+        // The transport edge's own serializer, so this is the body a client
+        // actually receives — not a hand-built envelope that could agree with
+        // the fixture while the middleware does not.
+        const { body } = toErrorBody(thrown, { encodeData: (data) => data });
+
+        expect(Object.keys(body.data as Record<string, unknown>)).toStrictEqual(Object.keys(fixtureRateLimitData()));
+        // Milliseconds, as the key name promises: this limiter's bucket refills
+        // one token per second, so a denial one call in is a whole period away.
+        expect((body.data as { retryAfterMs: number }).retryAfterMs).toBe(1000);
+    });
+
+    it("maps a deny-list hit to FORBIDDEN (403) without a retry hint", async () => {
         expect.assertions(3);
 
         const middleware = rateLimit<Context>(makeLimiter(["banned"]), "api", { key: (context) => context.userId });
@@ -72,8 +114,9 @@ describe("rateLimit middleware", () => {
 
         expect(error.code).toBe("FORBIDDEN");
         expect(error.status).toBe(403);
-        // Infinite retryAfter is dropped rather than serialized.
-        expect(error.retryAfter).toBeUndefined();
+        // An infinite retryAfterMs is dropped rather than serialized — a client
+        // that waited it out would never send again.
+        expect(error.data).toBeUndefined();
     });
 
     it("isolates limits by the derived key", async () => {

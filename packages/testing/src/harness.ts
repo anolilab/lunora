@@ -14,7 +14,6 @@ import type {
     RegisteredAction,
     RegisteredMutation,
     RegisteredQuery,
-    Scheduler,
     Schema,
     SpanHandle,
     TableDefinition,
@@ -966,7 +965,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
     // transaction commits (`runInMutationTransaction` opens and settles the
     // window). Without it a rolled-back mutation still leaves its job pending, and
     // the harness would tell a test the opposite of what production does.
-    const scheduler = withDeferredSchedules(fakeScheduler) as Scheduler;
+    const scheduler = withDeferredSchedules(fakeScheduler);
 
     const makeHarness = (identity: null | TestIdentity): TestHarness => {
         const resolved = resolveTestIdentity(identity);

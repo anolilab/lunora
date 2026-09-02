@@ -79,7 +79,7 @@ carries:
 An HTTP action has no direct `ctx.db`, `ctx.scheduler`, `ctx.storage`, or
 `ctx.vectors`. Go through `runQuery` / `runMutation` / `runAction` to read or
 write your tables. (To stream a stored R2 object straight from a handler,
-`serveStorageObject(ctx, key, request, { authorize })` is the purpose-built
+`serveStorageObject(ctx, key, request, authorize)` is the purpose-built
 helper — it owns `Range`/`ETag`/`nosniff`, and its required `authorize` gate is
 where your signed-URL or session check goes.)
 
