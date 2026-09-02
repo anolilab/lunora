@@ -1,5 +1,6 @@
 import { gunzipSync } from "node:zlib";
 
+import { isLunoraError } from "@lunora/errors";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { LogEvent, LogLevel, MetricEvent, ObservabilityEvent, ObservabilitySinkContext, SpanEvent } from "../src/observability";
@@ -960,6 +961,78 @@ describe("observability-sinks", () => {
             // ts (1700ms) → nanos with six trailing zeros.
             expect(record.timeUnixNano).toBe("1700000000");
             expect(attrValue(record.attributes, "lunora.user_id")).toStrictEqual({ stringValue: "user-1" });
+        });
+
+        // `maxItems` is operator config, and both bad shapes are unrecoverable at
+        // runtime rather than merely wrong: a negative cap makes the batcher's
+        // drop-oldest `while` spin forever on the first buffered event (the
+        // isolate hangs on its first `ctx.log`), and `0`/`0.5` empty the buffer
+        // before the drain reads it, so every signal is discarded in silence.
+        it.each([-1, 0, 0.5])("refuses to construct with batch.maxItems %p", (maxItems) => {
+            expect.assertions(2);
+
+            let thrown: unknown;
+
+            try {
+                otlpSink({ batch: { maxItems }, endpoint: "https://collector.example" });
+            } catch (error) {
+                thrown = error;
+            }
+
+            expect(isLunoraError(thrown)).toBe(true);
+            expect((thrown as { code?: string }).code).toBe("ENV_INVALID");
+        });
+
+        // The console/Logpush line already redacts a log's `fields`, and the span
+        // pipeline already redacts error messages — a collector is the sink with
+        // third-party fan-out, so it must not be the one that sees MORE.
+        it("redacts a log record's fields and message before exporting them", () => {
+            expect.assertions(3);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
+
+            sink.onLog!({
+                args: [],
+                fields: { orderId: "o-1", password: "hunter2" },
+                functionPath: "orders:place",
+                level: "info",
+                message: "charged buyer@example.com",
+                ts: 1,
+            });
+
+            const { record } = logFrom(fetchMock.mock.calls[0]![1] as RequestInit);
+
+            expect(attrValue(record.attributes, "password")).not.toStrictEqual({ stringValue: "hunter2" });
+            // A field with no secret-shaped name and no PII pattern is untouched —
+            // this is a redactor, not a blunt drop-everything.
+            expect(attrValue(record.attributes, "orderId")).toStrictEqual({ stringValue: "o-1" });
+            expect(record.body.stringValue).not.toContain("buyer@example.com");
+        });
+
+        it("ships the raw log record when redactLogs is opted out", () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example", redactLogs: false });
+
+            sink.onLog!({
+                args: [],
+                fields: { password: "hunter2" },
+                functionPath: "orders:place",
+                level: "info",
+                message: "charged buyer@example.com",
+                ts: 1,
+            });
+
+            const { record } = logFrom(fetchMock.mock.calls[0]![1] as RequestInit);
+
+            expect(attrValue(record.attributes, "password")).toStrictEqual({ stringValue: "hunter2" });
+            expect(record.body.stringValue).toBe("charged buyer@example.com");
         });
 
         it("maps each log level to its OTLP severity number", () => {

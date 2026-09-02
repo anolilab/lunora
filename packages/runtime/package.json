@@ -63,6 +63,7 @@
     "dependencies": {
         "@lunora/bindings": "1.0.0-alpha.46",
         "@lunora/errors": "1.0.0-alpha.29",
+        "@lunora/observability": "1.0.0-alpha.53",
         "@lunora/platform": "1.0.0-alpha.24"
     },
     "devDependencies": {

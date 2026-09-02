@@ -4,10 +4,12 @@
  * Continuing an inbound W3C `traceparent` is what makes a distributed waterfall
  * stitch end to end, but the header is caller-supplied: on a public worker,
  * trusting it lets anyone choose which trace their spans and `ctx.log` lines land
- * in, and — because `shared/sampling` derives the head verdict from the trace id —
- * choose their own sampling outcome. Whether that matters is a *deployment*
- * question ("can an untrusted client reach this worker directly?"), which no
- * amount of request inspection can answer on its own.
+ * in — and, since a trusted upstream is also what makes the head verdict key on
+ * that caller-supplied TRACE id, choose their own sampling outcome. (Untrusted,
+ * the verdict keys on the server-minted span id instead, which is precisely the
+ * hole this option closes.) Whether that matters is a *deployment* question
+ * ("can an untrusted client reach this worker directly?"), which no amount of
+ * request inspection can answer on its own.
  *
  * So rather than ask users to hand-roll a security predicate, this module ships
  * the answers that are actually sound, named:

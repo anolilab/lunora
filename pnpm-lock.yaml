@@ -4325,6 +4325,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/observability':
+        specifier: 1.0.0-alpha.53
+        version: link:../observability
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform

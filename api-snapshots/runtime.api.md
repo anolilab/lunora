@@ -1400,6 +1400,7 @@ interface OtlpSinkOptions extends OnlyErrorsOption {
     endpoint: string;
     headers?: Record<string, string>;
     postProcessor?: OtlpPostProcessor;
+    redactLogs?: boolean;
     resourceAttributes?: OtlpResourceAttributes;
     serviceName?: string;
     serviceNamespace?: string;

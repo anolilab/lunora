@@ -6,11 +6,21 @@
  * tiers and must not gain a runtime dependency edge on each other, so this lives
  * in `shared/` and is inlined into each `dist` rather than published.
  *
- * The model mirrors Cloudflare Workers' `head_sampling_rate`: a per-trace head
- * decision derived deterministically from the trace id — so the same trace yields
- * the same verdict on the worker and on every shard/container beneath it, and a
- * trace is kept or dropped *whole* (never half) — biased to always keep traces
- * that produced an error (tail bias) so failures are never sampled away.
+ * The model mirrors Cloudflare Workers' `head_sampling_rate`: one deterministic
+ * head decision per trace, taken ONCE at the worker's entry and then propagated
+ * — so a trace is kept or dropped *whole* (never half) — biased to always keep
+ * traces that produced an error (tail bias) so failures are never sampled away.
+ *
+ * **What the verdict is keyed on is the caller's choice, not this module's.**
+ * `resolveTraceSampling` hashes whatever id it is handed. The worker
+ * (`otel-trace.ts`'s `beginDispatchTrace`) hands it the inbound TRACE id only
+ * when `trustInboundTraceContext` accepted the upstream; otherwise it hands it
+ * the freshly-minted SPAN id, because a client that could choose the trace id
+ * could otherwise choose its own verdict — dropping itself out of every trace,
+ * or forcing capture to inflate the operator's ingest bill. Shards and
+ * containers do NOT re-derive anything: they read the settled verdict off the
+ * propagated `traceparent` sampled flag (`trace-context.ts`), which is what
+ * actually keeps the trace whole across tiers.
  *
  * Pure and dependency-free (only built-ins) so inlining stays sound. Only trace
  * spans are governed here; metrics and application logs are never sampled.
