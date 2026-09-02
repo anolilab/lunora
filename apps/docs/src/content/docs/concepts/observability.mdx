@@ -27,7 +27,7 @@ several; combine them with `combineSinks`.
 | `consoleSink()`                 | `console` (local dev)                                           |
 | `otlpSink({ endpoint })`        | any OTLP-over-HTTP collector                                    |
 | `webhookSink({ url })`          | an arbitrary HTTP endpoint (your own JSON shape)                |
-| `sentrySink({ dsn })`           | Sentry                                                          |
+| `sentrySink({ capture })`       | Sentry, through a callback you wire                             |
 | `analyticsEngineSink({ … })`    | a Cloudflare Analytics Engine dataset                           |
 | `pipelineLogSink({ pipeline })` | a Cloudflare Pipeline → R2 (durable log store, read via R2 SQL) |
 
@@ -43,12 +43,23 @@ export default createWorker({
 });
 ```
 
-Sinks that carry RPC events accept `onlyErrors: true` to drop successful RPCs and
-export only failures (`pipelineLogSink` is log-only, so it has no such option;
-log events always pass through regardless). All four network/log sinks
-(`otlpSink`, `webhookSink`, `pipelineLogSink`, plus `sentrySink` when you wire
-its `captureLog`) forward `ctx.log` lines; `webhookSink` takes a `transformLog`
-redactor mirroring its RPC `transform`.
+`sentrySink` bundles no Sentry client and takes no `dsn`. It forwards to a
+`capture` callback you wire to your own client, so the runtime keeps no
+dependency on `@sentry/*`; constructing it without one throws:
+
+```ts
+sentrySink({ capture: (event) => Sentry.captureMessage(event.name) });
+```
+
+Sinks that carry RPC events accept `onlyErrors` to drop successful RPCs and
+export only failures. It defaults to `false` everywhere except `sentrySink`,
+which defaults to `true` — capturing every successful RPC would flood a Sentry
+project — so pass `onlyErrors: false` there to get all events.
+`pipelineLogSink` is log-only, so it has no such option; log events always pass
+through regardless. All four network/log sinks (`otlpSink`, `webhookSink`,
+`pipelineLogSink`, plus `sentrySink` when you wire its `captureLog`) forward
+`ctx.log` lines; `webhookSink` takes a `transformLog` redactor mirroring its RPC
+`transform`.
 
 :::caution[Upgrading a `webhookSink`]
 `webhookSink` now ships `ctx.log` lines (message **and** structured `fields`,

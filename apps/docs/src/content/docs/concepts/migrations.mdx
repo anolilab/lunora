@@ -18,8 +18,11 @@ storage backends:
   and re-running codegen is the migration. The DO provisions tables and indexes
   on demand.
 - **Global tables** (`.global()`) live in D1. A relational store needs explicit
-  `CREATE TABLE` / `ADD COLUMN` SQL, so `lunora migrate generate` diffs your
-  schema and emits a timestamped `.sql` file that is applied at deploy time.
+  `CREATE TABLE` / `ADD COLUMN` SQL. The runtime writes the additive part itself
+  on first use, and `lunora migrate generate` emits a timestamped `.sql` file
+  recording the diff — a review artifact and the place to hand-write what the
+  generator cannot express. **No command applies that file**, `lunora deploy`
+  included.
 
 Separately, **data migrations** (`defineMigration`) rewrite existing rows in a
 sharded table: a backfill or shape change applied to live documents, running
@@ -99,9 +102,28 @@ index). Unsupported deltas (column rename, column type change, dropping a
 column or index) are surfaced as a commented `unsupported` block in the
 generated file with a warning; write that SQL by hand.
 
-The generated SQL is applied through `@lunora/d1`'s `MigrationRunner`, which
-tracks applied migrations in a journal table and skips ones already run, so
-re-applying is safe.
+### Nothing applies the generated file
+
+The `.sql` file is a record of the diff, not a step in any pipeline. What
+actually provisions a global table is the runtime: on the first request that
+touches one it runs `CREATE TABLE IF NOT EXISTS` for the declared columns and
+indexes, and `ALTER TABLE … ADD COLUMN` for fields the table lacks. That covers
+every additive change, which is most of them, with the schema as the single
+source of truth.
+
+It does **not** cover anything the generator flags as `unsupported`, or SQL you
+add by hand: a backfilling `UPDATE`, a column rename written as add/copy/drop,
+an index the schema does not declare, a `DROP TABLE`. Apply those yourself, once
+per environment, before the deploy that depends on them:
+
+```bash
+wrangler d1 execute <DB> --remote --file=lunora/migrations/<timestamp>_<slug>.sql
+```
+
+<Callout type="warn">
+    A hand-edited migration file that is only committed and deployed runs nowhere. The runtime will silently add a fresh empty column where your file intended a
+    backfilled one, and the deploy stays green.
+</Callout>
 
 ## Data migrations (sharded tables)
 
@@ -211,7 +233,7 @@ require `--yes`.
 You can also apply pending data migrations as part of a deploy:
 
 ```bash
-lunora deploy --migrate --migrate-token $LUNORA_ADMIN_TOKEN
+lunora deploy --migrate --migrate-yes --migrate-url https://app.example.com --migrate-token $LUNORA_ADMIN_TOKEN
 ```
 
 ### Resumable and idempotent

@@ -102,7 +102,7 @@ determinism/realtime caveat.
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
 import postgres from "postgres";
 
-import { action, v } from "@lunora/server";
+import { action, v } from "#lunora/_generated/server.js";
 
 export const listLegacyOrders = action.input({ orgId: v.string() }).action(async ({ ctx, args: { orgId } }) => {
     const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);

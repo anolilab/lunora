@@ -49,7 +49,8 @@ lunora reset [--all] [--yes]            # clear local Miniflare state
 lunora prepare [--api-spec <spec>]      # every pre-deploy gate, without deploying — for CI
 lunora build [--out-dir <dir>]          # bundle the worker to disk without deploying
 lunora deploy [--env <name>]            # codegen, validate wrangler, then wrangler deploy
-              [--migrate] [--prebuilt]  #   --preview uploads a version (no live traffic)
+              [--migrate --migrate-yes] #   --migrate also needs --migrate-url unless linked
+              [--prebuilt]              #   --preview uploads a version (no live traffic)
               [--preview] [--dry-run]   #   --dry-run validates + bundles, never publishes
               [--temporary]             #   --temporary deploys with no account (~60min, then claim)
               [--health-check]          #   --health-check probes /_lunora/health/ready after deploying
@@ -338,12 +339,17 @@ JSON log lines are available to everyone via `lunora dev --json` or
 
 Runs codegen, validates `wrangler.jsonc`, then invokes `wrangler deploy`.
 Pass `--migrate` to apply pending data migrations against the live worker
-immediately after a successful deploy.
+immediately after a successful deploy. It also requires `--migrate-yes` (an
+explicit confirmation; there is no environment variable for it), an admin token
+(`--migrate-token` or `LUNORA_ADMIN_TOKEN`), and `--migrate-url` unless this
+checkout is linked for the same `--env`. All three are checked **before**
+`wrangler deploy`, so a missing one aborts the deploy rather than skipping the
+migration.
 
 ```bash
 lunora deploy
 lunora deploy --env staging
-lunora deploy --migrate --migrate-token $LUNORA_ADMIN_TOKEN
+lunora deploy --migrate --migrate-yes --migrate-url https://app.example.com --migrate-token $LUNORA_ADMIN_TOKEN
 lunora deploy --temporary     # no Cloudflare account needed
 lunora deploy --dry-run       # run every pre-deploy gate, publish nothing
 lunora deploy --health-check  # …then prove the new version answers
@@ -711,8 +717,10 @@ snapshot format, restore drills, and moving data between deployments.
 
 Generates deterministic fake data from `lunora/schema.ts` and bulk-inserts it
 through the worker's admin endpoint. Rows are derived from a seed number, so the
-same `--seed` always produces identical data, which makes seeded fixtures
-reproducible across machines and CI runs.
+same `--seed` always produces identical ids and non-time columns. Columns named
+like a timestamp (`createdAt`, `expiresAt`, …) are generated relative to the
+wall clock, so a fixture that must be byte-identical across machines and CI runs
+needs `--now <epoch-ms>` pinned alongside `--seed`.
 
 ```bash
 lunora seed                          # every table, default 10 rows each
@@ -796,8 +804,8 @@ Copilot) how to use Lunora. `lunora dev`, the Vite plugin, and the studio nudge
 you to run this when the rules are missing.
 
 ```bash
-lunora rules install              # copy the skills into .agents/skills/ (skips edited files)
-lunora rules install --overwrite  # reinstall, replacing local edits
+lunora rules install              # copy the skills into .agents/skills/ (skips files that exist)
+lunora rules install --overwrite  # reinstall, replacing every existing file
 lunora rules check                # report which skills are present
 lunora rules check --strict       # exit non-zero when missing (CI gate)
 ```
@@ -928,5 +936,6 @@ loop.
 - `server.ts`: `internalQuery`, `internalMutation` exports re-typed against your schema
 - `dataModel.ts`: `Doc<"messages">`, `Id<"users">`, etc.
 
-These files are deterministic, so commit them. CI re-runs codegen and diffs
-the result to catch drift.
+These files are deterministic, so commit them. Nothing checks the committed
+copy for you — `verify` runs codegen as a dry run and `prepare` overwrites it —
+so gate it explicitly: `lunora codegen && git diff --exit-code lunora/_generated`.

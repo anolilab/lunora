@@ -5,7 +5,7 @@ description: "Deterministic, schema-driven seeding: realistic fake data generate
 
 `@lunora/seed` fills a Lunora database with realistic fake data derived from your `defineSchema`. It reads every table, maps each column to a generator (field-name aware: a `string` column named `email` becomes an email, `firstName` a first name), inserts foreign-key parents before their children, and lets you override any value.
 
-Generation is deterministic. The same `seed` value and schema always produce the same rows and ids, so fixtures are reproducible across runs and machines. It is built on a vendored, input-hashed generator (a rebuilt [`copycat`](https://github.com/supabase-community/copycat)) over [`@faker-js/faker`](https://fakerjs.dev).
+Generation is deterministic. Generation is deterministic in `seed` alone for every column except the time-valued ones: a `number` column named like a timestamp (`createdAt`, `expiresAt`, …) is generated relative to the wall clock, so two runs with the same `seed` differ unless you also pin `now` (`--now` on the CLI). Ids are unaffected. Pin the `(seed, now)` pair and a plan is byte-identical across runs and machines. It is built on a vendored, input-hashed generator (a rebuilt [`copycat`](https://github.com/supabase-community/copycat)) over [`@faker-js/faker`](https://fakerjs.dev).
 
 ## Install
 
@@ -65,6 +65,12 @@ const plan = seedPlan(schema, {
             description: "Per-table absolute index base, so successive batches of the same table never collide ids.",
         },
         seed: { type: "number", default: "0", description: "Deterministic mapping selector — same seed yields identical rows." },
+        now: {
+            type: "number",
+            default: "Date.now()",
+            description:
+                "Epoch-ms reference for time-valued columns (createdAt, expiresAt, …). The one input that drifts between runs; pin it with seed for a byte-identical plan.",
+        },
     }}
 />
 
@@ -145,7 +151,7 @@ Generates from `lunora/schema.ts` and bulk-inserts through the worker's admin en
 ```bash
 lunora seed                              # every table, default count (10)
 lunora seed --table posts --count 100    # one table; FK parents seeded automatically
-lunora seed --seed 42                    # reproducible run
+lunora seed --seed 42 --now 1750000000000  # byte-identical run (pin both)
 lunora seed --dry-run                    # print the NDJSON, insert nothing
 lunora seed --reset                      # wipe local .wrangler/state first (local dev only)
 ```
@@ -156,7 +162,7 @@ Other flags: `--batch-size` (rows per HTTP request, default 500), `--url` (worke
 
 ## Limitations
 
-- `.unique()` columns are not enforced. Each value is hashed independently, so a unique column over a small value space (a bounded integer, a boolean, a short enum) can collide across rows. Strings such as emails and uuids are effectively unique in practice. Colliding rows are rejected by the import path rather than overwritten.
+- **`.unique()` columns are dealt distinct values by construction.** Each value is a function of the row's absolute index, not a hash of the row, so two rows in the same run never collide — including across the several calls `indexOffset` exists to support. A column whose domain is too small to cover the requested count (a boolean, a three-literal `v.union()`) is refused at plan time, with the column named, before anything is inserted.
 - Seeding is deterministic by design. Re-running with the same `seed` regenerates identical `_id`s, which the import path skips as conflicts. Use a different `seed` for fresh rows, or `--reset` to wipe local state first.
 
 ## Related

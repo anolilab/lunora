@@ -78,7 +78,9 @@ consts from `lunora/*.ts`; codegen surfaces them as `api.<file>.<name>`.
 
 ```ts
 import type { Id } from "@lunora/server";
-import { action, LunoraError, mutation, query, v } from "@lunora/server";
+import { LunoraError } from "@lunora/server";
+
+import { action, mutation, query, v } from "#lunora/_generated/server.js";
 
 // `api` / `internal` come from codegen:
 // import { api, internal } from "./_generated/api";

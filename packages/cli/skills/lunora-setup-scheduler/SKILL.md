@@ -35,7 +35,7 @@ Available on `ctx.scheduler` in any function. Target functions are passed by
 reference from the generated `api` / `internal` proxy:
 
 ```ts
-import { mutation, v } from "@lunora/server";
+import { mutation, v } from "#lunora/_generated/server.js";
 
 import { internal } from "./_generated/api";
 

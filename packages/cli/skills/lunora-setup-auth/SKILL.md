@@ -104,7 +104,9 @@ dependency). OAuth items need the provider's client id/secret added to
 The runtime resolves the session and exposes the user on every context:
 
 ```ts
-import { LunoraError, mutation, v } from "@lunora/server";
+import { LunoraError } from "@lunora/server";
+
+import { mutation, v } from "#lunora/_generated/server.js";
 
 export const createDocument = mutation.input({ title: v.string() }).mutation(async ({ ctx, args: { title } }) => {
     if (!ctx.auth.userId) {
