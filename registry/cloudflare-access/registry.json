@@ -2,7 +2,7 @@
     "$schema": "../schema/registry-item.schema.json",
     "name": "cloudflare-access",
     "title": "Cloudflare Access",
-    "description": "Cloudflare Zero Trust identity for Lunora — verify the Cf-Access-Jwt-Assertion JWT against your team JWKS and feed the verified identity into ctx.auth via a resolveIdentity adapter. Ships with an admin gate for the Studio.",
+    "description": "Cloudflare Zero Trust identity for Lunora — verify the Cf-Access-Jwt-Assertion JWT against your team JWKS and feed the verified identity into ctx.auth via a resolveIdentity adapter. Gating the Studio on an Access group is a separate opt-in wiring (accessAdminGate), not scaffolded here.",
     "requires": [],
     "deps": {
         "@lunora/cloudflare-access": "workspace:*",
