@@ -37,6 +37,11 @@ export interface RegisteredLunoraFunction {
     lifecycle?: "connect" | "disconnect" | "init" | "reactor";
     /** `"internal"` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
+    /**
+     * `.x402({ price })` tag on a paid public procedure. The origin worker
+     * paywalls it; the shard refuses to subscribe it (`isPaidFunction`).
+     */
+    x402?: { readonly price: number | string };
 }
 
 /**

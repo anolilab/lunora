@@ -22,7 +22,16 @@ interface RateLimitMiddlewareOptions<Context> {
      * — note that a failing limiter then permits every request through.
      */
     failOpen?: boolean;
-    /** Sub-key derived from `ctx` (per-user/IP). Omit for a global limit. */
+
+    /**
+     * Sub-key derived from `ctx` (per-user/IP). Omit for a global limit.
+     *
+     * A resolver that returns `undefined` is a config bug, not a global limit:
+     * the middleware throws `INTERNAL` rather than silently pooling every
+     * keyless caller (e.g. every anonymous user) into one shared bucket. Fold
+     * the absent case yourself — `ctx.auth.userId ?? "anonymous"` — so the
+     * shared bucket is a visible choice.
+     */
     key?: (context: Context) => string | undefined;
     /** Override the error message thrown on rejection. */
     message?: string;
@@ -40,6 +49,28 @@ const defaultMessage = (name: string, reason: RateLimitReason, retryAfter: numbe
     }
 
     return retryAfter === undefined ? `rate limit "${name}" exceeded` : `rate limit "${name}" exceeded; retry after ${String(retryAfter)}ms`;
+};
+
+/**
+ * Fail closed: a per-caller limit whose key resolves to `undefined` would
+ * quietly become one global bucket that a single caller can drain for everyone.
+ * INTERNAL, so the middleware's catch rethrows it as-is under both policies.
+ */
+const resolveKey = <Context>(name: string, context: Context, key: RateLimitMiddlewareOptions<Context>["key"]): string | undefined => {
+    if (!key) {
+        return undefined;
+    }
+
+    const resolved = key(context);
+
+    if (resolved === undefined) {
+        throw new LunoraError(
+            "INTERNAL",
+            `@lunora/ratelimit: rateLimit("${name}") key resolver returned undefined; return a fallback such as "anonymous" instead`,
+        );
+    }
+
+    return resolved;
 };
 
 /**
@@ -68,7 +99,7 @@ const rateLimit =
         try {
             const resolved = typeof limiter === "function" ? await limiter(ctx) : limiter;
 
-            status = await resolved.limit(name, { count: options.count, key: options.key?.(ctx) });
+            status = await resolved.limit(name, { count: options.count, key: resolveKey(name, ctx, options.key) });
         } catch (error) {
             // Deterministic caller misuse (unconfigured limit, non-positive
             // count, a count that exceeds capacity) is thrown as an INTERNAL

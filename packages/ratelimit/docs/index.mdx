@@ -97,7 +97,10 @@ successful login).
 ```ts
 import { RateLimiter, RateLimitError, createDbStore } from "@lunora/ratelimit";
 
-export const login = mutation.mutation(async ({ ctx, args }) => {
+import { action } from "./_generated/server";
+
+// An action, not a mutation: see the callout below.
+export const login = action.action(async ({ ctx, args }) => {
     const limiter = new RateLimiter({ config, store: createDbStore({ db: ctx.db }) });
     const status = await limiter.limit("login", { key: args.email });
 
@@ -116,6 +119,14 @@ export const login = mutation.mutation(async ({ ctx, args }) => {
     await limiter.reset("login", { key: args.email });
 });
 ```
+
+<Callout type="warn">
+    **DB-store consumption commits with the mutation.** A mutation's `ctx.db` writes ride its storage transaction, and a throw rolls all of them back —
+    including the unit `limit()` just consumed. Written as a mutation, the example above charges nothing for a wrong password (`authenticate` throws), so only
+    successful logins count and an attacker gets an unlimited number of guesses. Consume from an **action** when failed attempts must count: its writes commit
+    on their own, so the unit stays spent whether or not the handler throws. The same applies to `.use(dbRateLimit(...))` on a mutation whose handler rejects. A
+    mutation that must keep the charge can return a failure value instead of throwing.
+</Callout>
 
 Per-call `RateLimitArgs`:
 
@@ -143,7 +154,7 @@ const config = { send: { kind: "token bucket", period: 1_000, rate: 10 } } as co
 export const send = mutation
     .use(
         rateLimit((ctx) => new RateLimiter({ config, store: createDbStore({ db: ctx.db }) }), "send", {
-            key: (ctx) => ctx.auth.userId,
+            key: (ctx) => ctx.auth.userId ?? "anonymous",
         }),
     )
     .mutation(async ({ ctx, args }) => {
@@ -172,12 +183,12 @@ the rest of `options` matches `rateLimit`'s.
 
 `RateLimitMiddlewareOptions`:
 
-| Option     | Type                           | Default | Notes                                                                        |
-| ---------- | ------------------------------ | ------- | ---------------------------------------------------------------------------- |
-| `key`      | `(ctx) => string \| undefined` | —       | Sub-key derived from context. Omit for a global limit.                       |
-| `count`    | `number`                       | `1`     | Units to consume per call.                                                   |
-| `message`  | `string`                       | —       | Override the error message thrown on rejection.                              |
-| `failOpen` | `boolean`                      | `false` | Behavior when the limiter itself throws (store unavailable, etc). See below. |
+| Option     | Type                           | Default | Notes                                                                                                                                                                           |
+| ---------- | ------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `key`      | `(ctx) => string \| undefined` | —       | Sub-key derived from context. Omit for a global limit. A resolver that returns `undefined` throws `INTERNAL` rather than silently pooling every keyless caller into one bucket. |
+| `count`    | `number`                       | `1`     | Units to consume per call.                                                                                                                                                      |
+| `message`  | `string`                       | —       | Override the error message thrown on rejection.                                                                                                                                 |
+| `failOpen` | `boolean`                      | `false` | Behavior when the limiter itself throws (store unavailable, etc). See below.                                                                                                    |
 
 <Callout type="warn">
     **Failure policy:** the middleware **fails closed by default**: if resolving or invoking the limiter throws, it logs via `console.error` and rejects with
@@ -228,12 +239,12 @@ bucket) otherwise.
 
 Persistence is a `RateLimitStore` (`get`/`set`/`delete`, sync or async):
 
-| Factory                         | Backing                                                            | Use when                                                                               |
-| ------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
-| `createMemoryStore()`           | An in-process `Map`. The default when no `store` is given.         | Single-DO/process limits where state needn't survive eviction.                         |
-| `createSqlStore({ sql })`       | `state.storage.sql` (workerd `SqlStorage`, also `node:sqlite`).    | Durable per-DO state that survives hibernation, and you have raw SQL.                  |
-| `createDbStore({ db })`         | A Lunora table via `ctx.db` (the ORM writer on a mutation/action). | Durable per-DO limits inside a procedure, where there is no raw SQL.                   |
-| `createReadOnlyDbStore({ db })` | The same table through a **query** context's reader `ctx.db`.      | Showing remaining quota from a query — `getValue`/`check` only; `limit`/`reset` throw. |
+| Factory                         | Backing                                                            | Use when                                                                                                                                                  |
+| ------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createMemoryStore()`           | An in-process `Map`. The default when no `store` is given.         | Single-DO/process limits where state needn't survive eviction.                                                                                            |
+| `createSqlStore({ sql })`       | `state.storage.sql` (workerd `SqlStorage`, also `node:sqlite`).    | Durable per-DO state that survives hibernation, and you have raw SQL.                                                                                     |
+| `createDbStore({ db })`         | A Lunora table via `ctx.db` (the ORM writer on a mutation/action). | Durable per-DO limits inside a procedure, where there is no raw SQL. Inside a mutation the consumed unit commits with the handler and a throw returns it. |
+| `createReadOnlyDbStore({ db })` | The same table through a **query** context's reader `ctx.db`.      | Showing remaining quota from a query — `getValue`/`check` only; `limit`/`reset` throw.                                                                    |
 
 `createReadOnlyDbStore` exists so a remaining-quota display does not have to cast
 a query's `ctx.db` to the writer type. `getValue` and `check` project the stored

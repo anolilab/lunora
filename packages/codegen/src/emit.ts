@@ -2650,6 +2650,11 @@ export interface RegisteredLunoraFunction {
     lifecycle?: "connect" | "disconnect" | "init" | "reactor";
     /** \`"internal"\` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
+    /**
+     * \`.x402({ price })\` tag on a paid public procedure. The origin worker
+     * paywalls it; the shard refuses to subscribe it (\`isPaidFunction\`).
+     */
+    x402?: { readonly price: number | string };
 }
 ${agentRegistry.prelude}${sandboxRegistry.prelude}
 /**
@@ -5221,6 +5226,10 @@ ${sourceBootstrap}${ttlBootstrap}        }
 
         protected override isQueryFunction(functionPath: string): boolean {
             return LUNORA_FUNCTIONS[functionPath]?.kind === "query";
+        }
+
+        protected override isPaidFunction(functionPath: string): boolean {
+            return LUNORA_FUNCTIONS[functionPath]?.x402 !== undefined;
         }
 `;
     /* eslint-enable no-secrets/no-secrets */
