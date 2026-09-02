@@ -147,17 +147,20 @@ const formatAddress = (entry: { address?: string; group?: { address?: string; na
  * the first being the `authserv-id`). Returns the lowercased result and the
  * domain of the named property (the part after the last `@`, so `smtp.mailfrom`
  * may be a full address), each `null` when absent. Case-insensitive; CFWS
- * comments are dropped first so a `;` or `=` inside one cannot split a clause.
+ * comments are dropped first so a `;` or `=` inside one cannot split a clause,
+ * and the remaining CFWS (optional whitespace) is accepted around both `=`
+ * separators — RFC 8601 permits `dkim = pass header.d = sender.example` just
+ * as much as the tight form.
  */
 const authVerdict = (authResults: string, method: string, property: string): [result: string | null, domain: string | null] => {
-    const clause = new RegExp(String.raw`(?:^|;)\s*${method}=([a-z]+)([^;]*)`, "i").exec(authResults.replaceAll(/\([^()]*\)/g, ""));
+    const clause = new RegExp(String.raw`(?:^|;)\s*${method}\s*=\s*([a-z]+)([^;]*)`, "i").exec(authResults.replaceAll(/\([^()]*\)/g, ""));
 
     if (!clause) {
         // eslint-disable-next-line unicorn/no-null -- documented "method not reported" sentinel
         return [null, null];
     }
 
-    const value = new RegExp(String.raw`\b${property.replaceAll(".", String.raw`\.`)}="?([^\s;"]+)`, "i").exec(clause[2] ?? "")?.[1];
+    const value = new RegExp(String.raw`\b${property.replaceAll(".", String.raw`\.`)}\s*=\s*"?([^\s;"]+)`, "i").exec(clause[2] ?? "")?.[1];
 
     // eslint-disable-next-line unicorn/no-null -- documented "property not reported" sentinel
     return [clause[1]?.toLowerCase() ?? null, value === undefined ? null : value.slice(value.lastIndexOf("@") + 1).toLowerCase()];

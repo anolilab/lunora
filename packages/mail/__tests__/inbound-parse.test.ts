@@ -156,6 +156,37 @@ describe("parseInboundEmail", () => {
         });
     });
 
+    it("parses CFWS-spaced method and property fields as valid Authentication-Results", async () => {
+        expect.assertions(1);
+
+        // RFC 8601 allows CFWS around the `=` separators, so `dkim = pass
+        // header.d = example.com` is as valid as the tight form. Requiring the
+        // tight form read these as "method not reported" and had the inbound
+        // gate fail a message the receiving MX had fully authenticated.
+        const spaced = crlf([
+            "From: Eve <eve@example.com>",
+            "To: rcpt@example.test",
+            "Subject: Spaced",
+            "Message-ID: <auth-spaced-1@example.com>",
+            "Authentication-Results: mx.cloudflare.net; dkim = pass header.d = example.com; spf = pass smtp.mailfrom = eve@example.com; dmarc = pass header.from = example.com",
+            "Content-Type: text/plain; charset=utf-8",
+            "",
+            "body",
+            "",
+        ]);
+
+        const parsed = await parseInboundEmail(spaced);
+
+        expect(parsed.authentication).toStrictEqual({
+            dkim: "pass",
+            dkimDomain: "example.com",
+            dmarc: "pass",
+            dmarcDomain: "example.com",
+            spf: "pass",
+            spfDomain: "example.com",
+        });
+    });
+
     it("keeps the attacker's identifiers when SPF/DKIM pass for a domain other than From", async () => {
         expect.assertions(1);
 
