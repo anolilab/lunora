@@ -1102,3 +1102,259 @@ describe("offline lifecycle (e2e)", () => {
         client.close();
     });
 });
+
+/**
+ * The outbox's retry policy under failures the server left no readable verdict
+ * on: a refusal with no `Retry-After` hint, a hint per shard key, the HTTP-date
+ * form of `Retry-After`, and a non-2xx that is not a Lunora error envelope at
+ * all. Same harness as the lifecycle suite above — a real client, a mock socket,
+ * and a `fetch` that answers the way a limiter or an edge proxy does.
+ */
+describe("outbox replay backoff", () => {
+    beforeEach(() => {
+        sockets.length = 0;
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
+    const offlineClient = (fetchMock: typeof fetch): LunoraClient =>
+        new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+    it("backs off a rate-limit refusal that carried no hint at all", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+        // Pin the jitter so the backoff is one number a test can wait on:
+        // 1000ms base * (0.5 + 0.5 * 0.5) = 750ms.
+        vi.spyOn(Math, "random").mockReturnValue(0.5);
+
+        let attempt = 0;
+        const fetchMock = vi.fn<typeof fetch>(async () => {
+            attempt += 1;
+
+            // A limiter that refused the write and said nothing about when to
+            // come back — no `Retry-After` header, no `data.retryAfterMs`.
+            if (attempt === 1) {
+                return jsonResponse({ error: { code: "TOO_MANY_REQUESTS", message: "slow down" } }, { status: 429 });
+            }
+
+            return jsonResponse({ result: { id: "accepted" } });
+        });
+
+        const client = offlineClient(fetchMock);
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        const pending = client.mutation(fnRef("posts:create"), { title: "hintless" });
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        // The socket stays open through a 429, so nothing else will ever
+        // schedule this flush — without a default backoff the write is stranded.
+        await vi.advanceTimersByTimeAsync(749);
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(1);
+
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        await expect(pending).resolves.toEqual({ id: "accepted" });
+
+        client.close();
+    });
+
+    it("keys the retry hint per shard, so one limited shard cannot strand another", async () => {
+        expect.assertions(5);
+
+        vi.useFakeTimers();
+
+        const attempts: unknown[] = [];
+        const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+            const { shardKey } = JSON.parse((init?.body ?? "{}") as string) as { shardKey?: string };
+
+            attempts.push(shardKey);
+
+            // First refusal per shard, with two very different hints: the long
+            // one must not become the short one's wait, and neither flush may
+            // consume the other's.
+            if (attempts.filter((key) => key === shardKey).length === 1) {
+                return jsonResponse(
+                    { error: { code: "TOO_MANY_REQUESTS", data: { retryAfterMs: shardKey === "room-a" ? 30_000 : 500 }, message: "slow down" } },
+                    { status: 429 },
+                );
+            }
+
+            return jsonResponse({ result: { id: `${String(shardKey)}-accepted` } });
+        });
+
+        const client = offlineClient(fetchMock);
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined, { shardKey: "room-a" });
+        client.subscribe(fnRef("posts:list"), {}, () => undefined, { shardKey: "room-b" });
+
+        sockets[0]?.open();
+        sockets[1]?.open();
+        sockets[0]?.triggerClose();
+        sockets[1]?.triggerClose();
+
+        const pendingA = client.mutation(fnRef("posts:create"), { title: "a" }, { shardKey: "room-a" });
+        const pendingB = client.mutation(fnRef("posts:create"), { title: "b" }, { shardKey: "room-b" });
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        sockets[2]?.open();
+        sockets[3]?.open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(attempts.toSorted((a, b) => String(a).localeCompare(String(b)))).toEqual(["room-a", "room-b"]);
+
+        // `room-b` waits out its own 500ms hint, not `room-a`'s 30s one.
+        await vi.advanceTimersByTimeAsync(500);
+
+        expect(attempts.filter((key) => key === "room-b")).toHaveLength(2);
+        await expect(pendingB).resolves.toEqual({ id: "room-b-accepted" });
+
+        // ...and `room-a` still retries on its own, rather than having had its
+        // hint consumed by the shard that flushed alongside it.
+        await vi.advanceTimersByTimeAsync(29_500);
+
+        expect(attempts.filter((key) => key === "room-a")).toHaveLength(2);
+        await expect(pendingA).resolves.toEqual({ id: "room-a-accepted" });
+
+        client.close();
+    });
+
+    it("waits out a `Retry-After` sent as an HTTP-date", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+        vi.spyOn(Math, "random").mockReturnValue(0.5);
+
+        let attempt = 0;
+        const fetchMock = vi.fn<typeof fetch>(async () => {
+            attempt += 1;
+
+            // RFC 9110 allows delta-seconds OR an HTTP-date, and a proxy in
+            // front of the worker sends the form the client never parsed.
+            if (attempt === 1) {
+                return jsonResponse(
+                    { error: { code: "TOO_MANY_REQUESTS", message: "slow down" } },
+                    { headers: { "retry-after": "Thu, 01 Jan 2026 00:00:02 GMT" }, status: 429 },
+                );
+            }
+
+            return jsonResponse({ result: { id: "accepted" } });
+        });
+
+        const client = offlineClient(fetchMock);
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        const pending = client.mutation(fnRef("posts:create"), { title: "dated" });
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        // The date is 2s out — honoured as 2s, neither read as `NaN` nor left to
+        // the 750ms hintless backoff.
+        await vi.advanceTimersByTimeAsync(1979);
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(20);
+
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        await expect(pending).resolves.toEqual({ id: "accepted" });
+
+        client.close();
+    });
+
+    it("settles a lone write on an envelope-less 4xx instead of replaying it forever", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        const fetchMock = vi.fn<typeof fetch>(
+            async () => new Response("<html><body>403 Forbidden</body></html>", { headers: { "content-type": "text/html" }, status: 403 }),
+        );
+        const client = offlineClient(fetchMock);
+        const settled: { status: string }[] = [];
+
+        client.onMutationSettled((event) => settled.push(event));
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        const pending = client.mutation(fnRef("posts:create"), { title: "refused" }).catch((error: unknown) => error);
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // A proxy that refused the REQUEST outright: no `{ error }` envelope to
+        // classify, but a status that says replaying can only reproduce it. The
+        // write settles, and the queue moves.
+        await expect(pending).resolves.toMatchObject({ code: "FORBIDDEN" });
+        expect(settled.map((event) => event.status)).toEqual(["rejected"]);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(client.pendingCount()).toBe(0);
+
+        client.close();
+    });
+
+    it("settles a whole batch on an envelope-less 4xx instead of wedging the outbox head", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const fetchMock = vi.fn<typeof fetch>(
+            async () => new Response("<html><body>400 Bad Request</body></html>", { headers: { "content-type": "text/html" }, status: 400 }),
+        );
+        const client = offlineClient(fetchMock);
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        // Two writes take the batch path, where the same unreadable reply used
+        // to re-queue the whole chunk unconditionally.
+        const first = client.mutation(fnRef("posts:create"), { title: "one" }).catch((error: unknown) => error);
+        const second = client.mutation(fnRef("posts:create"), { title: "two" }).catch((error: unknown) => error);
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        await expect(first).resolves.toMatchObject({ code: "BAD_REQUEST" });
+        await expect(second).resolves.toMatchObject({ code: "BAD_REQUEST" });
+        expect(client.pendingCount()).toBe(0);
+
+        client.close();
+    });
+});

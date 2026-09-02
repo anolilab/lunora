@@ -1400,7 +1400,7 @@ class TabCoordinator {
 
 ```ts
 class TransportError extends LunoraError {
-    constructor(message: string);
+    constructor(message: string, data?: unknown);
 }
 ```
 
