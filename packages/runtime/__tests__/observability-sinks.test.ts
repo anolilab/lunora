@@ -535,6 +535,15 @@ describe("observability-sinks", () => {
 
             expect(sink.onLog).toBeUndefined();
         });
+
+        it("throws at construction when `capture` is missing instead of swallowing every event", () => {
+            expect.assertions(2);
+
+            expect(() => sentrySink({ dsn: "https://key@o0.ingest.sentry.io/0" } as unknown as Parameters<typeof sentrySink>[0])).toThrow(
+                /requires a `capture` callback/u,
+            );
+            expect(() => sentrySink({} as unknown as Parameters<typeof sentrySink>[0])).toThrow(TypeError);
+        });
     });
 
     describe("combineSinks", () => {

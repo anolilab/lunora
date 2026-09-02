@@ -418,6 +418,18 @@ export interface SentrySinkOptions extends OnlyErrorsOption {
  */
 export const sentrySink = (options: SentrySinkOptions): ObservabilitySink => {
     const { capture, captureLog } = options;
+
+    // Fail at construction, not per event. `capture` is the whole sink: without
+    // it every `onRpc` throws inside the try/catch below, which swallows — so a
+    // misconfigured sink (`sentrySink({ dsn })`, the shape the docs used to
+    // show) reports nothing and logs nothing, losing the error feed silently.
+    // A worker that boots with a broken sink is worse than one that refuses to.
+    if (typeof capture !== "function") {
+        throw new TypeError(
+            "sentrySink requires a `capture` callback — wire your own Sentry client, e.g. `sentrySink({ capture: (event) => Sentry.captureMessage(event.name) })`. There is no `dsn` option; the runtime bundles no Sentry client.",
+        );
+    }
+
     // Sentry defaults to error-only — capturing every successful RPC as an
     // event would flood the project. Callers opt into all events explicitly.
     const onlyErrors = options.onlyErrors ?? true;
