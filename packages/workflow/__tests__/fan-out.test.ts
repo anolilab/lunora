@@ -200,6 +200,60 @@ describe("createParallel", () => {
         expect(compensations[0]?.params).toStrictEqual({ branch: "second", error: { message: "boom", name: "Error" }, index: 1, output: { b: 2 } });
     });
 
+    it("group saga: fails as soon as ANY branch fails, and compensates every sibling that had completed", async () => {
+        expect.assertions(4);
+
+        // The documented shape: a fast branch completes, a slow one is still running, and a
+        // third fails. Under a declaration-order join the group waited for branch #0 before it
+        // could even see #2's failure (not fail-fast), and branch #1 — which finished ahead of
+        // #0 — was absent from the completed set, so its rollback never ran.
+        const settled: string[] = [];
+        const resolvers = new Map<string, (outcome: BranchOutcome) => void>();
+        const step = {
+            do: vi.fn<(name: string, callback: (context: unknown) => Promise<unknown>) => Promise<unknown>>(async (_name, callback) => callback({})),
+            sleep: vi.fn<() => Promise<void>>(),
+            sleepUntil: vi.fn<() => Promise<void>>(),
+            waitForEvent: vi.fn<(name: string, options: { type: string }) => Promise<{ payload: unknown; type: string }>>(
+                async (_name, options) =>
+                    await new Promise((resolve) => {
+                        resolvers.set(options.type, (payload: BranchOutcome) => {
+                            settled.push(options.type);
+                            resolve({ payload, type: options.type });
+                        });
+                    }),
+            ),
+        } as unknown as WorkflowStepLike;
+        const { create, deps } = makeDeps(step);
+
+        const group = createParallel(deps)([
+            branch("slow", undefined, { compensateWith: "undoSlow" }),
+            branch("fast", undefined, { compensateWith: "undoFast" }),
+            branch("doomed"),
+        ]).catch((error_: unknown) => error_);
+
+        // Let the spawn phase and all three joins register, then land "fast" (out of declaration
+        // order) and fail "doomed". "slow" never reports — the group must not wait on it.
+        for (let tick = 0; tick < 50 && resolvers.size < 3; tick += 1) {
+            // eslint-disable-next-line no-await-in-loop -- drain the microtask queue until every join has registered
+            await Promise.resolve();
+        }
+
+        resolvers.get("lunora:branch:parent-1-c1")?.(okOutcome({ b: 2 }));
+        resolvers.get("lunora:branch:parent-1-c2")?.(errorOutcome(new Error("boom")));
+
+        const error = await group;
+
+        expect((error as Error).name).toBe("NonRetryableError");
+        // Fail-fast: the group rejected without branch #0 ever signalling back.
+        expect(settled).toStrictEqual(["lunora:branch:parent-1-c1", "lunora:branch:parent-1-c2"]);
+
+        const compensations = create.mock.calls.map((call) => call[0]).filter((options) => String(options?.id).endsWith(":compensate"));
+
+        // The out-of-order sibling that HAD completed is rolled back; the one still running is not.
+        expect(compensations.map((options) => options?.id)).toStrictEqual(["parent-1-c1:compensate"]);
+        expect(compensations[0]?.params).toStrictEqual({ branch: "fast", error: { message: "boom", name: "Error" }, index: 1, output: { b: 2 } });
+    });
+
     it("group saga: a group with no compensateWith fails fast with zero compensation spawns", async () => {
         expect.assertions(2);
 

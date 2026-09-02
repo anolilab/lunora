@@ -17,9 +17,11 @@
  * spawning), then **hibernates** on a `step.waitForEvent` per branch. Each child
  * is an ordinary declared workflow; the base class wraps it so that, when spawned
  * as a branch, it `sendEvent`s its result (or error) back to the parent instance
- * once its handler finishes. The parent collects the events in declaration order,
- * returning a tuple of branch outputs, and fails fast if any branch reports an
- * error. Children are arbitrary user workflows — nothing about their bodies
+ * once its handler finishes. The parent awaits all those joins CONCURRENTLY — so a
+ * failure anywhere fails the group at once rather than after every earlier-declared
+ * branch has finished — and slots each result into its declaration-order position,
+ * returning a tuple of branch outputs. Children are arbitrary user workflows —
+ * nothing about their bodies
  * changes; only the base class learns to call home.
  */
 import { LunoraError } from "@lunora/errors";
@@ -173,6 +175,28 @@ interface PlannedBranch {
 }
 
 /**
+ * Internal carrier for the first branch (in wall-clock order) to fail its join.
+ *
+ * Concurrent joins reject rather than return, so the branch that lost has to travel
+ * out through `Promise.all` with enough context to build the group's terminal message
+ * and pick the error the compensations receive. Never escapes `createParallel`.
+ */
+class BranchJoinFailure extends Error {
+    public readonly branchError: { message: string; name: string };
+
+    public readonly kind: "failed" | "join failed";
+
+    public readonly plan: PlannedBranch;
+
+    public constructor(plan: PlannedBranch, branchError: { message: string; name: string }, kind: "failed" | "join failed") {
+        super(branchError.message);
+        this.branchError = branchError;
+        this.kind = kind;
+        this.plan = plan;
+    }
+}
+
+/**
  * Group-saga rollback (plan 075 Phase 3): on a branch failure, spawn each
  * already-completed sibling's declared `compensateWith` workflow in reverse
  * declaration order. Each spawn is a durable, replay-safe idempotent create
@@ -228,18 +252,24 @@ const compensateCompleted = async (
 
 /**
  * Build `ctx.parallel` for one workflow invocation. Spawns each branch as an
- * isolated child instance, hibernates on a per-branch `waitForEvent`, and returns
- * the branch outputs in declaration order. Throws (non-retryable — retrying the
- * join cannot re-run an already-failed child) on the first branch that reports an
- * error; still-running siblings are left to finish (Cloudflare cannot cleanly
- * cancel a running instance).
+ * isolated child instance, hibernates on all the per-branch `waitForEvent` joins at
+ * once, and returns the branch outputs in declaration order. Throws (non-retryable —
+ * retrying the join cannot re-run an already-failed child) on the first branch to
+ * report an error in WALL-CLOCK order, not the first in declaration order:
+ * `ctx.parallel` is documented fail-fast, and a declaration-order loop made a group
+ * whose first branch runs for an hour wait that hour to notice its second branch had
+ * failed in a second. Still-running siblings are left to finish (Cloudflare cannot
+ * cleanly cancel a running instance).
  *
  * **Group saga (plan 075 Phase 3):** when a branch fails, every *already-completed*
  * sibling that declared a `compensateWith` workflow is rolled back — its
  * compensation workflow is spawned (durable, replay-safe, in reverse declaration
  * order) with {@link BranchCompensationParams} — before the group failure is
- * thrown. A group where no branch sets `compensateWith` behaves exactly as a plain
- * fail-fast fan-out, so the feature is zero-overhead until opted into.
+ * thrown. "Already-completed" means completed at the instant of failure, in any
+ * order: a sibling that finished ahead of an earlier-declared one used to be
+ * invisible to the loop and its rollback was silently skipped. A group where no
+ * branch sets `compensateWith` behaves exactly as a plain fail-fast fan-out, so the
+ * feature is zero-overhead until opted into.
  */
 const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
     const run = async (branches: ReadonlyArray<WorkflowBranch>): Promise<unknown[]> => {
@@ -294,17 +324,22 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
             ),
         );
 
-        // 2. Join: hibernate until each branch signals back. Sequential in
-        //    declaration order — events are buffered by type, so the wall-clock is
-        //    max(branch durations), not the sum, and the result order is stable.
-        const results: unknown[] = [];
-        const completed: { output: unknown; plan: PlannedBranch }[] = [];
+        // 2. Join: hibernate until each branch signals back. CONCURRENT, not a
+        //    declaration-order loop — a loop observes branch #1's failure only after
+        //    branch #0's join returns, so a group whose first branch runs for an hour
+        //    is not fail-fast, and a sibling that finished out of declaration order
+        //    was absent from `completed` and never compensated. Both are documented
+        //    guarantees. `Promise.all` rejects on the first branch to fail in
+        //    WALL-CLOCK order and handles the later rejections itself, and each join
+        //    records its own completion as it lands, so `completed` is the true
+        //    already-finished set at the instant of failure.
+        const results: unknown[] = Array.from({ length: planned.length });
+        const completed: ({ output: unknown; plan: PlannedBranch } | undefined)[] = Array.from({ length: planned.length });
 
-        for (const plan of planned) {
+        const join = async (plan: PlannedBranch): Promise<void> => {
             let outcome: BranchOutcome;
 
             try {
-                // eslint-disable-next-line no-await-in-loop -- sequential, ordered join; per-type event buffering keeps wall-clock at max(branch), not the sum
                 const event = await deps.step.waitForEvent<BranchOutcome>(`${AWAIT_STEP_PREFIX}${plan.childId}`, {
                     timeout: plan.item.timeout,
                     type: plan.eventType,
@@ -314,28 +349,39 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
             } catch (joinError: unknown) {
                 // The join itself failed — the per-branch `timeout` elapsed because
                 // the child was terminated (or its parent binding was absent, so its
-                // signal no-op'd) before it could report back. Roll back the
-                // already-completed siblings before failing the group, exactly as a
-                // reported branch error does; otherwise a timed-out join would strand
-                // their compensations.
-                const joinFailure = serializeError(joinError);
-
-                // eslint-disable-next-line no-await-in-loop -- compensation must finish before the group's terminal throw
-                await compensateCompleted(deps, completed, joinFailure);
-
-                throw new NonRetryableError(`ctx.parallel: branch "${plan.item.workflow}" (#${String(plan.index)}) join failed: ${joinFailure.message}`);
+                // signal no-op'd) before it could report back. Treated exactly as a
+                // reported branch error, so a timed-out join compensates its siblings
+                // rather than stranding them.
+                throw new BranchJoinFailure(plan, serializeError(joinError), "join failed");
             }
 
             if (outcome.status === "error") {
-                // Group saga: roll back completed siblings before failing the group.
-                // eslint-disable-next-line no-await-in-loop -- compensation must finish before the group's terminal throw
-                await compensateCompleted(deps, completed, outcome.error);
-
-                throw new NonRetryableError(`ctx.parallel: branch "${plan.item.workflow}" (#${String(plan.index)}) failed: ${outcome.error.message}`);
+                throw new BranchJoinFailure(plan, outcome.error, "failed");
             }
 
-            completed.push({ output: outcome.value, plan });
-            results.push(outcome.value);
+            completed[plan.index] = { output: outcome.value, plan };
+            results[plan.index] = outcome.value;
+        };
+
+        try {
+            await Promise.all(planned.map((plan) => join(plan)));
+        } catch (error: unknown) {
+            if (!(error instanceof BranchJoinFailure)) {
+                throw error;
+            }
+
+            // Group saga: roll back every sibling that HAD completed when the group
+            // failed, in reverse declaration order. `completed` is sparse — a branch
+            // still running has no entry — so compact it before handing it over.
+            await compensateCompleted(
+                deps,
+                completed.filter((done) => done !== undefined),
+                error.branchError,
+            );
+
+            throw new NonRetryableError(
+                `ctx.parallel: branch "${error.plan.item.workflow}" (#${String(error.plan.index)}) ${error.kind}: ${error.branchError.message}`,
+            );
         }
 
         return results;
