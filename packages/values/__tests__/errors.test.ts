@@ -77,7 +77,6 @@ describe("describeValue", () => {
         expect(describeValue(Object.create(null))).toBe("object");
     });
 
-
     it("caps a genuine constructor name like every primitive branch", () => {
         expect.assertions(1);
 
