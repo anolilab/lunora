@@ -1,6 +1,6 @@
 {
     "name": "@lunora/platform",
-    "version": "1.0.0-alpha.23",
+    "version": "1.0.0-alpha.24",
     "description": "Provider-neutral host contracts for Lunora: shard/socket/directory/scheduler interfaces, binding projections, and the platform capability matrix",
     "keywords": [
         "cloudflare",
