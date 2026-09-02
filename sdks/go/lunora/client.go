@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -59,6 +60,13 @@ type APIError struct {
 	Code    string
 	Message string
 	Data    any
+	// Transient says the call never reached a verdict — a 5xx, or a non-2xx
+	// carrying no envelope at all (an edge error page, a WAF block, a proxy). It
+	// is set where the HTTP STATUS is still in scope, because nothing downstream
+	// can recover it: Code alone cannot tell a BAD_REQUEST a function returned
+	// from the INTERNAL this client synthesises for a body that never came from
+	// one. See isTransient.
+	Transient bool
 }
 
 func (e APIError) Error() string { return fmt.Sprintf("%s: %s", e.Code, e.Message) }
@@ -131,7 +139,12 @@ type Client struct {
 
 	// offline holds the writes made while send was nil. Guarded by mu, which is
 	// why OfflineQueue carries no lock of its own.
-	offline          *OfflineQueue
+	offline *OfflineQueue
+	// flushNotBefore is the instant before which FlushOfflineQueue is a no-op,
+	// set when a replay came back rate-limited and the envelope named a delay.
+	// Compared with time.Until, which uses Go's monotonic reading, so a
+	// wall-clock adjustment cannot strand a queue for hours.
+	flushNotBefore   time.Time
 	wasEverConnected bool
 	closed           bool
 	settledListeners []func(MutationSettled)
@@ -343,7 +356,7 @@ func ParseRPCEnvelope(status int, raw []byte) (any, *int64, error) {
 
 	if err := json.Unmarshal(raw, &body); err != nil {
 		if status < 200 || status > 299 {
-			return nil, nil, APIError{Code: "INTERNAL", Message: fmt.Sprintf("HTTP %d with an unparseable body", status)}
+			return nil, nil, APIError{Code: "INTERNAL", Message: fmt.Sprintf("HTTP %d with an unparseable body", status), Transient: true}
 		}
 
 		return nil, nil, fmt.Errorf("lunora: malformed RPC response: %w", err)
@@ -372,11 +385,19 @@ func ParseRPCEnvelope(status int, raw []byte) (any, *int64, error) {
 			data = decoded
 		}
 
-		return nil, nil, APIError{Code: code, Data: data, Message: message}
+		// A 5xx is the shard or the edge failing under the call, not a verdict on
+		// it, so a queued write replayed under the same idempotency key is still
+		// good.
+		return nil, nil, APIError{Code: code, Data: data, Message: message, Transient: status >= 500}
 	}
 
 	if status < 200 || status > 299 {
-		return nil, nil, APIError{Code: "INTERNAL", Message: fmt.Sprintf("HTTP %d without an error envelope", status)}
+		// No envelope at all, so this body never came from a Lunora function: an
+		// edge error page, a WAF block, a proxy. Nothing reached the shard, which
+		// makes it transport rather than a verdict — the batch path already
+		// classified the identical response that way, and a lone queued write must
+		// not be dropped for being alone.
+		return nil, nil, APIError{Code: "INTERNAL", Message: fmt.Sprintf("HTTP %d without an error envelope", status), Transient: true}
 	}
 
 	result, err := DecodeWire(body["result"])
@@ -813,12 +834,16 @@ func (c *Client) ResendSubscriptions() error {
 	// Snapshot the resume state INSIDE the lock. Copying the pointers and
 	// reading entry.cursor/epoch afterwards races the frame goroutine, which
 	// writes both in advance() — `go test -race` proves it.
+	//
+	// One struct for both registries: name is the query's function path or the
+	// shape's name, cursor its sinceSeq or sinceCheckpoint, and the two resends
+	// differ only in which builder consumes them.
 	type resumePoint struct {
-		id           string
-		functionPath string
-		args         any
-		cursor       any
-		epoch        any
+		id     string
+		name   string
+		args   any
+		cursor any
+		epoch  any
 	}
 
 	c.mu.Lock()
@@ -827,11 +852,27 @@ func (c *Client) ResendSubscriptions() error {
 
 	for id, entry := range c.subscriptions {
 		entries = append(entries, resumePoint{
-			args:         entry.args,
-			cursor:       entry.cursor,
-			epoch:        entry.epoch,
-			functionPath: entry.functionPath,
-			id:           id,
+			args:   entry.args,
+			cursor: entry.cursor,
+			epoch:  entry.epoch,
+			id:     id,
+			name:   entry.functionPath,
+		})
+	}
+
+	// Shapes resume too. A resend that walks only the query registry leaves every
+	// shape view subscribed to a socket that no longer exists — silently, and for
+	// the rest of the process's life, because a shape is only ever fed by pokes
+	// the server stops sending.
+	shapes := make([]resumePoint, 0, len(c.shapes))
+
+	for id, shape := range c.shapes {
+		shapes = append(shapes, resumePoint{
+			args:   shape.args,
+			cursor: shape.checkpoint,
+			epoch:  shape.epoch,
+			id:     id,
+			name:   shape.name,
 		})
 	}
 
@@ -842,7 +883,18 @@ func (c *Client) ResendSubscriptions() error {
 	}
 
 	for _, entry := range entries {
-		frame, err := BuildSubscribeFrame(entry.id, entry.functionPath, entry.args, "", entry.cursor, entry.epoch)
+		frame, err := BuildSubscribeFrame(entry.id, entry.name, entry.args, "", entry.cursor, entry.epoch)
+		if err != nil {
+			return err
+		}
+
+		if err := send(frame); err != nil {
+			return err
+		}
+	}
+
+	for _, shape := range shapes {
+		frame, err := BuildShapeSubscribeFrame(shape.id, shape.name, shape.args, shape.cursor, shape.epoch)
 		if err != nil {
 			return err
 		}
@@ -876,6 +928,7 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 
 	c.mu.Lock()
 	entry := c.subscriptions[id]
+	shape := c.shapes[id]
 	c.mu.Unlock()
 
 	switch kind {
@@ -889,7 +942,15 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 
 		value, err := DecodeWire(payload)
 		if err != nil {
-			return kind, err
+			// A malformed payload belongs on THIS subscription's error callback,
+			// not on the socket read loop's stack. Returning it ended the caller's
+			// loop — and with it every other subscription on this client — over one
+			// bad frame.
+			if entry != nil && entry.onError != nil {
+				entry.onError(SubscriptionError{Code: "INVALID_FRAME", Message: err.Error()})
+			}
+
+			return "error", nil
 		}
 
 		if entry != nil {
@@ -966,8 +1027,15 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			subscriptionError.Message = message
 		}
 
+		// BOTH registries: an error frame is addressed by subscription id, and a
+		// shape id is one. Looking only in the query registry made every
+		// server-side shape failure unreportable.
 		if entry != nil && entry.onError != nil {
 			entry.onError(subscriptionError)
+		}
+
+		if shape != nil && shape.onError != nil {
+			shape.onError(subscriptionError)
 		}
 
 		return kind, nil
