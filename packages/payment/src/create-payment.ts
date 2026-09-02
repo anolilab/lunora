@@ -13,7 +13,7 @@ import type { Entitlements, EntitlementsConfig } from "./entitlements";
 import { featureNames, hasActivePrice, resolveEntitlements, usagePeriodStart } from "./entitlements";
 import { LunoraPaymentError } from "./errors";
 import { derivedIdempotencyKey, idempotencyKey, localRefundKey } from "./idempotency";
-import { addMoney, compareMoney, subtractMoney } from "./money";
+import { addMoney, compareMoney, isZeroMoney, subtractMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
@@ -503,13 +503,51 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 );
             }
 
+            // Nothing left to refund — the ledger already holds the whole captured amount. Return the
+            // row as it stands instead of asking the provider to move zero (Polar would read the order
+            // total and refund it a second time; the guard above cannot catch that, because `issued` is
+            // zero and the total does not move).
+            if (isZeroMoney(issued)) {
+                return existing;
+            }
+
+            // What the PROVIDER is asked to refund. An omitted `input.amount` means "whatever is left",
+            // which is not the same thing as "the whole order": Polar's refund endpoint takes the order
+            // total when no amount is given (`providers/polar.ts`), so a full refund of a partially
+            // refunded session would move the total a second time while the ledger records only the
+            // remainder. Send the resolved remainder instead.
+            //
+            // The amount stays absent when the remainder IS the captured total, so a provider that can
+            // only refund in full keeps working; when the two differ, that provider rejects the call
+            // (Dodo throws PROVIDER_ERROR for any explicit amount) — which is the right answer, since
+            // it cannot express the refund being asked for.
+            const providerAmount = input.amount ?? (compareMoney(issued, existing.capturedAmount) === 0 ? undefined : issued);
+
             // Amount and reason are part of the key — see `capturePayment`; partial refunds of one
-            // session are legitimate and must not collide on the provider's idempotency window.
+            // session are legitimate and must not collide on the provider's idempotency window. It is
+            // the amount actually sent that keys it, so a full-refund-of-a-remainder and an explicit
+            // refund of the same remainder are one operation rather than two.
             const key =
                 input.idempotencyKey ??
-                (await derivedIdempotencyKey("refund_payment", adapter.identifier, input.sessionId, amountPart(input.amount), input.reason ?? ""));
+                (await derivedIdempotencyKey("refund_payment", adapter.identifier, input.sessionId, amountPart(providerAmount), input.reason ?? ""));
 
-            const issuedRefund = await adapter.refundPayment({ ...input, idempotencyKey: key });
+            const issuedRefund = await adapter.refundPayment({ ...input, amount: providerAmount, idempotencyKey: key });
+
+            // A refund the provider has NOT settled yet moves no money and must not be written to the
+            // ledger. Dodo answers `refunds.create` with `pending`/`review` and only later sends
+            // `refund.succeeded` — or `refund.failed`, which maps to `unhandled` and reverses nothing,
+            // so an optimistically recorded amount would over-state the row forever. Leave the row
+            // untouched and let the confirming `payment.refunded` webhook carry the money; no marker
+            // either, or that webhook would be zeroed and the refund would never land at all.
+            //
+            // The cost is that the local ledger cannot guard a retry during the pending window. That is
+            // the lesser evil: a retry is bounded and visible, an over-stated refunded total is neither
+            // (it also blocks every later legitimate refund through the over-refund guard above).
+            if (issuedRefund.pending) {
+                return existing;
+            }
+
+            const marker = localRefundKey(input.sessionId, issuedRefund.refundId, issued);
 
             // Record the refund on the row NOW rather than waiting for the provider's webhook. This
             // ledger is the only thing standing between a retried (or repeated) call and a second
@@ -525,12 +563,30 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             //
             // The state is derived locally too — from the amount this call refunds, not from the
             // adapter's own state, which Polar pins to "refunded" for a partial refund as well.
-            await store.markEventProcessed(adapter.identifier, localRefundKey(input.sessionId, issuedRefund.refundId, issued));
+            await store.markEventProcessed(adapter.identifier, marker);
 
-            return persistSession(existing, {
-                refundedAmount: refunded,
-                state: compareMoney(refunded, existing.capturedAmount) < 0 ? "partially_refunded" : "refunded",
-            });
+            try {
+                return await persistSession(existing, {
+                    refundedAmount: refunded,
+                    state: compareMoney(refunded, existing.capturedAmount) < 0 ? "partially_refunded" : "refunded",
+                });
+            } catch (error) {
+                // The marker is claimed BEFORE the row, because the confirming webhook can arrive while
+                // this write is still in flight and must not double-count. There is no transaction across
+                // the two stores, so if the row write fails the claim would outlive the fold it stands
+                // for: the delta provider's `payment.refunded` would consume it, contribute nothing, and
+                // the refund would be absent from the row entirely. Release it so that webhook carries
+                // the money instead — the same claim/rollback shape `sync.ts` uses around `applyPayment`.
+                //
+                // KNOWN WINDOW: a hard isolate kill between the two writes still strands the marker, and
+                // it is inert only until this refund's webhook consumes it. Closing that needs a
+                // conditional write on `PaymentStore` (the DB store's `patch` compare-and-swaps on the
+                // pre-image it reads itself, which a caller cannot supply), not an ordering change —
+                // writing the row first only trades a lost refund for a double-counted one.
+                await store.releaseEvent(adapter.identifier, marker);
+
+                throw error;
+            }
         },
 
         store,

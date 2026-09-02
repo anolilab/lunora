@@ -325,18 +325,19 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
 
             // Dodo refunds can settle asynchronously (`pending`/`review` → later `refund.succeeded` or
             // `refund.failed`). Reflect the refund's real status instead of optimistically claiming
-            // "refunded"; the webhook-synced store stays authoritative for the final state.
-            let state: PaymentState = "captured";
-
-            if (readString(refund, "status") === "succeeded") {
-                state = "refunded";
-            }
+            // "refunded"; the webhook-synced store stays authoritative for the final state. `pending`
+            // says so explicitly, so the facade does not have to infer it from the SESSION's state —
+            // it holds its ledger back until `refund.succeeded` lands, because `refund.failed` carries
+            // no transition and would leave an optimistic write over-stating the row for good.
+            const settled = readString(refund, "status") === "succeeded";
+            const state: PaymentState = settled ? "refunded" : "captured";
 
             return {
                 amount: refundedAmount,
                 capturedAmount: refundedAmount,
                 createdAt: Date.now(),
                 id: input.sessionId,
+                pending: !settled,
                 provider: "dodopayments",
                 referenceId: "",
                 refundedAmount,
