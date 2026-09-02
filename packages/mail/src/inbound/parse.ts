@@ -44,6 +44,16 @@ interface InboundAttachment {
  * Verdicts are best-effort: when the receiving MX did not stamp an
  * `Authentication-Results` header, every field is `null` ("unknown").
  *
+ * SECURITY: a bare `"pass"` is NOT proof the `From` header is genuine. SPF
+ * authenticates the envelope `MAIL FROM` domain and DKIM the signing domain
+ * (`d=`), and an attacker controls both — `spf=pass smtp.mailfrom=evil.example;
+ * dkim=pass header.d=evil.example` is routine for a message whose `From` says
+ * `ceo@victim.example`. Each verdict therefore carries the identifier it is
+ * about (`*Domain`): an SPF or DKIM pass only vouches for `from` when that
+ * domain equals the `From` address's domain (RFC 7489 strict alignment). Only a
+ * DMARC pass already checked alignment for you. A pass with no identifier
+ * reported cannot be aligned and must be treated as unauthenticated.
+ *
  * SECURITY: verdicts are read from the **first/topmost** `Authentication-Results`
  * header in document order. The receiving MX prepends its own genuine header per
  * RFC 8601, so the topmost occurrence is the trustworthy one; any lower
@@ -55,10 +65,16 @@ interface InboundAttachment {
 interface InboundAuthentication {
     /** DKIM verdict (`"pass"`/`"fail"`/…), or `null` when not reported. */
     dkim: string | null;
+    /** Signing domain the DKIM verdict is about (`header.d=`, lowercased), or `null` when not reported. */
+    dkimDomain: string | null;
     /** DMARC verdict (`"pass"`/`"fail"`/…), or `null` when not reported. */
     dmarc: string | null;
+    /** `From` domain the DMARC verdict evaluated (`header.from=`, lowercased), or `null` when not reported. */
+    dmarcDomain: string | null;
     /** SPF verdict (`"pass"`/`"fail"`/…), or `null` when not reported. */
     spf: string | null;
+    /** Envelope `MAIL FROM` domain the SPF verdict is about (`smtp.mailfrom=`, local part dropped, lowercased), or `null` when not reported. */
+    spfDomain: string | null;
 }
 
 /** Normalised, transport-agnostic view of a received message. */
@@ -67,10 +83,12 @@ interface InboundEmail {
     attachments: InboundAttachment[];
 
     /**
-     * Sender-authentication verdicts (DKIM/SPF/DMARC) parsed from the receiving
-     * MX's **first/topmost** `Authentication-Results` header. SECURITY: see
-     * {@link InboundAuthentication} — `from` is spoofable; gate trust on these
-     * verdicts, not on `from`. Reading the raw `headers["authentication-results"]`
+     * Sender-authentication verdicts (DKIM/SPF/DMARC) and the domain each is
+     * about, parsed from the receiving MX's **first/topmost**
+     * `Authentication-Results` header. SECURITY: see
+     * {@link InboundAuthentication} — `from` is spoofable, and an SPF/DKIM pass
+     * vouches for it only when its `*Domain` equals the `From` domain (a DMARC
+     * pass checked that already). Reading the raw `headers["authentication-results"]`
      * map instead exposes last-wins (a lower, potentially attacker-injected)
      * value — trust `authentication`, not the raw map.
      */
@@ -124,32 +142,43 @@ const formatAddress = (entry: { address?: string; group?: { address?: string; na
 };
 
 /**
- * Pull a single `method=result` verdict (e.g. `dkim=pass`) out of an
- * `Authentication-Results` header value. Case-insensitive on the method name;
- * returns `null` when the method isn't present.
+ * Pull one method's `method=result [ptype.property=value …]` clause out of an
+ * `Authentication-Results` header value (RFC 8601: clauses are `;`-separated,
+ * the first being the `authserv-id`). Returns the lowercased result and the
+ * domain of the named property (the part after the last `@`, so `smtp.mailfrom`
+ * may be a full address), each `null` when absent. Case-insensitive; CFWS
+ * comments are dropped first so a `;` or `=` inside one cannot split a clause.
  */
-const authVerdict = (authResults: string, method: string): string | null => {
-    const match = new RegExp(String.raw`\b${method}=([a-zA-Z]+)`, "i").exec(authResults);
+const authVerdict = (authResults: string, method: string, property: string): [result: string | null, domain: string | null] => {
+    const clause = new RegExp(String.raw`(?:^|;)\s*${method}=([a-z]+)([^;]*)`, "i").exec(authResults.replaceAll(/\([^()]*\)/g, ""));
 
-    // eslint-disable-next-line unicorn/no-null -- `null` is the documented "method not reported" sentinel in the public `InboundAuthentication` contract (`dkim: string | null`).
-    return match?.[1]?.toLowerCase() ?? null;
+    if (!clause) {
+        // eslint-disable-next-line unicorn/no-null -- documented "method not reported" sentinel
+        return [null, null];
+    }
+
+    const value = new RegExp(String.raw`\b${property.replaceAll(".", String.raw`\.`)}="?([^\s;"]+)`, "i").exec(clause[2] ?? "")?.[1];
+
+    // eslint-disable-next-line unicorn/no-null -- documented "property not reported" sentinel
+    return [clause[1]?.toLowerCase() ?? null, value === undefined ? null : value.slice(value.lastIndexOf("@") + 1).toLowerCase()];
 };
 
 /**
  * Parse the receiving MX's `Authentication-Results` header into DKIM/SPF/DMARC
- * verdicts. Returns all-`null` ("unknown") when the header is absent.
+ * verdicts plus the identifier each one is about. Returns all-`null`
+ * ("unknown") when the header is absent.
  */
 const parseAuthentication = (authResults: string | undefined): InboundAuthentication => {
     if (authResults === undefined || authResults === "") {
         // eslint-disable-next-line unicorn/no-null -- all-`null` is the documented "unknown" verdict in the public `InboundAuthentication` contract.
-        return { dkim: null, dmarc: null, spf: null };
+        return { dkim: null, dkimDomain: null, dmarc: null, dmarcDomain: null, spf: null, spfDomain: null };
     }
 
-    return {
-        dkim: authVerdict(authResults, "dkim"),
-        dmarc: authVerdict(authResults, "dmarc"),
-        spf: authVerdict(authResults, "spf"),
-    };
+    const [dkim, dkimDomain] = authVerdict(authResults, "dkim", "header.d");
+    const [dmarc, dmarcDomain] = authVerdict(authResults, "dmarc", "header.from");
+    const [spf, spfDomain] = authVerdict(authResults, "spf", "smtp.mailfrom");
+
+    return { dkim, dkimDomain, dmarc, dmarcDomain, spf, spfDomain };
 };
 
 /**

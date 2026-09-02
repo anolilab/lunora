@@ -31,6 +31,14 @@ const DEFAULT_MAX_SESSION_TURNS = 100;
 /** Cap on a `text` frame's length. Beyond this the frame is refused before it reaches the model. */
 const MAX_TEXT_FRAME_CHARS = 4000;
 
+/**
+ * Cap on a raw control frame, checked BEFORE `JSON.parse`: the text cap alone
+ * still let a client hand the DO a 32 MiB string to parse. Sized so a
+ * `MAX_TEXT_FRAME_CHARS` text survives worst-case JSON escaping (`\uXXXX`, six
+ * chars per one) plus the envelope.
+ */
+const MAX_CONTROL_FRAME_CHARS = 32 * 1024;
+
 /** Close code for a socket that exhausted its turn budget (reconnect for a fresh one). */
 const TURN_LIMIT_CLOSE_CODE = 4002;
 
@@ -141,9 +149,8 @@ class VoiceSessionDO {
         this.sttModel = agent.voice?.stt ?? DEFAULT_STT_MODEL;
         this.ttsModel = agent.voice?.tts ?? DEFAULT_TTS_MODEL;
 
-        const configured = agent.voice?.maxTurns;
-
-        this.maxSessionTurns = Number.isInteger(configured) && (configured as number) > 0 ? (configured as number) : DEFAULT_MAX_SESSION_TURNS;
+        // `defineAgent` already rejected anything but a positive integer.
+        this.maxSessionTurns = agent.voice?.maxTurns ?? DEFAULT_MAX_SESSION_TURNS;
     }
 
     /** HTTP entry — only a WebSocket upgrade carrying a `threadKey` is accepted. */
@@ -284,6 +291,12 @@ class VoiceSessionDO {
 
     /** Route a JSON control frame (`commit` / `interrupt` / `text`). */
     private async handleControl(ws: WebSocket, attachment: VoiceSocketAttachment, raw: string): Promise<void> {
+        if (raw.length > MAX_CONTROL_FRAME_CHARS) {
+            this.send(ws, { message: `control frame exceeds the maximum of ${String(MAX_CONTROL_FRAME_CHARS)} characters`, type: "error" });
+
+            return;
+        }
+
         let frame: VoiceClientFrame;
 
         try {

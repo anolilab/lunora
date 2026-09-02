@@ -98,7 +98,7 @@ describe("parseInboundEmail", () => {
     });
 
     it("parses DKIM/SPF/DMARC verdicts from Authentication-Results", async () => {
-        expect.assertions(3);
+        expect.assertions(1);
 
         const authed = crlf([
             "From: Eve <eve@example.com>",
@@ -114,9 +114,75 @@ describe("parseInboundEmail", () => {
 
         const parsed = await parseInboundEmail(authed);
 
-        expect(parsed.authentication.dkim).toBe("pass");
-        expect(parsed.authentication.spf).toBe("pass");
-        expect(parsed.authentication.dmarc).toBe("fail");
+        // A method with no identifier property reports a `null` domain — a
+        // consumer cannot align it and must treat the pass as unauthenticated.
+        expect(parsed.authentication).toStrictEqual({
+            dkim: "pass",
+            dkimDomain: "example.com",
+            dmarc: "fail",
+            dmarcDomain: null,
+            spf: "pass",
+            spfDomain: null,
+        });
+    });
+
+    it("keeps the domain each verdict is about, through comments and a full smtp.mailfrom address", async () => {
+        expect.assertions(1);
+
+        // The shape Cloudflare Email Routing stamps: a parenthesised SPF comment
+        // (with `;`-free but `=`-bearing prose), extra properties per method, and
+        // `smtp.mailfrom` as a full address rather than a bare domain.
+        const authed = crlf([
+            "From: Alice <alice@Example.COM>",
+            "To: rcpt@example.test",
+            "Subject: Authed",
+            "Message-ID: <auth-2@example.com>",
+            "Authentication-Results: mx.cloudflare.net; dkim=pass header.d=Example.com header.s=s1 header.b=abc; spf=pass (mx.cloudflare.net: domain of alice@example.com designates 1.2.3.4 as permitted sender) smtp.helo=mail.example.com smtp.mailfrom=alice@example.com; arc=none smtp.remote-ip=1.2.3.4; dmarc=pass header.from=example.com policy.dmarc=none",
+            "Content-Type: text/plain; charset=utf-8",
+            "",
+            "body",
+            "",
+        ]);
+
+        const parsed = await parseInboundEmail(authed);
+
+        expect(parsed.authentication).toStrictEqual({
+            dkim: "pass",
+            dkimDomain: "example.com",
+            dmarc: "pass",
+            dmarcDomain: "example.com",
+            spf: "pass",
+            spfDomain: "example.com",
+        });
+    });
+
+    it("keeps the attacker's identifiers when SPF/DKIM pass for a domain other than From", async () => {
+        expect.assertions(1);
+
+        // `spf=pass` + `dkim=pass` here vouch for evil.example, not for the forged
+        // victim.example `From`; the domains are what let a consumer tell.
+        const forged = crlf([
+            "Authentication-Results: mx.cloudflare.net; dkim=pass header.d=evil.example; spf=pass smtp.mailfrom=evil.example; dmarc=fail (p=REJECT) header.from=victim.example",
+            "From: CEO <ceo@victim.example>",
+            "To: rcpt@example.test",
+            "Subject: approve the wire",
+            "Message-ID: <1@evil.example>",
+            "Content-Type: text/plain; charset=utf-8",
+            "",
+            "please approve",
+            "",
+        ]);
+
+        const parsed = await parseInboundEmail(forged);
+
+        expect(parsed.authentication).toStrictEqual({
+            dkim: "pass",
+            dkimDomain: "evil.example",
+            dmarc: "fail",
+            dmarcDomain: "victim.example",
+            spf: "pass",
+            spfDomain: "evil.example",
+        });
     });
 
     it("reads verdicts from the topmost Authentication-Results, ignoring lower spoofed ones", async () => {
@@ -152,7 +218,7 @@ describe("parseInboundEmail", () => {
 
         const parsed = await parseInboundEmail(MULTIPART_ALTERNATIVE);
 
-        expect(parsed.authentication).toStrictEqual({ dkim: null, dmarc: null, spf: null });
+        expect(parsed.authentication).toStrictEqual({ dkim: null, dkimDomain: null, dmarc: null, dmarcDomain: null, spf: null, spfDomain: null });
     });
 
     it("accepts an ArrayBuffer as well as a string", async () => {

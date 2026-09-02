@@ -4,32 +4,28 @@ import { describe, expect, it } from "vitest";
 import { dispatchAgentEmail } from "../src/inbound";
 import type { AgentEmailMapper } from "../src/types";
 
+/** Build a minimal RFC 822 message `parseInboundEmail` (postal-mime) can parse, with the given `Authentication-Results`. */
+const rawEmail = (authenticationResults: string | undefined, from = "Alice <alice@example.com>"): string =>
+    [
+        `From: ${from}`,
+        "To: support@myapp.com",
+        "Subject: Need help",
+        "Message-ID: <abc@example.com>",
+        ...(authenticationResults === undefined ? [] : [`Authentication-Results: mx.cloudflare.net; ${authenticationResults}`]),
+        "",
+        "Please help.",
+    ].join("\r\n");
+
 /**
- * A minimal RFC 822 message `parseInboundEmail` (postal-mime) can parse.
- *
- * Carries a passing `Authentication-Results` header because the handler gates on
- * the DKIM/SPF/DMARC verdicts before any mapper runs. A message WITHOUT one is
- * the spoofed case, covered by its own test below.
+ * Carries a passing, ALIGNED `Authentication-Results` header because the
+ * handler gates on the verdicts before any mapper runs. A message without one,
+ * or whose passes vouch for some other domain, is the spoofed case, covered by
+ * its own tests below.
  */
-const RAW_EMAIL = [
-    "From: Alice <alice@example.com>",
-    "To: support@myapp.com",
-    "Subject: Need help",
-    "Message-ID: <abc@example.com>",
-    "Authentication-Results: mx.cloudflare.net; dkim=pass; spf=pass; dmarc=pass",
-    "",
-    "Please help.",
-].join("\r\n");
+const RAW_EMAIL = rawEmail("dkim=pass header.d=example.com; spf=pass smtp.mailfrom=alice@example.com; dmarc=pass header.from=example.com");
 
 /** The same message with no `Authentication-Results` header — verdicts read `null`. */
-const UNAUTHENTICATED_EMAIL = [
-    "From: Alice <alice@example.com>",
-    "To: support@myapp.com",
-    "Subject: Need help",
-    "Message-ID: <abc@example.com>",
-    "",
-    "Please help.",
-].join("\r\n");
+const UNAUTHENTICATED_EMAIL = rawEmail(undefined);
 
 /** A fake `AGENT_*` Workflow binding recording every `create(...)`. */
 const fakeBinding = (): {
@@ -106,6 +102,82 @@ describe(dispatchAgentEmail, () => {
         expect(mapperRan).toBe(false);
         expect(support.calls).toHaveLength(0);
         expect(rejects).toHaveLength(1);
+    });
+
+    /** Run the handler over `raw` with a claiming mapper; report whether a run started and whether the message bounced. */
+    const gate = async (raw: string): Promise<{ bounced: boolean; ran: boolean }> => {
+        const support = fakeBinding();
+        const onEmail: AgentEmailMapper = () => {
+            return { input: "x", threadKey: "t" };
+        };
+        const handler = dispatchAgentEmail([{ agent: { onEmail }, binding: "AGENT_SUPPORT" }]);
+        const { message, rejects } = fakeMessage(raw);
+
+        await handler(message, { AGENT_SUPPORT: support.binding }, {});
+
+        return { bounced: rejects.length === 1, ran: support.calls.length === 1 };
+    };
+
+    it("refuses SPF+DKIM passes that vouch for a domain other than the forged From", async () => {
+        expect.assertions(1);
+
+        // SPF passed for the attacker's envelope domain and DKIM for the
+        // attacker's `d=`; neither says anything about `ceo@victim.example`,
+        // and DMARC (which does) failed. This must never start a privileged run.
+        const forged = rawEmail(
+            "dkim=pass header.d=evil.example; spf=pass smtp.mailfrom=evil.example; dmarc=fail (p=REJECT) header.from=victim.example",
+            "CEO <ceo@victim.example>",
+        );
+
+        await expect(gate(forged)).resolves.toStrictEqual({ bounced: true, ran: false });
+    });
+
+    it("refuses a pass that reports no domain to align against", async () => {
+        expect.assertions(1);
+
+        await expect(gate(rawEmail("dkim=pass; spf=pass; dmarc=pass"))).resolves.toStrictEqual({ bounced: true, ran: false });
+    });
+
+    it("refuses a display name that smuggles a second, aligned mailbox before the real From", async () => {
+        expect.assertions(1);
+
+        // The mailbox is the LAST `<…>`; the aligned one in the display name must not stand in for it.
+        const smuggled = rawEmail("dkim=pass header.d=evil.example; dmarc=fail header.from=victim.example", '"<x@evil.example>" <ceo@victim.example>');
+
+        await expect(gate(smuggled)).resolves.toStrictEqual({ bounced: true, ran: false });
+    });
+
+    it("accepts a lone SPF pass, a lone DKIM pass, or a DMARC pass when aligned with From", async () => {
+        expect.assertions(3);
+
+        // Mixed case and a full `smtp.mailfrom` address are how a real MX stamps it.
+        await expect(
+            gate(rawEmail("spf=pass (comment) smtp.mailfrom=Alice@Example.com; dkim=none; dmarc=fail header.from=example.com")),
+        ).resolves.toStrictEqual({
+            bounced: false,
+            ran: true,
+        });
+        await expect(
+            gate(rawEmail("dkim=pass header.d=example.com; spf=fail smtp.mailfrom=relay.example; dmarc=fail header.from=example.com")),
+        ).resolves.toStrictEqual({
+            bounced: false,
+            ran: true,
+        });
+        await expect(
+            gate(rawEmail("dkim=fail header.d=other.example; spf=fail smtp.mailfrom=relay.example; dmarc=pass header.from=example.com")),
+        ).resolves.toStrictEqual({
+            bounced: false,
+            ran: true,
+        });
+    });
+
+    it("refuses a subdomain pass — alignment is strict, not organizational", async () => {
+        expect.assertions(1);
+
+        await expect(gate(rawEmail("spf=pass smtp.mailfrom=mail.example.com; dkim=pass header.d=mail.example.com; dmarc=none"))).resolves.toStrictEqual({
+            bounced: true,
+            ran: false,
+        });
     });
 
     it("drops the message (no run, no bounce) when the mapper declines with null", async () => {

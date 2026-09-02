@@ -7,11 +7,20 @@ import { validateSessionPolicy } from "./session";
 
 /**
  * The client IP header Cloudflare's edge sets on every request it forwards,
- * overwriting whatever the client sent. It is the one header on that platform a
+ * overwriting whatever the client sent. Behind Cloudflare it is the one header a
  * client cannot choose, which is why `audit-hooks.ts`'s `resolveIp` reads it and
  * nothing else by default — this is the same policy, expressed in better-auth's
  * configuration instead of our own code, so the audit trail and the rate limiter
  * cannot disagree about who a request came from.
+ *
+ * That trust ends at the Cloudflare boundary. On a host that takes traffic
+ * directly (the Node host, a bare container) nothing overwrites the header, so it
+ * is whatever the client typed: rotate it and every request gets a fresh bucket;
+ * send a non-IP and better-auth resolves nothing, landing the request in the
+ * shared flood-cap bucket. Such a deployment must terminate at a proxy that sets
+ * `cf-connecting-ip` itself, or declare `trustedProxies` so `x-forwarded-for`
+ * carries the client — nothing in a request tells this package which case it is
+ * in.
  */
 const CLOUDFLARE_CLIENT_IP_HEADER = "cf-connecting-ip";
 
@@ -35,8 +44,9 @@ const CLOUDFLARE_CLIENT_IP_HEADER = "cf-connecting-ip";
  * the limit stops applying to exactly the traffic it exists to stop.
  *
  * Reading `cf-connecting-ip` first closes both without needing to know which of
- * the two a given edge does, because Cloudflare sets that header itself on every
- * request and a client cannot influence it.
+ * the two a given edge does, because behind Cloudflare that header is set by the
+ * edge on every request and a client cannot influence it (off Cloudflare it is
+ * not — see {@link CLOUDFLARE_CLIENT_IP_HEADER}).
  *
  * `x-forwarded-for` comes back into the list only when the caller has declared
  * `trustedProxies`, which is what makes the chain interpretable: better-auth then
@@ -78,6 +88,29 @@ const ALL_PATHS_RULE = "/**";
  * limiting cannot be recovered from headers that are not there.
  */
 const UNRESOLVED_IP_BUCKET_FACTOR = 100;
+
+type RateLimitRules = NonNullable<NonNullable<BetterAuthOptions["rateLimit"]>["customRules"]>;
+
+/**
+ * The caller's `customRules` plus a {@link ALL_PATHS_RULE} catch-all that widens
+ * the bucket by {@link UNRESOLVED_IP_BUCKET_FACTOR} when no client IP resolved.
+ * The caller's rules come first on purpose: better-auth takes the FIRST key whose
+ * pattern matches the path, so theirs win over the catch-all rather than being
+ * shadowed by it. A caller who declared the catch-all themselves keeps it.
+ */
+const withUnresolvedIpFloodCap = (options: LunoraAuthOptions): RateLimitRules => {
+    const rules = options.rateLimit?.customRules ?? {};
+
+    if (rules[ALL_PATHS_RULE] !== undefined) {
+        return rules;
+    }
+
+    return {
+        ...rules,
+        [ALL_PATHS_RULE]: (request: Request, rule: { max: number; window: number }) =>
+            getIP(request, options) === null ? { max: rule.max * UNRESOLVED_IP_BUCKET_FACTOR, window: rule.window } : rule,
+    };
+};
 
 /**
  * A `secret` shorter than this is brute-forceable; better-auth itself accepts
@@ -411,33 +444,21 @@ export const resolveAuthOptions = (options: LunoraAuthOptions): LunoraAuthOption
     // `rateLimit` table into `getAuthTables` / the compiled migration.
     const needsRateLimitStorage = hardened.rateLimit?.storage === undefined && hardened.rateLimit?.enabled !== false;
 
-    return {
-        ...hardened,
-        ...(hardened.rateLimit?.enabled === false
+    const rateLimit =
+        hardened.rateLimit?.enabled === false
             ? {}
             : {
                   rateLimit: {
                       ...hardened.rateLimit,
                       ...(needsRateLimitEnabled ? { enabled: true } : {}),
                       ...(needsRateLimitStorage ? { storage: "database" as const } : {}),
-                      customRules: {
-                          // The caller's own rules are spread first on purpose:
-                          // better-auth takes the FIRST key whose pattern matches
-                          // the path, so anything they declared wins over the
-                          // catch-all below rather than being shadowed by it. A
-                          // caller who declared this exact pattern themselves keeps
-                          // it — spreading ours unconditionally would overwrite the
-                          // one rule the key ordering cannot protect.
-                          ...hardened.rateLimit?.customRules,
-                          ...(hardened.rateLimit?.customRules?.[ALL_PATHS_RULE] === undefined
-                              ? {
-                                    [ALL_PATHS_RULE]: (request: Request, rule: { max: number; window: number }) =>
-                                        getIP(request, hardened) === null ? { max: rule.max * UNRESOLVED_IP_BUCKET_FACTOR, window: rule.window } : rule,
-                                }
-                              : {}),
-                      },
+                      customRules: withUnresolvedIpFloodCap(hardened),
                   },
-              }),
+              };
+
+    return {
+        ...hardened,
+        ...rateLimit,
         ...(hardened.session?.cookieCache === undefined ? { session: { ...hardened.session, cookieCache: { enabled: true, maxAge: 60 } } } : {}),
     };
 };

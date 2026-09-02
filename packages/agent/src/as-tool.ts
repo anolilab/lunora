@@ -4,6 +4,7 @@ import { jsonSchema } from "ai";
 import { isDuplicateInstanceError } from "./channels";
 import { agentBindingName } from "./naming";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
+import isPositiveInteger from "./positive-integer";
 import type {
     AgentAsToolOptions,
     AgentMessageRow,
@@ -122,7 +123,7 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
         throw new LunoraError("INTERNAL", "@lunora/agent: agent.asTool requires a non-empty `description` (the parent model decides from it)");
     }
 
-    if (options.maxPolls !== undefined && (!Number.isInteger(options.maxPolls) || options.maxPolls < 1)) {
+    if (options.maxPolls !== undefined && !isPositiveInteger(options.maxPolls)) {
         // `slice`-style leniency has no place here: `maxPolls: 0` returned
         // "timeout" without a single status read, so the parent reported the
         // child had not finished before the child had even been looked at.
@@ -141,7 +142,7 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
         // costs nothing at the last level. Returned as the tool's answer rather
         // than thrown: a throw fails (and retries) the parent's durable step,
         // while a message lets the parent's model recover and answer directly.
-        const depth = (Number.isInteger(context.depth) ? (context.depth as number) : 0) + 1;
+        const depth = (isPositiveInteger(context.depth) ? context.depth : 0) + 1;
 
         if (depth > MAX_DELEGATION_DEPTH) {
             return `Sub-agent "${name}" was not started: the maximum delegation depth of ${String(MAX_DELEGATION_DEPTH)} is already reached. Answer with what you have instead of delegating further.`;

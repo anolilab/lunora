@@ -6,6 +6,7 @@ import { firstEpisodicSource, firstGraphSource, memoryStepName, resolveInjectedS
 import { buildModelMessages } from "./model-messages";
 import { agentBindingName } from "./naming";
 import { toFunctionReference } from "./paths";
+import isPositiveInteger from "./positive-integer";
 import type {
     AgentApprovalContext,
     AgentCompact,
@@ -100,7 +101,7 @@ const DEFAULT_MAX_TURNS = 8;
  * only ever RESTRICTS how far this run may delegate (see `as-tool.ts`), so a
  * bogus one — absent, negative, fractional — is treated as a top-level run.
  */
-const normalizeDepth = (depth: number | undefined): number => (Number.isInteger(depth) && (depth as number) > 0 ? (depth as number) : 0);
+const normalizeDepth = (depth: number | undefined): number => (isPositiveInteger(depth) ? depth : 0);
 
 /** Everything one turn (and its tool calls) needs, prepared once per run. */
 interface TurnContext {

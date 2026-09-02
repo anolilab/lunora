@@ -76,6 +76,8 @@ const createFakeSocket = (
     };
 };
 
+const FRAME_SIZE_PATTERN = /control frame exceeds the maximum/u;
+
 /** A voice-enabled agent with no greeting (so `fetch()` never schedules `speakGreeting`). */
 const agent = defineAgent({ instructions: "Be brief.", model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", voice: {} });
 // `createAi` requires an `AI` binding at construction time — the fake is never
@@ -539,6 +541,23 @@ describe("voice session resource bounds", () => {
 
         expect(turnsRun(instance)).toBe(0);
         expect(JSON.parse(sent[0] as string)).toMatchObject({ type: "error" });
+    });
+
+    it("refuses an oversized frame before parsing it", async () => {
+        const instance = new TestVoiceDO(fakeState(), env, agent, "support");
+        const { sent, ws } = createFakeSocket({ connectionId: "c1", threadKey: "t1", turn: 0 });
+
+        // Oversized AND malformed: the text cap ran after `JSON.parse(raw)`, so a
+        // 32 MiB frame was parsed in full first. A parse failure is dropped
+        // silently, so the size error frame is the proof the parse never ran.
+        await instance.webSocketMessage(ws, `{"type":"text","text":"${"x".repeat(500_000)}`);
+
+        expect(turnsRun(instance)).toBe(0);
+
+        const error = JSON.parse(sent[0] as string) as { message: string; type: string };
+
+        expect(error.type).toBe("error");
+        expect(error.message).toMatch(FRAME_SIZE_PATTERN);
     });
 
     it("still runs a text frame within the cap", async () => {

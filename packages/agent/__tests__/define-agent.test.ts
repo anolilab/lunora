@@ -6,6 +6,7 @@ import { defineSkill } from "../src/skill";
 
 const MODEL_PATTERN = /model/u;
 const MAX_TURNS_PATTERN = /maxTurns/u;
+const VOICE_MAX_TURNS_PATTERN = /`voice\.maxTurns` must be a positive integer/u;
 const TOOL_NAME_PATTERN = /tool name/u;
 const DESCRIPTION_PATTERN = /description/u;
 const EXECUTE_PATTERN = /execute/u;
@@ -27,6 +28,9 @@ describe(defineAgent, () => {
     it("rejects a missing model, bad maxTurns, and invalid tool names", () => {
         expect(() => defineAgent({ model: "" })).toThrow(MODEL_PATTERN);
         expect(() => defineAgent({ maxTurns: 0, model: "m" })).toThrow(MAX_TURNS_PATTERN);
+        // `voice.maxTurns: 0` silently became the 100-turn default while `maxTurns: 0` threw.
+        expect(() => defineAgent({ model: "m", voice: { maxTurns: 0 } })).toThrow(VOICE_MAX_TURNS_PATTERN);
+        expect(() => defineAgent({ model: "m", voice: { maxTurns: 1.5 } })).toThrow(VOICE_MAX_TURNS_PATTERN);
         expect(() =>
             defineAgent({
                 model: "m",

@@ -531,6 +531,21 @@ export const auth = createAuth({
 });
 ```
 
+The per-IP bucket is keyed on `cf-connecting-ip`, which Cloudflare's edge
+sets on every request it forwards, so behind Cloudflare a client cannot pick
+its own bucket. That is only true behind Cloudflare: on a host that takes
+traffic directly (the Node host, a bare container) the header is whatever the
+client sent, and a client that rotates it gets a fresh bucket per request.
+Off Cloudflare, terminate at a proxy that sets `cf-connecting-ip` itself, or
+declare your proxies so the `x-forwarded-for` chain is trusted instead:
+
+```ts
+export const auth = createAuth({
+    secret: env.AUTH_SECRET,
+    advanced: { ipAddress: { trustedProxies: ["10.0.0.1"] } },
+});
+```
+
 To turn rate limiting off, for example when you front auth with your own
 limiter (see [`@lunora/ratelimit`](/docs/packages/ratelimit)), pass an
 explicit flag; an explicit `enabled` value always wins over the default:

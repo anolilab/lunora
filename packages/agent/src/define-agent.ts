@@ -3,6 +3,7 @@ import { LunoraError } from "@lunora/errors";
 import { collectAgenticMemoryTools } from "./agentic-memory";
 import { agentAsTool } from "./as-tool";
 import { isInjectedMemorySource } from "./memory";
+import isPositiveInteger from "./positive-integer";
 import { RESERVED_SKILL_NAME, SKILL_NAME_PATTERN } from "./skill";
 import type {
     AgentConfig,
@@ -219,8 +220,14 @@ const defineAgent = (config: AgentConfig): AgentDefinition => {
         );
     }
 
-    if (config.maxTurns !== undefined && (!Number.isInteger(config.maxTurns) || config.maxTurns < 1)) {
+    if (config.maxTurns !== undefined && !isPositiveInteger(config.maxTurns)) {
         throw new LunoraError("INTERNAL", "@lunora/agent: `maxTurns` must be a positive integer");
+    }
+
+    // Same policy as `maxTurns`: `voice.maxTurns: 0` used to fall back to the
+    // 100-turn default silently, while `maxTurns: 0` threw.
+    if (config.voice?.maxTurns !== undefined && !isPositiveInteger(config.voice.maxTurns)) {
+        throw new LunoraError("INTERNAL", "@lunora/agent: `voice.maxTurns` must be a positive integer");
     }
 
     const skills = config.skills ?? [];
