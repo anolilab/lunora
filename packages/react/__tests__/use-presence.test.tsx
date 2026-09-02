@@ -1,4 +1,4 @@
-import type { FunctionReference } from "@lunora/client";
+import type { FunctionReference, SubscriptionErrorCallback } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { createRoot } from "react-dom/client";
@@ -34,6 +34,45 @@ describe("usePresence", () => {
 
     afterEach(() => {
         vi.useRealTimers();
+    });
+
+    it("surfaces a listPresent subscription error on `error` and through `onError`", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+        const onError = vi.fn<SubscriptionErrorCallback>();
+
+        const Probe = (): ReactElement => {
+            const { error } = usePresence("room-1", {
+                heartbeat: HEARTBEAT,
+                intervalMs: 1000,
+                listPresent: LIST_PRESENT,
+                onError,
+                sessionId: "sess-fixed",
+            });
+
+            return <div data-testid="probe">{error?.message ?? ""}</div>;
+        };
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Probe />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        await act(async () => {
+            mock.emitError("presence:listPresent", { code: "UNAUTHORIZED", message: "room closed" });
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("probe").textContent).toBe("room closed");
+        });
+
+        expect(onError).toHaveBeenCalledWith({ code: "UNAUTHORIZED", message: "room closed" });
     });
 
     it("heartbeats on mount and again on each interval tick", async () => {

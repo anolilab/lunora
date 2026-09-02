@@ -375,10 +375,17 @@ export interface LunoraClientOptions {
     heartbeatIntervalMs?: number;
 
     /**
-     * When `true` and a `queryCache` is active, framework hooks (React, Vue, …)
-     * wait for the durable cache to finish hydrating before their first render
-     * with an enabled subscription, so users see cached data instead of an
-     * undefined flash before the socket round-trip. Defaults to `false`.
+     * When `true` and a `queryCache` is active, React's `useQuery` holds its
+     * TanStack query disabled until the durable cache has finished loading
+     * (`whenReady()`), so its first enabled render can seed the cached value
+     * instead of issuing an HTTP read that the cache would immediately
+     * overwrite. Defaults to `false`.
+     *
+     * It is ONLY React's `useQuery` that defers — the Vue, Svelte, Solid and
+     * Angular hooks subscribe at mount regardless of this flag, and so does
+     * React's own subscription registry. They do not need the gate: a
+     * subscription opened before the load completes is seeded by the load
+     * itself, so a cached value reaches the first subscriber either way.
      *
      * Requires `queryCache` to be set (not `false`); silently ignored otherwise.
      */

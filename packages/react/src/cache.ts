@@ -16,8 +16,6 @@ interface RegistryEntry {
      * the subscription opened still hears about it.
      */
     errorCallbacks: Set<SubscriptionErrorCallback>;
-    /** Polling fallback when `client.subscribe` is unavailable (e.g. no WS). */
-    pollTimer: ReturnType<typeof setInterval> | undefined;
     refCount: number;
     /** WS unsubscribe handle, set on first successful attach. */
     unsubscribe: Unsubscribe | undefined;
@@ -34,12 +32,14 @@ interface RegistryEntry {
  * Every hook that mounts a `useQuery({queryKey: ["lunora", fn, args, shard]})`
  * also calls `registry.attach(qc, queryKey, fn, args, shardKey)`; the registry
  * dedupes by hashed queryKey so two components observing the same query open a
- * single WS subscription. On the last `detach()` the subscription is closed
- * (or the polling fallback is cleared).
+ * single WS subscription. On the last `detach()` the subscription is closed.
  *
- * Polling fallback: if `client.subscribe` throws (no WS in the environment),
- * the registry installs a 5s interval that calls `qc.invalidateQueries({
- * queryKey })`, letting TanStack's own `refetch` loop drive freshness.
+ * `client.subscribe` is NOT caught here. A missing WebSocket does not throw —
+ * `ensureSocket` returns silently and the subscription simply stays unfed — so
+ * the only throws reachable are a closed client and args the wire codec cannot
+ * encode. Both are programming errors that no amount of retrying fixes, and the
+ * 5s `invalidateQueries` loop that used to swallow them just hid the stack
+ * behind a silently-degraded query.
  */
 class LunoraSubscriptionRegistry {
     private readonly entries = new Map<string, RegistryEntry>();
@@ -67,13 +67,13 @@ class LunoraSubscriptionRegistry {
         function_: FunctionReference,
         args: Record<string, unknown>,
         shardKey: string | undefined,
-        options: { onError?: SubscriptionErrorCallback; pollIntervalMs?: number } = {},
+        options: { onError?: SubscriptionErrorCallback } = {},
     ): () => void {
         const key = keyHash(queryKey);
         let entry = this.entries.get(key);
 
         if (!entry) {
-            entry = { errorCallbacks: new Set(), pollTimer: undefined, refCount: 0, unsubscribe: undefined };
+            entry = { errorCallbacks: new Set(), refCount: 0, unsubscribe: undefined };
             this.entries.set(key, entry);
 
             const opened = entry;
@@ -94,15 +94,12 @@ class LunoraSubscriptionRegistry {
                         shardKey,
                     },
                 );
-            } catch {
-                // WS unavailable — fall back to periodic invalidation so
-                // TanStack Query's own refetch loop keeps the cache fresh.
-                entry.pollTimer = setInterval(() => {
-                    queryClient.invalidateQueries({ queryKey }).catch(() => {
-                        // Best-effort refresh: a failed invalidation just means
-                        // the next tick tries again.
-                    });
-                }, options.pollIntervalMs ?? 5000);
+            } catch (error) {
+                // Leave no half-registered entry behind for the next attach of
+                // this key to join, then let the programming error surface.
+                this.entries.delete(key);
+
+                throw error;
             }
         }
 
@@ -144,11 +141,6 @@ class LunoraSubscriptionRegistry {
 
             if (current.refCount <= 0) {
                 current.unsubscribe?.();
-
-                if (current.pollTimer) {
-                    clearInterval(current.pollTimer);
-                }
-
                 this.entries.delete(key);
             }
         };

@@ -1,6 +1,6 @@
 "use client";
 
-import type { FunctionReference } from "@lunora/client";
+import type { FunctionReference, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 import type { Page, PaginatedCoreResult, PaginationResult } from "@lunora/client/pagination";
 import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
 import type { QueryKey } from "@tanstack/react-query";
@@ -51,16 +51,29 @@ import useLazyRef from "./use-lazy-ref";
  * `@lunora/client/pagination` so framework-agnostic adapters can reuse it.
  */
 
+/** {@link usePaginatedCore}'s handle: the shared core result plus the error channel. */
+interface PaginatedCoreReactResult<T> extends PaginatedCoreResult<T> {
+    error: SubscriptionError | undefined;
+}
+
 /**
  * The reactive-pagination engine shared by both public hooks. Owns the page
  * boundary list, the per-page live subscriptions, the split/join maintenance,
- * and `loadMore`; returns the ordered per-page results plus the feed `status`.
+ * `loadMore`, and the error channel; returns the ordered per-page results plus
+ * the feed `status`.
+ *
+ * A page can fail two ways — its initial fetch rejects, or the server pushes a
+ * subscription error — and both land on `error`. A FAILED TAIL that never got a
+ * frame is dropped from the page list, so `status` falls back to the previous
+ * page's cursor (`"CanLoadMore"`) instead of pinning the feed at
+ * `"LoadingMore"` with a permanently no-op `loadMore`. The first page has no
+ * previous page to fall back to and stays `"LoadingFirstPage"` with `error` set.
  */
 const usePaginatedCore = function <T>(
     function_: FunctionReference,
     args: "skip" | Record<string, unknown>,
-    options: { initialNumItems: number; shardKey?: string },
-): PaginatedCoreResult<T> {
+    options: { initialNumItems: number; onError?: SubscriptionErrorCallback; shardKey?: string },
+): PaginatedCoreReactResult<T> {
     const client = useLunora();
     const queryClient = useQueryClient();
     const { initialNumItems, shardKey } = options;
@@ -70,6 +83,16 @@ const usePaginatedCore = function <T>(
 
     const [, forceRender] = useReducer((tick: number) => tick + 1, 0);
     const [pages, setPages] = useState<Page[]>(() => initialPages(initialNumItems));
+    const [error, setError] = useState<SubscriptionError | undefined>(undefined);
+
+    // The attach effect keys on the page-key hash, so an inline `onError` must
+    // not change its identity — register a stable wrapper and read the latest
+    // handler through a ref (the same shape `useQuery` uses).
+    const onErrorRef = useRef(options.onError);
+
+    useEffect(() => {
+        onErrorRef.current = options.onError;
+    });
 
     // Reset to the first page whenever the query identity, base args, page size,
     // or shard changes. Set-state-during-render (guarded by a ref) is React's
@@ -89,6 +112,7 @@ const usePaginatedCore = function <T>(
         // react-doctor-disable-next-line react-hooks-js/refs -- intentional: writing the ref guard here is what makes the render-phase reset fire exactly once per input change (see above).
         resetKeyRef.current = resetKey;
         setPages(initialPages(initialNumItems));
+        setError(undefined);
     }
 
     // Build the (queryKey, args) pair for each loaded page. `cursor`/`endCursor`
@@ -117,6 +141,31 @@ const usePaginatedCore = function <T>(
     useEffect(() => {
         desiredRef.current = { baseArgs, entries: pageEntries, fn: function_, shardKey };
     });
+
+    /**
+     * Record a page failure and, when it is the still-unresolved TAIL of a
+     * multi-page feed, drop that page so the feed leaves `"LoadingMore"` and
+     * `loadMore` can ask for it again. Reads `desiredRef` so the tail's key is
+     * computed from the same fn/args the subscription was opened with.
+     */
+    const failPage = (hash: string, queryKey: QueryKey, pageError: SubscriptionError): void => {
+        setError(pageError);
+
+        setPages((current) => {
+            const desired = desiredRef.current;
+            const tail = current.at(-1);
+
+            if (current.length <= 1 || !tail || queryClient.getQueryData(queryKey) !== undefined) {
+                return current;
+            }
+
+            const tailArgs = { ...desired.baseArgs, paginationOpts: { cursor: tail.lower, endCursor: tail.upper, numItems: tail.numItems } };
+
+            return serializeQueryKey(lunoraQueryKey(desired.fn, tailArgs, desired.shardKey)) === hash ? current.slice(0, -1) : current;
+        });
+
+        onErrorRef.current?.(pageError);
+    };
 
     // Per-page detach handles so a page falling out of the request set releases
     // its subscription without disturbing the others.
@@ -193,11 +242,26 @@ const usePaginatedCore = function <T>(
                 staleTime: 0,
             });
 
-            // Initial fetch failures surface through the live subscription /
-            // polling fallback; swallow here so the promise doesn't float.
-            initialFetch.catch(() => {});
+            // A page whose FIRST fetch rejects has no live subscription frame
+            // coming to correct it — route the rejection into the same channel
+            // the pushed subscription errors use, or the feed hangs on this page
+            // forever.
+            initialFetch.catch((error_: unknown) => {
+                failPage(
+                    hash,
+                    entry.key,
+                    error_ instanceof Error ? { code: (error_ as { code?: string }).code, message: error_.message } : { message: String(error_) },
+                );
+            });
 
-            detaches.set(hash, registry.attach(queryClient, entry.key, desired.fn, entry.args, desired.shardKey));
+            detaches.set(
+                hash,
+                registry.attach(queryClient, entry.key, desired.fn, entry.args, desired.shardKey, {
+                    onError: (pageError) => {
+                        failPage(hash, entry.key, pageError);
+                    },
+                }),
+            );
         }
         // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the attach effect re-runs only when the set of page keys (`pageKeysHash`), the client, or the skip flag changes. `detachesRef`/`desiredRef`/`queryClient` are stable refs read at run time; the latest fn/args/entries come from `desiredRef.current` (updated in a sibling effect). Client swaps are handled explicitly via `detachClientRef`.
     }, [client, queryClient, pageKeysHash, skipped]);
@@ -232,6 +296,8 @@ const usePaginatedCore = function <T>(
             const hash = serializeQueryKey(event.query.queryKey as QueryKey);
 
             if (pageEntries.some(({ key }) => serializeQueryKey(key) === hash)) {
+                // A frame for one of our pages landed — the feed is healthy again.
+                setError(undefined);
                 forceRender();
             }
         });
@@ -268,6 +334,7 @@ const usePaginatedCore = function <T>(
     // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: the render-phase `resetKeyRef` read above bails React Compiler for this whole hook, so this `useCallback` is the only thing keeping `loadMore`'s identity stable for consumers. Keep it.
     const loadMore = useCallback(
         (numberItems: number) => {
+            setError(undefined);
             setPages((current) => {
                 // Resolve the next-page cursor from COMMITTED state at call time —
                 // the authoritative `current` pages plus the live query cache —
@@ -295,7 +362,8 @@ const usePaginatedCore = function <T>(
         [queryClient],
     );
 
-    return { loadMore, pageResults, status };
+    return { error, loadMore, pageResults, status };
 };
 
+export type { PaginatedCoreReactResult };
 export default usePaginatedCore;
