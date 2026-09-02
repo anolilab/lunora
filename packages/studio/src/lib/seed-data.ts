@@ -15,7 +15,7 @@
  * studio's `basePath` — so the client targets it directly. Keep this in sync
  * with `SEED_ENDPOINT` in `@lunora/config/studio-host`.
  */
-import { decodeWire } from "../../../../shared/wire-codec";
+import { decodeWire, isPlainObject } from "../../../../shared/wire-codec";
 import type { ColumnMeta } from "./admin";
 import { errorMessage } from "./internal";
 
@@ -78,9 +78,17 @@ interface SeedResponseBody {
     readonly tables?: unknown;
 }
 
-/** Narrow a decoded reply to the row documents `onInsertRows` can hand to `importShard`. */
-const isRowList = (value: unknown): value is ReadonlyArray<Record<string, unknown>> =>
-    Array.isArray(value) && value.every((row) => typeof row === "object" && row !== null && !Array.isArray(row));
+/**
+ * Narrow a decoded reply to the row documents `onInsertRows` can hand to
+ * `importShard`.
+ *
+ * `isPlainObject` rather than `typeof === "object"`: this runs AFTER
+ * `decodeWire`, which turns tagged leaves into `Date`, `Map`, `Set` and
+ * `Uint8Array` — every one of which is `typeof "object"` and none of which is a
+ * row document. A `!Array.isArray` check is enough for bare `JSON.parse` output
+ * and not for this one.
+ */
+const isRowList = (value: unknown): value is ReadonlyArray<Record<string, unknown>> => Array.isArray(value) && value.every((row) => isPlainObject(row));
 
 /**
  * Request generated rows from the dev host, normalising every outcome.

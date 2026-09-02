@@ -70,7 +70,14 @@ const useStagedEdits = (): StagedEditsModel => {
             // is in flight and `commitStaged` iterates a snapshot, so dropping
             // the whole row entry silently discarded any edit made since —
             // an edit the writer never saw.
-            const pending = Object.fromEntries(Object.entries(row).filter(([column, value]) => !Object.is(value, committed[column])));
+            //
+            // Membership first, then the value: a column ABSENT from `committed`
+            // was never written, and `committed[column]` reads `undefined` for
+            // it — indistinguishable by value alone from a cell written as
+            // `undefined`. Comparing values only threw away a cell staged as
+            // `undefined` after the snapshot was taken, which is exactly the
+            // edit this filter exists to keep.
+            const pending = Object.fromEntries(Object.entries(row).filter(([column, value]) => !(column in committed) || !Object.is(value, committed[column])));
 
             if (Object.keys(pending).length === 0) {
                 return Object.fromEntries(Object.entries(previous).filter(([id]) => id !== rowId));
