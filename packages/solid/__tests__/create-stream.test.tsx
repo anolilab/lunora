@@ -43,6 +43,25 @@ describe(createStream, () => {
         expect(latest?.status()).toBe("complete");
     });
 
+    it("forwards `durable` to the client so a reconnect resumes the run", () => {
+        const fake = createFakeClient();
+
+        render(
+            () => {
+                const result = createStream(makeStreamRef(TICK_REF), { since: 0 }, { durable: true });
+
+                return <pre>{result.status()}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        // `{ durable: true }` is what makes a dropped socket resume the same run
+        // instead of failing with `STREAM_DISCONNECTED`. The client reads it off the
+        // stream options, so a primitive that does not forward it silently gives the
+        // caller a non-durable stream — which only shows up on a reconnect.
+        expect(fake.streamCalls[0]?.options.durable).toBe(true);
+    });
+
     it('"skip" keeps the primitive mounted without opening a stream', () => {
         const fake = createFakeClient();
         let latest: CreateStreamResult<unknown> | undefined;

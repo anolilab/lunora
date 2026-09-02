@@ -24,6 +24,14 @@ export interface StreamOptions {
      */
     destroyRef?: DestroyRef;
 
+    /**
+     * Opt into resume-on-reconnect for a stream the server declared `durable`.
+     * The chunks already received are kept and the socket re-attaches to the same
+     * run, so a dropped connection mid-generation continues instead of surfacing
+     * `STREAM_DISCONNECTED`. Has no effect on an ephemeral stream.
+     */
+    durable?: boolean;
+
     /** Forwarded to `client.stream()` — caps the in-flight chunk buffer. */
     maxBuffer?: number;
 
@@ -91,7 +99,7 @@ export const stream = <F extends FunctionReference<"stream">>(
     if (args !== "skip") {
         status.set("streaming");
 
-        const iterable = client.stream(reference, args, { maxBuffer: options.maxBuffer, shardKey: options.shardKey });
+        const iterable = client.stream(reference, args, { durable: options.durable, maxBuffer: options.maxBuffer, shardKey: options.shardKey });
 
         cancelIterable = (): void => {
             iterable.cancel();

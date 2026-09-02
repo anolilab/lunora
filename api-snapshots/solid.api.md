@@ -381,6 +381,7 @@ interface CreateRateLimitResult {
 
 ```ts
 interface CreateStreamOptions {
+    durable?: boolean;
     maxBuffer?: number;
     shardKey?: string;
 }
