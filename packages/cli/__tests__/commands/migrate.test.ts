@@ -57,7 +57,7 @@ describe("lunora migrate", () => {
         });
 
         it("first run on a global table emits CREATE TABLE", () => {
-            expect.assertions(10);
+            expect.assertions(11);
 
             writeSchema(
                 `import { defineSchema, defineTable, v } from "@lunora/server";
@@ -86,6 +86,10 @@ export const schema = defineSchema({
             expect(sql).toContain('CREATE TABLE IF NOT EXISTS "users"');
             expect(sql).toContain('"id" TEXT PRIMARY KEY');
             expect(sql).toContain('"_creationTime" REAL NOT NULL');
+            // The optimistic-concurrency row version the runtime auto-provisioner
+            // also adds — emitted here so a hand-applied migration and the
+            // auto-provisioner agree on the physical shape and the column budget.
+            expect(sql).toContain('"_version" INTEGER');
             expect(sql).toContain('"email" TEXT NOT NULL');
             expect(sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "users_by_email"');
 
@@ -97,6 +101,39 @@ export const schema = defineSchema({
             const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as { tables: Record<string, unknown> };
 
             expect(Object.keys(snapshot.tables)).toEqual(["users"]);
+        });
+
+        it("ignores a hyperdrive-backed global table", () => {
+            expect.assertions(3);
+
+            // `.global({ backend: "hyperdrive" })` stores the table in a
+            // Postgres/MySQL database reached through Hyperdrive, which
+            // provisions itself from the schema at runtime. The generator renders
+            // through `@lunora/d1/dialect` and has no dialect seam, so including
+            // it wrote SQLite DDL — double-quoted identifiers, `REAL` affinity —
+            // into a file the docs label "D1 SQL": a phantom table if it is ever
+            // applied to D1, and invalid syntax on MySQL.
+            writeSchema(
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    accounts: defineTable({
+        email: v.string(),
+    }).global({ backend: "hyperdrive" }).index("by_email", ["email"]),
+});
+`,
+            );
+
+            const result = runMigrateGenerateCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                name: "init",
+                now: fixedNow,
+            });
+
+            expect(result.code).toBe(0);
+            expect(result.empty).toBe(true);
+            expect(result.migrationFile).toBe("");
         });
 
         it("ignores sharded (non-global) tables", () => {
