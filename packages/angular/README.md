@@ -58,8 +58,8 @@ export class MessagesComponent {
 Pass `"skip"` as the args to short-circuit (no network call, no socket).
 
 Pass a function/`Signal` instead of a plain object to make the args reactive —
-each change tears the old subscription down and opens a fresh one for the new
-args:
+each change tears the old subscription down, resets the signal to `undefined`,
+and opens a fresh one for the new args:
 
 ```ts
 export class MessagesComponent {

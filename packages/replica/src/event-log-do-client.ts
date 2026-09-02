@@ -12,7 +12,7 @@
  *   fetch: (req) => env.EVENT_LOG_DO.get(id).fetch(req),
  * });
  *
- * const entries = await client.getSince(0);
+ * const { entries } = await client.getSince(0); // first page — see `getSince`
  * await client.append([{ type: "chat.messageSent", payload: { text: "hi" } }]);
  * ```
  */
@@ -108,23 +108,28 @@ export class EventLogDOClient {
     // ── Read / replay ───────────────────────────────────────────────────
 
     /**
-     * Fetch all entries with `seq >= sinceSeq`.
+     * Fetch ONE page of entries with `seq >= sinceSeq`.
      *
-     * Pass `sinceSeq = 0` to fetch the entire log.
+     * The DO bounds every page (500 entries unless `limit` says otherwise, 1000
+     * max), so `getSince(0)` is the START of the log, never all of it — a
+     * catch-up walks pages until `truncated` is `false`:
+     *
+     * ```ts
+     * let seq = 0;
+     * for (;;) {
+     *   const page = await client.getSince(seq);
+     *   apply(page.entries);
+     *   if (!page.truncated || page.cursor === undefined) break;
+     *   seq = page.cursor;
+     * }
+     * ```
+     * @returns `{ entries, truncated, cursor }` — `cursor` is the `sinceSeq`
+     * for the next page and is present exactly when `truncated` is `true`.
      */
-    public async getSince(sinceSeq: number): Promise<EventLogEntry[]> {
-        const data = await this.#get<{ entries: EventLogEntry[] }>(`/since?seq=${String(sinceSeq)}`, "getSince");
+    public async getSince(sinceSeq: number, limit?: number): Promise<{ cursor?: number; entries: EventLogEntry[]; truncated: boolean }> {
+        const limitQuery = limit === undefined ? "" : `&limit=${String(limit)}`;
 
-        return data.entries;
-    }
-
-    /**
-     * Fetch a paginated range of entries.
-     * @returns `{ entries, hasMore }` — `hasMore` is `true` when another
-     * page exists (i.e. the DO returned `limit + 1` rows).
-     */
-    public async getRange(fromSeq: number, limit: number = 50): Promise<{ entries: EventLogEntry[]; hasMore: boolean }> {
-        return this.#get(`/range?from=${String(fromSeq)}&limit=${String(limit)}`, "getRange");
+        return this.#get(`/since?seq=${String(sinceSeq)}${limitQuery}`, "getSince");
     }
 
     /**

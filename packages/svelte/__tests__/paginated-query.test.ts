@@ -1,4 +1,4 @@
-import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
+import type { FunctionReference, LunoraClient, SubscriptionError, Unsubscribe } from "@lunora/client";
 import type { PaginationResult } from "@lunora/client/pagination";
 import { get, writable } from "svelte/store";
 import { describe, expect, it, vi } from "vitest";
@@ -159,6 +159,66 @@ describe("paginatedQuery (Svelte)", () => {
         expect(get(status)).toBe("Exhausted");
 
         stopStatus();
+    });
+});
+
+describe("paginatedQuery page errors", () => {
+    it("a page error surfaces on `error`, returns status to CanLoadMore, and lets loadMore retry", async () => {
+        const subscribeCalls: { args: Record<string, unknown>; callback: (data: unknown) => void; onError?: (error: SubscriptionError) => void }[] = [];
+
+        const client = {
+            subscribe: (
+                _fn: FunctionReference,
+                args: Record<string, unknown>,
+                callback: (data: unknown) => void,
+                options?: { onError?: (error: SubscriptionError) => void },
+            ) => {
+                subscribeCalls.push({ args, callback, onError: options?.onError });
+
+                return () => undefined;
+            },
+        } as unknown as LunoraClient;
+
+        const errors: SubscriptionError[] = [];
+        const { error, isLoading, loadMore, results, status } = paginatedQuery(client, fn, {}, { initialNumItems: NUM_ITEMS, onError: (e) => errors.push(e) });
+
+        const stops = [results.subscribe(() => {}), status.subscribe(() => {}), error.subscribe(() => {}), isLoading.subscribe(() => {})];
+        const find = (opts: Record<string, unknown>) => subscribeCalls.find((c) => JSON.stringify(c.args) === JSON.stringify({ paginationOpts: opts }));
+
+        find({ cursor: null, endCursor: null, numItems: NUM_ITEMS })?.callback({ continueCursor: "cur-1", isDone: false, page: firstPageItems });
+        await flushAsync();
+
+        loadMore(NUM_ITEMS);
+        await flushAsync();
+
+        expect(get(status)).toBe("LoadingMore");
+
+        // An RLS denial on the new page: without an error channel the feed sat
+        // in `LoadingMore` forever with `isLoading` true and nothing surfaced.
+        const tailArgs = { cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS };
+
+        find(tailArgs)?.onError?.({ code: "FORBIDDEN", message: "denied" });
+        await flushAsync();
+
+        expect(errors).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
+        expect(get(error)).toStrictEqual({ code: "FORBIDDEN", message: "denied" });
+        expect(get(status)).toBe("CanLoadMore");
+        expect(get(isLoading)).toBe(false);
+        expect(get(results)).toStrictEqual(firstPageItems);
+
+        // The failed tail was dropped, so `loadMore` re-opens exactly that range.
+        const before = subscribeCalls.length;
+
+        loadMore(NUM_ITEMS);
+        await flushAsync();
+
+        expect(get(error)).toBeUndefined();
+        expect(get(status)).toBe("LoadingMore");
+        expect(subscribeCalls.slice(before).map((c) => c.args["paginationOpts"])).toStrictEqual([tailArgs]);
+
+        for (const stop of stops) {
+            stop();
+        }
     });
 });
 

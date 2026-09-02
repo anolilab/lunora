@@ -1,4 +1,4 @@
-import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, Unsubscribe } from "@lunora/client";
+import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 import type { MaybeRefOrGetter, Ref } from "vue";
 import { shallowRef, toValue, watch } from "vue";
@@ -18,7 +18,9 @@ import type { UseQueryOptions } from "./types";
  * replays the last value synchronously, so multiple consumers of the same query
  * ride one server-side registration. `seed` sets the ref's value synchronously
  * before the subscription attaches, so the first read shows the SSR value with
- * no loading flash.
+ * no loading flash. `onError` receives a subscription-scoped error the server
+ * pushes (a session expiry, an RLS denial); without it the ref keeps rendering
+ * the seed as if it were live.
  *
  * Teardown is wired to the active effect scope (`onScopeDispose`), so it fires
  * on component unmount or `effectScope().stop()`. Call it inside `setup()` / an
@@ -30,7 +32,7 @@ export const subscribeToQuery = <F extends FunctionReference, T = ReturnOf<F>>(
     client: LunoraClient,
     function_: F,
     args: ArgsOf<F>,
-    options: { seed?: T; shardKey?: string } = {},
+    options: { onError?: SubscriptionErrorCallback; seed?: T; shardKey?: string } = {},
 ): Ref<T | undefined> => {
     // `shallowRef` — query results are replaced wholesale on every push, never
     // mutated in place, so deep reactivity would only add overhead.
@@ -46,7 +48,7 @@ export const subscribeToQuery = <F extends FunctionReference, T = ReturnOf<F>>(
             (value) => {
                 data.value = value as T;
             },
-            { shardKey: options.shardKey },
+            { onError: options.onError, shardKey: options.shardKey },
         );
 
         onScopeDisposeOrWarn(
@@ -66,8 +68,8 @@ export const subscribeToQuery = <F extends FunctionReference, T = ReturnOf<F>>(
  * updates on every delta the server pushes — the Vue-idiomatic equivalent of
  * React's `useQuery`. `args` may be a plain value, a `ref`, or a getter: passing
  * a reactive source makes the subscription reactive — when the args change the
- * old subscription is torn down and a fresh one opens for the new args (matching
- * `@lunora/react`/`@lunora/solid`). Pass `"skip"` (or a source resolving to
+ * old subscription is torn down, the ref resets to `undefined`, and a fresh one
+ * opens for the new args (matching `@lunora/react`/`@lunora/solid`). Pass `"skip"` (or a source resolving to
  * `"skip"`) to short-circuit: no network call, no socket. The subscription tears
  * down automatically when the owning component unmounts (or the effect scope
  * stops).
@@ -103,6 +105,10 @@ export const useQuery = <F extends FunctionReference>(
             if (!isBrowser()) {
                 return;
             }
+
+            // The previous args' value must not render under the new args until
+            // the new subscription's first frame lands.
+            data.value = undefined;
 
             const unsubscribe = createQuerySubscription(
                 client,

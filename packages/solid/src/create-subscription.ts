@@ -30,10 +30,12 @@ const createSubscription = <F extends FunctionReference>(
     const resolveArgs = typeof args === "function" ? (args as Accessor<ArgsOf<F> | "skip">) : () => args;
 
     trackedEffect(resolveArgs, (currentArgs) => {
-        if (currentArgs === "skip") {
-            setData(() => undefined);
-            setError(() => undefined);
+        // Each args generation starts clean: the previous args' value must not
+        // render under the new args until the new subscription's first frame.
+        setData(() => undefined);
+        setError(() => undefined);
 
+        if (currentArgs === "skip") {
             return undefined;
         }
 

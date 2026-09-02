@@ -70,12 +70,15 @@ const createMockSql = () => {
                     table = table.filter((r) => r.seq >= Number(params[0]));
                 }
 
-                const limitMatch = query.match(/LIMIT\s+(\d+)/i);
+                // ORDER BY seq ASC — before the limit, as SQLite does.
+                table.sort((a, b) => a.seq - b.seq);
+
+                // LIMIT ? (bound — the handlers' form) or LIMIT <n>
+                const limitMatch = query.match(/LIMIT\s+(\?|\d+)/i);
                 if (limitMatch) {
-                    table = table.slice(0, Number(limitMatch[1]));
+                    table = table.slice(0, limitMatch[1] === "?" ? Number(params.at(-1)) : Number(limitMatch[1]));
                 }
 
-                table.sort((a, b) => a.seq - b.seq);
                 return { toArray: () => table };
             }
 
@@ -121,13 +124,13 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
 
         const since = await client.getSince(1);
 
-        expect(since).toHaveLength(1);
-        expect(since[0]!.seq).toBe(1);
-        expect(since[0]!.type).toBe("test.b");
+        expect(since.entries).toHaveLength(1);
+        expect(since.entries[0]!.seq).toBe(1);
+        expect(since.entries[0]!.type).toBe("test.b");
     });
 
-    it("paginates via getRange", async () => {
-        expect.assertions(7);
+    it("paginates via getSince", async () => {
+        expect.assertions(8);
 
         const do_ = createDO();
         const client = createClient(do_);
@@ -138,17 +141,18 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
             { type: "c", payload: {} },
         ]);
 
-        const page1 = await client.getRange(0, 2);
+        const page1 = await client.getSince(0, 2);
 
         expect(page1.entries).toHaveLength(2);
-        expect(page1.hasMore).toBe(true);
+        expect(page1.truncated).toBe(true);
+        expect(page1.cursor).toBe(2);
         expect(page1.entries[0]!.seq).toBe(0);
         expect(page1.entries[1]!.seq).toBe(1);
 
-        const page2 = await client.getRange(2, 2);
+        const page2 = await client.getSince(page1.cursor!, 2);
 
         expect(page2.entries).toHaveLength(1);
-        expect(page2.hasMore).toBe(false);
+        expect(page2.truncated).toBe(false);
         expect(page2.entries[0]!.seq).toBe(2);
     });
 

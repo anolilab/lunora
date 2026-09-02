@@ -23,15 +23,18 @@ interface LocalMirrorOptions {
     readonly db: SqliteAdapter;
 
     /**
-     * Cap the mirror's internal {@link EventLog} to this many entries
-     * (REPLICA-06). Every applied diff is recorded in the log — with no cap,
-     * a long-running client accumulates one entry per diff forever.
+     * Cap the mirror's internal {@link EventLog} to this many entries.
+     * Every applied diff is recorded in the log, so an uncapped log grows by
+     * one entry (holding every changed row) per diff for the life of the
+     * mirror — a leak by construction on a long-lived client.
      *
-     * `undefined` (the default) preserves unbounded retention. Set this when
-     * catch-up replication only ever needs a bounded recent window; older
-     * entries are silently evicted (oldest-first) once the cap is exceeded.
-     * See {@link EventLog#truncateBelow} for caller-driven truncation tied to
-     * a snapshot instead.
+     * Defaults to {@link DEFAULT_MAX_EVENT_LOG_ENTRIES}. On overflow the
+     * OLDEST entries are dropped; nothing in the mirror replays its own log,
+     * so a drop loses nothing the mirror needs. A consumer that does replay
+     * it (`eventLog.getSince(watermark)` from another tab / service worker)
+     * detects a gap when the first returned entry's `seq` is above its
+     * watermark, and should re-seed from the mirror's rows (`query`) instead
+     * of applying the partial window.
      */
     readonly maxEventLogEntries?: number;
 
@@ -47,6 +50,9 @@ interface LocalMirrorOptions {
 }
 
 // ── LocalMirror ──────────────────────────────────────────────────────────
+
+/** Default {@link LocalMirrorOptions.maxEventLogEntries}. */
+const DEFAULT_MAX_EVENT_LOG_ENTRIES = 1000;
 
 // Bookkeeping table for mirror-wide state — currently just the schema
 // version (see `MIRROR_SCHEMA_VERSION` below). Created on construction.
@@ -190,7 +196,7 @@ class LocalMirror {
     public constructor(options: LocalMirrorOptions) {
         this.#db = options.db;
         this.#tables = { ...options.tables };
-        this.#eventLog = new EventLog({ maxEntries: options.maxEventLogEntries });
+        this.#eventLog = new EventLog({ maxEntries: options.maxEventLogEntries ?? DEFAULT_MAX_EVENT_LOG_ENTRIES });
 
         ensureMetaTable(this.#db);
         this.#reconcileSchemaVersion();
@@ -248,11 +254,9 @@ class LocalMirror {
             return;
         }
 
-        const pkColumn = this.#tables[diff.table]?.primaryKey ?? "id";
-
         this.#ensureTableSchema(diff);
 
-        applyDiffToDatabase(this.#db, diff, pkColumn);
+        applyDiffToDatabase(this.#db, diff, this.primaryKeyOf(diff.table));
 
         this.#eventLog.append("table-diff", diff, [diff]);
         this.#notifyChange();
@@ -320,10 +324,18 @@ class LocalMirror {
 
     /**
      * Register a table schema so the mirror can create the table on
-     * first use.
+     * first use. Merges into any definition already registered for `name`
+     * (from the constructor's `tables` or an earlier call), so a helper that
+     * registers `{}` just to make the table known does not erase a
+     * user-supplied `primaryKey`.
      */
     public registerTable(name: string, definition: MirrorTableDef): void {
-        this.#tables[name] = definition;
+        this.#tables[name] = { ...this.#tables[name], ...definition };
+    }
+
+    /** The primary-key column of a mirrored table (`"id"` unless registered otherwise). */
+    public primaryKeyOf(table: string): string {
+        return this.#tables[table]?.primaryKey ?? "id";
     }
 
     /**
@@ -477,7 +489,7 @@ class LocalMirror {
      * - If the table already exists, ALTER TABLE ADD COLUMN for any keys in the diff that don't have a corresponding column yet (schema evolution), with the same inferred affinity.
      */
     #ensureTableSchema(diff: TableDiff): void {
-        const pk = this.#tables[diff.table]?.primaryKey ?? "id";
+        const pk = this.primaryKeyOf(diff.table);
 
         // Derive required columns from the UNION of keys across every non-delete change
         const requiredColumns = LocalMirror.#collectDiffColumns(diff, pk);

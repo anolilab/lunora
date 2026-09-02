@@ -8,13 +8,12 @@
  *
  * ## RPC surface (fetch-like)
  *
- * | Method | Path               | Description                          |
- * |--------|--------------------|--------------------------------------|
- * | POST   | `/append`          | Insert events, return assigned seqs  |
- * | GET    | `/since?seq=N`     | Events with `seq >= N`               |
- * | GET    | `/range?from=N&limit=M` | Paginated read               |
- * | GET    | `/size`            | Number of stored events              |
- * | GET    | `/state`           | Full event log state (for recovery)  |
+ * | Method | Path                    | Description                          |
+ * |--------|-------------------------|--------------------------------------|
+ * | POST   | `/append`               | Insert events, return assigned seqs  |
+ * | GET    | `/since?seq=N&limit=M`  | ONE bounded page of `seq >= N`       |
+ * | GET    | `/size`                 | Number of stored events              |
+ * | GET    | `/state`                | Full event log state (for recovery)  |
  */
 
 import type { EventLogEntry } from "./event-log";
@@ -142,9 +141,24 @@ interface AppendResponse {
     entries: EventLogEntry[];
 }
 
-interface RangeResponse {
+/** Entries returned by `GET /since` when the caller names no `limit`. */
+const DEFAULT_PAGE_SIZE = 500;
+
+/** Largest `limit` a caller may ask `GET /since` for. */
+const MAX_PAGE_SIZE = 1000;
+
+/**
+ * `GET /since` body — ONE page of the log.
+ *
+ * `truncated` is `true` when the page stopped at the limit rather than at the
+ * end of the log, and `cursor` is then the `seq` to pass as the next request's
+ * `seq` (the last returned entry's `seq + 1`). A caller that ignores them reads
+ * a silently short log.
+ */
+interface SinceResponse {
+    cursor?: number;
     entries: EventLogEntry[];
-    hasMore: boolean;
+    truncated: boolean;
 }
 
 interface SqlRow {
@@ -229,9 +243,6 @@ export class EventLogDO {
             }
             if (request.method === "GET" && url.pathname === "/since") {
                 return this.#handleSince(url);
-            }
-            if (request.method === "GET" && url.pathname === "/range") {
-                return this.#handleRange(url);
             }
             if (request.method === "GET" && url.pathname === "/size") {
                 return this.#handleSize();
@@ -418,47 +429,42 @@ export class EventLogDO {
         return undefined;
     }
 
-    /** GET /since?seq=N — return entries with seq >= N. */
+    /**
+     * GET /since?seq=N&limit=M — ONE bounded page of entries with `seq >= N`.
+     *
+     * The page is bounded because a catch-up starts at seq 0: an unbounded
+     * response serialised the WHOLE log into one body (and the caller applied
+     * it as one atom), so log growth alone eventually broke every first sync.
+     * A caller walks the pages with `truncated`/`cursor`.
+     */
     #handleSince(url: URL): Response {
         const seqParameter = url.searchParams.get("seq");
         const sinceSeq = seqParameter === null ? 0 : Number(seqParameter);
+        const limitParameter = url.searchParams.get("limit");
+        const limit = limitParameter === null ? DEFAULT_PAGE_SIZE : Number(limitParameter);
 
         if (!Number.isFinite(sinceSeq) || sinceSeq < 0) {
             return errorResponse(400, "BAD_REQUEST", "invalid seq");
         }
 
-        const { sql } = this.state.storage;
-        const cursor = sql.exec(
-            "SELECT seq, type, payload, timestamp, client_id, session_id, parent_seq FROM events WHERE seq >= ? ORDER BY seq ASC",
-            sinceSeq,
-        ) as SqlCursor;
-
-        return json({ entries: rowsToEntries(cursor) });
-    }
-
-    /** GET /range?from=N&limit=M — paginated read (default limit 50). */
-    #handleRange(url: URL): Response {
-        const fromParameter = url.searchParams.get("from");
-        const fromSeq = fromParameter === null ? 0 : Number(fromParameter);
-        const limitParameter = url.searchParams.get("limit");
-        const limit = limitParameter === null ? 50 : Number(limitParameter);
-
-        if (!Number.isFinite(fromSeq) || fromSeq < 0 || !Number.isFinite(limit) || limit < 1 || limit > 1000) {
-            return errorResponse(400, "BAD_REQUEST", "invalid from/limit");
+        if (!Number.isFinite(limit) || limit < 1 || limit > MAX_PAGE_SIZE) {
+            return errorResponse(400, "BAD_REQUEST", "invalid limit");
         }
 
         const { sql } = this.state.storage;
         const cursor = sql.exec(
             "SELECT seq, type, payload, timestamp, client_id, session_id, parent_seq FROM events WHERE seq >= ? ORDER BY seq ASC LIMIT ?",
-            fromSeq,
-            limit + 1, // Fetch one extra to detect hasMore
+            sinceSeq,
+            limit + 1, // One extra row: its presence is what `truncated` reports.
         ) as SqlCursor;
 
-        const allRows = rowsToEntries(cursor);
-        const hasMore = allRows.length > limit;
-        const entries = hasMore ? allRows.slice(0, limit) : allRows;
+        const rows = rowsToEntries(cursor);
+        const truncated = rows.length > limit;
+        const entries = truncated ? rows.slice(0, limit) : rows;
+        const last = entries.at(-1);
 
-        const response: RangeResponse = { entries, hasMore };
+        const response: SinceResponse = truncated && last !== undefined ? { entries, truncated: true, cursor: last.seq + 1 } : { entries, truncated: false };
+
         return json(response);
     }
 
