@@ -596,10 +596,13 @@ describe("relay shape control frames vs. a resubscribe on the same subId", () =>
 
                         posts.push(frame.type);
 
-                        return Response.json({ cursor: 5, epoch: "e1", frames: [] }, {
-                            headers: { "content-type": "application/json" },
-                            status: 200,
-                        });
+                        return Response.json(
+                            { cursor: 5, epoch: "e1", frames: [] },
+                            {
+                                headers: { "content-type": "application/json" },
+                                status: 200,
+                            },
+                        );
                     },
                 };
 
