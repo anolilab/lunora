@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import { collectPages } from "../../../shared/collect-pages";
 import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { CronTarget, LunoraSchedulerOptions, RunOptions, Scheduler, ScheduleRecord, ScheduleTargetArgs } from "./types";
 import { isWorkflowReference } from "./types";
@@ -89,26 +90,13 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
      * unbounded duplicates. Paging keeps that promise while each individual
      * response stays bounded.
      */
-    const listAll = async (path: string): Promise<ScheduleRecord[]> => {
-        const all: ScheduleRecord[] = [];
-        let cursor: string | undefined;
-
-        for (;;) {
-            const query = cursor === undefined ? "" : `?cursor=${encodeURIComponent(cursor)}`;
-            // eslint-disable-next-line no-await-in-loop -- each page's cursor comes from the previous page, so the round-trips are inherently sequential
-            const body = await getDO<{ cursor?: string; records?: ScheduleRecord[]; truncated?: boolean }>(options, `${path}${query}`);
-
-            // Keep the return type honest (never `undefined`) if the DO ever
-            // responds 200 without a `records` array.
-            all.push(...(Array.isArray(body.records) ? body.records : []));
-
-            if (body.truncated !== true || typeof body.cursor !== "string" || body.cursor.length === 0) {
-                return all;
-            }
-
-            cursor = body.cursor;
-        }
-    };
+    const listAll = async (path: string): Promise<ScheduleRecord[]> =>
+        await collectPages<ScheduleRecord>(async (cursor) =>
+            getDO<{ cursor?: string; records?: ScheduleRecord[]; truncated?: boolean }>(
+                options,
+                cursor === undefined ? path : `${path}?cursor=${encodeURIComponent(cursor)}`,
+            ),
+        );
 
     // The DO's `/list` returns one bounded page of the pending `id:` headers;
     // `listAll` walks them all so callers see every pending job.

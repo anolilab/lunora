@@ -1,3 +1,5 @@
+import type { LunoraErrorCodeInput } from "@lunora/errors";
+
 import { stableWireKey } from "../../../shared/wire-key";
 import type { FunctionReference } from "./types";
 
@@ -5,7 +7,16 @@ export type SubscriptionCallback = (data: unknown) => void;
 
 /** A subscription-scoped error the server pushed for this subscription id. */
 export interface SubscriptionError {
-    code?: string;
+    /**
+     * The coded reason, when the frame carried one. `LunoraErrorCodeInput`, not
+     * `LunoraErrorCode`: the catalog codes autocomplete for a consumer branching
+     * on this (the shard sends `BAD_SUBSCRIPTION_ARGS`, `TOO_MANY_SUBSCRIPTIONS`,
+     * `SUBSCRIPTION_PERSIST_FAILED`, …; the client itself adds
+     * `WIRE_DECODE_FAILED` for a frame `decodeWire` refuses), but this value is
+     * read verbatim off the wire and nothing validates it against the catalog,
+     * so narrowing it to `LunoraErrorCode` would be a lie a newer server tells.
+     */
+    code?: LunoraErrorCodeInput;
     message: string;
 }
 

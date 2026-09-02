@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
+import { collectPages } from "../../../shared/collect-pages";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
@@ -577,7 +578,9 @@ const buildSubscriptionError = (message: ServerErrorMessage): SubscriptionError 
  * set and tore the shared registration out from under the second consumer.
  * Passes `undefined` through so an unset `onError`/`onCheckpoint` stays unset.
  */
-const wrapSubscriber = <A>(callback: ((argument: A) => void) | undefined): ((argument: A) => void) | undefined => {
+function wrapSubscriber<A>(callback: (argument: A) => void): (argument: A) => void;
+function wrapSubscriber<A>(callback: ((argument: A) => void) | undefined): ((argument: A) => void) | undefined;
+function wrapSubscriber<A>(callback: ((argument: A) => void) | undefined): ((argument: A) => void) | undefined {
     if (callback === undefined) {
         return undefined;
     }
@@ -585,7 +588,7 @@ const wrapSubscriber = <A>(callback: ((argument: A) => void) | undefined): ((arg
     return (argument: A): void => {
         callback(argument);
     };
-};
+}
 
 /** Fan an error out to every registered `onError` callback, swallowing throws so one bad listener can't starve the rest. */
 const fanSubscriptionError = (callbacks: Iterable<SubscriptionErrorCallback>, error: SubscriptionError): void => {
@@ -2478,19 +2481,14 @@ class LunoraClient {
         // one, so stopping at the first page would hide exactly the backlog the
         // operator opened it for. Returning `records` alone made this silently
         // truncate the moment the route grew its limit.
-        const records: ScheduleRecord[] = [];
-        let cursor: string | undefined;
-
-        do {
-            const path = cursor === undefined ? SCHEDULED_DEAD_PATH : `${SCHEDULED_DEAD_PATH}?cursor=${encodeURIComponent(cursor)}`;
-            // eslint-disable-next-line no-await-in-loop -- each page's request needs the PRIOR page's cursor; there is nothing to parallelise
-            const body = (await this.adminFetch(path, "GET")) as { cursor?: string; records?: ScheduleRecord[]; truncated?: boolean };
-
-            records.push(...(body.records ?? []));
-            cursor = body.truncated === true ? body.cursor : undefined;
-        } while (cursor !== undefined);
-
-        return records;
+        return await collectPages<ScheduleRecord>(
+            async (cursor) =>
+                (await this.adminFetch(cursor === undefined ? SCHEDULED_DEAD_PATH : `${SCHEDULED_DEAD_PATH}?cursor=${encodeURIComponent(cursor)}`, "GET")) as {
+                    cursor?: string;
+                    records?: ScheduleRecord[];
+                    truncated?: boolean;
+                },
+        );
     }
 
     /**
@@ -3464,7 +3462,7 @@ class LunoraClient {
         // A fresh closure per `subscribe()` call gives each consumer its own
         // slot, its own delivery, and its own unsubscribe. Mirrored below for
         // `onError`/`onCheckpoint`, which have the same shape.
-        const subscriptionCallback = wrapSubscriber(callback as SubscriptionCallback) as SubscriptionCallback;
+        const subscriptionCallback: SubscriptionCallback = wrapSubscriber(callback as SubscriptionCallback);
         const errorCallback = wrapSubscriber(options.onError);
         const checkpointCallback = wrapSubscriber(options.onCheckpoint);
 
