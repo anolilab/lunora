@@ -18,6 +18,7 @@
 
 import { LunoraError } from "@lunora/errors";
 
+import { capErrorBody } from "../../../../shared/cap-error-body";
 import SelectBuilder from "./builder";
 import type { QueryExecutor } from "./query";
 import type { Sql } from "./sql";
@@ -64,23 +65,12 @@ const inferColumns = (rows: Record<string, unknown>[]): R2SqlColumn[] => {
 };
 
 /**
- * How much of the upstream body may be spliced into the error MESSAGE.
- *
- * `R2_SQL_ERROR` is a catalogued, non-internal code, so `toErrorBody` echoes its
- * `message` verbatim to whoever called the action — an uncapped body puts the
- * engine's SQL error text (which quotes the query) or a multi-KB HTML gateway
- * page on the wire to a browser. The full body is kept on `cause`, which
- * `toErrorBody` never serialises, so a server-side log still has all of it.
- */
-const MAX_ERROR_BODY_CHARS = 256;
-
-/** Trim `body` to {@link MAX_ERROR_BODY_CHARS}, marking that it was cut. */
-const capErrorBody = (body: string): string => (body.length > MAX_ERROR_BODY_CHARS ? `${body.slice(0, MAX_ERROR_BODY_CHARS)}… (truncated)` : body);
-
-/**
  * Thrown when R2 SQL responds with a non-2xx status, an `success: false`
  * envelope, or an unparseable body; carries the HTTP `status` and a capped body
  * preview for the caller to surface, with the full body on `cause`.
+ *
+ * The preview is capped because the engine's SQL error text quotes the query
+ * back, and `R2_SQL_ERROR` is non-internal — the message reaches the browser.
  */
 export class R2SqlError extends LunoraError {
     public constructor(status: number, body: string) {

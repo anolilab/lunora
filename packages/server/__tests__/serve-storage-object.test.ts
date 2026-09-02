@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import type { ReadOnlyStorage, ServeStorageObjectOptions, StorageObjectBody } from "../src/index";
+import type { ReadOnlyStorage, StorageObjectBody, StorageServeAuthorizer } from "../src/index";
 import { serveStorageObject } from "../src/index";
 
 interface FakeObjectOptions {
@@ -86,14 +86,14 @@ const ctxWith = (bytes: Uint8Array | null, options: FakeObjectOptions = {}) => {
 const BODY = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
 /** The gate every non-authorization test passes: already-verified, serve it. */
-const ALLOW: ServeStorageObjectOptions = { authorize: () => true };
+const ALLOW: StorageServeAuthorizer = () => true;
 
 describe("serveStorageObject — authorization", () => {
     it("streams nothing and answers 403 when the gate denies — never touching storage", async () => {
         expect.assertions(3);
 
         const { calls, ctx } = ctxWith(BODY);
-        const response = await serveStorageObject(ctx, "k", new Request("https://x/k"), { authorize: () => false });
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k"), () => false);
 
         expect(response.status).toBe(403);
         expect(calls.downloads).toHaveLength(0);
@@ -104,10 +104,8 @@ describe("serveStorageObject — authorization", () => {
         expect.assertions(2);
 
         const { calls, ctx } = ctxWith(BODY);
-        const response = await serveStorageObject(ctx, "k", new Request("https://x/k"), {
-            authorize: () => {
-                throw new Error("verifier exploded");
-            },
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k"), () => {
+            throw new Error("verifier exploded");
         });
 
         expect(response.status).toBe(403);
@@ -120,12 +118,10 @@ describe("serveStorageObject — authorization", () => {
         const { ctx } = ctxWith(BODY);
         const seen: { key: string; url: string }[] = [];
 
-        const response = await serveStorageObject(ctx, "avatars/1.png", new Request("https://x/avatars/1.png?sig=abc"), {
-            authorize: ({ key, request }) => {
-                seen.push({ key, url: request.url });
+        const response = await serveStorageObject(ctx, "avatars/1.png", new Request("https://x/avatars/1.png?sig=abc"), ({ key, request }) => {
+            seen.push({ key, url: request.url });
 
-                return new URL(request.url).searchParams.get("sig") === "abc";
-            },
+            return new URL(request.url).searchParams.get("sig") === "abc";
         });
 
         expect(response.status).toBe(200);
@@ -136,10 +132,10 @@ describe("serveStorageObject — authorization", () => {
     // A gate is mandatory in the type — there is no "forgot to pass one" shape
     // that still compiles, which is what keeps a mounted route from being an
     // open object store.
-    it("requires the authorize option at the type level", () => {
+    it("requires the authorizer at the type level", () => {
         expect.assertions(1);
 
-        expectTypeOf<Parameters<typeof serveStorageObject>[3]>().toEqualTypeOf<ServeStorageObjectOptions>();
+        expectTypeOf<Parameters<typeof serveStorageObject>[3]>().toEqualTypeOf<StorageServeAuthorizer>();
 
         expect(true).toBe(true);
     });

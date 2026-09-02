@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { Plugin } from "vite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { devVariablesPlugin } from "../src/dev-variables-plugin";
+import devVariablesPlugin from "../src/dev-variables-plugin";
 import { lunora } from "../src/index";
 
 const RESOLVED = (projectRoot: string) => {

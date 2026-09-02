@@ -126,4 +126,4 @@ const devVariablesPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     };
 };
 
-export { DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, devVariablesPlugin };
+export default devVariablesPlugin;

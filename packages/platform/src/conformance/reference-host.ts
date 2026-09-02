@@ -259,19 +259,9 @@ const createReferenceHost = (): ReferenceHost => {
     const durableTags = new Map<string, Set<string>>();
 
     /**
-     * Whether the caller owns the transaction currently open on this host.
-     *
-     * Cloudflare's isolation is the input gate: while a mutation holds
-     * `blockConcurrencyWhile`, no other event is delivered to the object, so
-     * nothing else can read the open transaction's uncommitted rows. Neither
-     * this host nor `@lunora/platform-node` has such a gate — dispatch never
-     * enters a host — and both run every caller over one connection, on which
-     * an open transaction's writes are visible to any read another task issues
-     * while the mutation awaits. `ShardSqlExec.exec` is synchronous and so
-     * cannot be queued behind the closure the way Cloudflare queues the whole
-     * dispatch; what it CAN do is refuse, which keeps `ShardHost`'s "no partial
-     * writes are observable" true instead of answering with rows that are about
-     * to roll back.
+     * Whether the caller owns the transaction currently open on this host —
+     * how a gateless host keeps guarantee 2 of the {@link ShardHost} contract
+     * ("no partial writes are observable") — the full reasoning is there.
      *
      * The refusal is coded `SHARD_UNAVAILABLE`/503, not a bare `Error`: the
      * refused read failed only because it arrived while a mutation was

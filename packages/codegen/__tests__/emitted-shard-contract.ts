@@ -88,7 +88,7 @@ class EmittedShardContract extends ShardDO {
      * private.
      */
     private async runMutationTransaction<T>(context: unknown, work: () => Promise<T>): Promise<T> {
-        const settleSchedules = beginDeferredSchedules(context);
+        const settleSchedules = beginDeferredSchedules(context as { scheduler?: unknown });
 
         if (this.isInTransaction()) {
             const nested = await work();

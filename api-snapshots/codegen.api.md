@@ -1337,7 +1337,7 @@ const lintSchema: (options: LintSchemaOptions) => Finding[];
 ### `listLunoraSourceFiles` (const)
 
 ```ts
-const listLunoraSourceFiles: (directory: string, accumulator?: string[], root?: string, visited?: Set<string>) => string[];
+const listLunoraSourceFiles: (directory: string) => string[];
 ```
 
 ### `parseSchemaSnapshot` (const)

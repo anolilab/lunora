@@ -4,6 +4,7 @@ import { collectPages } from "../../../shared/collect-pages";
 import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { CronTarget, LunoraSchedulerOptions, RunOptions, Scheduler, ScheduleRecord, ScheduleTargetArgs } from "./types";
 import { isWorkflowReference } from "./types";
+import assertScheduleDelay from "./validate-delay";
 
 /**
  * Client-side scheduler — forwards `runAfter` / `runAt` / `cancel` calls to a
@@ -72,9 +73,7 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
     };
 
     const runAfter = async <T extends CronTarget>(delayMs: number, target: T, args: ScheduleTargetArgs<T>, options_: RunOptions = {}): Promise<string> => {
-        if (!Number.isFinite(delayMs) || delayMs < 0) {
-            throw new LunoraError("INTERNAL", "@lunora/scheduler: `delayMs` must be a non-negative finite number");
-        }
+        assertScheduleDelay(delayMs, "ctx.scheduler.runAfter");
 
         return runAt(Date.now() + delayMs, target, args, options_);
     };

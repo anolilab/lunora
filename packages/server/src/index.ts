@@ -40,10 +40,10 @@ export type {
     LunoraHttpApp,
     LunoraHttpEnv,
     LunoraRouteHandler,
-    ServeStorageObjectOptions,
-    StorageServeAuthzContext,
 } from "./http";
-export { httpAction, httpRoute, httpRouter, isSafeHeaderValue, serveStorageObject } from "./http";
+export { httpAction, httpRoute, httpRouter, isSafeHeaderValue } from "./http";
+export type { StorageServeAuthorizer, StorageServeAuthzContext } from "./http-storage";
+export { serveStorageObject } from "./http-storage";
 export type { DefineIdentityOptions, IdentityContract, IdentityRejectMode, IdentityValidation, InferIdentity } from "./identity";
 export { defineIdentity } from "./identity";
 export type { LifecycleHandler, ShardInitHandler } from "./lifecycle";

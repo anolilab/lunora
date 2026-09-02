@@ -934,7 +934,6 @@ const paidSocketRefusal = (functionPath: string, verb: "streamed" | "subscribed"
  * its own answers. A client that sent none falls back to its connection, which
  * isolates correctly and simply cannot resume.
  */
-
 const anonymousStreamCaller = (attachment: SocketAttachment, streamId: string): string =>
     attachment.clientId === undefined ? `conn:${attachment.connectionId ?? streamId}` : `client:${attachment.clientId}`;
 
@@ -1093,18 +1092,22 @@ abstract class ShardDO {
      * budget**, not this number: every registration is persisted in the
      * hibernation attachment as `{functionPath, table, args, sinceSeq,
      * sinceEpoch}` beside `connectionId`/`userId`/`identity`/`clientId`/
-     * `context`/`whispers`, and a realistic subscription record (a function
-     * path, one id argument, a limit, a cursor and an epoch uuid) costs ~190
-     * structured-clone bytes — so an attachment carrying 12 of them serializes
-     * to ~2.3 KB and the runtime refuses it. The previous ceiling of 32 was
-     * therefore unreachable: subscriptions 11+ failed the serialize instead,
-     * one `SUBSCRIPTION_PERSIST_FAILED` at a time.
+     * `context`/`whispers`. A realistic subscription record (a function path,
+     * one id argument, a limit, a cursor and an epoch uuid) costs ~200
+     * structured-clone bytes, so the old ceiling of 32 was unreachable — that
+     * attachment serializes to ~6.7 KB, and the socket would have failed the
+     * serialize somewhere in the low teens instead, one
+     * `SUBSCRIPTION_PERSIST_FAILED` at a time.
      *
-     * 8 leaves room for the fixed fields and for a subscription whose args are
-     * larger than the average. Past that the budget is enforced where it
-     * actually binds — `subscribe`/`shapeSubscribe` roll the registry back on a
-     * serialize throw and answer `SUBSCRIPTION_PERSIST_FAILED` — because no
-     * fixed count can bound a record whose `args` the client chooses.
+     * 8 fits a plain authenticated socket (~1.8 KB) with room for a subscription
+     * whose args are larger than the average. It does NOT fit every socket: add
+     * identity claims, app `context` and whisper topics and the same 8 overflow.
+     * That is by design — no fixed count can bound a record whose `args` the
+     * client chooses, so the budget is enforced where it actually binds:
+     * `subscribe`/`shapeSubscribe` roll the registry back on a serialize throw
+     * and answer `SUBSCRIPTION_PERSIST_FAILED`.
+     *
+     * All three numbers are asserted in `__tests__/shard-do.subscription-cap.test.ts`.
      */
     protected static readonly MAX_SUBSCRIPTIONS_PER_SOCKET = 8;
 

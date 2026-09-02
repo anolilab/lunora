@@ -816,7 +816,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
          * scheduler flush.
          */
         private async runMutationTransaction<T>(ctx: unknown, work: () => Promise<T>): Promise<T> {
-            const settleSchedules = beginDeferredSchedules(ctx);
+            const settleSchedules = beginDeferredSchedules(ctx as { scheduler?: unknown });
 
             if (this.isInTransaction()) {
                 try {
@@ -1280,7 +1280,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // while a transaction is (see `runMutationTransaction`).
             //
             // Wrapped OUTSIDE the read-stamping facade so `get`/`list` stay stamped.
-            const scheduler = (contextKind === "mutation" || contextKind === "action" ? withDeferredSchedules(schedulerBase) : schedulerBase) as SchedulerLike;
+            const scheduler = contextKind === "mutation" || contextKind === "action" ? withDeferredSchedules(schedulerBase) : schedulerBase;
             // Build the storage adapter once and share it between `ctx.storage`
             // and `ctx.db.system._storage` so both read the same R2 binding. The
             // `storageStub` fallback satisfies SystemReaderStorageLike structurally

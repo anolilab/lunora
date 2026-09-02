@@ -23,27 +23,6 @@ import { effectiveColumnKind, sqliteDecode, sqliteEncode } from "./value-codec";
 /** Logical field → physical column name (`_id`/`id` → `id`; everything else, incl. `_creationTime`, is itself). */
 const physicalColumn = (field: string): string => (field === "_id" || field === "id" ? "id" : field);
 
-/**
- * The optimistic-concurrency row version every global table carries alongside
- * `id`/`_creationTime`.
- *
- * The CAS used to bind one parameter per physical column of the snapshot, so an
- * `UPDATE` on a wide table bound `2N+2` parameters — over D1's 100-per-statement
- * ceiling (workerd's `SQLITE_LIMIT_VARIABLE_NUMBER`) from 50 declared fields up,
- * while `INSERT` at the same width stayed under it. The table provisioned, rows
- * inserted, and the first `patch`/`replace`/soft-`delete` died with a raw
- * `too many SQL variables` that redacts to "Internal error" on the way out.
- *
- * Guarding on this one column instead makes the CAS cost two parameters at any
- * width. Every guarded write bumps it in SQL (`COALESCE(<col>, 0) + 1`), which
- * costs no parameter of its own; `INSERT` leaves it NULL, and the NULL-safe
- * comparison handles both that and rows written before the column existed.
- *
- * Not decoded into documents — {@link decodeGlobalRow} builds its result from
- * the declared shape, so an undeclared physical column is invisible to callers.
- */
-const OCC_VERSION_COLUMN = "_version";
-
 /** Logical-field → physical column reference as a drizzle {@link SQL}; the engine's dialect quotes it at render time (`_id`/`id` → `id`). */
 const columnRefSql = (field: string): SQL => sql`${sql.identifier(physicalColumn(field))}`;
 
@@ -356,7 +335,6 @@ export {
     decodeRow,
     decodeRows,
     forEachRowPaged,
-    OCC_VERSION_COLUMN,
     physicalColumn,
     queryAll,
     queryBatch,
@@ -364,3 +342,5 @@ export {
     serializeColumnValue,
     tableColumns,
 };
+
+export { OCC_VERSION_COLUMN } from "../../../shared/occ-version-column";

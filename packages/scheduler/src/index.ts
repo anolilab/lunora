@@ -42,3 +42,4 @@ export type {
 } from "./types";
 export { isWorkflowReference } from "./types";
 export { assertValidCronExpression, isValidCronExpression, warnIfSecondsLeading } from "./validate-cron";
+export { default as assertScheduleDelay } from "./validate-delay";

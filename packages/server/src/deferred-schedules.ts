@@ -1,4 +1,4 @@
-import { LunoraError } from "@lunora/errors";
+import { assertScheduleDelay } from "@lunora/scheduler";
 
 /**
  * `ctx.scheduler.runAfter(0, …)` — documented as "the deterministic equivalent
@@ -70,14 +70,34 @@ interface DeferredScheduleContext {
 }
 
 /**
+ * The scheduler surface the facade wraps — the two methods it intercepts, plus
+ * whatever else the concrete scheduler carries (spread through untouched).
+ *
+ * A structural mirror rather than an import: `@lunora/scheduler`'s `Scheduler`,
+ * `@lunora/shard-engine`'s `SchedulerLike` and the test harness's fake all reach
+ * here, and their `target`/`args` parameters disagree. `never` parameters accept
+ * every one of them while still pinning the shape and the `Promise<string>` a
+ * caller depends on.
+ */
+interface SchedulerLike {
+    runAfter: (delayMs: number, target: never, args?: never, options?: never) => Promise<string>;
+    runAt: (timestampMs: number, target: never, args?: never, options?: never) => Promise<string>;
+}
+
+/**
  * Wrap a scheduler so `runAfter`/`runAt` can be held for a transaction.
  *
  * Call once per dispatch, OUTSIDE the read-stamping wrapper: the spread reads
  * through that proxy's `get` trap, so `get`/`list` stay stamped.
+ *
+ * Generic so the facade comes back as the SAME scheduler type it was handed:
+ * every method but `runAfter`/`runAt` is spread through unchanged, and a caller
+ * that had to widen to `unknown` and cast back — the generated shard among them
+ * — could not be type-checked against the contract this docblock describes.
  * @param scheduler the `ctx.scheduler` implementation to wrap
  */
-export const withDeferredSchedules = (scheduler: unknown): unknown => {
-    const inner = (scheduler ?? {}) as Record<string, unknown>;
+export const withDeferredSchedules = <S extends SchedulerLike>(scheduler: S): S => {
+    const inner = scheduler as unknown as Record<string, unknown>;
     const queue: ScheduleQueue = { depth: 0, pending: [] };
 
     const call = (method: "runAfter" | "runAt", when: number, target: unknown, args: unknown, options: unknown): Promise<string> =>
@@ -108,14 +128,11 @@ export const withDeferredSchedules = (scheduler: unknown): unknown => {
     const facade: Record<string, unknown> = {
         ...inner,
         runAfter: (delayMs: number, target: unknown, args?: unknown, options?: Record<string, unknown>): Promise<string> => {
-            // Restated rather than left to the underlying scheduler: buffered, the
+            // Run here rather than left to the underlying scheduler: buffered, the
             // guard would not fire until the flush — which runs AFTER the commit,
             // turning a caller's bad argument into a 500 on a mutation that already
-            // succeeded. `@lunora/scheduler` and the test harness's fake scheduler
-            // carry the same guard for the same reason.
-            if (!Number.isFinite(delayMs) || delayMs < 0) {
-                throw new LunoraError("INVALID_INPUT", "ctx.scheduler.runAfter: `delayMs` must be a non-negative finite number");
-            }
+            // succeeded.
+            assertScheduleDelay(delayMs, "ctx.scheduler.runAfter");
 
             return schedule("runAfter", delayMs, target, args, options);
         },
@@ -127,7 +144,9 @@ export const withDeferredSchedules = (scheduler: unknown): unknown => {
 
     queues.set(facade, queue);
 
-    return facade;
+    // The facade is `inner` plus two overrides on the same prototype, so it is
+    // the same scheduler by every structural measure the caller can apply.
+    return facade as unknown as S;
 };
 
 /**
@@ -143,8 +162,8 @@ export const withDeferredSchedules = (scheduler: unknown): unknown => {
  * needs no branch.
  * @param context the dispatch context whose `scheduler` carries the queue
  */
-export const beginDeferredSchedules = (context: unknown): ((committed: boolean) => Promise<void>) => {
-    const { scheduler } = (context ?? {}) as DeferredScheduleContext;
+export const beginDeferredSchedules = (context: DeferredScheduleContext): ((committed: boolean) => Promise<void>) => {
+    const { scheduler } = context;
     const queue = typeof scheduler === "object" && scheduler !== null ? queues.get(scheduler) : undefined;
 
     if (!queue) {
