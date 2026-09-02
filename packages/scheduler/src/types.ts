@@ -86,7 +86,12 @@ export interface RetryPolicy {
     backoff?: "exponential" | "linear";
     /** Base delay in milliseconds for the first retry. Default `30_000`. */
     baseMs?: number;
-    /** Maximum number of dispatch attempts before dead-lettering. Default `5`. */
+
+    /**
+     * Maximum number of **retries** after the initial dispatch. Default `5`, so
+     * a job that keeps failing is dispatched 6 times in total before it is
+     * dead-lettered (the park happens once `attempts > maxAttempts`).
+     */
     maxAttempts?: number;
     /** Optional ceiling clamping the computed backoff delay. */
     maxMs?: number;
