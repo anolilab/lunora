@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { userCreatingMutationWithoutCaptcha } from "@lunora/advisor";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -16,7 +17,8 @@ import discoverProcedureMiddleware from "../../src/discover/procedure-middleware
 const PREAMBLE = `
     declare const rateLimit: (options?: unknown) => (options: { ctx: unknown }) => unknown;
     declare const dbRateLimit: (config?: unknown, name?: unknown, options?: unknown) => (options: { ctx: unknown }) => unknown;
-    declare const verifyTurnstile: (options?: unknown) => (options: { ctx: unknown }) => unknown;
+    declare const verifyTurnstile: (options?: unknown) => Promise<{ success: boolean }>;
+    declare const verifyTurnstileMiddleware: (options?: unknown) => (options: { ctx: unknown }) => unknown;
     declare const protectPublic: (options: { rateLimit?: unknown; captcha?: unknown }) => (options: { ctx: unknown }) => unknown;
     declare const mutation: <R>(config: { args: Record<string, unknown>; handler: (ctx: unknown) => R }) => { kind: "mutation" };
 
@@ -345,6 +347,28 @@ const DB_RATE_LIMITED = `${PREAMBLE}
         .use(dbRateLimit({}, "send"))
         .mutation(async ({ ctx }) => {
             await ctx.db.insert("messages", {});
+        });
+`;
+
+/**
+ * `.use(verifyTurnstile(...))` — the async verdict FUNCTION, not a middleware.
+ * The chain holds a Promise and nothing is verified, so this must NOT read as a
+ * captcha check.
+ */
+const VERDICT_FUNCTION_SIGNUP = `${PREAMBLE}
+    export const signUp = c.mutation
+        .use(verifyTurnstile({ secret: "s", token: "t" }))
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("users", {});
+        });
+`;
+
+/** `.use(verifyTurnstileMiddleware(...))` — the real `.use()`-able guard. */
+const MIDDLEWARE_SIGNUP = `${PREAMBLE}
+    export const signUp = c.mutation
+        .use(verifyTurnstileMiddleware({ secret: "s", token: (c2: { args: { t: string } }) => c2.args.t }))
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("users", {});
         });
 `;
 
@@ -821,5 +845,24 @@ describe("discoverProcedureMiddleware", () => {
         expect(found[0]?.unboundedAiGeneration).toBeUndefined();
         expect(found[0]?.usesInsertManyUnsafe).toBeUndefined();
         expect(found[0]?.writesUserTable).toBeUndefined();
+    });
+
+    // `verifyTurnstile` is `@lunora/auth`'s async verdict function; only
+    // `verifyTurnstileMiddleware` is `.use()`-able. Counting the former as
+    // protection silenced the lint for a procedure with no captcha check at all.
+    it.each([
+        ["the bare verdict function is not a captcha check", VERDICT_FUNCTION_SIGNUP, 1],
+        ["the middleware is", MIDDLEWARE_SIGNUP, 0],
+    ])("feeds user_creating_mutation_without_captcha: %s", (_label, source, expected) => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "signup.ts"), source, "utf8");
+
+        const findings = userCreatingMutationWithoutCaptcha.run({
+            procedureProtections: discoverProcedureMiddleware(project, join(workdir, "lunora")),
+            schema: { tables: [] },
+        });
+
+        expect(findings).toHaveLength(expected);
     });
 });

@@ -1008,6 +1008,33 @@ describe("rls — write path", () => {
             name: "LunoraError",
         });
     });
+
+    it("compares a Date-valued predicate by equality instead of matching every row", async () => {
+        expect.assertions(2);
+
+        // A `Date` (like a `Uint8Array` or a `Map`) has no own enumerable keys.
+        // Under a `typeof value === "object"` plain-object test it counted as an
+        // operator bag, `every` over zero keys was vacuously true, and the
+        // predicate matched EVERY candidate row — so this policy allowed an
+        // insert carrying any `createdAt` at all.
+        const cutoff = new Date("2024-01-01T00:00:00.000Z");
+        const policy = definePolicy<TestContext>({
+            on: "insert",
+            table: "documents",
+            when: () => {
+                return { createdAt: cutoff };
+            },
+        });
+        const database = createFakeDatabase([]);
+        const insert = insertWithPolicy(policy);
+
+        // A different instant must be denied…
+        await expect(insert({ createdAt: new Date("2025-06-01T00:00:00.000Z"), title: "x" }).handler(makeContext(database, "u1"), {})).rejects.toMatchObject({
+            code: "FORBIDDEN",
+        });
+        // …and the matching value must still be allowed (equality, not "deny all").
+        await expect(insert({ createdAt: cutoff, title: "x" }).handler(makeContext(database, "u1"), {})).resolves.toBeDefined();
+    });
 });
 
 describe("rls — batch write path", () => {

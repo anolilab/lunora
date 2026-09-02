@@ -161,21 +161,21 @@ const listSecurityScanFiles = (lunoraDirectory: string): ScannedSourceFile[] => 
 };
 
 /**
- * Shared driver for the per-call-site feeders: walk every lunora source file
- * (via {@link listLunoraSourceFiles}), resolve each into the shared `Project`
- * (reusing an already-added `SourceFile`), and map every `CallExpression`
- * descendant through `rowOf` with the file's lunora-relative path — rows kept
- * in encounter order.
+ * Resolve each file into the shared `Project` (reusing an already-added
+ * `SourceFile`) and map every `CallExpression` descendant through `rowOf` with
+ * the file's display path — rows kept in encounter order.
+ *
+ * The file set is the caller's choice: {@link collectCallRows} passes the
+ * function file set, {@link collectSecurityCallRows} the wider security one.
  */
-const collectCallRows = <Row>(project: Project, lunoraDirectory: string, rowOf: (call: CallExpression, relativePath: string) => Row | undefined): Row[] => {
+const collectRowsFrom = <Row>(project: Project, files: ScannedSourceFile[], rowOf: (call: CallExpression, relativePath: string) => Row | undefined): Row[] => {
     const rows: Row[] = [];
 
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
+    for (const { displayPath, filePath } of files) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
         for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-            const row = rowOf(call, relativePath);
+            const row = rowOf(call, displayPath);
 
             if (row !== undefined) {
                 rows.push(row);
@@ -185,6 +185,31 @@ const collectCallRows = <Row>(project: Project, lunoraDirectory: string, rowOf: 
 
     return rows;
 };
+
+/**
+ * Shared driver for the per-call-site feeders: walk every lunora source file
+ * (via {@link listLunoraSourceFiles}) and map every `CallExpression` descendant
+ * through `rowOf` with the file's lunora-relative path.
+ */
+const collectCallRows = <Row>(project: Project, lunoraDirectory: string, rowOf: (call: CallExpression, relativePath: string) => Row | undefined): Row[] =>
+    collectRowsFrom(
+        project,
+        listLunoraSourceFiles(lunoraDirectory).map((filePath) => {
+            return { displayPath: lunoraRelativePath(lunoraDirectory, filePath), filePath };
+        }),
+        rowOf,
+    );
+
+/**
+ * The {@link collectCallRows} driver over the *security* file set — `lunora/`
+ * plus the worker entry (see {@link listSecurityScanFiles}) — for a feeder
+ * whose call sites are conventionally built in the entry, not under `lunora/`.
+ */
+const collectSecurityCallRows = <Row>(
+    project: Project,
+    lunoraDirectory: string,
+    rowOf: (call: CallExpression, relativePath: string) => Row | undefined,
+): Row[] => collectRowsFrom(project, listSecurityScanFiles(lunoraDirectory), rowOf);
 
 /**
  * Export binding name of the exported, top-level function that lexically contains
@@ -465,6 +490,7 @@ const stringPropertyFor =
 
 export {
     collectCallRows,
+    collectSecurityCallRows,
     defaultExportExpression,
     enclosingExportName,
     handlerOf,

@@ -622,17 +622,18 @@ describe("dispatchQueueBatch — poison message isolation (deterministic dispatc
     it("redacts the dropped-message log and names the real disposition", async () => {
         expect.assertions(6);
 
-        // A non-envelope 4xx body: `toDispatchError` cannot parse it, so it
-        // falls back to an INTERNAL-coded error carrying the upstream response
-        // text VERBATIM. That text is whatever the upstream wrote — here a
-        // bearer token — and the drop log is a Workers log line, so it must go
-        // through the same redaction every other error-to-output path uses.
+        // A deterministic 4xx envelope whose INTERNAL-coded message carries the
+        // upstream response text VERBATIM. That text is whatever the upstream
+        // wrote — here a bearer token — and the drop log is a Workers log line,
+        // so it must go through the same redaction every other error-to-output
+        // path uses. (A non-envelope body is no longer deterministic, so it
+        // would be retried rather than dropped and never reach this log.)
         const secret = "Bearer sk-live-4f9c1a";
         const leakyFetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
             const { args } = JSON.parse((init?.body ?? "{}") as string) as { args?: { id?: string } };
 
             if (args?.id === "m2") {
-                return new Response(`upstream rejected: authorization=${secret}`, { status: 400 });
+                return Response.json({ error: { code: "INTERNAL", message: `upstream rejected: authorization=${secret}` } }, { status: 400 });
             }
 
             return Response.json({ ok: true });

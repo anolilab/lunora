@@ -15,6 +15,13 @@ const REPO_ROOT = join(__dirname, "..", "..", "..");
 // their own apps. Extend this set, don't reintroduce a directory allowlist,
 // when a root walk turns up a new build/vendor tree that is noise-only.
 const SKIP_DIRECTORIES = new Set([
+    // Agent scratch space, and the second place git worktrees are checked out
+    // (`git worktree list` shows both `.claude/worktrees/*` and `.worktrees/*`).
+    // A worktree is a whole other branch's checkout of this same repo, so
+    // walking one makes a code minted on a sibling branch fail THIS branch's
+    // gate — locally only, since CI checks out one branch. Skipping `.claude`
+    // drops 12,312 of the 15,344 files this walk used to read.
+    ".claude",
     ".git",
     ".history",
     ".vis",

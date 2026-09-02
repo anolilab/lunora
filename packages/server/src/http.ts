@@ -36,10 +36,26 @@ type HttpMethod = "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PU
  * the helper even on the branches that never went near storage.
  */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
-type HttpActionCtx = Pick<ActionContext, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery"> & {
+type HttpActionCtx = {
     readonly scheduler?: ActionContext["scheduler"];
     readonly storage?: ActionContext["storage"];
-};
+
+    /**
+     * The request's `ExecutionContext.waitUntil` — keep a promise alive past the
+     * returned `Response`. Present whenever the host supplied one (a real
+     * Cloudflare `ExecutionContext` always does; a partial context from a
+     * framework mount seam or a unit test may not), hence optional.
+     *
+     * An HTTP action is the one ctx that routinely returns before its work is
+     * done — "acknowledge the webhook in 200ms, then do the real thing" — and
+     * without this a handler had no way to defer anything: work started and not
+     * awaited is cancelled when the response resolves. Wrappers that need it
+     * (`@lunora/x402`'s `withX402`, whose receipt sink must outlive the
+     * response) read it structurally off whatever context they are handed, so
+     * its absence made them silently no-op rather than fail.
+     */
+    readonly waitUntil?: (promise: Promise<unknown>) => void;
+} & Pick<ActionContext, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery">;
 
 /** A raw handler wrapped by {@link httpAction}. Receives the raw request, returns the raw response. */
 type HttpActionHandler = (context: HttpActionCtx, request: Request) => Promise<Response> | Response;

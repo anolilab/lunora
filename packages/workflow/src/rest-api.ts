@@ -25,6 +25,20 @@ import type { WorkflowInstanceStatus } from "./types";
 const API_BASE = "https://api.cloudflare.com/client/v4/accounts";
 
 /**
+ * How much of the upstream body may be spliced into the error MESSAGE.
+ *
+ * `WORKFLOWS_REST_ERROR` is a catalogued, non-internal code, so `toErrorBody`
+ * echoes its `message` verbatim to whoever called the action — an uncapped body
+ * puts the Cloudflare API's auth/authorization error text or a multi-KB HTML
+ * gateway page on the wire to a browser. The full body is kept on `cause`, which
+ * `toErrorBody` never serialises, so a server-side log still has all of it.
+ */
+const MAX_ERROR_BODY_CHARS = 256;
+
+/** Trim `body` to {@link MAX_ERROR_BODY_CHARS}, marking that it was cut. */
+const capErrorBody = (body: string): string => (body.length > MAX_ERROR_BODY_CHARS ? `${body.slice(0, MAX_ERROR_BODY_CHARS)}… (truncated)` : body);
+
+/**
  * The Cloudflare instance statuses as an exhaustive lookup. The `satisfies`
  * assertion against the status union makes adding a member to the union without
  * listing it here a **compile error**, so the set can never silently drift from
@@ -140,10 +154,14 @@ export interface WorkflowInstancePage {
     totalCount?: number;
 }
 
-/** Thrown when the REST API responds non-2xx or `success: false`; carries the status plus body for the caller to surface. */
+/** Thrown when the REST API responds non-2xx or `success: false`; carries the status plus a capped body preview, with the full body on `cause`. */
 export class WorkflowsRestError extends LunoraError {
     public constructor(status: number, body: string) {
-        super("WORKFLOWS_REST_ERROR", `Cloudflare Workflows REST API returned ${String(status)}: ${body}`, { name: "WorkflowsRestError", status });
+        super("WORKFLOWS_REST_ERROR", `Cloudflare Workflows REST API returned ${String(status)}: ${capErrorBody(body)}`, {
+            cause: body,
+            name: "WorkflowsRestError",
+            status,
+        });
     }
 }
 

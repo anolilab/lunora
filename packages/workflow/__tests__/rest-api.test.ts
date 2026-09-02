@@ -159,6 +159,27 @@ describe("createWorkflowsRestClient", () => {
         await expect(client.listInstances({ workflowName: "wf" })).rejects.toThrow(WorkflowsRestError);
     });
 
+    it("caps the upstream body in the message and keeps the whole of it on cause", async () => {
+        expect.assertions(4);
+
+        // `WORKFLOWS_REST_ERROR` is a catalogued (non-internal) code, so
+        // `toErrorBody` echoes this message VERBATIM to whoever called the
+        // action — an uncapped body puts a multi-KB gateway page, or the
+        // Cloudflare API's auth error text, on the wire to a browser.
+        const body = `<html>${"A".repeat(10_000)}</html>`;
+        const { fetch } = fakeFetch(502, body);
+        const client = createWorkflowsRestClient({ accountId: "acc", apiToken: "tok", fetch });
+
+        const error = (await client.listInstances({ workflowName: "wf" }).catch((error_: unknown) => error_)) as WorkflowsRestError;
+
+        expect(error).toBeInstanceOf(WorkflowsRestError);
+        expect(error.status).toBe(502);
+        expect(error.message.length).toBeLessThan(400);
+        // The full text is still available server-side, on `cause` — which
+        // `toErrorBody` never serialises.
+        expect(error.cause).toBe(body);
+    });
+
     it("calls the global fetch bound to globalThis (no `this`-strict 'Illegal invocation')", async () => {
         // A receiver-strict `fetch` throws TypeError unless invoked with the global
         // as its receiver. We model that here and rely on the default (no injected

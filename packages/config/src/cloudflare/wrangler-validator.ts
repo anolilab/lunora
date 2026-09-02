@@ -14,6 +14,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
+import { isEnvEnabled } from "../../../../shared/env-flag";
 import { WORKER_ENTRY_FALLBACKS } from "../infer-bindings";
 import join from "../path";
 import type { SchemaInfo } from "../schema-info";
@@ -1173,9 +1174,6 @@ const withTailConsumer = (wrangler: WranglerConfig, consumer: TailConsumer): Wra
     return { ...wrangler, tail_consumers: [...existing, consumer] };
 };
 
-/** Env values that read as "on" for a boolean-ish `LUNORA_*` flag — mirrors the DO security audit. */
-const TRUTHY_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
-
 /**
  * Reject the one CORS combination the worker cannot enforce: a `*` wildcard
  * origin paired with credentials. The runtime's `resolveSecurity` throws on the
@@ -1195,7 +1193,7 @@ const validateCorsVariables = (wrangler: WranglerConfig, errors: string[]): void
     const allowCredentials = vars["LUNORA_CORS_ALLOW_CREDENTIALS"];
 
     const hasWildcard = typeof allowedOrigins === "string" && allowedOrigins.split(",").some((entry) => entry.trim() === "*");
-    const credentialsOn = typeof allowCredentials === "string" && TRUTHY_ENV_VALUES.has(allowCredentials.trim().toLowerCase());
+    const credentialsOn = isEnvEnabled(allowCredentials);
 
     if (hasWildcard && credentialsOn) {
         errors.push(

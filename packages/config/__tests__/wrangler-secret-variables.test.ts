@@ -4,7 +4,64 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { isPublicKeyName, isSecretKeyName } from "../../../shared/secret-key";
 import { collectWranglerSecretVariables, scanWranglerVariablesForSecrets } from "../src/cloudflare/wrangler-secret-variables";
+
+/**
+ * The key-name classifier is `shared/secret-key.ts` — the SAME function
+ * `lunora deploy` builds its required-secrets list from and `@lunora/server`
+ * redacts a thrown env error with. This module used to carry a second,
+ * materially different rule under the same name, so the cases below are the ones
+ * the two disagreed on: a deploy that "succeeded" then crashed on an unset
+ * `SENTRY_DSN`, and a deploy blocked as missing a `STRIPE_PUBLISHABLE_KEY` that
+ * is meant to ship in cleartext.
+ */
+describe("isSecretKeyName (shared/secret-key)", () => {
+    it("treats a whole-word secret name as a secret, whatever the separator convention", () => {
+        expect.assertions(8);
+
+        expect(isSecretKeyName("SENTRY_DSN")).toBe(true);
+        expect(isSecretKeyName("SMTP_PASSWD")).toBe(true);
+        expect(isSecretKeyName("GOOGLE_CREDENTIALS")).toBe(true);
+        expect(isSecretKeyName("BACKUP_PASSPHRASE")).toBe(true);
+        expect(isSecretKeyName("auth-token")).toBe(true);
+        // camelCase splits on the case boundary, so `apiToken` is not config.
+        expect(isSecretKeyName("apiToken")).toBe(true);
+        // Run-together spellings no word split recovers.
+        expect(isSecretKeyName("OPENAI_APIKEY")).toBe(true);
+        expect(isSecretKeyName("MYPASSWORD")).toBe(true);
+    });
+
+    it("treats a compound *_KEY suffix as a secret but a bare KEY as ordinary config", () => {
+        expect.assertions(6);
+
+        expect(isSecretKeyName("OPENAI_API_KEY")).toBe(true);
+        expect(isSecretKeyName("AWS_SECRET_ACCESS_KEY")).toBe(true);
+        expect(isSecretKeyName("apiKey")).toBe(true);
+        // The over-match that blocked a non-interactive deploy on a value the
+        // worker never needed as a secret.
+        expect(isSecretKeyName("PARTITION_KEY")).toBe(false);
+        expect(isSecretKeyName("IDEMPOTENCY_KEY")).toBe(false);
+        expect(isSecretKeyName("MONKEY")).toBe(false);
+    });
+
+    it("exempts a name that advertises itself as public/publishable", () => {
+        expect.assertions(4);
+
+        expect(isSecretKeyName("STRIPE_PUBLISHABLE_KEY")).toBe(false);
+        expect(isSecretKeyName("NEXT_PUBLIC_API_KEY")).toBe(false);
+        expect(isPublicKeyName("NEXT_PUBLIC_API_KEY")).toBe(true);
+        expect(isPublicKeyName("STRIPE_SECRET_KEY")).toBe(false);
+    });
+
+    it("stays anchored on whole words, so an ordinary word that merely contains one is config", () => {
+        expect.assertions(3);
+
+        expect(isSecretKeyName("SECRETARY")).toBe(false);
+        expect(isSecretKeyName("TOKENIZER")).toBe(false);
+        expect(isSecretKeyName("DATABASE_URL")).toBe(false);
+    });
+});
 
 describe("scanWranglerVariablesForSecrets", () => {
     it("flags a value that matches a known secret shape", () => {

@@ -10,6 +10,24 @@ describe("heuristic scorers", () => {
         expect(containsScorer("Shipped", { caseSensitive: true }).score({ output: "it shipped" })).toBe(0);
     });
 
+    it("containsScorer refuses an empty needle", () => {
+        expect.assertions(1);
+
+        // Every string contains "", so this used to score every output a silent 1.
+        expect(() => containsScorer("")).toThrow("requires a non-empty needle");
+    });
+
+    it("regexScorer is stateless across samples even with a /g pattern", () => {
+        expect.assertions(2);
+
+        // `.test()` on a /g regex advances `lastIndex`, so the same scorer used to
+        // score every second matching sample 0.
+        const scorer = regexScorer(/order #\d+/gu);
+
+        expect(scorer.score({ output: "your order #42 shipped" })).toBe(1);
+        expect(scorer.score({ output: "your order #43 shipped" })).toBe(1);
+    });
+
     it("regexScorer scores 1 on a match", () => {
         expect.assertions(2);
 
@@ -55,12 +73,12 @@ describe(llmScorer, () => {
         expect(judge.mock.calls[0]?.[0]).toContain("It shipped.");
     });
 
-    it("clamps a garbage judge reply to 0", async () => {
+    it("fails the eval on a garbage judge reply rather than inventing a verdict", async () => {
         expect.assertions(1);
 
         const scorer = llmScorer({ criteria: "x", judge: async () => "no idea" });
 
-        await expect(scorer.score({ output: "y" })).resolves.toStrictEqual({ reason: "no idea", score: 0 });
+        await expect(scorer.score({ output: "y" })).rejects.toThrow("did not answer with a score in [0, 1]");
     });
 
     it("does not mis-score a reply whose leading number isn't the verdict", async () => {
@@ -70,7 +88,20 @@ describe(llmScorer, () => {
 
         const scorer = llmScorer({ criteria: "x", judge: async () => "Order #42 handled well — 0.8" });
 
-        await expect(scorer.score({ output: "y" })).resolves.toStrictEqual({ reason: "Order #42 handled well — 0.8", score: 0 });
+        await expect(scorer.score({ output: "y" })).rejects.toThrow("did not answer with a score in [0, 1]");
+    });
+
+    it("refuses an out-of-range or non-verdict leading number instead of clamping it to 1", async () => {
+        expect.assertions(3);
+
+        // "7/10" used to clamp to a perfect 1; "1." is a numbered list, not a score.
+        await expect(llmScorer({ criteria: "x", judge: async () => "7/10" }).score({ output: "y" })).rejects.toThrow("did not answer with a score in [0, 1]");
+        await expect(llmScorer({ criteria: "x", judge: async () => "1. The answer is wrong" }).score({ output: "y" })).rejects.toThrow(
+            "did not answer with a score in [0, 1]",
+        );
+        await expect(llmScorer({ criteria: "x", judge: async () => "-2 - terrible" }).score({ output: "y" })).rejects.toThrow(
+            "did not answer with a score in [0, 1]",
+        );
     });
 });
 

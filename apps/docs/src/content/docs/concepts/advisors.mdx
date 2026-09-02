@@ -80,22 +80,16 @@ Run against the declared schema alone: deterministic, no running shard needed.
 
 Need observed signal from a live shard, aggregated by the Studio backend.
 
-| Lint                   | Level     | Detects                                                                                                                                                                           |
-| ---------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hot_shard`            | warn      | One shard takes >50% of a `shardBy(...)` function's traffic while siblings idle (fires above a minimum request volume).                                                           |
-| `index_utilization`    | info/warn | Two checks: a **dead index** with zero recorded reads (info), and a **hot unindexed scan**, a table full-scanned ≥25× with no index (warn).                                       |
-| `constraint_validator` | warn      | Sampled rows that violate a declared constraint: a dangling foreign key, a null in a non-optional column, or a duplicate on a unique index. **Not currently active** — see below. |
-| `fan_out_breadth`      | warn      | A shard group with enough active shards that a cross-shard read over it would approach the per-invocation internal-subrequest ceiling.                                            |
+| Lint                | Level     | Detects                                                                                                                                     |
+| ------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hot_shard`         | warn      | One shard takes >50% of a `shardBy(...)` function's traffic while siblings idle (fires above a minimum request volume).                     |
+| `index_utilization` | info/warn | Two checks: a **dead index** with zero recorded reads (info), and a **hot unindexed scan**, a table full-scanned ≥25× with no index (warn). |
+| `fan_out_breadth`   | warn      | A shard group with enough active shards that a cross-shard read over it would approach the per-invocation internal-subrequest ceiling.      |
 
 <Callout type="warn">
-    `constraint_validator` is declared but does not currently run, and it is missing **two** inputs, not one. It needs sampled rows from each table, which the
-    Studio does not gather (reading a sample of every table on each Advisors load is a real cost, and it has not been taken) — and it needs the schema, which
-    the Studio passes as `{ tables: [] }`, so it cannot resolve a table's columns, relations, or unique indexes either. Supplying samples alone would not
-    activate it. Nothing else checks these constraints, so treat dangling foreign keys, nulls in non-optional columns, and duplicates on a unique index as
-    **unchecked** today rather than as clean — for rows that predate the constraint
-    or arrived through a bulk import. A unique index declared in the schema *is*
-    enforced by both backends on the normal write path; what nothing checks is
-    whether existing rows already violate one.
+    Nothing samples existing rows against the declared constraints. A unique index declared in the schema *is* enforced by both backends on the normal write
+    path, but dangling foreign keys, nulls in non-optional columns and duplicates that predate the constraint or arrived through a bulk import are **unchecked**
+    today rather than clean.
 </Callout>
 
 ## Running advisors

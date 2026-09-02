@@ -248,9 +248,11 @@ test("scheduled mutation runs after advance", async () => {
 | `t.scheduler.runPending()` | Run all pending jobs regardless of `scheduledFor`. Returns the count executed.                                 |
 
 The virtual clock is per-harness, so parallel tests are isolated. A path not in
-the `functions` map (or pointing at a query) produces a `console.warn` and is
-dropped, which matches production behaviour for unknown paths. Jobs run through the
-same dispatch as `ctx.runMutation`, so they share the harness database.
+the `functions` map (or pointing at a query) fails the job with
+`FUNCTION_NOT_FOUND`; it is then retried and finally recorded on
+`t.scheduler.failures()`, matching production's dead-letter park. Jobs run through
+the same dispatch as `ctx.runMutation`, so they share the harness database, and
+`ctx.now` inside a job is the virtual clock at fire time.
 
 ### Subscriptions
 

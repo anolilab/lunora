@@ -1864,6 +1864,7 @@ interface ShardClientOptions {
 
 ```ts
 interface ShardError {
+    code: string;
     message: string;
     shardKey: string;
     timedOut: boolean;

@@ -18,8 +18,8 @@ import type {
     SpanHandle,
     TableDefinition,
 } from "@lunora/server";
-import type { SchemaLike } from "@lunora/shard-engine";
-import { createShardCtxDb, RLS_UNWRAP_SYMBOL, runShardMigrations } from "@lunora/shard-engine";
+import type { SchemaLike, TransactionHeadroom } from "@lunora/shard-engine";
+import { createShardCtxDb, RLS_UNWRAP_SYMBOL, runShardMigrations, TransactionHeadroomTracker } from "@lunora/shard-engine";
 
 import { evaluationAttributes } from "./evaluation-telemetry";
 import { createFakeScheduler } from "./fake-scheduler";
@@ -42,6 +42,67 @@ type TestSchema = Schema<Record<string, TableDefinition>>;
  */
 interface TestIdentity extends Record<string, unknown> {
     userId?: null | string;
+}
+
+/** The `userId` + claims a dispatch runs under, after production's normalisation. */
+interface ResolvedIdentity {
+    readonly claims: Record<string, unknown> | null;
+    readonly userId: null | string;
+}
+
+/**
+ * Reduce a caller-supplied {@link TestIdentity} to what production would actually
+ * hand a shard.
+ *
+ * Mirrors `@lunora/runtime`'s `create-worker.ts` identity forwarding: an identity
+ * whose `userId` is not a non-empty string is dropped to anonymous outright, and
+ * the forwarded claims are the identity MINUS `userId` (`null` when nothing is
+ * left), because the shard reads the subject from its own header and surfaces
+ * only the remaining claims through `ctx.auth.getIdentity()`. Without this the
+ * harness accepted identities production cannot build — `{ roles: ["admin"] }`
+ * with no subject reached `rls()` with its roles intact.
+ */
+const resolveTestIdentity = (identity: null | TestIdentity): ResolvedIdentity => {
+    if (identity === null || typeof identity.userId !== "string" || identity.userId.length === 0) {
+        // eslint-disable-next-line unicorn/no-null -- AuthState's anonymous sentinel is `null` for both fields
+        return { claims: null, userId: null };
+    }
+
+    const { userId, ...extra } = identity;
+
+    // eslint-disable-next-line unicorn/no-null -- `getIdentity()`'s empty-claims sentinel is `null`, matching a shard with no `x-lunora-identity` header
+    return { claims: Object.keys(extra).length > 0 ? extra : null, userId };
+};
+
+/**
+ * A resource meter with a stable identity whose budget resets per dispatch.
+ *
+ * Production builds a fresh `createShardCtxDb` writer — and with it a fresh
+ * {@link TransactionHeadroomTracker} — for every dispatch (`ShardDO.beginDispatch`
+ * mints one; the generated `buildCtx` passes it). The harness builds one writer
+ * per identity view, so it hands that writer this forwarder and swaps the tracker
+ * behind it at each top-level entry: every dispatch gets its own budget, and the
+ * ceilings are the engine defaults rather than "unmetered".
+ */
+class DispatchHeadroom extends TransactionHeadroomTracker {
+    private current = new TransactionHeadroomTracker();
+
+    /** Begin a new dispatch with a full budget. */
+    public reset(): void {
+        this.current = new TransactionHeadroomTracker();
+    }
+
+    public override headroom(): TransactionHeadroom {
+        return this.current.headroom();
+    }
+
+    public override recordRead(count: number): void {
+        this.current.recordRead(count);
+    }
+
+    public override recordWrite(row: unknown): void {
+        this.current.recordWrite(row);
+    }
 }
 
 /**
@@ -703,23 +764,45 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
 
     runShardMigrations(sql, ddlSchema);
 
-    // Secure-by-default: mirrors production's generated `buildCtx`, which always
-    // passes `enforceRls: true` (a no-op unless the schema is `.rls("required")`).
-    // `options.enforceRls` is the harness's opt-out — default `true` so a green
-    // suite means a procedure that forgot `.use(rls(...))` against a protected
-    // table would fail here exactly as it fails on first production dispatch.
-    const database = createShardCtxDb({ enforceRls: options?.enforceRls ?? true, schema: ddlSchema, sql }) as unknown as DatabaseWriter;
+    // The per-dispatch resource meter, reset at every top-level entry below. One
+    // instance for the whole harness (all identity views share the one SQLite
+    // handle, and top-level entries are serialized), handed to every writer built
+    // here so a harness mutation hits the same ceilings production enforces.
+    const headroom = new DispatchHeadroom();
 
-    // The trusted, UNGUARDED writer — recovered through the same well-known
-    // `RLS_UNWRAP_SYMBOL` seam `@lunora/server`'s `rls()` middleware uses to
-    // reach the raw writer, rather than a second `createShardCtxDb` call. When
-    // the guard didn't wrap `database` (schema not `.rls("required")`, or
-    // `enforceRls: false`), the symbol is absent and `rawDatabase` is `database`
-    // itself. Backs the harness's explicit trusted escape hatch (`t.run`, and any
-    // `@lunora/seed` helper built on it) — mirrors production's admin/migration/
-    // studio writers, which are built from `createShardCtxDb` WITHOUT `enforceRls`
-    // and so are never guarded.
-    const rawDatabase = ((database as unknown as Record<PropertyKey, unknown>)[RLS_UNWRAP_SYMBOL] as DatabaseWriter | undefined) ?? database;
+    /**
+     * The guarded `ctx.db` writer for one identity view, plus the trusted writer
+     * behind it.
+     *
+     * Secure-by-default: mirrors production's generated `buildCtx`, which always
+     * passes `enforceRls: true` (a no-op unless the schema is `.rls("required")`).
+     * `options.enforceRls` is the harness's opt-out — default `true` so a green
+     * suite means a procedure that forgot `.use(rls(...))` against a protected
+     * table would fail here exactly as it fails on first production dispatch.
+     *
+     * `auth` is the same slice `buildCtx` passes, so `.serverDefault(({ auth }) => …)`
+     * columns stamp the dispatching identity rather than the anonymous fallback.
+     */
+    const createWriters = (identity: ResolvedIdentity): { database: DatabaseWriter; rawDatabase: DatabaseWriter } => {
+        const database = createShardCtxDb({
+            auth: { identity: identity.claims, userId: identity.userId },
+            enforceRls: options?.enforceRls ?? true,
+            headroom,
+            schema: ddlSchema,
+            sql,
+        }) as unknown as DatabaseWriter;
+
+        // The trusted, UNGUARDED writer — recovered through the same well-known
+        // `RLS_UNWRAP_SYMBOL` seam `@lunora/server`'s `rls()` middleware uses to
+        // reach the raw writer, rather than a second `createShardCtxDb` call. When
+        // the guard didn't wrap `database` (schema not `.rls("required")`, or
+        // `enforceRls: false`), the symbol is absent and `rawDatabase` is `database`
+        // itself. Backs the harness's explicit trusted escape hatch (`t.run`, and any
+        // `@lunora/seed` helper built on it) — mirrors production's admin/migration/
+        // studio writers, which are built from `createShardCtxDb` WITHOUT `enforceRls`
+        // and so are never guarded.
+        return { database, rawDatabase: ((database as unknown as Record<PropertyKey, unknown>)[RLS_UNWRAP_SYMBOL] as DatabaseWriter | undefined) ?? database };
+    };
 
     // Mutation atomicity — mirrors the real ShardDO, whose codegen `handleRpc`
     // dispatches a mutation inside `runInTransaction` (a BEGIN/COMMIT span). Only
@@ -753,6 +836,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
 
     const runInMutationTransaction = <R>(function_: () => Promise<R> | R): Promise<R> => {
         const runTransaction = async (): Promise<R> => {
+            headroom.reset();
             execStatement("BEGIN");
 
             try {
@@ -859,12 +943,12 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
     );
 
     const makeHarness = (identity: null | TestIdentity): TestHarness => {
+        const resolved = resolveTestIdentity(identity);
         const auth: AuthState = {
-            // eslint-disable-next-line unicorn/no-null -- AuthState.getIdentity's anonymous sentinel is `null` (mirrors a decoded JWT being absent)
-            getIdentity: () => Promise.resolve(identity ?? null),
-            // eslint-disable-next-line unicorn/no-null -- AuthState.userId's anonymous sentinel is `null`
-            userId: identity?.userId ?? null,
+            getIdentity: () => Promise.resolve(resolved.claims),
+            userId: resolved.userId,
         };
+        const { database, rawDatabase } = createWriters(resolved);
 
         const queryContext: QueryCtx = {
             auth,
@@ -1000,10 +1084,14 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
                 return runInMutationTransaction(() => runRegistered("mutation", reference as never, context, args, true)).then(notifyAfter);
             }
 
+            headroom.reset();
+
             return runInternal("action", reference, context, args);
         };
 
         const query = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
+            headroom.reset();
+
             if (registeredFunctionKind(referenceOrInline)) {
                 return runRegistered("query", referenceOrInline as never, queryContext, args, false);
             }
@@ -1020,6 +1108,8 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         }) as TestHarness["mutation"];
 
         const action = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
+            headroom.reset();
+
             if (registeredFunctionKind(referenceOrInline)) {
                 return runRegistered("action", referenceOrInline as never, actionContext, args, false);
             }
@@ -1027,7 +1117,17 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             return Promise.resolve((referenceOrInline as InlineActionFunction<unknown>)(actionContext));
         }) as TestHarness["action"];
 
-        const subscribe = buildSubscribe(runRegistered, queryContext, mutationListeners);
+        // A subscription re-run is its own top-level dispatch (production re-dispatches
+        // the query), so it gets a fresh budget rather than accumulating onto the last one.
+        const subscribe = buildSubscribe(
+            (...parameters) => {
+                headroom.reset();
+
+                return runRegistered(...parameters);
+            },
+            queryContext,
+            mutationListeners,
+        );
 
         const harness: TestHarness = {
             action,

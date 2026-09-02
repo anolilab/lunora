@@ -1,3 +1,5 @@
+import { isEnvDisabled, isEnvEnabled } from "../../../shared/env-flag";
+
 /**
  * Ordering/visual weight of a security finding — mirrors the studio's insight
  * severities so the Security Advisor and the Performance Advisor (Insights) share
@@ -71,12 +73,6 @@ const MIN_AUTH_SECRET_LENGTH = 32;
 /** error first, then warning, then info — so the worst findings sort to the top. */
 const LEVEL_ORDER: Record<SecurityFindingLevel, number> = { error: 0, info: 2, warning: 1 };
 
-/** Env values that read as "this security layer is turned off" for the `LUNORA_SECURITY_*` opt-out vars. */
-const DISABLED_ENV_VALUES = new Set(["0", "disabled", "false", "no", "off"]);
-
-/** Truthy env values for a boolean-ish flag like `LUNORA_CORS_ALLOW_CREDENTIALS`. */
-const ENABLED_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
-
 /** Read a string env var, trimmed and lowercased, or `undefined` when absent/non-string. */
 const readFlag = (value: unknown): string | undefined => (typeof value === "string" ? value.trim().toLowerCase() : undefined);
 
@@ -107,7 +103,7 @@ const auditAuthSecret = (env: Record<string, unknown>): SecurityFinding[] => {
  */
 const auditCors = (env: Record<string, unknown>): SecurityFinding[] => {
     const allowedOrigins = readFlag(env["LUNORA_ALLOWED_ORIGINS"]);
-    const corsCredentials = ENABLED_ENV_VALUES.has(readFlag(env["LUNORA_CORS_ALLOW_CREDENTIALS"]) ?? "");
+    const corsCredentials = isEnvEnabled(env["LUNORA_CORS_ALLOW_CREDENTIALS"]);
     const hasWildcard = allowedOrigins?.split(",").some((entry) => entry.trim() === "*") ?? false;
 
     return hasWildcard && corsCredentials ? [{ kind: "cors-wildcard-credentials", level: "error" }] : [];
@@ -127,11 +123,11 @@ const auditSecurityLayers = (env: Record<string, unknown>, dev: boolean): Securi
 
     const findings: SecurityFinding[] = [];
 
-    if (DISABLED_ENV_VALUES.has(readFlag(env["LUNORA_SECURITY_HEADERS"]) ?? "")) {
+    if (isEnvDisabled(env["LUNORA_SECURITY_HEADERS"])) {
         findings.push({ kind: "security-headers-disabled", level: "warning" });
     }
 
-    if (DISABLED_ENV_VALUES.has(readFlag(env["LUNORA_SECURITY_CSRF"]) ?? "")) {
+    if (isEnvDisabled(env["LUNORA_SECURITY_CSRF"])) {
         findings.push({ kind: "csrf-disabled", level: "warning" });
     }
 

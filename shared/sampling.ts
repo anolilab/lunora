@@ -56,14 +56,27 @@ interface TraceSamplingDecision {
 }
 
 /**
- * Map a trace id to a stable value in `[0, 1)` from its first 8 hex characters
- * (32 bits) divided by `2^32`. Same id → same value everywhere, so the head
- * decision is identical on the worker, the shard, and any container. A malformed
- * or empty id parses to `NaN` and falls back to `0` (the keep-leaning end), so a
- * bad id is never silently dropped.
+ * Map a trace id to a stable value in `[0, 1)` from its LAST 8 hex characters
+ * (the low 32 bits) divided by `2^32`. Same id → same value everywhere, so the
+ * head decision is identical on the worker, the shard, and any container. A
+ * malformed or empty id parses to `NaN` and falls back to `0` (the keep-leaning
+ * end), so a bad id is never silently dropped.
+ *
+ * The LOW bits, not the high ones, because an inbound trace id is not
+ * necessarily uniformly random across its 128 bits. The OpenTelemetry
+ * specification's `TraceIdRatioBased` sampler is defined over the *rightmost*
+ * portion of the id for exactly this reason: a 64-bit-id system propagating into
+ * a W3C context left-pads with 16 zero hex digits, and AWS X-Ray puts the
+ * request's epoch seconds in the leading 8. Keying on the first 8 characters
+ * therefore gave every zero-padded trace the value `0` (kept at ANY rate above
+ * 0) and every X-Ray trace of the current era a value near `1` (dropped at any
+ * rate below ~0.9) — i.e. 100% or 0% sampling instead of the configured rate.
+ * `@lunora/runtime`'s `otel-trace.ts` keys on the upstream id whenever
+ * `trustInboundTraceContext` is set, so both shapes reach here in practice.
+ * Locally minted ids are uniformly random, so they are unaffected either way.
  */
 const traceIdToUnitInterval = (traceId: string): number => {
-    const int = Number.parseInt(traceId.slice(0, 8), 16);
+    const int = Number.parseInt(traceId.slice(-8), 16);
 
     return Number.isFinite(int) ? int / 0x1_0000_0000 : 0;
 };

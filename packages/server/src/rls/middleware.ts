@@ -45,6 +45,17 @@
 import { LunoraError } from "@lunora/errors";
 
 import { isRelationPredicate } from "../../../../shared/relation-operators";
+// `isPlainObject` comes from the wire codec rather than being re-declared here.
+// The prototype check it carries is load-bearing: a local `typeof === "object"`
+// variant counted a `Date`, a `Uint8Array` or a `Map` as a plain object, so
+// `isOperatorBag` saw zero own enumerable keys, its `every` was vacuously true,
+// and `matchesOperators` returned true having checked nothing — making
+// `where: { createdAt: someDate }` match EVERY row on the write-decision paths
+// and the JS reader instead of comparing by equality. The codec needs the exact
+// same predicate for the same reason (a class instance has no own enumerable
+// keys and would silently encode to `{}`). `Array.isArray` is subsumed: an
+// array's prototype is `Array.prototype`, not `Object.prototype`.
+import { isPlainObject } from "../../../../shared/wire-codec";
 import type { Middleware } from "../builder/types";
 import type { FacadeEntry } from "../facade";
 import { bindOrm, bindTableFacade } from "../facade";
@@ -412,8 +423,6 @@ const computeReadBaseWhere = <Context>(policies: ReadonlyArray<Policy<Context>>,
 
     return predicates.length === 1 ? predicates[0] : { OR: predicates };
 };
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** Operator keys the JS evaluator recognises. Mirrors `FieldOperators` from the SQL compiler. */
 const OPERATOR_KEYS = ["contains", "eq", "gt", "gte", "in", "isNull", "lt", "lte", "ne", "notIn"] as const;
