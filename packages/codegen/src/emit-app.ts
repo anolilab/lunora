@@ -780,7 +780,20 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
                 // \`admin()\` plugin owns that column (comma-joined for multiple roles)
                 // and only an administrator can write it; it is absent when the plugin
                 // is off, which reads as no roles.
-                return { role: (session.user as { role?: unknown }).role, userId: session.user.id };
+                //
+                // \`expiresAtMs\` is the socket credential expiry the runtime forwards
+                // as \`x-lunora-identity-exp\`. Without it the DO's expiry check never
+                // fires, so a signed-out, banned or lapsed user keeps streaming their
+                // RLS-scoped rows over an already-open WebSocket while every HTTP call
+                // is anonymous. better-auth hands back a \`Date\`; anything else means
+                // the adapter did not hydrate it, and omitting beats guessing.
+                const expiresAt = session.session.expiresAt;
+
+                return {
+                    ...(expiresAt instanceof Date ? { expiresAtMs: expiresAt.getTime() } : {}),
+                    role: (session.user as { role?: unknown }).role,
+                    userId: session.user.id,
+                };
             };
             const authInstance = getAuth();
 
@@ -1032,6 +1045,19 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
                 .prepare(sql)
                 .bind(...parameters)
                 .all<Record<string, unknown>>();
+
+            // \`all\` carries writes, not just reads: D1 runs
+            // \`UPDATE/DELETE … RETURNING\` through it exactly like \`.run()\`, and
+            // that is precisely what \`@lunora/sql-store\` issues for its
+            // optimistic-concurrency compare-and-swap — so \`patch\`, \`replace\`
+            // and \`delete\` all land here and nowhere else. Without this the
+            // bookmark those writes produced was never reported, and the next
+            // read could pin a replica that has not seen them: read-your-writes
+            // lost on the exact path the bookmark exists for. Reporting it after
+            // a plain \`SELECT\` too is harmless and correct — the session's
+            // bookmark only ever moves forward, and \`setOutboundBookmark\` takes
+            // the last value.
+            onBookmark?.(session?.getBookmark() ?? undefined);
 
             return result.results;
         },

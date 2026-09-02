@@ -1,8 +1,9 @@
 import { fromBase64 } from "../../../shared/base64";
 import { decodeIdentityHeader } from "../../../shared/identity-header";
+import { compactHistory } from "./agent-loop";
 import { buildModelMessages } from "./model-messages";
 import { toFunctionReference } from "./paths";
-import type { AgentDefinition, AgentFunctionPaths, AgentMessageRow, AgentRunFunction, AgentStreamGenerate } from "./types";
+import type { AgentCompact, AgentDefinition, AgentFunctionPaths, AgentMessageRow, AgentRunFunction, AgentStreamGenerate } from "./types";
 
 /** Client-side capture format the STT WAV wrapper assumes: 16kHz, mono, 16-bit PCM. */
 const PCM_SAMPLE_RATE = 16_000;
@@ -101,6 +102,15 @@ interface VoiceTurnResult {
 interface RunVoiceTurnOptions {
     /** The agent whose thread + models back this session. */
     agent: AgentDefinition;
+
+    /**
+     * History-compaction seam — the SAME one the durable loop uses. Voice and
+     * text turns share one thread, so an agent that declares `compaction` must
+     * get it here too; absent (or with no `compaction` config) the turn takes
+     * the byte-identical uncompacted path.
+     */
+    compact?: AgentCompact;
+
     /** Stable per-socket id — the message-key prefix that keeps persisted rows idempotent. */
     connectionId: string;
     /** The Worker env (resolves a dynamic `instructions` thunk). */
@@ -264,6 +274,7 @@ const takeSentences = (buffer: string): { rest: string; sentences: string[] } =>
 const runVoiceTurn = async (options: RunVoiceTurnOptions): Promise<VoiceTurnResult> => {
     const {
         agent,
+        compact,
         connectionId,
         env,
         exportName,
@@ -292,82 +303,103 @@ const runVoiceTurn = async (options: RunVoiceTurnOptions): Promise<VoiceTurnResu
     const listMessages = toFunctionReference(paths.listMessages);
     const patchThread = toFunctionReference(paths.patchThread);
 
-    const userText = (text ?? (pcm ? await transcribe(pcm) : "")).trim();
-
-    if (userText.length === 0) {
-        return { assistantText: "", interrupted: false, userText: "" };
-    }
-
-    send({ text: userText, type: "user_transcript" });
-
-    // Bootstrap + user turn: get-or-create thread, keyed append (both idempotent).
+    // Bootstrap FIRST: `ensureThread` carries the thread's owner gate, and
+    // everything below it — transcription above all — is a paid model call. A
+    // caller this thread refuses must be refused before it buys one.
     await run(ensureThread, {
         agent: exportName,
         key: threadKey,
         ...(agent.initialState === undefined ? {} : { initialState: agent.initialState }),
         ...(owner === undefined ? {} : { owner }),
     });
-    await run(appendMessage, { content: userText, messageKey: `voice:${connectionId}:${String(turn)}:user`, role: "user", threadKey });
-    await run(patchThread, { key: threadKey, status: "running" });
 
-    const instructions = typeof agent.instructions === "function" ? agent.instructions({ env, input: userText, threadKey }) : agent.instructions;
-    const history = (await run(listMessages, { key: threadKey })) as AgentMessageRow[];
-    const messages = buildModelMessages({ history, ...(instructions === undefined ? {} : { instructions }) });
-
-    // TTS overlaps generation: each completed sentence is chained onto a serial
-    // promise so audio frames stay in order, and every step honors `signal` so a
-    // barge-in stops both the client output and the in-flight synthesis.
-    let pending = "";
-    // The text whose audio was actually flushed to the socket (the spoken
-    // prefix). Advanced inside `speak` AFTER a sentence's frames are sent — never
-    // at enqueue time — because generation routinely outpaces synthesis, so at a
-    // barge-in many sentences are already queued while only the first has played.
-    // On an interrupt we persist THIS rather than the model's full `result.text`,
-    // so the thread history reflects what the caller actually heard.
-    let spoken = "";
-    let ttsChain = Promise.resolve();
-
-    const speak = async (sentence: string): Promise<void> => {
-        if (isAborted() || sentence.length === 0) {
-            return;
-        }
-
-        let flushed = false;
-
-        try {
-            for await (const chunk of toByteIterable(await synthesize(sentence, signal))) {
-                if (isAborted()) {
-                    break;
-                }
-
-                // Outbound backpressure: yield until the socket send buffer
-                // drains below the cap so a slow client can't balloon DO memory.
-                await waitForDrain?.();
-
-                if (isAborted()) {
-                    break;
-                }
-
-                sendAudio(chunk);
-                flushed = true;
-            }
-        } catch (error) {
-            send({ message: error instanceof Error ? error.message : String(error), type: "error" });
-        }
-
-        // Record the sentence in the spoken prefix only once at least one audio
-        // frame reached the socket — a never-started or fully-aborted sentence is
-        // excluded so the persisted history matches what the caller heard.
-        if (flushed) {
-            spoken = spoken.length > 0 ? `${spoken} ${sentence}` : sentence;
-        }
-    };
-
-    const enqueueSpeak = (sentence: string): void => {
-        ttsChain = ttsChain.then(async () => speak(sentence));
-    };
-
+    // From here on the thread is marked live, so EVERY exit — the silent-utterance
+    // short-circuit, a failed history read, a throwing `instructions` thunk, a
+    // provider error — must hand it back idle. `agentEnsureThread` treats
+    // "running" as a live run, so one uncaught failure here rejected every later
+    // voice turn AND every durable text run on this thread for ABANDONED_RUN_MS
+    // (13 hours). The previous shape opened this `try` three statements too late.
     try {
+        const userText = (text ?? (pcm ? await transcribe(pcm) : "")).trim();
+
+        if (userText.length === 0) {
+            await run(patchThread, { key: threadKey, status: "idle" });
+
+            return { assistantText: "", interrupted: false, userText: "" };
+        }
+
+        send({ text: userText, type: "user_transcript" });
+
+        // The user turn: a keyed (idempotent) append, then mark the turn running.
+        await run(appendMessage, { content: userText, messageKey: `voice:${connectionId}:${String(turn)}:user`, role: "user", threadKey });
+        await run(patchThread, { key: threadKey, status: "running" });
+
+        const instructions = typeof agent.instructions === "function" ? agent.instructions({ env, input: userText, threadKey }) : agent.instructions;
+        const rawHistory = (await run(listMessages, { key: threadKey })) as AgentMessageRow[];
+        // The SAME compaction the durable loop applies. Voice and text turns share
+        // one thread by design, so an agent configured with `compaction` was
+        // getting it on text turns and silently losing it on voice — a long shared
+        // conversation sent its entire history to the model on every spoken turn.
+        const { history, summary } = await compactHistory({ agent, compact, env }, rawHistory);
+        const messages = buildModelMessages({
+            history,
+            ...(instructions === undefined ? {} : { instructions }),
+            ...(summary === undefined ? {} : { summary }),
+        });
+
+        // TTS overlaps generation: each completed sentence is chained onto a serial
+        // promise so audio frames stay in order, and every step honors `signal` so a
+        // barge-in stops both the client output and the in-flight synthesis.
+        let pending = "";
+        // The text whose audio was actually flushed to the socket (the spoken
+        // prefix). Advanced inside `speak` AFTER a sentence's frames are sent — never
+        // at enqueue time — because generation routinely outpaces synthesis, so at a
+        // barge-in many sentences are already queued while only the first has played.
+        // On an interrupt we persist THIS rather than the model's full `result.text`,
+        // so the thread history reflects what the caller actually heard.
+        let spoken = "";
+        let ttsChain = Promise.resolve();
+
+        const speak = async (sentence: string): Promise<void> => {
+            if (isAborted() || sentence.length === 0) {
+                return;
+            }
+
+            let flushed = false;
+
+            try {
+                for await (const chunk of toByteIterable(await synthesize(sentence, signal))) {
+                    if (isAborted()) {
+                        break;
+                    }
+
+                    // Outbound backpressure: yield until the socket send buffer
+                    // drains below the cap so a slow client can't balloon DO memory.
+                    await waitForDrain?.();
+
+                    if (isAborted()) {
+                        break;
+                    }
+
+                    sendAudio(chunk);
+                    flushed = true;
+                }
+            } catch (error) {
+                send({ message: error instanceof Error ? error.message : String(error), type: "error" });
+            }
+
+            // Record the sentence in the spoken prefix only once at least one audio
+            // frame reached the socket — a never-started or fully-aborted sentence is
+            // excluded so the persisted history matches what the caller heard.
+            if (flushed) {
+                spoken = spoken.length > 0 ? `${spoken} ${sentence}` : sentence;
+            }
+        };
+
+        const enqueueSpeak = (sentence: string): void => {
+            ttsChain = ttsChain.then(async () => speak(sentence));
+        };
+
         const result = await streamGenerate({ messages, signal }, (delta) => {
             if (isAborted()) {
                 return;
@@ -405,11 +437,12 @@ const runVoiceTurn = async (options: RunVoiceTurnOptions): Promise<VoiceTurnResu
 
         return { assistantText, interrupted, userText };
     } catch (error) {
-        // A non-abort failure (e.g. a provider/Workers AI error thrown by
-        // streamGenerate) must not leave the SHARED thread wedged at
-        // status:"running": reset it to idle before propagating so `useAgentChat`
-        // and status-sensitive logic stay consistent. An abort does NOT throw —
-        // streamGenerate resolves normally — so only genuine errors reach here.
+        // Any failure after the thread was marked live (STT, the history read, an
+        // `instructions` thunk, a provider/Workers AI error out of streamGenerate)
+        // must not leave the SHARED thread wedged at status:"running": reset it to
+        // idle before propagating so `useAgentChat`, `agentEnsureThread`'s live-run
+        // check, and status-sensitive logic stay consistent. An abort does NOT
+        // throw — streamGenerate resolves normally — so only genuine errors reach here.
         await run(patchThread, { key: threadKey, status: "idle" });
 
         throw error;

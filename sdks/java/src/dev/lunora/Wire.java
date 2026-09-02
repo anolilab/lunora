@@ -3,6 +3,7 @@ package dev.lunora;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -42,6 +43,27 @@ public final class Wire {
      * its tag exist for that case.
      */
     public static final long MAX_EXACT_INTEGER = (1L << 53) - 1;
+
+    /**
+     * Bytes per element for the typed-array views the codec round-trips. A view whose payload is
+     * not a whole number of elements is not a view the reference can rebuild — {@code new
+     * Float32Array(buffer)} raises a RangeError there — so accepting it would hand the consumer
+     * bytes it cannot reconstruct. {@code ArrayBuffer} is absent deliberately: it is untyped, so
+     * there is nothing to align.
+     */
+    private static final Map<String, Integer> TYPED_ARRAY_ELEMENT_SIZES =
+            Map.ofEntries(
+                    Map.entry("BigInt64Array", 8),
+                    Map.entry("BigUint64Array", 8),
+                    Map.entry("Float32Array", 4),
+                    Map.entry("Float64Array", 8),
+                    Map.entry("Int16Array", 2),
+                    Map.entry("Int32Array", 4),
+                    Map.entry("Int8Array", 1),
+                    Map.entry("Uint16Array", 2),
+                    Map.entry("Uint32Array", 4),
+                    Map.entry("Uint8Array", 1),
+                    Map.entry("Uint8ClampedArray", 1));
 
     /**
      * JavaScript's {@code undefined}, distinct from JSON null.
@@ -400,20 +422,80 @@ public final class Wire {
 
     private static Object decodeMap(List<?> items, int depth) {
         List<Map.Entry<Object, Object>> entries = new ArrayList<>();
+        Map<String, Integer> seen = new HashMap<>();
 
         for (Object item : asList(payload(items, "map"), "map")) {
             // A truncated entry is a rejection, not a pair with a missing half:
             // `pair.get(1)` threw a bare IndexOutOfBoundsException straight out
             // of Wire.decode, so a caller catching WireFormatException around a
-            // decode caught nothing at all.
-            if (!(item instanceof List<?> pair) || pair.size() < 2) {
+            // decode caught nothing at all. A LONGER entry is refused for the
+            // same reason: the reference reads neither.
+            if (!(item instanceof List<?> pair) || pair.size() != 2) {
                 throw new WireFormatException("wire-codec: malformed map entry");
             }
 
-            entries.add(Map.entry(decode(pair.get(0), depth + 1), decode(pair.get(1), depth + 1)));
+            Object key = decode(pair.get(0), depth + 1);
+            Map.Entry<Object, Object> entry = Map.entry(key, decode(pair.get(1), depth + 1));
+            String identity = mapKeyIdentity(key);
+
+            // Last write wins, at the FIRST occurrence's position — the reference
+            // builds a real Map, and Map.prototype.set on a key already present
+            // overwrites the value in place rather than appending. Keeping both
+            // entries left two peers of one deployment reading a different value from
+            // identical bytes.
+            if (identity != null) {
+                Integer index = seen.get(identity);
+
+                if (index != null) {
+                    entries.set(index, entry);
+
+                    continue;
+                }
+
+                seen.put(identity, entries.size());
+            }
+
+            entries.add(entry);
         }
 
         return new WireMap(entries);
+    }
+
+    /**
+     * A map key's collapse identity, or {@code null} when it never collapses.
+     *
+     * <p>The reference's {@code Map} compares keys by SameValueZero: primitives by value (NaN equal
+     * to itself), everything else by reference — so two structurally identical {@code
+     * WireDate}/bytes keys stay two entries there and must stay two here.
+     */
+    private static String mapKeyIdentity(Object key) {
+        if (key == null) {
+            return "null";
+        }
+
+        if (key == UNDEFINED) {
+            return "undefined";
+        }
+
+        if (key instanceof Boolean flag) {
+            return "bool:" + flag;
+        }
+
+        if (key instanceof String text) {
+            return "str:" + text;
+        }
+
+        if (key instanceof WireBigInt bigInt) {
+            return "big:" + bigInt.value();
+        }
+
+        if (key instanceof Number number) {
+            double numeric = number.doubleValue();
+
+            return Double.isNaN(numeric) ? "num:nan" : "num:" + numeric;
+        }
+
+        return null;
     }
 
     /** The tag's payload slot, or a typed rejection when the array is too short. */
@@ -455,8 +537,14 @@ public final class Wire {
             throw new WireFormatException("wire-codec: malformed error tag");
         }
 
-        Object decodedProps =
-                items.size() > 4 ? decode(items.get(4), depth + 1) : new LinkedHashMap<>();
+        // The props slot is NOT optional and NOT nullable: the reference reads it with
+        // Object.keys, which throws on a null or missing slot, so quietly substituting an
+        // empty map accepted a frame the reference refuses.
+        if (items.size() < 5 || items.get(4) == null) {
+            throw new WireFormatException("wire-codec: malformed error tag");
+        }
+
+        Object decodedProps = decode(items.get(4), depth + 1);
         Map<String, Object> props =
                 decodedProps instanceof Map<?, ?>
                         ? (Map<String, Object>) decodedProps
@@ -488,7 +576,35 @@ public final class Wire {
 
         // A plain Uint8Array is byte[] and re-encodes to the 2-element form;
         // every other view keeps its constructor name.
-        return "Uint8Array".equals(ctor) ? data : new WireBytes(data, ctor);
+        if ("Uint8Array".equals(ctor)) {
+            return data;
+        }
+
+        if (!"ArrayBuffer".equals(ctor)) {
+            Integer size = TYPED_ARRAY_ELEMENT_SIZES.get(ctor);
+
+            // An UNKNOWN ctor name decodes to raw bytes, dropping the name — the
+            // forward-compat rule in protocol/README.md §2.1. Keeping it re-encoded a
+            // 4-element form the reference emits as 3, so the same value relayed through
+            // JS and through here produced different bytes, and therefore different
+            // stable subscription keys.
+            if (size == null) {
+                return data;
+            }
+
+            if (data.length % size != 0) {
+                throw new WireFormatException(
+                        "wire-codec: "
+                                + ctor
+                                + " payload of "
+                                + data.length
+                                + " bytes is not a multiple of its "
+                                + size
+                                + "-byte element");
+            }
+        }
+
+        return new WireBytes(data, ctor);
     }
 
     /** Whether {@code raw} is an optionally-negative run of ASCII digits. */

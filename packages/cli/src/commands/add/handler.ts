@@ -12,6 +12,7 @@ import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "
 import type { TextPrompt } from "../../util/tui-prompts";
 import { tuiSelect, tuiText } from "../../util/tui-prompts";
 import { runAddCommand } from "../registry";
+import { isCustomRegistrySource } from "../registry/apply";
 import type { RegistryManifest } from "../registry/types";
 import { deriveDatabaseName, promptDatabaseName, sanitizeDatabaseName, withAuthDatabaseName } from "./auth-database";
 import type { FeatureItem, NormalizedFeature } from "./features";
@@ -34,6 +35,8 @@ interface AddFeatureOptions {
     allowUnsafeSource?: boolean;
     /** storage: R2 bucket name to use without prompting. */
     bucket?: string;
+    /** Inject the registry apply confirmer for non-interactive callers / tests. */
+    confirm?: (prompt: string) => Promise<boolean>;
     cwd?: string;
     /** auth: D1 database name to use without prompting. */
     db?: string;
@@ -263,6 +266,20 @@ const syncLintIgnores = (cwd: string, logger: Logger): void => {
 };
 
 /**
+ * Whether `lunora add` may skip the registry's own confirmation prompt.
+ *
+ * Running `lunora add` IS the opt-in for the package.json / wrangler mutations
+ * the FIRST-PARTY registry declares, so those need no second confirmation. It is
+ * NOT an opt-in for a registry the user pointed at: that gate (in
+ * `confirmDepMutation`) hangs off the same `yes` flag, and passing `true`
+ * unconditionally disarmed it — `lunora registry add … --source gh:attacker/evil`
+ * refused while `lunora add` wrote files, deps, wrangler bindings and `.dev.vars`
+ * at exit 0. `--from` is the same kind of origin as `--source` (see
+ * {@link isCustomRegistrySource}), and was the half that still skipped it.
+ */
+const autoConfirmRegistryApply = (options: AddFeatureOptions): boolean => !isCustomRegistrySource(options) || options.yes === true;
+
+/**
  * `lunora add <feature>`: validate we're in a Lunora project, resolve the
  * feature to its registry item(s) (prompting for the auth provider when
  * interactive), and apply via `runAddCommand`. Returns the applied items so
@@ -343,10 +360,9 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
               }
             : undefined;
 
-    // The act of running `lunora add` IS the opt-in, so skip the registry's
-    // package.json-mutation confirmation (yes: true) and apply directly.
     const result = await runAddCommand({
         allowUnsafeSource: options.allowUnsafeSource,
+        confirm: options.confirm,
         cwd,
         from: options.from,
         logger: options.logger,
@@ -354,7 +370,7 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
         ref: options.ref,
         source: options.source,
         transformManifest,
-        yes: true,
+        yes: autoConfirmRegistryApply(options),
     });
 
     if (result.code === 0) {

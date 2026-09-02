@@ -67,6 +67,28 @@ class TestDecodeBounds(unittest.TestCase):
         # the end of it.
         self.assertEqual(decode_wire([TAG]), [TAG])
 
+        # And the rejection has to REACH the subscription that owns the frame.
+        # `handle_frame` catches WireFormatError only, so every stdlib exception
+        # the codec used to leak — IndexError off a short tagged array, TypeError
+        # off a null props slot, ValueError off a non-ASCII digit string — escaped
+        # it and ended the socket read loop, taking every OTHER subscription on
+        # the client down with it. Driving the whole list through the client is
+        # what holds the codec to raising only its own type.
+        for case in load("wire-codec.json")["rejected"]:
+            with self.subTest(case=case["name"]):
+                client = LunoraClient("https://app.example")
+                client.attach_socket(lambda _frame: None)
+
+                seen: list = []
+                errors: list = []
+                client.subscribe("messages:list", None, seen.append, errors.append)
+
+                descriptor = client.handle_frame({"data": case["encoded"], "id": "sub_1", "type": "data"})
+
+                self.assertEqual(descriptor["kind"], "error", "handle_frame must return rather than throw")
+                self.assertEqual(seen, [], "a malformed value must not reach on_data")
+                self.assertEqual(len(errors), 1, "a malformed value must surface via on_error")
+
     def test_exact_integer_range_enforced(self):
         covers("exact_integer_range_enforced")
 

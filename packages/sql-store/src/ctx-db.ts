@@ -112,12 +112,12 @@ import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
 import type { SearchStage } from "./ctx-db-search";
 import { createSearchSync, runSqlSearch, runSqlSearchMigrations } from "./ctx-db-search";
-import { migrateSearchState } from "./ctx-db-search-state";
+import { migrateSearchState, readSearchBackfillState, writeSearchBackfillState } from "./ctx-db-search-state";
 import type { SqlDialect } from "./dialect";
 import { createPointReadBatcher } from "./point-read-batcher";
 import type { SqlCtxExec } from "./sql-exec";
 import { columnRefSql, createIndexIfNotExists, decodeRow, decodeRows, forEachRowPaged, queryAll, queryBatch, queryRun, serializeColumnValue } from "./sql-exec";
-import { effectiveColumnKind } from "./value-codec";
+import { BIGINT_KEY_LENGTH, bigintSqlKey, effectiveColumnKind } from "./value-codec";
 
 /** Order fields that already provide a stable tiebreak (no extra `id` term needed). */
 const ID_ORDER_FIELDS = new Set(["_id", "id"]);
@@ -910,6 +910,310 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
 };
 
 /**
+ * Refuse a SQL-side reduce or group over a column stored as an order-preserving
+ * key rather than as its value.
+ *
+ * A `v.bigint()` column holds the zero-padded key {@link bigintSqlKey} builds, so
+ * `SUM` over it coerces to nonsense (1.5e40 for a couple of small amounts),
+ * `MIN`/`MAX` hand back the padded string, and a `GROUP BY` key comes back as 40
+ * characters of padding. All three look like answers, and `SUM` past 2^53 used
+ * instead to escape as a raw driver `RangeError`.
+ *
+ * The maintained `__agg_` companion answers these numerically, so the error names
+ * it rather than just refusing. Exact per CONTRIBUTION, not per total: `__value__`
+ * is a DOUBLE, and `applyAggregateDelta` accumulates coerced values into it — so
+ * a `sum` of individually safe `bigint` amounts loses integer precision once the
+ * running total passes 2^53, and a `min`/`max` over values past it compares the
+ * nearest doubles. A caller who needs an exact total over that range reads the
+ * rows and reduces them in JS, where the values are `bigint` again.
+ *
+ * Applied at every SQL-reducing entry point —
+ * `aggregate`'s scan and both halves of `groupBy` — matching the shard twin's
+ * `assertReducibleBySql`, which shipped guarding one and not its sibling.
+ * @throws LunoraError `BAD_REQUEST` when `field` is stored as an order-preserving key
+ */
+const assertReducibleBySql = (definition: SchemaLike["tables"][string], field: string, label: string): void => {
+    const validator = definition.shape[field];
+
+    if (validator !== undefined && effectiveColumnKind(validator) === "bigint") {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `${label}: "${field}" is stored as an order-preserving key, which SQL cannot reduce or group — declare an aggregateIndex covering this (by, field, op) so the maintained companion answers it`,
+        );
+    }
+};
+
+/** Applies {@link assertReducibleBySql} to every field a `groupBy` scan hands to SQL: the `by` keys and the reducer's own field. */
+const assertGroupByReducibleBySql = (
+    definition: SchemaLike["tables"][string],
+    tableName: string,
+    by: ReadonlyArray<string>,
+    agg: { field?: string; op: string },
+): void => {
+    for (const field of by) {
+        assertReducibleBySql(definition, field, `groupBy(${tableName}, { by: [..."${field}"] })`);
+    }
+
+    if (agg.field !== undefined) {
+        assertReducibleBySql(definition, agg.field, `groupBy(${tableName}, { agg: { op: "${agg.op}", field: "${agg.field}" } })`);
+    }
+};
+
+/**
+ * Rows converted per pass by {@link rewriteLegacyBigintColumns}; keeps one
+ * statement's bound-parameter count inside D1's budget.
+ *
+ * Rendered into the `LIMIT` inline (`sql.raw`) rather than bound: mysql2's
+ * prepared-statement path rejects a placeholder there with
+ * `Incorrect arguments to mysqld_stmt_execute`, which took the whole MySQL
+ * provisioning pass down. It is a module constant, so nothing caller-supplied
+ * reaches the statement text.
+ */
+const BIGINT_REWRITE_PAGE = 100;
+
+/**
+ * Migration-state key for one table's `bigint` re-encoding pass.
+ *
+ * Recorded in the same reserved table the search backfill uses — it is a
+ * `key → {cursor, done, profile}` map, and this pass needs exactly that. The
+ * `:` namespace cannot collide with a search companion name (`companionFor`
+ * emits `<table>__search_<index>`).
+ */
+const bigintRewriteStateKey = (tableName: string): string => `bigint-rewrite:${tableName}`;
+
+/**
+ * Stamped alongside a recorded completion, so widening {@link BIGINT_KEY_LENGTH}
+ * one day re-runs the pass instead of reading a marker for the old width.
+ */
+const BIGINT_REWRITE_PROFILE = `bigint-key/${String(BIGINT_KEY_LENGTH)}`;
+
+/**
+ * The declared fields of `table` that are stored as a `bigint` key.
+ */
+const bigintFields = (definition: SchemaLike["tables"][string]): string[] =>
+    Object.entries(definition.shape)
+        .filter(([, validator]) => validator._meta?.column !== undefined && effectiveColumnKind(validator) === "bigint")
+        .map(([field]) => field);
+
+/**
+ * The `SET` assignments that convert one row's legacy `bigint` columns, empty
+ * when every one of them already holds a key.
+ *
+ * A value this encoding cannot hold — non-numeric text no encoder here ever
+ * wrote, or a magnitude past the 39-digit ceiling — is left exactly as stored
+ * rather than aborting the pass; the keyset cursor still steps over it.
+ */
+const legacyBigintAssignments = (row: Record<string, unknown>, fields: ReadonlyArray<string>): SQL[] => {
+    const assignments: SQL[] = [];
+
+    for (const field of fields) {
+        const raw = row[field];
+
+        // "Already a key", not "already 40 characters" — the same distinction the
+        // `legacy` predicate makes. A key is a `"0"`/`"1"` sign character plus 39
+        // digits; `"-"` plus a 39-digit magnitude is 40 characters too, and a
+        // length-only test skipped exactly those, leaving a convertible negative
+        // stored as decimal text that `eq` no longer matches.
+        if (typeof raw !== "string" || (raw.length === BIGINT_KEY_LENGTH && !raw.startsWith("-"))) {
+            continue;
+        }
+
+        try {
+            assignments.push(sql`${columnRefSql(field)} = ${bigintSqlKey(BigInt(raw))}`);
+        } catch {
+            // Not a value this encoding can hold. Left as stored.
+        }
+    }
+
+    return assignments;
+};
+
+/**
+ * Rows still holding decimal text, expressed so the rows the encoding can never
+ * hold stop matching permanently.
+ *
+ * A convertible legacy value is at most a signed 39-digit decimal — 40
+ * characters with the sign — so anything longer is past the encoding's digit
+ * ceiling and is left as stored. That leaves the one overlap with a real key, which is
+ * also 40 characters: a key's first character is its `"0"`/`"1"` sign, never
+ * `"-"`, so `SUBSTR(col, 1, 1) = '-'` separates them. A plain `LENGTH(col) <> 40`
+ * matched neither, which silently skipped every negative 39-digit value.
+ */
+const legacyBigintPredicate = (fields: ReadonlyArray<string>): SQL =>
+    sql.join(
+        fields.map(
+            (field) =>
+                sql`(${columnRefSql(field)} IS NOT NULL AND (LENGTH(${columnRefSql(field)}) < ${BIGINT_KEY_LENGTH} OR (LENGTH(${columnRefSql(field)}) = ${BIGINT_KEY_LENGTH} AND SUBSTR(${columnRefSql(field)}, 1, 1) = ${"-"})))`,
+        ),
+        sql` OR `,
+    );
+
+/** One `UPDATE` per row of a page that has something to convert; rows without a usable `id`, and values the encoding cannot hold, are skipped. */
+const legacyBigintUpdates = (rows: ReadonlyArray<Record<string, unknown>>, fields: ReadonlyArray<string>, tableName: string): SQL[] => {
+    const updates: SQL[] = [];
+
+    for (const row of rows) {
+        const { id } = row;
+        const assignments = typeof id === "string" ? legacyBigintAssignments(row, fields) : [];
+
+        if (assignments.length > 0) {
+            updates.push(sql`UPDATE ${sql.identifier(tableName)} SET ${sql.join(assignments, sql`, `)} WHERE ${columnRefSql("id")} = ${id}`);
+        }
+    }
+
+    return updates;
+};
+
+/**
+ * Rewrite any `v.bigint()` column still holding the plain decimal text an
+ * earlier build stored into the order-preserving key {@link bigintSqlKey} now
+ * writes.
+ *
+ * This is a **storage-format migration, and it is not optional**. Decimal text
+ * is exact for `=` but sorts `"9"` after `"10"`, so every range filter,
+ * `ORDER BY`, page cursor and `MIN`/`MAX` over such a column returned the wrong
+ * rows. The fix changes what is written — which means a table holding both forms
+ * has a worse problem than the one it started with: `where: { n: { eq: 10n } }`
+ * binds the key and no longer matches a row stored as `"10"`. Converting the
+ * stragglers is what keeps that from being a silent read break, so it runs from
+ * the same provisioning pass that creates the table.
+ *
+ * Self-terminating, and recorded once done. It pages on a keyset cursor over
+ * `id`, so a value the encoding cannot hold is stepped over rather than retried
+ * forever within a pass — but the cursor is not durable, so without a marker the
+ * next `ensureMigrated` restarted at the top. `ensureMigrated` is memoised per
+ * ctx-db (per REQUEST on a Hyperdrive binding), and the probe is a scan: on a
+ * converted table it matches nothing only after reading every row. So completion
+ * goes in the shared migration-state table and the steady state is one
+ * primary-key lookup, not a full-table scan per request.
+ *
+ * The predicate skips what the encoding provably cannot hold — anything longer
+ * than a signed 39-digit decimal — so an oversized legacy value stops matching
+ * permanently rather than pinning the pass open. It does still match a sign
+ * character: `"-"` plus 39 digits is 40 characters, so a plain `LENGTH <> 40`
+ * left exactly the negative 39-digit values unconverted, and a converted key
+ * never starts with `-`.
+ */
+const rewriteLegacyBigintColumns = async (
+    exec: SqlCtxExec,
+    tableName: string,
+    definition: SchemaLike["tables"][string],
+    dialect: SqlDialect,
+): Promise<void> => {
+    const fields = bigintFields(definition);
+
+    if (fields.length === 0) {
+        return;
+    }
+
+    const stateKey = bigintRewriteStateKey(tableName);
+    const recorded = await readSearchBackfillState(exec, dialect, stateKey);
+
+    if (recorded.done && recorded.profile === BIGINT_REWRITE_PROFILE) {
+        return;
+    }
+
+    const legacy = legacyBigintPredicate(fields);
+    const selected = sql.join([columnRefSql("id"), ...fields.map((field) => columnRefSql(field))], sql`, `);
+    let cursor = "";
+
+    for (;;) {
+        // eslint-disable-next-line no-await-in-loop -- keyset pages run sequentially on the single shared connection; each page's cursor comes from the previous one.
+        const rows = await queryAll(
+            exec,
+            dialect,
+            sql`SELECT ${selected} FROM ${sql.identifier(tableName)} WHERE (${legacy}) AND ${columnRefSql("id")} > ${cursor} ORDER BY ${columnRefSql("id")} LIMIT ${sql.raw(String(BIGINT_REWRITE_PAGE))}`,
+        );
+
+        if (rows.length === 0) {
+            break;
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- one round trip per page; the rows are keyed by distinct `id`, so order across them doesn't matter.
+        await queryBatch(exec, dialect, legacyBigintUpdates(rows, fields, tableName));
+
+        const last = rows.at(-1)?.["id"];
+
+        if (typeof last !== "string") {
+            // The cursor cannot advance, so this pass did NOT reach the end of
+            // the table and must not be recorded as converged.
+            return;
+        }
+
+        cursor = last;
+    }
+
+    await writeSearchBackfillState(exec, dialect, stateKey, undefined, true, BIGINT_REWRITE_PROFILE);
+};
+
+/**
+ * Add the columns a `.global()` table is missing.
+ *
+ * `CREATE TABLE IF NOT EXISTS` alone leaves an existing table exactly as it is,
+ * so adding a field to a shipped schema provisioned nothing: every `insert` died
+ * with the driver's own `table p has no column named slug` — untyped, and never
+ * mentioning a remedy — while reads and unrelated patches kept working, so the
+ * deploy looked half-healthy. Both sibling migrations in this package already
+ * reshape their own tables (`runSqlAggregateMigrations` PRAGMA-checks and
+ * `ALTER`s, `migrateSearchState` `ALTER`s under a try/catch); only the
+ * user-facing table was left out.
+ *
+ * The probe is one `SELECT <every declared column> … LIMIT 0` — dialect-blind,
+ * no catalog member on {@link SqlDialect}, and on the overwhelmingly common
+ * no-drift path it is a single statement that reads no rows. Only when that
+ * fails does it cost one probe per column to find which are missing.
+ *
+ * Added columns are always **nullable**, whatever the field declares: existing
+ * rows have no value for a field that did not exist, and `ADD COLUMN … NOT NULL`
+ * without a default is rejected outright on a non-empty table by all three
+ * engines. The declared `notNull` is still enforced on write by the validator.
+ * Additive only, like the `CREATE` it follows — a retype or a drop still needs an
+ * explicit migration.
+ */
+const alterGlobalTableDrift = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
+    const fields = Object.entries(definition.shape).filter(([, validator]) => validator._meta?.column !== undefined);
+
+    if (fields.length === 0) {
+        return;
+    }
+
+    const probe = async (columns: ReadonlyArray<string>): Promise<boolean> => {
+        try {
+            await queryAll(
+                exec,
+                dialect,
+                sql`SELECT ${sql.join(
+                    columns.map((column) => columnRefSql(column)),
+                    sql`, `,
+                )} FROM ${sql.identifier(tableName)} LIMIT 0`,
+            );
+
+            return true;
+        } catch {
+            return false;
+        }
+    };
+
+    if (await probe(fields.map(([field]) => field))) {
+        return;
+    }
+
+    for (const [field, validator] of fields) {
+        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared connection; each probe gates its own ALTER.
+        if (await probe([field])) {
+            continue;
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- same connection, and a failure here must surface rather than race the next ALTER.
+        await queryRun(
+            exec,
+            dialect,
+            sql`ALTER TABLE ${sql.identifier(tableName)} ADD COLUMN ${sql.identifier(field)} ${sql.raw(globalColumnAffinity(validator, dialect))}`,
+        );
+    }
+};
+
+/**
  * Auto-provision every `.global()` table from the schema: `CREATE TABLE IF NOT
  * EXISTS` with the physical `id`/`_creationTime` columns plus a typed column per
  * declared field, then its secondary and `.unique()` indexes. This is the D1
@@ -924,6 +1228,12 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
  * an explicit migration.
  */
 const runSqlGlobalTableMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
+    // The bigint re-encoding pass below records its completion there, and this is
+    // also the entry point a dev host calls on its own — "the migration throws
+    // unless you happened to run the search one first" is not a contract.
+    // Idempotent, so the later call from `ensureMigrated` costs nothing.
+    await migrateSearchState(exec, dialect);
+
     for (const [tableName, definition] of Object.entries(schema.tables)) {
         if (definition.shardMode?.kind !== "global") {
             continue;
@@ -933,8 +1243,12 @@ const runSqlGlobalTableMigrations = async (exec: SqlCtxExec, schema: SchemaLike,
 
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared D1 connection; the table must exist before its indexes below.
         await queryRun(exec, dialect, sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(tableName)} (${columns})`);
+        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially; the table must carry every declared column before its indexes reference them.
+        await alterGlobalTableDrift(exec, tableName, definition, dialect);
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially; indexes follow the table.
         await createGlobalTableIndexes(exec, tableName, definition, dialect);
+        // eslint-disable-next-line no-await-in-loop -- runs on the same connection, after the columns exist.
+        await rewriteLegacyBigintColumns(exec, tableName, definition, dialect);
     }
 };
 
@@ -2640,6 +2954,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 }
             }
 
+            assertReducibleBySql(definition, aggOptions.field, `aggregate(${tableName}, { op: "${aggOptions.op}", field: "${aggOptions.field}" })`);
+
             const whereCondition = compileWhereSql(resolved, whereSqlStrategy);
             const aggregateFunction = sql.raw(aggregateSqlFunction(aggOptions.op));
             const query = sql`SELECT ${aggregateFunction}(${columnRefSql(aggOptions.field)}) AS value FROM ${sql.identifier(tableName)}`;
@@ -3092,6 +3408,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                     return indexed;
                 }
             }
+
+            // Whatever the companion above would have answered is exactly what
+            // the scan refuses here: every field this hands to SQL — the `by`
+            // keys AND the reducer's field.
+            assertGroupByReducibleBySql(definition, tableName, groupOptions.by, agg);
 
             const whereCondition = compileWhereSql(resolved, whereSqlStrategy);
 

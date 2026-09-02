@@ -1158,10 +1158,14 @@ const offerLintIgnores = async (projectDirectory: string, interactive: boolean, 
  * run the post-scaffold auth/email offer against `projectDir`. Interactive when
  * `--interactive` is set, prompts are injected (tests), or stdin is a TTY —
  * unless `--yes` suppresses it (then it prints the later-setup hint and applies
- * nothing). Apply is best-effort: a failed registry add is logged by
- * `runAddCommand` and never aborts the (already successful) scaffold.
+ * nothing).
+ *
+ * The INTERACTIVE offer is best-effort: a failed registry add is logged by
+ * `runAddCommand` and never aborts the (already successful) scaffold. An
+ * explicit `--add` is not — it exists for scripts, so returns `false` on failure
+ * and that becomes the command's exit code.
  */
-const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: string): Promise<void> => {
+const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: string): Promise<boolean> => {
     const interactive = offerIsInteractive(options);
     const preselected =
         options.add === undefined
@@ -1266,10 +1270,11 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
 
     // `--add` applies its features directly (no headline, no multi-select).
     if (preselected.length > 0) {
-        await offerRegistryExtras(deps);
+        const added = await offerRegistryExtras(deps);
+
         await offerLintIgnores(projectDirectory, interactive, options);
 
-        return;
+        return added;
     }
 
     // A plain headline for the interactive offer (no badge, just the section
@@ -1282,6 +1287,8 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
 
     await offerRegistryExtras(deps);
     await offerLintIgnores(projectDirectory, interactive, options);
+
+    return true;
 };
 
 /** Default framework when none is specified — the React create-vite overlay. */
@@ -1568,8 +1575,8 @@ const runScaffoldStep = async (
  * are part of the single install. In-place init keeps its own per-framework
  * wiring hints and never auto-installs an existing project.
  */
-const runPostScaffold = async (options: InitCommandOptions, result: InitCommandResult, cwd: string): Promise<void> => {
-    await maybeOfferExtras(options, result.target);
+const runPostScaffold = async (options: InitCommandOptions, result: InitCommandResult, cwd: string): Promise<boolean> => {
+    const added = await maybeOfferExtras(options, result.target);
 
     const installedManager = options.inPlace === true ? undefined : await maybeOfferInstall(options, result.target);
 
@@ -1585,6 +1592,8 @@ const runPostScaffold = async (options: InitCommandOptions, result: InitCommandR
         await printNextSteps(basename(result.target), installedManager, manager, isInsideMonorepo(cwd));
         await emitMascot(options.logger);
     }
+
+    return added;
 };
 
 /** `--ci`: drop a deploy pipeline into the scaffolded project (or `cwd` for in-place). Best-effort — never affects the exit code. */
@@ -1643,7 +1652,12 @@ const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandR
             // scaffold interrupted mid-write (which throws before reaching here).
             cleanup.target = undefined;
 
-            await runPostScaffold(options, result, cwd);
+            // An explicit `--add` that could not be applied fails the command:
+            // the result used to be discarded, so a script asking for a feature
+            // got an error line and exit 0.
+            if (!(await runPostScaffold(options, result, cwd))) {
+                result = { ...result, code: 1 };
+            }
         }
     } catch (error) {
         // The user pressed Ctrl-C mid-flow — reset anything we created, then abort

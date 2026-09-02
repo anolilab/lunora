@@ -356,8 +356,13 @@ export const agentComponent = (): AgentComponent => {
             if (existing) {
                 // The owner is immutable: a run started for a different
                 // identity must not attach its messages to (or reopen) someone
-                // else's thread. `undefined` continues an ownerless thread.
-                if (existing["owner"] !== args.owner && args.owner !== undefined) {
+                // else's thread. The match is EXACT in both directions — an
+                // identity-less caller (`owner: undefined`, which is what a token
+                // resolving to no identity produces on the public `agentRun`
+                // path) is an identity that owns nothing, not a wildcard that
+                // matches every thread. It continues an ownerless thread and
+                // nothing else; an owned thread only continues for its owner.
+                if (existing["owner"] !== args.owner) {
                     throw new Error(`@lunora/agent: thread "${args.key}" belongs to another owner`);
                 }
 
@@ -949,10 +954,15 @@ export const agentComponent = (): AgentComponent => {
                 // rejects this too, but only AFTER a workflow instance has been
                 // spawned — so an authenticated caller could amplify billable
                 // compute by targeting known/guessed foreign threadKeys. Reject
-                // here, before `handle.run`, so no doomed instance is started. An
-                // ownerless caller (owner === undefined) is still admitted,
-                // exactly as the bootstrap admits it.
-                if (inflightOwner !== owner && owner !== undefined) {
+                // here, before `handle.run`, so no doomed instance is started.
+                // The match is EXACT, exactly as the bootstrap's is: a caller
+                // whose token resolves to NO identity (`owner === undefined`)
+                // does not match an owned thread either — admitting it let an
+                // unauthenticated request append to a stranger's history (read
+                // back into the owner's next model turn), burn the owner's
+                // inference budget, and under `onConcurrentRun: "replace"`
+                // terminate the owner's in-flight run.
+                if (inflightOwner !== owner) {
                     throw new LunoraError("FORBIDDEN", `@lunora/agent: thread "${args.threadKey}" belongs to another owner`);
                 }
             }

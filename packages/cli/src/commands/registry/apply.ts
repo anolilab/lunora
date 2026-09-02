@@ -459,18 +459,30 @@ const applyItemResources = (manifest: RegistryManifest, cwd: string, logger: Log
 };
 
 /**
+ * True when the items come from a registry the user pointed at rather than the
+ * pinned first-party one — a remote `--source` OR a local `--from` root. Both
+ * are attacker-influenceable (a checked-out repo, a downloaded directory, a
+ * hostile fetch base) and both ship the same file/dep/binding writes, so they
+ * carry one rule and one predicate. Two copies of this check had already
+ * drifted: `--source` was refused while `--from` applied silently.
+ */
+const isCustomRegistrySource = (options: { from?: string; source?: string }): boolean =>
+    (options.source !== undefined && options.source.length > 0) || (options.from !== undefined && options.from.length > 0);
+
+/**
  * Gate the privileged project mutations behind a confirmation when any item adds
  * dependencies OR wrangler.jsonc bindings, or when the items came from a
- * non-default `--source` (an attacker-influenceable origin can ship binding/file
+ * custom registry source (an attacker-influenceable origin can ship binding/file
  * writes that fire on `wrangler dev`/`deploy` without the victim importing
  * anything). Returns `true` to proceed, `false` to abort (after logging).
  */
 const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManifest }>, options: AddCommandOptions): Promise<boolean> => {
     const hasDeps = items.some(({ manifest }) => Object.keys(manifest.deps ?? {}).length > 0 || Object.keys(manifest.devDependencies ?? {}).length > 0);
     const hasBindings = items.some(({ manifest }) => (manifest.bindings ?? []).length > 0);
-    // A non-default `--source` is untrusted: require a conscious confirmation even
-    // for a files-only item, so attacker-controlled source files aren't written silently.
-    const nonDefaultSource = options.source !== undefined && options.source.length > 0;
+    // A custom `--source`/`--from` registry is untrusted: require a conscious
+    // confirmation even for a files-only item, so attacker-controlled source
+    // files aren't written silently.
+    const nonDefaultSource = isCustomRegistrySource(options);
 
     if ((!hasDeps && !hasBindings && !nonDefaultSource) || options.yes) {
         return true;
@@ -487,7 +499,10 @@ const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManif
     }
 
     if (nonDefaultSource) {
-        reasons.push(`come from a non-default source (${String(options.source)})`);
+        // `from` first, matching `resolveRegistryRoot`: when both are given the
+        // resolver reads the local root and ignores `--source`, so naming
+        // `source` here asked the operator to confirm a place nothing read from.
+        reasons.push(`come from a custom registry source (${String(options.from ?? options.source)})`);
     }
 
     const reasonText = reasons.join(", ");
@@ -508,4 +523,4 @@ const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManif
     return confirmed;
 };
 
-export { applyDeps, applyItemResources, confirmDepMutation, projectUsesUmbrella, resolveDepRange, rewriteUmbrellaImports };
+export { applyDeps, applyItemResources, confirmDepMutation, isCustomRegistrySource, projectUsesUmbrella, resolveDepRange, rewriteUmbrellaImports };

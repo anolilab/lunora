@@ -17,6 +17,25 @@ import java.util.Locale
  * because object field order must survive a round trip).
  */
 object Json {
+    /**
+     * Levels of ENVELOPE a wire value can sit under before its own nesting
+     * starts. Every payload arrives wrapped: `{"result": V}` is one, and the two
+     * deepest — a batch response `{"results":[{"result": V}]}` and a poke part
+     * `{"rowsPatch":[{"value": V}]}` — are three.
+     */
+    private const val MAX_ENVELOPE_DEPTH: Int = 3
+
+    /**
+     * The parser's own nesting cap, counted from the DOCUMENT root.
+     *
+     * It cannot be [Wire.MAX_DEPTH] directly: that bounds a wire VALUE, whose
+     * root is already [MAX_ENVELOPE_DEPTH] levels into the frame carrying it, so
+     * charging the envelope against the value's budget refused frames whose
+     * payload the reference encodes happily. The cap is here to keep a hostile
+     * frame off the stack, and a few extra levels cost nothing against that.
+     */
+    const val MAX_DEPTH: Int = Wire.MAX_DEPTH + MAX_ENVELOPE_DEPTH
+
     fun parse(text: String): Any? {
         val parser = Parser(text)
         val value = parser.readValue()
@@ -76,7 +95,7 @@ object Json {
             // decoded tree and never sees the payload; without this a deeply
             // nested frame overflows the stack, and StackOverflowError is an
             // Error that handleFrame's RuntimeException catch cannot catch.
-            require(depth <= Wire.MAX_DEPTH) { "json: nesting exceeds the ${Wire.MAX_DEPTH}-level limit" }
+            require(depth <= MAX_DEPTH) { "json: nesting exceeds the $MAX_DEPTH-level limit" }
 
             return when (text[offset]) {
                 '{' -> readObject()

@@ -205,7 +205,7 @@ const columnKinds = (definition: TableDefinitionLike): [string, string | undefin
  * (`introspect.ts`) and admin export/import paths share the exact same decode.
  *
  * The decode is engine-agnostic: every backend stores SQLite-shaped values
- * (boolean → 1/0, JSON → text, bigint → decimal string), and `sqliteDecode` is
+ * (boolean → 1/0, JSON → text, bigint → an order-preserving text key), and `sqliteDecode` is
  * robust to a driver returning either the stored string OR a natively-parsed
  * value (e.g. mysql2 returns JSON columns pre-parsed) — so the same decoder is
  * correct on SQLite, Postgres and MySQL.

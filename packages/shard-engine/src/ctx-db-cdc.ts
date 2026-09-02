@@ -230,13 +230,24 @@ const cdcTouchesTables = (sql: SqlExec, sinceSeq: number, tables: ReadonlySet<st
  *
  * So the vouchable set is defined POSITIVELY, and read from the storage itself
  * rather than from a list someone has to remember to extend: a dependency is
- * vouchable iff a table of that name exists in this DO's SQLite. That is the
- * set `recordCdc` appends for, plus the shard's own bookkeeping tables, which
- * no `ctx.db` read can name. Anything else — a `.global()` table, a sentinel, a
- * dependency stamped by a capability added after this was written — falls to
- * the default, and the default is "cannot vouch". Getting the classification
- * wrong then costs a needless re-snapshot instead of silently serving stale
- * data.
+ * vouchable iff a table of that name exists in this DO's SQLite. Anything else —
+ * a `.global()` table, a sentinel, a dependency stamped by a capability added
+ * after this was written — falls to the default, and the default is "cannot
+ * vouch". Getting the classification wrong then costs a needless re-snapshot
+ * instead of silently serving stale data.
+ *
+ * **One local table is nevertheless unvouchable, and it is the one exception to
+ * the paragraph above.** "Exists in this DO's SQLite" was meant as a proxy for
+ * "is a table `recordCdc` appends for", and a `.memory()` table breaks the two
+ * apart: migrations create it like any other (only its rows are cleared on
+ * eviction), so it is in `sqlite_master` — but `recordCdc` deliberately skips it,
+ * so the log holds no record of it and "nothing changed" is a claim this function
+ * cannot support. Rather than teach the catalog scan about a schema fact it
+ * cannot see, `ctx-db.ts` stamps {@link import("./read-footprint").UNVOUCHABLE_DEP}
+ * on every read of a memory table, which lands the read-set in the default branch
+ * where it belongs. A read-set assembled by hand rather than by the read
+ * footprint therefore still gets the naive answer for a memory table — the
+ * footprint is the only supported producer.
  *
  * The live-refresh path is already pessimistic in exactly this way (see
  * `writeTouchesMemo` in `subscription-range-gate.ts` — "assume touched on any
@@ -308,7 +319,7 @@ const cdcCanVouchFor = (sql: SqlExec, deps: ReadonlySet<string>): boolean => {
     return true;
 };
 
-/** One changed row key in a range: the id, the LATEST op that hit it, and that op's `seq`. No post-image. */
+/** One changed row key in a range: the id, the LATEST op that hit it (`update` whenever more than one did — see {@link readCdcChangeKeys}), and that op's `seq`. No post-image. */
 interface CdcChangeKey {
     id: string;
     op: CdcChange["op"];
@@ -329,24 +340,39 @@ interface CdcChangeKey {
  * `MAX(seq)` with bare `id`/`op` columns is SQLite's documented single-aggregate
  * behaviour — the bare columns come from the row that supplied the max — and
  * collapses multiple ops on one row to the newest, exactly as the read-then-
- * overwrite drain it replaces did. `seq <= upTo` bounds the read at the
- * checkpoint the poke will be stamped with; the drain it replaces bounded only
- * its loop, so its final page could pull rows past `upTo` into the diff.
+ * overwrite drain it replaces did. (`COUNT(*)` rides along without disturbing
+ * that: the rule needs exactly one `min()`/`max()` in the query, not exactly one
+ * aggregate.) `seq <= upTo` bounds the read at the checkpoint the poke will be
+ * stamped with; the drain it replaces bounded only its loop, so its final page
+ * could pull rows past `upTo` into the diff.
+ *
+ * **A collapsed group never reports `insert`.** {@link import("./shape-diff").buildShapeDiff}
+ * skips a non-member whose op is `insert`, on the sound ground that a row which
+ * never matched the predicate was never replicated, so a `delete` for it would
+ * spam every subscriber on the table. That ground only holds for a key whose
+ * insert is the ONLY op in the window. A hard `delete` followed by a re-insert of
+ * the same `_id` inside one poke window collapses to `insert` here — and that key
+ * HAD been replicated, so skipping it leaves the pre-delete row on the client
+ * forever. A multi-op group is reported as `update` instead: for a member it is
+ * the more accurate client-facing kind anyway (the client may already hold the
+ * key), and for a non-member it is what earns the `delete` the client needs.
  */
 const readCdcChangeKeys = (sql: SqlExec, table: string, sinceSeq: number, upTo: number): CdcChangeKey[] => {
     // `maxSeq`, not a second `seq`: aliasing the aggregate to the name of the
     // column it aggregates leaves `ORDER BY seq` resolvable two ways, and which
     // one wins is an engine rule rather than something stated here.
-    const rows = runDrizzle<{ id: string; maxSeq: number; op: string }>(
+    const rows = runDrizzle<{ id: string; maxSeq: number; op: string; ops: number }>(
         sql,
-        dsql`SELECT id, op, MAX(seq) AS maxSeq FROM ${dsql.identifier(CDC_LOG_TABLE)}
+        dsql`SELECT id, op, MAX(seq) AS maxSeq, COUNT(*) AS ops FROM ${dsql.identifier(CDC_LOG_TABLE)}
              WHERE ${dsql.identifier("table")} = ${table} AND seq > ${sinceSeq} AND seq <= ${upTo}
              GROUP BY id
              ORDER BY maxSeq ASC`,
     ).toArray();
 
     return rows.map((row) => {
-        return { id: row.id, op: row.op as CdcChange["op"], seq: row.maxSeq };
+        const op = row.op as CdcChange["op"];
+
+        return { id: row.id, op: op === "insert" && row.ops > 1 ? "update" : op, seq: row.maxSeq };
     });
 };
 

@@ -11,6 +11,7 @@ import { detectPackageManager, installArgsFor } from "../../util/detect-package-
 import type { Logger } from "../../util/logger";
 import { confirmDepMutation, resolveDepRange } from "./apply";
 import { buildRegistryIndex, collectCatalog } from "./catalog";
+import safe from "./display";
 import { readItemFile, reconcileItems } from "./reconcile";
 import { readManifest, resolveItemDirectory, resolvePlan, resolveRegistryRoot, sourceGateError } from "./resolve";
 import type { AddCommandOptions, AddCommandResult, RegistryManifest } from "./types";
@@ -20,10 +21,10 @@ import { emptyResult } from "./types";
 const printPlan = (logger: Logger, manifest: RegistryManifest): void => {
     const label = manifest.title ?? manifest.description;
 
-    logger.info(`plan: ${manifest.name}${label ? ` — ${label}` : ""}`);
+    logger.info(`plan: ${safe(manifest.name)}${label ? ` — ${safe(label)}` : ""}`);
 
     for (const file of manifest.files) {
-        logger.info(`  file  ${file.to}  (${file.merge})`);
+        logger.info(`  file  ${safe(file.to)}  (${safe(file.merge)})`);
     }
 
     // Show the range that will actually be WRITTEN, not the manifest's internal
@@ -50,31 +51,33 @@ const printPlan = (logger: Logger, manifest: RegistryManifest): void => {
     };
 
     for (const [dep, range] of Object.entries(manifest.deps ?? {})) {
-        logger.info(`  dep   ${dep}@${rangeFor(range)}`);
+        logger.info(`  dep   ${safe(dep)}@${safe(rangeFor(range))}`);
     }
 
     for (const [dep, range] of Object.entries(manifest.devDependencies ?? {})) {
-        logger.info(`  dev   ${dep}@${rangeFor(range)}`);
+        logger.info(`  dev   ${safe(dep)}@${safe(rangeFor(range))}`);
     }
 
     for (const binding of manifest.bindings ?? []) {
         // Render the concrete value so a reviewer can audit what gets written into
         // wrangler.jsonc (e.g. an attempt to set an exec/entrypoint key) before it
         // is applied — a bare key path hides the payload.
-        logger.info(`  bind  ${binding.path.join(".")} = ${JSON.stringify(binding.value)}`);
+        // `JSON.stringify` escapes control bytes but NOT the BIDI overrides that
+        // reorder the rendered line, so the serialized value is sanitized too.
+        logger.info(`  bind  ${safe(binding.path.join("."))} = ${safe(JSON.stringify(binding.value))}`);
     }
 
     for (const variable of manifest.envVars ?? []) {
         // Show non-secret values; secrets are scaffolded as empty placeholders so
         // there is nothing to leak.
-        const valueSuffix = variable.secret ? " (secret)" : ` = ${JSON.stringify(variable.value ?? "")}`;
+        const valueSuffix = variable.secret ? " (secret)" : ` = ${safe(JSON.stringify(variable.value ?? ""))}`;
 
-        logger.info(`  env   ${variable.name}${valueSuffix}`);
+        logger.info(`  env   ${safe(variable.name)}${valueSuffix}`);
     }
 
     for (const reexport of manifest.entrypointReexports ?? []) {
-        const specifier = `./lunora/${reexport.module}`;
-        const suffix = reexport.comment ? `  // ${reexport.comment}` : "";
+        const specifier = `./lunora/${safe(reexport.module)}`;
+        const suffix = reexport.comment ? `  // ${safe(reexport.comment)}` : "";
 
         logger.info(`  entry ${specifier}${suffix}`);
     }
@@ -145,7 +148,7 @@ const reportAddResult = (
 
     for (const { manifest } of items) {
         if (manifest.docs) {
-            logger.info(`${manifest.name}: ${manifest.docs}`);
+            logger.info(`${safe(manifest.name)}: ${safe(manifest.docs)}`);
         }
     }
 };
@@ -184,7 +187,9 @@ const runListCommand = async (options: AddCommandOptions): Promise<AddCommandRes
 
         return empty;
     } catch (error) {
-        options.logger.error(`list failed: ${error instanceof Error ? error.message : String(error)}`);
+        // The message can quote the untrusted manifest back (a rejected env-var
+        // name, a bad path), so it is sanitized like every other render site.
+        options.logger.error(safe(`list failed: ${error instanceof Error ? error.message : String(error)}`));
 
         return { ...empty, code: 1 };
     } finally {
@@ -267,7 +272,9 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
 
         return { bindings, code: 0, deps, skipped, written };
     } catch (error) {
-        options.logger.error(`add failed: ${error instanceof Error ? error.message : String(error)}`);
+        // The message can quote the untrusted manifest back (a rejected env-var
+        // name, a bad path), so it is sanitized like every other render site.
+        options.logger.error(safe(`add failed: ${error instanceof Error ? error.message : String(error)}`));
 
         return { ...empty, code: 1 };
     } finally {
@@ -313,7 +320,7 @@ const runRegistryViewCommand = async (options: AddCommandOptions): Promise<AddCo
             printPlan(options.logger, manifest);
 
             for (const file of manifest.files) {
-                options.logger.info(`--- ${file.to} (${file.merge}) ---`);
+                options.logger.info(`--- ${safe(file.to)} (${safe(file.merge)}) ---`);
 
                 // Shared with `add` so both read paths carry the same symlink
                 // refusal. `useUmbrella: false` — `view` shows the item's source
@@ -321,14 +328,16 @@ const runRegistryViewCommand = async (options: AddCommandOptions): Promise<AddCo
                 const content = readItemFile(directory, file, false, name);
 
                 for (const line of content.split("\n")) {
-                    options.logger.info(line);
+                    options.logger.info(safe(line));
                 }
             }
         }
 
         return empty;
     } catch (error) {
-        options.logger.error(`view failed: ${error instanceof Error ? error.message : String(error)}`);
+        // The message can quote the untrusted manifest back (a rejected env-var
+        // name, a bad path), so it is sanitized like every other render site.
+        options.logger.error(safe(`view failed: ${error instanceof Error ? error.message : String(error)}`));
 
         return { ...empty, code: 1 };
     } finally {

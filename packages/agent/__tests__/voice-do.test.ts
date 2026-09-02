@@ -2,8 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { encodeIdentityHeader } from "../../../shared/identity-header";
 import { defineAgent } from "../src/define-agent";
+import { DEFAULT_AGENT_FUNCTION_PATHS } from "../src/paths";
+import type { AgentRunFunction } from "../src/types";
 import VoiceSessionDO from "../src/voice-do";
 import type { VoiceAudioSource } from "../src/voice-turn";
+
+/** The `DurableObjectState` shape the voice DO consumes. */
+interface VoiceSessionStateDouble {
+    acceptWebSocket: (ws: unknown) => void;
+    getWebSockets: () => never[];
+    waitUntil?: (promise: Promise<unknown>) => void;
+}
 
 /** Structural double of `DurableObjectState` — accepts the socket, never actually hibernates. */
 const fakeState = (): { acceptWebSocket: (ws: unknown) => void; getWebSockets: () => never[] } => {
@@ -79,8 +88,20 @@ const env: Record<string, unknown> = {
     },
 };
 
-/** Subclass overriding the AI seams so a turn completes without a real Workers AI binding, and counts how many utterances/synthesis calls actually reached the seam (i.e. how many times a turn — including a greeting — actually spoke). */
+/**
+ * Subclass overriding the AI seams so a turn completes without a real Workers AI
+ * binding, and counts how many utterances/synthesis calls actually reached the
+ * seam (i.e. how many times a turn — including a greeting — actually spoke).
+ *
+ * `resolveRun` is overridden too: the real one builds a dispatch runner that has
+ * no bindings here and throws on the FIRST `agents:*` call. That used to happen
+ * after transcription, so `transcribedPcmLengths` doubled as "the turn ran"; the
+ * owner gate (`agentEnsureThread`) now runs BEFORE the paid transcription, so
+ * the tests need a dispatch seam that answers instead of one that throws.
+ */
 class TestVoiceDO extends VoiceSessionDO {
+    public dispatched: string[] = [];
+
     public synthesizeCalls = 0;
 
     public transcribedPcmLengths: number[] = [];
@@ -95,6 +116,28 @@ class TestVoiceDO extends VoiceSessionDO {
         this.synthesizeCalls += 1;
 
         return new Uint8Array([1]);
+    }
+
+    protected override resolveRun(): AgentRunFunction {
+        return async (reference, _args) => {
+            const path = reference["__lunoraRef"];
+
+            this.dispatched.push(path);
+
+            if (path === DEFAULT_AGENT_FUNCTION_PATHS.ensureThread) {
+                // Mirrors the real mutation: the first caller CREATES the thread,
+                // every later one CONTINUES it.
+                const first = this.dispatched.filter((entry) => entry === DEFAULT_AGENT_FUNCTION_PATHS.ensureThread).length === 1;
+
+                return { outcome: first ? "created" : "continued" };
+            }
+
+            if (path === DEFAULT_AGENT_FUNCTION_PATHS.listMessages) {
+                return [];
+            }
+
+            return undefined;
+        };
     }
 }
 
@@ -443,5 +486,166 @@ describe("voice session credential expiry", () => {
 
             await expect(instance.webSocketMessage(ws, JSON.stringify({ type: "commit" }))).resolves.toBeUndefined();
         });
+    });
+});
+
+/** How many turns actually reached the shared thread (one `ensureThread` per turn). */
+const turnsRun = (instance: TestVoiceDO): number => instance.dispatched.filter((path) => path === DEFAULT_AGENT_FUNCTION_PATHS.ensureThread).length;
+
+/** A `waitUntil`-capturing state double, for the `fetch()` paths that schedule a greeting. */
+const waitingState = (): { state: VoiceSessionStateDouble; waited: Promise<unknown>[] } => {
+    const waited: Promise<unknown>[] = [];
+
+    return {
+        state: {
+            acceptWebSocket: () => {
+                /* no-op: the fake socket needs no host-side registration */
+            },
+            getWebSockets: () => [],
+            waitUntil: (promise: Promise<unknown>) => {
+                waited.push(promise);
+            },
+        },
+        waited,
+    };
+};
+
+describe("voice session resource bounds", () => {
+    it("caps how many turns one socket may run, then closes it", async () => {
+        const capped = defineAgent({ instructions: "Be brief.", model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", voice: { maxTurns: 3 } });
+        const instance = new TestVoiceDO(fakeState(), env, capped, "support");
+        const { getClosed, sent, ws } = createFakeSocket({ connectionId: "c1", threadKey: "t1", turn: 0 });
+
+        // The only guard was one-turn-in-flight per connection, which throttles
+        // nothing: 50 sequential turns were accepted with no rate-limit frame,
+        // each a full LLM generation plus sentence-by-sentence TTS, billed and
+        // persisted, on a hibernatable socket that can live for days.
+        for (let index = 0; index < 50; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential turns are the point
+            await instance.webSocketMessage(ws, JSON.stringify({ text: "hello", type: "text" }));
+        }
+
+        expect(turnsRun(instance)).toBe(3);
+        expect(getClosed()).toStrictEqual({ code: 4002, reason: "turn_limit" });
+        expect(sent.map((raw) => (JSON.parse(raw as string) as { type: string }).type)).toContain("error");
+    });
+
+    it("rejects an oversized text frame before it reaches the model", async () => {
+        const instance = new TestVoiceDO(fakeState(), env, agent, "support");
+        const { sent, ws } = createFakeSocket({ connectionId: "c1", threadKey: "t1", turn: 0 });
+
+        // A 500k-character `text` frame reached the LLM unmeasured.
+        await instance.webSocketMessage(ws, JSON.stringify({ text: "x".repeat(500_000), type: "text" }));
+
+        expect(turnsRun(instance)).toBe(0);
+        expect(JSON.parse(sent[0] as string)).toMatchObject({ type: "error" });
+    });
+
+    it("rejects an oversized RAW control frame before parsing it", async () => {
+        const instance = new TestVoiceDO(fakeState(), env, agent, "support");
+        const { getClosed, sent, ws } = createFakeSocket({ connectionId: "c1", threadKey: "t1", turn: 0 });
+
+        // Not valid JSON, so the only thing that can react to it is a check that
+        // runs BEFORE `JSON.parse`. The `text` bound is measured on the parsed
+        // frame, so the 32MiB string message Cloudflare will deliver was parsed
+        // in full first — once per frame, on the DO's single thread.
+        await instance.webSocketMessage(ws, `{"type":"text","text":"${"x".repeat(32 * 1024 * 1024)}`);
+
+        expect(JSON.parse(sent[0] as string)).toMatchObject({ type: "error" });
+        expect(getClosed()).toStrictEqual({ code: 4004, reason: "control_frame_limit" });
+    });
+
+    it("still runs a text frame within the cap", async () => {
+        const instance = new TestVoiceDO(fakeState(), env, agent, "support");
+        const { ws } = createFakeSocket({ connectionId: "c1", threadKey: "t1", turn: 0 });
+
+        await instance.webSocketMessage(ws, JSON.stringify({ text: "hello", type: "text" }));
+
+        expect(turnsRun(instance)).toBe(1);
+    });
+
+    it("closes the socket when the utterance buffer overflows instead of resetting the counter", async () => {
+        const instance = new TestVoiceDO(fakeState(), env, agent, "support");
+        const { getClosed, sent, ws } = createFakeSocket({ connectionId: "c1", threadKey: "t1", turn: 0 });
+        const megabyte = new ArrayBuffer(1024 * 1024);
+
+        // Dropping BOTH maps on overflow reset the counter, so the 8MB cap bounded
+        // peak memory and not throughput: 40MB pushed through produced 4 error
+        // frames and left the socket open to push 40 more. The loop stops at the
+        // close because the runtime delivers no frame after one.
+        let delivered = 0;
+
+        for (let index = 0; index < 40 && getClosed() === undefined; index += 1) {
+            delivered += 1;
+            // eslint-disable-next-line no-await-in-loop -- sequential frames are the point
+            await instance.webSocketMessage(ws, megabyte);
+        }
+
+        expect(getClosed()).toStrictEqual({ code: 4003, reason: "utterance_too_large" });
+        expect(delivered).toBe(9);
+        expect(sent).toHaveLength(1);
+    });
+
+    it("synthesizes the greeting once per THREAD, not once per upgrade", async () => {
+        const greetingAgent = defineAgent({
+            instructions: "Be brief.",
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            voice: { greeting: "Hello! How can I help you today?" },
+        });
+        const { state, waited } = waitingState();
+        const instance = new TestVoiceDO(state, env, greetingAgent, "support");
+
+        for (let index = 0; index < 20; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential upgrades are the point
+            await upgradeAndCaptureAttachment(instance, "https://do.internal/?threadKey=t1");
+        }
+
+        await Promise.allSettled(waited);
+
+        // The greeting's persisted row is already keyed once per thread; the paid
+        // TTS synthesis was not — 20 reconnects bought 20 syntheses of one line.
+        expect(waited).toHaveLength(20);
+        expect(instance.synthesizeCalls).toBe(1);
+    });
+});
+
+describe("voice socket lifecycle", () => {
+    it("frees a socket's buffered utterance on close (webSocketClose)", async () => {
+        const instance = new TestVoiceDO(fakeState(), env, agent, "support");
+        const { ws } = createFakeSocket({ connectionId: "c1", threadKey: "t1", turn: 0 });
+
+        await instance.webSocketMessage(ws, new ArrayBuffer(1024));
+        instance.webSocketClose(ws);
+
+        // The buffer is gone, so a later commit transcribes an EMPTY utterance.
+        await instance.webSocketMessage(ws, JSON.stringify({ type: "commit" }));
+
+        expect(instance.transcribedPcmLengths).toStrictEqual([0]);
+    });
+
+    it("frees a socket's buffered utterance on error (webSocketError)", async () => {
+        const instance = new TestVoiceDO(fakeState(), env, agent, "support");
+        const { ws } = createFakeSocket({ connectionId: "c1", threadKey: "t1", turn: 0 });
+
+        await instance.webSocketMessage(ws, new ArrayBuffer(1024));
+        instance.webSocketError(ws);
+        await instance.webSocketMessage(ws, JSON.stringify({ type: "commit" }));
+
+        expect(instance.transcribedPcmLengths).toStrictEqual([0]);
+    });
+
+    it("refuses an overlapping trigger while a turn is in flight", async () => {
+        const instance = new TestVoiceDO(fakeState(), env, agent, "support");
+        const { sent, ws } = createFakeSocket({ connectionId: "c1", threadKey: "t1", turn: 0 });
+
+        const inFlight = instance.webSocketMessage(ws, JSON.stringify({ type: "commit" }));
+
+        await instance.webSocketMessage(ws, JSON.stringify({ text: "and another thing", type: "text" }));
+        await inFlight;
+
+        expect(turnsRun(instance)).toBe(1);
+        expect(sent.map((raw) => (JSON.parse(raw as string) as { message?: string }).message)).toContainEqual(
+            "a turn is already in progress — send an interrupt before the next utterance",
+        );
     });
 });

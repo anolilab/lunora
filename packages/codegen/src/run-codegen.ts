@@ -24,7 +24,6 @@ import discoverBrowserUrlAccesses from "./discover/browser-url-accesses";
 import discoverConfigCalls from "./discover/config-calls";
 import discoverContainerKeyAccesses from "./discover/container-key-accesses";
 import discoverContainerOverrides from "./discover/container-overrides";
-import discoverCrons from "./discover/crons";
 import discoverExportSinks from "./discover/export-sinks";
 import discoverFailOpenGuards from "./discover/fail-open-guards";
 import { discoverFlagKeys } from "./discover/flag-keys";
@@ -597,11 +596,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const {
         agents,
         containers,
+        crons,
         dataModelContent,
         dependencies,
         env,
         featureUsage,
-        hasBrowser,
         hasFlags,
         hasNotify,
         identity,
@@ -658,8 +657,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         usesSandbox,
         workflows,
     });
-
-    const crons = discoverCrons(project, lunoraDirectory, workflows, agents);
 
     // Static advisories (unindexed FKs, redundant indexes, unknown index/relation
     // fields, filter-without-index, …). Cheap, derived from the schema + the
@@ -827,7 +824,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasAccessFacade: featureUsage.access,
         hasAi: featureUsage.ai,
         hasAnalytics: featureUsage.analytics,
-        hasBrowser,
+        hasBrowser: featureUsage.browser,
         hasFlags,
         hasHyperdrive: featureUsage.hyperdrive,
         hasImages: featureUsage.images,
@@ -891,7 +888,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasAi: featureUsage.ai,
         hasAnalytics: featureUsage.analytics,
         hasAuth: dependencies.has("@lunora/auth"),
-        hasBrowser,
+        hasBrowser: featureUsage.browser,
         // Worker-composition framework adapters expose a `withLunora` over
         // `withFrameworkWorker`; when one is installed, surface `.buildFrameworkWorker()`.
         hasFramework: dependencies.has("@lunora/astro") || dependencies.has("@lunora/svelte") || dependencies.has("@lunora/vue"),
@@ -917,7 +914,12 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasQueue: queues.some((queue) => queue.mode === "push"),
         hasScheduler: studioFeatures.scheduler,
         hasStorage: studioFeatures.storage,
-        hasVectors: schema.vectorIndexes.length > 0,
+        // Gated, not raw: the declaration alone is what the platform pass
+        // rejects on a host rating `vectorStore: "unsupported"`. Passing the raw
+        // count here emitted the runtime WIRING for `ctx.vectors` even when the
+        // type surface was correctly withheld, so "the surface was withheld" was
+        // only half true. Absent means never declared, which must not withhold.
+        hasVectors: platformGate.signals.vectorStore !== false && schema.vectorIndexes.length > 0,
         hasWorkflow: workflows.length > 0,
         hasX402: featureUsage.x402,
         // The single `defineIdentity(...)` contract (Plan 080). Wires

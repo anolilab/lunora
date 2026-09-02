@@ -13,7 +13,12 @@ const prepareCommand: Command = {
         }),
     name: "prepare",
     options: [
-        { description: "Override the schema-drift gate (proceed even with breaking schema drift and no migration)", name: "allow-schema-drift", type: Boolean },
+        {
+            description:
+                "Override the schema-drift gate for this run (proceed even with breaking schema drift and no migration; the committed baseline is not advanced)",
+            name: "allow-schema-drift",
+            type: Boolean,
+        },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
         TARGET_OPTION,
         {

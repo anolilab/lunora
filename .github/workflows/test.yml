@@ -6,7 +6,7 @@
 "on": # yamllint disable-line rule:truthy
     "pull_request":
         "types": ["opened", "synchronize", "reopened"]
-        "branches": ["main", "alpha", "next", "beta"]
+        "branches": ["main", "alpha", "next", "beta", "fix/**"]
     "merge_group": # yamllint disable-line rule:empty-values
     "workflow_dispatch": # yamllint disable-line rule:empty-values
 
@@ -146,8 +146,15 @@
             #
             # studio is excluded from the coverage scripts only — its component suite
             # still stalls under v8 coverage (packages/studio/vitest.config.ts) — and is
-            # covered by the dedicated step below. lunora-playground stays excluded
-            # entirely, same hang class as e2e.
+            # covered by the dedicated step below.
+            #
+            # lunora-playground is NOT excluded. It was, on the belief that it hung like
+            # e2e; it does not. Its `runCodegen` smoke test parses the app with ts-morph
+            # and takes ~15s cold, and the app's vitest config used to grant 30s only
+            # when `CI` was set — so a local run tripped a 10s timeout that read as a
+            # hang. The budget is unconditional now (apps/playground/vitest.config.ts)
+            # and the suite runs here, on the leg without coverage. It has no
+            # `test:coverage` script, so the 22.15 leg simply has nothing to run for it.
             - "name": "Run affected tests"
               "shell": "bash"
               "run": |

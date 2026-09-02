@@ -508,6 +508,67 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
         expect(dead.attempts).toBeGreaterThan(5);
     });
 
+    it("does not requeue a job whose dead-letter row is already durable", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
+        const realDelete = state.storage.delete.bind(state.storage);
+
+        // `parkDead` writes `dead:<id>` and THEN clears the pending rows. Fail
+        // that clear: the park is durable, the error reaches
+        // `drainRecordGuarded`, and re-asserting the time index there dispatched
+        // a job that already has a terminal record — a duplicate run of a
+        // workflow or any other non-idempotent job.
+        state.storage.delete = async (keyOrKeys: string | string[]) => {
+            if (Array.isArray(keyOrKeys) && keyOrKeys.some((key) => key.startsWith("id:"))) {
+                throw new Error("storage unavailable");
+            }
+
+            return realDelete(keyOrKeys);
+        };
+
+        const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 })));
+
+        // Force the re-armed job due, moving the HEADER's `scheduledFor` with the
+        // index key: `alarm()` reads the record off the header, so a rewrite that
+        // touches only the index leaves the claim delete pointing at a key that
+        // no longer exists and the forced entry survives every pass.
+        const forceDue = (): void => {
+            const indexKey = [...state.storageMap.keys()].find((key) => key.startsWith("t:"));
+
+            if (indexKey === undefined) {
+                return;
+            }
+
+            const recordId = String(state.storageMap.get(indexKey));
+            const header = state.storageMap.get(`id:${recordId}`) as ScheduleRecord | undefined;
+
+            state.storageMap.delete(indexKey);
+
+            if (header !== undefined) {
+                state.storageMap.set(`id:${recordId}`, { ...header, scheduledFor: 0 });
+            }
+
+            state.storageMap.set(`t:${"0".padStart(15, "0")}:${recordId}`, recordId);
+        };
+
+        for (let index = 0; index < 7; index += 1) {
+            forceDue();
+
+            // eslint-disable-next-line no-await-in-loop -- sequential alarm fires
+            await scheduler.alarm();
+        }
+
+        const dispatchedByPark = scheduler.attempts;
+
+        await scheduler.alarm();
+
+        expect(state.storageMap.has(`dead:${id}`)).toBe(true);
+        expect(keysWithPrefix(state, "t:")).toHaveLength(0);
+        expect(scheduler.attempts).toBe(dispatchedByPark);
+    });
+
     it("logs a warning when a job is parked in the dead-letter store", async () => {
         expect.assertions(2);
 

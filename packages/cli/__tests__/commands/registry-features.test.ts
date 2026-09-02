@@ -144,6 +144,103 @@ describe("lunora add — shadcn-parity features", () => {
         expect(existsSync(destination())).toBe(false);
     });
 
+    it("registry view strips terminal escapes from remote manifest text and file bodies", async () => {
+        expect.assertions(3);
+
+        // `view` is the inspect-before-you-install command, so its whole input is
+        // attacker-controlled when `--source` points at a hostile registry.
+        writeItem({ title: "Foo\u001B[2J\u001B]0;pwned\u0007" }, "export const marker = 42;\u001B[8m hidden\u001B[0m\n\texport const tabbed = 1;\n");
+
+        const { lines, logger } = capturingLogger();
+
+        await runRegistryViewCommand({ cwd: workdir, from: registryRoot, logger, names: ["foo"] });
+
+        const printed = lines.join("\n");
+
+        expect(printed).not.toContain("\u001B");
+        expect(printed).not.toContain("\u0007");
+        // Tabs are real indentation in a source listing, not an escape vector.
+        expect(printed).toContain("\texport const tabbed = 1;");
+    });
+
+    it("a files-only item from a custom --from root still needs confirmation", async () => {
+        expect.assertions(3);
+
+        // No deps, no bindings — just files. `--from` is a registry root the user
+        // named, so those files are as attacker-influenceable as a `--source`
+        // fetch, and the confirmation only looked at `--source`.
+        writeItem({});
+
+        const { logger } = capturingLogger();
+        const prompts: string[] = [];
+        const result = await runAddCommand({
+            confirm: async (message) => {
+                prompts.push(message);
+
+                return false;
+            },
+            cwd: workdir,
+            from: registryRoot,
+            logger,
+            names: ["foo"],
+        });
+
+        expect(prompts).toHaveLength(1);
+        expect(result.code).toBe(1);
+        expect(existsSync(destination())).toBe(false);
+    });
+
+    it("strips BIDI overrides from the plan, from serialized values, and from errors", async () => {
+        expect.assertions(4);
+
+        // U+202E and friends are the terminal-spoofing vector the C0/C1 strip
+        // does not cover: they reorder a rendered line, so a plan can read as
+        // one thing and apply as another. `JSON.stringify` passes them through
+        // untouched, so the serialized binding/env values needed it too.
+        writeItem({
+            bindings: [{ path: ["vars", "FLAG"], value: "safe\u202Egnp.exe" }],
+            envVars: [{ name: "FOO", secret: false, value: "safe\u202Egnp.exe" }],
+            title: "Foo\u2066spoofed\u2069",
+        });
+
+        const { lines, logger } = capturingLogger();
+
+        await runAddCommand({ cwd: workdir, dryRun: true, from: registryRoot, logger, names: ["foo"], yes: true });
+
+        const printed = lines.join("\n");
+
+        expect(printed).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/u);
+        expect(printed).toContain("Foospoofed");
+        expect(printed).toContain("safegnp.exe");
+
+        // The caught-error path renders untrusted manifest text too: a rejected
+        // env-var name is echoed straight back into `add failed: …`.
+        rmSync(join(registryRoot, "foo"), { force: true, recursive: true });
+        writeItem({ envVars: [{ name: "BAD\u202E-NAME", value: "x" }] });
+
+        const failure = capturingLogger();
+
+        await runAddCommand({ cwd: workdir, from: registryRoot, logger: failure.logger, names: ["foo"], yes: true });
+
+        expect(failure.lines.join("\n")).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/u);
+    });
+
+    it("strips line feeds so a manifest value cannot forge its own plan lines", async () => {
+        expect.assertions(2);
+
+        // Every call site renders one value into ONE logger line, so an LF in a
+        // manifest value does not wrap — it invents a line the operator reads as
+        // the CLI's own output. TAB is kept (real indentation); LF is not.
+        writeItem({ title: "Foo\n  bind  vars.ADMIN = true\n  ✔ verified" });
+
+        const { lines, logger } = capturingLogger();
+
+        await runAddCommand({ cwd: workdir, dryRun: true, from: registryRoot, logger, names: ["foo"], yes: true });
+
+        expect(lines.some((line) => line.includes("\n"))).toBe(false);
+        expect(lines.join("\n")).not.toMatch(/^ {2}bind {2}vars\.ADMIN/mu);
+    });
+
     it("registry build generates index.json and --check detects drift", async () => {
         expect.assertions(3);
 

@@ -31,16 +31,25 @@ const hasIndexMetadata = (metadata: Record<string, unknown>): metadata is IndexF
         return false;
     }
 
-    if (
-        typeof suggestedIndex !== "object" ||
-        suggestedIndex === null ||
-        !Array.isArray((suggestedIndex as Record<string, unknown>)["fields"]) ||
-        ((suggestedIndex as Record<string, unknown>)["fields"] as unknown[]).length === 0
-    ) {
+    if (typeof suggestedIndex !== "object" || suggestedIndex === null) {
         return false;
     }
 
-    return true;
+    const { fields, name } = suggestedIndex as Record<string, unknown>;
+
+    // Every MEMBER, not just the array: `[null]` / `[42]` satisfied
+    // `Array.isArray` and the predicate then exposed them as strings, so the
+    // advisory action handed one to `sqlIdentifier`, which calls `.replaceAll`
+    // on it — a TypeError thrown while rendering rather than a hidden action.
+    if (!Array.isArray(fields) || fields.length === 0 || !fields.every((field) => typeof field === "string" && field.length > 0)) {
+        return false;
+    }
+
+    // `name` was asserted by the type predicate but never checked. `metadata` is
+    // server-supplied `Record<string, unknown>`, so a finding carrying a
+    // non-string name reached `quoteIdentifier`, which calls `.replaceAll` on it
+    // — a TypeError thrown inside the render rather than a hidden action.
+    return typeof name === "string" && name.length > 0;
 };
 
 /**

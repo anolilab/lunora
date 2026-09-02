@@ -89,7 +89,7 @@ export const create = mutation
 /** Sit down at a specific table. A private lobby additionally needs its invite code. */
 export const join = mutation
     .use(rateLimit(mutationLimiter, "write", byPlayer))
-    .input({ lobbyId: v.id("lobbies"), inviteCode: v.optional(v.string().meta({ schema: { maxLength: 16 } })) })
+    .input({ lobbyId: v.id("lobbies"), inviteCode: v.optional(v.string().max(16)) })
     .mutation(async ({ args: { inviteCode, lobbyId }, ctx }): Promise<void> => {
         if (!ctx.auth.userId) {
             throw new LunoraError("UNAUTHENTICATED", "sign in to join");
@@ -119,7 +119,7 @@ export const join = mutation
 
 export const joinByCode = mutation
     .use(rateLimit(mutationLimiter, "write", byPlayer))
-    .input({ inviteCode: v.string().meta({ schema: { maxLength: 16 } }) })
+    .input({ inviteCode: v.string().max(16) })
     .mutation(async ({ args: { inviteCode }, ctx }): Promise<Id<"lobbies">> => {
         if (!ctx.auth.userId) {
             throw new LunoraError("UNAUTHENTICATED", "sign in to join");

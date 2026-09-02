@@ -436,6 +436,64 @@ const resolveMintableKeys = async (context: EnvContext): Promise<string[]> => {
 };
 
 /**
+ * Split a minted batch into the keys `--set` may write and the keys already
+ * holding a live secret.
+ *
+ * A minted value REPLACES whatever is there, and the old one is gone — every
+ * session, signed URL and admin bearer issued under it stops verifying. With no
+ * explicit key `env generate` unions the required secrets with every mintable key
+ * already in `.dev.vars`, which is how "fill in the placeholders `env doctor`
+ * complained about" rotated live credentials nobody asked it to touch.
+ */
+const partitionMintable = (
+    devVariablesPath: string,
+    generated: ReadonlyArray<{ key: string; value: string }>,
+    rotate: boolean,
+): { live: string[]; writable: ReadonlyArray<{ key: string; value: string }> } => {
+    const existing = loadDevVariables(devVariablesPath);
+    const holdsLiveValue = (key: string): boolean => {
+        const entry = existing.get(key);
+
+        return entry !== undefined && entry.value !== "" && !isPlaceholderValue(entry.value);
+    };
+
+    return {
+        live: generated.filter((entry) => holdsLiveValue(entry.key)).map((entry) => entry.key),
+        writable: rotate ? generated : generated.filter((entry) => !holdsLiveValue(entry.key)),
+    };
+};
+
+/** Upsert the minted secrets into `.dev.vars`, refusing to rotate live values without `--yes`. */
+const writeGeneratedSecrets = (context: EnvContext, generated: ReadonlyArray<{ key: string; value: string }>): EnvCommandResult => {
+    const { devVariablesPath, logger, options } = context;
+    const { live, writable } = partitionMintable(devVariablesPath, generated, options.yes === true);
+
+    if (writable.length === 0) {
+        logger.error(
+            `env generate --set: ${live.join(", ")} already hold(s) a live secret and rotating it is irreversible ` +
+                `(outstanding signed URLs and bearers stop verifying). Re-run with --yes to rotate anyway.`,
+        );
+
+        return { code: 1, descriptors: [] };
+    }
+
+    if (live.length > 0) {
+        logger.warn(`env generate --set: left ${live.join(", ")} untouched (already set) — re-run with --yes to rotate them too`);
+    }
+
+    let raw = readDevVariablesRaw(devVariablesPath);
+
+    for (const entry of writable) {
+        raw = upsertDevVariableLine(raw, entry.key, entry.value);
+    }
+
+    writeDevVariablesFileAtomically(devVariablesPath, raw);
+    logger.success(`env: generated ${String(writable.length)} secret(s) into ${DEV_VARS_FILE}: ${writable.map((entry) => entry.key).join(", ")}`);
+
+    return { code: 0, descriptors: [] };
+};
+
+/**
  * Generate cryptographically-strong secret values (32-byte hex) so the user can
  * set them for prod or other envs. With an explicit key argument it mints that
  * one key; with none it mints every secret the project can generate locally.
@@ -443,7 +501,7 @@ const resolveMintableKeys = async (context: EnvContext): Promise<string[]> => {
  * put`), or with `--set` writes them into `.dev.vars`.
  */
 const runEnvGenerate = async (context: EnvContext): Promise<EnvCommandResult> => {
-    const { devVariablesPath, logger, options } = context;
+    const { logger, options } = context;
 
     let keys: string[];
 
@@ -471,16 +529,7 @@ const runEnvGenerate = async (context: EnvContext): Promise<EnvCommandResult> =>
     });
 
     if (options.set === true) {
-        let raw = readDevVariablesRaw(devVariablesPath);
-
-        for (const entry of generated) {
-            raw = upsertDevVariableLine(raw, entry.key, entry.value);
-        }
-
-        writeDevVariablesFileAtomically(devVariablesPath, raw);
-        logger.success(`env: generated ${String(generated.length)} secret(s) into ${DEV_VARS_FILE}: ${generated.map((entry) => entry.key).join(", ")}`);
-
-        return { code: 0, descriptors: [] };
+        return writeGeneratedSecrets(context, generated);
     }
 
     // Print full `KEY=value` lines to stdout (the user asked to generate them —

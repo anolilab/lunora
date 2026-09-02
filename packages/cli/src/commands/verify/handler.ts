@@ -14,6 +14,7 @@ import type { HealthFetch } from "../../util/health-probe";
 import { probeHealth } from "../../util/health-probe";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
@@ -189,6 +190,17 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
         }
 
         const codegen = runCodegen({ apiSpec: options.apiSpec, dryRun: true, projectRoot: cwd, target: resolvedTarget.target });
+
+        // The target is resolved and validated immediately above precisely so
+        // the surface is gated against it — reporting everything else this run
+        // produced and dropping the one output that depends on the target left
+        // `lunora verify`, the documented pre-deploy gate, green on an app whose
+        // host cannot serve what codegen emitted.
+        const platform = reportPlatformDiagnostics(codegen.platformDiagnostics, logger);
+
+        errors.push(...platform.errors);
+        warnings.push(...platform.warnings);
+
         const gate = runSchemaDriftGate({ allowDrift: options.allowSchemaDrift === true, codegen, command: "verify", logger, readOnly: true });
 
         if (gate.blocked) {

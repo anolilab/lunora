@@ -141,6 +141,7 @@ describe("runAddFeature (auth-ui)", () => {
         seedProject(workdir, { "@lunora/react": "1.0.0-alpha.30" });
 
         const result = await runAddFeature({
+            confirm: async () => true,
             cwd: workdir,
             feature: "auth-ui",
             from: registryRoot,
@@ -164,6 +165,7 @@ describe("runAddFeature (auth-ui)", () => {
         seedProject(workdir, { "@lunora/vue": "1.0.0-alpha.1" });
 
         const result = await runAddFeature({
+            confirm: async () => true,
             cwd: workdir,
             feature: "auth-ui",
             from: registryRoot,
@@ -211,6 +213,7 @@ describe("runAddFeature (auth-ui)", () => {
         seedProject(workdir, { "@lunora/solid": "1.0.0", "@solidjs/web": "2.0.0-rc.0", "solid-js": "^2.0.0-rc.0" });
 
         const result = await runAddFeature({
+            confirm: async () => true,
             cwd: workdir,
             feature: "auth-ui",
             from: registryRoot,
@@ -232,6 +235,7 @@ describe("runAddFeature (auth-ui)", () => {
         seedProject(workdir, {});
 
         const result = await runAddFeature({
+            confirm: async () => true,
             cwd: workdir,
             feature: "auth-ui",
             from: registryRoot,

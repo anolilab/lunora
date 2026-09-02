@@ -262,6 +262,51 @@ describe("d1 admin export/import globals", () => {
             expect(result.errors[0]).toMatchObject({ code: "VALIDATION_ERROR", table: "settings" });
         });
 
+        /**
+         * A `.global()` table stores real columns, so a key it does not declare
+         * has nowhere to go — the writer dropped it and the import still answered
+         * `{"conflicts":0,"errors":[],"inserted":{"settings":1}}`. A snapshot
+         * taken before a `title → heading` rename therefore restored as
+         * `{"heading": null}` and reported success. The shard twin errors with
+         * `unexpected field "…"` on the identical input; this half now does too.
+         */
+        it("rejects a field the table does not declare rather than dropping it and reporting success", async () => {
+            expect.assertions(3);
+
+            const result = await importGlobalRows(writer, schema, {
+                rows: [
+                    { doc: { _id: "s1", name: "ok", title: "renamed away", value: "x" }, table: "settings" },
+                    { doc: { _id: "s2", name: "ok2", value: "y" }, table: "settings" },
+                ],
+            });
+
+            expect(result.inserted).toEqual({ settings: 1 });
+            expect(result.errors).toHaveLength(1);
+            expect(result.errors[0]).toMatchObject({
+                code: "VALIDATION_ERROR",
+                message: 'unexpected field "title": not declared in table "settings"',
+                table: "settings",
+            });
+        });
+
+        it("rejects a prototype-named field the table does not declare", async () => {
+            expect.assertions(2);
+
+            // `key in definition.shape` walks the prototype chain, so `constructor`
+            // (and `toString`, `valueOf`) passed as "declared". The validation loop
+            // iterates `Object.entries(shape)` and never sees such a key, so it went
+            // straight to `writer.insert` — dropped on the floor, still answered 200.
+            const result = await importGlobalRows(writer, schema, {
+                rows: [{ doc: { _id: "s3", constructor: "injected", name: "ok", value: "x" }, table: "settings" }],
+            });
+
+            expect(result.inserted).toEqual({});
+            expect(result.errors[0]).toMatchObject({
+                message: 'unexpected field "constructor": not declared in table "settings"',
+                table: "settings",
+            });
+        });
+
         it("attributes errors to each row's own `line` when non-contiguous (interspersed shard-local rows filtered out upstream)", async () => {
             expect.assertions(1);
 

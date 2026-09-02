@@ -2749,6 +2749,49 @@ describe("lunoraClient", () => {
             expect((init.headers as Record<string, string>)["authorization"]).toBe("Bearer tkn");
         });
 
+        it("listDeadJobs walks every page rather than stopping at the first", async () => {
+            expect.assertions(3);
+
+            // `/dead` is a bounded, cursored read — a shard that dead-lettered
+            // thousands of jobs cannot serialize them all in one response. But
+            // this list is the ONLY view of a permanently-failed job and the only
+            // way to requeue one, so returning `records` alone silently hid
+            // exactly the backlog an operator opens the panel to find.
+            const page1 = Array.from({ length: 100 }, (_unused, index) => {
+                return {
+                    args: {},
+                    enqueuedAt: 1,
+                    functionPath: "email:send",
+                    id: `d${String(index)}`,
+                    scheduledFor: 2000,
+                };
+            });
+            const page2 = [{ args: {}, enqueuedAt: 1, functionPath: "email:send", id: "d100", scheduledFor: 2000 }];
+
+            const fetchMock = vi.fn<typeof fetch>(async (input) => {
+                // `fetch`'s input is `string | URL | Request`; only a URL string
+                // can be substring-matched for the cursor.
+                const requested = input instanceof Request ? input.url : String(input);
+
+                return requested.includes("cursor=")
+                    ? jsonResponse({ records: page2, truncated: false })
+                    : jsonResponse({ cursor: "dead:d99", records: page1, truncated: true });
+            });
+
+            const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+            client.setAuthToken("tkn");
+
+            const result = await client.listDeadJobs();
+
+            expect(result).toHaveLength(101);
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+
+            const [secondUrl] = fetchMock.mock.calls[1] as unknown as [string];
+
+            expect(secondUrl).toBe("https://app.example/_lunora/admin/scheduled/dead?cursor=dead%3Ad99");
+        });
+
         it("listScheduledJobs defaults to an empty array when records are absent", async () => {
             expect.assertions(1);
 

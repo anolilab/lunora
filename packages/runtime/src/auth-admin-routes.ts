@@ -723,7 +723,15 @@ const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request
         const input = descriptor.build(context);
         const result = await runAuthOp(() => (method as (argument: unknown) => Promise<unknown>)(input));
 
-        return Response.json(descriptor.returns === "void" ? { ok: true } : result, { headers: { "content-type": "application/json" }, status: 200 });
+        // `no-store`, not just `content-type`: `users/impersonate` answers with a live
+        // session bearer token for an arbitrary user and `users` with PII. Under an
+        // `adminGate` the request carries a cookie/JWT and no `Authorization` header,
+        // so RFC 9111's shared-cache suppression does not apply — nothing else would
+        // stop an intermediary storing it. Mirrors the inline admin routes.
+        return Response.json(descriptor.returns === "void" ? { ok: true } : result, {
+            headers: { "cache-control": "no-store", "content-type": "application/json" },
+            status: 200,
+        });
     };
 
     const routes: Record<string, (request: Request) => Promise<Response>> = {};

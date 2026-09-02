@@ -29,6 +29,7 @@ import {
     FTS_TEXT_COLUMN,
     FTS_TOKEN_COLUMN,
     ftsTableName,
+    searchIndexProfile,
     searchTermRange,
     tokenizeSearch,
 } from "@lunora/search-core";
@@ -469,11 +470,19 @@ const resolveSearchLayout = (index: SearchIndexDefinitionLike, dialect: SqlDiale
 };
 
 /**
- * The profile recorded for a companion: its analysis *and* its layout. Both
- * change what the stored rows mean, so both have to be detected.
+ * The profile recorded for a companion: everything that changes what its rows
+ * mean. The shared half — analysis and the indexed field — comes from
+ * `searchIndexProfile`, so this backend cannot detect a rebuild the DO one
+ * misses; the layout is appended because only this backend has more than one
+ * physical shape, and a companion built for one holds different *columns* than
+ * another.
+ *
+ * The layout is the LAST `/`-delimited segment, which is what `layoutOf` in
+ * `ctx-db-search` reads back to tell an unsalvageable shape change from a
+ * rebuild the existing rows can be walked through in place.
  */
 const companionProfile = (index: SearchIndexDefinitionLike, dialect: SqlDialect): string =>
-    `${createSearchAnalyzer(index.language).profile}/${resolveSearchLayout(index, dialect).name}`;
+    `${searchIndexProfile(index)}/${resolveSearchLayout(index, dialect).name}`;
 
 /**
  * Every table a `.global()` companion can be built for, paired with its index.

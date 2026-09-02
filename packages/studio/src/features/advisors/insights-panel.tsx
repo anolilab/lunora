@@ -434,10 +434,10 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
         //
         // For `unindexed_foreign_key` / `unindexed_relation_target` findings (and
         // any other finding that carries `suggestedIndex` metadata), attach an
-        // "Apply index" action that composes the `CREATE INDEX` SQL and copies it
-        // to the operator's clipboard on confirm. This is the Item 5 "create all
-        // missing indexes" apply control — per-finding rather than bulk, guarded
-        // by ConfirmButton.
+        // action that composes the `CREATE INDEX` SQL and copies it to the
+        // operator's clipboard on confirm — per-finding rather than bulk, guarded
+        // by ConfirmButton. It copies rather than applies: `runSql` rejects DDL by
+        // design, so nothing here can run the statement.
         const indexAdvisoryLints = new Set(["unindexed_foreign_key", "unindexed_relation_target"]);
         const staticRows: AdvisorRow[] = (advisories ?? []).map((finding) => {
             const base = advisoryRow(finding);

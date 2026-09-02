@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -47,6 +47,17 @@ describe("lunora data-transfer", () => {
                 controller.close();
             },
         });
+    };
+
+    /** A worker that answers one NDJSON row carrying something worth not disclosing. */
+    const oneRowFetch = (): StreamingFetchLike => async (): ReturnType<StreamingFetchLike> => {
+        return {
+            body: stringStream(`${JSON.stringify({ doc: { _id: "u1", ssn: "000-00-0000" }, table: "users" })}\n`),
+            json: async () => undefined,
+            ok: true,
+            status: 200,
+            text: async () => "",
+        };
     };
 
     describe("runExportCommand", () => {
@@ -131,6 +142,81 @@ describe("lunora data-transfer", () => {
             expect(calls[0]!.body.tables).toEqual(["users", "messages"]);
         });
 
+        it("leaves an existing --out file intact when the export fails mid-stream", async () => {
+            expect.assertions(3);
+
+            const outPath = join(workDir, "yesterday.ndjson");
+            const yesterday = `${JSON.stringify({ doc: { _id: "old" }, table: "users" })}\n`;
+
+            writeFileSync(outPath, yesterday, "utf8");
+
+            // The body starts fine and then errors — the shape of a dropped
+            // connection part-way through a large dump.
+            const failingBody = new ReadableStream<Uint8Array>({
+                start(controller) {
+                    controller.enqueue(new TextEncoder().encode('{"table":"users","doc":{"_id":"u1"}}\n'));
+                    controller.error(new Error("connection reset"));
+                },
+            });
+
+            const fetchImpl: StreamingFetchLike = async () => {
+                return { body: failingBody, json: async () => undefined, ok: true, status: 200, text: async () => "" };
+            };
+
+            await expect(runExportCommand({ fetchImpl, logger: silentLogger(), out: outPath, token: "t", url: "http://localhost:8787" })).rejects.toThrow(
+                "connection reset",
+            );
+
+            // Yesterday's dump is still there, byte for byte.
+            expect(existsSync(outPath)).toBe(true);
+            expect(readFileSync(outPath, "utf8")).toBe(yesterday);
+        });
+
+        it("discards the staged dump when the commit rename fails", async () => {
+            expect.assertions(2);
+
+            // `--out` is an existing directory, so the stage → commit `rename`
+            // rejects after every row is on disk. The staged `.partial` holds the
+            // complete plaintext export; leaving it behind is the same disclosure
+            // the stage/commit was added to prevent.
+            const outPath = join(workDir, "already-a-directory");
+
+            mkdirSync(outPath, { recursive: true });
+
+            await expect(
+                runExportCommand({ fetchImpl: oneRowFetch(), logger: silentLogger(), out: outPath, token: "t", url: "http://localhost:8787" }),
+            ).rejects.toThrow(/EISDIR/u);
+
+            expect(readdirSync(workDir).filter((entry) => entry.endsWith(".partial"))).toStrictEqual([]);
+        });
+
+        it("keeps the exported dump private under a permissive umask", async () => {
+            expect.assertions(1);
+
+            const outPath = join(workDir, "private.ndjson");
+
+            // `createWriteStream` opens at 0666 before the umask, so without an
+            // explicit mode the dump is world-readable on any box that does not
+            // narrow it — and a dump is every row of every table.
+            // eslint-disable-next-line sonarjs/file-permissions -- widening the umask IS the test: it is what makes an unset `mode` observable, and it is restored in the `finally`
+            const previousUmask = process.umask(0o000);
+
+            try {
+                await runExportCommand({
+                    fetchImpl: oneRowFetch(),
+                    logger: silentLogger(),
+                    out: outPath,
+                    token: "t",
+                    url: "http://localhost:8787",
+                });
+
+                // eslint-disable-next-line no-bitwise -- reading the permission bits IS the assertion
+                expect(statSync(outPath).mode & 0o777).toBe(0o600);
+            } finally {
+                process.umask(previousUmask);
+            }
+        });
+
         it("refuses to target localhost with --prod", async () => {
             expect.assertions(1);
 
@@ -155,6 +241,42 @@ describe("lunora data-transfer", () => {
             });
 
             expect(result.code).toBe(1);
+        });
+
+        it("refuses a remote --url without --yes even when --prod is not passed", async () => {
+            expect.assertions(3);
+
+            const file = join(workDir, "remote.ndjson");
+
+            writeFileSync(file, `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n`, "utf8");
+
+            const errors: string[] = [];
+            const calls: string[] = [];
+            const fetchImpl: StreamingFetchLike = async (url) => {
+                calls.push(url);
+
+                return {
+                    body: null,
+                    json: async () => {
+                        return { conflicts: 0, errors: [], inserted: {} };
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
+            };
+
+            const result = await runImportCommand({
+                fetchImpl,
+                file,
+                logger: { ...silentLogger(), error: (m) => errors.push(m) },
+                token: "t",
+                url: "https://prod.example.invalid",
+            });
+
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(0);
+            expect(errors.join("\n")).toContain("--yes");
         });
 
         it("pOSTs batches and aggregates the inserted counts", async () => {

@@ -60,14 +60,18 @@ installCompiledValidatorMap(lunora_push_0.announce.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["body"] !== "string") return DEFER;
+if (source["body"].length > 2048) return DEFER;
 if (typeof source["title"] !== "string") return DEFER;
+if (source["title"].length > 256) return DEFER;
 return { "body": source["body"], "title": source["title"] };
 });
 installCompiledValidatorMap(lunora_push_0.broadcast.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["body"] !== "string") return DEFER;
+if (source["body"].length > 2048) return DEFER;
 if (typeof source["title"] !== "string") return DEFER;
+if (source["title"].length > 256) return DEFER;
 return { "body": source["body"], "title": source["title"] };
 });
 installCompiledValidatorMap(lunora_push_0.registerDevice.args, (source) => {
@@ -76,10 +80,13 @@ if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(
 if (typeof source["subscription"] !== "object" || source["subscription"] === null || Array.isArray(source["subscription"])) return DEFER;
 if (Object.getPrototypeOf(source["subscription"]) !== Object.prototype && Object.getPrototypeOf(source["subscription"]) !== null) return DEFER;
 if (typeof source["subscription"]["endpoint"] !== "string") return DEFER;
+if (source["subscription"]["endpoint"].length > 2048) return DEFER;
 if (typeof source["subscription"]["keys"] !== "object" || source["subscription"]["keys"] === null || Array.isArray(source["subscription"]["keys"])) return DEFER;
 if (Object.getPrototypeOf(source["subscription"]["keys"]) !== Object.prototype && Object.getPrototypeOf(source["subscription"]["keys"]) !== null) return DEFER;
 if (typeof source["subscription"]["keys"]["auth"] !== "string") return DEFER;
+if (source["subscription"]["keys"]["auth"].length > 256) return DEFER;
 if (typeof source["subscription"]["keys"]["p256dh"] !== "string") return DEFER;
+if (source["subscription"]["keys"]["p256dh"].length > 256) return DEFER;
 const __obj1 = { "auth": source["subscription"]["keys"]["auth"], "p256dh": source["subscription"]["keys"]["p256dh"] };
 const __obj2 = { "endpoint": source["subscription"]["endpoint"], "keys": __obj1 };
 return { "subscription": __obj2 };

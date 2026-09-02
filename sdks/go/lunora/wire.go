@@ -37,6 +37,26 @@ const MaxDepth = 64
 // Applied only on decode — the untrusted direction.
 const MaxBigIntDigits = 1024
 
+// typedArrayElementSizes gives the bytes per element of each typed-array view
+// the codec round-trips. A view whose payload is not a whole number of elements
+// is not a view the reference can rebuild — new Float32Array(buffer) raises a
+// RangeError there — so accepting it would hand the consumer bytes it cannot
+// reconstruct. ArrayBuffer is absent deliberately: it is untyped, so there is
+// nothing to align.
+var typedArrayElementSizes = map[string]int{
+	"BigInt64Array":     8,
+	"BigUint64Array":    8,
+	"Float32Array":      4,
+	"Float64Array":      8,
+	"Int16Array":        2,
+	"Int32Array":        4,
+	"Int8Array":         1,
+	"Uint16Array":       2,
+	"Uint32Array":       4,
+	"Uint8Array":        1,
+	"Uint8ClampedArray": 1,
+}
+
 // undefinedType is the type of Undefined. It is unexported so Undefined is the
 // only value of it, making `== Undefined` a total test.
 type undefinedType struct{}
@@ -613,10 +633,11 @@ func decodeMap(value []any, depth int) (any, error) {
 	}
 
 	entries := make([]MapEntry, 0, len(raw))
+	seen := map[string]int{}
 
 	for _, item := range raw {
 		pair, ok := item.([]any)
-		if !ok || len(pair) < 2 {
+		if !ok || len(pair) != 2 {
 			return nil, fmt.Errorf("wire-codec: malformed map entry")
 		}
 
@@ -630,10 +651,56 @@ func decodeMap(value []any, depth int) (any, error) {
 			return nil, err
 		}
 
+		// Last write wins, at the FIRST occurrence's position — the reference
+		// builds a real Map, and Map.prototype.set on a key already present
+		// overwrites the value in place rather than appending. Keeping both
+		// entries left two peers of one deployment reading a different value
+		// from identical bytes.
+		identity, collapses := mapKeyIdentity(key)
+
+		if collapses {
+			if index, duplicate := seen[identity]; duplicate {
+				entries[index] = MapEntry{Key: key, Value: decoded}
+
+				continue
+			}
+
+			seen[identity] = len(entries)
+		}
+
 		entries = append(entries, MapEntry{Key: key, Value: decoded})
 	}
 
 	return Map{Entries: entries}, nil
+}
+
+// mapKeyIdentity returns a map key's collapse identity, and whether it collapses
+// at all.
+//
+// The reference's Map compares keys by SameValueZero: primitives by value (NaN
+// equal to itself), everything else by reference — so two structurally identical
+// Date/Bytes keys stay two entries there and must stay two here.
+func mapKeyIdentity(key any) (string, bool) {
+	switch typed := key.(type) {
+	case nil:
+		return "null", true
+	case undefinedType:
+		return "undefined", true
+	case bool:
+		return fmt.Sprintf("bool:%t", typed), true
+	case string:
+		return "str:" + typed, true
+	case BigInt:
+		return "big:" + typed.Value.String(), true
+	case float64:
+		if math.IsNaN(typed) {
+			return "num:nan", true
+		}
+
+		return fmt.Sprintf("num:%v", typed), true
+	}
+
+	return "", false
 }
 
 func decodeSet(value []any, depth int) (any, error) {
@@ -663,15 +730,20 @@ func decodeError(value []any, depth int) (any, error) {
 	message, _ := value[3].(string)
 	decoded := Error{Message: message, Name: name, Props: map[string]any{}, Cause: Undefined}
 
-	if len(value) > 4 {
-		props, err := decodeWire(value[4], depth+1)
-		if err != nil {
-			return nil, err
-		}
+	// The props slot is NOT optional and NOT nullable: the reference reads it with
+	// Object.keys, which throws on a null or missing slot, so quietly substituting
+	// an empty map accepted a frame the reference refuses.
+	if len(value) < 5 || value[4] == nil {
+		return nil, fmt.Errorf("wire-codec: malformed error tag")
+	}
 
-		if asMap, ok := props.(map[string]any); ok {
-			decoded.Props = asMap
-		}
+	props, err := decodeWire(value[4], depth+1)
+	if err != nil {
+		return nil, err
+	}
+
+	if asMap, ok := props.(map[string]any); ok {
+		decoded.Props = asMap
 	}
 
 	if len(value) > 5 {
@@ -713,6 +785,23 @@ func decodeBytes(value []any) (any, error) {
 	// every other view keeps its constructor name so the type survives.
 	if ctor == "Uint8Array" {
 		return data, nil
+	}
+
+	if ctor != "ArrayBuffer" {
+		size, known := typedArrayElementSizes[ctor]
+
+		// An UNKNOWN ctor name decodes to raw bytes, dropping the name — the
+		// forward-compat rule in protocol/README.md §2.1. Keeping it re-encoded a
+		// 4-element form the reference emits as 3, so the same value relayed
+		// through JS and through here produced different bytes, and therefore
+		// different stable subscription keys.
+		if !known {
+			return data, nil
+		}
+
+		if len(data)%size != 0 {
+			return nil, fmt.Errorf("wire-codec: %s payload of %d bytes is not a multiple of its %d-byte element", ctor, len(data), size)
+		}
 	}
 
 	return Bytes{Ctor: ctor, Data: data}, nil

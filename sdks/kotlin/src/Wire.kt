@@ -32,6 +32,28 @@ object Wire {
      */
     const val MAX_BIGINT_DIGITS: Int = 1024
 
+    /**
+     * Bytes per element for the typed-array views the codec round-trips. A view
+     * whose payload is not a whole number of elements is not a view the
+     * reference can rebuild — `new Float32Array(buffer)` raises a RangeError
+     * there — so accepting it would hand the consumer bytes it cannot
+     * reconstruct. `ArrayBuffer` is absent deliberately: it is untyped, so there
+     * is nothing to align.
+     */
+    private val TYPED_ARRAY_ELEMENT_SIZES: Map<String, Int> = mapOf(
+        "BigInt64Array" to 8,
+        "BigUint64Array" to 8,
+        "Float32Array" to 4,
+        "Float64Array" to 8,
+        "Int16Array" to 2,
+        "Int32Array" to 4,
+        "Int8Array" to 1,
+        "Uint16Array" to 2,
+        "Uint32Array" to 4,
+        "Uint8Array" to 1,
+        "Uint8ClampedArray" to 1,
+    )
+
     /** Encode [value] into a JSON-safe tree, tagging the leaves JSON cannot carry. */
     fun encode(value: WireValue, depth: Int = 0): Any? {
         if (depth > MAX_DEPTH) throw WireFormatException("wire-codec: value nesting exceeds the $MAX_DEPTH-level limit")
@@ -106,19 +128,85 @@ object Wire {
         "-inf" -> WireValue.NegInfinity
         "bigint" -> decodeBigInt(items)
         "date" -> WireValue.Date(decode(items.getOrNull(2), depth + 1))
-        "url" -> WireValue.Url(items[2] as String)
-        "map" -> WireValue.WireMap(
-            (items[2] as List<*>).map { entry ->
-                val pair = entry as List<*>
-                decode(pair[0], depth + 1) to decode(pair[1], depth + 1)
-            },
-        )
-        "set" -> WireValue.WireSet((items[2] as List<*>).map { decode(it, depth + 1) })
+        "url" -> WireValue.Url(items.getOrNull(2) as? String ?: throw WireFormatException("wire-codec: malformed url tag"))
+        "map" -> decodeMap(items, depth)
+        "set" -> WireValue.WireSet(payloadList(items, "set").map { decode(it, depth + 1) })
         "error" -> decodeError(items, depth)
         "bytes" -> decodeBytes(items)
-        "arr" -> WireValue.Arr((items[2] as List<*>).map { decode(it, depth + 1) })
+        "arr" -> WireValue.Arr(payloadList(items, "arr").map { decode(it, depth + 1) })
         // Unknown tag (forward compatibility): an ordinary array.
         else -> WireValue.Arr(items.map { decode(it, depth + 1) })
+    }
+
+    /**
+     * The tag's payload slot as a list, or a typed rejection.
+     *
+     * `items[2] as List<*>` threw a bare ClassCastException — or an
+     * IndexOutOfBoundsException on a short array — straight out of `decode`, so
+     * a caller catching WireFormatException around a decode caught neither.
+     */
+    private fun payloadList(items: List<*>, tag: String): List<*> =
+        items.getOrNull(2) as? List<*> ?: throw WireFormatException("wire-codec: malformed $tag tag")
+
+    /**
+     * Decode a `map` tag, refusing an entry that is not exactly a `[key, value]`
+     * pair. A longer entry is as malformed as a shorter one — the reference
+     * refuses both rather than picking two slots out of an entry it cannot read.
+     */
+    private fun decodeMap(items: List<*>, depth: Int): WireValue {
+        val entries = mutableListOf<Pair<WireValue, WireValue>>()
+        val seen = mutableMapOf<String, Int>()
+
+        for (entry in payloadList(items, "map")) {
+            if (entry !is List<*> || entry.size != 2) {
+                throw WireFormatException("wire-codec: malformed map entry")
+            }
+
+            val key = decode(entry[0], depth + 1)
+            val pair = key to decode(entry[1], depth + 1)
+            val identity = mapKeyIdentity(key)
+
+            // Last write wins, at the FIRST occurrence's position — the reference
+            // builds a real Map, and `Map.prototype.set` on a key already present
+            // overwrites the value in place rather than appending. Keeping both
+            // entries left two peers of one deployment reading a different value
+            // from identical bytes.
+            if (identity != null) {
+                val index = seen[identity]
+
+                if (index != null) {
+                    entries[index] = pair
+
+                    continue
+                }
+
+                seen[identity] = entries.size
+            }
+
+            entries.add(pair)
+        }
+
+        return WireValue.WireMap(entries)
+    }
+
+    /**
+     * A map key's collapse identity, or `null` when it never collapses.
+     *
+     * The reference's `Map` compares keys by SameValueZero: primitives by value
+     * (NaN equal to itself), everything else by reference — so two structurally
+     * identical Date/bytes keys stay two entries there and must stay two here.
+     */
+    private fun mapKeyIdentity(key: WireValue): String? = when (key) {
+        is WireValue.Null -> "null"
+        is WireValue.Undefined -> "undefined"
+        is WireValue.NaN -> "num:nan"
+        is WireValue.Infinity -> "num:inf"
+        is WireValue.NegInfinity -> "num:-inf"
+        is WireValue.Bool -> "bool:${key.value}"
+        is WireValue.Num -> "num:${key.value}"
+        is WireValue.Text -> "str:${key.value}"
+        is WireValue.BigInt -> "big:${key.value}"
+        else -> null
     }
 
     private fun decodeBigInt(items: List<*>): WireValue {
@@ -132,7 +220,12 @@ object Wire {
     }
 
     private fun decodeError(items: List<*>, depth: Int): WireValue {
-        val props = (items.getOrNull(4) as? Map<*, *>)
+        // The props slot is NOT optional and NOT nullable: the reference reads it
+        // with `Object.keys`, which throws on a null or missing slot, so quietly
+        // substituting an empty map accepted a frame the reference refuses.
+        if (items.size < 5 || items[4] == null) throw WireFormatException("wire-codec: malformed error tag")
+
+        val props = (items[4] as? Map<*, *>)
             ?.map { (key, item) -> key.toString() to decode(item, depth + 1) }
             ?: emptyList()
 
@@ -145,12 +238,34 @@ object Wire {
     }
 
     private fun decodeBytes(items: List<*>): WireValue {
-        val data = Base64.getDecoder().decode(items[2] as String)
+        val encoded = items.getOrNull(2) as? String ?: throw WireFormatException("wire-codec: malformed bytes tag")
+
+        val data = try {
+            Base64.getDecoder().decode(encoded)
+        } catch (error: IllegalArgumentException) {
+            throw WireFormatException("wire-codec: invalid base64 in bytes tag")
+        }
+
         val ctor = items.getOrNull(3) as? String ?: "Uint8Array"
 
         // A plain Uint8Array re-encodes to the 2-element form; every other view
         // keeps its constructor name.
-        return if (ctor == "Uint8Array") WireValue.Bytes(data) else WireValue.TypedBytes(data, ctor)
+        if (ctor == "Uint8Array") return WireValue.Bytes(data)
+
+        if (ctor != "ArrayBuffer") {
+            // An UNKNOWN ctor name decodes to raw bytes, dropping the name — the
+            // forward-compat rule in protocol/README.md §2.1. Keeping it re-encoded
+            // a 4-element form the reference emits as 3, so the same value relayed
+            // through JS and through here produced different bytes, and therefore
+            // different stable subscription keys.
+            val size = TYPED_ARRAY_ELEMENT_SIZES[ctor] ?: return WireValue.Bytes(data)
+
+            if (data.size % size != 0) {
+                throw WireFormatException("wire-codec: $ctor payload of ${data.size} bytes is not a multiple of its $size-byte element")
+            }
+        }
+
+        return WireValue.TypedBytes(data, ctor)
     }
 
     /** Whether [raw] is an optionally-negative run of ASCII digits. */

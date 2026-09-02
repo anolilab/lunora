@@ -505,10 +505,16 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
             // This write populates the companion for n5 alone…
             await writer.insert("notes", { _id: "n5", body: "goodbye latecomer", channel: "general", title: "five" }, { allowExplicitId: true });
 
-            const beforeBackfill = await writer
+            // A NEW index covers a growing PREFIX of the table, so a search over
+            // it would return a confidently wrong subset — n5 alone here. The
+            // read refuses instead. (A REBUILDING index is the other case: it
+            // holds every row under stale analysis, so it keeps serving.)
+            const beforeBackfill = writer
                 .query("notes")
                 .withSearchIndex("by_body", (q) => q.search("body", "goodbye"))
                 .collect();
+
+            await expect(beforeBackfill).rejects.toThrow(/still backfilling/u);
 
             // …and the out-of-band backfill still reaches the pre-index rows.
             await backfillSqlSearchIndexes(harness.exec, stagedSchema, postgresDialect);
@@ -518,7 +524,6 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
                 .withSearchIndex("by_body", (q) => q.search("body", "goodbye"))
                 .collect();
 
-            expect(ids(beforeBackfill)).toEqual(["n5"]);
             expect([...ids(afterBackfill)].toSorted((left, right) => String(left).localeCompare(String(right)))).toEqual(["n3", "n5"]);
         });
 

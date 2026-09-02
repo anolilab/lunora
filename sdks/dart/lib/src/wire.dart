@@ -53,6 +53,25 @@ const int wireMaxBigIntDigits = 1024;
 /// changing value — `BigInt` and its tag exist for that case.
 const int wireMaxExactInteger = 9007199254740991;
 
+/// Bytes per element for the typed-array views the codec round-trips. A view
+/// whose payload is not a whole number of elements is not a view the reference
+/// can rebuild — `new Float32Array(buffer)` raises a RangeError there — so
+/// accepting it would hand the consumer bytes it cannot reconstruct.
+/// `ArrayBuffer` is absent deliberately: it is untyped, so nothing to align.
+const Map<String, int> wireTypedArrayElementSizes = <String, int>{
+  'BigInt64Array': 8,
+  'BigUint64Array': 8,
+  'Float32Array': 4,
+  'Float64Array': 8,
+  'Int16Array': 2,
+  'Int32Array': 4,
+  'Int8Array': 1,
+  'Uint16Array': 2,
+  'Uint32Array': 4,
+  'Uint8Array': 1,
+  'Uint8ClampedArray': 1,
+};
+
 /// JavaScript's `undefined`, distinct from JSON null.
 ///
 /// As an object field it is dropped on encode (matching `JSON.stringify`); in an
@@ -436,28 +455,87 @@ Object? _decodeMap(List<Object?> value, int depth) {
   _require(value.length >= 3 && value[2] is List, 'map');
 
   final entries = <MapEntry<Object?, Object?>>[];
+  final seen = <String, int>{};
 
   for (final item in value[2] as List<Object?>) {
-    if (item is! List || item.length < 2) {
+    if (item is! List || item.length != 2) {
       throw const WireFormatException('malformed map entry tag');
     }
-    entries.add(MapEntry(decodeWire(item[0], depth + 1), decodeWire(item[1], depth + 1)));
+
+    final key = decodeWire(item[0], depth + 1);
+    final entry = MapEntry(key, decodeWire(item[1], depth + 1));
+    final identity = _mapKeyIdentity(key);
+
+    // Last write wins, at the FIRST occurrence's position — the reference builds
+    // a real Map, and `Map.prototype.set` on a key already present overwrites
+    // the value in place rather than appending. Keeping both entries left two
+    // peers of one deployment reading a different value from identical bytes.
+    if (identity != null) {
+      final index = seen[identity];
+
+      if (index != null) {
+        entries[index] = entry;
+        continue;
+      }
+
+      seen[identity] = entries.length;
+    }
+
+    entries.add(entry);
   }
 
   return WireMap(entries);
 }
 
+/// A map key's collapse identity, or `null` when it never collapses.
+///
+/// The reference's `Map` compares keys by SameValueZero: primitives by value
+/// (`NaN` equal to itself), everything else by reference — so two structurally
+/// identical `WireDate`/bytes keys stay two entries there and must stay two
+/// here.
+String? _mapKeyIdentity(Object? key) {
+  if (key == null) {
+    return 'null';
+  }
+
+  if (identical(key, WireUndefined.instance)) {
+    return 'undefined';
+  }
+
+  if (key is bool) {
+    return 'bool:$key';
+  }
+
+  if (key is String) {
+    return 'str:$key';
+  }
+
+  if (key is BigInt) {
+    return 'big:$key';
+  }
+
+  if (key is num) {
+    // `1` and `1.0` are one key to the reference, where every JSON number is a
+    // double — so they must not split on Dart's int/double distinction.
+    return key.isNaN ? 'num:nan' : 'num:${key.toDouble()}';
+  }
+
+  return null;
+}
+
 Object? _decodeError(List<Object?> value, int depth) {
   _require(value.length >= 4, 'error');
 
+  // The props slot is NOT optional and NOT nullable: the reference reads it with
+  // `Object.keys`, which throws on a null or missing slot, so quietly
+  // substituting an empty map accepted a frame the reference refuses.
+  _require(value.length > 4 && value[4] != null, 'error');
+
   final props = <String, Object?>{};
+  final decoded = decodeWire(value[4], depth + 1);
 
-  if (value.length > 4) {
-    final decoded = decodeWire(value[4], depth + 1);
-
-    if (decoded is Map<String, Object?>) {
-      props.addAll(decoded);
-    }
+  if (decoded is Map<String, Object?>) {
+    props.addAll(decoded);
   }
 
   return WireError(
@@ -483,5 +561,26 @@ Object? _decodeBytes(List<Object?> value) {
 
   // A plain Uint8Array is a Uint8List and re-encodes to the 2-element form;
   // every other view keeps its constructor name.
-  return ctor == 'Uint8Array' ? data : WireBytes(data, ctor);
+  if (ctor == 'Uint8Array') {
+    return data;
+  }
+
+  if (ctor != 'ArrayBuffer') {
+    // An UNKNOWN ctor name decodes to raw bytes, dropping the name — the
+    // forward-compat rule in protocol/README.md §2.1. Keeping it re-encoded a
+    // 4-element form the reference emits as 3, so the same value relayed
+    // through JS and through here produced different bytes, and therefore
+    // different stable subscription keys.
+    final size = wireTypedArrayElementSizes[ctor];
+
+    if (size == null) {
+      return data;
+    }
+
+    if (data.length % size != 0) {
+      throw WireFormatException('$ctor payload of ${data.length} bytes is not a multiple of its $size-byte element');
+    }
+  }
+
+  return WireBytes(data, ctor);
 }

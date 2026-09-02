@@ -76,15 +76,43 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
 
     const cancel = async (id: string): Promise<{ cancelled: boolean }> => callDO<{ cancelled: boolean }>(options, "/cancel", { id });
 
-    // The DO's `/list` returns `{ records: ScheduleRecord[] }` (the pending
-    // `id:` headers). Surface the array directly to callers.
-    const list = async (): Promise<ScheduleRecord[]> => {
-        const body = await getDO<{ records?: ScheduleRecord[] }>(options, "/list");
+    /**
+     * Walk every page of a cursored DO list route (`/list`, `/dead`) and return
+     * the whole set.
+     *
+     * The DO answers a BOUNDED page (`{ records, truncated, cursor }`) so a large
+     * backlog is never serialized into one response. Returning just the first
+     * page here — and dropping `truncated` on the floor — is a silent wrong
+     * answer: `list()` backs `ctx.db.system.query("_scheduled_functions")
+     * .collect()`, whose contract is "the full list of rows", so an app deduping
+     * against its pending jobs reads clean past the page size and schedules
+     * unbounded duplicates. Paging keeps that promise while each individual
+     * response stays bounded.
+     */
+    const listAll = async (path: string): Promise<ScheduleRecord[]> => {
+        const all: ScheduleRecord[] = [];
+        let cursor: string | undefined;
 
-        // Keep the return type honest (never `undefined`) if the DO ever responds
-        // 200 without a `records` array.
-        return Array.isArray(body.records) ? body.records : [];
+        for (;;) {
+            const query = cursor === undefined ? "" : `?cursor=${encodeURIComponent(cursor)}`;
+            // eslint-disable-next-line no-await-in-loop -- each page's cursor comes from the previous page, so the round-trips are inherently sequential
+            const body = await getDO<{ cursor?: string; records?: ScheduleRecord[]; truncated?: boolean }>(options, `${path}${query}`);
+
+            // Keep the return type honest (never `undefined`) if the DO ever
+            // responds 200 without a `records` array.
+            all.push(...(Array.isArray(body.records) ? body.records : []));
+
+            if (body.truncated !== true || typeof body.cursor !== "string" || body.cursor.length === 0) {
+                return all;
+            }
+
+            cursor = body.cursor;
+        }
     };
+
+    // The DO's `/list` returns one bounded page of the pending `id:` headers;
+    // `listAll` walks them all so callers see every pending job.
+    const list = async (): Promise<ScheduleRecord[]> => listAll("/list");
 
     // Direct single-record lookup against the DO's `GET /get?id=` route, which
     // reads the `id:<id>` storage key in O(1) — instead of scanning the whole
@@ -100,11 +128,7 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
     // retry budget was exhausted. They are deliberately absent from `/list` (the
     // park deletes the `id:` header), so this is the only view of a job that
     // failed permanently rather than being silently dropped.
-    const dead = async (): Promise<ScheduleRecord[]> => {
-        const body = await getDO<{ records?: ScheduleRecord[] }>(options, "/dead");
-
-        return Array.isArray(body.records) ? body.records : [];
-    };
+    const dead = async (): Promise<ScheduleRecord[]> => listAll("/dead");
 
     // `POST /dead/retry` resurrects a parked record with a fresh attempt budget.
     // A miss answers `{ retried: false }` rather than erroring, so a racing

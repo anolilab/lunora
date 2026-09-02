@@ -186,8 +186,18 @@ interface StudioProps {
     readonly chrome?: StudioChrome;
 
     /**
-     * Make the data tab editable (insert/edit/delete rows). Off by default so
-     * the studio is read-only unless the host opts in; see {@link TableEditor}.
+     * Show the data tab's write controls (insert/edit/delete rows). Off by
+     * default; see {@link TableEditor}.
+     *
+     * **This HIDES THE CONTROLS. It does not make anything read-only.** The
+     * write RPCs are gated server-side by `LUNORA_ADMIN_TOKEN` alone — one
+     * all-or-nothing check in `handleAdminRpc`, with no read/write scoping — and
+     * `renderStudioHtml({ adminToken })` already ships that bearer to the
+     * browser. So a viewer handed a studio deployed with `dataEditable: false`
+     * still holds a credential that can write; the buttons are simply absent
+     * from the page. Treat it as an affordance switch for a trusted operator,
+     * never as an authorization boundary. The same holds for
+     * {@link StudioProps.schemaEditable} and {@link StudioProps.runAsIdentity}.
      */
     readonly dataEditable?: boolean;
 
@@ -231,6 +241,10 @@ interface StudioProps {
      * the host MUST set this only on a trusted loopback-dev gate (the same gate
      * as `dataEditable`) — never in a production/static deploy. Off by default;
      * see {@link FunctionRunner}.
+     *
+     * Like {@link StudioProps.dataEditable}, leaving it off only hides the tool.
+     * The RPC behind it stays reachable to anyone holding the admin token the
+     * page already carries — the gate is the token, not this flag.
      */
     readonly runAsIdentity?: boolean;
 
@@ -254,12 +268,15 @@ interface StudioProps {
     readonly scheduledLoad?: SchedulePanelProps["scheduledLoad"];
 
     /**
-     * Enable the visual schema editor overlay on the schema diagram (add table /
-     * column / index, written back to `lunora/schema.ts` + codegen). Off by default
-     * so the diagram stays read-only unless a host opts in. Like {@link
-     * StudioProps.dataEditable}, only the loopback-only dev hosts set this — the
-     * write path needs the project's filesystem + toolchain, so a static deploy
-     * leaves it off.
+     * Show the visual schema editor overlay on the schema diagram (add table /
+     * column / index, written back to `lunora/schema.ts` + codegen). Off by
+     * default. Only the loopback-only dev hosts set this — the write path needs
+     * the project's filesystem + toolchain, so a static deploy leaves it off.
+     *
+     * Like {@link StudioProps.dataEditable}, it hides the overlay rather than
+     * making the diagram read-only: what actually stops a schema write in a
+     * static deploy is that the host has no filesystem to write to, not this
+     * flag.
      */
     readonly schemaEditable?: boolean;
 }

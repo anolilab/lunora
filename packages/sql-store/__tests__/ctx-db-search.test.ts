@@ -5,6 +5,7 @@ import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createSqlCtxDb } from "../src/ctx-db";
+import type { SearchStage } from "../src/ctx-db-search";
 import { backfillSqlSearchIndexes, createSearchSync, runSqlSearch, runSqlSearchMigrations } from "../src/ctx-db-search";
 import type { SqlDialect } from "../src/dialect";
 import { companionFor } from "../src/search-layout";
@@ -83,6 +84,33 @@ const tokensFor = (id?: string): string[] =>
         ? raw(`SELECT "__token__" FROM ${JSON.stringify(COMPANION)} ORDER BY "__token__"`)
         : raw(`SELECT "__token__" FROM ${JSON.stringify(COMPANION)} WHERE "__id__" = ? ORDER BY "__token__"`, id)
     ).map((row) => String(row["__token__"]));
+
+/** A staged `by_body` search, as the reader hands one to `runSqlSearch`. */
+const bodyStage = (query: string, definition: SearchIndexDefinitionLike = BY_BODY): SearchStage => {
+    return {
+        definition,
+        field: "body",
+        filters: [],
+        hasQuery: true,
+        indexName: "by_body",
+        query,
+    };
+};
+
+/**
+ * More rows than one backfill page holds, so a pass that indexed only a prefix
+ * is distinguishable from one that indexed the table. At the one-row scale the
+ * rebuild tests used to run at, the whole backfill finishes inside the first
+ * pass and the window this file exists to pin is invisible.
+ */
+const insertPastOnePage = (): void => {
+    for (let index = 0; index < 250; index += 1) {
+        insertNote(`d${String(index).padStart(4, "0")}`, `hello note${String(index)}`);
+    }
+};
+
+/** Documents the companion currently holds a row for. */
+const companionDocumentCount = (): number => Number(raw(`SELECT COUNT(DISTINCT "__id__") AS c FROM ${JSON.stringify(COMPANION)}`)[0]?.["c"]);
 
 const notesDefinition = (searchSchema as unknown as { tables: Record<string, TableDefinitionLike> }).tables["notes"]!;
 
@@ -221,6 +249,143 @@ describe("global search provisioning", () => {
             await runSqlSearchMigrations(exec, tableWith([{ ...BY_BODY, strategy: "native" }]), nativeDialect);
 
             expect(raw(`PRAGMA table_info(${JSON.stringify(COMPANION)})`).map((row) => String(row["name"]))).toStrictEqual(["__id__", "__vector__"]);
+        });
+
+        it("rebuilds when the indexed field changes", async () => {
+            expect.assertions(2);
+
+            createNotesTable();
+            insertNote("a", "aaa", "zzz");
+
+            await runSqlSearchMigrations(exec, searchSchema, dialect);
+
+            expect(tokensFor()).toStrictEqual(["aaa"]);
+
+            // Re-pointing an index at another column changes what the companion
+            // holds just as surely as changing the analyzer does. Recorded as
+            // analysis-only, the mismatch goes undetected: searching the column
+            // you just declared returns nothing while the abandoned one keeps
+            // matching, under an index that reports itself complete.
+            await runSqlSearchMigrations(exec, tableWith([{ ...BY_BODY, field: "channel" }]), dialect);
+
+            expect(tokensFor()).toStrictEqual(["zzz"]);
+        });
+
+        it("keeps every row served while an analysis change rebuilds the companion", async () => {
+            expect.assertions(2);
+
+            createNotesTable();
+            insertPastOnePage();
+
+            await backfillSqlSearchIndexes(exec, searchSchema, dialect);
+
+            // A rebuild re-walks the table under the new analysis, and must
+            // rewrite each row in place rather than empty the companion first:
+            // emptying takes a COMPLETE index down to nothing and refills it one
+            // page per request, so a large table serves a fraction of its rows
+            // for thousands of requests — with no error either way.
+            await runSqlSearchMigrations(exec, englishSchema, dialect);
+
+            expect(companionDocumentCount()).toBe(250);
+
+            const rows = await runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello", { ...BY_BODY, language: "en" }), 300);
+
+            expect(rows).toHaveLength(250);
+        });
+
+        it("leaves a staged index populated when its analysis changes", async () => {
+            expect.assertions(1);
+
+            createNotesTable();
+            insertPastOnePage();
+
+            await backfillSqlSearchIndexes(exec, stagedSchema, dialect);
+
+            // The migration pass skips a staged index's backfill entirely, so a
+            // companion emptied here has nothing to refill it: every request
+            // afterwards searches an empty table and returns zero hits, forever,
+            // until a host happens to re-run the out-of-band backfill.
+            const stagedEnglish = { ...BY_BODY, language: "en", staged: true };
+
+            await runSqlSearchMigrations(exec, tableWith([stagedEnglish]), dialect);
+            await runSqlSearchMigrations(exec, tableWith([stagedEnglish]), dialect);
+            await runSqlSearchMigrations(exec, tableWith([stagedEnglish]), dialect);
+
+            const rows = await runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello", stagedEnglish), 300);
+
+            expect(rows).toHaveLength(250);
+        });
+    });
+
+    describe("coverage gate", () => {
+        it("refuses a read against an index that covers only part of the table", async () => {
+            expect.assertions(2);
+
+            createNotesTable();
+            insertPastOnePage();
+
+            // One migration pass indexes one page, and `ensureMigrated` is
+            // memoised per ctx-db — so the table sits at 200 of 250 rows for the
+            // rest of the request. Every layout queries the companion regardless,
+            // so a matching document past the cursor is simply absent from a
+            // result set that looks complete.
+            await runSqlSearchMigrations(exec, searchSchema, dialect);
+
+            expect(companionDocumentCount()).toBe(200);
+
+            await expect(runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello"), 300)).rejects.toThrow(/still backfilling/u);
+        });
+
+        it("serves a staged index declared over an empty table", async () => {
+            expect.assertions(2);
+
+            createNotesTable();
+
+            // `staged` defers the backfill of rows that PREDATE the index, and an
+            // empty table has none. With no progress row written the plan said
+            // "not finished" and the coverage flag said "not covered", so every
+            // search refused — permanently, because the migration pass never
+            // backfills a staged index. Declaring one alongside a new table took
+            // search on that table offline for good.
+            await runSqlSearchMigrations(exec, stagedSchema, dialect);
+
+            const sync = createSearchSync({ dialect, exec, schema: stagedSchema });
+
+            insertNote("n1", "hello world");
+            await sync("notes", "n1", { body: "hello world" });
+
+            const rows = await runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello", { ...BY_BODY, staged: true }), 300);
+
+            expect(rows).toHaveLength(1);
+            expect(rows[0]?.["body"]).toBe("hello world");
+        });
+
+        it("still refuses a staged index over a table that already held rows", async () => {
+            expect.assertions(1);
+
+            createNotesTable();
+            insertNote("old", "hello ancient");
+
+            // The other half: the deferral is real when there IS a backfill to
+            // defer, so the gate must still hold until the host runs it.
+            await runSqlSearchMigrations(exec, stagedSchema, dialect);
+
+            await expect(runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello", { ...BY_BODY, staged: true }), 300)).rejects.toThrow(
+                /still backfilling/u,
+            );
+        });
+
+        it("serves a fully indexed table without refusing", async () => {
+            expect.assertions(1);
+
+            createNotesTable();
+            insertPastOnePage();
+
+            await backfillSqlSearchIndexes(exec, searchSchema, dialect);
+
+            const rows = await runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello"), 300);
+
+            expect(rows).toHaveLength(250);
         });
     });
 

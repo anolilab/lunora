@@ -9,6 +9,7 @@ import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
+import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 import type { DeployCommandResult } from "../deploy/handler";
 import { runDeployCommand } from "../deploy/handler";
 import type { BundleSize } from "./bundle-size";
@@ -19,6 +20,16 @@ import type { BuildOptions } from "./index";
 const DEFAULT_OUT_DIR = ".lunora/build";
 
 interface BuildCommandOptions {
+    /**
+     * Per-run override for the schema-drift gate. `build` runs the same gate
+     * `deploy` does (it IS `deploy --dry-run` underneath), so the blocked-drift
+     * message it prints tells the operator to pass this — and it used to be
+     * rejected as an unknown option by the command that had just printed it.
+     *
+     * Per-run only: a build publishes nothing, so it never advances the
+     * committed baseline (see `schema-drift-gate.ts`).
+     */
+    allowSchemaDrift?: boolean;
     /** Which API spec(s) codegen emits. */
     apiSpec?: ApiSpec;
     cwd?: string;
@@ -74,43 +85,35 @@ const kib = (bytes: number): string => `${(bytes / 1024).toFixed(1)} KiB`;
  * is only the resolved answer once it has finished. Reading it earlier would
  * describe the requirements the project happened to have written down, not the
  * ones the bundle actually has.
+ *
+ * That is also why `build` — not the deploy pipeline — owns the dry-run rollback
+ * (see {@link snapshotWranglerConfig}): this read is the LAST one that has to see
+ * the provisioned config, and a rollback that fired before it produced a
+ * requirements document saying `"crons": []` for an app with a nightly cron.
  */
 const writeBindingManifest = (projectRoot: string, target: string, logger: Logger): { error?: string } =>
     writeBindingManifestFile({ destination: target, logger, projectRoot });
 
 /**
- * Build the Worker without deploying: this is `deploy` in its dry-run +
- * `--outdir` mode, so it reuses the entire pre-deploy pipeline (codegen, the
- * schema-drift gate, binding provisioning, container preflight, wrangler
- * validation) and then emits the bundle to disk instead of publishing.
+ * The build proper, run while the provisioned `wrangler.jsonc` is still on disk.
+ * Split from {@link runBuildCommand} only so the rollback there is a plain
+ * `try`/`finally` around one call rather than around every early return.
  */
-const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildCommandResult> => {
-    const outDirectory = options.outDir ?? DEFAULT_OUT_DIR;
-    const jsonMode = isJsonFormat(options.format);
-
-    // `build` owns its `--format json` document instead of delegating to
-    // deploy's: the bundle measurement below is what a CI consumer runs this
-    // command for, and the deploy result has no field to carry it. Everything
-    // human therefore goes to stderr from here on.
-    const logger = loggerForFormat(options.format, options.logger);
-    const emit = (result: BuildCommandResult): BuildCommandResult => {
-        if (jsonMode) {
-            printJson(result);
-        }
-
-        return result;
-    };
-
-    const formatError = validateOutputFormat("build", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { code: 1, descriptor: undefined, error: formatError, validation: { problems: [], wranglerPath: undefined } };
-    }
-
+const buildWithProvisionedConfig = async (
+    options: BuildCommandOptions,
+    outDirectory: string,
+    jsonMode: boolean,
+    logger: Logger,
+    emit: (result: BuildCommandResult) => BuildCommandResult,
+): Promise<BuildCommandResult> => {
     const result = await runDeployCommand({
+        allowSchemaDrift: options.allowSchemaDrift,
         apiSpec: options.apiSpec,
+        // So the drift gate names `build` and offers only the flags `build`
+        // registers — it does NOT accept `--update-schema-baseline`, because it
+        // publishes nothing and re-blessing a baseline for an artifact that never
+        // shipped is what lets a breaking change through on the retry.
+        commandName: "build",
         cwd: options.cwd,
         dryRun: true,
         format: undefined,
@@ -153,9 +156,53 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
     return emit({ ...result, bundle });
 };
 
+/**
+ * Build the Worker without deploying: this is `deploy` in its dry-run +
+ * `--outdir` mode, so it reuses the entire pre-deploy pipeline (codegen, the
+ * schema-drift gate, binding provisioning, container preflight, wrangler
+ * validation) and then emits the bundle to disk instead of publishing.
+ */
+const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildCommandResult> => {
+    const outDirectory = options.outDir ?? DEFAULT_OUT_DIR;
+    const jsonMode = isJsonFormat(options.format);
+
+    // `build` owns its `--format json` document instead of delegating to
+    // deploy's: the bundle measurement below is what a CI consumer runs this
+    // command for, and the deploy result has no field to carry it. Everything
+    // human therefore goes to stderr from here on.
+    const logger = loggerForFormat(options.format, options.logger);
+    const emit = (result: BuildCommandResult): BuildCommandResult => {
+        if (jsonMode) {
+            printJson(result);
+        }
+
+        return result;
+    };
+
+    const formatError = validateOutputFormat("build", options.format);
+
+    if (formatError !== undefined) {
+        options.logger.error(formatError);
+
+        return { code: 1, descriptor: undefined, error: formatError, validation: { problems: [], wranglerPath: undefined } };
+    }
+
+    // `build` is `deploy --dry-run`, so provisioning's writes to the committed
+    // `wrangler.jsonc` are rolled back — but only once the bundle AND the binding
+    // manifest below have been derived from them.
+    const restoreWrangler = snapshotWranglerConfig(options.cwd ?? process.cwd());
+
+    try {
+        return await buildWithProvisionedConfig(options, outDirectory, jsonMode, logger, emit);
+    } finally {
+        restoreWrangler();
+    }
+};
+
 /** `lunora build` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions>(async ({ cwd, logger, options }) => {
     const result = await runBuildCommand({
+        allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         emitBindings: options.emitBindings,

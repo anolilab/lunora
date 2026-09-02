@@ -227,11 +227,15 @@ const FEATURE_COLLECTORS: Partial<Record<StackFeature, (deps: OfferDeps, picked:
  * single progress line whose label changes per feature, instead of one spinner
  * per item. Non-interactive: prints how to add them later and changes nothing.
  */
-const offerRegistryExtras = async (deps: OfferDeps): Promise<void> => {
+const offerRegistryExtras = async (deps: OfferDeps): Promise<boolean> => {
     // `--add`: apply the named features with their shipped defaults — no
     // multi-select, no sub-prompts (scriptable / repeatable).
     if (deps.preselected !== undefined && deps.preselected.length > 0) {
-        await deps.applyAll(
+        // Returned, not discarded: `--add` is the scriptable form, so a feature
+        // that could not be added has to reach the exit code. The INTERACTIVE
+        // offer below stays best-effort — declining or failing an optional extra
+        // must not fail a scaffold the user already saw succeed.
+        return deps.applyAll(
             deps.preselected.map((feature) => {
                 // `auth-ui` resolves to a per-framework item; everything else maps 1:1
                 // (with `email` → the mail item). `--add` uses shipped defaults, so no
@@ -241,8 +245,6 @@ const offerRegistryExtras = async (deps: OfferDeps): Promise<void> => {
                 return { label: feature, names: [item] };
             }),
         );
-
-        return;
     }
 
     if (!deps.interactive) {
@@ -251,13 +253,13 @@ const offerRegistryExtras = async (deps: OfferDeps): Promise<void> => {
             "tip: add features later with `lunora add <ai|auth|backup|browser|cloudflare-access|crons|email|flags|hyperdrive|payment|presence|queue|storage|workflow>`.",
         );
 
-        return;
+        return true;
     }
 
     const picked = await deps.multiSelect("Which features do you want to add?", STACK_FEATURE_OPTIONS, { defaults: [] });
 
     if (picked.length === 0) {
-        return;
+        return true;
     }
 
     // Collect every answer first. Sequential by design: each sub-prompt asks the
@@ -272,7 +274,10 @@ const offerRegistryExtras = async (deps: OfferDeps): Promise<void> => {
     }
 
     // Then apply them all in one batch — one progress line for the whole stack.
+    // Best-effort by design: the scaffold has already been announced as complete.
     await deps.applyAll(plans);
+
+    return true;
 };
 
 export { offerRegistryExtras, parseFeatureList, STACK_FEATURE_OPTIONS };

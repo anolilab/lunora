@@ -71,7 +71,14 @@ describe("runAddFeature", () => {
     it("`add auth --provider clerk` applies the auth-clerk item", async () => {
         expect.assertions(2);
 
-        const result = await runAddFeature({ cwd: workdir, feature: "auth", from: registryRoot, logger: makeLogger().logger, provider: "clerk" });
+        const result = await runAddFeature({
+            confirm: async () => true,
+            cwd: workdir,
+            feature: "auth",
+            from: registryRoot,
+            logger: makeLogger().logger,
+            provider: "clerk",
+        });
 
         expect(result.items).toStrictEqual(["auth-clerk"]);
         expect(existsSync(join(workdir, "lunora", "auth", "clerk.ts"))).toBe(true);
@@ -89,6 +96,31 @@ describe("runAddFeature", () => {
         });
 
         expect(result.items).toStrictEqual(["auth-auth0"]);
+    });
+
+    it("asks before applying items from a custom --from registry root", async () => {
+        expect.assertions(3);
+
+        // `--from` points at a registry the user named, exactly like `--source`:
+        // the item's files, deps and wrangler bindings are whatever that root
+        // ships. `lunora add` used to auto-confirm the apply whenever `--source`
+        // was unset, so the `--from` half wrote them silently.
+        const prompts: string[] = [];
+        const result = await runAddFeature({
+            confirm: async (message: string) => {
+                prompts.push(message);
+
+                return false;
+            },
+            cwd: workdir,
+            feature: "email",
+            from: registryRoot,
+            logger: makeLogger().logger,
+        });
+
+        expect(prompts).toHaveLength(1);
+        expect(result.code).toBe(1);
+        expect(existsSync(join(workdir, "lunora", "mail", "index.ts"))).toBe(false);
     });
 
     it("rejects when run outside a Lunora project", async () => {
@@ -129,6 +161,7 @@ describe("runAddFeature", () => {
         expect.assertions(3);
 
         const result = await runAddFeature({
+            confirm: async () => true,
             cwd: workdir,
             feature: "storage",
             from: registryRoot,
@@ -146,6 +179,7 @@ describe("runAddFeature", () => {
 
         await runAddFeature({
             bucket: "My_App Uploads!",
+            confirm: async () => true,
             cwd: workdir,
             feature: "storage",
             from: registryRoot,
@@ -189,6 +223,7 @@ describe("runAddFeature", () => {
         expect.assertions(2);
 
         const result = await runAddFeature({
+            confirm: async () => true,
             cwd: workdir,
             feature: "email",
             from: registryRoot,
@@ -205,7 +240,7 @@ describe("runAddFeature", () => {
 
         const { lines, logger } = makeLogger();
 
-        await runAddFeature({ cwd: workdir, feature: "email", from: registryRoot, logger, promptText: async () => "not-an-email" });
+        await runAddFeature({ confirm: async () => true, cwd: workdir, feature: "email", from: registryRoot, logger, promptText: async () => "not-an-email" });
 
         expect(readBindingValue(workdir, "destination_address")).toBe("REPLACE_ME@example.com");
         expect(lines.join("\n")).toMatch(/doesn't look like an email/);
@@ -215,6 +250,7 @@ describe("runAddFeature", () => {
         expect.assertions(3);
 
         const result = await runAddFeature({
+            confirm: async () => true,
             cwd: workdir,
             feature: "auth",
             from: registryRoot,
@@ -233,6 +269,7 @@ describe("runAddFeature", () => {
         expect.assertions(1);
 
         await runAddFeature({
+            confirm: async () => true,
             cwd: workdir,
             db: "My App DB",
             feature: "auth",
@@ -251,6 +288,7 @@ describe("runAddFeature", () => {
         expect.assertions(2);
 
         const result = await runAddFeature({
+            confirm: async () => true,
             cwd: workdir,
             feature: "auth",
             from: registryRoot,

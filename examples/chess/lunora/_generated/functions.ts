@@ -85,11 +85,14 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["gameId"] !== "string") return DEFER;
 if (typeof source["from"] !== "string") return DEFER;
+if (source["from"].length > 2) return DEFER;
 if (typeof source["to"] !== "string") return DEFER;
+if (source["to"].length > 2) return DEFER;
 let __has1 = false;
 let __val1;
 if (source["promotion"] !== undefined) {
 if (typeof source["promotion"] !== "string") return DEFER;
+if (source["promotion"].length > 1) return DEFER;
 __val1 = source["promotion"];
 __has1 = true;
 }
@@ -140,6 +143,7 @@ let __has1 = false;
 let __val1;
 if (source["inviteCode"] !== undefined) {
 if (typeof source["inviteCode"] !== "string") return DEFER;
+if (source["inviteCode"].length > 16) return DEFER;
 __val1 = source["inviteCode"];
 __has1 = true;
 }
@@ -149,6 +153,7 @@ installCompiledValidatorMap(lunora_lobby_1.joinByCode.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["inviteCode"] !== "string") return DEFER;
+if (source["inviteCode"].length > 16) return DEFER;
 return { "inviteCode": source["inviteCode"] };
 });
 installCompiledValidatorMap(lunora_lobby_1.leave.args, (source) => {
@@ -164,6 +169,7 @@ let __has1 = false;
 let __val1;
 if (source["displayName"] !== undefined) {
 if (typeof source["displayName"] !== "string") return DEFER;
+if (source["displayName"].length > 80) return DEFER;
 __val1 = source["displayName"];
 __has1 = true;
 }

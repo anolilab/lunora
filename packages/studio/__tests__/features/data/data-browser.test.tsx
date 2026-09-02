@@ -1475,6 +1475,34 @@ describe("dataBrowser — structured filters and bulk delete", () => {
         expect(perRow).toHaveLength(0);
     });
 
+    it('does not offer "Delete N matching" during the search debounce, when the predicate is still empty', async () => {
+        expect.assertions(4);
+
+        // The button used to gate on the RAW search box while `bulkDelete` sent the
+        // 300ms-DEBOUNCED mirror. For that window the button was on screen reading
+        // "Delete 3 matching" with `search === ""` and no filters — and confirming
+        // sent a predicate-free `deleteRows`, i.e. a whole-table truncate, past the
+        // separate `Clear all N rows?` confirm the studio puts in front of exactly
+        // that operation.
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        // Unfiltered: the whole-table action is the one on offer.
+        expect(screen.queryByTestId("db-bulk-delete")).toBeNull();
+        expect(screen.getByTestId("db-clear-table")).toBeDefined();
+
+        // First keystroke. The debounce has NOT elapsed, so the request would still
+        // carry an empty predicate — nothing that deletes by predicate may render.
+        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "h" } });
+
+        expect(screen.queryByTestId("db-bulk-delete")).toBeNull();
+        expect(screen.queryByTestId("db-bulk-patch")).toBeNull();
+    });
+
     it("loops the bounded deleteRows call until the server reports no more", async () => {
         expect.assertions(2);
 

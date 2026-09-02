@@ -90,6 +90,28 @@ const scalar = (value: unknown): string | undefined => {
 const joinParts = (parts: ReadonlyArray<string | undefined>): string => parts.filter((part) => part !== undefined).join(" ");
 
 /**
+ * Describe the predicate a bulk write ran against — the filter count and whether
+ * a search term was present, or an explicit `no predicate` when there was
+ * neither.
+ *
+ * The explicit form matters: a predicate-free `deleteRows`/`patchRows` hits every
+ * row in the table, and rendering that as an absent count (the previous
+ * behaviour) made it indistinguishable on the tape from a targeted one. The
+ * search TERM is operator-typed data and is never recorded — only that one
+ * existed, matching `readTablePage`.
+ */
+const describePredicate = (args: Record<string, unknown>): string => {
+    const filterCount = Array.isArray(args.filters) ? args.filters.length : 0;
+    const searched = typeof args.search === "string" && args.search !== "";
+
+    if (filterCount === 0 && !searched) {
+        return "no predicate";
+    }
+
+    return joinParts([filterCount === 0 ? undefined : `${String(filterCount)} filters`, searched ? "search" : undefined]);
+};
+
+/**
  * Per-function argument summarisers, keyed by the bare function name (the part
  * after `__lunora_admin__:`). Anything not listed falls back to argument KEYS
  * only — deliberately lossy, because the default must never be able to leak a
@@ -100,9 +122,37 @@ const joinParts = (parts: ReadonlyArray<string | undefined>): string => parts.fi
  * covered set is discoverable from the type.
  */
 const SUMMARISERS: Readonly<Partial<Record<keyof typeof ADMIN_FUNCTIONS, ArgumentSummariser>>> = {
-    deleteRows: (args) =>
-        joinParts([scalar(args.table), Array.isArray(args.filters) && args.filters.length > 0 ? `${String(args.filters.length)} filters` : undefined]),
+    // Whole-table truncate. Without an entry its tape line read "table" — the
+    // argument KEY, not which table — for the second-most destructive action here.
+    clearTable: (args) => joinParts([scalar(args.table), "whole table"]),
+    // "no predicate" is the load-bearing part: a `deleteRows` with neither filters
+    // nor a search term deletes every row, exactly like `clearTable`, and a count
+    // of `0 filters` renders as nothing at all — so the tape could not tell a
+    // targeted delete from a truncate.
+    deleteRows: (args) => joinParts([scalar(args.table), describePredicate(args)]),
     facetColumn: (args) => joinParts([scalar(args.table), scalar(args.column)]),
+    // The ROWS are operator-supplied data and are not recorded — only how many,
+    // and which tables (schema, not data) they land in.
+    importShard: (args) => {
+        if (!Array.isArray(args.rows)) {
+            return "";
+        }
+
+        // `operationLog.start` runs BEFORE dispatch, so a malformed row never
+        // reaches server validation: reading `.table` off a `null` entry threw
+        // here and took the whole operation down with a TypeError instead of the
+        // RPC's own error. Narrow to real objects first.
+        const tables = [
+            ...new Set(
+                args.rows
+                    .filter((row): row is Record<string, unknown> => typeof row === "object" && row !== null)
+                    .map((row) => row["table"])
+                    .filter((table) => typeof table === "string"),
+            ),
+        ].toSorted((a, b) => a.localeCompare(b));
+
+        return joinParts([`${String(args.rows.length)} rows`, tables.length === 0 ? undefined : `into ${tables.join(", ")}`]);
+    },
     lintSql: () => "sql",
     // The patched VALUES are operator-supplied data and are not recorded — only
     // the field NAMES (schema, not data) and the size of the predicate.
@@ -110,7 +160,17 @@ const SUMMARISERS: Readonly<Partial<Record<keyof typeof ADMIN_FUNCTIONS, Argumen
         joinParts([
             scalar(args.table),
             typeof args.doc === "object" && args.doc !== null ? `set ${Object.keys(args.doc).join(", ")}` : undefined,
-            Array.isArray(args.filters) && args.filters.length > 0 ? `${String(args.filters.length)} filters` : undefined,
+            describePredicate(args),
+        ]),
+    // The restore TARGET is the whole point of the entry — an operation tape that
+    // records a point-in-time restore as "time" (the argument key) cannot answer
+    // the only question anyone asks it afterwards. The bookmark is an opaque,
+    // long DO token, so only its presence is recorded.
+    pitrRestore: (args) =>
+        joinParts([
+            scalar(args.time) === undefined ? undefined : `to ${String(args.time)}`,
+            typeof args.bookmark === "string" && args.bookmark !== "" ? "from bookmark" : undefined,
+            args.restart === true ? "restart now" : undefined,
         ]),
     readTablePage: (args) =>
         joinParts([

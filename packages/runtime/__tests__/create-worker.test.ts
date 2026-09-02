@@ -1828,6 +1828,47 @@ describe("createWorker — HTTP actions", () => {
         expect(scheduler.calls).toHaveLength(0);
     });
 
+    it("ctx.scheduler.list() returns the records array, walking every page the DO answers", async () => {
+        expect.assertions(3);
+
+        // The DO answers ONE bounded page plus `{ truncated, cursor }`. Handing
+        // the raw body back would return an object where an array is declared —
+        // and would drop every job past the first page on the floor.
+        const paths: string[] = [];
+        const schedulerNamespace: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        const url = new URL(request.url);
+
+                        paths.push(`${url.pathname}${url.search}`);
+
+                        if (url.searchParams.get("cursor") === "id:b") {
+                            return Response.json({ records: [{ id: "c" }], truncated: false });
+                        }
+
+                        return Response.json({ cursor: "id:b", records: [{ id: "a" }, { id: "b" }], truncated: true });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) => app.get("/jobs", async (c) => Response.json(await (c.var.lunora.scheduler?.list() ?? Promise.resolve([]))))),
+            schedulerDO: schedulerNamespace,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/jobs"), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        await expect(res.json()).resolves.toStrictEqual([{ id: "a" }, { id: "b" }, { id: "c" }]);
+        expect(paths).toStrictEqual(["/list", "/list?cursor=id%3Ab"]);
+    });
+
     it("leaves ctx.scheduler undefined when the worker declares no schedulerDO", async () => {
         expect.assertions(2);
 

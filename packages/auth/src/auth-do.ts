@@ -286,9 +286,16 @@ class LunoraAuthDO {
      * Resolve the identity behind a request's headers — the worker's
      * `resolveIdentity` in DO mode.
      *
-     * Answers `{ userId }`, or `{}` for an anonymous request; never the session
-     * record itself. The worker only needs the subject, and a narrow reply keeps
-     * session material inside the object.
+     * Answers `{ expiresAtMs, role, userId }`, or `{}` for an anonymous request;
+     * never the session record itself. The worker only needs those three, and a
+     * narrow reply keeps session material inside the object.
+     *
+     * `expiresAtMs` is the socket credential expiry the runtime forwards as
+     * `x-lunora-identity-exp`: without it the DO's expiry check never fires and a
+     * signed-out, banned or lapsed user keeps streaming their RLS-scoped rows over
+     * an already-open WebSocket. `role` is what `readIdentityRoles` reads for RLS
+     * role grants — the D1 wiring forwards it, so dropping it here would make
+     * `.auth({ d1 })` -> `.auth({ namespace })` silently turn every grant off.
      */
     async #resolveSession(request: Request): Promise<Response> {
         if (!this.#isTrustedCaller(request)) {
@@ -301,7 +308,20 @@ class LunoraAuthDO {
         const session = await auth.api.getSession({ headers: request.headers });
         const userId = session?.user.id;
 
-        return Response.json(userId === undefined ? {} : { userId });
+        if (userId === undefined) {
+            return Response.json({});
+        }
+
+        // better-auth hands back a `Date`; anything else means the adapter did not
+        // hydrate it, and a missing expiry is safer to omit than to guess at.
+        const expiresAt = session?.session.expiresAt;
+        const role = (session?.user as { role?: unknown } | undefined)?.role;
+
+        return Response.json({
+            ...(expiresAt instanceof Date ? { expiresAtMs: expiresAt.getTime() } : {}),
+            ...(typeof role === "string" && role.length > 0 ? { role } : {}),
+            userId,
+        });
     }
 
     /**

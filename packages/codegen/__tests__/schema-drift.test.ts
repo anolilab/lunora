@@ -234,6 +234,26 @@ describe("schema-drift", () => {
             expect(decision.reason).toContain("changed type");
         });
 
+        it("names the command that ran, not `deploy`, and offers only the flags that command accepts", () => {
+            expect.assertions(4);
+
+            // `lunora build` reaches this gate through `runDeployCommand({ dryRun: true })`.
+            // It used to report "deploy blocked:" — sending the operator to look for a
+            // deployment that was never attempted — and to offer
+            // `--update-schema-baseline`, which `build` rejects with a raw
+            // `Found unknown option` stack trace. Both halves of its own advice failed.
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), []);
+            const decision = evaluateSchemaDrift({ baseline, command: "build", current, migrations: [] });
+
+            expect(decision.blocked).toBe(true);
+            expect(decision.reason).toContain("build blocked");
+            expect(decision.reason).not.toContain("deploy blocked");
+
+            // `build` publishes nothing, so re-blessing a baseline from it would
+            // advance past a breaking change that never shipped.
+            expect(decision.reason).toContain("`lunora build` does not take that flag");
+        });
+
         it("passes breaking drift when a NEW migration covers the affected table", () => {
             expect.assertions(3);
 

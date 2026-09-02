@@ -56,7 +56,7 @@ interface CapturedQueueMessage {
     attempts: number;
     /** The message body (JSON-encoded + capped by the catcher). */
     body: unknown;
-    /** `true` when this failed delivery was the message's last (its retries are exhausted — the broker dead-letters it). */
+    /** `true` when this failed delivery was the message's last (its retries are exhausted) AND the queue declares a `deadLetterQueue` for it to land in. Stays `false` for a queue with no DLQ, where the broker drops the exhausted message instead — `attempts > maxRetries` with `outcome !== "ack"` is what identifies that case. */
     deadLettered: boolean;
     /** Handler error message when `outcome` is `error`; absent otherwise. */
     error?: string;
@@ -306,7 +306,10 @@ const describeThrownError = (handlerError: unknown): string => {
  * For every other message an explicit `ack`/`retry` wins; an undecided message
  * is an implicit `ack` on a clean return, or `error` when the handler threw
  * (workerd retries the whole batch). `deadLettered` flags a non-ack disposition
- * that exhausted the queue's `maxRetries`.
+ * that exhausted the queue's `maxRetries` AND has somewhere to land: with no
+ * `deadLetterQueue` configured Cloudflare simply DELETES the exhausted message,
+ * so claiming it was dead-lettered sends an operator hunting through a queue
+ * that does not exist for a message that no longer exists anywhere.
  */
 const buildCaptureRecords = (
     harness: CaptureHarness,
@@ -322,6 +325,8 @@ const buildCaptureRecords = (
     // handler threw (the batch is retried by workerd, but the handler signalled
     // failure), else workerd's implicit ack-on-success.
     const undecided: QueueMessageOutcome = threw ? "error" : "ack";
+    // A message only reaches a dead-letter queue if the queue declares one.
+    const hasDeadLetterQueue = typeof entry.definition.deadLetterQueue === "string" && entry.definition.deadLetterQueue.length > 0;
 
     return harness.originals.map((message): CapturedQueueMessage => {
         const isAttributed = message === attributed;
@@ -332,7 +337,7 @@ const buildCaptureRecords = (
         return {
             attempts,
             body: message.body,
-            deadLettered: !isAttributed && outcome !== "ack" && attempts > maxRetries,
+            deadLettered: hasDeadLetterQueue && !isAttributed && outcome !== "ack" && attempts > maxRetries,
             error: outcome === "error" ? errorMessage : undefined,
             exportName: entry.exportName,
             messageId: message.id,

@@ -170,6 +170,23 @@ describe("compileWhereSql — per-engine rendering", () => {
         expect(render({ x: { notIn: [] } }, "sqlite")).toEqual({ params: [], sql: `1 = 1` });
     });
 
+    it("refuses a scalar IN / NOT IN instead of compiling one that matches everything", () => {
+        expect.assertions(4);
+
+        // A non-array used to fall back to the empty list, whose complement is
+        // `1 = 1`: an RLS policy `{ role: { notIn: deniedRoles } }` where
+        // `deniedRoles` arrived as a single string dropped the restriction
+        // entirely, while the same mistake on `in` silently matched nothing.
+        // Neither is an answer the caller can act on, so both refuse.
+        expect(() => render({ role: { notIn: "admin" } }, "sqlite")).toThrow(/`notIn` on "role" expects an array/u);
+        expect(() => render({ role: { in: "admin" } }, "sqlite")).toThrow(/`in` on "role" expects an array/u);
+        expect(() => render({ role: { in: undefined } }, "sqlite")).toThrow(/`in` on "role" expects an array/u);
+
+        // An explicitly empty list stays a legitimate predicate — it says
+        // something, and it says it in both directions.
+        expect(render({ role: { notIn: [] } }, "sqlite")).toEqual({ params: [], sql: `1 = 1` });
+    });
+
     it("returns undefined for an empty / absent where", () => {
         expect.assertions(2);
 

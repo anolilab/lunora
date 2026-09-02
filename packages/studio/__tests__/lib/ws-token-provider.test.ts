@@ -115,6 +115,30 @@ describe("createAdminWsTokenProvider", () => {
         expect(calls).toHaveLength(1);
     });
 
+    it("invalidate() clears the 404 latch so a transient miss does not pin the master token forever", async () => {
+        expect.assertions(3);
+
+        // The latch exists so a pre-095 worker isn't re-probed on every reconnect.
+        // But one 404 is reachable without a legacy worker at all — a proxy/CDN
+        // that 404s an unknown POST, or a BYO dev setup where Vite answers the
+        // mint path — and `invalidate()` IS the rotation-recovery path (wired to
+        // `client.onTokenExpired`). Leaving the latch set there downgraded the WS
+        // credential to the master admin token for the provider's whole life,
+        // putting it in the `?token=` query string this module exists to keep it
+        // out of.
+        const now = Date.now();
+        const { calls, fetchImpl } = mintFetch([new Response("not found", { status: 404 }), mintedResponse("eph-1", now + 60_000)]);
+        const provider = createAdminWsTokenProvider({ adminToken: ADMIN_TOKEN, baseUrl: BASE_URL, fetchImpl });
+
+        await expect(provider.getToken()).resolves.toBe(ADMIN_TOKEN);
+
+        provider.invalidate();
+
+        await expect(provider.getToken()).resolves.toBe("eph-1");
+
+        expect(calls).toHaveLength(2);
+    });
+
     it("throws on a non-OK, non-404 mint response so the client retries with backoff", async () => {
         expect.assertions(1);
 

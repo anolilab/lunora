@@ -268,11 +268,13 @@ const NOOP_EXECUTION_CONTEXT: ExecutionContextLike;
 ```ts
 interface PlatformCapabilities {
     features: {
+        agents?: Capability;
         ai?: Capability;
         analytics?: Capability;
         browser?: Capability;
         commitOrderedTables?: Capability;
         containers?: Capability;
+        cronTriggers?: Capability;
         crossShardFanout?: Capability;
         durableStreams?: Capability;
         globalTables?: Capability;

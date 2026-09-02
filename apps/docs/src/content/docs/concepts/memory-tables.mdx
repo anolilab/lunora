@@ -29,9 +29,12 @@ export default defineSchema({
 });
 ```
 
-It is a full `ctx.db` table — indexes, `where`, `orderBy`, pagination, relations,
-live queries all work exactly as they do on a durable one. What differs is its
-**lifetime**.
+It is a full `ctx.db` table — indexes, `where`, `orderBy`, pagination, relations
+and live queries all work exactly as they do on a durable one. What differs is
+its **lifetime** — and one consequence of that lifetime, which is that its writes
+never enter the CDC changelog. That rules out `defineShape` over a memory table
+(see [Restrictions](#restrictions)) and makes every reconnect re-snapshot rather
+than resume.
 
 ## The lifetime
 
@@ -44,8 +47,20 @@ same footing as the DO's JS heap, and that is the mental model to hold: this is
 state that lives as long as the process, and the process is short.
 
 Its writes also never reach the CDC changelog, which matters more than it looks:
-the log is append-only, and a heartbeat-rate presence table would otherwise grow
-it for the entire life of the shard.
+log retention is opt-in, so on a default deployment a heartbeat-rate presence
+table would otherwise grow the log for the entire life of the shard.
+
+Two things follow, and both are handled for you rather than left to surprise you:
+
+- **A subscription that reads a memory table can never `resume`.** Reconnecting
+  with a cached cursor normally lets the shard prove "nothing you read has
+  changed" from the changelog — which it cannot do for a table the log has no
+  record of. Such a subscription is marked un-resumable and re-snapshots on
+  reconnect. That is what you want anyway: the eviction that usually precedes a
+  reconnect is the same one that emptied the table.
+- **A shape cannot replicate a memory table**, because a shard-local shape is
+  driven entirely by the changelog. `defineShape` over one is refused at
+  subscribe time rather than left to seed once and silently freeze.
 
 ## Rebuilding: `onShardInit`
 
@@ -109,6 +124,17 @@ time. One model, wiped, is the honest trade.
   does not reach, leaving it describing rows that no longer exist.
 
 A plain `.index()` is fine: SQLite maintains it through the `DELETE`.
+
+One more restriction is enforced later, at the moment a client subscribes,
+because only then is the shape and the table it names known together:
+
+- **`defineShape`** over a `.memory()` table is rejected with
+  `SHAPE_MEMORY_TABLE`. A shard-local shape replicates from the CDC changelog,
+  which never records a memory table, so the shape would send its initial
+  snapshot and then never send another row — no error, no counter, nothing to
+  grep. Replicate presence with a live query (`useQuery`) instead, which
+  refreshes off the changed-table set rather than the log; or drop `.memory()` if
+  you need partial replication, and accept the changelog growth it brings.
 
 ## Choosing between `.memory()` and `.ttl()`
 

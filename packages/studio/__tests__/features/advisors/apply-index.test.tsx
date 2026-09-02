@@ -87,6 +87,28 @@ describe("hasIndexMetadata", () => {
 
         expect(hasIndexMetadata({ table: "posts" })).toBe(false);
     });
+
+    it("returns false when suggestedIndex.name is not a usable string", () => {
+        expect.assertions(2);
+
+        // `metadata` is server-supplied `Record<string, unknown>`. The narrowing
+        // asserted `suggestedIndex.name: string` without ever checking it, so a
+        // finding carrying a non-string name reached `quoteIdentifier`, which
+        // calls `.replaceAll` on it — a TypeError inside the render.
+        expect(hasIndexMetadata({ suggestedIndex: { fields: ["authorId"], name: 7 }, table: "posts" })).toBe(false);
+        expect(hasIndexMetadata({ suggestedIndex: { fields: ["authorId"], name: "" }, table: "posts" })).toBe(false);
+    });
+
+    it("returns false when a FIELD is not a usable string", () => {
+        expect.assertions(3);
+
+        // Same defect one level down: `Array.isArray` accepted `[null]` / `[42]`
+        // and the predicate then exposed them as strings, so the action handed
+        // one to `sqlIdentifier` and `.replaceAll` threw during the render.
+        expect(hasIndexMetadata({ suggestedIndex: { fields: [null], name: "byAuthorId" }, table: "posts" })).toBe(false);
+        expect(hasIndexMetadata({ suggestedIndex: { fields: [42], name: "byAuthorId" }, table: "posts" })).toBe(false);
+        expect(hasIndexMetadata({ suggestedIndex: { fields: ["authorId", ""], name: "byAuthorId" }, table: "posts" })).toBe(false);
+    });
 });
 
 // ── render test: ApplyIndexButton ───────────────────────────────────────────
@@ -129,7 +151,7 @@ describe("applyIndexButton", () => {
         expect(screen.getByTestId("test-apply-cancel")).toBeDefined();
     });
 
-    it("copies SQL to clipboard and shows the applied state after confirm", () => {
+    it("copies SQL to clipboard and shows the copied state after confirm", async () => {
         expect.assertions(1);
 
         const writeText = vi.fn<(_sql: string) => Promise<void>>(() => Promise.resolve());
@@ -142,10 +164,52 @@ describe("applyIndexButton", () => {
         fireEvent.click(screen.getByTestId("test-apply"));
         fireEvent.click(screen.getByTestId("test-apply-confirm"));
 
-        // The applied state is set synchronously (setApplied before fireAndForget).
-        screen.getByTestId("test-apply-applied");
+        // Awaited, not synchronous: this used to call `setApplied(true)` on the
+        // line after an un-awaited `writeText`, so a REJECTED copy still rendered
+        // "copied to clipboard".
+        await screen.findByTestId("test-apply-applied");
 
         expect(writeText).toHaveBeenCalledWith(`CREATE INDEX IF NOT EXISTS "byAuthorId" ON "posts" ("authorId");`);
+    });
+
+    it("does not claim a copy when the clipboard write rejects", async () => {
+        expect.assertions(2);
+
+        const writeText = vi.fn<(_sql: string) => Promise<void>>(() => Promise.reject(new Error("denied")));
+        Object.defineProperty(globalThis.navigator, "clipboard", {
+            configurable: true,
+            value: { writeText },
+        });
+
+        renderButton({ fields: ["authorId"], indexName: "byAuthorId", table: "posts" });
+        fireEvent.click(screen.getByTestId("test-apply"));
+        fireEvent.click(screen.getByTestId("test-apply-confirm"));
+
+        // The statement is shown for manual copying instead — a state-changing
+        // `fireAndForget` with no `onError` (see `lib/internal.ts`) just swallowed
+        // the rejection.
+        const fallback = await screen.findByTestId("test-apply-manual");
+
+        expect(fallback.textContent).toContain(`CREATE INDEX IF NOT EXISTS "byAuthorId" ON "posts" ("authorId");`);
+        expect(screen.queryByTestId("test-apply-applied")).toBeNull();
+    });
+
+    it("shows the statement when there is no clipboard at all (non-secure context)", async () => {
+        expect.assertions(2);
+
+        // The studio served over a LAN IP is not a secure context, so
+        // `navigator.clipboard` is undefined. Confirming used to return with no
+        // state change and no message whatsoever — the button simply did nothing.
+        Object.defineProperty(globalThis.navigator, "clipboard", { configurable: true, value: undefined });
+
+        renderButton({ fields: ["authorId"], indexName: "byAuthorId", table: "posts" });
+        fireEvent.click(screen.getByTestId("test-apply"));
+        fireEvent.click(screen.getByTestId("test-apply-confirm"));
+
+        const fallback = await screen.findByTestId("test-apply-manual");
+
+        expect(fallback.textContent).toContain(`CREATE INDEX IF NOT EXISTS "byAuthorId" ON "posts" ("authorId");`);
+        expect(screen.queryByTestId("test-apply-applied")).toBeNull();
     });
 
     it("returns to the button after cancel", () => {

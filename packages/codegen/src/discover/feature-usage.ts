@@ -111,5 +111,5 @@ const discoverFeatureUsage = (project: Project, lunoraDirectory: string): Featur
     return usage;
 };
 
-export { discoverFeatureUsage };
+export { contextPropertiesRead, discoverFeatureUsage };
 export type { FeatureUsage };

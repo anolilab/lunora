@@ -44,6 +44,31 @@ const trimTrailingSlashes = (value: string): string => {
     return value.slice(0, end);
 };
 
+/**
+ * Percent-escape the two characters that are structural in the serialized
+ * transform: `&` separates entries and `=` separates a key from its value.
+ *
+ * Without this the encoding is ambiguous, and the signature binds the ambiguous
+ * string — so a value carrying them decodes to a transform the signer never
+ * authorised. A `background` (or `gravity`, or `draw`) fed from user input and
+ * set to `blue&width=10000` minted a URL whose verified transform really did
+ * request a 10000px render, under a signature that checks out. The same
+ * ambiguity truncated legitimate values from the other side: a `draw` overlay
+ * URL carrying `?v=2&width=64` had its JSON cut at the `&`.
+ *
+ * `%` itself is deliberately NOT escaped, so a percent-encoded value that works
+ * today (`background=%23ff0000`) keeps canonicalizing byte-for-byte and its
+ * outstanding signed URLs keep verifying. The cost is that a value containing
+ * the literal text `%26` decodes to `&` — which can only ever place a literal
+ * `&` INSIDE one value, never split a new entry out of it, so it cannot forge a
+ * key. The only URLs whose canonical this changes are the ones that were
+ * already decoding to the wrong transform.
+ */
+const escapeTransformValue = (value: string): string => value.replaceAll("&", "%26").replaceAll("=", "%3D");
+
+/** The exact inverse of {@link escapeTransformValue}. */
+const unescapeTransformValue = (value: string): string => value.replaceAll("%3D", "=").replaceAll("%26", "&");
+
 // Stable, order-independent serialization of the transform so the same options
 // canonicalize byte-for-byte regardless of key insertion order. Object-valued
 // keys (e.g. gravity coordinates) are JSON-encoded; primitives stringify plainly.
@@ -57,7 +82,7 @@ const serializeTransform = (transform: TransformOptions | undefined): string => 
     return Object.entries(transform)
         .filter(([, value]) => value !== undefined)
         .toSorted(([a], [b]) => (a > b ? 1 : 0) - (a < b ? 1 : 0))
-        .map(([key, value]) => `${key}=${typeof value === "object" ? JSON.stringify(value) : String(value)}`)
+        .map(([key, value]) => `${key}=${escapeTransformValue(typeof value === "object" ? JSON.stringify(value) : String(value))}`)
         .join("&");
 };
 
@@ -92,35 +117,6 @@ const TRANSFORM_KEY_KINDS = {
 
 /** String-keyed view of {@link TRANSFORM_KEY_KINDS} for lookups from parsed input. */
 const KIND_BY_KEY: ReadonlyMap<string, TransformValueKind> = new Map(Object.entries(TRANSFORM_KEY_KINDS));
-
-/**
- * Split a serialized transform into `key=value` segments.
- *
- * `serializeTransform` joins with `&` and does NOT escape values, so a naive
- * `split("&")` truncates any value that contains one — a `draw` overlay whose
- * `url` carries two query params (`?v=2&w=64`) is the common case. The encoding
- * is the signature canonical and cannot change without invalidating every
- * outstanding signed URL, so the split is disambiguated on the read side
- * instead: an `&` starts a new segment only when what follows begins a key this
- * version knows; otherwise it is a literal `&` inside the current value.
- */
-const splitTransformSegments = (t: string): string[] => {
-    const segments: string[] = [];
-
-    for (const part of t.split("&")) {
-        const eq = part.indexOf("=");
-        const startsKnownKey = eq !== -1 && KIND_BY_KEY.has(part.slice(0, eq));
-        const previous = segments.at(-1);
-
-        if (startsKnownKey || previous === undefined) {
-            segments.push(part);
-        } else {
-            segments[segments.length - 1] = `${previous}&${part}`;
-        }
-    }
-
-    return segments;
-};
 
 /** Coerce one serialized transform value back to its declared type; throws `TypeError` naming the key on drift. */
 const coerceTransformValue = (key: string, kind: TransformValueKind, raw: string): unknown => {
@@ -178,14 +174,19 @@ export const parseSignedTransform = (t: string): TransformOptions => {
 
     const options: Record<string, unknown> = {};
 
-    for (const part of splitTransformSegments(t)) {
+    // A plain `split("&")` is exact: `serializeTransform` escapes both
+    // separators inside every value, so each `&` here really does start a new
+    // entry and each entry holds exactly one `=`. The read side used to guess
+    // instead — treating an `&` as a separator only when a known key followed —
+    // which split a `draw` URL's `?v=2&width=64` straight down the middle and
+    // could never have told an injected key from a legitimate one anyway.
+    for (const part of t.split("&")) {
         const eq = part.indexOf("=");
 
         if (eq === -1) {
             throw new TypeError(`@lunora/bindings/images: malformed transform segment "${part}" — expected key=value`);
         }
 
-        // Split on the FIRST "=" only, so a value containing "=" survives.
         const key = part.slice(0, eq);
         const kind = KIND_BY_KEY.get(key);
 
@@ -195,7 +196,7 @@ export const parseSignedTransform = (t: string): TransformOptions => {
             );
         }
 
-        options[key] = coerceTransformValue(key, kind, part.slice(eq + 1));
+        options[key] = coerceTransformValue(key, kind, unescapeTransformValue(part.slice(eq + 1)));
     }
 
     return options;

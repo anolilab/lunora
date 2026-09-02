@@ -6935,12 +6935,16 @@ const createConsentController = (context: ControllerContext, options: ConsentOpt
                 store.update({ error: context.localization.consentExpired, status: "error" });
                 return;
             }
-            store.update({ status: "success" });
             if (isSafeRedirect(redirect)) {
+                store.update({ status: "success" });
                 context.nav.replace(redirect);
             }
-            else {
+            else if (isHttpUrl(redirect)) {
+                store.update({ status: "success" });
                 globalThis.location.assign(redirect);
+            }
+            else {
+                store.update({ error: context.localization.genericError, status: "error" });
             }
         }
         catch (error) {

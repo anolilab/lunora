@@ -54,6 +54,27 @@ interface ConsentOptions {
 }
 
 /**
+ * Whether `value` is an absolute `http:`/`https:` URL — the only kind of
+ * off-origin destination this screen ever hands to the browser.
+ *
+ * Parsed rather than prefix-matched on purpose: the URL parser strips the
+ * leading whitespace, tabs and newlines a browser also strips before resolving
+ * the scheme, and lowercases it, so `"\n JavaScript:alert(1)"` is recognised as
+ * `javascript:` rather than passing a naive `startsWith("http")` test.
+ */
+const isHttpUrl = (value: string): boolean => {
+    try {
+        const { protocol } = new URL(value);
+
+        return protocol === "http:" || protocol === "https:";
+    } catch {
+        // Not an absolute URL at all — and it already failed `isSafeRedirect`,
+        // so it is not a path either.
+        return false;
+    }
+};
+
+/**
  * Drive one pending consent request.
  *
  * `accept`/`deny` both resolve by *navigating*: better-auth answers with the
@@ -106,8 +127,6 @@ const createConsentController = (context: ControllerContext, options: ConsentOpt
                 return;
             }
 
-            store.update({ status: "success" });
-
             /*
              * `redirectURI` is the relying party's absolute callback URL
              * carrying the authorization code, and better-auth returns it only
@@ -120,11 +139,24 @@ const createConsentController = (context: ControllerContext, options: ConsentOpt
              * that a caller could reach with a `redirectTo` query parameter is
              * an open redirect, and this is the one call site whose input is
              * vetted by the authorization server.
+             *
+             * That vetting is about the HOST, not the SCHEME, and it happens on
+             * the other side of the network — so the browser hand-off is still
+             * gated on {@link isHttpUrl}. `location.assign("javascript:…")`
+             * executes in *this* app's origin, which is the auth app: a single
+             * malformed or hostile `redirectURI` would be script execution on
+             * the session it was issued for, with no defence in depth behind it.
+             * Nothing that is neither a same-origin path nor an http(s) URL is a
+             * destination this screen can honour, so it fails visibly instead.
              */
             if (isSafeRedirect(redirect)) {
+                store.update({ status: "success" });
                 context.nav.replace(redirect);
-            } else {
+            } else if (isHttpUrl(redirect)) {
+                store.update({ status: "success" });
                 globalThis.location.assign(redirect);
+            } else {
+                store.update({ error: context.localization.genericError, status: "error" });
             }
         } catch (error) {
             context.onError?.(error);

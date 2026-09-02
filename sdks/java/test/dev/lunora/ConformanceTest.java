@@ -391,6 +391,35 @@ public final class ConformanceTest {
         }
 
         check(throwsWireError(nested), "decoding past the depth cap must be rejected");
+
+        // The PARSER's cap is counted from the document root, and every payload
+        // arrives inside an envelope — so charging the envelope against the wire
+        // value's own budget refused a frame whose payload the reference encodes
+        // happily. A value nested exactly MAX_DEPTH deep must still reach onData.
+        Object deepest = "leaf";
+
+        for (int depth = 0; depth < Wire.MAX_DEPTH; depth++) {
+            deepest = List.of(deepest);
+        }
+
+        Client client = new Client("https://app.example", null);
+
+        client.attachSocket(frame -> {});
+
+        List<Object> seen = new ArrayList<>();
+
+        client.subscribe("messages:list", null, seen::add, null, null);
+
+        Map<String, Object> envelope = new LinkedHashMap<>();
+
+        envelope.put("type", "data");
+        envelope.put("id", "sub_1");
+        envelope.put("data", deepest);
+
+        check(
+                "data".equals(client.handleFrame(Json.write(envelope))),
+                "a MAX_DEPTH value must survive its frame envelope");
+        check(seen.size() == 1, "and reach onData");
     }
 
     @SuppressWarnings("unchecked")

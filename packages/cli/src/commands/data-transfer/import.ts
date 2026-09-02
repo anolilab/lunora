@@ -9,7 +9,7 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 
-import { resolveAdminBearer } from "../../util/admin-token";
+import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { Logger } from "../../util/logger";
 import { CONVEX_STORAGE_TABLE } from "../convex-snapshot";
@@ -152,17 +152,20 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
         return undefined;
     }
 
-    if (options.prod && options.yes !== true) {
-        options.logger.error("import --prod bulk-writes production. Re-run with --yes to confirm.");
-
-        return undefined;
-    }
-
     // Resolved before the token so the `.dev.vars` fallback is gated on the
     // request's real destination rather than on the (possibly absent) flag.
     const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
     if (baseUrl === undefined) {
+        return undefined;
+    }
+
+    // Gated on the RESOLVED destination, not on `--prod`: the flag is a
+    // self-declaration, and a bulk write to `--url https://…` without it is
+    // just as destructive.
+    if (targetsRemoteWorker({ prod: options.prod, url: baseUrl }) && options.yes !== true) {
+        options.logger.error(`import bulk-writes ${baseUrl}, which is not local. Re-run with --yes to confirm.`);
+
         return undefined;
     }
 

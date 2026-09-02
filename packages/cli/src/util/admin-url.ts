@@ -38,6 +38,15 @@ const resolveDefaultAdminUrl = (cwd: string | undefined): string => {
 };
 
 /**
+ * The base-URL normalization every admin command shares: drop the trailing
+ * slash so `https://worker/` and `https://worker` name one target. Exported
+ * because callers that COMPARE two `--url` values (the `d1-to-hyperdrive`
+ * self-migration guard) have to use the same rule the request path uses, or the
+ * guard and the work disagree.
+ */
+const normalizeAdminBaseUrl = (url: string): string => url.replace(TRAILING_SLASH, "");
+
+/**
  * Normalize a `--url` value to a base URL and refuse to send the full-access
  * admin bearer in cleartext to a non-loopback host (a network MITM would gain
  * full admin access). Returns `undefined` (after logging) when the URL is
@@ -65,7 +74,7 @@ const resolveAdminBaseUrl = (rawUrl: string | undefined, logger: Logger, cwd?: s
         return undefined;
     }
 
-    return candidate.replace(TRAILING_SLASH, "");
+    return normalizeAdminBaseUrl(candidate);
 };
 
-export { resolveAdminBaseUrl, resolveDefaultAdminUrl };
+export { normalizeAdminBaseUrl, resolveAdminBaseUrl, resolveDefaultAdminUrl };

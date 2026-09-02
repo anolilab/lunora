@@ -62,7 +62,7 @@ describe("runAddFeature — lint ignores", () => {
 
         seedProject(workdir, { prettier: "^3.0.0" });
 
-        await runAddFeature({ cwd: workdir, feature: "presence", from: registryRoot, logger: makeLogger().logger });
+        await runAddFeature({ confirm: async () => true, cwd: workdir, feature: "presence", from: registryRoot, logger: makeLogger().logger });
 
         const ignore = readFileSync(join(workdir, ".prettierignore"), "utf8");
 
@@ -77,7 +77,7 @@ describe("runAddFeature — lint ignores", () => {
 
         seedProject(workdir, {});
 
-        await runAddFeature({ cwd: workdir, feature: "presence", from: registryRoot, logger: makeLogger().logger });
+        await runAddFeature({ confirm: async () => true, cwd: workdir, feature: "presence", from: registryRoot, logger: makeLogger().logger });
 
         expect(existsSync(join(workdir, ".prettierignore"))).toBe(false);
         expect(existsSync(join(workdir, ".oxlintrc.json"))).toBe(false);
@@ -92,7 +92,7 @@ describe("runAddFeature — lint ignores", () => {
 
         const { lines, logger } = makeLogger();
 
-        await runAddFeature({ cwd: workdir, feature: "presence", from: registryRoot, logger });
+        await runAddFeature({ confirm: async () => true, cwd: workdir, feature: "presence", from: registryRoot, logger });
 
         expect(existsSync(join(workdir, ".eslintignore"))).toBe(false);
         // An existing flat config is arbitrary JS, so it is reported, not rewritten.

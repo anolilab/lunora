@@ -117,10 +117,12 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
         logger.warn(`${count.toString()} schema ${count === 1 ? "advisory" : "advisories"}:\n${lines.join("\n")}`);
     }
 
-    const platformError = reportPlatformDiagnostics(result.platformDiagnostics, logger);
+    const platform = reportPlatformDiagnostics(result.platformDiagnostics, logger);
 
-    if (platformError !== undefined) {
-        commandResult.error = platformError;
+    if (platform.errors.length > 0) {
+        // Every message was already logged; `error` is the single-string reason
+        // this command's result carries.
+        commandResult.error = platform.errors.join("; ");
     }
 
     // An ERROR advisory says something is broken, not merely untidy — the one

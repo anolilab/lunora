@@ -18,6 +18,8 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import type { DatabaseWriterLike } from "./schema-types";
+
 /**
  * Well-known symbol the guard hangs the unwrapped writer off of. `Symbol.for`
  * (the cross-realm global registry) lets `@lunora/server`'s RLS middleware read
@@ -143,31 +145,80 @@ const guardShardSweep = (
     }
 };
 
+/** How {@link guardWriter} gates one method of the real writer. */
+type WriterGating =
+    /** By-id write/read: the owning table is resolved from the id, then gated (`guardById`). */
+    | "id-gated"
+    /** Table-first, but overridden inline rather than by the uniform loop — its key must exist (as `undefined`) even when the base has no implementation. */
+    | "inline-table-gated"
+    /** Whole-shard sweep: every table in range is gated (`guardShardSweep`). */
+    | "sweep-gated"
+    /** First argument is the table name: gated by the one uniform table-level check below. */
+    | "table-first"
+    /** Deliberately NOT gated — see the reason on each entry. */
+    | "ungated";
+
+/**
+ * How the guard treats EVERY method of the real `DatabaseWriterLike`.
+ *
+ * This is the exhaustiveness control: the key type is `keyof DatabaseWriterLike`,
+ * so a method ADDED to the real writer fails to compile here until it is
+ * classified, and a method removed fails too. Before this map, both the gated
+ * list below and the unit test's fake writer were hand-maintained and nothing
+ * compared them to the writer — `insertMany`/`insertManyUnsafe` were gated in
+ * source but unreachable in the test, so deleting them from the list left the
+ * suite green.
+ *
+ * `"ungated"` entries are an explicit allowlist WITH a reason, never an
+ * omission: each one either touches no rows or is a pure string helper.
+ */
+const WRITER_METHOD_GATING: Readonly<Record<keyof DatabaseWriterLike, WriterGating>> = {
+    aggregate: "table-first",
+    /** Pure id formatter — composes a string from `(tableName, id)`, reads and writes nothing. */
+    asId: "ungated",
+    /** Metadata-only changelog probe: returns table NAMES and a cursor, never a document. */
+    cdcChangedTables: "ungated",
+    count: "table-first",
+    delete: "id-gated",
+    deleteAll: "table-first",
+    deleteMany: "id-gated",
+    deleteWhere: "inline-table-gated",
+    findFirst: "table-first",
+    findFirstOrThrow: "table-first",
+    findMany: "table-first",
+    get: "id-gated",
+    groupBy: "table-first",
+    insert: "table-first",
+    insertMany: "table-first",
+    insertManyUnsafe: "table-first",
+    lookupById: "id-gated",
+    /** Pure id validator/parser — returns the id or `null`, reads no row. */
+    normalizeId: "ungated",
+    patch: "id-gated",
+    patchMany: "id-gated",
+    patchWhere: "inline-table-gated",
+    query: "table-first",
+    rank: "table-first",
+    rankBefore: "table-first",
+    rankPage: "table-first",
+    rankPageRows: "table-first",
+    replace: "id-gated",
+    restore: "id-gated",
+    /** The system-table reader: reserved tables, not user tables, so the per-table policy model does not apply. */
+    system: "ungated",
+    wipeShard: "sweep-gated",
+};
+
 /**
  * Every method whose FIRST argument is the table name, gated by one uniform
- * table-level check. Includes the optional members (`deleteAll`, `rankBefore`,
+ * table-level check — DERIVED from {@link WRITER_METHOD_GATING} so the two can
+ * never drift. Includes the optional members (`deleteAll`, `rankBefore`,
  * `rankPageRows`) — a base without them simply isn't overridden, so they stay
  * absent on the guarded writer exactly as the `...raw` spread left them.
- * `deleteWhere`/`patchWhere` are handled inline instead: their keys must exist
- * (as `undefined`) even when the base has no implementation.
  */
-const TABLE_FIRST_METHODS = [
-    "aggregate",
-    "count",
-    "deleteAll",
-    "findFirst",
-    "findFirstOrThrow",
-    "findMany",
-    "groupBy",
-    "insert",
-    "insertMany",
-    "insertManyUnsafe",
-    "query",
-    "rank",
-    "rankBefore",
-    "rankPage",
-    "rankPageRows",
-] as const;
+const TABLE_FIRST_METHODS: ReadonlyArray<keyof DatabaseWriterLike> = Object.entries(WRITER_METHOD_GATING)
+    .filter(([, gating]) => gating === "table-first")
+    .map(([name]) => name as keyof DatabaseWriterLike);
 
 /**
  * Wrap `raw` in the secure-by-default guard. A no-op (returns `raw` untouched)
@@ -386,4 +437,5 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, t
     return guarded as unknown as W;
 };
 
-export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError };
+export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError, TABLE_FIRST_METHODS, WRITER_METHOD_GATING };
+export type { WriterGating };

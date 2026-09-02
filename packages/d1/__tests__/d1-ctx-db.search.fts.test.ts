@@ -67,6 +67,12 @@ const createRecordingFts = (matchRows: MatchRow[]): { exec: D1Exec; statements: 
         // (`RETURNING "id"`) reports one changed row so the CAS passes.
         const routes: { pattern: RegExp; rows: () => Record<string, unknown>[] }[] = [
             { pattern: /__fts_by_body__vocab/u, rows: () => matchRows as unknown as Record<string, unknown>[] },
+            // The read path refuses an index that is still backfilling, and this
+            // double answers every unrouted SELECT with `[]` — so without a row
+            // here the progress table reads as "nothing recorded" and every
+            // search below is refused. These tests are about the emitted SQL,
+            // not about backfill progress: report the index as complete.
+            { pattern: /FROM "__lunora_search_state"/u, rows: () => [{ covered: 1, cursor: null, done: 1, profile: null }] },
             // The migration-time backfill probes for the source table and then
             // pages through it; the canned rows stand in for a table that
             // already held data when the search index was declared.

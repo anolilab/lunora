@@ -86,10 +86,16 @@ describe("d1 ctx-db search backfill", () => {
 
         await staged.insert("docs", { _id: "new", body: "ancient news", channel: "x" }, { allowExplicitId: true });
 
-        const before = await staged
+        // A NEW index covers a growing PREFIX of the table, so a search over it
+        // would return a confidently wrong subset — one row of two here. The
+        // read refuses instead. (A REBUILDING index is the other case: it holds
+        // every row under stale analysis, so it keeps serving.)
+        const searchBeforeBackfill = staged
             .query("docs")
             .withSearchIndex("by_body", (q) => q.search("body", "ancient"))
             .collect();
+
+        await expect(searchBeforeBackfill).rejects.toThrow(/still backfilling/u);
 
         await backfillSqlSearchIndexes(exec, stagedSchema, invertedDialect);
 
@@ -98,7 +104,6 @@ describe("d1 ctx-db search backfill", () => {
             .withSearchIndex("by_body", (q) => q.search("body", "ancient"))
             .collect();
 
-        expect(before.map((document) => document["_id"])).toStrictEqual(["new"]);
         expect(after.map((document) => String(document["_id"])).toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["new", "old"]);
     });
 

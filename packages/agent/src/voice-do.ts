@@ -5,7 +5,7 @@ import { createDispatchRunner } from "@lunora/dispatch";
 
 import { toBase64 } from "../../../shared/base64";
 import { decodeIdentityExpiryHeader, decodeUserIdHeader, dropExpiredCredentialSocket, isIdentityExpired } from "../../../shared/identity-header";
-import { createStreamGenerate } from "./generate";
+import { createCompact, createStreamGenerate } from "./generate";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
 import type { AgentDefinition, AgentFunctionPaths, AgentRunFunction, AgentStreamGenerate } from "./types";
 import type { VoiceAudioSource, VoiceClientFrame, VoiceServerFrame } from "./voice-turn";
@@ -19,6 +19,38 @@ const DEFAULT_TTS_MODEL = "@cf/deepgram/aura-1";
 
 /** Cap a single utterance's buffered PCM (~8MB, roughly 4 min of 16kHz/16-bit audio) to bound DO memory. */
 const MAX_UTTERANCE_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Default cap on turns one socket may run before it is closed. Each turn is a
+ * full LLM generation plus sentence-by-sentence TTS — billed and persisted —
+ * and the one-turn-in-flight guard bounds concurrency, not volume. Overridable
+ * per agent via `voice.maxTurns`.
+ */
+const DEFAULT_MAX_SESSION_TURNS = 100;
+
+/** Cap on a `text` frame's length. Beyond this the frame is refused before it reaches the model. */
+const MAX_TEXT_FRAME_CHARS = 4000;
+
+/**
+ * Cap on the RAW control frame, checked before `JSON.parse`.
+ *
+ * The `text` bound below is measured on the parsed frame, so a 32MiB string
+ * message — Cloudflare's own delivery ceiling — was fully parsed before anything
+ * looked at its size, once per frame, on the DO's single thread. The margin over
+ * {@link MAX_TEXT_FRAME_CHARS} is the JSON envelope plus room for escaping: a
+ * frame past it cannot carry an acceptable `text` under any encoding, so there is
+ * nothing to answer and the socket is closed rather than left to repeat it.
+ */
+const MAX_CONTROL_FRAME_CHARS = MAX_TEXT_FRAME_CHARS * 4 + 1024;
+
+/** Close code for a socket that exhausted its turn budget (reconnect for a fresh one). */
+const TURN_LIMIT_CLOSE_CODE = 4002;
+
+/** Close code for a socket that overran the utterance buffer without committing. */
+const UTTERANCE_LIMIT_CLOSE_CODE = 4003;
+
+/** Close code for a socket that sent a control frame past {@link MAX_CONTROL_FRAME_CHARS}. */
+const CONTROL_FRAME_LIMIT_CLOSE_CODE = 4004;
 
 /** Outbound-audio backpressure: pause synthesis when the socket send buffer exceeds ~256KB so a slow client can't balloon DO memory. */
 const MAX_SOCKET_BUFFER_BYTES = 256 * 1024;
@@ -101,6 +133,9 @@ class VoiceSessionDO {
 
     protected readonly ttsModel: string;
 
+    /** Turn budget for one socket — see {@link DEFAULT_MAX_SESSION_TURNS}. */
+    private readonly maxSessionTurns: number;
+
     private readonly audioBuffers = new Map<string, Uint8Array[]>();
 
     private readonly bufferedBytes = new Map<string, number>();
@@ -120,6 +155,10 @@ class VoiceSessionDO {
         this.streamGenerate = createStreamGenerate(agent, env);
         this.sttModel = agent.voice?.stt ?? DEFAULT_STT_MODEL;
         this.ttsModel = agent.voice?.tts ?? DEFAULT_TTS_MODEL;
+
+        const configured = agent.voice?.maxTurns;
+
+        this.maxSessionTurns = Number.isInteger(configured) && (configured as number) > 0 ? (configured as number) : DEFAULT_MAX_SESSION_TURNS;
     }
 
     /** HTTP entry — only a WebSocket upgrade carrying a `threadKey` is accepted. */
@@ -260,6 +299,16 @@ class VoiceSessionDO {
 
     /** Route a JSON control frame (`commit` / `interrupt` / `text`). */
     private async handleControl(ws: WebSocket, attachment: VoiceSocketAttachment, raw: string): Promise<void> {
+        // Before the parse, not after: the `text` bound further down is measured
+        // on the parsed frame, so the 32MiB message Cloudflare will deliver was
+        // parsed in full first.
+        if (raw.length > MAX_CONTROL_FRAME_CHARS) {
+            this.send(ws, { message: `control frame exceeds the maximum of ${String(MAX_CONTROL_FRAME_CHARS)} characters`, type: "error" });
+            this.closeSocket(ws, CONTROL_FRAME_LIMIT_CLOSE_CODE, "control_frame_limit");
+
+            return;
+        }
+
         let frame: VoiceClientFrame;
 
         try {
@@ -270,6 +319,27 @@ class VoiceSessionDO {
 
         if (frame.type === "interrupt") {
             this.controllers.get(attachment.connectionId)?.abort();
+
+            return;
+        }
+
+        // Input bound, checked before anything schedules work: an unmeasured
+        // `text` frame went straight to the model (a 500k-character one reached
+        // it). Refuse the frame; the socket stays usable for a sane next turn.
+        if (frame.type === "text" && frame.text.length > MAX_TEXT_FRAME_CHARS) {
+            this.send(ws, { message: `text frame exceeds the maximum of ${String(MAX_TEXT_FRAME_CHARS)} characters`, type: "error" });
+
+            return;
+        }
+
+        // Session bound. `turn` is the socket's monotonic turn index (advanced in
+        // `runTurn`'s finally and stamped on the hibernation attachment, so it
+        // survives eviction). Without this the only guard was one-turn-in-flight,
+        // which bounds concurrency and not volume — an unattended socket could run
+        // paid LLM+TTS turns for as long as it stayed open.
+        if (attachment.turn >= this.maxSessionTurns) {
+            this.send(ws, { message: `voice session reached its ${String(this.maxSessionTurns)}-turn limit — reconnect to continue`, type: "error" });
+            this.closeSocket(ws, TURN_LIMIT_CLOSE_CODE, "turn_limit");
 
             return;
         }
@@ -301,6 +371,13 @@ class VoiceSessionDO {
             this.audioBuffers.delete(connectionId);
             this.bufferedBytes.delete(connectionId);
             this.send(ws, { message: "utterance exceeded the maximum buffer — send a commit sooner", type: "error" });
+            // Dropping the buffer alone reset the counter, so the cap bounded peak
+            // memory and NOT throughput: a client that never commits could push
+            // unlimited audio, one error frame per 8MB, forever. A client that
+            // overruns 8MB (~4 minutes) without a commit is not following the
+            // protocol — close the socket so the bound is on the stream, not the
+            // snapshot. It reconnects if it wants another utterance.
+            this.closeSocket(ws, UTTERANCE_LIMIT_CLOSE_CODE, "utterance_too_large");
 
             return;
         }
@@ -340,6 +417,10 @@ class VoiceSessionDO {
         try {
             await runVoiceTurn({
                 agent: this.agent,
+                // Same history compaction the durable loop wires. Dormant unless
+                // the agent declares a `compaction` config — voice and text turns
+                // share one thread, so it must not apply to only one of them.
+                compact: createCompact(),
                 connectionId: attachment.connectionId,
                 env: this.env,
                 exportName: this.exportName,
@@ -397,12 +478,22 @@ class VoiceSessionDO {
         this.controllers.set(connectionId, controller);
 
         try {
-            await run(toFunctionReference(this.paths.ensureThread), {
+            const ensured = (await run(toFunctionReference(this.paths.ensureThread), {
                 agent: this.exportName,
                 key: threadKey,
                 ...(this.agent.initialState === undefined ? {} : { initialState: this.agent.initialState }),
                 ...(userId === undefined ? {} : { owner: userId }),
-            });
+            })) as { outcome?: string } | undefined;
+
+            // Greet once per THREAD, not once per upgrade. The greeting's append
+            // is already keyed per thread ("voice:greeting:assistant") so it never
+            // duplicated in history — but the SYNTHESIS ran unthrottled on every
+            // connect, so 20 reconnects bought 20 paid TTS calls of one line. A
+            // thread that already exists has been greeted (or has a history that
+            // makes an opening line wrong anyway).
+            if (ensured?.outcome !== "created") {
+                return;
+            }
 
             for await (const chunk of toByteIterable(await this.synthesizeWithSignal(greeting, controller.signal))) {
                 if (isAborted()) {
@@ -465,6 +556,16 @@ class VoiceSessionDO {
         this.controllers.delete(attachment.connectionId);
         this.audioBuffers.delete(attachment.connectionId);
         this.bufferedBytes.delete(attachment.connectionId);
+    }
+
+    /** Close a socket that broke a session bound, swallowing an already-closed error (never throw from a handler). */
+    // eslint-disable-next-line class-methods-use-this -- instance method (kept non-static for subclass override symmetry); acts on the passed socket
+    private closeSocket(ws: WebSocket, code: number, reason: string): void {
+        try {
+            (ws as unknown as HibernatableWebSocket).close?.(code, reason);
+        } catch {
+            /* socket may already be closed */
+        }
     }
 
     /** Send a JSON control frame, swallowing a closed-socket error (never throw from a handler). */

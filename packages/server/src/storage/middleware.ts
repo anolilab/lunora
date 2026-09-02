@@ -20,6 +20,14 @@
  * An operation with no rules at all passes through untouched (opt-in, exactly
  * like a table with no RLS policy).
  *
+ * That opt-in only holds when "this operation has no rules" means the author
+ * chose to leave it open. A rule naming a bucket the request's storage cannot
+ * address is not a rule that doesn't fire — it is a rule that governs nothing,
+ * and it leaves its intended operation wide open while reading as enforced in
+ * source and in the studio's access-rules view. So the bucket of every rule is
+ * checked for reachability before any wrapping happens — see
+ * {@link assertRuleBucketsReachable}.
+ *
  * 3. **Opt-in scope**: rules apply only inside procedures whose builder chain
  * includes this middleware. A procedure without `.use(storageRules(...))` sees
  * the unwrapped `ctx.storage`.
@@ -121,6 +129,66 @@ const GUARDED_METHODS: ReadonlyArray<[keyof WrappableStorage, OperationResolver]
     ["store", "write"],
 ];
 
+/**
+ * Does `storage.bucket(name)` actually resolve to the bucket `name`?
+ *
+ * The ground truth, and the only reliable one. `createBucketStorage` returns an
+ * accessor tagged with the requested name and throws for an unregistered one;
+ * `asBucketStorage` — which every generated `ctx.storage` passes through — gives
+ * a single-bucket app a selector that is the IDENTITY, returning the same
+ * `"default"`-tagged accessor whatever it is handed. So "did it throw?" is not
+ * the test (the identity selector never throws) and "does a selector exist?" is
+ * not either (one always does). Whether the returned accessor is tagged with the
+ * name asked for is the test, and it separates all three shapes.
+ *
+ * A custom storage that echoes any name back is simply not checked — that
+ * direction only ever misses a bad rule, never rejects a good one.
+ */
+const selectsBucket = (bucket: (name: string) => WrappableStorage, name: string): boolean => {
+    try {
+        return bucket(name).bucketName === name;
+    } catch {
+        // An unregistered name — `createBucketStorage` throws with the known set.
+        return false;
+    }
+};
+
+/**
+ * Throw unless every bucket named by a rule is one this request's storage can
+ * actually address. A rule for an unaddressable bucket can never fire, so the
+ * per-op default-deny it was written to engage never engages and the operation
+ * it meant to lock down stays fully open — silently, because a mismatched name
+ * is indistinguishable from a rule for a sibling bucket. The reported shape is a
+ * single-bucket `createStorage` app (every accessor tagged `"default"`) whose
+ * rule says `{ bucket: "uploads" }`: it compiles, the studio lists it, and every
+ * user can read every other user's object.
+ *
+ * The addressable set is only knowable here, at runtime: the buckets a worker
+ * registers come from its `.storage({ bucket, buckets })` declaration, which is
+ * a runtime object. The generated `StorageBucketName` union is NOT that set (it
+ * is seeded from `v.storage()` columns and from the rules themselves), so it
+ * cannot be the check — see the bucket-union builder in `@lunora/codegen`'s
+ * `emit.ts`, whose docblock spells out why.
+ */
+const assertRuleBucketsReachable = (storage: WrappableStorage, ruleBuckets: Iterable<string>): void => {
+    const bucketName = storage.bucketName ?? "default";
+    const { bucket } = storage;
+
+    for (const name of new Set(ruleBuckets)) {
+        if (name === bucketName || (typeof bucket === "function" && selectsBucket(bucket, name))) {
+            continue;
+        }
+
+        throw new LunoraError(
+            "INTERNAL",
+            `storageRules: rule for bucket "${name}" governs nothing — this request's storage cannot address that bucket ` +
+                `(the accessor is "${bucketName}", and selecting "${name}" does not reach a bucket of that name). ` +
+                "A rule on an unaddressable bucket leaves the operation it was written to gate wide open. " +
+                "Match the rule's `bucket` to the name the binding is registered under in `.storage({ bucket, buckets })`.",
+        );
+    }
+};
+
 const storageRules = <Context extends StorageContextIn = StorageContextIn>(
     rules: ReadonlyArray<StorageRule<Context>>,
     options: StorageRulesOptions = {},
@@ -135,6 +203,11 @@ const storageRules = <Context extends StorageContextIn = StorageContextIn>(
          * rule allows the key. Rules are scoped to the accessor's bucket — a rule for
          * a different bucket never applies. An operation with no rule for the bucket
          * stays open (opt-in, like a table with no RLS policy).
+         *
+         * The empty-`applicable` fallthrough is only sound because every rule bucket
+         * was already proven addressable ({@link assertRuleBucketsReachable}): reaching
+         * it now means the author left this `(bucket, op)` ungoverned, not that a rule
+         * meant for it was misnamed into inertness.
          */
         const assertAllowed = (op: StorageOperation, key: string, bucketName: string): void => {
             const applicable = rules.filter((rule) => rule.on === op && rule.bucket === bucketName);
@@ -199,6 +272,11 @@ const storageRules = <Context extends StorageContextIn = StorageContextIn>(
         if (storage === undefined) {
             return next();
         }
+
+        assertRuleBucketsReachable(
+            storage,
+            rules.map((rule) => rule.bucket),
+        );
 
         return next({ ctx: { storage: wrapStorage(storage) } });
     };

@@ -15,6 +15,7 @@
 //!
 //! See `protocol/README.md` §2 for the normative grammar.
 
+use std::collections::HashMap;
 use std::fmt;
 
 use serde_json::{Map, Number, Value};
@@ -30,6 +31,25 @@ pub const MAX_DEPTH: usize = 64;
 /// unbounded digit string from an untrusted peer is a denial of service.
 /// Applied only on decode — the untrusted direction.
 pub const MAX_BIGINT_DIGITS: usize = 1024;
+
+/// Bytes per element for the typed-array views the codec round-trips. A view
+/// whose payload is not a whole number of elements is not a view the reference
+/// can rebuild — `new Float32Array(buffer)` raises a `RangeError` there — so
+/// accepting it would hand the consumer bytes it cannot reconstruct.
+/// `ArrayBuffer` is absent deliberately: it is untyped, so nothing to align.
+const TYPED_ARRAY_ELEMENT_SIZES: &[(&str, usize)] = &[
+    ("BigInt64Array", 8),
+    ("BigUint64Array", 8),
+    ("Float32Array", 4),
+    ("Float64Array", 8),
+    ("Int16Array", 2),
+    ("Int32Array", 4),
+    ("Int8Array", 1),
+    ("Uint16Array", 2),
+    ("Uint32Array", 4),
+    ("Uint8Array", 1),
+    ("Uint8ClampedArray", 1),
+];
 
 /// Every value the Lunora wire can carry.
 ///
@@ -349,6 +369,43 @@ fn decode_at(value: &Value, depth: usize) -> WireResult<WireValue> {
     })
 }
 
+/// A map key's collapse identity, or `None` when it never collapses.
+///
+/// The reference's `Map` compares keys by SameValueZero: primitives by value
+/// (`NaN` equal to itself), everything else by reference — so two structurally
+/// identical `Date`/bytes keys stay two entries there and must stay two here.
+fn map_key_identity(key: &WireValue) -> Option<String> {
+    Some(match key {
+        WireValue::Null => "null".to_owned(),
+        WireValue::Undefined => "undefined".to_owned(),
+        WireValue::Bool(value) => format!("bool:{value}"),
+        WireValue::Number(value) => format!("num:{value}"),
+        WireValue::NaN => "num:nan".to_owned(),
+        WireValue::Infinity => "num:inf".to_owned(),
+        WireValue::NegInfinity => "num:-inf".to_owned(),
+        WireValue::String(value) => format!("str:{value}"),
+        // The digits are carried verbatim, so `01` and `1` are one key to the
+        // reference (`BigInt("01") === 1n`) and must be one here.
+        WireValue::BigInt(digits) => format!("big:{}", normalise_bigint(digits)),
+        _ => return None,
+    })
+}
+
+/// Strip a bigint literal's leading zeros and a sign that only reaches zero.
+fn normalise_bigint(digits: &str) -> String {
+    let (sign, body) = match digits.strip_prefix('-') {
+        Some(rest) => ("-", rest),
+        None => ("", digits),
+    };
+    let trimmed = body.trim_start_matches('0');
+
+    if trimmed.is_empty() {
+        return "0".to_owned();
+    }
+
+    format!("{sign}{trimmed}")
+}
+
 fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
     let name = items.get(1).and_then(Value::as_str).unwrap_or("");
 
@@ -370,14 +427,35 @@ fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
         "url" => WireValue::Url(items.get(2).and_then(Value::as_str).ok_or(WireError::Malformed("url"))?.to_string()),
         "map" => {
             let raw = items.get(2).and_then(Value::as_array).ok_or(WireError::Malformed("map"))?;
-            let mut entries = Vec::with_capacity(raw.len());
+            let mut entries: Vec<(WireValue, WireValue)> = Vec::with_capacity(raw.len());
+            let mut seen: HashMap<String, usize> = HashMap::new();
 
             for pair in raw {
                 let pair = pair.as_array().ok_or(WireError::Malformed("map entry"))?;
-                let key = pair.first().ok_or(WireError::Malformed("map entry"))?;
-                let item = pair.get(1).ok_or(WireError::Malformed("map entry"))?;
 
-                entries.push((decode_at(key, depth + 1)?, decode_at(item, depth + 1)?));
+                let [key, item] = pair.as_slice() else {
+                    return Err(WireError::Malformed("map entry"));
+                };
+
+                let key = decode_at(key, depth + 1)?;
+                let item = decode_at(item, depth + 1)?;
+
+                // Last write wins, at the FIRST occurrence's position — the
+                // reference builds a real Map, and `Map.prototype.set` on a key
+                // already present overwrites the value in place rather than
+                // appending. Keeping both entries left two peers of one
+                // deployment reading a different value from identical bytes.
+                if let Some(identity) = map_key_identity(&key) {
+                    if let Some(&index) = seen.get(&identity) {
+                        entries[index] = (key, item);
+
+                        continue;
+                    }
+
+                    seen.insert(identity, entries.len());
+                }
+
+                entries.push((key, item));
             }
 
             WireValue::Map(entries)
@@ -388,12 +466,17 @@ fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
             WireValue::Set(raw.iter().map(|item| decode_at(item, depth + 1)).collect::<WireResult<_>>()?)
         }
         "error" => {
+            // The props slot is NOT optional and NOT nullable: the reference
+            // reads it with `Object.keys`, which throws on a null or missing
+            // slot, so quietly substituting an empty map accepted a frame the
+            // reference refuses.
             let props = match items.get(4) {
                 Some(Value::Object(fields)) => fields
                     .iter()
                     .map(|(key, item)| Ok((key.clone(), decode_at(item, depth + 1)?)))
                     .collect::<WireResult<Vec<_>>>()?,
-                _ => Vec::new(),
+                None | Some(Value::Null) => return Err(WireError::Malformed("error")),
+                Some(_) => Vec::new(),
             };
 
             WireValue::Error {
@@ -415,8 +498,20 @@ fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
             // view keeps its constructor name.
             if ctor == "Uint8Array" {
                 WireValue::Bytes(data)
-            } else {
+            } else if ctor == "ArrayBuffer" {
                 WireValue::TypedBytes { data, ctor: ctor.to_string() }
+            } else {
+                match TYPED_ARRAY_ELEMENT_SIZES.iter().find(|(name, _)| *name == ctor) {
+                    // An UNKNOWN ctor name decodes to raw bytes, dropping the
+                    // name — the forward-compat rule in protocol/README.md §2.1.
+                    // Keeping it re-encoded a 4-element form the reference emits
+                    // as 3, so the same value relayed through JS and through here
+                    // produced different bytes, and therefore different stable
+                    // subscription keys.
+                    None => WireValue::Bytes(data),
+                    Some((_, size)) if data.len() % size != 0 => return Err(WireError::Malformed("typed-array bytes")),
+                    Some(_) => WireValue::TypedBytes { data, ctor: ctor.to_string() },
+                }
             }
         }
         "arr" => {

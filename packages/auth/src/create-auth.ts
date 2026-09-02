@@ -1,8 +1,115 @@
 import { LunoraError } from "@lunora/errors";
 import type { BetterAuthOptions } from "better-auth";
 import { betterAuth } from "better-auth";
+import { getIP } from "better-auth/api";
 
 import { validateSessionPolicy } from "./session";
+
+/**
+ * The client IP header Cloudflare's edge sets on every request it forwards,
+ * overwriting whatever the client sent. It is the one header on that platform a
+ * client cannot choose, which is why `audit-hooks.ts`'s `resolveIp` reads it and
+ * nothing else by default — this is the same policy, expressed in better-auth's
+ * configuration instead of our own code, so the audit trail and the rate limiter
+ * cannot disagree about who a request came from.
+ */
+const CLOUDFLARE_CLIENT_IP_HEADER = "cf-connecting-ip";
+
+/**
+ * Whether this process runs behind Cloudflare's edge — the only condition under
+ * which {@link CLOUDFLARE_CLIENT_IP_HEADER} is a header the client cannot write.
+ *
+ * workerd sets `navigator.userAgent` to `"Cloudflare-Workers"`; Node and every
+ * other host this framework now targets do not. Read at call time rather than
+ * module scope so a test can stand the global up, and off `globalThis` with an
+ * optional chain because it is absent on older runtimes — where the honest
+ * answer is "not Cloudflare", which is also the safe one.
+ */
+// eslint-disable-next-line n/no-unsupported-features/node-builtins -- read defensively off globalThis precisely because the runtime may not have it; this is a Workers-vs-Node probe, not a Node API call
+const onCloudflareEdge = (): boolean => (globalThis as { navigator?: { userAgent?: string } }).navigator?.userAgent === "Cloudflare-Workers";
+
+/**
+ * Which headers better-auth may resolve a client IP from, when the caller has
+ * not chosen for themselves.
+ *
+ * better-auth's own default is `["x-forwarded-for"]`, and `x-forwarded-for` is
+ * whatever the client typed unless a proxy in front of us rewrote it. That has
+ * two consequences and both are bad, in opposite directions:
+ *
+ * - Where the edge *appends* the real address to a client-supplied chain, the
+ * header holds two or more entries, and with no `trustedProxies` configured
+ * better-auth refuses to guess which is the client — it resolves nothing and
+ * every such request lands in one shared `no-trusted-ip|<path>` bucket. At the
+ * built-in 3-per-10s limit on `/sign-in*`, `/sign-up*`, `/change-password` and
+ * `/change-email`, three unrelated clients exhaust it and the fourth is denied
+ * sign-in on its first attempt.
+ * - Where nothing rewrites the header at all, a single client-chosen value *is*
+ * accepted, so an attacker rotates it and gets a fresh bucket per request —
+ * the limit stops applying to exactly the traffic it exists to stop.
+ *
+ * Reading `cf-connecting-ip` first closes both without needing to know which of
+ * the two a given edge does, because Cloudflare sets that header itself on every
+ * request and a client cannot influence it — but only ON Cloudflare. Anywhere
+ * else it is a header like any other, so trusting it there reintroduces the
+ * second failure above verbatim: rotate the value, get a fresh bucket, and the
+ * sign-in limit stops applying. It is therefore gated on
+ * {@link onCloudflareEdge} rather than assumed, now that a Node host is a
+ * supported target.
+ *
+ * `x-forwarded-for` comes back into the list only when the caller has declared
+ * `trustedProxies`, which is what makes the chain interpretable: better-auth then
+ * walks it right-to-left past the hops it was told to trust instead of trusting
+ * the leftmost token. That is the non-Cloudflare answer — a Node/other host
+ * behind a proxy configures its proxy addresses and gets per-client buckets —
+ * and it mirrors `audit-hooks.ts`'s `trustProxyHeaders` opt-in rather than
+ * inventing a second switch. Without it we do not silently trust a header the
+ * client can write.
+ */
+const defaultIpAddressHeaders = (trustedProxies: ReadonlyArray<string> | undefined): string[] => {
+    const proxied = trustedProxies !== undefined && trustedProxies.length > 0;
+
+    if (!onCloudflareEdge()) {
+        // Off Cloudflare, `cf-connecting-ip` is not set by anything — it is just
+        // another header the client typed, so trusting it hands an attacker a
+        // fresh rate-limit bucket per request and removes the sign-in limit
+        // entirely. Without declared proxies there is no header here we can
+        // believe, so resolve nothing and let those requests fall into the
+        // shared `no-trusted-ip` bucket, which {@link UNRESOLVED_IP_BUCKET_FACTOR}
+        // already sizes for exactly that case.
+        return proxied ? ["x-forwarded-for"] : [];
+    }
+
+    return proxied ? [CLOUDFLARE_CLIENT_IP_HEADER, "x-forwarded-for"] : [CLOUDFLARE_CLIENT_IP_HEADER];
+};
+
+/**
+ * Matches every auth path, so the fallback rule below is consulted for all of
+ * them. `/*` would not: better-auth's glob treats `/` as a separator, so a
+ * single star stops at the first one and never reaches `/sign-in/email`.
+ */
+const ALL_PATHS_RULE = "/**";
+
+/**
+ * How much wider the shared bucket is than the per-client rule it stands in for,
+ * when no trustworthy client IP could be resolved at all.
+ *
+ * Some deployment forwards no header we trust — no Cloudflare edge, no declared
+ * proxies. better-auth then keys every one of those requests to the single
+ * `no-trusted-ip|<path>` bucket, and there are only two honest ways to treat a
+ * bucket that every client shares. Sizing it for one client (the default) turns
+ * the sign-in limit into a self-inflicted denial of service: the app breaks for
+ * everybody as soon as a handful of people sign in at once. Dropping the limit
+ * for those requests throws away the brute-force protection this package turns
+ * on deliberately. So we keep the limit and re-size the bucket for what it
+ * actually is — a coarse flood cap across all clients rather than a budget for
+ * one — which bounds a credential-stuffing run without denying ordinary traffic.
+ *
+ * This is a floor, not a fix. The fix is to give better-auth a client IP it can
+ * trust (`advanced.ipAddress.ipAddressHeaders` / `trustedProxies`), which is also
+ * what better-auth's own one-time warning on this path asks for. Per-client
+ * limiting cannot be recovered from headers that are not there.
+ */
+const UNRESOLVED_IP_BUCKET_FACTOR = 100;
 
 /**
  * A `secret` shorter than this is brute-forceable; better-auth itself accepts
@@ -181,12 +288,17 @@ const hardenAuthOptions = (options: BetterAuthOptions): BetterAuthOptions => {
     }
 
     const advanced = options.advanced ?? {};
+    const ipAddress = advanced.ipAddress ?? {};
 
     return {
         ...options,
         advanced: {
             ...advanced,
             defaultCookieAttributes: advanced.defaultCookieAttributes ?? { httpOnly: true, path: "/", sameSite: "lax" },
+            ipAddress: {
+                ...ipAddress,
+                ...(ipAddress.ipAddressHeaders === undefined ? { ipAddressHeaders: defaultIpAddressHeaders(ipAddress.trustedProxies) } : {}),
+            },
             ...(advanced.useSecureCookies === undefined ? { useSecureCookies: !isExplicitHttpBaseUrl(baseURL) } : {}),
         },
         baseURL,
@@ -294,6 +406,16 @@ export type LunoraAuth = ReturnType<typeof betterAuth>;
  * their own durable store can pass an explicit `rateLimit: { storage: … }`
  * (or `customStorage`), and any explicit value wins.
  *
+ * The limiter's *bucket key* is filled here too, and it is the half that makes
+ * the rest of the paragraph above true. A limit is only brute-force protection
+ * if the key identifies the client, so {@link defaultIpAddressHeaders} points
+ * better-auth at `cf-connecting-ip` instead of its own `x-forwarded-for`
+ * default, and {@link UNRESOLVED_IP_BUCKET_FACTOR} re-sizes the shared bucket
+ * for the deployments where no client IP can be resolved at all. Both are read
+ * off `advanced.ipAddress`, so a caller who configures that keeps their own
+ * policy end to end. The catch-all `customRules` entry is merged *after* the
+ * caller's own rules so theirs match first.
+ *
  * Session cookie cache is ON by default too.
  *
  * Every authenticated call resolves identity through better-auth's
@@ -309,8 +431,8 @@ export type LunoraAuth = ReturnType<typeof betterAuth>;
  * is bounded by that TTL; callers who need immediate revocation opt out with
  * `session: { cookieCache: { enabled: false } }` (or the `strict` preset).
  *
- * Every explicit caller value is forwarded verbatim. The two `rateLimit` fills
- * merge into a single `rateLimit` object so neither clobbers the other.
+ * Every explicit caller value is forwarded verbatim. The `rateLimit` fills all
+ * merge into a single `rateLimit` object so none clobbers the others.
  */
 export const resolveAuthOptions = (options: LunoraAuthOptions): LunoraAuthOptions => {
     const hardened = hardenAuthOptions(options);
@@ -323,15 +445,31 @@ export const resolveAuthOptions = (options: LunoraAuthOptions): LunoraAuthOption
 
     return {
         ...hardened,
-        ...(needsRateLimitEnabled || needsRateLimitStorage
-            ? {
+        ...(hardened.rateLimit?.enabled === false
+            ? {}
+            : {
                   rateLimit: {
                       ...hardened.rateLimit,
                       ...(needsRateLimitEnabled ? { enabled: true } : {}),
                       ...(needsRateLimitStorage ? { storage: "database" as const } : {}),
+                      customRules: {
+                          // The caller's own rules are spread first on purpose:
+                          // better-auth takes the FIRST key whose pattern matches
+                          // the path, so anything they declared wins over the
+                          // catch-all below rather than being shadowed by it. A
+                          // caller who declared this exact pattern themselves keeps
+                          // it — spreading ours unconditionally would overwrite the
+                          // one rule the key ordering cannot protect.
+                          ...hardened.rateLimit?.customRules,
+                          ...(hardened.rateLimit?.customRules?.[ALL_PATHS_RULE] === undefined
+                              ? {
+                                    [ALL_PATHS_RULE]: (request: Request, rule: { max: number; window: number }) =>
+                                        getIP(request, hardened) === null ? { max: rule.max * UNRESOLVED_IP_BUCKET_FACTOR, window: rule.window } : rule,
+                                }
+                              : {}),
+                      },
                   },
-              }
-            : {}),
+              }),
         ...(hardened.session?.cookieCache === undefined ? { session: { ...hardened.session, cookieCache: { enabled: true, maxAge: 60 } } } : {}),
     };
 };

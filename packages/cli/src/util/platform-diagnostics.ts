@@ -8,46 +8,63 @@
  * them ships that mismatch to production, which is the failure the whole target
  * seam exists to prevent.
  *
- * Shared rather than copied because there are four such paths (`codegen`,
- * `prepare`, the dev watcher, and the Vite plugin's own equivalent), and a
- * reporting rule that lives in four places is a rule that ends up applied in
- * three.
+ * Shared rather than copied because five paths report through it — `codegen`,
+ * `deploy`, `verify` and the dev watcher here, plus the Vite plugin's own
+ * inlined equivalent in `@lunora/vite` — and a reporting rule that lives in five
+ * places is a rule that ends up applied in four. `verify` was the one it ended
+ * up not applied in: it resolves and validates the deploy target, runs codegen
+ * with it, and used to drop the diagnostics on the floor.
+ *
+ * Two further `runCodegen` calls deliberately stay silent, and both are covered
+ * elsewhere: `dev`'s pre-sidecar warm-up (the codegen watcher it starts reports
+ * the same run moments later) and `advisor`, which passes no target at all and
+ * reports schema advisories rather than gating a deploy.
  */
 import type { PlatformDiagnostic } from "@lunora/codegen";
 
 import type { Logger } from "./logger";
 
 /**
- * Log every diagnostic, and report whether any of them should fail the command.
+ * Log every diagnostic, and hand the caller ALL of them, partitioned by level.
  *
  * Error-level diagnostics fail. Both kinds carry `level: "error"` because each
  * "drops or misdirects an emitted surface" (see `PlatformDiagnostic`), and
  * reporting that as a warning with a zero exit is how an app ends up built
  * against a surface its target cannot serve while CI stays green.
+ *
+ * Returning only the FIRST error was the same class of bug one level down: the
+ * console got the whole list while `lunora verify --format json` — the
+ * documented CI gate — put one message in its `errors` array and dropped the
+ * rest, so a pipeline reading that output saw an incomplete picture of why the
+ * app cannot run on its target.
  * @param diagnostics What `runCodegen` returned.
  * @param logger Where the lines go.
- * @returns the first error-level message, or `undefined` when nothing failed.
+ * @returns every error-level and warn-level message; both empty when nothing was reported.
  */
-const reportPlatformDiagnostics = (diagnostics: ReadonlyArray<PlatformDiagnostic>, logger: Logger): string | undefined => {
+const reportPlatformDiagnostics = (
+    diagnostics: ReadonlyArray<PlatformDiagnostic>,
+    logger: Logger,
+): { errors: ReadonlyArray<string>; warnings: ReadonlyArray<string> } => {
     if (diagnostics.length === 0) {
-        return undefined;
+        return { errors: [], warnings: [] };
     }
 
     const lines = diagnostics.map(
         (diagnostic) => `  [${diagnostic.level.toUpperCase()}] ${diagnostic.name} — ${diagnostic.message}\n      ↳ ${diagnostic.remediation}`,
     );
-    const errors = diagnostics.filter((diagnostic) => diagnostic.level === "error");
+    const errors = diagnostics.filter((diagnostic) => diagnostic.level === "error").map((diagnostic) => diagnostic.message);
+    const warnings = diagnostics.filter((diagnostic) => diagnostic.level !== "error").map((diagnostic) => diagnostic.message);
     const heading = `${String(diagnostics.length)} platform ${diagnostics.length === 1 ? "diagnostic" : "diagnostics"}:\n${lines.join("\n")}`;
 
     if (errors.length === 0) {
         logger.warn(heading);
 
-        return undefined;
+        return { errors: [], warnings };
     }
 
     logger.error(heading);
 
-    return errors[0]?.message ?? "platform diagnostics reported an error";
+    return { errors, warnings };
 };
 
 export default reportPlatformDiagnostics;

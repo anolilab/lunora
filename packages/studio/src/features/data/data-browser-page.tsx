@@ -35,6 +35,7 @@ const DataBrowserViewControls = ({
     filter,
     filters,
     hasMaskedColumns,
+    hasPredicate,
     liveError,
     maskOn,
     onAddRow,
@@ -53,10 +54,21 @@ const DataBrowserViewControls = ({
 }: {
     columns: string[];
     editable: boolean;
+    /** The RAW search box value — the controlled input's `value`, and nothing else. */
     filter: string;
     filters: EditableFilter[];
     /** Whether the selected table has any mask-covered columns — gates the toggle's visibility. */
     hasMaskedColumns: boolean;
+
+    /**
+     * Whether the view carries a predicate the bulk ops would actually send —
+     * the DEBOUNCED search plus the structured filters. Gates the predicate
+     * actions (and, inverted, the whole-table one) so the button on screen and
+     * the request it fires can never disagree; gating on `filter` put "Delete N
+     * matching" up for the 300ms debounce window with an empty predicate, which
+     * deletes the whole table.
+     */
+    hasPredicate: boolean;
     liveError: string | undefined;
     /** Whether the "Mask sensitive columns" preview is on. */
     maskOn: boolean;
@@ -111,7 +123,7 @@ const DataBrowserViewControls = ({
                         {t("Generate rows")}
                     </button>
                 )}
-                {editable && total > 0 && (filter !== "" || filters.length > 0) && (
+                {editable && total > 0 && hasPredicate && (
                     <ConfirmButton confirmLabel={`Delete ${total.toString()} matching?`} onConfirm={onBulkDelete} testId="db-bulk-delete">
                         {`Delete ${total.toString()} matching`}
                     </ConfirmButton>
@@ -126,12 +138,12 @@ const DataBrowserViewControls = ({
                  * No `ConfirmButton` on top: the dialog is the confirmation step — it
                  * names the row count and cannot be submitted without a parsed value.
                  */}
-                {editable && total > 0 && (filter !== "" || filters.length > 0) && (
+                {editable && total > 0 && hasPredicate && (
                     <button className={CONTROL_TOGGLE_BTN} data-testid="db-bulk-patch" onClick={onBulkPatch} type="button">
                         {t("Set column on {total} matching", { total: total.toString() })}
                     </button>
                 )}
-                {editable && total > 0 && filter === "" && filters.length === 0 && (
+                {editable && total > 0 && !hasPredicate && (
                     <ConfirmButton confirmLabel={`Clear all ${total.toString()} rows?`} onConfirm={onClearTable} testId="db-clear-table">
                         {`Clear table (${total.toString()})`}
                     </ConfirmButton>
@@ -232,6 +244,7 @@ const DataBrowserPage = ({
                 filter={browser.filter}
                 filters={browser.filters}
                 hasMaskedColumns={preferences.maskColumns.size > 0}
+                hasPredicate={browser.hasPredicate}
                 liveError={browser.liveError}
                 maskOn={preferences.maskOn}
                 onAddRow={browser.addRow}

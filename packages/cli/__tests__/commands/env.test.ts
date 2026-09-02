@@ -670,6 +670,45 @@ describe("lunora env", () => {
             expect(map.get("RESEND_API_KEY")).toBe("");
         });
 
+        it("--set leaves live secrets alone and mints only the blank/placeholder ones", async () => {
+            expect.assertions(4);
+
+            const live = "a".repeat(64);
+
+            // STORAGE_SIGNING_SECRET already holds a real value: rotating it
+            // invalidates every signed URL outstanding, unrecoverably.
+            writeFileSync(join(workdir, ".dev.vars"), `BETTER_AUTH_SECRET=\nSTORAGE_SIGNING_SECRET=${live}\n`, "utf8");
+
+            const { logger, recorded } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, logger, set: true, subcommand: "generate" });
+            const written = readFileSync(join(workdir, ".dev.vars"), "utf8");
+
+            expect(result.code).toBe(0);
+            expect(written).toContain(`STORAGE_SIGNING_SECRET=${live}`);
+            expect(written).toMatch(/BETTER_AUTH_SECRET="?[a-f0-9]{64}/u);
+            expect(recorded.warnings.join("\n")).toContain("STORAGE_SIGNING_SECRET");
+        });
+
+        it("--set on an explicit key that already holds a live secret refuses without --yes", async () => {
+            expect.assertions(4);
+
+            const live = "b".repeat(64);
+
+            writeFileSync(join(workdir, ".dev.vars"), `LUNORA_ADMIN_TOKEN=${live}\n`, "utf8");
+
+            const { logger, recorded } = recordingLogger();
+            const refused = await runEnvCommand({ cwd: workdir, key: "LUNORA_ADMIN_TOKEN", logger, set: true, subcommand: "generate" });
+
+            expect(refused.code).toBe(1);
+            expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toContain(live);
+
+            // …and --yes is the deliberate rotation.
+            await runEnvCommand({ cwd: workdir, key: "LUNORA_ADMIN_TOKEN", logger, set: true, subcommand: "generate", yes: true });
+
+            expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).not.toContain(live);
+            expect(recorded.errors.join("\n")).toContain("--yes");
+        });
+
         it("prints KEY=value to stdout for an explicit key (default, no --set)", async () => {
             expect.assertions(3);
 

@@ -195,6 +195,43 @@ export const schema = defineSchema({
             expect(sql).not.toContain("NOT NULL"); // v.optional → nullable
         });
 
+        it("detects a same-affinity type change (v.string() -> v.bigint(), both TEXT)", () => {
+            expect.assertions(3);
+
+            writeSchema(
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    users: defineTable({ email: v.string() }).global(),
+});
+`,
+            );
+
+            runMigrateGenerateCommand({ cwd: workdir, logger: silentLogger(), name: "init", now: fixedNow });
+
+            writeSchema(
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    users: defineTable({ email: v.bigint() }).global(),
+});
+`,
+            );
+
+            const result = runMigrateGenerateCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                name: "retype_email",
+                now: () => new Date("2024-04-02T00:00:00.000Z"),
+            });
+
+            expect(result.code).toBe(0);
+            // Both kinds map to the TEXT affinity, so the affinity alone says
+            // nothing — the validator shape has to be compared.
+            expect(result.empty).toBe(false);
+            expect(readFileSync(result.migrationFile, "utf8")).toContain("users.email");
+        });
+
         it("removed table produces DROP TABLE", () => {
             expect.assertions(2);
 
@@ -694,6 +731,65 @@ export const backfillReadBy = defineMigration({
             expect(errors.join("\n")).toContain("--prod requires an explicit --url");
         });
 
+        it("refuses up against a remote --url without --yes even when --prod is not passed", async () => {
+            expect.assertions(3);
+
+            const calls: CapturedCall[] = [];
+            const errors: string[] = [];
+
+            const result = await runMigrateDataCommand({
+                cwd: workdir,
+                fetchImpl: captureFetch(calls, okResponse()),
+                id: "backfill-read-by",
+                logger: { ...silentLogger(), error: (m) => errors.push(m) },
+                subcommand: "up",
+                token: "s3cret",
+                url: "https://prod.example.invalid",
+            });
+
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(0);
+            expect(errors.join("\n")).toContain("--yes");
+        });
+
+        it("runs against a remote --url once --yes confirms it", async () => {
+            expect.assertions(2);
+
+            const calls: CapturedCall[] = [];
+
+            const result = await runMigrateDataCommand({
+                cwd: workdir,
+                fetchImpl: captureFetch(calls, okResponse()),
+                id: "backfill-read-by",
+                logger: silentLogger(),
+                subcommand: "up",
+                token: "s3cret",
+                url: "https://prod.example.invalid",
+                yes: true,
+            });
+
+            expect(result.code).toBe(0);
+            expect(calls).toHaveLength(1);
+        });
+
+        it("still runs against the implicit localhost target with no flags", async () => {
+            expect.assertions(2);
+
+            const calls: CapturedCall[] = [];
+
+            const result = await runMigrateDataCommand({
+                cwd: workdir,
+                fetchImpl: captureFetch(calls, okResponse()),
+                id: "backfill-read-by",
+                logger: silentLogger(),
+                subcommand: "up",
+                token: "s3cret",
+            });
+
+            expect(result.code).toBe(0);
+            expect(calls).toHaveLength(1);
+        });
+
         it("returns non-zero on an HTTP error response", async () => {
             expect.assertions(1);
 
@@ -716,6 +812,26 @@ export const backfillReadBy = defineMigration({
         });
     });
 });
+
+/**
+ * A fetch double that records every URL it is handed and answers with an empty
+ * 200 — enough for the guard tests, which assert that NOTHING was requested.
+ */
+const recordingFetch =
+    (calls: string[]): StreamingFetchLike =>
+    async (input: string) => {
+        calls.push(input);
+
+        return {
+            body: null,
+            json: async () => {
+                return {};
+            },
+            ok: true,
+            status: 200,
+            text: async () => "",
+        };
+    };
 
 describe("lunora migrate d1-to-hyperdrive", () => {
     let dir: string;
@@ -777,12 +893,91 @@ describe("lunora migrate d1-to-hyperdrive", () => {
             tables: "settings",
             toToken: "target-token",
             toUrl: "https://new.example.com",
+            yes: true,
         });
 
         expect(result.code).toBe(0);
         expect(calls.some((url) => new URL(url).origin === "https://old.example.com" && new URL(url).pathname.includes("/_lunora/admin/export"))).toBe(true);
         expect(calls.some((url) => new URL(url).origin === "https://new.example.com" && new URL(url).pathname.includes("/_lunora/admin/import"))).toBe(true);
         expect(infos.some((line) => line.includes("counts match"))).toBe(true);
+    });
+
+    it("refuses the import leg against a remote target when --yes was not passed", async () => {
+        expect.assertions(2);
+
+        const ndjson = '{"table":"settings","doc":{"_creationTime":1,"_id":"a","key":"x"}}\n';
+        const errors: string[] = [];
+        const logger: Logger = { error: (message: string) => errors.push(message), info: () => {}, success: () => {}, warn: () => {} };
+        const fetchImpl: StreamingFetchLike = async () => {
+            return {
+                body: new ReadableStream<Uint8Array>({
+                    start(controller) {
+                        controller.enqueue(new TextEncoder().encode(ndjson));
+                        controller.close();
+                    },
+                }),
+                json: async () => {
+                    return {};
+                },
+                ok: true,
+                status: 200,
+                text: async () => ndjson,
+            };
+        };
+
+        const result = await runMigrateToHyperdriveCommand({
+            fetchImpl,
+            fromToken: "source-token",
+            fromUrl: "https://old.example.com",
+            logger,
+            out: join(dir, "dump.ndjson"),
+            tables: "settings",
+            toToken: "target-token",
+            toUrl: "https://new.example.com",
+        });
+
+        expect(result.code).toBe(1);
+        expect(errors.join("\n")).toContain("--yes");
+    });
+
+    it("refuses a self-migration when neither --from-url nor --to-url is given", async () => {
+        expect.assertions(3);
+
+        const errors: string[] = [];
+        const logger: Logger = { error: (message: string) => errors.push(message), info: () => {}, success: () => {}, warn: () => {} };
+        const calls: string[] = [];
+        const fetchImpl = recordingFetch(calls);
+
+        const result = await runMigrateToHyperdriveCommand({ fetchImpl, logger, out: join(dir, "dump.ndjson"), yes: true });
+
+        expect(result.code).toBe(1);
+        expect(calls).toHaveLength(0);
+        expect(errors.join("\n")).toContain("same deployment");
+    });
+
+    it("refuses a self-migration that differs only by a trailing slash", async () => {
+        expect.assertions(3);
+
+        // `resolveAdminBaseUrl` strips the trailing slash, so both legs address
+        // the same worker — the guard compared the raw flags and let it through,
+        // then reported "counts match" over a one-database no-op.
+        const errors: string[] = [];
+        const logger: Logger = { error: (message: string) => errors.push(message), info: () => {}, success: () => {}, warn: () => {} };
+        const calls: string[] = [];
+        const fetchImpl = recordingFetch(calls);
+
+        const result = await runMigrateToHyperdriveCommand({
+            fetchImpl,
+            fromUrl: "https://worker.example.com/",
+            logger,
+            out: join(dir, "dump.ndjson"),
+            toUrl: "https://worker.example.com",
+            yes: true,
+        });
+
+        expect(result.code).toBe(1);
+        expect(calls).toHaveLength(0);
+        expect(errors.join("\n")).toContain("same deployment");
     });
 
     it("shreds the private plaintext dump dir even when the import throws", async () => {
@@ -837,6 +1032,7 @@ describe("lunora migrate d1-to-hyperdrive", () => {
             tables: "settings",
             toToken: "target-token",
             toUrl: "https://new.example.com",
+            yes: true,
         });
 
         expect(failed.code).toBe(1);

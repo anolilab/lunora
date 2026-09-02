@@ -20,16 +20,18 @@
  *
  * # Gate-bearing keys
  *
- * A rating only gates something if `@lunora/codegen` maps a usage key onto that
- * feature (`CAPABILITY_ROWS` + `CAPABILITY_TO_FEATURE`). The gate-bearing keys
- * are:
+ * A rating only gates something if `@lunora/codegen` reads it — either through a
+ * usage key mapped onto the feature (`CAPABILITY_ROWS` + `CAPABILITY_TO_FEATURE`,
+ * for an app-imported `ctx.*` module) or through a `PlatformSignals` entry (for
+ * something the app declares in its schema or a declaration file). The
+ * gate-bearing keys are:
  *
- * `ai`, `analytics`, `browser`, `containers`, `crossShardFanout`,
- * `durableStreams`, `globalTables`, `hyperdrive`, `images`, `keyValueStore`,
- * `mail`, `objectStorage`, `pipelines`, `queues`, `scheduler`, `secrets`,
- * `vectorStore`, `workflows`.
+ * `agents`, `ai`, `analytics`, `browser`, `commitOrderedTables`, `containers`,
+ * `cronTriggers`, `crossShardFanout`, `durableStreams`, `globalTables`,
+ * `hyperdrive`, `images`, `keyValueStore`, `mail`, `objectStorage`,
+ * `pipelines`, `queues`, `scheduler`, `secrets`, `vectorStore`, `workflows`.
  *
- * Every other key here — `commitOrderedTables`, `httpCache`, `identityProxy`,
+ * Every other key here — `httpCache`, `identityProxy`,
  * `localSql`, `memoryTables`, `objectStorageBackups`,
  * `objectStorageCdcArchive`, `serverReactors`, `shardAlarms`, `shardedState`,
  * `shardPlacement`, `shardReadReplicas`, `websocketHibernation` — is
@@ -50,10 +52,11 @@
  * and the rating is still consulted by nothing. Codegen already has the shape
  * for exactly this — `PlatformSignals` in `platform-target.ts`, the second gate
  * pass that diagnoses app-declared features with no `ctx.*` capability row
- * (`commitOrderedTables`, `globalTables`, `durableStreams`, `crossShardFanout`,
- * `queues`, `secrets`). Promoting one is three lines there: a `PlatformSignals`
- * field, plus its entry in that module's signal-key list and its human-readable
- * label — and then setting the signal from the IR.
+ * (`agents`, `commitOrderedTables`, `cronTriggers`, `crossShardFanout`,
+ * `durableStreams`, `globalTables`, `queues`, `secrets`, `vectorStore`).
+ * Promoting one is three lines there: a `PlatformSignals` field, plus its entry
+ * in that module's signal-key list and its human-readable label — and then
+ * setting the signal from the IR.
  *
  * `commitOrderedTables` was promoted that way: `TableIR.commitOrdered` sits in
  * the same IR that feeds `globalTables`, and until it was read a host rating it
@@ -88,6 +91,18 @@ export interface Capability {
 export interface PlatformCapabilities {
     /** Feature-level capabilities. */
     features: {
+        /**
+         * Durable agents — a `defineAgent` export in `lunora/agents.ts`.
+         *
+         * Its own key rather than a facet of `workflows` or `ai`, because an
+         * agent needs BOTH and neither implies the other: the generated class
+         * compiles onto the host's workflow engine under an `AGENT_*` binding
+         * the emitted context resolves off `env`, and the loop it runs there
+         * calls model inference. A host that emulates workflows but has no
+         * inference (or no way to mount a generated class into its engine) can
+         * rate `workflows` honestly and still not run an agent.
+         */
+        agents?: Capability;
         /** AI inference (Workers AI / Bedrock / OpenAI). */
         ai?: Capability;
         /** Analytics / observability sinks. */
@@ -108,12 +123,11 @@ export interface PlatformCapabilities {
          * create the counter and hand out increasing numbers — they just would
          * not order commits, which is the whole contract.
          *
-         * **Advisory today, and it should not be.** Nothing consults this
-         * rating: a host rating it `unsupported` still gets the full
-         * `.commitOrdered()` surface emitted, with no diagnostic. `TableIR`
-         * carries `commitOrdered` in the same IR codegen already reads for the
-         * `globalTables` signal, so this is a `PlatformSignals` entry away from
-         * being gate-bearing — see this module's header.
+         * Gate-bearing: `TableIR.commitOrdered` feeds the `PlatformSignals`
+         * pass off the same IR the `globalTables` signal reads, so a host
+         * rating this `unsupported` refuses the app rather than emitting the
+         * full `.commitOrdered()` surface and silently dropping the ordering
+         * guarantee — which is the only thing the feature is.
          */
         commitOrderedTables?: Capability;
 
@@ -128,6 +142,19 @@ export interface PlatformCapabilities {
          */
         containers?: Capability;
 
+        /**
+         * DECLARED cron triggers — the `cronJobs()` registrations codegen lifts
+         * into `LUNORA_CRONS`, dispatched by whatever the host wakes on a
+         * schedule.
+         *
+         * Separate from {@link PlatformCapabilities.features.scheduler}, which
+         * rates the imperative surface (`ctx.scheduler.runAfter/runAt`, a job
+         * the app enqueues at runtime). The two are genuinely independent: a
+         * host can dispatch enqueued jobs perfectly and still walk nothing into
+         * its declared crons, in which case an app's `crons.daily(...)` never
+         * fires. One rating covering both is how that shipped as green.
+         */
+        cronTriggers?: Capability;
         /** Cross-shard fan-out queries. */
         crossShardFanout?: Capability;
 
@@ -330,6 +357,14 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         queues: { level: "native", note: "Cloudflare Queues" },
         workflows: { level: "native", note: "Cloudflare Workflows" },
         scheduler: { level: "emulated", note: "SchedulerDO (Lunora, on DO alarms) + declarative Cron Triggers; no runtime cron registration" },
+        cronTriggers: {
+            level: "native",
+            note: "wrangler triggers.crons, reconciled from the declared crons at build time, delivered to the worker's scheduled() handler — which is the one cron dispatch that ships: it walks the generated LUNORA_CRONS map itself",
+        },
+        agents: {
+            level: "emulated",
+            note: "The durable agent loop is Lunora's: each defineAgent compiles onto a Cloudflare Workflow under an AGENT_* binding (a voice-enabled agent additionally gets a VoiceSessionDO), and the loop drives Workers AI. Cloudflare supplies the workflow engine, the Durable Object and the inference; the agent is built on them, not consumed as a product",
+        },
         objectStorage: { level: "native", note: "R2" },
         objectStorageBackups: {
             level: "emulated",
@@ -466,7 +501,15 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         scheduler: {
             level: "emulated",
-            note: "SQLite job table dispatched to onDispatch and re-armed on construction, with retry backoff and a dead-letter queue. It is also the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer — but nothing dispatches into it: no runtime walks the generated LUNORA_CRONS map into SchedulerHost.cron, so the conformance suite is its only caller and a declared cron does not fire on this host",
+            note: "SQLite job table dispatched to onDispatch and re-armed on construction, with retry backoff and a dead-letter queue. It is also the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer — but nothing walks an app's DECLARED crons into that method, which is why cronTriggers is rated separately and unsupported here. This rating covers the imperative surface only: ctx.scheduler.runAfter/runAt do dispatch on this host",
+        },
+        cronTriggers: {
+            level: "unsupported",
+            note: "No runtime walks the generated LUNORA_CRONS map into SchedulerHost.cron, so the conformance suite is that method's only caller and a declared cron does not fire on this host. Gate-bearing: codegen refuses an app that declares one here rather than letting it deploy green and never run. Schedule the work explicitly with ctx.scheduler.runAfter/runAt instead",
+        },
+        agents: {
+            level: "unsupported",
+            note: "Nothing here mounts the generated agent classes: createNodeWorkflowHost compiles defineWorkflow handlers onto the @visulima/workflow engine, and an agent is a generated WorkflowEntrypoint resolved off an AGENT_ prefixed env binding this host never provides. The loop's inference has no home either — ai is unsupported on this target",
         },
         objectStorageBackups: {
             level: "emulated",

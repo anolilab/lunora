@@ -416,6 +416,19 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
                 .bind(...parameters)
                 .all<Record<string, unknown>>();
 
+            // `all` carries writes, not just reads: D1 runs
+            // `UPDATE/DELETE … RETURNING` through it exactly like `.run()`, and
+            // that is precisely what `@lunora/sql-store` issues for its
+            // optimistic-concurrency compare-and-swap — so `patch`, `replace`
+            // and `delete` all land here and nowhere else. Without this the
+            // bookmark those writes produced was never reported, and the next
+            // read could pin a replica that has not seen them: read-your-writes
+            // lost on the exact path the bookmark exists for. Reporting it after
+            // a plain `SELECT` too is harmless and correct — the session's
+            // bookmark only ever moves forward, and `setOutboundBookmark` takes
+            // the last value.
+            onBookmark?.(session?.getBookmark() ?? undefined);
+
             return result.results;
         },
         // D1's own `batch` runs the whole array as one atomic SQLite

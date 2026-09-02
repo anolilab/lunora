@@ -28,7 +28,7 @@ import { isInteractive, promptYesNo } from "@lunora/config";
 import type { BackupManifestEntry, BackupRetentionPreview, PrunedBackups } from "@lunora/runtime";
 import { backupObjectKeyOfManifest } from "@lunora/runtime";
 
-import { resolveAdminBearer } from "../../util/admin-token";
+import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -317,15 +317,18 @@ const resolvePitrRequest = (options: BackupCommandOptions): PitrRequest | undefi
         return undefined;
     }
 
-    if (options.restore === true && options.prod === true && options.yes !== true) {
-        options.logger.error("pitr --restore --prod restores production data in place. Re-run with --yes to confirm.");
-
-        return undefined;
-    }
-
     const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
     if (baseUrl === undefined) {
+        return undefined;
+    }
+
+    // Gated on the RESOLVED destination, not on `--prod`: a `--restore` at a
+    // deployed `--url` is an in-place restore of live data whether or not the
+    // operator remembered to also declare the flag.
+    if (options.restore === true && targetsRemoteWorker({ prod: options.prod, url: baseUrl }) && options.yes !== true) {
+        options.logger.error(`pitr --restore restores data in place at ${baseUrl}, which is not local. Re-run with --yes to confirm.`);
+
         return undefined;
     }
 

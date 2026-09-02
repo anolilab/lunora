@@ -17,8 +17,6 @@ interface DeploySummaryInputs {
     /** Cloudflare environment the deploy targeted, when named. */
     env?: string;
     logger: Logger;
-    /** True when `--migrate` ran data migrations as part of this deploy. */
-    migrated?: boolean;
 
     /**
      * The `.dev.vars`-shaped filename (never a value) a secret minted during
@@ -41,9 +39,15 @@ interface DeploySummaryInputs {
  * Render the post-deploy summary. Best-effort: any failure reading config is
  * swallowed so a cosmetic summary never turns a successful deploy into a
  * non-zero exit.
+ *
+ * No "migrations: applied" line: it was rendered from the `--migrate` FLAG, not
+ * from the outcome, so it claimed migrations had been applied when discovery had
+ * thrown and the run warned "skipping", and when the project declared none. The
+ * migration path already logs each id it applies, and says so when there is
+ * nothing to apply — an accurate line already exists a few lines above.
  */
 const renderDeploySummary = (inputs: DeploySummaryInputs): void => {
-    const { cwd, env, logger, migrated, mintedSecretsFile } = inputs;
+    const { cwd, env, logger, mintedSecretsFile } = inputs;
 
     try {
         const link = readLinkedProject(cwd);
@@ -61,10 +65,6 @@ const renderDeploySummary = (inputs: DeploySummaryInputs): void => {
             logger.info("  url:     run `lunora link --url <https://your-worker>` to record it");
         } else {
             logger.info(`  url:     ${url}`);
-        }
-
-        if (migrated) {
-            logger.info("  migrations: applied");
         }
 
         if (mintedSecretsFile !== undefined) {

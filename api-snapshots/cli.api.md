@@ -86,6 +86,7 @@ const COMMANDS: readonly [
 
 ```ts
 interface ColumnSnapshot {
+    field?: FieldSnapshot;
     nullable: boolean;
     sqlType: "BLOB" | "INTEGER" | "REAL" | "TEXT";
 }
@@ -109,6 +110,7 @@ const DEFAULT_IMPORT_BATCH_SIZE = 500;
 interface DeployCommandOptions {
     allowSchemaDrift?: boolean;
     apiSpec?: ApiSpec;
+    commandName?: PreDeployCommand;
     cwd?: string;
     dockerAvailable?: DockerProbe;
     dryRun?: boolean;

@@ -208,6 +208,22 @@ describe("lunora deploy", () => {
             });
         });
 
+        it("--dry-run leaves the committed wrangler.jsonc byte-identical", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner });
+
+            expect(result.code).toBe(0);
+            // A dry run answers "would this deploy?" — it must not edit a
+            // hand-maintained, committed config to get there.
+            expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(VALID_WRANGLER);
+        });
+
         it("runs codegen, validates wrangler, then spawns `pnpm exec wrangler deploy`", async () => {
             expect.assertions(5);
 
@@ -339,6 +355,40 @@ export const worker = defineContainer({ image: { build: "./services/worker" } })
             // railpack build → wrangler containers push → wrangler deploy.
             expect(calls.map((call) => call.descriptor.command)).toStrictEqual(["railpack", "pnpm", "pnpm"]);
             expect(calls[0]?.descriptor.args).toStrictEqual(["build", "./services/worker", "--name", "lunora-worker:build"]);
+        });
+
+        it("--dry-run neither builds nor pushes a container image", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(
+                join(workdir, "lunora", "containers.ts"),
+                `import { defineContainer } from "@lunora/container";
+export const worker = defineContainer({ image: { build: "./services/worker" } });
+`,
+                "utf8",
+            );
+            mkdirSync(join(workdir, "services", "worker"), { recursive: true });
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({
+                cwd: workdir,
+                dryRun: true,
+                secretLister: noRemoteSecrets,
+                dockerAvailable: () => true,
+                logger,
+                railpackAvailable: () => true,
+                spawner,
+            });
+
+            expect(result.code).toBe(0);
+            // `wrangler containers push` uploads to the Cloudflare Registry — a
+            // dry run must reach neither it nor the railpack build.
+            expect(
+                calls.map((call) => call.descriptor.args.join(" ")).filter((line) => line.includes("containers push") || line.startsWith("build ")),
+            ).toStrictEqual([]);
         });
 
         it("blocks the deploy when a { build } container needs Railpack but it is unavailable", async () => {
@@ -901,6 +951,35 @@ export const backfillNames = defineMigration({
             // Migration log messages emitted
             expect(infos.some((line) => line.includes("--migrate"))).toBe(true);
             expect(infos.some((line) => line.includes("backfill-names"))).toBe(true);
+        });
+
+        it("--migrate does not claim migrations were applied when none were", async () => {
+            expect.assertions(3);
+
+            // No `lunora/migrations.ts`: discovery finds nothing to run.
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { spawner } = createRecordingSpawner();
+            const { infos, logger, warns } = silentLogger();
+            const fetchStub: FetchLike = () => Promise.resolve({ ok: true, text: () => Promise.resolve(JSON.stringify({ status: "ok" })) } as Response);
+
+            const result = await runDeployCommand({
+                cwd: workdir,
+                secretLister: noRemoteSecrets,
+                fetchImpl: fetchStub,
+                logger,
+                migrate: true,
+                migrateToken: "test-token",
+                migrateUrl: "https://my-worker.workers.dev",
+                migrateYes: true,
+                spawner,
+            });
+
+            expect(result.code).toBe(0);
+            // The truthful line is there — discovery found nothing to run…
+            expect([...infos, ...warns].some((line) => line.includes("migration"))).toBe(true);
+            // …and the summary does not contradict it from the flag alone.
+            expect(infos.some((line) => line.includes("migrations: applied"))).toBe(false);
         });
 
         describe("--format json", () => {

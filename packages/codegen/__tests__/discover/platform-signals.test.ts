@@ -55,6 +55,44 @@ describe("discoverPlatformSignals", () => {
         expect(signals().durableStreams).toBe(false);
     });
 
+    it("does not treat an explicit `durable: false` as a declaration", () => {
+        expect.assertions(1);
+
+        // Presence of the key used to be the whole test, so an app that
+        // explicitly opted OUT of durability hard-failed the build on a host
+        // that rates durableStreams unsupported.
+        write("feed.ts", `import { procedure } from "@lunora/server";\n\nexport const feed = procedure.stream(async function* () {}, { durable: false });\n`);
+
+        expect(signals().durableStreams).toBe(false);
+    });
+
+    it("does not treat a parenthesized `durable: (false)` as a declaration", () => {
+        expect.assertions(1);
+
+        // The opt-out is read off the initializer's TEXT, so any wrapping the
+        // user's formatter leaves behind — `(false)`, `((false))` — used to read
+        // as a declaration and hard-fail the build on a host that rates
+        // durableStreams unsupported.
+        write("feed.ts", `import { procedure } from "@lunora/server";\n\nexport const feed = procedure.stream(async function* () {}, { durable: (false) });\n`);
+
+        expect(signals().durableStreams).toBe(false);
+    });
+
+    it("detects a destructured ctx.secrets read", () => {
+        expect.assertions(1);
+
+        // The gate exists so codegen refuses an app reading ctx.secrets on a
+        // host without a secrets binding, instead of emitting a surface that
+        // throws on first use. Matching only `ctx.secrets` handed that app
+        // exactly the surface it was supposed to refuse.
+        write(
+            "keys.ts",
+            `import { action } from "@lunora/server";\n\nexport const send = action({ args: {}, handler: async (ctx) => {\n    const { secrets } = ctx;\n\n    return secrets.get("STRIPE_KEY");\n} });\n`,
+        );
+
+        expect(signals().secrets).toBe(true);
+    });
+
     it("detects a ctx.secrets read", () => {
         expect.assertions(1);
 

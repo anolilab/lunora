@@ -16,7 +16,8 @@ import { join } from "@visulima/path";
 import { Project } from "ts-morph";
 
 import { REPROJECTION_MIGRATION_PREFIX, reprojectionMigrationTable } from "../../../../../shared/reprojection-id";
-import { resolveAdminBaseUrl } from "../../util/admin-url";
+import { targetsRemoteWorker } from "../../util/admin-token";
+import { normalizeAdminBaseUrl, resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
@@ -536,12 +537,6 @@ const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateD
         return undefined;
     }
 
-    if (options.prod && (options.subcommand === "up" || options.subcommand === "down") && !options.yes) {
-        options.logger.error(`migrate ${options.subcommand} --prod runs the migration against production. Re-run with --yes to confirm.`);
-
-        return undefined;
-    }
-
     const token = options.token ?? process.env.LUNORA_ADMIN_TOKEN;
 
     if (!token) {
@@ -559,6 +554,15 @@ const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateD
     const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
     if (baseUrl === undefined) {
+        return undefined;
+    }
+
+    // Gated on the RESOLVED destination, not on `--prod`: the flag is the
+    // operator's self-declaration, and omitting it against `--url https://…`
+    // used to rewrite every row in production with no confirmation at all.
+    if ((options.subcommand === "up" || options.subcommand === "down") && targetsRemoteWorker({ prod: options.prod, url: baseUrl }) && !options.yes) {
+        options.logger.error(`migrate ${options.subcommand} runs the migration against ${baseUrl}, which is not local. Re-run with --yes to confirm.`);
+
         return undefined;
     }
 
@@ -642,7 +646,12 @@ interface MigrateToHyperdriveOptions {
     toToken?: string;
     /** Target deployment (Hyperdrive-backed). Defaults to `--url`/localhost. */
     toUrl?: string;
+    /** Confirm the bulk write into the target — forwarded to the import leg, which refuses a remote target without it. */
+    yes?: boolean;
 }
+
+/** Apply {@link normalizeAdminBaseUrl}, passing an absent URL straight through. */
+const normalizeOptionalUrl = (url: string | undefined): string | undefined => (url === undefined ? undefined : normalizeAdminBaseUrl(url));
 
 /**
  * `lunora migrate d1-to-hyperdrive` — copy `.global()` table data from a
@@ -660,13 +669,21 @@ interface MigrateToHyperdriveOptions {
  */
 const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions): Promise<{ code: number }> => {
     const { logger } = options;
-    const fromUrl = options.fromUrl ?? options.toUrl;
-    const toUrl = options.toUrl ?? options.fromUrl;
+    // Normalized with the SAME rule `resolveAdminBaseUrl` applies to the request
+    // it sends, so the guard below compares what the two legs will actually
+    // address rather than what the user typed — `https://w/` and `https://w` are
+    // one deployment, and the raw comparison waved them through. The normalized
+    // values are what the export/import legs are handed, so guard and work agree.
+    const fromUrl = normalizeOptionalUrl(options.fromUrl ?? options.toUrl);
+    const toUrl = normalizeOptionalUrl(options.toUrl ?? options.fromUrl);
 
     // Refuse a self-migration: with only one URL given, the source and target
     // resolve to the same deployment, so the export and import would run against
     // one database (a no-op that misreports "counts match"). Require distinct URLs.
-    if (fromUrl !== undefined && fromUrl === toUrl) {
+    // No `!== undefined` precondition: with neither URL flag given both are
+    // `undefined` and both default to the SAME worker, which is exactly the
+    // self-migration this refuses — the guard used to skip that case.
+    if (fromUrl === toUrl) {
         logger.error(
             "source and target are the same deployment — pass distinct --from-url and --to-url so the D1 export and Hyperdrive import don't run against one database",
         );
@@ -707,6 +724,7 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
             prod: options.prod,
             token: options.toToken,
             url: toUrl,
+            yes: options.yes,
         });
 
         if (importResult.code !== 0) {
@@ -754,6 +772,7 @@ const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions>(({
             tables: options.tables,
             toToken: options.toToken ?? options.token,
             toUrl: options.toUrl ?? options.url,
+            yes: options.yes === true,
         });
     }
 

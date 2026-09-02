@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Middleware, StorageRule } from "../src/index";
-import { defineStorageRule, defineStorageRules, initLunora, LunoraError, storageRules } from "../src/index";
+import { asBucketStorage, defineStorageRule, defineStorageRules, initLunora, LunoraError, storageRules } from "../src/index";
 
 const lunora = initLunora.dataModel<Record<string, never>>().create();
 
@@ -434,5 +434,98 @@ describe("storageRules — allowlist (privileged methods dropped)", () => {
         expect(exposed.list).toBeUndefined();
         expect(exposed.getPresignedUrl).toBeUndefined();
         expect(exposed.createMultipartUpload).toBeUndefined();
+    });
+});
+
+/**
+ * A rule naming a bucket the request's storage cannot address governs nothing.
+ * The operation it was written to lock down then falls through the per-op
+ * default-deny and is fully open, while the source and the studio's
+ * access-rules view both read as if it were enforced. Nothing upstream catches
+ * it: `StorageRule.bucket` is `string`, and the generated `StorageBucketName`
+ * union is seeded from the rules themselves, so a typo adds itself to the list
+ * of "valid" names.
+ */
+describe("storageRules — unaddressable rule bucket", () => {
+    it("throws for a single-bucket app whose rule names a bucket no accessor uses", async () => {
+        expect.assertions(2);
+
+        // A `createStorage` single-bucket app, built through the very wrapper
+        // every generated `ctx.storage` passes through. `asBucketStorage` gives
+        // it a `bucket()` selector that is the IDENTITY — it answers to any name
+        // with the same `"default"`-tagged accessor — which is why "the selector
+        // threw" and "there is no selector" both fail to detect this shape.
+        const calls: { key: string; method: string }[] = [];
+        const backing = asBucketStorage({
+            download: async (key: string): Promise<undefined> => {
+                calls.push({ key, method: "download" });
+
+                return undefined;
+            },
+            store: async (key: string): Promise<{ etag: string; key: string }> => {
+                calls.push({ key, method: "store" });
+
+                return { etag: "e", key };
+            },
+        }) as { bucketName: string; download: (key: string) => Promise<undefined> };
+
+        // The owner-scoped read rule the author believes gates every download.
+        const rule = defineStorageRule<{ auth: { userId: null | string }; storage: typeof backing }>({
+            bucket: "uploads",
+            on: "read",
+            when: ({ auth, key }) => key.startsWith(`${auth.userId ?? ""}/`),
+        });
+
+        const handler = lunora.action
+            .use(rulesForTest([rule]))
+            // u2's object, which the rule was written to deny to u1.
+            .action(async ({ ctx }) => (ctx.storage as typeof backing).download("u2/secret.png"));
+
+        await expect(handler.handler({ auth: { userId: "u1" }, storage: backing }, {})).rejects.toThrow(/rule for bucket "uploads" governs nothing/);
+        // The load-bearing half: the read never reached the backing storage.
+        expect(calls).toStrictEqual([]);
+    });
+
+    it("throws for a multi-bucket app whose rule mistypes a registered bucket name", async () => {
+        expect.assertions(1);
+
+        // Mirrors `createBucketStorage`: `bucket(name)` throws for a name that
+        // was never registered, which is the ground truth the check probes.
+        const registered = new Set(["avatars", "default"]);
+        const make = (bucketName: string): Record<string, unknown> => {
+            return {
+                bucket: (name: string): Record<string, unknown> => {
+                    if (!registered.has(name)) {
+                        throw new LunoraError("INTERNAL", `no bucket registered for "${name}"`);
+                    }
+
+                    return make(name);
+                },
+                bucketName,
+                download: async (): Promise<undefined> => undefined,
+            };
+        };
+
+        const rule = defineStorageRule({ bucket: "avatar", on: "read", when: () => false });
+        const storage = make("default");
+        const handler = lunora.action.use(rulesForTest([rule])).action(async () => undefined);
+
+        await expect(handler.handler({ auth: { userId: "u1" }, storage }, {})).rejects.toThrow(/rule for bucket "avatar" governs nothing/);
+    });
+
+    it("accepts a rule for a bucket reachable only via bucket(name)", async () => {
+        expect.assertions(1);
+
+        // The legitimate multi-bucket shape must keep working: `avatars` is not
+        // the bare accessor's bucket, but it is addressable.
+        const rule = defineStorageRule<BucketedContext>({ bucket: "avatars", on: "read", when: () => true });
+        const fake = createBucketedFakeStorage();
+        const handler = lunora.action
+            .use(rulesForTest<BucketedContext>([rule]))
+            .action(async ({ ctx }) => ctx.storage.bucket("avatars").download("user/u1/a.png"));
+
+        await handler.handler(makeBucketedContext(fake, "u1"), {});
+
+        expect(fake.calls).toContainEqual({ bucket: "avatars", key: "user/u1/a.png", method: "download" });
     });
 });

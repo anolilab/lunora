@@ -58,8 +58,16 @@ export interface DoAuthWiring {
     /** Forwards `/api/auth/*` to the object; `undefined` for anything else. */
     authHandler: (request: Request) => Promise<Response | undefined>;
 
-    /** Resolves a request's identity by asking the object. `null` when anonymous, unreachable, or ungated. */
-    resolveIdentity: (request: Request) => Promise<null | { userId: string }>;
+    /**
+     * Resolves a request's identity by asking the object. `null` when anonymous,
+     * unreachable, or ungated.
+     *
+     * `expiresAtMs` (epoch ms) is the session's expiry, which the runtime forwards as
+     * the socket's credential expiry so the DO can drop a subscriber whose session has
+     * lapsed; `role` is better-auth's `admin()` column, which RLS role grants read.
+     * Both are absent when the session carries neither.
+     */
+    resolveIdentity: (request: Request) => Promise<null | { expiresAtMs?: number; role?: string; userId: string }>;
 }
 
 /**
@@ -162,9 +170,22 @@ export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring =
             }
 
             // `Response.json()` resolves to `unknown`, so narrow once here.
-            const body: null | { userId?: string } = await response.json();
+            const body: null | { expiresAtMs?: number; role?: string; userId?: string } = await response.json();
 
-            return body?.userId ? { userId: body.userId } : null;
+            if (!body?.userId) {
+                return null;
+            }
+
+            // `expiresAtMs` becomes the socket's credential expiry
+            // (`x-lunora-identity-exp`) so the DO drops a subscriber whose session has
+            // lapsed; `role` is what RLS role grants are read from. Both are dropped
+            // when absent rather than forwarded as `undefined`, so the claims header
+            // stays byte-identical to before for a session that carries neither.
+            return {
+                ...(typeof body.expiresAtMs === "number" && Number.isFinite(body.expiresAtMs) ? { expiresAtMs: body.expiresAtMs } : {}),
+                ...(typeof body.role === "string" && body.role.length > 0 ? { role: body.role } : {}),
+                userId: body.userId,
+            };
         },
     };
 };

@@ -6,6 +6,7 @@
  * root-DO tables live in per-DO SQLite and do not need D1 migrations.
  */
 import type { SchemaIR, ValidatorIR } from "@lunora/codegen";
+import { buildSchemaSnapshot } from "@lunora/codegen";
 
 import type { ColumnSnapshot, IndexSnapshot, SchemaSnapshot, TableSnapshot } from "./migration-diff";
 import { validatorKindToSqlType } from "./migration-diff";
@@ -28,6 +29,11 @@ const isGlobal = (mode: SchemaIR["tables"][number]["shardMode"]): boolean => mod
 
 const schemaIrToSnapshot = (ir: SchemaIR): SchemaSnapshot => {
     const tables: Record<string, TableSnapshot> = {};
+    // The deploy gate's structural snapshot, built once from this same IR. Its
+    // per-field shapes ride along in `ColumnSnapshot.field` so `migrate
+    // generate` compares what `lunora prepare` compares, instead of a lossy
+    // `{nullable, sqlType}` pair that cannot tell `v.string()` from `v.bigint()`.
+    const structural = buildSchemaSnapshot(ir, []);
 
     for (const table of ir.tables) {
         if (!isGlobal(table.shardMode)) {
@@ -37,7 +43,9 @@ const schemaIrToSnapshot = (ir: SchemaIR): SchemaSnapshot => {
         const columns: Record<string, ColumnSnapshot> = {};
 
         for (const [columnName, validator] of Object.entries(table.shape)) {
-            columns[columnName] = validatorToColumn(validator);
+            const field = structural.tables[table.name]?.fields[columnName];
+
+            columns[columnName] = field === undefined ? validatorToColumn(validator) : { ...validatorToColumn(validator), field };
         }
 
         const indexes: Record<string, IndexSnapshot> = {};

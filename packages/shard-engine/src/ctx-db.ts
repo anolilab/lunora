@@ -98,6 +98,7 @@ import {
 } from "./query-args";
 import { encodePartitionKey, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 import type { ReactiveCache } from "./reactive-cache";
+import { UNVOUCHABLE_DEP } from "./read-footprint";
 import type { IndexKeyEntry, KeyRange } from "./read-write-set";
 import { buildIndexRange, indexKeysForRow } from "./read-write-set";
 import type { RelationExistsMarker } from "./relation-predicates";
@@ -2272,15 +2273,53 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     };
 
     const reportRead = options.onRead ?? (() => undefined);
+
+    /**
+     * Stamp {@link UNVOUCHABLE_DEP} when a read touched a `.memory()` table.
+     *
+     * `recordCdc` deliberately skips memory tables, so `__cdc_log` holds no
+     * record of them — and `cdcCanVouchFor` (see `ctx-db-cdc.ts`) defines the
+     * vouchable set as "a table of that name exists in this DO's SQLite", which
+     * a memory table satisfies. Migrations create it; only its rows are cleared.
+     * So a read-set of `{presence}` was fully vouchable, `cdcTouchesTables` found
+     * nothing for it in the log, and a client that disconnected while presence
+     * churned reconnected to `resumable: true` with no snapshot — keeping its
+     * pre-disconnect roster for the life of the subscription.
+     *
+     * The sentinel is exactly the missing stamp: a name no table can carry, so it
+     * can only ever fall to "cannot vouch". Cost is one re-snapshot per reconnect
+     * for a subscription that read a memory table, which is what such a
+     * subscription needs anyway — a memory table is emptied by the very eviction
+     * that most often precedes the reconnect.
+     *
+     * Stamped alongside the real table dep rather than in place of it: the live
+     * refresh path still invalidates on the memory table's own name (its writes
+     * DO reach `broadcast`/the changed-table set), and `UNVOUCHABLE_DEP` never
+     * appears in a written-table set, so `setsIntersect`/`writeTouchesMemo` step
+     * straight past it.
+     */
+    const reportMemoryRead = (table: string): void => {
+        if (isMemoryTable(schema.tables[table])) {
+            // The sentinel doubles as its own id marker so the RPC path's hook
+            // does not coalesce it to `SCAN_DEP` and file `!unvouchable` in the
+            // request log's scanned-table readout as if it were a real table.
+            reportRead(UNVOUCHABLE_DEP, UNVOUCHABLE_DEP);
+        }
+    };
+
     // An unwired host must degrade to the whole-table dep, NOT to silence: the
     // terminal reports either a range or a scan, so dropping the range would
     // leave an indexed read with no dependency at all — it would never
     // invalidate, which is the one failure this whole design must not have.
-    const onReadRange =
+    const reportReadRange =
         options.onReadRange ??
         ((range: KeyRange) => {
             reportRead(range.table, SCAN_DEP);
         });
+    const onReadRange = (range: KeyRange): void => {
+        reportMemoryRead(range.table);
+        reportReadRange(range);
+    };
 
     /**
      * Charge reads as they are stamped. The object-form readers (`get`,
@@ -2295,6 +2334,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             headroom?.recordRead(1);
         }
 
+        reportMemoryRead(table);
         reportRead(table, idOrScan);
     };
     const onIndexUse = options.onIndexUse ?? (() => undefined);
@@ -2358,11 +2398,25 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const recordCdc = (table: string, id: string, op: CdcChange["op"], doc?: Record<string, unknown>): void => {
         // A `.memory()` table never reaches the changelog. Its rows do not
         // survive the next eviction, so a CDC consumer replaying them would
-        // materialize state the shard itself no longer believes in — and the log
-        // is append-only with no `trimCdcChanges` caller in `ShardDO`, so a
-        // heartbeat-rate presence table would grow it without bound for the life
-        // of the shard. Live queries are unaffected: subscription refresh is
-        // driven by the changed-table set, not by CDC.
+        // materialize state the shard itself no longer believes in — and log
+        // retention is opt-in (`LUNORA_CDC_LOG_RETENTION`; without it
+        // `CdcRetentionRunner.sweep` returns before trimming anything), so on a
+        // default deployment a heartbeat-rate presence table would grow the log
+        // without bound for the life of the shard.
+        //
+        // What this costs, stated because two call sites got it wrong by
+        // assuming otherwise:
+        //
+        // - LIVE refresh is unaffected — it is driven by the changed-table set,
+        //   which `broadcast` populates for a memory table like any other.
+        // - RESUME is affected, and is handled: a read of a memory table stamps
+        //   `UNVOUCHABLE_DEP` (see `reportMemoryRead` above), because
+        //   `cdcCanVouchFor` would otherwise vouch for a table this log has no
+        //   record of.
+        // - SHAPES cannot work off a table that never enters this log, and
+        //   nothing here can synthesize one. The combination is refused at shape
+        //   registration instead — see `assertShapeShardable` in
+        //   `relation-predicates.ts`.
         if (cdcEnabled && !isMemoryTable(schema.tables[table])) {
             appendCdcChange(sql, clock(), table, id, op, doc);
         }

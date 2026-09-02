@@ -148,6 +148,37 @@ describe("emitApp — buildExec real-output bookmark wiring (plan 336)", () => {
         expect(onBookmark).toHaveBeenCalledWith("bookmark-after-write");
     });
 
+    /**
+     * `all` carries writes, not just reads. D1 runs `UPDATE … RETURNING` through
+     * it exactly like `.run()` — `@lunora/d1`'s retry gate says so in as many
+     * words — and `@lunora/sql-store`'s optimistic-concurrency compare-and-swap
+     * issues precisely that, so `patch`, `replace` and `delete` reach the D1
+     * binding through `all` and nowhere else. `run` and `batch` reported their
+     * bookmark and `all` did not, so those three writes produced no outbound
+     * bookmark at all and the next read could pin a replica that had not seen
+     * them: read-your-writes lost on the exact path the bookmark exists for.
+     * Only the default configuration was affected — with `cdc: true` a later
+     * `run` happened to emit a covering bookmark.
+     */
+    it("reports the bookmark for an UPDATE … RETURNING, which D1 runs through all() and not run()", async () => {
+        expect.assertions(2);
+
+        const buildExec = compileBuildExec(extractBuildExec(emitApp(baseOptions)));
+
+        const preparedStatement = fakeStatement([{ id: "s1" }]);
+        const session = fakeSession(preparedStatement, "bookmark-after-occ-swap");
+        const withSession = vi.fn<(bookmark?: string) => unknown>(() => session);
+        const database: FakeD1Database = { prepare: vi.fn<(sql: string) => unknown>(), withSession } as FakeD1Database;
+        const onBookmark = vi.fn<(bookmark: string | undefined) => void>();
+
+        const exec = buildExec(database, "bookmark-inbound", onBookmark);
+
+        const rows = await exec.all(`UPDATE "settings" SET "value" = ? WHERE "id" = ? AND "value" IS ? RETURNING *`, ["b", "s1", "a"]);
+
+        expect(rows).toEqual([{ id: "s1" }]);
+        expect(onBookmark).toHaveBeenCalledWith("bookmark-after-occ-swap");
+    });
+
     it("a write then a read on the same exec share one session, so the read is pinned to the write (write-then-read round trip)", async () => {
         expect.assertions(2);
 

@@ -14,6 +14,35 @@
  * there is nothing in it).
  */
 
+import { createSearchAnalyzer } from "./analyzer";
+
+/**
+ * The profile recorded alongside a companion's backfill progress: everything
+ * about the index that changes what the companion *stores*.
+ *
+ * Produced here rather than in either engine because it is the input to
+ * {@link planSearchBackfillPass} below — the two have to agree on what counts
+ * as a rebuild, and a producer sitting beside the consumer is what stops one
+ * engine detecting a change the other misses.
+ *
+ * Two facts today. The **analyzer** profile, since analysis is baked into
+ * stored tokens. And the indexed **field**, since re-pointing an index at
+ * another column leaves every stored row holding the text of the column you
+ * abandoned — analysis alone left that undetected, so searching the column you
+ * just declared returned nothing while the old one kept matching, under an
+ * index that reported itself complete.
+ *
+ * `filterFields` is deliberately NOT here. It never reaches a companion: no
+ * layout stores it, and it is read only when a staged query validates which
+ * columns `.eq()` may narrow by. Including it would rebuild every index on the
+ * table for a change that cannot have invalidated a single stored row.
+ *
+ * A backend that also chooses a physical *layout* appends its own identity to
+ * this string — the shape of the companion is a fourth fact, but only where
+ * there is more than one shape.
+ */
+export const searchIndexProfile = (index: { field: string; language?: string }): string => `${createSearchAnalyzer(index.language).profile}:${index.field}`;
+
 /**
  * How far a companion's backfill has progressed, and under which analysis.
  * Declared here rather than beside either engine's state table: both record the

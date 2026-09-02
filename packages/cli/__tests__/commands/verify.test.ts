@@ -94,6 +94,57 @@ describe("lunora verify", () => {
             expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
         });
 
+        it("fails on a platform diagnostic — the target it just resolved cannot serve the app", async () => {
+            expect.assertions(3);
+
+            // `verify` is the documented CI/pre-deploy gate, and it resolves and
+            // validates the deploy target immediately before running codegen with
+            // it. Dropping the one output that depends on that target let an app
+            // whose nightly cron can never fire on this host verify clean.
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(join(workdir, "lunora.json"), `{ "target": "node" }`, "utf8");
+            writeFileSync(
+                join(workdir, "lunora", "crons.ts"),
+                `import { cronJobs } from "@lunora/server";\n\nconst crons = cronJobs();\n\ncrons.daily("nightly-billing-sweep", { hourUTC: 3, minuteUTC: 0 }, internal.messages.purge, {});\n\nexport default crons;\n`,
+                "utf8",
+            );
+            const { logger, recorded } = recordingLogger();
+
+            const result = await runVerifyCommand({ cwd: workdir, logger, typecheck: false });
+
+            expect(result.code).toBe(1);
+            expect(result.errors.some((error) => error.includes("cron"))).toBe(true);
+            expect(recorded.errors.join("\n")).toContain("platform_unsupported_feature");
+        });
+
+        it("reports every platform diagnostic, not just the first", async () => {
+            expect.assertions(3);
+
+            // `--format json` consumers read `errors` — the documented CI gate.
+            // Only the FIRST error-level diagnostic reached the result, so an app
+            // with two unsupported features had one of them silently dropped from
+            // the machine-readable output that gates the pipeline.
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(join(workdir, "lunora.json"), `{ "target": "node" }`, "utf8");
+            writeFileSync(
+                join(workdir, "lunora", "crons.ts"),
+                `import { cronJobs } from "@lunora/server";\n\nconst crons = cronJobs();\n\ncrons.daily("nightly-billing-sweep", { hourUTC: 3, minuteUTC: 0 }, internal.messages.purge, {});\n\nexport default crons;\n`,
+                "utf8",
+            );
+            writeFileSync(
+                join(workdir, "lunora", "summarize.ts"),
+                `import { action } from "@lunora/server";\n\nexport const summarize = action({ args: {}, handler: async (ctx) => ctx.ai.run("@cf/meta/llama", { prompt: "hi" }) });\n`,
+                "utf8",
+            );
+            const { logger } = recordingLogger();
+
+            const result = await runVerifyCommand({ cwd: workdir, logger, typecheck: false });
+
+            expect(result.code).toBe(1);
+            expect(result.errors.some((error) => error.includes("cron"))).toBe(true);
+            expect(result.errors.some((error) => error.toLowerCase().includes("ai"))).toBe(true);
+        });
+
         it("returns 1 and surfaces wrangler errors", async () => {
             expect.assertions(3);
 

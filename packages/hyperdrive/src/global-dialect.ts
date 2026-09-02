@@ -4,9 +4,11 @@
  *
  * Both mirror `@lunora/d1`'s `sqliteDialect`, differing only where the engines
  * genuinely diverge: column types, the catalog probe, unique-violation
- * detection, `RETURNING` support, and the MySQL index key-prefix. Every backend
- * stores **SQLite-shaped values** (boolean → 1/0, composites → JSON text, bigint
- * → decimal string) through the store core's own `sqliteEncode`/`sqliteDecode`,
+ * detection, the MySQL index key-prefix, and the MySQL column collation (see
+ * {@link MYSQL_COLLATION} — the server default folds case and accents, which the
+ * other two engines do not). Every backend stores **SQLite-shaped values**
+ * (boolean → 1/0, composites → JSON text, bigint → an order-preserving text key)
+ * through the store core's own `sqliteEncode`/`sqliteDecode`,
  * which is not a dialect member — `sqliteDecode` is robust to a driver returning
  * either the stored string or a natively-parsed value (e.g. node-postgres
  * returns bigint as a string).
@@ -46,12 +48,50 @@ const toQuery = (terms: ReadonlyArray<string>): SQL =>
 /** Postgres unique-violation message (the SQLSTATE 23505 fallback when the driver omits `.code`). */
 const PG_UNIQUE_VIOLATION_RE = /duplicate key value violates unique constraint/iu;
 
+/**
+ * The collation every MySQL character column this dialect declares is pinned to.
+ *
+ * MySQL 8's server default is `utf8mb4_0900_ai_ci` — **accent- and
+ * case-insensitive**. SQLite compares TEXT byte for byte and Postgres compares
+ * `text` for equality byte for byte, so an unqualified column inherited a third
+ * set of semantics and `.global()` stopped meaning the same thing per engine:
+ * `"Acme"` and `"acme"` folded into one row in an `__agg_` counter, `.unique()`
+ * rejected `alice@` against `Alice@`, `ne "CAFE"` excluded `"café"`, and — the
+ * one that makes this a security bug rather than a papercut — a `rankPage`
+ * partitioned on a tenant key returned another tenant's rows.
+ *
+ * `utf8mb4_0900_bin`, not `utf8mb4_bin`: the former compares code points with NO
+ * PAD, which is what SQLite and Postgres do. `utf8mb4_bin` is PAD SPACE, so
+ * `'a' = 'a  '` would still be true on MySQL and false on the other two. It is
+ * MySQL 8.0+ only, which is the floor Hyperdrive's MySQL support targets; an
+ * older server rejects the DDL loudly rather than silently folding case.
+ *
+ * Declared per **column** rather than per table or per connection. A connection
+ * collation loses to the column's own on every `column = 'literal'` comparison
+ * (the column has the lower coercibility), so it would fix nothing; a table
+ * default would need a new `SqlDialect` member for the DDL builder to render,
+ * for an answer the column type already carries to every site that declares one
+ * — the main tables, the rank companion's sort columns, and the companion keys.
+ *
+ * **Pre-existing tables keep the collation they were created with.**
+ * `CREATE TABLE IF NOT EXISTS` does not reshape one, and neither does anything
+ * here: converting is a full table rebuild, which is not something to run from a
+ * cold start. A binding provisioned before this ships needs the operator to run
+ * `ALTER TABLE <t> CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin`
+ * once per table, companions included.
+ */
+const MYSQL_COLLATION = "utf8mb4_0900_bin";
+
+/** A character column's declaration with {@link MYSQL_COLLATION} pinned onto it. */
+const collated = (type: string): string => `${type} COLLATE ${MYSQL_COLLATION}`;
+
 /** MySQL storage type for a validator `kind`. Shared by `columnType` and the index-prefix decision below. */
 const mysqlColumnType = (kind: string | undefined): string => {
     switch (kind) {
         case "bigint": {
-            // stored as a decimal string (max 20 digits — never truncates).
-            return "VARCHAR(64)";
+            // stored as the order-preserving 40-character key `bigintSqlKey`
+            // builds (sign + 39 digits) — never truncates.
+            return collated("VARCHAR(64)");
         }
         case "boolean": {
             return "TINYINT";
@@ -77,7 +117,7 @@ const mysqlColumnType = (kind: string | undefined): string => {
             // insert, rejecting it outright with ER_3140. A `union`/`any`/`from`
             // column is stored by its runtime JS type for the same reason: a
             // `v.from(z.string())` column holds a bare `hello`.
-            return "LONGTEXT";
+            return collated("LONGTEXT");
         }
     }
 };
@@ -187,14 +227,17 @@ export const mysqlDialect: SqlDialect = {
         integer: "INTEGER",
         // VARCHAR so it can be a PRIMARY KEY and be fully indexed (TEXT cannot,
         // without a prefix length). 768 = InnoDB utf8mb4 single-column index limit.
-        key: "VARCHAR(768)",
+        // Collated like every other character column: `__key__` carries the
+        // aggregate/group key tuple and `__partition__` the rank partition, and
+        // a case-folding comparison on either merges two distinct groups into one.
+        key: collated("VARCHAR(768)"),
         real: "DOUBLE",
         // Unbounded post-image storage (CDC `doc`); never an index key, so no bound.
-        text: "LONGTEXT",
+        text: collated("LONGTEXT"),
     },
     columnType: mysqlColumnType,
     frameworkColumns: () => [
-        { name: "id", type: "VARCHAR(768) PRIMARY KEY" },
+        { name: "id", type: `${collated("VARCHAR(768)")} PRIMARY KEY` },
         { name: "_creationTime", type: "DOUBLE NOT NULL" },
     ],
     // InnoDB can't index a TEXT/LONGTEXT/BLOB column without a key prefix. Bound it

@@ -424,34 +424,43 @@ const reconcileItems = (
 
     // Sequential by design: reconciling lunora/schema.ts is read-modify-write,
     // so two items extending the schema must not interleave their edits.
-    for (const { directory, manifest } of items) {
-        for (const file of manifest.files) {
-            const outcome = reconcileFile(file, manifest.name, directory, cwd, logger, lock, reconcileOptions, useUmbrella);
+    //
+    // `finally`, not a trailing statement: a throw part-way down the plan
+    // (an unreadable source file, a symlinked item) still leaves every file
+    // written before it on disk. Discarding the lock there recorded no
+    // provenance for them, so the next run saw an untracked file it "didn't
+    // add" and refused — permanently, short of `--overwrite` (which discards
+    // local edits) or hand-editing the lock.
+    try {
+        for (const { directory, manifest } of items) {
+            for (const file of manifest.files) {
+                const outcome = reconcileFile(file, manifest.name, directory, cwd, logger, lock, reconcileOptions, useUmbrella);
 
-            (outcome.kind === "written" ? written : skipped).push(outcome.path);
+                (outcome.kind === "written" ? written : skipped).push(outcome.path);
+            }
+
+            // Entrypoint re-exports must be shown in diff mode too (before the
+            // "skip resources" guard), since they modify a source file.
+            if (manifest.entrypointReexports !== undefined) {
+                applyEntrypointReexports(manifest.entrypointReexports, cwd, logger, reconcileOptions.diff === true);
+            }
+
+            // --diff is a read-only preview: don't mutate package.json / wrangler / .dev.vars.
+            if (reconcileOptions.diff) {
+                continue;
+            }
+
+            const applied = applyItemResources(manifest, cwd, logger, useUmbrella);
+
+            depsAdded.push(...applied.deps);
+            bindingsApplied.push(...applied.bindings);
         }
-
-        // Entrypoint re-exports must be shown in diff mode too (before the
-        // "skip resources" guard), since they modify a source file.
-        if (manifest.entrypointReexports !== undefined) {
-            applyEntrypointReexports(manifest.entrypointReexports, cwd, logger, reconcileOptions.diff === true);
+    } finally {
+        // Persist the lock only once it has something to track — items that ship
+        // nothing but a schema extension leave no whole-file provenance.
+        if (!reconcileOptions.diff && Object.keys(lock.items).length > 0) {
+            writeLock(cwd, lock);
         }
-
-        // --diff is a read-only preview: don't mutate package.json / wrangler / .dev.vars.
-        if (reconcileOptions.diff) {
-            continue;
-        }
-
-        const applied = applyItemResources(manifest, cwd, logger, useUmbrella);
-
-        depsAdded.push(...applied.deps);
-        bindingsApplied.push(...applied.bindings);
-    }
-
-    // Persist the lock only once it has something to track — items that ship
-    // nothing but a schema extension leave no whole-file provenance.
-    if (!reconcileOptions.diff && Object.keys(lock.items).length > 0) {
-        writeLock(cwd, lock);
     }
 
     return { bindings: bindingsApplied, deps: depsAdded, skipped, written };

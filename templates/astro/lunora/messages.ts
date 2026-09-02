@@ -23,7 +23,7 @@ const limiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
  */
 const byCaller = { key: (ctx: { auth: { userId?: null | string }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon" };
 
-export const list = query.input({ channelId: v.string().meta({ schema: { maxLength: 256 } }), limit: v.optional(v.number()) }).query(async ({ args, ctx }) => {
+export const list = query.input({ channelId: v.string().max(256), limit: v.optional(v.number()) }).query(async ({ args, ctx }) => {
     const messages = await ctx.db
         .query("messages")
         .withIndex("by_channel", (q) => q.eq("channelId", args.channelId))
@@ -33,7 +33,7 @@ export const list = query.input({ channelId: v.string().meta({ schema: { maxLeng
 });
 
 export const send = mutation
-    .input({ channelId: v.string().meta({ schema: { maxLength: 256 } }), text: v.string().meta({ schema: { maxLength: 4096 } }) })
+    .input({ channelId: v.string().max(256), text: v.string().max(4096) })
     .use(rateLimit(limiter, "send", byCaller))
     .mutation(async ({ args, ctx }) => {
         const id = await ctx.db.insert("messages", { channelId: args.channelId, text: args.text });

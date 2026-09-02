@@ -150,9 +150,9 @@ const ALLOWED_UPLOAD_CONTENT_TYPES: ReadonlySet<string> = new Set(["application/
  */
 export const generateUploadUrl = action
     .input({
-        contentType: v.string().meta({ schema: { maxLength: 256 } }),
+        contentType: v.string().max(256),
         expiresInSeconds: v.optional(v.number()),
-        key: v.string().meta({ schema: { maxLength: 1024 } }),
+        key: v.string().max(1024),
     })
     .use(rateLimit(limiter, "storage", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .action(async ({ args: { contentType, expiresInSeconds, key }, ctx }): Promise<{ key: string; url: string }> => {
@@ -176,7 +176,7 @@ export const generateUploadUrl = action
 export const getDownloadUrl = action
     .input({
         expiresInSeconds: v.optional(v.number()),
-        key: v.string().meta({ schema: { maxLength: 1024 } }),
+        key: v.string().max(1024),
     })
     .use(rateLimit(limiter, "storage", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .action(async ({ args: { expiresInSeconds, key }, ctx }): Promise<{ key: string; url: string }> => {
@@ -188,7 +188,7 @@ export const getDownloadUrl = action
 
 /** Delete a stored object owned by the caller. */
 export const deleteObject = mutation
-    .input({ key: v.string().meta({ schema: { maxLength: 1024 } }) })
+    .input({ key: v.string().max(1024) })
     .use(rateLimit(limiter, "storage", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .mutation(async ({ args: { key }, ctx }): Promise<{ ok: true }> => {
         const scoped = scopeKey(requireOwner(ctx.auth.userId), key);
@@ -221,9 +221,9 @@ interface StorageObject {
  */
 export const listObjects = action
     .input({
-        cursor: v.optional(v.string().meta({ schema: { maxLength: 2048 } })),
+        cursor: v.optional(v.string().max(2048)),
         limit: v.optional(v.number()),
-        prefix: v.optional(v.string().meta({ schema: { maxLength: 1024 } })),
+        prefix: v.optional(v.string().max(1024)),
     })
     .use(rateLimit(limiter, "storage", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .action(async ({ args: { cursor, limit, prefix }, ctx }): Promise<{ cursor?: string; objects: StorageObject[]; truncated?: boolean }> => {

@@ -9,6 +9,11 @@
  * report an un-backfilled index as complete and strand every pre-index row
  * permanently. Progress is therefore recorded explicitly, one row per
  * companion, in a reserved table beside the other `__lunora_*` bookkeeping.
+ *
+ * The table is a plain `key → {cursor, done, profile}` map and is shared with the
+ * one other paged migration that needs the same bookkeeping — `ctx-db.ts`'s
+ * bigint re-encoding pass, under a `bigint-rewrite:<table>` key. Its name is
+ * historical; renaming it would be a migration of its own for no behavioural gain.
  */
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-search-state" mirrors its parent "ctx-db.ts", the established module name in this package. */
@@ -27,13 +32,13 @@ const SEARCH_STATE_TABLE = "__lunora_search_state";
 const migrateSearchState = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<void> => {
     const { integer, key } = dialect.companionTypes;
 
-    // A state table created by an earlier build has no `profile` column, and
-    // `CREATE TABLE IF NOT EXISTS` will not add one — so every read of it would
-    // fail on the missing column. Add it separately; the failure when it is
-    // already there is the expected case, not an error.
-    const addProfileColumn = async (): Promise<void> => {
+    // A state table created by an earlier build has none of the columns added
+    // after it, and `CREATE TABLE IF NOT EXISTS` will not add them — so every
+    // read of it would fail on the missing column. Add them separately; the
+    // failure when one is already there is the expected case, not an error.
+    const addColumn = async (column: string, type: string): Promise<void> => {
         try {
-            await queryRun(exec, dialect, sql`ALTER TABLE ${sql.identifier(SEARCH_STATE_TABLE)} ADD COLUMN ${sql.identifier("profile")} ${sql.raw(key)}`);
+            await queryRun(exec, dialect, sql`ALTER TABLE ${sql.identifier(SEARCH_STATE_TABLE)} ADD COLUMN ${sql.identifier(column)} ${sql.raw(type)}`);
         } catch {
             // Column already present (or the table was just created with it).
         }
@@ -42,14 +47,69 @@ const migrateSearchState = async (exec: SqlCtxExec, dialect: SqlDialect): Promis
     await queryRun(
         exec,
         dialect,
-        sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(SEARCH_STATE_TABLE)} (${sql.identifier("companion")} ${sql.raw(key)} PRIMARY KEY, ${sql.identifier("cursor")} ${sql.raw(key)}, ${sql.identifier("done")} ${sql.raw(integer)} NOT NULL DEFAULT 0, ${sql.identifier("profile")} ${sql.raw(key)})`,
+        sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(SEARCH_STATE_TABLE)} (${sql.identifier("companion")} ${sql.raw(key)} PRIMARY KEY, ${sql.identifier("cursor")} ${sql.raw(key)}, ${sql.identifier("done")} ${sql.raw(integer)} NOT NULL DEFAULT 0, ${sql.identifier("profile")} ${sql.raw(key)}, ${sql.identifier("covered")} ${sql.raw(integer)} NOT NULL DEFAULT 0)`,
     );
 
-    await addProfileColumn();
+    await addColumn("profile", key);
+    await addColumn("covered", `${integer} NOT NULL DEFAULT 0`);
+
+    // Catch `covered` up for rows that predate the column, in its OWN statement
+    // rather than inside the `ALTER` above: sharing the ALTER's `try` would run
+    // this only on the single call that added the column, so a process that
+    // stopped between the two left every completed index reading as uncovered
+    // for good — refusing every search for the length of its next rebuild.
+    //
+    // `done` already carries the answer for those rows: a companion recorded as
+    // finished has walked the whole table. `AND covered = 0` makes this a no-op
+    // write after the first successful pass, so paying for it on every migration
+    // costs a matchless scan of a table with one row per index.
+    await queryRun(
+        exec,
+        dialect,
+        sql`UPDATE ${sql.identifier(SEARCH_STATE_TABLE)} SET ${sql.identifier("covered")} = 1 WHERE ${sql.identifier("done")} = 1 AND ${sql.identifier("covered")} = 0`,
+    );
 };
 
-/** The persisted `done` flag, however this engine's driver spells a boolean. */
+/** A persisted flag column (`done`, `covered`), however this engine's driver spells a boolean. */
 const isDone = (value: unknown): boolean => value === 1 || value === true || value === "1";
+
+/**
+ * Does this companion hold a row for every document in its table?
+ *
+ * The fact `done` cannot carry. A profile change clears `done` and sends the
+ * walk back to the top, so from its second page a REBUILD's progress row is
+ * indistinguishable from a brand-new index's — same cursor, same `done: false`,
+ * same profile. The two need opposite answers on the read path (a new index
+ * covers a growing prefix and must refuse; a rebuild holds every row under stale
+ * analysis and must serve), so the distinction is recorded rather than inferred.
+ *
+ * Read separately from {@link readSearchBackfillState} on purpose: the read path
+ * asks only once the shared plan has said "not finished", which is the path that
+ * would otherwise refuse — so a complete index still costs the one primary-key
+ * lookup it did before.
+ */
+const readSearchIndexCoverage = async (exec: SqlCtxExec, dialect: SqlDialect, companion: string): Promise<boolean> => {
+    const rows = await queryAll(
+        exec,
+        dialect,
+        sql`SELECT ${sql.identifier("covered")} FROM ${sql.identifier(SEARCH_STATE_TABLE)} WHERE ${sql.identifier("companion")} = ${companion}`,
+    );
+
+    return isDone(rows[0]?.["covered"]);
+};
+
+/**
+ * Forget everything recorded for a companion, because its rows are gone.
+ *
+ * The one place coverage falls back to zero: a layout change drops the
+ * companion table outright, so the next walk really does start from an empty
+ * index. Deleting the row rather than rewriting it also keeps the drop a
+ * one-time event — the caller only drops when a profile *is* recorded, and an
+ * absent row records nothing.
+ */
+const clearSearchBackfillState = async (exec: SqlCtxExec, dialect: SqlDialect, companion: string): Promise<void> => {
+    await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(SEARCH_STATE_TABLE)} WHERE ${sql.identifier("companion")} = ${companion}`);
+};
 
 /** Read a companion's progress. An unknown companion has done nothing yet. */
 const readSearchBackfillState = async (exec: SqlCtxExec, dialect: SqlDialect, companion: string): Promise<SearchBackfillState> => {
@@ -88,6 +148,13 @@ const readSearchBackfillState = async (exec: SqlCtxExec, dialect: SqlDialect, co
  * the UPDATE it should have done. Spelled with the portable three statements
  * rather than an upsert because the three dialects spell `ON CONFLICT` three
  * different ways, and this runs once per backfill page, never on a hot path.
+ *
+ * `covered` is not a parameter: it is `done`, latched. A walk that reached the
+ * end of the table put every row in the companion, and nothing takes rows back
+ * out (a rebuild rewrites each one in place), so the flag only ever rises —
+ * which is what lets a rebuild that has cleared `done` still be told apart from
+ * a first walk. `covered = covered` is the portable no-op assignment; the three
+ * dialects disagree about whether `MAX` is scalar or aggregate.
  */
 const writeSearchBackfillState = async (
     exec: SqlCtxExec,
@@ -99,7 +166,8 @@ const writeSearchBackfillState = async (
 ): Promise<void> => {
     // eslint-disable-next-line unicorn/no-null -- SQL bind value: "no page has run yet" is a NULL column, not undefined
     const cursorValue = cursor ?? null;
-    const update = sql`UPDATE ${sql.identifier(SEARCH_STATE_TABLE)} SET ${sql.identifier("cursor")} = ${cursorValue}, ${sql.identifier("done")} = ${done ? 1 : 0}, ${sql.identifier("profile")} = ${profile} WHERE ${sql.identifier("companion")} = ${companion}`;
+    const coveredSet = done ? sql`${sql.identifier("covered")} = 1` : sql`${sql.identifier("covered")} = ${sql.identifier("covered")}`;
+    const update = sql`UPDATE ${sql.identifier(SEARCH_STATE_TABLE)} SET ${sql.identifier("cursor")} = ${cursorValue}, ${sql.identifier("done")} = ${done ? 1 : 0}, ${sql.identifier("profile")} = ${profile}, ${coveredSet} WHERE ${sql.identifier("companion")} = ${companion}`;
     const existing = await queryAll(
         exec,
         dialect,
@@ -116,7 +184,7 @@ const writeSearchBackfillState = async (
         await queryRun(
             exec,
             dialect,
-            sql`INSERT INTO ${sql.identifier(SEARCH_STATE_TABLE)} (${sql.identifier("companion")}, ${sql.identifier("cursor")}, ${sql.identifier("done")}, ${sql.identifier("profile")}) VALUES (${companion}, ${cursorValue}, ${done ? 1 : 0}, ${profile})`,
+            sql`INSERT INTO ${sql.identifier(SEARCH_STATE_TABLE)} (${sql.identifier("companion")}, ${sql.identifier("cursor")}, ${sql.identifier("done")}, ${sql.identifier("profile")}, ${sql.identifier("covered")}) VALUES (${companion}, ${cursorValue}, ${done ? 1 : 0}, ${profile}, ${done ? 1 : 0})`,
         );
     } catch (error) {
         // A concurrent pass inserted the row between the probe and here. That
@@ -129,4 +197,4 @@ const writeSearchBackfillState = async (
     }
 };
 
-export { migrateSearchState, readSearchBackfillState, SEARCH_STATE_TABLE, writeSearchBackfillState };
+export { clearSearchBackfillState, migrateSearchState, readSearchBackfillState, readSearchIndexCoverage, SEARCH_STATE_TABLE, writeSearchBackfillState };
