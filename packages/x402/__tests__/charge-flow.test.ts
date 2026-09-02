@@ -242,6 +242,38 @@ describe("withX402", () => {
         vi.restoreAllMocks();
     });
 
+    it("calls waitUntil through the context so a receiver-bound one does not throw", async () => {
+        stubFacilitator();
+        vi.spyOn(X402HTTPResourceServer.prototype, "processHTTPRequest").mockResolvedValue(paymentVerifiedResult as never);
+        vi.spyOn(X402HTTPResourceServer.prototype, "processSettlement").mockResolvedValue(successSettlement as never);
+
+        const onReceipt = vi.fn<() => Promise<void>>(() => Promise.resolve());
+        const registered: Promise<unknown>[] = [];
+        // Cloudflare's `ExecutionContext.waitUntil` is receiver-bound: called
+        // detached it throws `TypeError: Illegal invocation`, which
+        // `reportReceipt` swallows — the paid response still lands, but the
+        // receipt promise is never registered and the async sink dies with the
+        // request. This context reproduces that binding requirement.
+        const context = {
+            token: "ctx",
+            waitUntil(this: unknown, promise: Promise<unknown>): void {
+                if ((this as { token?: string } | undefined)?.token !== "ctx") {
+                    throw new TypeError("Illegal invocation");
+                }
+
+                registered.push(promise);
+            },
+        };
+
+        const gated = withX402({ ...chargeConfig, onReceipt }, () => new Response("secret"));
+        const response = await gated(context, new Request("https://api.example/report"));
+
+        expect(response.status).toBe(200);
+        expect(registered).toHaveLength(1);
+
+        vi.restoreAllMocks();
+    });
+
     it("does not cache a failed initialisation", async () => {
         const failing = vi.fn<() => Promise<Response>>(() => Promise.reject(new Error("facilitator down")));
 

@@ -56,6 +56,14 @@ interface Env extends Record<string, unknown> {
 const ROOT_SHARD_KEY = "__root__";
 
 /**
+ * Whether ANY clause a method reported passed. One `Authentication-Results`
+ * header may report a method more than once (an ESP-relayed message is
+ * DKIM-signed by both the relay and the author domain), so the inbound gate below
+ * asks about the whole list rather than the first entry.
+ */
+const anyPass = (results: ReadonlyArray<{ result: string }>): boolean => results.some((entry) => entry.result === "pass");
+
+/**
  * Auth config the builder's `.auth()` lazily builds the runtime + migration
  * instances from — same plugins/secret so both describe the identical schema.
  * The full plugin set is what the studio's auth dashboard adapts to
@@ -151,14 +159,17 @@ const app = defineApp<Env>()
             // this gate anyone who can send mail to the routed address reaches
             // that, choosing `from` freely.
             //
-            // Fails closed on purpose: a `null` verdict means the receiving MX
-            // stamped no `Authentication-Results` header, which is "unknown",
+            // Fails closed on purpose: an empty verdict list means the receiving
+            // MX stamped no `Authentication-Results` header, which is "unknown",
             // not "fine". DMARC passing is sufficient (it subsumes an aligned
             // SPF or DKIM); otherwise both SPF and DKIM must pass on their own.
+            // Each method holds every clause the header reported — one header may
+            // report a method more than once — so "did any clause pass?" is the
+            // question, not "did the first?".
             verify: (email) => {
                 const { dkim, dmarc, spf } = email.authentication;
 
-                return dmarc === "pass" || (spf === "pass" && dkim === "pass");
+                return anyPass(dmarc) || (anyPass(spf) && anyPass(dkim));
             },
         });
 

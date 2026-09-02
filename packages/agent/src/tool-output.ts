@@ -20,7 +20,23 @@
 /** Max serialized characters kept of a persisted, re-injected tool output. */
 const MAX_TOOL_OUTPUT_CHARS = 4000;
 
+/**
+ * Appended to a cut output so the model knows it is looking at a prefix.
+ *
+ * Its length comes OUT of the cap rather than being added on top: the marker is
+ * part of the value that gets persisted and re-injected, so slicing to the cap
+ * and then appending persisted `MAX_TOOL_OUTPUT_CHARS + 13` characters — an
+ * overrun, on every turn, of exactly the thing this module exists to bound.
+ */
+const TRUNCATION_MARKER = "… [truncated]";
+
 /** Trim `text` to {@link MAX_TOOL_OUTPUT_CHARS}, marking that it was cut so the model can ask for the rest. */
-const capToolOutputText = (text: string): string => (text.length <= MAX_TOOL_OUTPUT_CHARS ? text : `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)}… [truncated]`);
+const capToolOutputText = (text: string): string => {
+    if (text.length <= MAX_TOOL_OUTPUT_CHARS) {
+        return text;
+    }
+
+    return `${text.slice(0, MAX_TOOL_OUTPUT_CHARS - TRUNCATION_MARKER.length)}${TRUNCATION_MARKER}`;
+};
 
 export { capToolOutputText, MAX_TOOL_OUTPUT_CHARS };

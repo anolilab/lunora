@@ -1768,7 +1768,10 @@ describe("tool output size", () => {
 
         const toolRow = [...runtime.messages.values()].find((message) => message.role === "tool");
 
-        expect(toolRow?.content).toHaveLength(4000 + "… [truncated]".length);
+        // Exactly the cap, marker included: the marker is part of the persisted
+        // row, so its length comes out of the budget rather than being added on
+        // top of it.
+        expect(toolRow?.content).toHaveLength(4000);
         expect(toolRow?.content.endsWith("… [truncated]")).toBe(true);
     });
 });

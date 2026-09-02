@@ -117,12 +117,9 @@ describe("parseInboundEmail", () => {
         // A method with no identifier property reports a `null` domain — a
         // consumer cannot align it and must treat the pass as unauthenticated.
         expect(parsed.authentication).toStrictEqual({
-            dkim: "pass",
-            dkimDomain: "example.com",
-            dmarc: "fail",
-            dmarcDomain: null,
-            spf: "pass",
-            spfDomain: null,
+            dkim: [{ domain: "example.com", result: "pass" }],
+            dmarc: [{ domain: null, result: "fail" }],
+            spf: [{ domain: null, result: "pass" }],
         });
     });
 
@@ -147,12 +144,9 @@ describe("parseInboundEmail", () => {
         const parsed = await parseInboundEmail(authed);
 
         expect(parsed.authentication).toStrictEqual({
-            dkim: "pass",
-            dkimDomain: "example.com",
-            dmarc: "pass",
-            dmarcDomain: "example.com",
-            spf: "pass",
-            spfDomain: "example.com",
+            dkim: [{ domain: "example.com", result: "pass" }],
+            dmarc: [{ domain: "example.com", result: "pass" }],
+            spf: [{ domain: "example.com", result: "pass" }],
         });
     });
 
@@ -178,12 +172,44 @@ describe("parseInboundEmail", () => {
         const parsed = await parseInboundEmail(spaced);
 
         expect(parsed.authentication).toStrictEqual({
-            dkim: "pass",
-            dkimDomain: "example.com",
-            dmarc: "pass",
-            dmarcDomain: "example.com",
-            spf: "pass",
-            spfDomain: "example.com",
+            dkim: [{ domain: "example.com", result: "pass" }],
+            dmarc: [{ domain: "example.com", result: "pass" }],
+            spf: [{ domain: "example.com", result: "pass" }],
+        });
+    });
+
+    it("keeps every reported clause when a method appears more than once", async () => {
+        expect.assertions(1);
+
+        // RFC 8601 lets one header report a method repeatedly, and real mail does:
+        // an ESP-relayed message is DKIM-signed by both the relay and the author
+        // domain, and the MX stamps a clause per signature in verification order.
+        // Keeping only the first discarded the aligned one whenever it was listed
+        // second, and the consumer rejected an authenticated message.
+        const relayed = crlf([
+            "From: Alice <alice@example.com>",
+            "To: rcpt@example.test",
+            "Subject: Relayed",
+            "Message-ID: <auth-multi-1@example.com>",
+            "Authentication-Results: mx.cloudflare.net; dkim=pass header.d=esp.example; dkim=pass header.d=example.com; spf=fail smtp.mailfrom=bounce@esp.example; spf=pass smtp.mailfrom=alice@example.com",
+            "Content-Type: text/plain; charset=utf-8",
+            "",
+            "body",
+            "",
+        ]);
+
+        const parsed = await parseInboundEmail(relayed);
+
+        expect(parsed.authentication).toStrictEqual({
+            dkim: [
+                { domain: "esp.example", result: "pass" },
+                { domain: "example.com", result: "pass" },
+            ],
+            dmarc: [],
+            spf: [
+                { domain: "esp.example", result: "fail" },
+                { domain: "example.com", result: "pass" },
+            ],
         });
     });
 
@@ -207,12 +233,9 @@ describe("parseInboundEmail", () => {
         const parsed = await parseInboundEmail(forged);
 
         expect(parsed.authentication).toStrictEqual({
-            dkim: "pass",
-            dkimDomain: "evil.example",
-            dmarc: "fail",
-            dmarcDomain: "victim.example",
-            spf: "pass",
-            spfDomain: "evil.example",
+            dkim: [{ domain: "evil.example", result: "pass" }],
+            dmarc: [{ domain: "victim.example", result: "fail" }],
+            spf: [{ domain: "evil.example", result: "pass" }],
         });
     });
 
@@ -237,19 +260,19 @@ describe("parseInboundEmail", () => {
 
         const parsed = await parseInboundEmail(spoofed);
 
-        expect(parsed.authentication.dkim).toBe("fail");
-        expect(parsed.authentication.spf).toBe("fail");
-        expect(parsed.authentication.dmarc).toBe("fail");
+        expect(parsed.authentication.dkim).toStrictEqual([{ domain: "evil.example", result: "fail" }]);
+        expect(parsed.authentication.spf).toStrictEqual([{ domain: null, result: "fail" }]);
+        expect(parsed.authentication.dmarc).toStrictEqual([{ domain: null, result: "fail" }]);
         // The raw flattened map keeps its documented last-wins behavior.
         expect(parsed.headers["authentication-results"]).toContain("forged.invalid");
     });
 
-    it("reports all-null verdicts when Authentication-Results is absent", async () => {
+    it("reports empty verdict lists when Authentication-Results is absent", async () => {
         expect.assertions(1);
 
         const parsed = await parseInboundEmail(MULTIPART_ALTERNATIVE);
 
-        expect(parsed.authentication).toStrictEqual({ dkim: null, dkimDomain: null, dmarc: null, dmarcDomain: null, spf: null, spfDomain: null });
+        expect(parsed.authentication).toStrictEqual({ dkim: [], dmarc: [], spf: [] });
     });
 
     it("accepts an ArrayBuffer as well as a string", async () => {

@@ -7,7 +7,7 @@ import type { InboundEmail } from "../src/inbound/parse";
 /** A parsed message fixture used by the handler tests (parsing is covered separately). */
 const fixture: InboundEmail = {
     attachments: [],
-    authentication: { dkim: null, dkimDomain: null, dmarc: null, dmarcDomain: null, spf: null, spfDomain: null },
+    authentication: { dkim: [], dmarc: [], spf: [] },
     from: "alice@example.com",
     headers: { subject: "Hi" },
     messageId: "<m-1@example.com>",

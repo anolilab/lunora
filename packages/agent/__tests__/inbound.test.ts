@@ -171,6 +171,35 @@ describe(dispatchAgentEmail, () => {
         });
     });
 
+    it("accepts a later aligned DKIM pass reported after an earlier unaligned one", async () => {
+        expect.assertions(2);
+
+        // An ESP-relayed message carries two DKIM signatures: the relay's own
+        // (`d=esp.example`) and the author domain's. Both pass, and the MX reports
+        // one clause per signature in whatever order it verified them. Keeping only
+        // the first clause threw the aligned one away and bounced a message the MX
+        // had fully authenticated.
+        await expect(
+            gate(rawEmail("dkim=pass header.d=esp.example; dkim=pass header.d=example.com; spf=fail smtp.mailfrom=esp.example; dmarc=none")),
+        ).resolves.toStrictEqual({ bounced: false, ran: true });
+
+        // Same shape one method over: a failed SPF clause ahead of a passing,
+        // aligned one.
+        await expect(
+            gate(rawEmail("dkim=none; spf=fail smtp.mailfrom=relay.example; spf=pass smtp.mailfrom=alice@example.com; dmarc=none")),
+        ).resolves.toStrictEqual({ bounced: false, ran: true });
+    });
+
+    it("still refuses when every reported clause is unaligned or failing", async () => {
+        expect.assertions(1);
+
+        // Multiple clauses must not become "some clause somewhere passed": none of
+        // these vouch for the `From` domain.
+        await expect(
+            gate(rawEmail("dkim=pass header.d=evil.example; dkim=fail header.d=example.com; spf=pass smtp.mailfrom=evil.example; dmarc=fail")),
+        ).resolves.toStrictEqual({ bounced: true, ran: false });
+    });
+
     it("refuses a subdomain pass — alignment is strict, not organizational", async () => {
         expect.assertions(1);
 
