@@ -863,6 +863,34 @@ describe("schedulerDO — alarm contract (fake clock)", () => {
         expect(scheduler.dispatched.map((record) => record.functionPath)).toEqual(["messages.send"]);
     });
 
+    it("refuses a caller-supplied id that is already scheduled, instead of firing the newer job at the older time", async () => {
+        expect.assertions(4);
+
+        const now = 1_700_000_000_000;
+        const { scheduler, fastForwardToAlarm, currentAlarm } = harness((state, env) => new TestScheduler(state, env), now);
+
+        const first = await scheduler.fetch(
+            post("/schedule", { args: {}, functionPath: "jobs.remind", id: "reminder-42", originUrl: "https://app.test", scheduledFor: now + 1000 }),
+        );
+        // Same id, five seconds later. Accepting it overwrites the `id:` header
+        // while BOTH `t:` index entries survive, so the drain dispatches the
+        // t+5000 record at t+1000 and then deletes the entry it should have
+        // fired at — the job runs four seconds early and never runs again.
+        const second = await scheduler.fetch(
+            post("/schedule", { args: {}, functionPath: "jobs.remind", id: "reminder-42", originUrl: "https://app.test", scheduledFor: now + 5000 }),
+        );
+
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(409);
+
+        await fastForwardToAlarm();
+
+        // The record that fired is the one that was actually scheduled, at its
+        // own time — and the queue is drained, not left holding a phantom entry.
+        expect(scheduler.dispatched.map((record) => record.scheduledFor)).toStrictEqual([now + 1000]);
+        expect(currentAlarm()).toBeNull();
+    });
+
     it("fires only the due job and re-arms setAlarm to the next pending entry", async () => {
         expect.assertions(4);
 
@@ -1310,5 +1338,38 @@ describe("schedulerDO — per-record drain isolation (storage throw)", () => {
         // Settled, so both the header and the re-put claim are gone again.
         expect(state.storageMap.has(`id:${id}`)).toBe(false);
         expect([...state.storageMap.keys()].filter((key) => key.startsWith("t:"))).toHaveLength(0);
+    });
+
+    it("recovers that orphan from the fetch entry point too — the crash left no alarm to recover from", async () => {
+        expect.assertions(5);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "messages.send", scheduledFor: Date.now() - 1000 })));
+
+        // The same eviction as above — but the death happens BEFORE the trailing
+        // `rescheduleAlarm()`, so the alarm the DO would have re-armed was never
+        // written. Recovery reachable only from `alarm()` is therefore recovery
+        // that never runs: nothing will ever deliver one.
+        const claimKey = [...state.storageMap.keys()].find((key) => key.startsWith("t:"));
+
+        state.storageMap.delete(claimKey ?? "");
+        await state.storage.deleteAlarm();
+
+        // A FRESH instance, woken the only way anything can still wake it: a
+        // request. `/status` is a plain read — it schedules nothing.
+        const revived = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const status = await revived.fetch(get("/status"));
+
+        expect(status.status).toBe(200);
+        // The claim is back and an alarm is armed for it, so the runtime will
+        // deliver `alarm()` again on its own.
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("t:"))).toHaveLength(1);
+        await expect(state.storage.getAlarm()).resolves.not.toBeNull();
+
+        await revived.alarm();
+
+        expect(revived.dispatched.map((record) => record.id)).toEqual([id]);
+        expect(state.storageMap.has(`id:${id}`)).toBe(false);
     });
 });

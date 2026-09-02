@@ -58,7 +58,7 @@ const statOrReport = (path: string): Stats | undefined => {
  * ..`) creates, so every directory is visited once by its REAL path: the second
  * arrival at the same target ends that branch instead of recursing forever.
  */
-const listLunoraSourceFiles = (directory: string, accumulator: string[] = [], root: string = directory, visited: Set<string> = new Set()): string[] => {
+const walkLunoraSourceFiles = (directory: string, accumulator: string[], root: string, visited: Set<string>): string[] => {
     let entries: string[];
     let realDirectory: string;
 
@@ -88,7 +88,7 @@ const listLunoraSourceFiles = (directory: string, accumulator: string[] = [], ro
 
         if (info.isDirectory()) {
             if (!SKIPPED_DIRECTORIES.has(entry)) {
-                listLunoraSourceFiles(full, accumulator, root, visited);
+                walkLunoraSourceFiles(full, accumulator, root, visited);
             }
         } else if (info.isFile() && extname(entry) === ".ts" && !isRootSchemaFile(entry, directory, root)) {
             accumulator.push(full);
@@ -97,6 +97,15 @@ const listLunoraSourceFiles = (directory: string, accumulator: string[] = [], ro
 
     return accumulator;
 };
+
+/**
+ * The exported entry point: every discoverer calls this with a directory and
+ * nothing else. {@link walkLunoraSourceFiles}'s accumulator/root/visited stay
+ * unexported because they are recursion state — a caller passing a pre-filled
+ * accumulator or a stale `visited` silently changes which files are discovered,
+ * and an exported signature freezes that hazard into the public API snapshot.
+ */
+const listLunoraSourceFiles = (directory: string): string[] => walkLunoraSourceFiles(directory, [], directory, new Set());
 
 /**
  * Where the worker entry lives, probed relative to the project root when a

@@ -68,10 +68,26 @@ const globalTableColumnsDdl = (tableName: string, definition: SchemaLike["tables
     // what to do. `ensureMigrated` does not cache the rejection, so every
     // request re-runs this; an opaque 500 forever is a bad way to learn a table
     // has too many columns.
-    if (dialect.maxTableColumns !== undefined && total > dialect.maxTableColumns) {
+    const limit = dialect.maxTableColumns;
+
+    if (limit !== undefined && total > limit) {
+        // Exactly one column over is the case that reads as an accusation
+        // rather than a diagnosis: `_version` joined the framework set after
+        // this table was provisioned, so a table that fit at the engine's limit
+        // yesterday is one column over today, and its rows are real. The limit
+        // is hard — no `ALTER` can widen a table already at it — so the
+        // difference between the two cases is worth a sentence: one is "your
+        // schema is too wide", the other is "your data needs moving first".
+        const displacedByRowVersion = total - 1 === limit;
+        const path = `Move one or more fields into a single object field, or split the table — either way the existing rows need a data migration (\`defineMigration\` + \`lunora migrate up\`); there is no in-place path.`;
+
         throw new LunoraError(
             "VALIDATION_ERROR",
-            `@lunora/sql-store: global table "${tableName}" needs ${String(total)} columns, over this engine's ${String(dialect.maxTableColumns)}-column limit — split the table, or move the extra fields into one object field`,
+            `@lunora/sql-store: global table "${tableName}" needs ${String(total)} columns, over this engine's ${String(limit)}-column limit. ${
+                displacedByRowVersion
+                    ? `One of them is "${OCC_VERSION_COLUMN}", the row version every guarded write reads, which caps declared fields at ${String(limit - frameworkColumns.length)}. A table provisioned at ${String(limit)} columns before that column existed cannot be widened to hold it. `
+                    : ""
+            }${path}`,
         );
     }
 

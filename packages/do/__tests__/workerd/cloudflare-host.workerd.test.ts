@@ -16,7 +16,7 @@
  * `acceptWebSocket`, `getTags`) instead of a hand-rolled double — the whole
  * reason this suite lives in the workerd project and not the mocks one.
  *
- * Two contracts are reported as gaps rather than asserted, both honestly:
+ * Three contracts are reported as gaps rather than asserted, all honestly:
  *
  * - **Alarm delivery.** Cloudflare fires an alarm by waking a *separate*
  * `alarm()` invocation, which cannot be observed from inside the shard
@@ -27,6 +27,11 @@
  * platform; the Cloudflare scheduler lives in `@lunora/scheduler`. The suite
  * records the gap. Assembling all four contracts under one TCK run is
  * `@lunora/platform-cloudflare`'s job.
+ * - **Mid-mutation isolation.** The host declares `isolatesByDispatch`, so the
+ * suite skips the leg that reads a shard mid-mutation from "outside". Inside
+ * one Durable Object event there is no outside: `blockConcurrencyWhile` closes
+ * the input gate, so a same-event read shares the open `storage.transaction`
+ * and a second event is never delivered to be read from.
  */
 import type { ConformanceHost } from "@lunora/platform/conformance";
 import { defineHostContractSuite } from "@lunora/platform/conformance/suite";
@@ -81,6 +86,11 @@ const createCloudflareHost = (): ConformanceHost => {
         // `createShardPlatform` performs. A wiring mistake in the root — the
         // wrong storage handle into `kv`, say — fails here, not in production.
         directory: createShardDirectory(env.ECHO as unknown as Parameters<typeof createShardDirectory>[0]),
+        // `runSerialized` is `blockConcurrencyWhile`: the input gate, not the
+        // SQL executor, is where this host keeps concurrent tasks apart. See
+        // the `isolatesByDispatch` note on `ConformanceHost` for what that
+        // costs the isolation leg and what still covers it.
+        isolatesByDispatch: true,
         kv: platform.kv,
         shard: platform.shard,
         socket: platform.sockets,

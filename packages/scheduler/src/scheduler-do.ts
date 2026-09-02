@@ -421,6 +421,16 @@ class SchedulerDO {
     }
 
     public async fetch(request: Request): Promise<Response> {
+        // An orphan is minted by a death DURING dispatch — after the claim
+        // deleted the `t:` entry and before `rescheduleAlarm()` re-armed — so
+        // the instance that comes back has no alarm left to recover from, and
+        // recovering from `alarm()` alone would never run. Every route needs the
+        // recovery anyway: `/list` and `/status` under-report an orphan, and
+        // `armAlarmIfEarlier` on a fresh `/schedule` compares against a clock
+        // derived from `t:` alone. Guarded by `reindexed`, so this is one boolean
+        // read per request after the first.
+        await this.reindexOrphanedRecords();
+
         const url = new URL(request.url);
 
         // `/ws` gates on the Upgrade header rather than the HTTP method, so it
@@ -1162,6 +1172,23 @@ class SchedulerDO {
         return SchedulerDO.json(status);
     }
 
+    /**
+     * Persist (or refresh) a pool's concurrency cap, so the alarm-time gate has
+     * a durable `maxConcurrency` even after the enqueuing client is gone.
+     */
+    private async persistPoolCap(pool: string, requestedMaxConcurrency: number | undefined): Promise<void> {
+        const current = await this.loadPool(pool, requestedMaxConcurrency);
+
+        await this.savePool(pool, {
+            inFlight: current.inFlight,
+            // Preserve the in-flight id set so refreshing the cap on a new
+            // enqueue can't wipe the held-slot bookkeeping (which would let a
+            // later /complete over-release).
+            ...(current.inFlightIds === undefined ? {} : { inFlightIds: current.inFlightIds }),
+            maxConcurrency: SchedulerDO.normalizeConcurrency(requestedMaxConcurrency, current.maxConcurrency),
+        });
+    }
+
     private async handleSchedule(request: Request): Promise<Response> {
         const body = (await request.json().catch(() => undefined)) as ScheduleRequestBody | undefined;
         const target = SchedulerDO.resolveScheduleTarget(body);
@@ -1197,6 +1224,25 @@ class SchedulerDO {
         const instanceName = typeof body.instanceName === "string" && body.instanceName.length > 0 ? body.instanceName : undefined;
         const retry = SchedulerDO.normalizeRetry(body.retry);
         const id = resolveScheduleId(body.id);
+
+        // A caller-supplied id must not land on a job that already exists.
+        // `put` on the `id:` header overwrites, but the `t:` index is keyed by
+        // TIME as well as id, so the old entry survives: the drain then
+        // dispatches the NEW record at the OLD time and deletes the entry it
+        // should have fired at — the job runs early and never runs again.
+        // Refused rather than made a replace: `RunOptions.id` exists so a
+        // deferred schedule can name its own job, and silently retiming someone
+        // else's is the worse failure. Only an id the caller chose can collide
+        // (a minted one is 96 random bits), so this costs one `get` on the
+        // deferred path and nothing on the ordinary one.
+        if (id === body.id && (await this.state.storage.get<ScheduleRecord>(`${HEADER_PREFIX}${id}`)) !== undefined) {
+            return SchedulerDO.error(
+                409,
+                "DUPLICATE_SCHEDULE_ID",
+                `a job with id "${id}" is already scheduled — cancel it first, or schedule under a different id`,
+            );
+        }
+
         const record: ScheduleRecord = {
             // body is parsed from an untrusted request; args may be absent at runtime
             // despite the type, so the ?? fallback is a real guard.
@@ -1213,19 +1259,8 @@ class SchedulerDO {
             ...(workflow === undefined ? {} : { workflow }),
         };
 
-        // Persist (or refresh) the pool's concurrency cap so the alarm-time gate
-        // has a durable maxConcurrency even after the enqueuing client is gone.
         if (pool !== undefined) {
-            const current = await this.loadPool(pool, body.maxConcurrency);
-
-            await this.savePool(pool, {
-                inFlight: current.inFlight,
-                // Preserve the in-flight id set so refreshing the cap on a new
-                // enqueue can't wipe the held-slot bookkeeping (which would let
-                // a later /complete over-release).
-                ...(current.inFlightIds === undefined ? {} : { inFlightIds: current.inFlightIds }),
-                maxConcurrency: SchedulerDO.normalizeConcurrency(body.maxConcurrency, current.maxConcurrency),
-            });
+            await this.persistPoolCap(pool, body.maxConcurrency);
         }
 
         await this.state.storage.put(`${HEADER_PREFIX}${id}`, record);

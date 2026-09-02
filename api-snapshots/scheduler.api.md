@@ -505,6 +505,12 @@ interface WorkpoolOptions extends LunoraSchedulerOptions {
 }
 ```
 
+### `assertScheduleDelay` (const)
+
+```ts
+const assertScheduleDelay: (delayMs: number, surface: string) => void;
+```
+
 ### `assertValidCronExpression` (const)
 
 ```ts

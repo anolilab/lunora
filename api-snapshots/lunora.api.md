@@ -733,10 +733,6 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
-### `ServeStorageObjectOptions` (interface)
-
-Re-exported from `@lunora/server` — signature tracked at its source.
-
 ### `ShapeDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -814,6 +810,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `StorageRulesOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageServeAuthorizer` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1740,6 +1740,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `TabCoordinator` (class)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `TransportError` (class)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -5443,10 +5447,6 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
-### `ServeStorageObjectOptions` (interface)
-
-Re-exported from `@lunora/server` — signature tracked at its source.
-
 ### `ShapeDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5524,6 +5524,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `StorageRulesOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageServeAuthorizer` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

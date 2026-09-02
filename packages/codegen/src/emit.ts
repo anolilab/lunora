@@ -5251,7 +5251,9 @@ ${schema.tables
         : "";
 
     // The emitted `scheduler?:` field on the shard config below is `unknown`, and
-    // the `as SchedulerLike` at each of its four use sites is the cost of that.
+    // the `as SchedulerLike` at each of its three remaining use sites is the cost
+    // of that (the deferral facade's is gone: `withDeferredSchedules` is generic
+    // and hands back the type it was given).
     // It is not laziness: `@lunora/scheduler`'s public `Scheduler.runAfter`/`runAt`
     // are generic with a REQUIRED `args` where `SchedulerLike` takes it optional,
     // so a function needing three parameters is not assignable to one callable
@@ -5525,7 +5527,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
          * scheduler flush.
          */
         private async runMutationTransaction<T>(ctx: unknown, work: () => Promise<T>): Promise<T> {
-            const settleSchedules = beginDeferredSchedules(ctx);
+            const settleSchedules = beginDeferredSchedules(ctx as { scheduler?: unknown });
 
             if (this.isInTransaction()) {
                 try {
@@ -5942,7 +5944,7 @@ ${vectorsBuild}${aiBuild}${everyContextBuild}${containersBuild}${workflowsBuild}
             // while a transaction is (see \`runMutationTransaction\`).
             //
             // Wrapped OUTSIDE the read-stamping facade so \`get\`/\`list\` stay stamped.
-            const scheduler = (contextKind === "mutation" || contextKind === "action" ? withDeferredSchedules(schedulerBase) : schedulerBase) as SchedulerLike;
+            const scheduler = contextKind === "mutation" || contextKind === "action" ? withDeferredSchedules(schedulerBase) : schedulerBase;
             // Build the storage adapter once and share it between \`ctx.storage\`
             // and \`ctx.db.system._storage\` so both read the same R2 binding. The
             // \`storageStub\` fallback satisfies SystemReaderStorageLike structurally

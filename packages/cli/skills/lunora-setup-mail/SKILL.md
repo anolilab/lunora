@@ -106,7 +106,7 @@ There is no `client.action("mail/sendEmail", …)` path, and adding one is the
 mistake this item exists to prevent: a general-purpose mailer that lets the
 caller pick recipient, subject and body is an open relay for phishing through
 your verified domain. If you need a client-callable send, write a
-*purpose-specific* public `action` that takes only safe business inputs (e.g.
+_purpose-specific_ public `action` that takes only safe business inputs (e.g.
 `{ orderId }`), checks `ctx.auth`/RBAC, derives the recipient server-side,
 rate-limits it (`@lunora/ratelimit`), and calls `internal.mail.sendEmail`.
 

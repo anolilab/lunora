@@ -43,12 +43,12 @@ const STATUS_BY_REASON: Record<RateLimitReason, { code: string; status: number }
     rate: { code: "TOO_MANY_REQUESTS", status: 429 },
 };
 
-const defaultMessage = (name: string, reason: RateLimitReason, retryAfter: number | undefined): string => {
+const defaultMessage = (name: string, reason: RateLimitReason, retryAfterMs: number | undefined): string => {
     if (reason === "deny") {
         return `request denied for "${name}"`;
     }
 
-    return retryAfter === undefined ? `rate limit "${name}" exceeded` : `rate limit "${name}" exceeded; retry after ${String(retryAfter)}ms`;
+    return retryAfterMs === undefined ? `rate limit "${name}" exceeded` : `rate limit "${name}" exceeded; retry after ${String(retryAfterMs)}ms`;
 };
 
 /**
@@ -77,7 +77,7 @@ const resolveKey = <Context>(name: string, context: Context, key: RateLimitMiddl
  * Procedure middleware that enforces a named rate limit before the handler
  * runs. Attach it with `.use()`. On rejection it throws a structural
  * `LunoraError` (`TOO_MANY_REQUESTS`/429, or `FORBIDDEN`/403 for deny-list
- * hits) carrying `retryAfter` in milliseconds — the runtime maps it to the
+ * hits) carrying `data.retryAfterMs` — the runtime maps it to the
  * matching RPC/HTTP status without any import of `@lunora/server` at runtime.
  *
  * **Failure policy:** if resolving or invoking the limiter throws for a genuine
@@ -126,11 +126,17 @@ const rateLimit =
         if (!status.ok) {
             const reason = status.reason ?? "rate";
             const mapped = STATUS_BY_REASON[reason];
-            const retryAfter = Number.isFinite(status.retryAfter) ? Math.ceil(status.retryAfter) : undefined;
+            const retryAfterMs = Number.isFinite(status.retryAfter) ? Math.ceil(status.retryAfter) : undefined;
 
-            throw new LunoraError(mapped.code, options.message ?? defaultMessage(name, reason, retryAfter), {
+            throw new LunoraError(mapped.code, options.message ?? defaultMessage(name, reason, retryAfterMs), {
                 status: mapped.status,
-                data: retryAfter === undefined ? undefined : { retryAfter },
+                // `retryAfterMs` — the key `protocol/fixtures/rpc.json`, the
+                // reference client and all eight SDK ports read. `TOO_MANY_REQUESTS`
+                // is a transient replay code, so a durable write denied here is
+                // re-queued and only the hint schedules the next attempt: sending
+                // it under any other name strands the write until the outbox
+                // evicts it.
+                data: retryAfterMs === undefined ? undefined : { retryAfterMs },
             });
         }
 

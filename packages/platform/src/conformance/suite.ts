@@ -121,11 +121,36 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 });
             });
 
-            it("never lets a task outside a mutation observe its uncommitted writes", async () => {
-                expect.assertions(3);
+            it("never lets a task outside a mutation observe its uncommitted writes", async (context) => {
+                // Not a fixed count: a host that defers the dispatch makes three
+                // assertions, one that refuses makes a fourth on the refusal.
+                expect.hasAssertions();
 
                 await withHost(async (host) => {
+                    if (host.isolatesByDispatch === true) {
+                        // The observation is unrepresentable here, not merely
+                        // unimplemented — see the `isolatesByDispatch` note on
+                        // `ConformanceHost` for the two measurements. What still covers the
+                        // property: the runtime's own input gate (workerd's
+                        // test, not the adapter's), and "rolls back a
+                        // transaction that throws" above, which pins that
+                        // nothing uncommitted survives on every host.
+                        context.skip(`${name} isolates concurrent tasks at the dispatch boundary, which no in-isolate read can stand in for`);
+
+                        return;
+                    }
+
                     host.shard.sql.exec("CREATE TABLE IF NOT EXISTS isolation_test (id INTEGER PRIMARY KEY)");
+
+                    // Resolved from inside the transaction, the instant the
+                    // uncommitted row exists. A `sleep` racing the mutation's
+                    // own `sleep` would be both non-deterministic and, on a
+                    // gated host, a deadlock: the earlier-due continuation
+                    // head-of-line blocks the later one behind the closed gate.
+                    let inserted!: () => void;
+                    const uncommitted = new Promise<void>((resolve) => {
+                        inserted = resolve;
+                    });
 
                     // The engine's mutation shape: `runSerialized(() => transaction(work))`,
                     // with a real await inside — fs-backed object storage, an
@@ -133,6 +158,7 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                     const mutation = host.shard.runSerialized(async () =>
                         host.shard.transaction(async () => {
                             host.shard.sql.exec("INSERT INTO isolation_test (id) VALUES (1)");
+                            inserted();
 
                             await sleep(20);
 
@@ -140,26 +166,38 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                         }),
                     );
 
-                    await sleep(5);
+                    await uncommitted;
 
                     // A query dispatch is NOT wrapped in `runSerialized` — only
                     // mutations are — so this is what the shard actually does
-                    // while a mutation is mid-await. On Cloudflare the input
-                    // gate defers the whole dispatch until the gate releases; a
-                    // host whose SQL executor is synchronous cannot defer, so
-                    // refusing is the other conformant answer. What no host may
-                    // do is hand back the row: `ShardHost` guarantee 2 is that
-                    // no partial writes are observable, and these are about to
-                    // roll back.
+                    // while a mutation is mid-await. A host whose SQL executor
+                    // is synchronous cannot defer the read, so refusing is the
+                    // conformant answer. What no host may do is hand back the
+                    // row: `ShardHost` guarantee 2 is that no partial writes are
+                    // observable, and these are about to roll back.
                     let observed: unknown[];
+                    let refusal: unknown;
 
                     try {
                         observed = host.shard.sql.exec("SELECT id FROM isolation_test").toArray();
-                    } catch {
+                    } catch (error) {
                         observed = [];
+                        refusal = error;
                     }
 
                     expect(observed).toStrictEqual([]);
+
+                    // Refusing is conformant. Refusing with a bare `Error` is
+                    // not: the transport can only classify what it recognizes,
+                    // so an uncatalogued throw redacts to an `INTERNAL` 500 that
+                    // no client retries — and this read failed only because it
+                    // arrived while a mutation was mid-await, which the very
+                    // next attempt will not. A host that refuses must refuse
+                    // with the retryable 503 code the runtime and client already
+                    // treat as "no verdict, try again".
+                    if (refusal !== undefined) {
+                        expect(refusal).toMatchObject({ code: "SHARD_UNAVAILABLE", status: 503, type: "VisulimaError" });
+                    }
 
                     await expect(mutation).rejects.toThrow("boom");
                     expect(host.shard.sql.exec("SELECT id FROM isolation_test").toArray()).toStrictEqual([]);

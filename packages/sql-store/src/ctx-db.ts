@@ -1183,6 +1183,30 @@ const throwIfRowTooBig = (dialect: SqlDialect, error: unknown, table: string): v
     );
 };
 
+/**
+ * Remap a write's raw engine error to the coded one a caller can act on, then
+ * rethrow — the single `catch` body every write path shares.
+ *
+ * A UNIQUE-index breach is a {@link ConflictError} (`CONFLICT`, 409): the caller
+ * lost a race or wrote a duplicate, both of which they can answer. A row over
+ * the engine's ceiling is {@link throwIfRowTooBig}'s `PAYLOAD_TOO_LARGE`.
+ * Anything else is rethrown untouched — guessing at an unrecognised engine error
+ * is how a redacted 500 becomes a wrong 409.
+ *
+ * Takes `dialect` rather than a pre-destructured `isUniqueViolation`, matching
+ * `throwIfRowTooBig`: the two used to disagree, which is why the identical catch
+ * body could not simply be lifted out.
+ */
+const mapWriteError = (dialect: SqlDialect, error: unknown, table: string): never => {
+    if (dialect.isUniqueViolation(error)) {
+        throw new ConflictError(`unique constraint violation on "${table}"`, "unique");
+    }
+
+    throwIfRowTooBig(dialect, error, table);
+
+    throw error;
+};
+
 const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     const { crossShardCounter, crossShardReader, exec, maxRelationKeys, schema } = options;
 
@@ -1191,7 +1215,6 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     // locals shadow the module-level SQLite helpers/imports. `@lunora/hyperdrive/global`
     // injects a Postgres/MySQL dialect; absent one, this is the SQLite default.
     const { dialect } = options;
-    const { isUniqueViolation } = dialect;
     // Value encode stays the shared SQLite codec (`serializeColumnValue`) on every
     // engine — storage is SQLite-shaped everywhere. Identifier quoting and
     // placeholder numbering are drizzle's job (rendered per-engine via renderSql),
@@ -1971,13 +1994,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         try {
             await queryRun(exec, dialect, query);
         } catch (error) {
-            if (isUniqueViolation(error)) {
-                throw new ConflictError(`unique constraint violation on "${table}"`, "unique");
-            }
-
-            throwIfRowTooBig(dialect, error, table);
-
-            throw error;
+            mapWriteError(dialect, error, table);
         }
     };
 
@@ -2070,13 +2087,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 }
             }
         } catch (error) {
-            if (isUniqueViolation(error)) {
-                throw new ConflictError(`unique constraint violation on "${table}"`, "unique");
-            }
-
-            throwIfRowTooBig(dialect, error, table);
-
-            throw error;
+            mapWriteError(dialect, error, table);
         }
     };
 
