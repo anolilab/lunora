@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -69,6 +69,26 @@ describe("handleSchemaEditRequest", () => {
         expect(readFileSync(schemaPath, "utf8")).toContain("v.optional(v.number())");
         // The returned schema reflects the new column.
         expect(body.tables.find((table) => table.name === "todos")?.columns.some((column) => column.name === "due")).toBe(true);
+    });
+
+    it("regenerates with the host's apiSpec instead of the default", () => {
+        expect.assertions(2);
+
+        writeSchema(SCHEMA);
+
+        // Codegen writes the spec its mode names and REMOVES the other, so an edit
+        // that defaulted to "openapi" deleted the `openrpc.json` an
+        // `apiSpec: "openrpc"` project had just generated — and the next watcher
+        // run put it back, once per edit.
+        const result = handleSchemaEditRequest({
+            apiSpec: "openrpc",
+            body: { column: "due", kind: "addOptionalColumn", table: "todos", validator: "v.number()" },
+            method: "POST",
+            projectRoot,
+        });
+
+        expect(result.status).toBe(200);
+        expect(existsSync(join(projectRoot, "lunora", "_generated", "openrpc.json"))).toBe(true);
     });
 
     it("returns 409 needsMigration on a destructive POST and does NOT write the file", () => {

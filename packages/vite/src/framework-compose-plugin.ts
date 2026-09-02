@@ -1,6 +1,7 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
+import { projectUsesUmbrella } from "@lunora/config";
 import { LunoraError } from "@lunora/errors";
 import type { Plugin } from "vite";
 
@@ -112,27 +113,6 @@ const isAutoComposable = (context: LunoraPluginContext): boolean => {
 };
 
 /**
- * Whether the project depends on the unscoped `lunorash` umbrella. When it does,
- * the composed worker must import the runtime through the umbrella subpath
- * (`lunorash/runtime`) rather than the bare `@lunora/runtime`: a umbrella-only
- * install — the default for the starter templates — never installs the granular
- * `@lunora/runtime`, so the bare specifier is unresolvable and the dev server
- * dies with `Cannot find module '@lunora/runtime' imported from
- * 'virtual:lunora/worker'`. Mirrors codegen's detection
- * (`run-codegen`: `dependencies.has("lunorash")`).
- */
-const projectUsesUmbrella = (projectRoot: string): boolean => {
-    try {
-        const pkg = JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf8")) as Record<string, Record<string, string> | undefined>;
-
-        return ["dependencies", "devDependencies", "peerDependencies"].some((field) => pkg[field]?.["lunorash"] !== undefined);
-    } catch {
-        // No readable package.json → assume granular `@lunora/*` (backward-compatible default).
-        return false;
-    }
-};
-
-/**
  * The `_generated/` modules whose exported classes wrangler validates a
  * `class_name` against: container Durable Objects, workflow entrypoints, and
  * agent (workflow) entrypoints — the same three kinds `reconcile-bindings`
@@ -180,7 +160,8 @@ const buildWorkerEntrySource = (
     // resolve `C:/…` ids fine, so the emitted imports are valid in all environments.
     const base = generatedImportBase.replaceAll("\\", "/");
 
-    // Umbrella-aware runtime import (see `projectUsesUmbrella`): the generated
+    // Umbrella-aware runtime import (`@lunora/config`'s `projectUsesUmbrella`,
+    // the same detector the policy scaffolder writes imports with): the generated
     // `_generated/*` already use `lunorash/*` for umbrella projects, so the composed
     // worker must match or the bare `@lunora/runtime` won't resolve.
     const runtimeModule = useUmbrella ? "lunorash/runtime" : "@lunora/runtime";
@@ -257,7 +238,9 @@ export default {
  * resolves/loads nothing. `cloudflare: false` does NOT disable the virtual
  * entry — it only means "don't add the Cloudflare Vite plugin a second time"
  * (the user supplied it themselves); the composed worker must still be
- * resolvable so the user-supplied CF plugin can find the wrangler `main`.
+ * resolvable so the user-supplied CF plugin can find the wrangler `main`. The
+ * vinext template depends on exactly that, so making this plugin honour the
+ * option would break it.
  */
 export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, context: LunoraPluginContext): Plugin => {
     // Virtual modules have no real filesystem path, so relative specifiers like
