@@ -350,6 +350,15 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Storage signed URL not configured";
     };
+    readonly RAG_DIMENSION_MISMATCH: {
+        readonly hint: readonly [
+            "A stored vector and the query embedding have different widths, so they cannot be compared.",
+            "",
+            "This is what changing a RAG index's `embeddingModel` (or a provider's `dimensions` option) without reindexing looks like. Either put the previous model back, or reindex the namespace under the new one — bump `embeddingModelVersion` so the index rebuilds instead of mixing widths."
+        ];
+        readonly status: 409;
+        readonly title: "Embedding dimension mismatch";
+    };
     readonly VECTORS_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Vector index introspector not configured";

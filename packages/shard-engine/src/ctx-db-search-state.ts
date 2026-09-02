@@ -28,6 +28,8 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-search-state" mirrors its parent "ctx-db.ts" (the established public module name). */
 
 import type { SearchBackfillState } from "@lunora/search-core";
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
+import { searchIndexField } from "@lunora/search-core";
 import { sql as dsql } from "drizzle-orm";
 
 // Type-only import for the structural surface threaded in — a value import
@@ -128,14 +130,31 @@ const readSearchBackfillState = (sql: SqlExec, companion: string): SearchBackfil
  * takes rows back out (the analyzer rebuild rewrites them in place), so the flag
  * only ever rises — which is what lets a rebuild that has cleared `done` still
  * be told apart from a first walk.
+ *
+ * The one thing that BREAKS the latch is re-pointing the index at another
+ * FIELD. The latch's whole justification is that a rebuilding companion still
+ * holds an answer about the column that was asked for, just under older rules.
+ * After a field change it does not: every stored row holds the text of the
+ * abandoned column, so a latched `covered` had the read path serve confidently
+ * wrong matches for the whole re-walk (500 rows per read on this plane). Only
+ * the FIELD half of the profile is compared, so an analyzer-version or language
+ * bump keeps the latch exactly as before.
  */
 const writeSearchBackfillState = (sql: SqlExec, companion: string, cursor: string | undefined, done: boolean, profile: string): void => {
     // eslint-disable-next-line unicorn/no-null -- SQL bind value: "no page has run yet" is a NULL column, not undefined
     const cursorValue = cursor ?? null;
+    const recorded = readSearchBackfillState(sql, companion).profile;
+    const fieldChanged = recorded !== undefined && searchIndexField(recorded) !== searchIndexField(profile);
+    // `MAX(...)` latches; `excluded.covered` (which is `done`) replaces. Only the
+    // FIRST page of a field-change rebuild sees a differing recorded profile —
+    // from the second page on, the recorded profile is already the new one.
+    const coveredValue = fieldChanged
+        ? dsql`excluded.${dsql.identifier("covered")}`
+        : dsql`MAX(${dsql.identifier(SEARCH_STATE_TABLE)}.${dsql.identifier("covered")}, excluded.${dsql.identifier("covered")})`;
 
     runDrizzle(
         sql,
-        dsql`INSERT INTO ${dsql.identifier(SEARCH_STATE_TABLE)} (${dsql.identifier("companion")}, ${dsql.identifier("cursor")}, ${dsql.identifier("done")}, ${dsql.identifier("profile")}, ${dsql.identifier("covered")}) VALUES (${companion}, ${cursorValue}, ${done ? 1 : 0}, ${profile}, ${done ? 1 : 0}) ON CONFLICT (${dsql.identifier("companion")}) DO UPDATE SET ${dsql.identifier("cursor")} = excluded.${dsql.identifier("cursor")}, ${dsql.identifier("done")} = excluded.${dsql.identifier("done")}, ${dsql.identifier("profile")} = excluded.${dsql.identifier("profile")}, ${dsql.identifier("covered")} = MAX(${dsql.identifier(SEARCH_STATE_TABLE)}.${dsql.identifier("covered")}, excluded.${dsql.identifier("covered")})`,
+        dsql`INSERT INTO ${dsql.identifier(SEARCH_STATE_TABLE)} (${dsql.identifier("companion")}, ${dsql.identifier("cursor")}, ${dsql.identifier("done")}, ${dsql.identifier("profile")}, ${dsql.identifier("covered")}) VALUES (${companion}, ${cursorValue}, ${done ? 1 : 0}, ${profile}, ${done ? 1 : 0}) ON CONFLICT (${dsql.identifier("companion")}) DO UPDATE SET ${dsql.identifier("cursor")} = excluded.${dsql.identifier("cursor")}, ${dsql.identifier("done")} = excluded.${dsql.identifier("done")}, ${dsql.identifier("profile")} = excluded.${dsql.identifier("profile")}, ${dsql.identifier("covered")} = ${coveredValue}`,
     );
 };
 

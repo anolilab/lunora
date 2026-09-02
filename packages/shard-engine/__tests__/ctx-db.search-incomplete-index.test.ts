@@ -93,6 +93,20 @@ const reanalyzedSchema: SchemaLike = {
     },
 };
 
+/**
+ * The same index re-POINTED at another column. Unlike a language change this
+ * makes every stored row an answer about a column the index no longer covers.
+ */
+const refieldedSchema: SchemaLike = {
+    tables: {
+        docs: {
+            indexes: [],
+            searchIndexes: [{ field: "title", name: "by_body" }],
+            shape: { body: { kind: "string" }, title: { kind: "string" } },
+        },
+    },
+};
+
 let harness: ReturnType<typeof createSqliteExec>;
 
 /** A writer over `schema`, with a deterministic clock/ids so ordering is stable across runs. */
@@ -121,11 +135,12 @@ const writerFor = (schema: SchemaLike): DatabaseWriterLike => {
 /** How many rows the companion currently holds — the index's coverage, independent of any analyzer. */
 const indexedRows = (): number => Number(harness.raw(`SELECT COUNT(*) AS count FROM "${ftsTableName("docs", "by_body")}"`)[0]?.["count"]);
 
-/** Titles matching `term`, read the way an app would, under `schema`'s analysis. */
+/** Titles matching `term`, read the way an app would, under `schema`'s analysis and declared field. */
 const searchTitles = async (term: string, schema: SchemaLike = indexedSchema): Promise<unknown[]> => {
+    const { field } = schema.tables["docs"]!.searchIndexes![0]!;
     const results = await writerFor(schema)
         .query("docs")
-        .withSearchIndex("by_body", (q) => q.search("body", term))
+        .withSearchIndex("by_body", (q) => q.search(field, term))
         .collect();
 
     return results.map((document) => document["title"]);
@@ -217,6 +232,27 @@ describe("search over a still-backfilling index", () => {
             backfillSearchIndexes(harness.sql, reanalyzedSchema);
 
             await expect(searchTitles("needle", reanalyzedSchema)).resolves.toStrictEqual([`t${String(NEW_NEEDLE)}`, `t${String(OLD_NEEDLE)}`]);
+        });
+
+        it("refuses again while a re-POINTED index rebuilds, instead of serving the abandoned column", async () => {
+            expect.assertions(3);
+
+            await seedThenDeployIndex();
+            backfillSearchIndexes(harness.sql, indexedSchema);
+
+            // A COMPLETE index over `body`, then a deploy that points it at
+            // `title`. The companion still holds a row per document — but the text
+            // in those rows is the body, so `covered` latching on the finished
+            // `body` walk had the reader answer a `title` search with `body`
+            // matches for the whole re-walk. That is not stale analysis; it is a
+            // different column's answer.
+            runShardMigrations(harness.sql, refieldedSchema);
+
+            expect(indexedRows()).toBe(ROW_COUNT);
+            // `needle` is in the BODY of two rows and in no title at all, so this
+            // answered a title search with body matches from past the re-walk's cursor.
+            await expect(searchTitles("needle", refieldedSchema)).rejects.toThrow(/still backfilling/u);
+            expect(searchIndexCoversTable(harness.sql, "docs", refieldedSchema.tables["docs"]!.searchIndexes![0]!)).toBe(false);
         });
 
         it("still refuses when the profile changes before the FIRST walk ever finished", async () => {

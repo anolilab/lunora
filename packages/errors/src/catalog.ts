@@ -253,6 +253,15 @@ export const ERROR_CATALOG = {
     STORAGE_OBJECT_NOT_FOUND: { status: 404, title: "Storage object not found" },
     STORAGE_UPLOAD_NOT_CONFIGURED: { status: 400, title: "Storage upload not configured" },
     STORAGE_URL_NOT_CONFIGURED: { status: 400, title: "Storage signed URL not configured" },
+    RAG_DIMENSION_MISMATCH: {
+        hint: [
+            "A stored vector and the query embedding have different widths, so they cannot be compared.",
+            "",
+            "This is what changing a RAG index's `embeddingModel` (or a provider's `dimensions` option) without reindexing looks like. Either put the previous model back, or reindex the namespace under the new one — bump `embeddingModelVersion` so the index rebuilds instead of mixing widths.",
+        ],
+        status: 409,
+        title: "Embedding dimension mismatch",
+    },
     VECTORS_NOT_CONFIGURED: { status: 400, title: "Vector index introspector not configured" },
     VECTOR_QUERY_UNSUPPORTED: { status: 400, title: "Vector index querying not enabled" },
     WORKFLOWS_NOT_CONFIGURED: { status: 501, title: "Workflows not configured" },

@@ -44,6 +44,29 @@ import { createSearchAnalyzer } from "./analyzer";
 export const searchIndexProfile = (index: { field: string; language?: string }): string => `${createSearchAnalyzer(index.language).profile}:${index.field}`;
 
 /**
+ * The FIELD half of a recorded profile — everything after the analyzer's `:`,
+ * minus any backend layout suffix a backend appended with `/`.
+ *
+ * Read back rather than re-derived because the two halves of a profile mean
+ * different things to a REBUILD in progress. An analyzer change leaves every
+ * stored row holding the right column's text under older rules — stale, but an
+ * answer about the column that was asked for — so the read path is allowed to
+ * keep serving it while the re-walk runs. A FIELD change does not: every stored
+ * row holds the text of the column the index was just pointed AWAY from, so
+ * serving it is a confidently wrong answer about a different column, for the
+ * whole walk. Told apart here so both planes decide it the same way.
+ *
+ * Neither an analyzer profile (`<lang>-v<n>`) nor a field (a bare SQL
+ * identifier) can contain `:` or `/`, so the split is unambiguous.
+ */
+export const searchIndexField = (profile: string): string => {
+    const afterAnalyzer = profile.slice(profile.indexOf(":") + 1);
+    const layoutAt = afterAnalyzer.lastIndexOf("/");
+
+    return layoutAt === -1 ? afterAnalyzer : afterAnalyzer.slice(0, layoutAt);
+};
+
+/**
  * How far a companion's backfill has progressed, and under which analysis.
  * Declared here rather than beside either engine's state table: both record the
  * same three facts, and the decisions made from them are the shared policy
