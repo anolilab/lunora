@@ -25,7 +25,7 @@ const MAX_TOOL_OUTPUT_CHARS = 4000;
  *
  * Its length comes OUT of the cap rather than being added on top: the marker is
  * part of the value that gets persisted and re-injected, so slicing to the cap
- * and then appending persisted `MAX_TOOL_OUTPUT_CHARS + 13` characters — an
+ * and then appending would persist the cap plus this marker's own length — an
  * overrun, on every turn, of exactly the thing this module exists to bound.
  */
 const TRUNCATION_MARKER = "… [truncated]";

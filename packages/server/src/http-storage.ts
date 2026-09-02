@@ -176,18 +176,20 @@ const INLINE_SAFE_CONTENT_TYPES: ReadonlySet<string> = new Set([
  * attachment` — an uploader who pinned `text/html` or `image/svg+xml` into the
  * signed PUT gets a download, not a same-origin script.
  */
-const storageObjectHeaders = (object: Omit<StorageObjectBody, "body">): Record<string, string> => {
+const storageObjectHeaders = (object: Omit<StorageObjectBody, "body">, cacheControl: string): Record<string, string> => {
     const rawContentType = object.httpMetadata?.contentType;
     const contentType = rawContentType !== undefined && isSafeHeaderValue(rawContentType) ? rawContentType : "application/octet-stream";
     const headers: Record<string, string> = {
         "accept-ranges": "bytes",
-        // Every response this helper produces passed a MANDATORY per-request
-        // `authorize` gate keyed on the caller's session or signature, so the
-        // bytes are private to that identity. Without `no-store` the browser
-        // (and any shared proxy) may keep them and replay the cached copy after
-        // a logout or an account switch — a second identity reading the first
-        // one's object with `authorize` never called again.
-        "cache-control": "no-store",
+        // Defaults to `no-store` because every response this helper produces
+        // passed a MANDATORY per-request `authorize` gate keyed on the caller's
+        // session or signature, so the bytes are private to that identity.
+        // Without it the browser (and any shared proxy) may keep them and replay
+        // the cached copy after a logout or an account switch — a second
+        // identity reading the first one's object with `authorize` never called
+        // again. An app fronting a genuinely public bucket overrides it; see
+        // `serveStorageObject`'s `cacheControl`.
+        "cache-control": cacheControl,
         "content-type": contentType,
         etag: toHttpEtag(object.etag),
         "x-content-type-options": "nosniff",
@@ -221,7 +223,7 @@ const storageObjectHeaders = (object: Omit<StorageObjectBody, "body">): Record<s
 const rangeDegradesToWholeObject = (header: null | string): boolean => parseRange(header, 0).kind === "full";
 
 /** The whole object as a `200`, streamed from a single `download()`. */
-const serveWholeStorageObject = async (context: ContextWithStorage, key: string): Promise<Response> => {
+const serveWholeStorageObject = async (context: ContextWithStorage, key: string, cacheControl: string): Promise<Response> => {
     const object = await context.storage.download(key);
 
     if (!object) {
@@ -229,7 +231,7 @@ const serveWholeStorageObject = async (context: ContextWithStorage, key: string)
     }
 
     return new Response(object.body, {
-        headers: { ...storageObjectHeaders(object), "content-length": String(object.size) },
+        headers: { ...storageObjectHeaders(object, cacheControl), "content-length": String(object.size) },
         status: 200,
     });
 };
@@ -301,8 +303,22 @@ const isServeAuthorized = async (authorize: StorageServeAuthorizer, key: string,
  * streams straight from a single `download()`. For very
  * large objects a signed URL (`ctx.storage.getSignedUrl`) is still cheaper since
  * the client then ranges against R2/CDN directly with no Worker hop.
+ *
+ * `cacheControl` defaults to `no-store`, which is right whenever `authorize`
+ * scopes the bytes to an identity. It is a parameter rather than something
+ * derived from `authorize` because a stub returning `true` during development
+ * would then silently publish a cache. An app fronting a genuinely public
+ * bucket passes its own value; `content-disposition` and `nosniff` stay
+ * unconditional either way. Note the default also defeats conditional
+ * revalidation, so the `etag` computed here can never answer a 304.
  */
-const serveStorageObject = async (context: ContextWithStorage, key: string, request: Request, authorize: StorageServeAuthorizer): Promise<Response> => {
+const serveStorageObject = async (
+    context: ContextWithStorage,
+    key: string,
+    request: Request,
+    authorize: StorageServeAuthorizer,
+    cacheControl = "no-store",
+): Promise<Response> => {
     if (!(await isServeAuthorized(authorize, key, request))) {
         // No reason, no distinction from a missing object's 404 shape beyond the
         // status: a precise answer here is a signing / existence oracle.
@@ -316,7 +332,7 @@ const serveStorageObject = async (context: ContextWithStorage, key: string, requ
     // look up first — and paying for a `head()` here would only add a round trip
     // and a window for the object to vanish between the two reads.
     if (rangeDegradesToWholeObject(rangeHeader)) {
-        return serveWholeStorageObject(context, key);
+        return serveWholeStorageObject(context, key, cacheControl);
     }
 
     // A range has to be resolved against the object's size before it can be
@@ -348,7 +364,7 @@ const serveStorageObject = async (context: ContextWithStorage, key: string, requ
     // Unreachable: the whole-object check at the top already answered this, and
     // its answer does not depend on `size`. Kept so the union stays exhaustive.
     if (range.kind === "full") {
-        return serveWholeStorageObject(context, key);
+        return serveWholeStorageObject(context, key, cacheControl);
     }
 
     const length = range.end - range.start + 1;
@@ -365,7 +381,7 @@ const serveStorageObject = async (context: ContextWithStorage, key: string, requ
     // pre-existing race either way — this at least keeps the header set coherent.)
     return new Response(slice.body, {
         headers: {
-            ...storageObjectHeaders(metadata),
+            ...storageObjectHeaders(metadata, cacheControl),
             "content-length": String(length),
             "content-range": `bytes ${String(range.start)}-${String(range.end)}/${String(metadata.size)}`,
         },

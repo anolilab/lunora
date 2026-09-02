@@ -3178,7 +3178,7 @@ const rls: <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray
 ### `serveStorageObject` (const)
 
 ```ts
-const serveStorageObject: (context: ContextWithStorage, key: string, request: Request, authorize: StorageServeAuthorizer) => Promise<Response>;
+const serveStorageObject: (context: ContextWithStorage, key: string, request: Request, authorize: StorageServeAuthorizer, cacheControl?: string) => Promise<Response>;
 ```
 
 ### `storageRules` (const)

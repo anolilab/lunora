@@ -215,6 +215,24 @@ describe("serveStorageObject — response hardening", () => {
         expect(whole.headers.get("cache-control")).toBe("no-store");
         expect(partial.headers.get("cache-control")).toBe("no-store");
     });
+
+    it("lets an app fronting a public bucket override the default, on both representations", async () => {
+        expect.assertions(4);
+
+        // `no-store` also defeats conditional revalidation, so the `etag` this
+        // helper computes can never produce a 304 and every `<video>` seek
+        // re-runs the R2 read. An app whose `authorize` is `() => true` has
+        // declared the bytes are not identity-scoped and may say so.
+        const { ctx } = ctxWith(BODY, { contentType: "image/png" });
+        const whole = await serveStorageObject(ctx, "k", new Request("https://x/k"), ALLOW, "public, max-age=3600");
+        const partial = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=2-5" } }), ALLOW, "public, max-age=3600");
+
+        expect(whole.headers.get("cache-control")).toBe("public, max-age=3600");
+        expect(partial.headers.get("cache-control")).toBe("public, max-age=3600");
+        // The protections that are not about caching stay unconditional.
+        expect(whole.headers.get("x-content-type-options")).toBe("nosniff");
+        expect(partial.headers.get("x-content-type-options")).toBe("nosniff");
+    });
 });
 
 describe("serveStorageObject", () => {
