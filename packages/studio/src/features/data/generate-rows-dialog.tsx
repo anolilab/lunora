@@ -189,7 +189,9 @@ const GenerateRowsDialog = ({ columns, fkPools, onClose, onInsertRows, table }: 
 
             {blockedFkColumns.length > 0 && (
                 <p className="text-xs text-destructive" data-testid="gen-rows-blocked" role="alert">
-                    {t("Cannot generate rows: {cols} reference tables with no rows. Seed those tables first.", { cols: blockedFkColumns.join(", ") })}
+                    {t("Cannot generate rows: these columns reference tables with no rows: {cols}. Seed those tables first.", {
+                        cols: blockedFkColumns.join(", "),
+                    })}
                 </p>
             )}
 

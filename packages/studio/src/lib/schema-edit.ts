@@ -40,10 +40,13 @@ const applyEdit = async (edit: AdditiveEdit): Promise<SchemaEditResult> => {
         body: JSON.stringify(edit),
         // `Content-Type: application/json` is the one header the host's
         // `csrfRejectionReason` guard actually requires on a state-changing
-        // request: it is non-simple, so a cross-origin form/text POST is
-        // preflighted (and the preflight gets a 403 with no CORS headers). The
-        // guard's other layer is the request's own `Sec-Fetch-Site` / `Origin`;
-        // no custom header is checked, and the sibling seed client sends none.
+        // request. That makes this `fetch` a non-simple request, so cross-origin
+        // it is preflighted (and the preflight gets a 403 with no CORS headers).
+        // The forms of cross-origin POST that are NOT preflighted — an HTML form
+        // submission, or a `text/plain` fetch — cannot set `application/json` at
+        // all, so they never satisfy the guard. Its other layer is the request's
+        // own `Sec-Fetch-Site` / `Origin`; no custom header is checked, and the
+        // sibling seed client sends none.
         headers: { "Content-Type": "application/json" },
         method: "POST",
     });
