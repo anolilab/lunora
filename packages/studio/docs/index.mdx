@@ -70,17 +70,17 @@ The `<Studio>` shell takes a few host-controlled switches worth knowing:
 The icon rail has **nine domains**, top to bottom, with Settings pinned to the
 bottom. Each owns a set of pages:
 
-| Domain            | Pages                                                                                                               |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------- |
-| **Overview**      | Home · Dashboards                                                                                                   |
-| **Database**      | Data · SQL editor · Schema · Migrations · Vectors · Time Travel · Export / Import                                   |
-| **Functions**     | Functions · API · Workflows · Queues · Containers                                                                   |
-| **Auth**          | Users · Organizations · Sessions · Configuration                                                                    |
-| **Storage**       | Files · Access Rules · KV                                                                                           |
-| **Observability** | Issues · Logs · Traces · Audit · Realtime · Fan-out · Containers · Metrics · Analytics · Health · Deployment health |
-| **Advisors**      | Security · RLS Policies · Permissions · Performance                                                                 |
-| **Operations**    | Scheduled · Mail · Log drains · Payments · Flags                                                                    |
-| **Settings**      | Settings                                                                                                            |
+| Domain            | Pages                                                                                                                                  |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **Overview**      | Home · Dashboards                                                                                                                      |
+| **Database**      | Data · SQL editor · Schema · Migrations · Vectors · Time Travel · Export / Import                                                      |
+| **Functions**     | Functions · API · Workflows · Agents · Queues                                                                                          |
+| **Auth**          | Users · Organizations · Sessions · Auth audit · Configuration                                                                          |
+| **Storage**       | Files · Access Rules · KV                                                                                                              |
+| **Observability** | Issues · Logs · Traces · Evals · Audit · Realtime · Reactors · Fan-out · Containers · Metrics · Analytics · Health · Deployment health |
+| **Advisors**      | Health score · Security · RLS Policies · Permissions · Performance                                                                     |
+| **Operations**    | Scheduled · Mail · Log drains · Notifications · Payments · Flags                                                                       |
+| **Settings**      | Settings                                                                                                                               |
 
 Most shard-scoped pages share a **shard-key input**: Durable Objects aren't
 enumerable server-side, so you target a shard by key. The data and SQL pages
