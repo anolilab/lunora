@@ -20,6 +20,9 @@
         "base_branches":
             - "main"
             - "alpha"
+            # Audit-round fix PRs are stacked on this branch so each group is
+            # reviewable on its own; auto review skips any base not listed here.
+            - "fix/audit-round-5"
 
     "profile": "chill"
 

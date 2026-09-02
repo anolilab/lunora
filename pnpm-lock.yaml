@@ -3385,10 +3385,10 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/observability':
-        specifier: 1.0.0-alpha.51
+        specifier: 1.0.0-alpha.52
         version: link:../observability
       '@lunora/platform-cloudflare':
-        specifier: 1.0.0-alpha.28
+        specifier: 1.0.0-alpha.29
         version: link:../platform-cloudflare
       '@lunora/shard-engine':
         specifier: workspace:*
@@ -3616,7 +3616,7 @@ importers:
         specifier: workspace:*
         version: link:../flags
       '@lunora/observability':
-        specifier: 1.0.0-alpha.51
+        specifier: 1.0.0-alpha.52
         version: link:../observability
       '@lunora/platform':
         specifier: workspace:*
@@ -4018,7 +4018,7 @@ importers:
         specifier: workspace:*
         version: link:../do
       '@lunora/platform-cloudflare':
-        specifier: 1.0.0-alpha.28
+        specifier: 1.0.0-alpha.29
         version: link:../platform-cloudflare
       '@lunora/runtime':
         specifier: workspace:*
@@ -4953,7 +4953,7 @@ importers:
         specifier: workspace:*
         version: link:../do
       '@lunora/observability':
-        specifier: 1.0.0-alpha.51
+        specifier: 1.0.0-alpha.52
         version: link:../observability
       '@types/node':
         specifier: catalog:types
