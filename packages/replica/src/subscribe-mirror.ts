@@ -98,7 +98,14 @@ const subscribeToMirror = (
                 const record = row as Record<string, unknown>;
                 const rawId = record[pk];
 
-                if (typeof rawId !== "string" && typeof rawId !== "number") {
+                // `bigint` belongs here with the other two: it is what the wire
+                // decoder hands back for an int64 column, so an id-typed primary
+                // key arrives as one. Rejecting it as un-keyed made every frame
+                // re-insert every row (never recorded in `known`, so never
+                // "unchanged") and made removal undetectable (never in `known`,
+                // so never deleted). `String()` keys them consistently — 1n and 1
+                // are the same row id, which is what the mirror stores.
+                if (typeof rawId !== "string" && typeof rawId !== "number" && typeof rawId !== "bigint") {
                     // Un-keyed row: cannot be diffed; let the mirror's NOT NULL
                     // constraint surface it, as documented above.
                     changes.push({ type: "insert", data: record });

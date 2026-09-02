@@ -61,6 +61,17 @@ import type { EventLogEntry } from "./event-log";
 import type { LocalMirror } from "./local-mirror";
 import type { TableDiff } from "./table-diff";
 
+/**
+ * Batches one poll cycle will drive before yielding, however much log is left.
+ *
+ * A catch-up loop that runs until a fetch comes back empty never terminates
+ * against a log being written faster than it is read. Bounding the cycle leaves
+ * the remainder to the next one, at the advanced watermark, so progress is
+ * unaffected and a busy log cannot pin the cycle open (or its `#inFlight`
+ * promise, which every concurrent `sync()` awaits).
+ */
+const MAX_BATCHES_PER_CYCLE = 1000;
+
 // ── Types ──────────────────────────────────────────────────────────────────
 
 /**
@@ -158,6 +169,14 @@ export class EventsSync {
     readonly #options: EventsSyncOptions;
     /** The highest `seq + 1` that has been applied. Starts at `0`. */
     #watermark = 0;
+
+    /**
+     * The highest `seq + 1` already handed to `applyEvents`. Runs AHEAD of
+     * `#watermark` between a successful replay and the mirror fan-out that
+     * commits it, which is exactly the interval a retry must not replay through
+     * the state machine a second time.
+     */
+    #appliedSeq = 0;
     #timer: ReturnType<typeof setInterval> | undefined;
 
     /**
@@ -294,7 +313,7 @@ export class EventsSync {
         let total = 0;
 
         try {
-            for (;;) {
+            for (let batches = 0; batches < MAX_BATCHES_PER_CYCLE; batches += 1) {
                 // eslint-disable-next-line no-await-in-loop -- each batch is fetched from the watermark the previous one advanced, so the round-trips are inherently sequential
                 const events = await this.#options.fetchEventsSince(this.#watermark);
 
@@ -307,7 +326,22 @@ export class EventsSync {
                 // catch: the watermark stays put and the next poll re-fetches
                 // and (via the idempotent getTableDiffs) re-derives the missing
                 // diffs.
-                this.#options.applyEvents(events);
+                //
+                // Only the events this sync has not already replayed reach
+                // `applyEvents`. A batch whose replay SUCCEEDED and then failed
+                // downstream (`getTableDiffs`, or a `mirror.applyDiff` partway
+                // through the fan-out) is re-fetched from the unmoved watermark,
+                // and handing it to the state machine a second time would apply
+                // the same events twice — only `getTableDiffs` is required to be
+                // idempotent, `applyEvents` is not, and it has no rollback. A
+                // replay that THREW is not recorded, so that batch is still
+                // retried whole (the state machine's own atomicity, unchanged).
+                const fresh = events.filter((event) => event.seq >= this.#appliedSeq);
+
+                if (fresh.length > 0) {
+                    this.#options.applyEvents(fresh);
+                    this.#appliedSeq = (fresh[fresh.length - 1] as EventLogEntry).seq + 1;
+                }
 
                 const diffs = this.#options.getTableDiffs();
 
@@ -332,6 +366,13 @@ export class EventsSync {
 
                 this.#watermark = next;
             }
+
+            // The page budget ran out. A log with a writer faster than this
+            // sync never returns an empty batch, so an unbounded loop would
+            // never finish — and `#inFlight` would never settle, hanging every
+            // later `sync()` on it. The watermark is where the last completed
+            // batch left it, so the next cycle picks up exactly there.
+            return total;
         } catch (error: unknown) {
             // eslint-disable-next-line no-console -- fallback for a caller that supplied no `onError`; swallowing the failure silently is the worse default
             const onError = this.#options.onError ?? console.error;

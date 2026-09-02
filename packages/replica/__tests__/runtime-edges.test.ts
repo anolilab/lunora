@@ -434,6 +434,28 @@ describe(subscribeToMirror, () => {
         expect(double.applied[1]?.changes).toStrictEqual([{ id: "t1", type: "delete" }]);
     });
 
+    it("tracks a bigint primary key like any other id", () => {
+        expect.assertions(3);
+
+        // An int64 column decodes off the wire as a `bigint`. Classified as
+        // un-keyed it was inserted every frame and never deleted.
+        const { double, push } = wire();
+
+        push([{ id: 1n, title: "a" }]);
+
+        expect(double.applied[0]?.changes).toStrictEqual([{ data: { id: 1n, title: "a" }, type: "insert" }]);
+
+        // Identical frame: no re-upsert.
+        push([{ id: 1n, title: "a" }]);
+
+        expect(double.applied).toHaveLength(1);
+
+        // …and the row is deletable once the server drops it.
+        push([]);
+
+        expect(double.applied[1]?.changes).toStrictEqual([{ id: "1", type: "delete" }]);
+    });
+
     it("treats a single-object frame as one row and numeric ids as strings", () => {
         expect.assertions(2);
 
