@@ -3,11 +3,13 @@
  *
  * Flow: claim the event id (inbound idempotency) → map the action to an FSM transition → upsert
  * if legal, otherwise no-op. Duplicate and out-of-order webhooks are absorbed here, not by the
- * caller — with one exception: an event whose target row does not exist yet reports `"orphaned"`,
- * which the HTTP layer answers with a 500 to request ONE redelivery (bounded below), because
- * absorbing it would burn the event id before the row it patches exists.
+ * caller — with one exception: an event that arrives before the row it patches is ready (a
+ * subscription update before its create, a refund before its capture) reports `"orphaned"`, which
+ * the HTTP layer answers with a 500 to request ONE redelivery (bounded below), because absorbing it
+ * would burn the event id while the change it carries is still unapplied.
  */
 import { LunoraPaymentError } from "./errors";
+import { localRefundKey } from "./idempotency";
 import { addMoney, compareMoney, zeroMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
@@ -47,6 +49,41 @@ const SUBSCRIPTION_ACTION_BY_TYPE: Partial<Record<WebhookActionType, Subscriptio
 const maxMoney = (a: Money, b: Money): Money => (compareMoney(a, b) > 0 ? a : b);
 
 /**
+ * States in which the money has not been captured yet. A refund that lands on one of them is
+ * out-of-order delivery, not an illegal transition — see the `orphaned` branch in `applyPayment`.
+ */
+const PRE_CAPTURE_STATES: ReadonlySet<PaymentState> = new Set<PaymentState>(["authorized", "initiated"]);
+
+/**
+ * The refund `action` still has to contribute, once what the facade already recorded is taken out.
+ *
+ * `refundPayment` folds the refund it issued into the row immediately — that ledger is what stops a
+ * retry from issuing it twice — and leaves a marker. This event is that same money coming back: an
+ * ABSOLUTE provider restates a cumulative total, which resolves to `max(...)` and is idempotent on
+ * its own; a DELTA provider's event would add it a second time, so consume the marker and zero the
+ * amount, leaving the event to carry only its state transition.
+ *
+ * Test-and-consume, with the two primitives the claim store has: claiming reports whether a marker
+ * was there, and releasing restores the unclaimed state either way — so a SECOND, genuinely separate
+ * refund still counts. The marker is keyed on the provider's own refund id, which is what makes two
+ * in-flight facade refunds of the SAME amount on one session distinguishable: each leaves its own
+ * marker and each confirming event consumes only that one. The amount is the key only for a provider
+ * that reports no refund id on either side, where the two would still collide.
+ */
+const withoutLocallyRecordedRefund = async (store: PaymentStore, action: WebhookAction, existing: PaymentSession | undefined): Promise<WebhookAction> => {
+    if (!existing || !action.sessionId || !action.amount || action.amountKind === "absolute") {
+        return action;
+    }
+
+    const key = localRefundKey(action.sessionId, action.refundId, action.amount);
+    const unclaimed = await store.markEventProcessed(action.provider, key);
+
+    await store.releaseEvent(action.provider, key);
+
+    return unclaimed ? action : { ...action, amount: zeroMoney(action.amount.currency) };
+};
+
+/**
  * Compute the new refunded total a refund action implies, honoring its `amountKind`.
  *
  * `"delta"` (the default, Polar `refund.created`) adds `amount` to the current refunded total, so
@@ -77,6 +114,21 @@ const refundedTotalFor = (base: PaymentSession, action: WebhookAction): Money | 
     return prospective;
 };
 
+/**
+ * The refund transition `action` implies on `existing`: "partial" while the resulting refunded total
+ * stays below the captured total, a full "refund" otherwise. `refundedTotalFor` resolves the
+ * absolute-vs-delta semantics, so the partial/full decision and the stored amount always agree.
+ */
+const resolveRefundAction = (existing: PaymentSession | undefined, action: WebhookAction): PaymentAction => {
+    if (!existing) {
+        return "refund";
+    }
+
+    const prospective = refundedTotalFor(existing, action);
+
+    return prospective && compareMoney(prospective, existing.capturedAmount) < 0 ? "partial_refund" : "refund";
+};
+
 const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentAction: PaymentAction): Promise<ApplyResult> => {
     if (!action.sessionId) {
         return { applied: false, reason: "unhandled" };
@@ -87,23 +139,21 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
     const now = Date.now();
     const currency = action.amount?.currency ?? existing?.amount.currency ?? "USD";
 
-    let resolvedAction = paymentAction;
+    const effective = paymentAction === "refund" ? await withoutLocallyRecordedRefund(store, action, existing) : action;
 
-    // A refund is "partial" while the resulting refunded total stays below the captured total.
-    // `refundedTotalFor` resolves absolute-vs-delta semantics so the partial/full decision and the
-    // stored amount agree.
-    if (paymentAction === "refund" && existing) {
-        const prospective = refundedTotalFor(existing, action);
-
-        if (prospective && compareMoney(prospective, existing.capturedAmount) < 0) {
-            resolvedAction = "partial_refund";
-        }
-    }
+    const resolvedAction = paymentAction === "refund" ? resolveRefundAction(existing, effective) : paymentAction;
 
     const toState = nextPaymentState(fromState, resolvedAction);
 
     if (!toState) {
-        return { applied: false, reason: "illegal_transition" };
+        // A refund cannot apply before the capture it refunds. Providers do not guarantee ordering
+        // (Stripe explicitly does not), so that is out-of-order delivery, not an illegal event:
+        // report it as `orphaned` so the claim is released and the provider's ONE bounded retry
+        // applies it once the capture lands. Dropping it would burn the event id and lose the refund
+        // permanently — leaving a refunded customer entitled.
+        const outOfOrder = paymentAction === "refund" && PRE_CAPTURE_STATES.has(fromState);
+
+        return { applied: false, reason: outOfOrder ? "orphaned" : "illegal_transition" };
     }
 
     const base: PaymentSession = existing ?? {
@@ -124,8 +174,8 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
         capturedAmount = action.amount;
     }
 
-    if ((resolvedAction === "partial_refund" || resolvedAction === "refund") && action.amount) {
-        const prospective = refundedTotalFor(base, action);
+    if ((resolvedAction === "partial_refund" || resolvedAction === "refund") && effective.amount) {
+        const prospective = refundedTotalFor(base, effective);
 
         if (!prospective) {
             return { applied: false, reason: "invalid_refund_amount" };

@@ -4,6 +4,7 @@ import type { PaymentAdapter } from "../src/adapter";
 import { createPayment } from "../src/create-payment";
 import { money } from "../src/money";
 import { MemoryPaymentStore } from "../src/store";
+import applyWebhookAction from "../src/sync";
 import type { PaymentSession, Subscription, WebhookAction } from "../src/types";
 
 const subscription = (referenceId: string, state: Subscription["state"]): Subscription => {
@@ -322,9 +323,152 @@ describe("createPayment", () => {
         expect(stored?.capturedAmount.minorUnits).toBe(1000n);
         // A partial refund is `partially_refunded` even though the adapter reported "refunded".
         expect(stored?.state).toBe("partially_refunded");
-        // The refunded TOTAL stays with the webhook path, which alone knows whether this provider
-        // reports refunds as a delta or a cumulative total — writing it here would double-count.
-        expect(stored?.refundedAmount.minorUnits).toBe(0n);
+        // The refunded TOTAL is recorded from what this call issued, not left to the webhook: it is
+        // what stops a retry from issuing the refund a second time.
+        expect(stored?.refundedAmount.minorUnits).toBe(300n);
+    });
+
+    it("records the refund it issued, so a second refund never reaches the provider", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(paymentSession("user_1"));
+
+        let calls = 0;
+        const adapter = fakeAdapter({
+            refundPayment: async () => {
+                calls += 1;
+
+                return paymentSession("user_1");
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        const refunded = await payment.refundPayment({ sessionId: "pi_1" });
+
+        expect(refunded.refundedAmount.minorUnits).toBe(1000n);
+        expect(refunded.state).toBe("refunded");
+
+        // No webhook has arrived yet. The local ledger alone must hold the over-refund guard — the
+        // refund call carries no idempotency key the provider honors (see `idempotency.ts`).
+        await expect(payment.refundPayment({ amount: money(500, "USD"), sessionId: "pi_1" })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+        expect(calls).toBe(1);
+    });
+
+    it("folds the provider's confirming refund webhook in without double-counting (absolute)", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(paymentSession("user_1"));
+
+        const adapter = fakeAdapter({ refundPayment: async () => paymentSession("user_1") });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await payment.refundPayment({ sessionId: "pi_1" });
+
+        // Stripe's `charge.refunded` restates the cumulative refunded-to-date on a row the facade
+        // already moved to "refunded" — it must apply (idempotently), not bounce off the FSM.
+        const applied = await applyWebhookAction(store, {
+            amount: money(1000, "USD"),
+            amountKind: "absolute",
+            eventId: "evt_1",
+            provider: "stripe",
+            sessionId: "pi_1",
+            type: "payment.refunded",
+        });
+
+        expect(applied).toEqual({ applied: true, reason: "ok" });
+
+        const stored = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(stored?.refundedAmount.minorUnits).toBe(1000n);
+        expect(stored?.state).toBe("refunded");
+    });
+
+    it("folds the provider's confirming refund webhook in without double-counting (delta)", async () => {
+        expect.assertions(6);
+
+        const store = new MemoryPaymentStore();
+        const polarSession = { ...paymentSession("user_1"), id: "ord_1", provider: "polar" as const };
+
+        await store.upsertPaymentSession(polarSession);
+
+        const adapter = fakeAdapter({ identifier: "polar", refundPayment: async () => polarSession });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+        const refundEvent = (eventId: string, minorUnits: number): WebhookAction => {
+            return { amount: money(minorUnits, "USD"), eventId, provider: "polar", sessionId: "ord_1", type: "payment.refunded" };
+        };
+
+        await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+        // Polar reports ONE refund per event, so its `refund.created` is a delta. It is the same 300
+        // the facade just recorded: the running total must stay 300, not become 600.
+        await applyWebhookAction(store, refundEvent("evt_a", 300));
+
+        const afterPartial = await store.getPaymentSession("polar", "ord_1");
+
+        expect(afterPartial?.refundedAmount.minorUnits).toBe(300n);
+        expect(afterPartial?.state).toBe("partially_refunded");
+
+        await payment.refundPayment({ sessionId: "ord_1" });
+        await applyWebhookAction(store, refundEvent("evt_b", 700));
+
+        const afterFull = await store.getPaymentSession("polar", "ord_1");
+
+        expect(afterFull?.refundedAmount.minorUnits).toBe(1000n);
+        expect(afterFull?.state).toBe("refunded");
+
+        // A refund issued from the provider's dashboard is NOT the facade's — its delta still counts,
+        // and here it would push the total past the capture, so it is rejected rather than absorbed.
+        await expect(applyWebhookAction(store, refundEvent("evt_c", 100))).resolves.toEqual({ applied: false, reason: "invalid_refund_amount" });
+
+        const afterDashboard = await store.getPaymentSession("polar", "ord_1");
+
+        expect(afterDashboard?.refundedAmount.minorUnits).toBe(1000n);
+    });
+
+    it("keeps two same-amount refunds on one session distinct, by the provider's refund id", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const polarSession = { ...paymentSession("user_1"), id: "ord_1", provider: "polar" as const };
+
+        await store.upsertPaymentSession(polarSession);
+
+        let issued = 0;
+        const adapter = fakeAdapter({
+            identifier: "polar",
+            refundPayment: async () => {
+                issued += 1;
+
+                return { ...polarSession, refundId: `ref_${String(issued)}` };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+        const refundEvent = (eventId: string, refundId: string): WebhookAction => {
+            return { amount: money(300, "USD"), eventId, provider: "polar", refundId, sessionId: "ord_1", type: "payment.refunded" };
+        };
+
+        // Two SEPARATE refunds of the identical amount, both in flight before either webhook lands.
+        await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+        await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+        const beforeWebhooks = await store.getPaymentSession("polar", "ord_1");
+
+        expect(beforeWebhooks?.refundedAmount.minorUnits).toBe(600n);
+
+        // Each confirming delta consumes ITS OWN marker. Keyed on the amount the two would share one,
+        // so the second event would find it already consumed and add 300 a third time.
+        await applyWebhookAction(store, refundEvent("evt_a", "ref_1"));
+        await applyWebhookAction(store, refundEvent("evt_b", "ref_2"));
+
+        const afterWebhooks = await store.getPaymentSession("polar", "ord_1");
+
+        expect(afterWebhooks?.refundedAmount.minorUnits).toBe(600n);
+        expect(afterWebhooks?.state).toBe("partially_refunded");
     });
 
     it("derives a distinct refund idempotency key per amount so partial refunds don't collide", async () => {

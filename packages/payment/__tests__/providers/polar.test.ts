@@ -245,18 +245,21 @@ describe("polar adapter", () => {
     });
 
     it("ingests usage as an event keyed on the external customer id", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const created: Record<string, unknown>[] = [];
         const adapter = createPolarAdapter({ client: makeClient(created), webhookSecret: SECRET });
 
         await adapter.reportUsage?.({ featureId: "api_calls", idempotencyKey: "usage_1", quantity: 3, referenceId: "user_1" });
 
-        const events = created[0]?.events as { externalCustomerId?: string; metadata?: Record<string, unknown>; name?: string }[];
+        const events = created[0]?.events as { externalCustomerId?: string; externalId?: string; metadata?: Record<string, unknown>; name?: string }[];
 
         expect(events[0]?.name).toBe("api_calls");
         expect(events[0]?.externalCustomerId).toBe("user_1");
         expect(events[0]?.metadata).toMatchObject({ value: 3 });
+        // Polar dedupes ingestion on `externalId`, so the engine's idempotency key has to travel on
+        // it — otherwise a retried usage forward meters (and bills) the same units twice.
+        expect(events[0]?.externalId).toBe("usage_1");
     });
 
     it("rejects a bad signature", async () => {
@@ -347,7 +350,7 @@ describe("polar adapter", () => {
     });
 
     it("refunds the full order total (no amount given), reading it from orders.get", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const calls: RecordedCall[] = [];
         const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
@@ -363,6 +366,8 @@ describe("polar adapter", () => {
         expect((call?.args[0] as { amount?: number; orderId?: string }).orderId).toBe("ord_1");
         // Polar has no partial-refund state on this path — pin the actual (always "refunded") result.
         expect(session.state).toBe("refunded");
+        // Polar's `Refund.id` — the same id `refund.created` carries, so the facade's marker matches.
+        expect(session.refundId).toBe("ref_1");
     });
 
     it("refunds an explicit amount without querying orders.get, still landing on state=refunded", async () => {
@@ -398,6 +403,21 @@ describe("polar adapter", () => {
 
         // Not `subscription.updated` — that patch would preserve an existing entitling state.
         expect(action.type).toBe("subscription.past_due");
+    });
+
+    it("normalizes a refund.created webhook, keeping the refund id apart from the order id", async () => {
+        expect.assertions(3);
+
+        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const payload = JSON.stringify({ data: { amount: 300, currency: "usd", id: "ref_1", order_id: "ord_1" }, type: "refund.created" });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const action = await adapter.parseWebhook({ headers: headersFor("evt_ref", timestamp, sign("evt_ref", timestamp, payload)), payload });
+
+        // The event object IS the refund: `order_id` is the session it refunds, `id` is the refund
+        // itself. Confusing the two would key the sync layer's marker lookup on the wrong value.
+        expect(action.sessionId).toBe("ord_1");
+        expect(action.refundId).toBe("ref_1");
+        expect(action.amount?.minorUnits).toBe(300n);
     });
 
     it("rejects a fractional webhook amount as a payment error, not a raw RangeError (regression)", async () => {

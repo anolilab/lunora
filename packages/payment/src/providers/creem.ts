@@ -200,6 +200,10 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 ...base,
                 amount: amount === undefined ? undefined : money(BigInt(Math.round(amount)), refundCurrency),
                 referenceId: referenceFromMetadata(object),
+                // The event object IS the refund, so its `id` is this refund's id. Creem issues refunds
+                // only from the dashboard (`refundPayment` throws), so no marker can ever match it —
+                // carrying it still keeps a same-amount dashboard refund from consuming one.
+                refundId: readString(object, "id"),
                 sessionId: idOf(object.transaction) ?? idOf(object.subscription) ?? idOf(object.order) ?? idOf(object.checkout) ?? readString(object, "id"),
                 type: "payment.refunded",
             };

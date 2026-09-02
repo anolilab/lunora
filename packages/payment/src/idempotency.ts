@@ -1,10 +1,17 @@
 /**
  * Outbound idempotency keys.
  *
- * Every mutating provider call carries a stable key derived from our own operation + inputs, so
- * a Worker retry can never double-charge. Distinct from inbound webhook dedupe (keyed on the
+ * Almost every mutating provider call carries a stable key derived from our own operation + inputs,
+ * so a Worker retry can never double-charge. Distinct from inbound webhook dedupe (keyed on the
  * provider event id).
+ *
+ * THE ONE EXCEPTION IS A POLAR REFUND. `@polar-sh/sdk`'s `RefundCreate` has no idempotency field
+ * and the endpoint accepts none, so a retried `refunds.create` genuinely issues a second refund —
+ * nothing on the wire can prevent it. The guard for that call is local instead: `refundPayment`
+ * records the refunded total on the session row before returning, so the over-refund check rejects
+ * the retry without reaching the adapter. Polar's *usage* ingestion does dedupe, on `externalId`.
  */
+import type { Money } from "./types";
 
 const encoder = new TextEncoder();
 
@@ -29,3 +36,20 @@ export const derivedIdempotencyKey = async (operation: string, provider: string,
 
     return `${operation}:${provider}:${digest}`;
 };
+
+/**
+ * Marker recording that the facade already folded ONE specific refund into `sessionId`'s row.
+ *
+ * Claimed (in the same store as inbound event ids) by `refundPayment` and consumed by the provider's
+ * confirming `payment.refunded` webhook, so a DELTA provider's event — Polar, Creem, Dodo, which
+ * report one refund each rather than a running total — does not add the same money a second time.
+ * Absolute providers (Stripe) are idempotent without it, and an unconsumed marker is inert.
+ *
+ * The key is the provider's own `refundId` whenever there is one, because that is the only per-refund
+ * identity: two in-flight refunds of the same amount on one session are two distinct refunds, and
+ * keying on the amount would give them one shared marker, so one confirming event would be counted
+ * twice. `amount` is the fallback for a provider that reports no refund id, and carries that
+ * collision.
+ */
+export const localRefundKey = (sessionId: string, refundId: string | undefined, amount: Money): string =>
+    refundId === undefined ? `local-refund:${sessionId}:${amount.currency}:${String(amount.minorUnits)}` : `local-refund:${sessionId}:id:${refundId}`;

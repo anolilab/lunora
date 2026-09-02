@@ -29,7 +29,13 @@ const PAYMENT_TRANSITIONS: Record<PaymentState, Partial<Record<PaymentAction, Pa
     // outcomes a fresh intent could reach directly.
     initiated: { authorize: "authorized", cancel: "canceled", capture: "captured", fail: "failed" },
     partially_refunded: { partial_refund: "partially_refunded", refund: "refunded" },
-    refunded: {},
+    // Self-loop, not an exit: `refundPayment` records the refund it issued on the row before the
+    // provider's confirming `payment.refunded` webhook arrives, so that webhook lands on a row that
+    // is ALREADY "refunded". Rejecting it there would strand the refunded total at whatever the
+    // facade wrote and drop a provider-side refund entirely. The money stays idempotent because
+    // `sync.ts` resolves the amount first: an absolute total resolves to `max(recorded, reported)`,
+    // and a delta is rejected as an over-refund once the total already equals the captured amount.
+    refunded: { refund: "refunded" },
 };
 
 const SUBSCRIPTION_TRANSITIONS: Record<SubscriptionState, Partial<Record<SubscriptionAction, SubscriptionState>>> = {
