@@ -317,10 +317,9 @@ class OfflineQueue {
      * refreshed — fell back to it, failed the replay identity gate, and rejected
      * the SAME user's offline write with `OFFLINE_IDENTITY_CHANGED`.
      *
-     * The durable rewrite is remove-then-append because `PersistenceAdapter.append`
-     * is an insert (the IndexedDB adapter's store has a unique index on `id`), not
-     * an upsert — see {@link OfflineQueue.rewriteStamp}, which owns the failure
-     * handling that ordering forces.
+     * The durable rewrite goes through `PersistenceAdapter.replace`, the one
+     * operation on the contract that is required to be atomic — see
+     * {@link OfflineQueue.rewriteStamp}.
      */
     public restampIdentity(from: string | null, to: string | null): void {
         for (const item of this.items) {
@@ -346,7 +345,7 @@ class OfflineQueue {
                 ...(this.version === undefined ? {} : { version: this.version }),
             };
 
-            this.rewriteStamp(id, record, from).catch((error: unknown) => {
+            this.rewriteStamp(id, record).catch((error: unknown) => {
                 // `rewriteStamp` reports and contains every failure it can see;
                 // this is the backstop for anything it cannot (an adapter that
                 // throws outside its own promise), and keeps the fire-and-forget
@@ -453,24 +452,26 @@ class OfflineQueue {
     }
 
     /**
-     * The durable half of {@link OfflineQueue.restampIdentity}: remove the record
-     * and re-append it under the new stamp, because `PersistenceAdapter.append`
-     * is an insert, not an upsert.
+     * The durable half of {@link OfflineQueue.restampIdentity}: rewrite the
+     * persisted record under the new identity stamp.
      *
-     * That ordering has a window the naive version lost writes in. A failed
-     * `remove` is harmless — the record stands under its old stamp. A `remove`
-     * that SUCCEEDS followed by an `append` that fails leaves nothing durable at
-     * all, while the in-memory entry has already advanced: a reload before the
-     * next flush loses the write permanently. So the append failure is
-     * compensated by re-appending under the ORIGINAL stamp, which restores the
-     * documented "leaves the record under its old stamp" outcome (a replay under
-     * a stale stamp is rejected with `OFFLINE_IDENTITY_CHANGED` — recoverable
-     * and visible, unlike a silent loss).
+     * This used to be `remove` then `append` (because `append` is an insert, not
+     * an upsert) with a compensating re-append on failure, and no arrangement of
+     * those two calls is safe. A process stop between a committed `remove` and
+     * the `append` leaves the mutation in NO durable store while the in-memory
+     * entry has already advanced, so a reload loses the write outright — and
+     * compensation cannot cover a crash, only a rejection. The re-append also
+     * moved the record to the tail, replaying it out of issue order.
      *
-     * Each failure is reported under the operation that actually failed, not a
-     * hardcoded `"append"`.
+     * `PersistenceAdapter.replace` is the single atomic operation that removes
+     * both: the swap lands whole or not at all, and the record keeps its place
+     * in FIFO order. A rejection means nothing changed durably — the record
+     * stands under its OLD stamp, which is the documented outcome (a replay
+     * under a stale stamp is refused with `OFFLINE_IDENTITY_CHANGED`, visible
+     * and recoverable, unlike a silent loss) — so there is nothing to
+     * compensate, only to report.
      */
-    private async rewriteStamp(id: string, record: PersistedMutation, from: string | null): Promise<void> {
+    private async rewriteStamp(id: string, record: PersistedMutation): Promise<void> {
         const store = this.persistence;
 
         if (!store) {
@@ -478,23 +479,9 @@ class OfflineQueue {
         }
 
         try {
-            await store.remove(id);
+            await store.replace(record);
         } catch (error: unknown) {
-            reportPersistenceError(this.onPersistenceError, "remove", error, id);
-
-            return;
-        }
-
-        try {
-            await store.append(record);
-        } catch (error: unknown) {
-            reportPersistenceError(this.onPersistenceError, "append", error, id);
-
-            try {
-                await store.append({ ...record, identity: from });
-            } catch (rollbackError: unknown) {
-                reportPersistenceError(this.onPersistenceError, "append", rollbackError, id);
-            }
+            reportPersistenceError(this.onPersistenceError, "replace", error, id);
         }
     }
 

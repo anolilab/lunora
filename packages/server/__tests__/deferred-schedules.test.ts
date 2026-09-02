@@ -81,6 +81,27 @@ describe("withDeferredSchedules — types", () => {
 
         expect(withDeferredSchedules(scheduler)).toHaveProperty("runAfter");
     });
+
+    it("accepts a scheduler whose `args` is required — the shape `createScheduler()` actually returns", () => {
+        expect.assertions(1);
+
+        // `@lunora/scheduler`'s `Scheduler.runAfter`/`runAt` take `args` as a
+        // REQUIRED third parameter. `SchedulerLike` declared it optional, which
+        // widens the constraint's parameter to `undefined` — not assignable to a
+        // required `args` — so the one scheduler this facade exists to wrap was
+        // the one scheduler it would not accept, and every real call site had to
+        // cast around the guard.
+        const scheduler = {
+            runAfter: (_delayMs: number, _target: string, _args: Record<string, unknown>, _options?: { id?: string }): Promise<string> =>
+                Promise.resolve("job-1"),
+            runAt: (_timestampMs: number, _target: string, _args: Record<string, unknown>, _options?: { id?: string }): Promise<string> =>
+                Promise.resolve("job-1"),
+        };
+
+        expectTypeOf(withDeferredSchedules(scheduler)).toEqualTypeOf<typeof scheduler>();
+
+        expect(withDeferredSchedules(scheduler)).toHaveProperty("runAt");
+    });
 });
 
 describe("withDeferredSchedules", () => {

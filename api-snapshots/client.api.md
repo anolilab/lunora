@@ -980,6 +980,7 @@ interface PersistenceAdapter {
     clear: () => Promise<void>;
     load: () => Promise<PersistedMutation[]>;
     remove: (id: string) => Promise<void>;
+    replace: (mutation: PersistedMutation) => Promise<void>;
 }
 ```
 

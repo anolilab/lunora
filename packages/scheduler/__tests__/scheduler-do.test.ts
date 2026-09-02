@@ -694,9 +694,18 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
 
 describe("schedulerDO — dead-letter admin endpoints", () => {
     /** Schedule a job and drive the alarm until it exhausts its retries and parks under `dead:`. */
-    const parkDeadJob = async (state: ReturnType<typeof createFakeState>, functionPath = "f"): Promise<string> => {
+    const parkDeadJob = async (state: ReturnType<typeof createFakeState>, functionPath = "f", requestedId?: string): Promise<string> => {
         const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
-        const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: { n: 1 }, functionPath, scheduledFor: Date.now() - 1000 })));
+        const id = await scheduledId(
+            await scheduler.fetch(
+                post("/schedule", {
+                    args: { n: 1 },
+                    functionPath,
+                    ...(requestedId === undefined ? {} : { id: requestedId }),
+                    scheduledFor: Date.now() - 1000,
+                }),
+            ),
+        );
 
         for (let index = 0; index < 7; index += 1) {
             const indexKey = [...state.storageMap.keys()].find((key) => key.startsWith("t:"));
@@ -766,6 +775,32 @@ describe("schedulerDO — dead-letter admin endpoints", () => {
         // A fresh time-index entry re-arms the resurrected job at its new due time.
         expect(state.storageMap.has(`t:${String(result.scheduledFor).padStart(15, "0")}:${id}`)).toBe(true);
         expect(state.alarm).toBe(result.scheduledFor);
+    });
+
+    it("refuses a caller-supplied id a dead-letter record still holds, so /dead/retry cannot overwrite the new job", async () => {
+        expect.assertions(4);
+
+        const state = createFakeState();
+        const id = await parkDeadJob(state, "f", "invoice-42");
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        expect(id).toBe("invoice-42");
+
+        // A dead record keeps no `id:` header, so a pending-only conflict check
+        // let the id be reused. `/dead/retry` then wrote the revived corpse over
+        // the new job's header and added a second `t:` index under the same id:
+        // the new job was gone and the dead one fired in its place.
+        const reused = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.charge", id: "invoice-42", scheduledFor: Date.now() + 60_000 }));
+
+        expect(reused.status).toBe(409);
+        await expect(reused.json<{ error: { code: string } }>()).resolves.toMatchObject({ error: { code: "DUPLICATE_SCHEDULE_ID" } });
+
+        // The dead record is the only thing that answers to the id — nothing new
+        // was written under it.
+        const listResponse = await scheduler.fetch(get("/list"));
+        const listed = await listResponse.json<{ records: unknown[] }>();
+
+        expect(listed.records).toHaveLength(0);
     });
 
     it("pOST /dead/retry is a no-op for an unknown id", async () => {

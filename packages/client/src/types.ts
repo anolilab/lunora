@@ -83,7 +83,7 @@ export interface ReconnectOptions {
 }
 
 /** Which durable-storage operation failed, passed to {@link OfflineQueueOptions.onPersistenceError}. */
-export type PersistenceOperation = "append" | "clear" | "load" | "remove";
+export type PersistenceOperation = "append" | "clear" | "load" | "remove" | "replace";
 
 /** Context handed to a persistence-error handler. */
 export interface PersistenceErrorContext {
@@ -174,6 +174,23 @@ export interface PersistenceAdapter {
     load: () => Promise<PersistedMutation[]>;
     /** Remove a mutation by id once it has been replayed (resolved or rejected). */
     remove: (id: string) => Promise<void>;
+
+    /**
+     * Overwrite an already-persisted mutation IN PLACE, keeping its position in
+     * FIFO order. Used when a queued write's identity stamp is rewritten after a
+     * sign-in / sign-out.
+     *
+     * Must be atomic: a `remove` + `append` pair has a window where a process
+     * stop leaves the mutation in no durable store at all, and the in-memory
+     * entry has already advanced, so a reload loses the write outright. It also
+     * moved the record to the BACK of the queue, replaying it out of the order
+     * it was issued in. Implementations do the whole swap under one transaction
+     * (or one serialized blob write).
+     *
+     * A mutation whose id is not present is left alone — the record was drained
+     * concurrently and re-inserting it would replay a settled write.
+     */
+    replace: (mutation: PersistedMutation) => Promise<void>;
 }
 
 /**

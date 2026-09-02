@@ -129,6 +129,23 @@ describe("serveStorageObject — authorization", () => {
         expect(seen[0]).toStrictEqual({ key: "avatars/1.png", url: "https://x/avatars/1.png?sig=abc" });
     });
 
+    it("denies a truthy non-boolean verdict — only an exact `true` streams", async () => {
+        expect.assertions(2);
+
+        const { calls, ctx } = ctxWith(BODY);
+        // The gate is app code and untyped JavaScript reaches it: an
+        // `async ({ request }) => verifySignedUrl(url, secret)` that forgot its
+        // `.valid` hands back `{ valid: false }`. Returned unchanged, that object
+        // is TRUTHY, so the one check standing between the request and the bucket
+        // read a refusal as an approval.
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k"), (() => {
+            return { valid: false };
+        }) as unknown as StorageServeAuthorizer);
+
+        expect(response.status).toBe(403);
+        expect(calls.downloads).toHaveLength(0);
+    });
+
     // A gate is mandatory in the type — there is no "forgot to pass one" shape
     // that still compiles, which is what keeps a mounted route from being an
     // open object store.
@@ -182,6 +199,21 @@ describe("serveStorageObject — response hardening", () => {
 
         expect(response.status).toBe(206);
         expect(response.headers.get("content-disposition")).toBe("attachment");
+    });
+
+    it("marks every served representation `no-store`, so a cached copy cannot outlive the identity that fetched it", async () => {
+        expect.assertions(2);
+
+        // The gate is per-request and keyed on a session or a signature. Without
+        // `no-store` the browser (and any shared proxy in front of it) may keep
+        // the bytes and replay them after a logout or an account switch, with
+        // `authorize` never called for the second identity.
+        const { ctx } = ctxWith(BODY, { contentType: "image/png" });
+        const whole = await serveStorageObject(ctx, "k", new Request("https://x/k"), ALLOW);
+        const partial = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=2-5" } }), ALLOW);
+
+        expect(whole.headers.get("cache-control")).toBe("no-store");
+        expect(partial.headers.get("cache-control")).toBe("no-store");
     });
 });
 

@@ -1175,6 +1175,46 @@ class SchedulerDO {
         });
     }
 
+    /**
+     * The `409` a caller-supplied id earns when something durable already holds
+     * it, or `undefined` when the id is free.
+     *
+     * A pending header is the obvious half: `put` on `id:<id>` overwrites, but
+     * the `t:` index is keyed by TIME as well as id, so the OLD entry survives.
+     * The drain then dispatches the NEW record at the OLD time and deletes the
+     * entry it should have fired at — the job runs early and never runs again.
+     * Refused rather than made a replace: `RunOptions.id` exists so a deferred
+     * schedule can name its own job, and silently retiming someone else's is the
+     * worse failure.
+     *
+     * The `dead:` row holds the id too, and for a worse reason. A dead record
+     * keeps NO `id:` header, so a pending-only check leaves the id apparently
+     * free — and a later `/dead/retry` writes the revived corpse straight over
+     * the new job's header and adds a SECOND time index under the same id. The
+     * new job is gone and the dead one fires in its place. Recovering a dead job
+     * is an operator action taken minutes or days after the schedule, so nothing
+     * at schedule time would ever have surfaced the collision.
+     */
+    private async idConflict(id: string): Promise<Response | undefined> {
+        if ((await this.state.storage.get<ScheduleRecord>(`${HEADER_PREFIX}${id}`)) !== undefined) {
+            return SchedulerDO.error(
+                409,
+                "DUPLICATE_SCHEDULE_ID",
+                `a job with id "${id}" is already scheduled — cancel it first, or schedule under a different id`,
+            );
+        }
+
+        if ((await this.state.storage.get<ScheduleRecord>(`${DEAD_PREFIX}${id}`)) !== undefined) {
+            return SchedulerDO.error(
+                409,
+                "DUPLICATE_SCHEDULE_ID",
+                `id "${id}" is held by a dead-letter record — retry or cancel it (POST /dead/retry, POST /dead/cancel) first, or schedule under a different id`,
+            );
+        }
+
+        return undefined;
+    }
+
     private async handleSchedule(request: Request): Promise<Response> {
         const body = (await request.json().catch(() => undefined)) as ScheduleRequestBody | undefined;
         const target = SchedulerDO.resolveScheduleTarget(body);
@@ -1211,22 +1251,13 @@ class SchedulerDO {
         const retry = SchedulerDO.normalizeRetry(body.retry);
         const id = resolveScheduleId(body.id);
 
-        // A caller-supplied id must not land on a job that already exists.
-        // `put` on the `id:` header overwrites, but the `t:` index is keyed by
-        // TIME as well as id, so the old entry survives: the drain then
-        // dispatches the NEW record at the OLD time and deletes the entry it
-        // should have fired at — the job runs early and never runs again.
-        // Refused rather than made a replace: `RunOptions.id` exists so a
-        // deferred schedule can name its own job, and silently retiming someone
-        // else's is the worse failure. Only an id the caller chose can collide
-        // (a minted one is 96 random bits), so this costs one `get` on the
-        // deferred path and nothing on the ordinary one.
-        if (id === body.id && (await this.state.storage.get<ScheduleRecord>(`${HEADER_PREFIX}${id}`)) !== undefined) {
-            return SchedulerDO.error(
-                409,
-                "DUPLICATE_SCHEDULE_ID",
-                `a job with id "${id}" is already scheduled — cancel it first, or schedule under a different id`,
-            );
+        // Only an id the CALLER chose can collide — a minted one is 96 random
+        // bits — so this costs two `get`s on the deferred path and nothing on
+        // the ordinary one.
+        const conflict = id === body.id ? await this.idConflict(id) : undefined;
+
+        if (conflict) {
+            return conflict;
         }
 
         const record: ScheduleRecord = {
