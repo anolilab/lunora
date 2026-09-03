@@ -37,6 +37,14 @@
         "tag with a missing or non-ASCII digit string (`\\d` is ASCII-only, while a",
         "Unicode-aware digit test accepts Arabic-Indic ٣).",
         "",
+        "A tag's payload slot is TYPE-CHECKED, never coerced: a `date` epoch that is",
+        "not a number (`null` coerces to epoch 0 and a string to an Invalid Date), a",
+        "`bytes` payload that is not a string (`atob(null)` decodes the base64 of",
+        "\"null\" — three invented bytes), and a `url` href that is not a string (a",
+        "one-element array ToStrings into a parseable href). Each of those decoded,",
+        "and re-encoded as a plausible value, which is what makes them worse than a",
+        "throw; every port already refused them.",
+        "",
         "Language-native construction checks (e.g. bigint 7 -> the bigint tag, or an",
         "integer past the exact-float64 range being refused) live in each SDK's own",
         "suite, keyed by protocol/conformance-cases.json, since native values are not",
@@ -161,6 +169,10 @@
         { "name": "bigint-missing-payload", "encoded": ["$lunora.wire$", "bigint"] },
         { "name": "bigint-non-ascii-digits", "encoded": ["$lunora.wire$", "bigint", "\u0663"] },
         { "name": "error-props-not-object", "encoded": ["$lunora.wire$", "error", "Error", "boom", null] },
-        { "name": "error-missing-props", "encoded": ["$lunora.wire$", "error", "Error", "boom"] }
+        { "name": "error-missing-props", "encoded": ["$lunora.wire$", "error", "Error", "boom"] },
+        { "name": "date-payload-not-number", "encoded": ["$lunora.wire$", "date", null] },
+        { "name": "date-payload-string", "encoded": ["$lunora.wire$", "date", "abc"] },
+        { "name": "bytes-payload-not-string", "encoded": ["$lunora.wire$", "bytes", null] },
+        { "name": "url-href-not-string", "encoded": ["$lunora.wire$", "url", ["http://x.example/"]] }
     ]
 }

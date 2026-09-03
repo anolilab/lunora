@@ -274,7 +274,12 @@ twice. The single-call endpoint carries the same value in the
 `x-lunora-client-id` header. Reserved
 `__lunora_relation__:` / `__lunora_admin__` paths cannot be batched. A batch is
 capped at **500** entries; a longer flush chunks, and the chunks must be sent
-sequentially to preserve order.
+sequentially to preserve order. That number is normative and lives in
+`protocol/fixtures/offline-optimistic.json` as `offlineQueue.batchReplay.maxEntries`;
+the `batch_entry_cap_matches_protocol` conformance case makes every port compare
+its own constant against it, because a client still chunking at a superseded cap
+takes the coded 400 below — a terminal verdict — and discards durable writes
+rather than retrying them.
 
 Response:
 

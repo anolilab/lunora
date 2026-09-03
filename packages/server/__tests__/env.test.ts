@@ -215,6 +215,24 @@ describe("defineEnv", () => {
             expect(error.message).toContain("DATABASE_PASSWORD");
             expect(error.message).toContain("[redacted]");
         });
+
+        it("redacts under a PLURAL secret-named key exactly as under its singular", () => {
+            expect.assertions(4);
+
+            // The classifier's word list is written in the singular and matched
+            // against the singular of each word, so a key an app spells in the
+            // plural is not a hole in it. It was: only `CREDENTIALS` had been
+            // hand-added, so `AUTH_TOKENS` classified as ordinary config and its
+            // value reached the thrown message — and the logs — verbatim.
+            const weakSecret = ["p@ss", "w0rd!"].join(" ");
+            const config = defineEnv({ AUTH_TOKENS: v.number() });
+
+            const error = captureEnvError(() => config({ AUTH_TOKENS: weakSecret }).AUTH_TOKENS);
+
+            expect(error.message).not.toContain(weakSecret);
+            expect(error.message).toContain("AUTH_TOKENS");
+            expect(error.message).toContain("[redacted]");
+        });
     });
 });
 

@@ -25,7 +25,7 @@ from lunora.offline import (
     is_stale_version,
     random_id,
 )
-from lunora.submit import SubmitOptions
+from lunora.submit import MAX_BATCH_ENTRIES, SubmitOptions
 from lunora.wire import WireBigInt, WireBytes, WireDate
 from tests._fixtures import load
 from tests._manifest import covers
@@ -804,6 +804,18 @@ class TestFlushIntegration(unittest.TestCase):
             asyncio.run(client.submit(SubmitOptions(args={}, function_path="messages:list", optimistic=lambda current: [*(current or []), "c"])))
 
         self.assertEqual(seen[-1], ["a"])
+
+    def test_batch_entry_cap_matches_protocol(self):
+        """The entry cap is not this port's to choose.
+
+        Both the worker and the shard DO refuse a larger batch with a coded 400,
+        which ``protocol/README.md`` 4.3 makes a TERMINAL verdict — so a client
+        chunking at a stale value discards durable writes instead of retrying
+        them. The number was a bare ``500`` in ten independent places with
+        nothing reconciling them.
+        """
+        covers("batch_entry_cap_matches_protocol")
+        self.assertEqual(MAX_BATCH_ENTRIES, FIXTURES["batchReplay"]["maxEntries"])
 
 
 if __name__ == "__main__":  # pragma: no cover

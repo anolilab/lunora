@@ -92,6 +92,7 @@ final class ConformanceTests: XCTestCase {
             case "optimistic_cursorless_frame_preserves_cursor": try caseOptimisticCursorlessFramePreservesCursor()
             case "offline_queue_hydrate_overflow_settles_discarded": try caseOfflineQueueHydrateOverflowSettlesDiscarded()
             case "offline_flush_unencodable_write_settles_terminal": try caseOfflineFlushUnencodableWriteSettlesTerminal()
+            case "batch_entry_cap_matches_protocol": try caseBatchEntryCapMatchesProtocol()
             default:
                 XCTFail("protocol/conformance-cases.json requires case \(name), which this suite does not implement")
             }

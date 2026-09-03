@@ -82,7 +82,10 @@ const fnv1a64BigintHex = (input: string): string => {
     const mask64 = 0xff_ff_ff_ff_ff_ff_ff_ffn;
 
     for (let index = 0; index < input.length; index += 1) {
-        hash ^= BigInt(input.codePointAt(index) ?? 0);
+        // Code UNITS, matching `shared/fnv1a.ts` — the two must produce the same
+        // digest for this benchmark to compare the same work.
+        // eslint-disable-next-line unicorn/prefer-code-point -- see above
+        hash ^= BigInt(input.charCodeAt(index));
         hash = (hash * prime) & mask64;
     }
 
