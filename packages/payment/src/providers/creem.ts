@@ -204,7 +204,15 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 // only from the dashboard (`refundPayment` throws), so no marker can ever match it —
                 // carrying it still keeps a same-amount dashboard refund from consuming one.
                 refundId: readString(object, "id"),
-                sessionId: idOf(object.transaction) ?? idOf(object.subscription) ?? idOf(object.order) ?? idOf(object.checkout) ?? readString(object, "id"),
+                // Key on the CHECKOUT id: `checkout.completed` writes the row under
+                // `CheckoutEntity.id` (see `checkoutToSession`) and `getPaymentStatus` retrieves the
+                // same id from `checkouts.retrieve`, so that is the only id a Creem payment row ever
+                // has. `RefundEntity.transaction` is required while `checkout` is optional, so
+                // reading `transaction` first always won and keyed every dashboard refund to a
+                // `TransactionEntity.id` — a row that does not exist. The remaining reads are
+                // fallbacks for a refund that carries no checkout at all; they orphan either way,
+                // but they keep a stable key instead of falling through to the refund's own id.
+                sessionId: idOf(object.checkout) ?? idOf(object.transaction) ?? idOf(object.subscription) ?? idOf(object.order) ?? readString(object, "id"),
                 type: "payment.refunded",
             };
         }

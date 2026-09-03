@@ -55,6 +55,26 @@ describe("applyWebhookAction", () => {
         expect(session?.state).toBe("captured");
     });
 
+    it("captures a payment that succeeds on a retry of the same declined intent (regression)", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+
+        // Card declined: `payment_intent.payment_failed` on `pi_1`.
+        await expect(
+            applyWebhookAction(store, { eventId: "evt_1", provider: "stripe", referenceId: "user_1", sessionId: "pi_1", type: "payment.failed" }),
+        ).resolves.toEqual({ applied: true, reason: "ok" });
+
+        // The customer retries with a working card on the SAME intent, which Stripe returned to
+        // `requires_payment_method` — `payment_intent.succeeded` must capture, not be dropped.
+        await expect(applyWebhookAction(store, captureEvent("evt_2"))).resolves.toEqual({ applied: true, reason: "ok" });
+
+        const session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(session?.state).toBe("captured");
+        expect(session?.capturedAmount.minorUnits).toBe(1000n);
+    });
+
     it("treats Stripe-style cumulative (absolute) refunds without over-counting across partials", async () => {
         expect.assertions(5);
 

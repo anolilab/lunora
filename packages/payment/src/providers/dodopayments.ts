@@ -96,6 +96,36 @@ const SUBSCRIPTION_STATE_BY_DODO_STATUS: Record<string, SubscriptionState> = {
 
 const notSupported = makeNotSupported("dodopayments (merchant-of-record)");
 
+/** A whole number of minor units, the only string shape `readMinorUnits` will accept. */
+const WHOLE_MINOR_UNITS = /^-?\d+$/;
+
+/**
+ * Minor units from a Dodo money field that may arrive as a number **or** a string.
+ *
+ * `refund.succeeded` carries `Refund.amount` as a `number`, but `dispute.*` carries
+ * `GetDispute.amount` as a **string** ("represented as a string to accommodate precision"), which a
+ * plain `readNumber` reads as `undefined` — so a lost chargeback reversed `0`.
+ *
+ * A digits-only string is read as minor units, matching every money field Dodo *does* document
+ * (`total_amount`: "the currency's smallest unit — cents for USD, yen for JPY, fils for KWD"). A
+ * string that is not a whole number is refused rather than scaled: Dodo does not document the
+ * dispute amount's unit, and choosing between `"25.00"` meaning 25 and meaning 2500 is a 100x error
+ * on a funds reversal. Returning `undefined` leaves the action with no amount, which `sync.ts`
+ * records as a FULL reversal with the money untouched — loud and fail-closed — rather than writing a
+ * confidently wrong figure into the ledger.
+ */
+const readMinorUnits = (object: Record<string, unknown>, key: string): bigint | undefined => {
+    const value = object[key];
+
+    if (typeof value === "number") {
+        // Round before BigInt, as elsewhere in this adapter: a stray fractional number would throw a
+        // RangeError out of the parse path (a webhook 400 → provider retry loop).
+        return Number.isFinite(value) ? BigInt(Math.round(value)) : undefined;
+    }
+
+    return typeof value === "string" && WHOLE_MINOR_UNITS.test(value) ? BigInt(value) : undefined;
+};
+
 const customerIdOf = (object: Record<string, unknown>): string | undefined =>
     readString(asRecord(object.customer), "customer_id") ?? readString(object, "customer_id");
 
@@ -153,9 +183,12 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         // `unhandled`; a won dispute needs no transition.
         case "dispute.lost":
         case "refund.succeeded": {
+            // `refund.succeeded` reports a number, `dispute.lost` a string — see `readMinorUnits`.
+            const minorUnits = readMinorUnits(object, "amount");
+
             return {
                 ...base,
-                amount: money(BigInt(Math.round(readNumber(object, "amount") ?? 0)), currency),
+                amount: minorUnits === undefined ? undefined : money(minorUnits, currency),
                 referenceId: referenceFromMetadata(object),
                 // Per-refund identity for the sync layer's marker match. A lost dispute is not a refund
                 // the facade issued, so `dispute_id` stands in: distinct from every refund id, it can
@@ -166,7 +199,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             };
         }
         // A cancelled payment never settled — record it as a non-entitling failure (there is no
-        // dedicated `payment.canceled` action; `failed` is the closest terminal, non-entitling state).
+        // dedicated `payment.canceled` action; `failed` is the closest non-entitling state).
         case "payment.cancelled":
         case "payment.failed": {
             return { ...base, referenceId: referenceFromMetadata(object), sessionId: readString(object, "payment_id"), type: "payment.failed" };
