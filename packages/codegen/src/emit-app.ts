@@ -58,8 +58,16 @@ interface EmitAppOptions {
     hasScheduler: boolean;
     /** App uses `@lunora/storage` → emit `.storage()` (DO `ctx.storage` + studio file browser). */
     hasStorage: boolean;
-    /** Schema declares vector indexes → emit `.vectors()` (the Vectorize index map backing `ctx.vectors`). */
-    hasVectors: boolean;
+
+    /**
+     * The target platform supports a vector store — the gate's verdict, NOT the
+     * app's declaration, on the same convention `emitServer` and `emitShard`
+     * take it: `.vectors()` is emitted only when this AND
+     * {@link EmitAppOptions.vectorIndexCount} are both set. Defaults to `true` so
+     * a caller that does not gate (tests, fixtures) is unchanged; the index count
+     * alone then decides, as it did before the gate existed.
+     */
+    hasVectors?: boolean;
     /** App declares Cloudflare Workflows (`defineWorkflow`) → wire `options.workflowsClient` so the studio's workflow-instance proxy can reach the CF REST API. */
     hasWorkflow: boolean;
     /** App uses `@lunora/x402/pay` / `ctx.x402` → emit `.x402()` (wire the agent-wallet pay rail). */
@@ -79,6 +87,8 @@ interface EmitAppOptions {
     tableNames: ReadonlyArray<string>;
     /** Project depends on the unscoped `lunorash` umbrella → import the runtime via `lunorash/runtime` instead of `@lunora/runtime`. */
     useUmbrella: boolean;
+    /** Number of `.vectorize()` / `defineVectorIndex(...)` indexes the schema declares — the app-side half of {@link EmitAppOptions.hasVectors}. Defaults to `0`. */
+    vectorIndexCount?: number;
 
     /**
      * Voice-enabled agents (`defineAgent({ voice: … })`) → wire
@@ -1255,7 +1265,14 @@ const buildExportedTypes = (options: EmitAppOptions): string =>
  * it can import the add-on packages the app installed (`@lunora/auth`,
  * `@lunora/storage`, …) directly.
  */
-const emitApp = (options: EmitAppOptions): string => {
+const emitApp = (rawOptions: EmitAppOptions): string => {
+    // `hasVectors` arrives as the platform gate's VERDICT and is consumed (via
+    // `LONG_TAIL`'s `options[flag]` lookup) as "emit `.vectors()`" — the AND with
+    // the app's own declaration happens once, here, exactly as `emitServer` and
+    // `emitShard` make it against their `schema`. Normalising up front keeps the
+    // three emitters on one convention instead of leaving the conjunction to
+    // whichever call site remembered to make it.
+    const options: EmitAppOptions = { ...rawOptions, hasVectors: (rawOptions.hasVectors ?? true) && (rawOptions.vectorIndexCount ?? 0) > 0 };
     const { hasAuth } = options;
 
     const declarationBlocks = buildDeclarationBlocks(options);

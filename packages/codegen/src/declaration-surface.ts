@@ -274,6 +274,10 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         vectorStore: schema.vectorIndexes.length > 0,
     });
     const featureUsage = platformGate.usage;
+    // The gate's `vectorStore` verdict, named once for both consumers below.
+    // `undefined` means the app never declared a vector index, which must not
+    // withhold anything; only an explicit `false` is a rejection.
+    const vectorStoreSupported = platformGate.signals.vectorStore !== false;
 
     const declaredDependencies = readPackageDependencies(projectRoot);
     const dependencies = declaredDependencies ?? new Set<string>();
@@ -282,7 +286,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // Before either render: a schema needing an uninstalled add-on must fail as an
     // actionable error naming the package, not as a `tsc` failure reported inside
     // a generated file the user did not write.
-    assertRequiredPackages(schema, declaredDependencies, { hasVectors: platformGate.signals.vectorStore !== false });
+    assertRequiredPackages(schema, declaredDependencies, vectorStoreSupported);
 
     const hasFlags = existsSync(join(lunoraDirectory, "flags.ts"));
     const hasNotify = existsSync(join(lunoraDirectory, "notify.ts"));
@@ -311,9 +315,8 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
             hasBrowser: featureUsage.browser,
             // The gate's verdict, not the raw declaration: a `.vectorize()` column
             // declares the feature without importing anything, so `featureUsage`
-            // never sees it. `false` only when the signal was REJECTED — absent
-            // means never declared, which must not withhold the surface.
-            hasVectors: platformGate.signals.vectorStore !== false,
+            // never sees it. The emitter AND's it with `schema.vectorIndexes`.
+            hasVectors: vectorStoreSupported,
             hasFlags,
             hasHyperdrive: featureUsage.hyperdrive,
             hasImages: featureUsage.images,

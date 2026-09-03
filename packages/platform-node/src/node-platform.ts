@@ -84,23 +84,27 @@ export interface NodePlatform<
 
     /**
      * The `.global()` backend, or `undefined` when the caller named no database
-     * file for it. Same reasoning as `objectStorage`: `globalTables` is rated
-     * `emulated`, so codegen emits the whole `.global()` surface for this target
-     * with no diagnostic, and a store nobody bound fails at the first global read
-     * or write. There is no default path, because a global store silently rooted
-     * at `:memory:` loses every row when the process exits.
+     * file for it. There is no default path, because a global store silently
+     * rooted at `:memory:` loses every row when the process exits.
+     *
+     * **A building block, not a wiring.** Unlike its three siblings, nothing
+     * downstream of this composition root reads it: a `.global()` read or write
+     * reaches its backend through exactly one seam, `createShardCtxDb({ globalDb
+     * })`, and the only thing that passes `globalDb` is the generated `shard.ts`,
+     * from its `d1` / `hyperdriveGlobal` config thunks. `createNodePlatform`
+     * constructs no shard DO, so it cannot make that hop itself. A caller that
+     * wants `.global()` on this host makes it: after `migrate(schema)` has
+     * provisioned the tables, give the generated `createShardDO` a `d1` thunk
+     * returning `platform.globalTables.writer({ schema, … })` — `writer` builds
+     * the `createSqlCtxDb` facade that seam expects, and `node-platform.test.ts`
+     * round-trips a row through exactly that object.
      */
     globalTables?: NodeGlobalStore;
 
     /** Durable key-value storage backed by the same `better-sqlite3` database as `shard`. */
     kv: ShardKvStore;
 
-    /**
-     * The local-filesystem bucket, or `undefined` when the caller named no
-     * bucket directory. Same reasoning as `queues`: `objectStorage` is rated
-     * `emulated`, so codegen emits `ctx.storage` for this target, and a bucket
-     * nobody bound fails at the first `put` with nothing upstream to warn.
-     */
+    /** The local-filesystem bucket, or `undefined` when the caller named no bucket directory. */
     objectStorage?: R2BucketLike;
 
     /**
@@ -137,8 +141,7 @@ export interface NodePlatform<
  * durable alarms somewhere to land.
  *
  * `queues`, `workflows`, `objectStorageDirectory` and `globalTablesPath` are the
- * four declarations: each binds its half of an `emulated` capability, and each is
- * absent from the returned platform when its declaration is omitted.
+ * four declarations — each is absent from the returned platform when omitted.
  */
 export type NodePlatformOptions<
     Queues extends Record<string, { isLunoraQueue: true }> = Record<string, never>,
@@ -195,6 +198,8 @@ export const createNodePlatform = <
     // host that declares the capability and binds nothing is the one combination
     // that fails at runtime with no diagnostic anywhere before it — which is
     // exactly what `.global()` did while this root composed only the other three.
+    // Composing it is half the job: see `NodePlatform.globalTables` for the hop
+    // only a caller can make, because nothing here builds a shard DO to make it.
     const queues =
         options.queues === undefined
             ? undefined

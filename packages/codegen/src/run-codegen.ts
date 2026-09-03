@@ -775,6 +775,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // (`useFlag`) iterate these. Only meaningful when a provider is wired.
     const flagKeys = hasFlags ? discoverFlagKeys(project, lunoraDirectory) : [];
 
+    // The platform gate's `vectorStore` verdict, named once for every consumer
+    // below. `undefined` means the app never declared a vector index, which must
+    // not withhold anything; only an explicit `false` is a rejection. Spelling
+    // that three-state comparison out per call site is what let one of them —
+    // the studio nav — keep advertising the feature the other two withheld.
+    const vectorStoreSupported = platformGate.signals.vectorStore !== false;
+
     // Which optional, package-backed features the studio should show a nav page
     // for. `buildStudioFeatures` OR's the code-usage flags with the schema/project
     // signals the `lunora/`-scoped scan can't see: storage columns + access rules,
@@ -796,6 +803,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         storageColumnCount: Object.keys(buildStorageColumns(schema)).length,
         storageRuleCount: storageRulesMetadata.rules.length,
         vectorIndexCount: schema.vectorIndexes.length,
+        vectorStoreSupported,
         workflowCount: workflows.length,
     });
 
@@ -846,9 +854,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // shard emitter recomputed the flag from `schema.vectorIndexes` instead,
         // so the DO kept the whole Vectorize wiring on a host rating
         // `vectorStore: "unsupported"` — a `generated.shard` byte-identical to
-        // the Cloudflare one while the type surface was withheld. Absent means
-        // never declared, which must not withhold.
-        hasVectors: platformGate.signals.vectorStore !== false,
+        // the Cloudflare one while the type surface was withheld.
+        hasVectors: vectorStoreSupported,
         hasX402: featureUsage.x402,
         maskMetadata,
         mutators,
@@ -930,12 +937,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasQueue: queues.some((queue) => queue.mode === "push"),
         hasScheduler: studioFeatures.scheduler,
         hasStorage: studioFeatures.storage,
-        // Gated, not raw: the declaration alone is what the platform pass
-        // rejects on a host rating `vectorStore: "unsupported"`. Passing the raw
-        // count here emitted the runtime WIRING for `ctx.vectors` even when the
-        // type surface was correctly withheld, so "the surface was withheld" was
-        // only half true. Absent means never declared, which must not withhold.
-        hasVectors: platformGate.signals.vectorStore !== false && schema.vectorIndexes.length > 0,
+        // The gate's verdict, on the same convention `emitServer`/`emitShard`
+        // take it: the emitter AND's it with the declaration itself. This call
+        // site used to pass the CONJUNCTION under the same prop name, so the one
+        // flag meant two different things depending on which emitter read it.
+        hasVectors: vectorStoreSupported,
         hasWorkflow: workflows.length > 0,
         hasX402: featureUsage.x402,
         // The single `defineIdentity(...)` contract (Plan 080). Wires
@@ -948,6 +954,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // Drives the emitted `listSchemaTables` — export's seed for "every table".
         tableNames: schema.tables.map((table) => table.name),
         useUmbrella,
+        // The app's own declaration, which `emitApp` AND's with `hasVectors`.
+        // `emitApp` takes no schema (it takes the table NAMES), so the count it
+        // needs to make the same decision its siblings make has to come in.
+        vectorIndexCount: schema.vectorIndexes.length,
         // Voice-enabled agents (`defineAgent({ voice: … })`) → wire the worker's
         // `/_lunora/voice/<exportName>` route to each agent's `VOICE_*` DO
         // namespace. Empty for voice-free (and agent-free) projects, so the

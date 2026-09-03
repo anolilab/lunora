@@ -110,10 +110,12 @@ describe("createNodePlatform", () => {
             using platform = createNodePlatform({ globalTablesPath: join(workdir, "global.sqlite3") });
 
             // The fourth member of the same set as queues / workflows / object
-            // storage: `globalTables` is rated `emulated`, codegen emits the whole
-            // `.global()` surface for this target with no diagnostic, and the
-            // composition root bound nothing — so the first `.global()` read or
-            // write failed at runtime with nothing upstream having warned.
+            // storage: `globalTables` is rated `emulated`, so codegen emits the
+            // whole `.global()` surface for this target with no diagnostic, and
+            // this root had no store to offer a caller at all. What it offers is
+            // a building block — the round-trip below is over the very `writer`
+            // a caller hands to `createShardDO` as `globalDb`; nothing here can
+            // make that hop for them, because nothing here builds a shard DO.
             expect(platform.capabilities.features.globalTables?.level).toBe("emulated");
 
             const store = platform.globalTables!;

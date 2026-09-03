@@ -2762,7 +2762,9 @@ export const LUNORA_MIGRATIONS: Record<string, RegisteredDataMigration> = {${mig
  * `./functions.js`; the live schema is imported from `../schema.js`.
  *
  * The file stays dependency-light: it always imports `@lunora/do`, and only
- * imports `@lunora/bindings/vectors` when the schema declares at least one vector index.
+ * imports `@lunora/bindings/vectors` when the schema declares at least one
+ * vector index AND the target platform rates a vector store as something other
+ * than `unsupported` (`hasVectors`) — the same pairing `emitServer` makes.
  * `scheduler`/`storage` arrive via optional config thunks (so the generated
  * file never hard-imports `@lunora/scheduler` / `@lunora/storage`); when a
  * thunk is omitted an error stub is wired in its place.
