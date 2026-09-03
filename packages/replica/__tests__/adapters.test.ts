@@ -205,6 +205,34 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
         expect(mirror.query("SELECT id, title FROM todos")).toStrictEqual([{ id: "1", title: "v2" }]);
     });
 
+    it("derives a primary key for an un-keyed insert rather than rolling the whole diff back", () => {
+        expect.assertions(3);
+
+        const mirror = new LocalMirror({ db: makeAdapter() });
+
+        // `subscribeToMirror` pushes an un-keyed insert on purpose for any row
+        // whose primary key it cannot read — an aggregate or a projection that
+        // does not select `id`. It is appended BEFORE the keyed upserts, and the
+        // whole diff is one transaction, so a pk-less INSERT failing the mirror's
+        // `PRIMARY KEY NOT NULL` discarded every well-keyed row in the frame too.
+        const diff = createTableDiff("todos", [
+            { data: { title: "no key at all" }, type: "insert" },
+            { data: { id: "1", title: "keyed, must survive" }, type: "insert" },
+        ]);
+
+        mirror.applyDiff(diff);
+
+        expect(mirror.query("SELECT id, title FROM todos WHERE id = '1'")).toStrictEqual([{ id: "1", title: "keyed, must survive" }]);
+        expect(mirror.query<{ title: string }>("SELECT title FROM todos WHERE id <> '1'")).toStrictEqual([{ title: "no key at all" }]);
+
+        // Deterministic, like the in-memory apply path (REPLICA-05): re-applying
+        // the SAME diff re-derives the same id and upserts rather than
+        // accumulating a second copy of the row.
+        mirror.applyDiff(diff);
+
+        expect(mirror.query<{ n: number }>("SELECT COUNT(*) AS n FROM todos")).toStrictEqual([{ n: 2 }]);
+    });
+
     it("evolves the schema when a later diff carries new columns", () => {
         expect.assertions(1);
 

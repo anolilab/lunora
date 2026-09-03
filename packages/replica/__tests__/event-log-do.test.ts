@@ -283,6 +283,40 @@ describe(EventLogDO, () => {
         expect(d2.entries).toHaveLength(1);
     });
 
+    it("refuses /state for a log too large to serialise, naming the bounded read instead", async () => {
+        expect.assertions(4);
+
+        const do_ = createDO();
+
+        await doFetch(do_, "POST", "/append", {
+            events: Array.from({ length: 1001 }, () => {
+                return { type: "e", payload: {} };
+            }),
+        });
+
+        // `/state` has no LIMIT and `Response.json` serialises whatever
+        // `rowsToEntries` materialised, so log growth alone eventually breaks it
+        // — the exact failure `/since` was bounded to fix. It must refuse rather
+        // than build the whole body inside a 128 MB isolate.
+        const res = await doFetch(do_, "GET", "/state");
+
+        expect(res.status).toBe(413);
+
+        const error = (await res.json()) as { error: { message: string } };
+
+        expect(error.error.message).toMatch(/\/since/);
+
+        // A log that still fits keeps working unchanged.
+        const small = createDO();
+
+        await doFetch(small, "POST", "/append", { events: [{ type: "e", payload: {} }] });
+
+        const smallRes = await doFetch(small, "GET", "/state");
+
+        expect(smallRes.status).toBe(200);
+        expect(((await smallRes.json()) as { entries: unknown[] }).entries).toHaveLength(1);
+    });
+
     it("rejects an out-of-range /since limit", async () => {
         expect.assertions(2);
 

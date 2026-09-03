@@ -13,7 +13,7 @@
  * | POST   | `/append`               | Insert events, return assigned seqs  |
  * | GET    | `/since?seq=N&limit=M`  | ONE bounded page of `seq >= N`       |
  * | GET    | `/size`                 | Number of stored events              |
- * | GET    | `/state`                | Full event log state (for recovery)  |
+ * | GET    | `/state`                | Whole log in one body; 413 past 1000 |
  */
 
 import type { EventLogEntry } from "./event-log";
@@ -483,13 +483,36 @@ export class EventLogDO {
         return json({ count });
     }
 
-    /** GET /state — return the full event log state. */
+    /**
+     * GET /state — the whole event log in one body, for a caller that wants it
+     * as a single atom.
+     *
+     * Refuses past {@link MAX_PAGE_SIZE} entries rather than building the body.
+     * The read is unpaged by definition, so it hits exactly what `#handleSince`
+     * was bounded to stop — `rowsToEntries` materialises every row and
+     * `Response.json` serialises all of them inside a 128 MB isolate — and log
+     * growth alone eventually reaches it on a route the class docblock lists
+     * "for recovery". One extra row is read so the refusal is decided without
+     * materialising the rest; the error names `/since`, which answers the same
+     * question in bounded pages.
+     */
     #handleState(): Response {
         const { sql } = this.state.storage;
 
-        const cursor = sql.exec("SELECT seq, type, payload, timestamp, client_id, session_id, parent_seq FROM events ORDER BY seq ASC") as SqlCursor;
+        const cursor = sql.exec(
+            "SELECT seq, type, payload, timestamp, client_id, session_id, parent_seq FROM events ORDER BY seq ASC LIMIT ?",
+            MAX_PAGE_SIZE + 1,
+        ) as SqlCursor;
 
         const entries = rowsToEntries(cursor);
+
+        if (entries.length > MAX_PAGE_SIZE) {
+            return errorResponse(
+                413,
+                "PAYLOAD_TOO_LARGE",
+                `the log holds more than ${String(MAX_PAGE_SIZE)} entries, which /state cannot return in one body — walk /since?seq=0 with its truncated/cursor pages instead`,
+            );
+        }
 
         const nextSeq = (entries.at(-1)?.seq ?? -1) + 1;
 
