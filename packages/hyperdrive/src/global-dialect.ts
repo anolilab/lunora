@@ -153,7 +153,9 @@ export const postgresDialect: SqlDialect = {
                 return "DOUBLE PRECISION";
             }
             default: {
-                // string/id/literal, bigint (decimal string), object/array/record/union/any (JSON text).
+                // string/id/literal, bigint (the order-preserving 40-character
+                // key `bigintSqlKey` builds, same as the MySQL arm above),
+                // object/array/record/union/any (JSON text).
                 return "TEXT";
             }
         }

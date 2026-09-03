@@ -389,6 +389,37 @@ describe("seedPlan — unique columns", () => {
         expect(rows[0]).toStrictEqual({ _id: "d84cf143-978e-4b60-9832-481cdfa76ce2", age: 460, email: "bryan79@hotmail.com", name: "Ada Fritsch DVM" });
         expect(rows[1]).toStrictEqual({ _id: "730f300b-1bf5-4730-9340-429bb785ee9b", age: 509, email: "courtney51@hotmail.com", name: "Griffin Towne" });
     });
+
+    // The tag budget for an email column is the whole fallback domain, not the
+    // one-character suffix separator: counting the cheap form let a narrow
+    // column claim a billion possible values and then seed one its own
+    // validator rejects.
+    it("refuses a unique email column too narrow to hold a tagged address", () => {
+        expect.hasAssertions();
+
+        const narrow = defineSchema({ people: defineTable({ contact: v.string().email().max(10).unique() }) });
+        const run = (): unknown => seedPlan(narrow, { counts: { people: 3 }, now: 1_700_000_000_000, seed: 3 });
+
+        expect(run).toThrow('unique column "contact"');
+        expect(run).toThrow(/only 0 possible values/);
+    });
+
+    // The narrowest column that can still hold `<tag>@example.com` deals exactly
+    // ten values — one per single-digit tag — and no more.
+    it("budgets a unique email column's capacity by the domain the tag has to fit around", () => {
+        expect.hasAssertions();
+
+        const boundary = defineSchema({ people: defineTable({ contact: v.string().email().max(13).unique() }) });
+        const seedRows = (count: number): ReadonlyArray<Record<string, unknown>> =>
+            seedPlan(boundary, { counts: { people: count }, now: 1_700_000_000_000, seed: 3 }).find((entry) => entry.table === "people")!.rows;
+
+        const rows = seedRows(10);
+
+        expect(new Set(rows.map((row) => row.contact)).size).toBe(10);
+        expect(rows.every((row) => String(row.contact).length <= 13)).toBe(true);
+        expect(() => seedRows(11)).toThrow(/cannot seed 11 rows into "people"/);
+        expect(() => seedRows(11)).toThrow(/only 10 possible values/);
+    });
 });
 
 describe("seedPlan — unique columns beyond enums and strings", () => {

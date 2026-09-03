@@ -135,6 +135,11 @@ Without codegen, pass the type yourself: `createSeedClient<InsertModel>(schema)`
     type={{
         defaultCount: { type: "number", default: "10", description: "Row count when a table call passes no spec." },
         seed: { type: "number", default: "0", description: "Deterministic mapping selector." },
+        now: {
+            type: "number",
+            default: "Date.now()",
+            description: "Epoch-ms reference for time-valued columns. Pin it alongside `seed` for a byte-identical run.",
+        },
         persist: {
             type: "(table, rows) => Promise<void> | void",
             description: "Called with each generated batch (parents first). The client is pure when omitted.",

@@ -85,9 +85,17 @@ const uniquifyString = (value: string, index: number, constraints: Constraints):
     if (at > 0) {
         const local = value.slice(0, at);
         const domain = value.slice(at);
-        const room = maxLength === undefined ? local.length : Math.max(0, maxLength - domain.length - tag.length - 1);
+        const room = maxLength === undefined ? local.length : maxLength - domain.length - tag.length - 1;
 
-        return `${local.slice(0, room)}+${tag}${domain}`;
+        // A generated address whose own domain fills the column leaves no room
+        // for a plus-tag: clamping to zero here would emit `+7@a-very-long.example`
+        // OVER `maxLength`, which is the overflow this reservation exists to
+        // prevent. Fall through instead — an `email` column rebuilds the address
+        // around the fixed fallback domain {@link stringCapacity} budgeted for,
+        // and anything else takes the plain index suffix.
+        if (room >= 0) {
+            return `${local.slice(0, room)}+${tag}${domain}`;
+        }
     }
 
     // The column declares `format: "email"` but the field-name heuristics didn't
@@ -185,13 +193,28 @@ const refuse = (table: string, column: string, why: string): never => {
  * How many distinct values a string column can hold once every value has to
  * carry an index tag. A narrow column runs out long before the alphabet does:
  * `maxLength` of 1 leaves no room for even `-0`.
+ *
+ * The overhead an `email` column pays is the whole {@link FALLBACK_EMAIL_DOMAIN},
+ * not the one-character separator: {@link uniquifyString} rebuilds the address
+ * around that domain whenever the generated one leaves no room for a plus-tag,
+ * so it is the fixed cost the tag has to fit around. Budgeting the cheaper
+ * suffix form is what let `v.string().email().max(10).unique()` report a
+ * billion possible values and then seed `0@example.com` — thirteen characters
+ * into a ten-character column, rejected by the column's own validator on
+ * insert, which is exactly the outcome the capacity check exists to pre-empt.
+ *
+ * With this budget the largest index the planner admits is `10 ** (maxLength -
+ * overhead) - 1`, whose tag is at most `maxLength - overhead` characters — so
+ * `tag + overhead` always fits.
  */
-const stringCapacity = (maxLength: number | undefined): number => {
+const stringCapacity = ({ format, maxLength }: Constraints): number => {
     if (maxLength === undefined) {
         return Number.POSITIVE_INFINITY;
     }
 
-    return maxLength <= 1 ? 0 : 10 ** (maxLength - 1);
+    const overhead = format === "email" ? FALLBACK_EMAIL_DOMAIN.length : "-".length;
+
+    return maxLength <= overhead ? 0 : 10 ** (maxLength - overhead);
 };
 
 /**
@@ -215,7 +238,7 @@ const stringDeal = (constraints: Constraints, table: string, column: string): Un
     }
 
     return {
-        capacity: stringCapacity(constraints.maxLength),
+        capacity: stringCapacity(constraints),
         valueAt: (index, generate) => uniquifyString(String(generate()), index, constraints),
     };
 };
