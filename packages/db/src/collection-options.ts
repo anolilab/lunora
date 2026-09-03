@@ -596,18 +596,21 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
     const getKey = options.getKey ?? ((row: TRow) => row._id);
     // Shared per-shard by default — a per-collection registry hangs any shard with
     // more than one collection (see `getShardCheckpoints`). A `shape` carries its
-    // own shard key; the `list` path uses the top-level one. Resolved LAZILY at
-    // each callback use site rather than captured once: an identity switch
-    // retires the derived registry and mints a fresh one, and a still-mounted
-    // collection's frames must advance the replacement — a captured registry
-    // would leave the fresh one unattached and never authoritatively advanced,
-    // so post-switch overlays would drop ungated (or wait out the fallback).
+    // own shard key; the `list` path uses the top-level one. The sync callbacks
+    // re-resolve rather than close over the capture below, because
+    // {@link disposeShardCheckpoints} drops the whole per-client map: a
+    // collection still mounted across that teardown must advance the registry a
+    // later {@link getShardCheckpoints} mints, not the disposed one it was built
+    // with (whose gates resolve to `Infinity`, so every overlay drops ungated).
+    // An identity switch is NOT such a case — {@link syncShardCheckpointIdentity}
+    // rewinds each registry IN PLACE precisely so captures stay valid; see
+    // {@link registryResets}.
     const resolveCheckpoints = (): CheckpointRegistry => {
         const registry = options.checkpoints ?? getShardCheckpoints(options.client, options.shape?.shardKey ?? options.shardKey);
 
         // This collection's subscription is what advances the registry — record
         // that so `bindMutators` knows gating an overlay on it will actually
-        // settle. Re-marked on every resolve so a post-switch replacement
+        // settle. Re-marked on every resolve so a post-teardown replacement
         // registry is covered too (a WeakSet add is idempotent).
         markCheckpointsAttached(registry);
 

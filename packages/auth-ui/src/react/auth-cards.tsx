@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 
 import { signInAnonymously } from "../core/anonymous";
 import { createBackupCodeSignInController } from "../core/backup-codes";
@@ -9,7 +9,7 @@ import { queryParameter } from "../core/browser-location";
 import { createEmailOtpController } from "../core/email-otp";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createForgotPasswordController } from "../core/forgot-password";
-import { LAST_METHOD_EMAIL, LAST_METHOD_MAGIC_LINK, readLastLoginMethod } from "../core/last-login-method";
+import { LAST_METHOD_EMAIL, LAST_METHOD_MAGIC_LINK, lastLoginMethodStore } from "../core/last-login-method";
 import { createMagicLinkController } from "../core/magic-link";
 import { createResetPasswordController } from "../core/reset-password";
 import { createResetPasswordOtpController } from "../core/reset-password-otp";
@@ -50,14 +50,19 @@ const SignInCard = ({ forgotPasswordHref = "/forgot-password", signUpHref = "/si
     const { localization: t, social } = context;
     const [state, actions] = useController(createSignInController);
     const pending = state.status === "submitting";
-    // Read once per render rather than in an effect: it is a cookie, it is
-    // available before the first paint, and it only picks a badge.
-    const lastUsed = readLastLoginMethod();
+    // Read after hydration, not during render: the server has no cookie, so a
+    // render-time read is a hydration mismatch. See `lastLoginMethodStore`.
+    const lastUsedAfterHydration = useSyncExternalStore(
+        lastLoginMethodStore.subscribe,
+        lastLoginMethodStore.getSnapshot,
+        lastLoginMethodStore.getServerSnapshot,
+    );
+    const lastUsed = context.plugins.lastLoginMethod ? lastUsedAfterHydration : undefined;
 
     return (
         <AuthCard footer={context.signUp ? <AuthLink href={signUpHref}>{t.noAccount}</AuthLink> : undefined} title={t.signIn}>
             <SocialButtons
-                lastUsed={context.plugins.lastLoginMethod ? lastUsed : undefined}
+                lastUsed={lastUsed}
                 onSelect={(provider) => {
                     void signInWithSocial(context, provider);
                 }}
@@ -78,9 +83,6 @@ const SignInCard = ({ forgotPasswordHref = "/forgot-password", signUpHref = "/si
                     <AuthLink href={forgotPasswordHref}>{t.forgotPasswordLink}</AuthLink>
                     <SubmitButton pending={pending}>
                         {t.signIn}
-                        {/* better-auth records a password sign-in as "email", so
-                            without this the badge is invisible for the most
-                            common route there is. */}
                         {lastUsed === LAST_METHOD_EMAIL ? <LastUsedBadge /> : null}
                     </SubmitButton>
                 </form>
@@ -204,10 +206,17 @@ interface MagicLinkCardProps {
 }
 
 const MagicLinkCard = ({ signInHref = "/sign-in" }: MagicLinkCardProps = {}): ReactElement | null => {
-    const lastUsed = readLastLoginMethod();
     const context = useAuthUI();
     const { localization: t } = context;
     const [state, actions] = useController(createMagicLinkController);
+    // Read after hydration, not during render: the server has no cookie, so a
+    // render-time read is a hydration mismatch. See `lastLoginMethodStore`.
+    const lastUsedAfterHydration = useSyncExternalStore(
+        lastLoginMethodStore.subscribe,
+        lastLoginMethodStore.getSnapshot,
+        lastLoginMethodStore.getServerSnapshot,
+    );
+    const lastUsed = context.plugins.lastLoginMethod ? lastUsedAfterHydration : undefined;
 
     if (!isFlowEnabled(context, "magicLink", "MagicLinkCard")) {
         return null;

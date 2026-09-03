@@ -17,17 +17,30 @@ const OUTBOX_DRAIN_INTERVAL_MS = 1000;
  */
 export const OUTBOX_MUTATION_FN_NAME = "__lunora_outbox__";
 
+/**
+ * Provenance stamped on a durable write at enqueue time: the two questions a
+ * replay cannot answer from the persisted row once the write outlives the
+ * session that made it — WHO queued it, and WHICH shard it belongs to.
+ *
+ * Shared so both replay paths (`db.actions.*` and the reserved
+ * `__lunora_outbox__` handler) check the same fields; they drifted apart once
+ * already, and only one of them had the identity guard.
+ */
+export interface WriteProvenance extends Record<string, unknown> {
+    /** Issuing identity fingerprint; a replay drops the write when it no longer matches. */
+    identity: string | null;
+    /** Captured, not re-read at replay: a queued write follows the shard it was made against even if the app reboots pointed at another. */
+    shardKey?: string;
+}
+
 /** The metadata an outbox-routed transaction carries so its replay can call `client.mutation`. */
-export interface OutboxMutationMetadata extends Record<string, unknown> {
+export interface OutboxMutationMetadata extends WriteProvenance {
     args: Record<string, unknown>;
     clientId: string;
     functionPath: string;
     /** Stable `${clientId}:${mutationId}` replay key; passed back as the mutation id so a committed-but-unacked replay is server-idempotent. */
     idempotencyKey: string;
-    /** Issuing identity fingerprint; the replay handler drops the write when it no longer matches. */
-    identity: string | null;
     mutationId: number;
-    shardKey?: string;
 }
 
 /** A committable outbox transaction handle (the `OfflineTransaction` the executor mints). */

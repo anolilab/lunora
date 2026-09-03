@@ -22,7 +22,17 @@ type DurableObjectContext = ConstructorParameters<typeof Container>[0];
 /** Interval between `readyOn` probe attempts while waiting for the app to come up. */
 const READINESS_POLL_INTERVAL_MS = 500;
 
-/** Upper bound on how long the `readyOn` probes block container start before failing. */
+/**
+ * Upper bound on how long the `readyOn` probes block container start before failing.
+ *
+ * Equal to the platform's own ceiling for a `blockConcurrencyWhile` callback —
+ * "if this timeout is exceeded, the Durable Object will be reset" — so inside
+ * the gate the reset would win the race and the `LunoraError` below would be
+ * unreachable on the very path it exists for. That is why this wait runs outside
+ * it; see `afterContainerStart`.
+ *
+ * https://developers.cloudflare.com/durable-objects/api/state/
+ */
 const READINESS_TIMEOUT_MS = 30_000;
 
 /**
@@ -63,6 +73,8 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     private readonly lunoraDefaultPort?: number;
     /** Hard-cap lifetime in whole seconds (from the `hardTimeout` config), or `undefined`. */
     private readonly lunoraHardTimeoutSeconds?: number;
+    /** In-flight `readyOn` gate for the current start; cleared when it fails. See `awaitReadinessGate`. */
+    private lunoraReadiness?: Promise<void>;
     /** Declarative readiness probes that gate request proxying (from the `readyOn` config). */
     private readonly lunoraReadyOn: ReadonlyArray<ContainerReadinessCheck>;
     /** Map of container env-var name → Worker Secrets Store binding name (from the `secretsStore` config). */
@@ -132,8 +144,21 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
      */
     public override async containerFetch(...args: Parameters<Container<Env>["containerFetch"]>): Promise<Response> {
         await this.resolveSecretsStoreEnv();
+        await this.awaitReadinessGate();
 
         return super.containerFetch(...args);
+    }
+
+    /**
+     * The start path `containerFetch` takes (and the one an app can call itself).
+     * The base's last act is `blockConcurrencyWhile(… onStart())`, so this
+     * override resumes on the far side of that gate — which is where
+     * {@link afterContainerStart} has to run. See its docblock.
+     */
+    public override async startAndWaitForPorts(...args: Parameters<Container<Env>["startAndWaitForPorts"]>): Promise<void> {
+        await super.startAndWaitForPorts(...args);
+
+        await this.afterContainerStart();
     }
 
     /**
@@ -153,7 +178,9 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
             await this.resolveSecretsStoreEnv();
         }
 
-        return super.start(...args);
+        await super.start(...args);
+
+        await this.afterContainerStart();
     }
 
     public override async onActivityExpired(): Promise<void> {
@@ -181,14 +208,6 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         this.surfaceInStudioLogs(envelope);
 
         await super.onStart();
-
-        // The base calls `onStart()` after the ports are healthy and inside a
-        // `blockConcurrencyWhile`, and `containerFetch` routes through that same
-        // start path — so arming the hard timeout here makes it count from the
-        // real start, and awaiting readiness here gates request proxying until
-        // the app reports ready.
-        await this.armHardTimeout();
-        await this.awaitContainerReadiness();
     }
 
     /**
@@ -224,7 +243,119 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
 
         this.surfaceInStudioLogs(envelope);
 
+        // The gate belongs to the run that just ended. Left in place, the next
+        // start would find it already settled and skip both `armHardTimeout` and
+        // the `readyOn` probes — so a restarted app would be proxied to before it
+        // reported ready, and its hard timeout would never be re-armed. Cleared
+        // here rather than at the top of a start so that single-flight still holds
+        // WITHIN a run: two concurrent starts must share one gate, or they each
+        // arm a schedule stamped with the same generation.
+        this.lunoraReadiness = undefined;
+
         await super.onStop(parameters);
+    }
+
+    /**
+     * Arm the hard timeout and block on the `readyOn` probes — the work that has
+     * to happen once per real start, **outside** the base's start gate.
+     *
+     * It cannot live in `onStart`, which is the obvious home for it: the base
+     * invokes that hook as `blockConcurrencyWhile(async () => { … onStart() })`
+     * (`@cloudflare/containers`, both `start()` and `startAndWaitForPorts()`),
+     * and workerd treats a *rejecting* `blockConcurrencyWhile` closure as
+     * unrecoverable — it aborts the Durable Object, discards its in-memory state
+     * and every hibernating socket on it, and flattens the error to a plain
+     * `Error`. A readiness timeout is an ordinary, diagnosable failure: it must
+     * surface as the `LunoraError` naming the check, the port and the budget,
+     * not cost the object its life and arrive as an opaque message. (The same
+     * reasoning, and the same settle-outside-the-gate remedy, is written up on
+     * `ShardHost.runSerialized` in `@lunora/platform-cloudflare`.) A 30-second
+     * wait also has no business inside a gate that blocks every other dispatch
+     * to the object.
+     *
+     * Both start entry points call this immediately after `super`, so it runs
+     * once per start. It does NOT gate proxying on its own: the base commits the
+     * healthy state inside the start gate, before this runs, so a concurrent
+     * request would sail past `containerFetch`'s status check. That is what
+     * `awaitReadinessGate` is for, and it is the seam the move cost us —
+     * the in-gate placement got this for free from `blockConcurrencyWhile`.
+     */
+    private async afterContainerStart(): Promise<void> {
+        // Single-flight. The base coalesces the container start itself
+        // (`startContainerIfNotRunning`) but not this tail, and it no longer runs
+        // inside `blockConcurrencyWhile` — so without this, two concurrent starts
+        // both read the same hard-timeout generation and each arm a schedule
+        // stamped with it, leaving two live schedules that both look current.
+        const inFlight = this.lunoraReadiness;
+
+        if (inFlight !== undefined) {
+            await inFlight;
+
+            return;
+        }
+
+        const gate = (async () => {
+            await this.armHardTimeout();
+            await this.awaitContainerReadiness();
+        })();
+
+        // Published before it is awaited, so a request that arrives mid-probe
+        // waits on THIS gate instead of proxying (see `awaitReadinessGate`).
+        this.lunoraReadiness = gate;
+
+        try {
+            await gate;
+        } catch (error) {
+            // Drop a failed gate rather than leaving it to reject every later
+            // request forever: the base has already committed the healthy state,
+            // so the next request re-probes instead of trusting it.
+            this.lunoraReadiness = undefined;
+
+            throw error;
+        }
+    }
+
+    /**
+     * Block until the `readyOn` probes for the current start have passed.
+     *
+     * Necessary because the base marks the container healthy *inside* the start
+     * gate — `startAndWaitForPorts` runs `setHealthy()` immediately before
+     * `onStart()` — while our probes run after it returns. `containerFetch`
+     * skips the start path entirely once it observes
+     * `container.running && status === "healthy"`, so without this a request
+     * arriving mid-probe would proxy to a container that never reported ready,
+     * and a request arriving after a *failed* probe would do so permanently.
+     * Holding `setHealthy` and the probes together the way the base does would
+     * mean putting the probes back inside the gate, which is the defect this
+     * whole path exists to avoid.
+     */
+    private async awaitReadinessGate(): Promise<void> {
+        if (this.lunoraReadyOn.length === 0) {
+            return;
+        }
+
+        if (this.lunoraReadiness === undefined) {
+            // Not healthy yet: `super.containerFetch` runs the start path, which
+            // routes through our `startAndWaitForPorts` override and gates there.
+            const { status } = await this.getState();
+
+            if (status !== "healthy") {
+                return;
+            }
+
+            // Healthy with no gate on record — a previous probe failed and was
+            // dropped, or this isolate was recycled after the start. Re-probe
+            // rather than proxy on the base's word alone.
+            this.lunoraReadiness = this.awaitContainerReadiness();
+        }
+
+        try {
+            await this.lunoraReadiness;
+        } catch (error) {
+            this.lunoraReadiness = undefined;
+
+            throw error;
+        }
     }
 
     /**

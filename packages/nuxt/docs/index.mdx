@@ -77,11 +77,13 @@ Configurable under the `lunora` key in `nuxt.config.ts`.
 | Option     | Default           | Description                                                                     |
 | ---------- | ----------------- | ------------------------------------------------------------------------------- |
 | `appEntry` | `~/lunora/server` | Module specifier of the Lunora app entry, aliased to the `#lunora/app` virtual. |
-| `prefix`   | `/_lunora`        | URL prefix the Lunora realtime plane is mounted at.                             |
+
+The `/_lunora/**` mount is fixed: the worker routes on those exact paths and the
+generated client calls them.
 
 ## How it works
 
-- **The route** (`addServerHandler` at `<prefix>/**`): reconstructs a Web
+- **The route** (`addServerHandler` at `/_lunora/**`): reconstructs a Web
   `Request` from the H3 event, resolves the Cloudflare `env`/`ExecutionContext`
   off it (tolerating both `event.context.cloudflare` and
   `event.req.runtime.cloudflare`), and forwards to your app's `fetch`. A
