@@ -42,6 +42,113 @@ const itemNames = readdirSync(registryRoot).filter((entry) => {
     return statSync(full).isDirectory() && existsSync(join(full, "registry.json"));
 });
 
+/** Every shipped item's parsed manifest — the source sweeps below all start here. */
+const manifests = itemNames.map((name) => {
+    return { manifest: parseManifest(JSON.parse(readFileSync(join(registryRoot, name, "registry.json"), "utf8")), name), name };
+});
+
+/** Every file an item ships, with its source — one flat list to sweep. */
+const itemSources = manifests.flatMap(({ manifest, name }) =>
+    manifest.files.map((file) => {
+        return { from: file.from, name, source: readFileSync(join(registryRoot, name, file.from), "utf8") };
+    }),
+);
+
+/**
+ * Wrangler's own `config-schema.json` `required` lists, for the binding kinds
+ * this registry scaffolds. A missing required field is not a warning: wrangler
+ * refuses to load the config, so an item shipping one breaks validation for the
+ * WHOLE Worker.
+ */
+const REQUIRED_BINDING_FIELDS: Record<string, ReadonlyArray<string>> = {
+    ai: ["binding"],
+    browser: ["binding"],
+    d1_databases: ["binding"],
+    hyperdrive: ["binding", "id"],
+    r2_buckets: ["binding", "bucket_name"],
+    send_email: ["name"],
+};
+
+/** Bindings whose scaffolded value omits something wrangler requires. */
+const bindingsMissingRequiredFields = (): string[] => {
+    const offenders: string[] = [];
+
+    for (const { manifest, name } of manifests) {
+        for (const binding of manifest.bindings ?? []) {
+            const kind = binding.path[0] ?? "";
+            const required = REQUIRED_BINDING_FIELDS[kind];
+
+            if (required === undefined) {
+                offenders.push(`${name}: unknown binding kind \`${kind}\` — add its wrangler-required fields to REQUIRED_BINDING_FIELDS`);
+
+                continue;
+            }
+
+            const entries = (Array.isArray(binding.value) ? binding.value : [binding.value]) as Record<string, unknown>[];
+
+            for (const entry of entries) {
+                offenders.push(...required.filter((field) => entry[field] === undefined).map((field) => `${name}: ${kind} entry is missing \`${field}\``));
+            }
+        }
+    }
+
+    return offenders;
+};
+
+/**
+ * UI frameworks an item deliberately does not declare: it is scaffolded INTO a
+ * React/Vue/Solid app, so pinning that app's own framework would be wrong. A
+ * package belongs here only when the consumer necessarily already has it.
+ */
+const CONSUMER_PROVIDED = new Set(["@angular/core", "react", "solid-js", "svelte", "vue"]);
+
+/** Bare package specifiers an item imports without naming them in its `deps`. */
+const undeclaredImports = (): string[] => {
+    const undeclared: string[] = [];
+    const declaredBy = new Map(manifests.map(({ manifest, name }) => [name, new Set(Object.keys(manifest.deps ?? {}))]));
+
+    for (const { from, name, source } of itemSources.filter((entry) => /\.tsx?$/u.test(entry.from))) {
+        // Bare specifiers only — a relative import or a `#lunora/…` subpath
+        // resolves inside the user's own project.
+        for (const match of source.matchAll(/from "((?:@[a-z\d-]+\/)?[a-z\d][a-z\d._-]*)(?:\/[^"]*)?"/gu)) {
+            const packageName = match[1] as string;
+
+            if (!declaredBy.get(name)?.has(packageName) && !CONSUMER_PROVIDED.has(packageName)) {
+                undeclared.push(`${name} → ${packageName} (${from})`);
+            }
+        }
+    }
+
+    return undeclared;
+};
+
+/** Every `createMailerFromEnv(` call site in the registry, split by whether it guards `cloudflareSend`. */
+const mailerCallSites = (): { guarded: string[]; unguarded: string[] } => {
+    const guarded: string[] = [];
+    const unguarded: string[] = [];
+
+    for (const { from, name, source } of itemSources) {
+        const calls = source.split("\n").filter((line) => line.includes("createMailerFromEnv(") && !line.trimStart().startsWith("*"));
+
+        for (const line of calls) {
+            (line.includes('["SEND_EMAIL"] === undefined') ? guarded : unguarded).push(`${name} → ${from}: ${line.trim()}`);
+        }
+    }
+
+    return { guarded, unguarded };
+};
+
+/** The message shapes that mark a throw as an authorization refusal rather than a server fault. */
+const AUTHORIZATION_MESSAGE = /requires an authenticated user|belongs to a different user|is not allowed/iu;
+
+/** Authorization refusals thrown as a bare `Error`, which `toErrorBody` redacts to a 500. */
+const uncodedAuthorizationThrows = (): string[] =>
+    itemSources
+        .filter(({ source }) =>
+            [...source.matchAll(/throw new Error\((?<head>[^;]*)/gu)].some((match) => AUTHORIZATION_MESSAGE.test(match.groups?.["head"] ?? "")),
+        )
+        .map(({ from, name }) => `${name} → ${from}`);
+
 let workdir: string;
 
 const seedProject = (): void => {
@@ -161,6 +268,77 @@ describe("shipped registry items", () => {
         expect(offenders).toStrictEqual([]);
     });
 
+    it("every scaffolded binding carries the fields wrangler requires", () => {
+        expect.assertions(1);
+
+        // `lunora registry add hyperdrive` left a `wrangler.jsonc` that failed
+        // validation for the whole Worker: the hyperdrive entry was the one
+        // shipped without a placeholder for its required `id`, while `auth`,
+        // `mail` and `storage` all had one for theirs.
+        expect(bindingsMissingRequiredFields()).toStrictEqual([]);
+    });
+
+    it("every package an item imports is declared in its `deps`", () => {
+        expect.assertions(1);
+
+        // `deps` is written verbatim into a USER's package.json by `lunora add`,
+        // so a package an item imports but does not declare is simply absent from
+        // the scaffolded project. `storage`, `payment` and `presence` each reached
+        // for `@lunora/errors` without declaring it while their `ai`/`browser`
+        // siblings did, and the Solid 2 port used `@solidjs/web` — its JSX import
+        // source, a package that exists only on the 2.x line — in 15 files without
+        // naming it anywhere.
+        expect(undeclaredImports()).toStrictEqual([]);
+    });
+
+    it("no item hands `createMailerFromEnv` an unguarded `cloudflareSend`", () => {
+        expect.assertions(2);
+
+        // `createMailerFromEnv` prefers `cloudflareSend` over `RESEND_API_KEY`
+        // whenever it is supplied (`packages/mail/src/from-env.ts`), so passing it
+        // unconditionally makes the documented Resend path unreachable: a deploy
+        // with no `SEND_EMAIL` binding throws inside the callback while
+        // `RESEND_API_KEY` is set. The base `auth` item shipped exactly that while
+        // its three siblings guarded the call.
+        const { guarded, unguarded } = mailerCallSites();
+
+        expect(unguarded).toStrictEqual([]);
+        // Guard the guard: a renamed helper must not turn this into a vacuous pass.
+        expect(guarded).toHaveLength(4);
+    });
+
+    it("authorization guards throw a coded error, not a bare `Error`", () => {
+        expect.assertions(1);
+
+        // `toErrorBody` maps a non-`LunoraError` to a redacted `INTERNAL` 500, so
+        // an uncoded throw tells the caller "server fault" where it meant "sign in
+        // first" / "not yours". Item authors keep rediscovering this — `ai` and
+        // `browser` carry a comment about it — so it is checked here.
+        expect(uncodedAuthorizationThrows()).toStrictEqual([]);
+    });
+
+    it("the `auth-emails` recipe passes only fields `sendAuthEmail` accepts", () => {
+        expect.assertions(1);
+
+        // The item's only documented integration is
+        // `sendAuthEmail(env, { html, subject, text, to })`, and `renderEmail`
+        // really does return `{ html, text }` — but the base `auth` item's
+        // signature named only `{ subject, text, to }`, so the recipe did not
+        // compile against the item it `requires`.
+        const { docs } = JSON.parse(readFileSync(join(registryRoot, "auth-emails", "registry.json"), "utf8")) as { docs: string };
+        const signature =
+            /const sendAuthEmail = async \(env: AuthEnv, message: \{(?<fields>[^}]*)\}/u.exec(readFileSync(join(registryRoot, "auth", "index.ts"), "utf8"))
+                ?.groups?.["fields"] ?? "";
+
+        const passed = /sendAuthEmail\(env, \{(?<fields>[^}]*)\}/u
+            .exec(docs)
+            ?.groups?.["fields"]?.split(",")
+            .map((field) => (field.split(":")[0] as string).trim())
+            .filter((field) => field.length > 0);
+
+        expect(passed?.filter((field) => !new RegExp(String.raw`\b${field}\??:`, "u").test(signature))).toStrictEqual([]);
+    });
+
     it("`list` reads the catalog and reports every item", async () => {
         // eslint-disable-next-line vitest/prefer-expect-assertions -- one assertion per discovered item; data-driven, so not a literal
         expect.assertions(itemNames.length);
@@ -185,6 +363,14 @@ describe("shipped registry items", () => {
             expect.assertions(1);
 
             expect(manifest.name).toBe(name);
+        });
+
+        it("ships a README", () => {
+            expect.assertions(1);
+
+            // The README is the only prose a copy-in item has once it lands in
+            // someone's repo — `auth-emails` was the one item of 26 without one.
+            expect(existsSync(join(registryRoot, name, "README.md"))).toBe(true);
         });
 
         it("every declared source file exists in the item directory", () => {

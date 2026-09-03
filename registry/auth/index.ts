@@ -85,8 +85,12 @@ export interface AuthEnv {
  * logs where anyone with log access could use them to take over the account.
  * Cast through the full `env` since the mailer reads bindings (`SHARD`,
  * `SEND_EMAIL`) and vars (`MAIL_FROM`) outside {@link AuthEnv}'s slice.
+ *
+ * `html` is optional so the `auth-emails` registry item's recipe compiles as
+ * documented: `renderEmail(<ResetPasswordEmail … />)` returns `{ html, text }`
+ * and both are passed straight through to `@lunora/mail`.
  */
-const sendAuthEmail = async (env: AuthEnv, message: { subject: string; text: string; to: string }): Promise<void> => {
+const sendAuthEmail = async (env: AuthEnv, message: { html?: string; subject: string; text: string; to: string }): Promise<void> => {
     const fullEnv = env as unknown as Record<string, unknown>;
 
     if (typeof fullEnv["MAIL_FROM"] !== "string") {
@@ -116,7 +120,11 @@ const sendAuthEmail = async (env: AuthEnv, message: { subject: string; text: str
         await binding.send(new EmailMessage(from, to, raw));
     };
 
-    await createMailerFromEnv(fullEnv, { cloudflareSend }).send(message);
+    // Only hand over `cloudflareSend` when the binding exists: `createMailerFromEnv`
+    // prefers it over `RESEND_API_KEY` whenever it is supplied, so passing it
+    // unconditionally would make a Resend-only deployment (no `SEND_EMAIL`
+    // binding) throw inside `cloudflareSend` instead of falling back to Resend.
+    await createMailerFromEnv(fullEnv, fullEnv["SEND_EMAIL"] === undefined ? {} : { cloudflareSend }).send(message);
 };
 
 /**
