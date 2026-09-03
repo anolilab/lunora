@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createSignal, Show } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
 
 import { signInAnonymously } from "../core/anonymous";
 import { createBackupCodeSignInController } from "../core/backup-codes";
@@ -46,14 +46,21 @@ const SignInCard = (props: SignInCardProps = {}): JSX.Element => {
     const context = useAuthUI();
     const { localization: t, social } = context;
     const [state, actions] = createController(createSignInController);
-    // Read once when the card is created rather than in an effect: it is a
-    // cookie, it is available before the first paint, and it only picks a badge.
-    const lastUsed = readLastLoginMethod();
+    // Read after mount, not when the card is created: the server has no cookie,
+    // so a render-time read is a hydration mismatch. See `lastLoginMethodStore`.
+    const [lastUsedAfterMount, setLastUsedAfterMount] = createSignal<string | undefined>();
+
+    // Solid 2 spells Solid 1.x's `onMount` as `onSettled`.
+    onSettled(() => {
+        setLastUsedAfterMount(readLastLoginMethod());
+    });
+
+    const lastUsed = () => (context.plugins.lastLoginMethod ? lastUsedAfterMount() : undefined);
 
     return (
         <AuthCard footer={context.signUp ? <AuthLink href={props.signUpHref ?? "/sign-up"}>{t.noAccount}</AuthLink> : undefined} title={t.signIn}>
             <SocialButtons
-                lastUsed={context.plugins.lastLoginMethod ? lastUsed : undefined}
+                lastUsed={lastUsed()}
                 onSelect={(provider) => {
                     void signInWithSocial(context, provider);
                 }}
@@ -79,7 +86,7 @@ const SignInCard = (props: SignInCardProps = {}): JSX.Element => {
                     <SubmitButton pending={state.status === "submitting"}>
                         {t.signIn}
                         {/* better-auth records a password sign-in as "email", so without this the badge is invisible for the most common route there is. */}
-                        <Show when={lastUsed === LAST_METHOD_EMAIL}>
+                        <Show when={lastUsed() === LAST_METHOD_EMAIL}>
                             <span class="lunora-auth-social__badge">{t.lastUsed}</span>
                         </Show>
                     </SubmitButton>
@@ -213,9 +220,16 @@ const MagicLinkCard = (props: MagicLinkCardProps = {}): JSX.Element => {
     }
 
     const [state, actions] = createController(createMagicLinkController);
-    // Read once when the card is created rather than in an effect: it is a
-    // cookie, it is available before the first paint, and it only picks a badge.
-    const lastUsed = readLastLoginMethod();
+    // Read after mount, not when the card is created: the server has no cookie,
+    // so a render-time read is a hydration mismatch. See `lastLoginMethodStore`.
+    const [lastUsedAfterMount, setLastUsedAfterMount] = createSignal<string | undefined>();
+
+    // Solid 2 spells Solid 1.x's `onMount` as `onSettled`.
+    onSettled(() => {
+        setLastUsedAfterMount(readLastLoginMethod());
+    });
+
+    const lastUsed = () => (context.plugins.lastLoginMethod ? lastUsedAfterMount() : undefined);
 
     return (
         <AuthCard footer={<AuthLink href={props.signInHref ?? "/sign-in"}>{t.backToSignIn}</AuthLink>} title={t.magicLink}>
@@ -224,7 +238,7 @@ const MagicLinkCard = (props: MagicLinkCardProps = {}): JSX.Element => {
                 <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
                 <SubmitButton pending={state.status === "submitting"}>
                     {t.magicLink}
-                    <Show when={lastUsed === LAST_METHOD_MAGIC_LINK}>
+                    <Show when={lastUsed() === LAST_METHOD_MAGIC_LINK}>
                         <span class="lunora-auth-social__badge">{t.lastUsed}</span>
                     </Show>
                 </SubmitButton>

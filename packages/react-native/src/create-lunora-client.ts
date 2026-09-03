@@ -74,8 +74,10 @@ export const withAuthWebSocket = (WebSocketImpl: typeof WebSocket, getAuthHeader
  * no cookie jar to attach a session implicitly.
  *
  * Everything on `LunoraClientOptions` is still accepted and passed through; an
- * explicit `persistence`, `fetch`, or `WebSocket` takes precedence over the
- * convenience derived from `storage` / `getAuthHeaders`. See the package README
+ * explicit `persistence`, `queryCache`, `fetch`, or `WebSocket` takes precedence
+ * over the convenience derived from `storage` / `getAuthHeaders`. `persistence`
+ * and `queryCache` override independently — `storage` backs both, so opting out
+ * of one leaves the other wired. See the package README
  * for a full setup example.
  * @experimental
  */

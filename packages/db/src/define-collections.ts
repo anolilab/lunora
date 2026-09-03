@@ -6,7 +6,7 @@ import type { OfflineConfig, OfflineExecutor, OfflineTransaction, StorageDiagnos
 import { NonRetriableError, startOfflineExecutor } from "@tanstack/offline-transactions";
 
 import { lunoraCollectionOptions } from "./collection-options";
-import type { OutboxMutationMetadata, Row } from "./internals";
+import type { OutboxMutationMetadata, Row, WriteProvenance } from "./internals";
 import { createOptimisticOnlineDetector, createOutboxCarrier, OUTBOX_MUTATION_FN_NAME, registerOutboxCarrier, runOutboxMutation } from "./internals";
 
 /** Element type of an array (the row type a `list` query returns). */
@@ -129,19 +129,54 @@ const warnDuplicateTable = (client: LunoraClient, name: string): void => {
 };
 
 /**
- * Provenance stamped onto every `db.actions.*` transaction at enqueue time and
- * read back by its replay handler. The persisted mutation carries the row and
- * nothing else, so without this the replay cannot answer either question a
- * durable write raises once it outlives its session: WHO queued it, and WHICH
- * shard it belongs to. The reserved `__lunora_outbox__` handler reads the same
- * two fields off {@link OutboxMutationMetadata}.
+ * Hand a terminal write verdict to `onWriteRejected`, absorbing a throwing
+ * listener. A listener that escaped here would replace the `NonRetriableError`
+ * that caused it — turning a terminal verdict retriable (a poison-message loop)
+ * and skipping the optimistic rollback.
  */
-interface CollectionWriteMetadata extends Record<string, unknown> {
-    /** `client.currentIdentity()` when the write was queued; the replay drops the write when it no longer matches. */
-    identity: null | string;
-    /** The collection's `shardKey` when the write was queued — captured, not re-read, so a queued write follows the shard it was made against even if the app reboots pointed at another. */
-    shardKey?: string;
-}
+const reportWriteRejected = (options: DefineCollectionsOptions, event: WriteRejectedEvent): void => {
+    try {
+        options.onWriteRejected?.(event);
+    } catch {
+        // Deliberately swallowed — see above.
+    }
+};
+
+/**
+ * Refuse a persisted write that must not be replayed under the current identity.
+ *
+ * Identity is the trust boundary: a durable write outlives the session that
+ * queued it (a reload, or a sign-out/sign-in in the same browser profile), so
+ * replaying it under whoever holds the bearer now would attribute one user's
+ * write to another and pass THEIR row-level security.
+ *
+ * The verdict is the client's to make, not this module's — see
+ * `LunoraClient.replayIdentityVerdict`. A bare `!==` here would be wrong twice:
+ * it would drop a write whose subject merely resolved late (same credential,
+ * different-looking stamp), and — far worse — it would drop the queuing user's
+ * OWN writes on every reload, because a durable replay begins when the executor
+ * is constructed, before the app has resolved its session. Nobody signed in yet
+ * is `"unknown"`: there is no other identity to replay as, so the write is held
+ * (a retriable error keeps it in durable storage) rather than destroyed.
+ *
+ * An unstamped write — queued by an older build — has no provenance, so it is
+ * held rather than dropped for the same reason.
+ */
+type AssertIssuingIdentity = (client: LunoraClient, meta: undefined | WriteProvenance) => asserts meta is WriteProvenance;
+
+const assertIssuingIdentity: AssertIssuingIdentity = (client, meta) => {
+    const verdict = client.replayIdentityVerdict(meta?.identity);
+
+    if (verdict === "mismatch") {
+        throw new NonRetriableError("outbox write dropped: identity changed since it was queued");
+    }
+
+    if (verdict === "unknown") {
+        // Deliberately NOT a NonRetriableError: the executor's retry policy holds
+        // the write and replays it once an identity is established.
+        throw new Error("outbox write deferred: no identity established yet");
+    }
+};
 
 /** A queued write that was permanently dropped, passed to {@link DefineCollectionsOptions.onWriteRejected}. */
 export interface WriteRejectedEvent {
@@ -276,7 +311,7 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
 
         if (insert) {
             mutationFns[name] = async ({ idempotencyKey, transaction }) => {
-                const meta = transaction.metadata as CollectionWriteMetadata | undefined;
+                const meta = transaction.metadata as WriteProvenance | undefined;
 
                 for (const [mutationIndex, mutation] of transaction.mutations.entries()) {
                     const row = mutation.modified as unknown as Row;
@@ -291,22 +326,11 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
                     const mutationId = `${idempotencyKey}:${String(mutationIndex)}`;
 
                     try {
-                        // Identity is the trust boundary. A durable write outlives the
-                        // session that queued it — a reload, or a sign-out/sign-in in the
-                        // same browser profile — so replaying it under whoever holds the
-                        // bearer now would attribute one user's write to another and pass
-                        // THEIR row-level security. Drop it instead: the same verdict the
-                        // reserved `__lunora_outbox__` handler reaches, and the one
-                        // `@lunora/client`'s queue settles as OFFLINE_IDENTITY_CHANGED.
-                        // Re-read per mutation, not once per transaction: a batched
+                        // Re-checked per mutation, not once per transaction: a batched
                         // transaction awaits between its writes, which is exactly where a
-                        // `setAuthToken` can slip in. A write persisted without the stamp
-                        // (queued by an older build) has no provenance to check, so it
-                        // fails closed too. Thrown inside the try so the drop reaches
-                        // `onWriteRejected` rather than rolling the row back in silence.
-                        if (meta?.identity !== client.currentIdentity()) {
-                            throw new NonRetriableError("outbox write dropped: identity changed since it was queued");
-                        }
+                        // `setAuthToken` can slip in. Inside the try so the drop reaches
+                        // `onWriteRejected` instead of rolling the row back in silence.
+                        assertIssuingIdentity(client, meta);
 
                         // eslint-disable-next-line no-await-in-loop -- sequential keeps the outbox's FIFO ordering
                         await runOutboxMutation(() =>
@@ -322,14 +346,8 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
                         // fire-and-forget caller still learns the write was dropped, then
                         // rethrow so the rollback proceeds. Transient errors retry — only
                         // the NonRetriableError verdict is terminal, so only it is reported.
-                        if (error instanceof NonRetriableError && options.onWriteRejected) {
-                            try {
-                                options.onWriteRejected({ code: (error as Error & { code?: string }).code, collection: name, error, row });
-                            } catch {
-                                // A throwing listener must not escape and replace the
-                                // NonRetriableError — that would turn a terminal verdict
-                                // retriable (poison-message loop) and skip the rollback.
-                            }
+                        if (error instanceof NonRetriableError) {
+                            reportWriteRejected(options, { code: (error as Error & { code?: string }).code, collection: name, error, row });
                         }
 
                         throw error;
@@ -354,9 +372,7 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
         }
 
         try {
-            if (meta.identity !== client.currentIdentity()) {
-                throw new NonRetriableError("outbox write dropped: identity changed since it was queued");
-            }
+            assertIssuingIdentity(client, meta);
 
             // Replay under the *original* idempotency key (not a fresh one), so a
             // committed-but-unacked write that the executor retries is deduped by the
@@ -365,29 +381,18 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
                 client.mutation({ __lunoraRef: meta.functionPath }, meta.args, { mutationId: meta.idempotencyKey, shardKey: meta.shardKey }),
             );
         } catch (error) {
-            // Same aggregate-channel report the per-collection handler makes, for the
-            // same reason: without it this path rolls the optimistic row back with no
-            // UI signal — the precise failure `onWriteRejected` was added to prevent.
-            // It covers the identity drop above AND a server-coded rejection from the
-            // replay, because reporting only the first would leave this handler with
-            // exactly the half-guarded shape it is being fixed for.
-            if (error instanceof NonRetriableError && options.onWriteRejected) {
-                try {
-                    options.onWriteRejected({
-                        code: (error as Error & { code?: string }).code,
-                        // A raw outbox write targets a function, not a collection — the
-                        // path is the only identifier it carries, and it is what a
-                        // consumer needs to name the dropped write.
-                        collection: meta.functionPath,
-                        error,
-                        // No `row`: the write rides the transport carrier, whose
-                        // transaction holds no optimistic collection row to hand back.
-                    });
-                } catch {
-                    // A throwing listener must not escape and replace the
-                    // NonRetriableError — that would turn a terminal verdict retriable
-                    // (poison-message loop) and skip the rollback.
-                }
+            // Covers the identity drop AND a server-coded rejection from the replay:
+            // reporting only the first would leave this handler half-guarded, which is
+            // the shape being fixed here.
+            if (error instanceof NonRetriableError) {
+                reportWriteRejected(options, {
+                    code: (error as Error & { code?: string }).code,
+                    // A raw outbox write targets a function, not a collection; the path
+                    // is the only identifier it carries. No `row` — it rides the
+                    // transport carrier, which holds no optimistic collection row.
+                    collection: meta.functionPath,
+                    error,
+                });
             }
 
             throw error;
@@ -412,19 +417,15 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
         // NonRetriableError *before* our per-collection `mutationFns` catch runs, so
         // this hook is the only place to surface it on `onWriteRejected`.
         onUnknownMutationFn: (name: string, tx: OfflineTransaction) => {
-            try {
-                options.onWriteRejected?.({
-                    code: "UNKNOWN_MUTATION_FN",
-                    collection: name,
-                    error: new Error(`offline write dropped: mutation "${name}" no longer exists (removed or renamed in a deploy?)`),
-                    // Best-effort recovered row: the persisted `modified` shape isn't a
-                    // validated `Row`, and a batched transaction surfaces only its first
-                    // mutation's row. Enough to describe the dropped write to the user.
-                    row: tx.mutations[0]?.modified as Row | undefined,
-                });
-            } catch {
-                // A throwing listener must not escape into the executor's drop path.
-            }
+            reportWriteRejected(options, {
+                code: "UNKNOWN_MUTATION_FN",
+                collection: name,
+                error: new Error(`offline write dropped: mutation "${name}" no longer exists (removed or renamed in a deploy?)`),
+                // Best-effort recovered row: the persisted `modified` shape isn't a
+                // validated `Row`, and a batched transaction surfaces only its first
+                // mutation's row. Enough to describe the dropped write to the user.
+                row: tx.mutations[0]?.modified as Row | undefined,
+            });
         },
     });
 
@@ -454,7 +455,7 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
             // shard have to be captured HERE, while the issuing session is still
             // the current one. Both are persisted with the transaction and
             // restored with it, so a replay after a reload still knows them.
-            const metadata: CollectionWriteMetadata = { identity: client.currentIdentity(), shardKey: definition.shardKey };
+            const metadata: WriteProvenance = { identity: client.currentIdentity(), shardKey: definition.shardKey };
             const offline = executor.createOfflineTransaction({ autoCommit: false, metadata, mutationFnName: name });
             const transaction = offline.mutate(() => {
                 collection.insert(insert.optimistic(input, id));

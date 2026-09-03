@@ -255,7 +255,7 @@ describe("lunoraContainer lifecycle logging", () => {
      * Stub the base's `startAndWaitForPorts` down to the one part that matters
      * here: `@cloudflare/containers` ends it (and `start()`) with
      * `blockConcurrencyWhile(async () => { … await this.onStart(); })`
-     * (`dist/lib/container.js:585`, `:634`), and workerd treats a *rejecting*
+     * (from both `start()` and `startAndWaitForPorts()`), and workerd treats a *rejecting*
      * closure there as unrecoverable — it aborts the Durable Object and flattens
      * the error to a plain `Error`. Pulling the image and waiting for ports is
      * stubbed; the gate is reproduced, and the double records the abort so a
@@ -460,6 +460,67 @@ describe("lunoraContainer lifecycle logging", () => {
         expect(state.aborted).toBe(false);
         expect(thrown).toBeInstanceOf(LunoraError);
         expect((thrown as Error).message).toContain('readiness check "/ready" (port 8080) did not return 200 within 30000ms');
+    });
+
+    it("does not proxy a request while the readiness probes are still pending", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        // The base commits the healthy state INSIDE its start gate, before our
+        // probes run — so `super.containerFetch` skips the start path entirely and
+        // would proxy to an app that never reported ready. Reproduce exactly that:
+        // healthy, with a probe that never succeeds.
+        const proxied = vi.spyOn(Container.prototype, "containerFetch").mockResolvedValue(new Response("from the app"));
+
+        vi.spyOn(Container.prototype, "getState").mockResolvedValue({ status: "healthy" } as never);
+
+        vi.useFakeTimers();
+
+        // A container that accepts the connection and never answers — the probe
+        // settles only via its abort signal, as with a real wedged app.
+        const context = fakeDurableObjectContext({
+            container: {
+                getTcpPort: () => {
+                    return {
+                        fetch: (_url: string, init?: { signal?: AbortSignal }) =>
+                            new Promise((_resolve, reject) => {
+                                if (init?.signal?.aborted) {
+                                    reject(new Error("aborted"));
+
+                                    return;
+                                }
+
+                                init?.signal?.addEventListener("abort", () => {
+                                    reject(new Error("aborted"));
+                                });
+                            }),
+                    };
+                },
+                running: false,
+            },
+        });
+
+        const definition = defineContainer({ defaultPort: 8080, image: "./app", readyOn: [{ path: "/ready" }] });
+        const instance = new LunoraContainer(context as never, {}, definition, "transcoder");
+
+        let thrown: unknown;
+
+        try {
+            const pending = instance.containerFetch("https://container/").catch((error: unknown) => {
+                thrown = error;
+            });
+
+            await vi.advanceTimersByTimeAsync(30_000);
+            await pending;
+        } finally {
+            vi.useRealTimers();
+        }
+
+        // The request fails on the readiness budget instead of being handed to an
+        // app that never reported ready.
+        expect(proxied).not.toHaveBeenCalled();
+        expect((thrown as Error).message).toContain('readiness check "/ready"');
     });
 
     it("arms a hard-timeout schedule on start, stamped with the bumped run generation", async () => {

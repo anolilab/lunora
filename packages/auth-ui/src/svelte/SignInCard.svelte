@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { onMount } from "svelte";
     import { LAST_METHOD_EMAIL, readLastLoginMethod } from "../core/last-login-method";
     import { createSignInController } from "../core/sign-in";
     import { signInWithSocial } from "../core/social";
@@ -25,14 +26,20 @@
     const t = context.localization;
     const social = context.social;
     const { actions, state: form } = controllerStore(createSignInController);
-    // Read once at initialisation rather than in an effect: it is a cookie, it is
-    // available before the first paint, and it only picks a badge.
-    const lastUsed = readLastLoginMethod();
+    // Read after mount, not at initialisation: the server has no cookie, so a
+    // render-time read is a hydration mismatch. See `lastLoginMethodStore`.
+    let lastUsedAfterMount = $state<string | undefined>(undefined);
+
+    onMount(() => {
+        lastUsedAfterMount = readLastLoginMethod();
+    });
+
+    const lastUsed = $derived(context.plugins.lastLoginMethod ? lastUsedAfterMount : undefined);
 </script>
 
 <AuthCard title={t.signIn}>
     <SocialButtons
-        lastUsed={context.plugins.lastLoginMethod ? lastUsed : undefined}
+        {lastUsed}
         onSelect={(provider) => {
             void signInWithSocial(context, provider);
         }}

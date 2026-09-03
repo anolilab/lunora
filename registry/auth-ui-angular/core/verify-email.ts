@@ -16,6 +16,7 @@
 import type { ControllerContext } from "./config";
 import { createFormController } from "./create-form-controller";
 import { assertOk, mapAuthError } from "./map-error";
+import { resolveAfterSignIn } from "./redirect-to";
 import { createStore } from "./store";
 import type { Controller, FlowStatus, FormController } from "./types";
 import { email as emailValidator } from "./validators";
@@ -74,7 +75,7 @@ const createVerifyEmailController = (context: ControllerContext, options: Verify
 
             store.update({ status: "success" });
             context.onSessionChange?.();
-            context.nav.replace(context.redirects.afterSignIn);
+            context.nav.replace(resolveAfterSignIn(context.redirects.afterSignIn));
         } catch (error) {
             context.onError?.(error);
             store.update({ error: mapAuthError(error, context.localization, context.localization.verifyEmailFailed), status: "error" });

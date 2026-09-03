@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CAPTCHA_HEADER, captchaHeaders, dismissToast, getToasts, pushToast, resetToasts, setCaptchaToken, subscribeToasts } from "../../src/core";
+import {
+    CAPTCHA_HEADER,
+    captchaHeaders,
+    dismissToast,
+    getToasts,
+    LAST_LOGIN_METHOD_COOKIE,
+    pushToast,
+    readLastLoginMethod,
+    resetToasts,
+    setCaptchaToken,
+    subscribeToasts,
+} from "../../src/core";
 
 // One cross-suite teardown hook, deliberately at the top level.
 let restoreLocation: (() => void) | undefined;
@@ -749,5 +760,38 @@ describe("theme mode", () => {
         });
 
         expect(applied).toStrictEqual([]);
+    });
+});
+
+describe("readLastLoginMethod", () => {
+    const withCookie = (cookie: string): void => {
+        vi.stubGlobal("document", { cookie });
+    };
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it("returns undefined for a malformed percent-escape instead of throwing", () => {
+        expect.assertions(2);
+
+        // The cookie is unsigned and attacker-writable (the module says so), and
+        // every port reads it during render — a URIError here takes the whole
+        // sign-in card down to decorate a label.
+        withCookie(`${LAST_LOGIN_METHOD_COOKIE}=%zz`);
+
+        expect(readLastLoginMethod()).toBeUndefined();
+
+        withCookie(`${LAST_LOGIN_METHOD_COOKIE}=%`);
+
+        expect(readLastLoginMethod()).toBeUndefined();
+    });
+
+    it("still decodes a well-formed escaped value", () => {
+        expect.assertions(1);
+
+        withCookie(`${LAST_LOGIN_METHOD_COOKIE}=${encodeURIComponent("magic-link")}`);
+
+        expect(readLastLoginMethod()).toBe("magic-link");
     });
 });

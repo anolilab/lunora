@@ -99,6 +99,16 @@ const preloaded = await preloadQuery(client, api.messages.list, {});
 <my-island></my-island>
 ```
 
+The island has to pick the token up explicitly — no adapter discovers `#preloaded` on its own:
+
+```ts
+import { hydratePreloaded } from "@lunora/react";
+import { deserializePreloaded } from "@lunora/astro/server";
+
+const preloaded = deserializePreloaded(document.querySelector("#preloaded")!.textContent!);
+const initial = hydratePreloaded(preloaded); // seeds the first paint, then goes live
+```
+
 ### Feature flags
 
 `@lunora/astro` ships no flag hook — like every other surface, flags follow the same server/island split. Read `ctx.flags` server-side (a server endpoint, a function, or the same `.astro` frontmatter) and hand the resolved value to the island, or call `useFlag` inside the island itself via the adapter you hydrate with (`@lunora/react`, `@lunora/vue`, …). Requires [`@lunora/flags`](https://www.npmjs.com/package/@lunora/flags) wired in `lunora/flags.ts`.

@@ -49,7 +49,14 @@ export type {
 } from "./invitations";
 export { createAcceptInvitationController, createUserInvitationsController } from "./invitations";
 export { firstLabel, passkeyLabel, providerLabel, ROLE_OPTIONS, rowActionLabel, sessionLabel, slugify } from "./labels";
-export { LAST_LOGIN_METHOD_COOKIE, LAST_METHOD_EMAIL, LAST_METHOD_MAGIC_LINK, LAST_METHOD_PASSKEY, readLastLoginMethod } from "./last-login-method";
+export {
+    LAST_LOGIN_METHOD_COOKIE,
+    LAST_METHOD_EMAIL,
+    LAST_METHOD_MAGIC_LINK,
+    LAST_METHOD_PASSKEY,
+    lastLoginMethodStore,
+    readLastLoginMethod,
+} from "./last-login-method";
 export type { Localization } from "./localization";
 export { DEFAULT_LOCALIZATION, resolveLocalization } from "./localization";
 export type { MagicLinkField } from "./magic-link";

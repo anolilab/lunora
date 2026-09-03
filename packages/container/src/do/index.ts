@@ -25,15 +25,11 @@ const READINESS_POLL_INTERVAL_MS = 500;
 /**
  * Upper bound on how long the `readyOn` probes block container start before failing.
  *
- * Equal to the platform's own ceiling, which is why this wait must stay OUTSIDE
- * `blockConcurrencyWhile` (see {@link LunoraContainer.afterContainerStart}).
- * Cloudflare's Durable Object state docs: "To help mitigate deadlocks there is a
- * 30 second timeout applied when executing the callback. If this timeout is
- * exceeded, the Durable Object will be reset." Inside the gate the reset wins the
- * race — the `LunoraError` below naming the failing check, port and budget is
- * then unreachable on the very path it exists for — and the same docs call
- * blocking the gate on I/O (`fetch`, KV, R2) an anti-pattern outright, which a
- * `readyOn` probe is.
+ * Equal to the platform's own ceiling for a `blockConcurrencyWhile` callback —
+ * "if this timeout is exceeded, the Durable Object will be reset" — so inside
+ * the gate the reset would win the race and the `LunoraError` below would be
+ * unreachable on the very path it exists for. That is why this wait runs outside
+ * it; see `afterContainerStart`.
  *
  * https://developers.cloudflare.com/durable-objects/api/state/
  */
@@ -77,6 +73,8 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     private readonly lunoraDefaultPort?: number;
     /** Hard-cap lifetime in whole seconds (from the `hardTimeout` config), or `undefined`. */
     private readonly lunoraHardTimeoutSeconds?: number;
+    /** In-flight `readyOn` gate for the current start; cleared when it fails. See `awaitReadinessGate`. */
+    private lunoraReadiness?: Promise<void>;
     /** Declarative readiness probes that gate request proxying (from the `readyOn` config). */
     private readonly lunoraReadyOn: ReadonlyArray<ContainerReadinessCheck>;
     /** Map of container env-var name → Worker Secrets Store binding name (from the `secretsStore` config). */
@@ -146,6 +144,7 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
      */
     public override async containerFetch(...args: Parameters<Container<Env>["containerFetch"]>): Promise<Response> {
         await this.resolveSecretsStoreEnv();
+        await this.awaitReadinessGate();
 
         return super.containerFetch(...args);
     }
@@ -265,15 +264,89 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
      * wait also has no business inside a gate that blocks every other dispatch
      * to the object.
      *
-     * Both start entry points call this immediately after `super`, so it still
-     * runs once per start and still gates request proxying: `containerFetch`
-     * starts through `startAndWaitForPorts` and only proxies once it returns, so
-     * a throw here fails the request instead of forwarding it to an app that
-     * never reported ready.
+     * Both start entry points call this immediately after `super`, so it runs
+     * once per start. It does NOT gate proxying on its own: the base commits the
+     * healthy state inside the start gate, before this runs, so a concurrent
+     * request would sail past `containerFetch`'s status check. That is what
+     * `awaitReadinessGate` is for, and it is the seam the move cost us —
+     * the in-gate placement got this for free from `blockConcurrencyWhile`.
      */
     private async afterContainerStart(): Promise<void> {
-        await this.armHardTimeout();
-        await this.awaitContainerReadiness();
+        // Single-flight. The base coalesces the container start itself
+        // (`startContainerIfNotRunning`) but not this tail, and it no longer runs
+        // inside `blockConcurrencyWhile` — so without this, two concurrent starts
+        // both read the same hard-timeout generation and each arm a schedule
+        // stamped with it, leaving two live schedules that both look current.
+        const inFlight = this.lunoraReadiness;
+
+        if (inFlight !== undefined) {
+            await inFlight;
+
+            return;
+        }
+
+        const gate = (async () => {
+            await this.armHardTimeout();
+            await this.awaitContainerReadiness();
+        })();
+
+        // Published before it is awaited, so a request that arrives mid-probe
+        // waits on THIS gate instead of proxying (see `awaitReadinessGate`).
+        this.lunoraReadiness = gate;
+
+        try {
+            await gate;
+        } catch (error) {
+            // Drop a failed gate rather than leaving it to reject every later
+            // request forever: the base has already committed the healthy state,
+            // so the next request re-probes instead of trusting it.
+            this.lunoraReadiness = undefined;
+
+            throw error;
+        }
+    }
+
+    /**
+     * Block until the `readyOn` probes for the current start have passed.
+     *
+     * Necessary because the base marks the container healthy *inside* the start
+     * gate — `startAndWaitForPorts` runs `setHealthy()` immediately before
+     * `onStart()` — while our probes run after it returns. `containerFetch`
+     * skips the start path entirely once it observes
+     * `container.running && status === "healthy"`, so without this a request
+     * arriving mid-probe would proxy to a container that never reported ready,
+     * and a request arriving after a *failed* probe would do so permanently.
+     * Holding `setHealthy` and the probes together the way the base does would
+     * mean putting the probes back inside the gate, which is the defect this
+     * whole path exists to avoid.
+     */
+    private async awaitReadinessGate(): Promise<void> {
+        if (this.lunoraReadyOn.length === 0) {
+            return;
+        }
+
+        if (this.lunoraReadiness === undefined) {
+            // Not healthy yet: `super.containerFetch` runs the start path, which
+            // routes through our `startAndWaitForPorts` override and gates there.
+            const { status } = await this.getState();
+
+            if (status !== "healthy") {
+                return;
+            }
+
+            // Healthy with no gate on record — a previous probe failed and was
+            // dropped, or this isolate was recycled after the start. Re-probe
+            // rather than proxy on the base's word alone.
+            this.lunoraReadiness = this.awaitContainerReadiness();
+        }
+
+        try {
+            await this.lunoraReadiness;
+        } catch (error) {
+            this.lunoraReadiness = undefined;
+
+            throw error;
+        }
     }
 
     /**

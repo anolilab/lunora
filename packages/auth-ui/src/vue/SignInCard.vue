@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed, onMounted, ref } from "vue";
 import { LAST_METHOD_EMAIL, readLastLoginMethod } from "../core/last-login-method";
 import { createSignInController } from "../core/sign-in";
 import { signInWithSocial } from "../core/social";
@@ -27,9 +28,15 @@ withDefaults(
 const context = useAuthUIContextRef();
 const t = context.value.localization;
 const { actions, state } = useController(createSignInController);
-// Read once at setup rather than from a watcher: it is a cookie, it is there
-// before the first paint, and it only picks a badge.
-const lastUsed = readLastLoginMethod();
+// Read after mount, not at setup: the server has no cookie, so a render-time
+// read is a hydration mismatch. See `lastLoginMethodStore`.
+const lastUsedAfterMount = ref<string | undefined>();
+
+onMounted(() => {
+    lastUsedAfterMount.value = readLastLoginMethod();
+});
+
+const lastUsed = computed(() => (context.value.plugins.lastLoginMethod ? lastUsedAfterMount.value : undefined));
 
 const onSocial = (provider: string): void => {
     void signInWithSocial(context.value, provider);
@@ -43,7 +50,7 @@ const onSocial = (provider: string): void => {
         discovery answers, rather than being frozen at the value `setup()` saw.
     -->
     <AuthCard :title="t.signIn">
-        <SocialButtons :providers="context.social" :lastUsed="context.plugins.lastLoginMethod ? lastUsed : undefined" @select="onSocial" />
+        <SocialButtons :providers="context.social" :lastUsed="lastUsed" @select="onSocial" />
         <AnonymousButton v-if="context.plugins.anonymous" />
         <AuthDivider v-if="context.social.length > 0 && context.credentials" />
         <!--

@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { onMount } from "svelte";
     import { isFlowEnabled } from "../core/flow-gate";
     import { LAST_METHOD_MAGIC_LINK, readLastLoginMethod } from "../core/last-login-method";
     import { createMagicLinkController } from "../core/magic-link";
@@ -16,9 +17,15 @@
     const t = context.localization;
     const enabled = isFlowEnabled(context, "magicLink", "MagicLinkCard");
     const { actions, state: form } = controllerStore(createMagicLinkController);
-    // Read once at initialisation rather than in an effect: it is a cookie, it
-    // is available before the first paint, and it only picks a badge.
-    const lastUsed = readLastLoginMethod();
+    // Read after mount, not at initialisation: the server has no cookie, so a
+    // render-time read is a hydration mismatch. See `lastLoginMethodStore`.
+    let lastUsedAfterMount = $state<string | undefined>(undefined);
+
+    onMount(() => {
+        lastUsedAfterMount = readLastLoginMethod();
+    });
+
+    const lastUsed = $derived(context.plugins.lastLoginMethod ? lastUsedAfterMount : undefined);
 </script>
 
 {#if enabled}

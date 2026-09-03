@@ -209,11 +209,12 @@ const db = defineCollections(client, defs, {
         // draft, etc.). The callback fires as the write is rejected — the row
         // rollback follows it, so read `row`/`error` here rather than the
         // collection's post-rollback state.
+        //
+        // A write whose target collection was removed/renamed in a deploy arrives
+        // here too, with `code: "UNKNOWN_MUTATION_FN"`. So does one queued under a
+        // user who is no longer signed in — identity is the trust boundary, so it
+        // is dropped rather than replayed under whoever holds the bearer now.
     },
-    // Optional: a write whose target collection was removed/renamed in a deploy
-    // arrives here too, with `code: "UNKNOWN_MUTATION_FN"`. So does one queued
-    // under a user who is no longer signed in — identity is the trust boundary,
-    // so it is dropped rather than replayed under whoever holds the bearer now.
     onStorageFailure: ({ code, message }) => {
         // The durable outbox couldn't persist (IndexedDB blocked in private mode,
         // quota exceeded, …) — the write won't survive a reload. Warn the user.

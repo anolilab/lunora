@@ -109,14 +109,34 @@ const makeClient = (options?: { identity?: string | null; mutation?: () => Promi
         options?.mutation ?? (async () => "ok"),
     );
 
+    // Mutable so a test can model the shape a real browser always has: the
+    // durable replay starts before the app has resolved its session, and the
+    // identity arrives afterwards.
+    let identity: null | string = options?.identity === undefined ? "user-a" : options.identity;
+
     const client = {
         confirmedMutationWatermark: () => 0,
-        currentIdentity: () => options?.identity ?? "user-a",
+        currentIdentity: () => identity,
         mutation,
+        // Mirrors `LunoraClient.replayIdentityVerdict`: nobody signed in yet is
+        // "unknown" (hold the write), a different user is "mismatch" (drop it).
+        replayIdentityVerdict: (stamped: null | string | undefined): "match" | "mismatch" | "unknown" => {
+            if (stamped === identity) {
+                return "match";
+            }
+
+            return identity === null ? "unknown" : "mismatch";
+        },
         subscribe: vi.fn<() => () => void>(() => () => undefined),
     };
 
-    return { client: client as never, mutation };
+    return {
+        client: client as never,
+        mutation,
+        signIn: (next: null | string) => {
+            identity = next;
+        },
+    };
 };
 
 const executors: OfflineExecutor[] = [];
@@ -201,7 +221,7 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(mutation).not.toHaveBeenCalled();
     });
 
-    // No `expect.assertions` here (nor in this file's other 14 `vi.waitFor` tests):
+    // No `expect.assertions` here (nor in this file's other `vi.waitFor` tests):
     // waitFor re-runs its callback until it passes, so the assertion count is a
     // function of timing, not of what the test checked.
     it("reports the reserved handler's identity drop on onWriteRejected instead of dropping it silently", async () => {
@@ -225,6 +245,41 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         // persisted path is what names the dropped write to the consumer.
         expect(event.collection).toBe("messages:send");
         expect(event.error.message).toContain("identity changed");
+    });
+
+    it("holds a queued write when no identity is established yet, then replays it once one arrives", { timeout: 10_000 }, async () => {
+        // The shape every reload has: `startOfflineExecutor` replays from its own
+        // constructor, before the app has resolved its session and called
+        // `setAuthToken`, so `currentIdentity()` is null while the replay runs.
+        // Dropping here would destroy the QUEUING user's own offline writes —
+        // strictly worse than the cross-user replay the guard exists to stop.
+        const { client, mutation, signIn } = makeClient({ identity: null });
+        const onWriteRejected = vi.fn<() => void>();
+        const database = buildDatabase(client, { onWriteRejected });
+
+        await database.executor.waitForInit();
+
+        const sink = createExecutorOutboxSink(database.executor);
+
+        await sink.enqueue(outboxWrite({ identity: "user-a" }));
+
+        // Held, not dropped: it stays in the durable outbox across replay
+        // attempts instead of being removed as a terminal verdict.
+        await vi.waitFor(() => {
+            expect(database.pendingCount()).toBeGreaterThan(0);
+        });
+
+        expect(mutation).not.toHaveBeenCalled();
+        expect(onWriteRejected).not.toHaveBeenCalled();
+
+        signIn("user-a");
+
+        await vi.waitFor(
+            () => {
+                expect(mutation).toHaveBeenCalledTimes(1);
+            },
+            { interval: 100, timeout: 8000 },
+        );
     });
 
     it("retries a transient (code-less) failure until the write lands", { timeout: 10_000 }, async () => {

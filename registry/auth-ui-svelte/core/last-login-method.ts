@@ -24,14 +24,13 @@
  *
  * # Under SSR
  *
- * There is no `document` server-side, so this returns undefined there and the
- * badge exists only in the client render — a genuine hydration difference, in
- * a decorative `<span>` and nothing else. Unlike `core/theme-mode.ts`'s
- * divergence this one *does* write to the DOM, so an SSR app that wants the two
- * renders identical has to keep the cookie out of the first paint itself. Every
- * port reads it at render/setup time for the same reason: it is available
- * before the first paint, and deferring it to an effect trades the mismatch for
- * a visible pop-in on the screen users see most.
+ * There is no `document` server-side, so a render-time read produces markup the
+ * server could not have produced — a hydration mismatch. Every port therefore
+ * reads it **after mount**, via {@link lastLoginMethodStore}: the first client
+ * render matches the server exactly (no badge), and the badge appears on the
+ * next frame. The cost is a one-frame pop-in on a decorative `<span>`; the
+ * alternative is markup that disagrees with the server on the screen users see
+ * most, which React 19 recovers from by discarding the server tree.
  */
 
 /** Recorded for `/sign-in/email` and `/sign-up/email`. */
@@ -68,7 +67,20 @@ const readLastLoginMethod = (cookieName: string = LAST_LOGIN_METHOD_COOKIE): str
             continue;
         }
 
-        const value = decodeURIComponent(part.slice(separator + 1).trim());
+        const raw = part.slice(separator + 1).trim();
+
+        let value: string;
+
+        try {
+            value = decodeURIComponent(raw);
+        } catch {
+            // `decodeURIComponent` throws `URIError` on a malformed escape ("%",
+            // "%zz"). This cookie is attacker-writable (see above) and is read
+            // during render in every port, so letting that escape would take the
+            // whole sign-in card down to decorate a label. No badge is the right
+            // answer for a value we cannot read.
+            return undefined;
+        }
 
         return value === "" ? undefined : value;
     }
@@ -76,4 +88,25 @@ const readLastLoginMethod = (cookieName: string = LAST_LOGIN_METHOD_COOKIE): str
     return undefined;
 };
 
-export { LAST_LOGIN_METHOD_COOKIE, LAST_METHOD_EMAIL, LAST_METHOD_MAGIC_LINK, LAST_METHOD_PASSKEY, readLastLoginMethod };
+/**
+ * Snapshot pair for reading the badge **after** hydration.
+ *
+ * `getServerSnapshot` is what makes this SSR-safe: it answers `undefined` on the
+ * server AND for the hydrating client render, so both agree; React then
+ * re-reads `getSnapshot` once hydration is finished. The other ports mirror the
+ * same contract with their own post-mount primitive.
+ *
+ * `subscribe` is a no-op on purpose — better-auth writes the cookie during a
+ * sign-in navigation, so its value cannot change under a mounted card. It exists
+ * because `useSyncExternalStore` requires it.
+ *
+ * `getSnapshot` returns a string, and equal strings are `Object.is`-equal, so
+ * the store cannot drive the re-render loop that a fresh object would.
+ */
+const lastLoginMethodStore = {
+    getServerSnapshot: (): string | undefined => undefined,
+    getSnapshot: (): string | undefined => readLastLoginMethod(),
+    subscribe: (): (() => void) => () => undefined,
+};
+
+export { LAST_LOGIN_METHOD_COOKIE, LAST_METHOD_EMAIL, LAST_METHOD_MAGIC_LINK, LAST_METHOD_PASSKEY, lastLoginMethodStore, readLastLoginMethod };

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, ref } from "vue";
 
 import { isFlowEnabled } from "../core/flow-gate";
 import { LAST_METHOD_MAGIC_LINK, readLastLoginMethod } from "../core/last-login-method";
@@ -27,9 +27,15 @@ const t = context.value.localization;
 // would stay frozen on the pre-discovery answer. See `provider.ts`.
 const enabled = computed(() => isFlowEnabled(context.value, "magicLink", "MagicLinkCard"));
 const { actions, state } = useController(createMagicLinkController);
-// Read once at setup rather than from a watcher: it is a cookie, it is there
-// before the first paint, and it only picks a badge.
-const lastUsed = readLastLoginMethod();
+// Read after mount, not at setup: the server has no cookie, so a render-time
+// read is a hydration mismatch. See `lastLoginMethodStore`.
+const lastUsedAfterMount = ref<string | undefined>();
+
+onMounted(() => {
+    lastUsedAfterMount.value = readLastLoginMethod();
+});
+
+const lastUsed = computed(() => (context.value.plugins.lastLoginMethod ? lastUsedAfterMount.value : undefined));
 </script>
 
 <template>
