@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { copycat } from "./copycat";
 import type { Constraints } from "./generate-value";
-import { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, isTimestampField, NUMBER_RANGE, TIMESTAMP_WINDOW_MS } from "./generate-value";
+import { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, isTimestampField, NUMBER_RANGE } from "./generate-value";
 import type { FieldSpec } from "./introspect";
 import { metaOf } from "./introspect";
 
@@ -135,7 +135,7 @@ const rangeDeal = (min: number, max: number): UniqueDeal => {
 
 /**
  * A deal over epoch-ms, stepping back from `now` one {@link TIMESTAMP_STEP_MS}
- * per row. Unbounded: the first {@link TIMESTAMP_WINDOW_MS} worth of rows land
+ * per row. Unbounded: the first `TIMESTAMP_WINDOW_MS` (`./generate-value`) worth of rows land
  * inside the same window the generator uses, and a batch large enough to run
  * past it simply keeps walking backwards rather than wrapping onto a value an
  * earlier row already took.
