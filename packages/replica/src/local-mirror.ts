@@ -278,8 +278,17 @@ class LocalMirror {
     }
 
     /**
-     * Delete every row from all known tables (preserves the event log
-     * and schema). Useful when re-syncing from scratch.
+     * Delete every row from every data table in the adapter's database
+     * (preserves the event log and schema). Useful when re-syncing from scratch.
+     *
+     * **The mirror owns its database.** The sweep is `sqlite_master` minus the
+     * reserved prefixes, NOT {@link LocalMirror.mirroredTables} — a table this
+     * mirror never registered is cleared too, and `#reconcileSchemaVersion`
+     * DROPs on the same list. It cannot be narrowed to the registered set: that
+     * runs from the constructor, before any `applyDiff` has re-registered the
+     * tables a previous session persisted, and those are exactly the
+     * stale-schema tables it exists to drop. So hand the adapter a database
+     * dedicated to the mirror, never one that also holds your own tables.
      *
      * Notifies `onChange` subscribers and bumps {@link LocalMirror.version}
      * (REPLICA-09) even though nothing is appended to the event log — a

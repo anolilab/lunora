@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { defineEvents, defineMaterializer, EventLog, InMemorySnapshotStore, MaterializerRuntime } from "../src/index";
+import { defineEvents, defineMaterializer, EventLog, InMemorySnapshotStore, MaterializerRuntime, UNHANDLED } from "../src/index";
 
 // ─── defineEvents ─────────────────────────────────────────────────────
 
@@ -377,13 +377,41 @@ describe(MaterializerRuntime, () => {
         expect(counts.state).toBe(0);
     });
 
+    it("does not read a recognised event's idempotent no-op as an unhandled event", () => {
+        expect.assertions(3);
+
+        // `MaterializerDef.handle` documents "return the current state unchanged
+        // to skip the event" — the way a reducer says "I handled this and there
+        // is nothing to do". Reference equality cannot tell that apart from "I do
+        // not recognise this type" (REPLICA-07), which is why `UNHANDLED` exists.
+        const counts = defineMaterializer({
+            name: "counts",
+            initial: () => 0,
+            // eslint-disable-next-line sonarjs/function-return-type -- reducer contract is `S | typeof UNHANDLED`; the number/symbol arms trip the heuristic
+            handle: (state, entry) => {
+                if (entry.type !== "inc") {
+                    return UNHANDLED;
+                }
+
+                // Idempotent: this event was already counted, so nothing to do.
+                return state === 0 ? state + 1 : state;
+            },
+        });
+
+        const runtime = new MaterializerRuntime([counts], { unknownEventHandling: "fail" });
+
+        expect(runtime.applyEntries([{ seq: 0, type: "inc", payload: null, timestamp: 1 }])).toBe(1);
+        expect(() => runtime.applyEntries([{ seq: 1, type: "inc", payload: null, timestamp: 2 }])).not.toThrow();
+        expect(counts.state).toBe(1);
+    });
+
     it("'fail' strategy on an unknown event leaves the watermark re-surfaceable — a catch-and-retry does not skip it", () => {
         expect.assertions(5);
 
         const counts = defineMaterializer({
             name: "counts",
             initial: () => 0,
-            handle: (s, e) => (e.type === "inc" ? s + 1 : s),
+            handle: (s, e) => (e.type === "inc" ? s + 1 : UNHANDLED),
         });
 
         const runtime = new MaterializerRuntime([counts], { unknownEventHandling: "fail" });
@@ -410,6 +438,7 @@ describe(MaterializerRuntime, () => {
                 defineMaterializer({
                     name: "counts",
                     initial: () => 0,
+                    // eslint-disable-next-line sonarjs/function-return-type -- reducer contract is `S | typeof UNHANDLED`; the number/symbol arms trip the heuristic
                     handle: (s, e) => {
                         if (e.type === "mystery") {
                             handled += 1;
@@ -417,7 +446,7 @@ describe(MaterializerRuntime, () => {
                             return s + 1;
                         }
 
-                        return e.type === "inc" ? s + 1 : s;
+                        return e.type === "inc" ? s + 1 : UNHANDLED;
                     },
                 }),
             ],

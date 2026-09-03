@@ -19,7 +19,7 @@
  *       const channelId = (entry.payload as { channelId: string }).channelId;
  *       return { ...state, [channelId]: (state[channelId] ?? 0) + 1 };
  *     }
- *     return state;
+ *     return UNHANDLED;
  *   },
  * });
  * ```
@@ -28,6 +28,7 @@
 import type { EventLogEntry } from "./event-log";
 import type { AppendEventInput, EventLogDOClient } from "./event-log-do-client";
 import type { EventReducer, UnknownEventHandling } from "./event-source";
+import { UNHANDLED } from "./event-source";
 import type { SnapshotStore } from "./snapshot-store";
 
 /**
@@ -45,9 +46,16 @@ const MAX_CATCHUP_PAGES = 1000;
  *
  * Pure functions are strongly encouraged: given the same event and state,
  * they must produce the same next state for deterministic replay.
+ *
+ * Return {@link UNHANDLED} for an event `type` the reducer does not recognise —
+ * that, and only that, is what {@link MaterializerRuntimeOptions.unknownEventHandling}
+ * reacts to. Returning the current `state` is a legitimate, idempotent no-op for
+ * a type the reducer DOES handle; reference equality cannot tell the two apart
+ * (REPLICA-07), and reading it as "unhandled" warned about — or, under `"fail"`,
+ * threw on — an event type the reducer explicitly recognised.
  * @experimental
  */
-type MaterializerReducer<S> = (state: S, entry: EventLogEntry) => S;
+type MaterializerReducer<S> = (state: S, entry: EventLogEntry) => S | typeof UNHANDLED;
 
 /**
  * Options for defining a single materializer.
@@ -58,7 +66,8 @@ interface MaterializerDef<S> {
     /**
      * Reducer invoked for every event in the log.
      *
-     * Return the current state unchanged to skip the event.
+     * Return the current state unchanged for a recognised event with nothing to
+     * do; return {@link UNHANDLED} for a `type` this reducer does not process.
      */
     handle: MaterializerReducer<S>;
 
@@ -74,8 +83,12 @@ interface MaterializerDef<S> {
  * @experimental
  */
 interface Materializer<S> {
-    /** Apply a single event entry through the reducer. */
-    apply: (entry: EventLogEntry) => void;
+    /**
+     * Apply a single event entry through the reducer.
+     * @returns `false` when the reducer returned {@link UNHANDLED} (state left
+     * untouched), `true` otherwise.
+     */
+    apply: (entry: EventLogEntry) => boolean;
     readonly def: MaterializerDef<S>;
     /** Reset to the initial state. */
     reset: () => void;
@@ -105,8 +118,16 @@ const defineMaterializer = <S>(definition: MaterializerDef<S>): Materializer<S> 
         setState(newState: S): void {
             state = newState;
         },
-        apply(entry: EventLogEntry): void {
-            state = definition.handle(state, entry);
+        apply(entry: EventLogEntry): boolean {
+            const reduced = definition.handle(state, entry);
+
+            if (reduced === UNHANDLED) {
+                return false;
+            }
+
+            state = reduced;
+
+            return true;
         },
         reset(): void {
             state = definition.initial();
@@ -206,7 +227,7 @@ class MaterializerRuntime {
 
         for (const entry of entries) {
             let appliedToAny = false;
-            let anyChanged = false;
+            let anyHandled = false;
 
             // Stage which materializers advanced; commit their watermarks only
             // AFTER the unknown-event strategy has run without throwing (below).
@@ -223,14 +244,14 @@ class MaterializerRuntime {
                     continue;
                 }
 
-                const stateBefore = materializer.state;
-
-                materializer.apply(entry);
-                appliedToAny = true;
-
-                if (materializer.state !== stateBefore) {
-                    anyChanged = true;
+                // The reducer's OWN answer, not a state-identity guess: a
+                // recognised event whose reduction is a no-op returns the same
+                // state and must not be reported as unhandled (REPLICA-07).
+                if (materializer.apply(entry)) {
+                    anyHandled = true;
                 }
+
+                appliedToAny = true;
 
                 advancedIndices.push(i);
             }
@@ -240,7 +261,7 @@ class MaterializerRuntime {
                 continue;
             }
 
-            if (!anyChanged) {
+            if (!anyHandled) {
                 // May throw under the `"fail"` strategy — deliberately BEFORE
                 // the watermark commit below, so a throw leaves the watermark
                 // re-surfaceable.
