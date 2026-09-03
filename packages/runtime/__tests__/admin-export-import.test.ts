@@ -725,15 +725,27 @@ describe("backup registry snapshot → admin import", () => {
      * Lifting the item's own expression is the point: a re-typed copy here would
      * keep passing after the item drifted, which is exactly the gap that let the
      * header-framed shape ship.
+     *
+     * The item wire-encodes each document through its own `encodeWire` mirror,
+     * which is too large to lift with it (multi-statement, and it closes over two
+     * module constants). The reference encoder is injected instead, because the
+     * question HERE is the NDJSON framing — `table` and `doc` on every line. That
+     * the item's mirror still agrees with the reference is pinned separately, by
+     * `packages/cli/__tests__/commands/registry-backup-item.test.ts`, which builds
+     * its expected bytes from `shared/wire-codec`.
      */
     const itemToNdjson = async (): Promise<(table: string, rows: ReadonlyArray<Record<string, unknown>>) => string> => {
-        const match = /^const toNdjson = (.*);$/mu.exec(readFileSync(itemPath, "utf8"));
+        // Spans lines: the expression is an arrow whose body sits on the next one.
+        const match = /^const toNdjson = ([\s\S]*?);$/mu.exec(readFileSync(itemPath, "utf8"));
 
         if (match?.[1] === undefined) {
             throw new Error("could not locate `toNdjson` in registry/backup/backup.ts");
         }
 
-        const compiled = transformSync(`export const toNdjson = ${match[1]};`, { loader: "ts" }).code;
+        const codecPath = resolvePath(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "shared", "wire-codec.ts");
+        const compiled = transformSync(`import { encodeWire } from ${JSON.stringify(pathToFileURL(codecPath).href)};\nexport const toNdjson = ${match[1]};`, {
+            loader: "ts",
+        }).code;
         const file = join(scratch, `to-ndjson-${randomUUID()}.mjs`);
 
         writeFileSync(file, compiled);
