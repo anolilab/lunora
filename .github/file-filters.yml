@@ -234,13 +234,18 @@ templates:
     - ".github/workflows/test.yml"
     - ".github/file-filters.yml"
 
-# `MAX_BATCH_ENTRIES` in shared/batch-wire.ts vs the literal every non-JS port and
-# protocol/README.md restate. Separate from `sdks` because the reconciliation is a node
-# script, not a conformance suite: it must run on a change to any one of the ten copies
-# without paying for eight toolchains.
+# The two batch caps — `MAX_BATCH_ENTRIES` (shared/batch-wire.ts) and `MAX_BATCH_BYTES`
+# (packages/client/src/replay.ts, derived from the worker's own body cap in
+# packages/runtime/src/body-readers.ts) — vs the literal every non-JS port,
+# protocol/README.md and the offline fixture restate. Separate from `sdks` because the
+# reconciliation is a node script, not a conformance suite: it must run on a change to any
+# one of the copies without paying for eight toolchains.
 batch_cap:
     - "shared/batch-wire.ts"
+    - "packages/client/src/replay.ts"
+    - "packages/runtime/src/body-readers.ts"
     - "protocol/README.md"
+    - "protocol/fixtures/offline-optimistic.json"
     - "sdks/**"
     - "scripts/check-batch-cap-drift.js"
     - ".github/workflows/lint.yml"

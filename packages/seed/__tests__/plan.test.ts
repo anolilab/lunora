@@ -481,6 +481,20 @@ describe("seedPlan — unique columns beyond enums and strings", () => {
         expect(distinct(rows, "contact")).toBe(50);
     });
 
+    it("keeps a unique format-email column valid once maxLength also bites", () => {
+        expect.hasAssertions();
+
+        // The two narrowing steps compose: the generator refits the address into
+        // `maxLength`, then the deal reserves room for the index tag inside the
+        // same bound. Either step applied blindly emits an address the column's
+        // own validator rejects.
+        const column = v.string().email().max(24).unique();
+        const rows = rowsOf({ contact: column }, 50);
+
+        expect(rows.filter((row) => !column.safeParse(row.contact).ok)).toStrictEqual([]);
+        expect(distinct(rows, "contact")).toBe(50);
+    });
+
     it("deals a unique literal union without replacement and refuses past its domain", () => {
         expect.hasAssertions();
 
