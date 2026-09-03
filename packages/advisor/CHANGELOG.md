@@ -1,3 +1,14 @@
+## @lunora/advisor [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.106...@lunora/advisor@1.0.0-alpha.107) (2026-09-03)
+
+### Bug Fixes
+
+* audit rounds 14-16 ([#586](https://github.com/anolilab/lunora/issues/586)) ([6a09b74](https://github.com/anolilab/lunora/commit/6a09b746cfc9fb36f451c208b7a1c3eac16e56f4))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.101
+
 ## @lunora/advisor [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.105...@lunora/advisor@1.0.0-alpha.106) (2026-09-03)
 
 ### ⚠ BREAKING CHANGES
