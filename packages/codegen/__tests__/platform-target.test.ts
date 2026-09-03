@@ -536,6 +536,28 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         expect(result.generated.shard).not.toContain("@lunora/bindings/vectors");
     });
 
+    it("hides the studio's vector browser on a target with no vector store", () => {
+        expect.assertions(3);
+
+        // The studio nav reads `studioFeatures.vectors` out of the emitted shard.
+        // That flag was built from the RAW `.vectorize()` count and the raw
+        // `@lunora/bindings` dependency, both un-gated — so the same build that
+        // withheld `ctx.vectors` from the shard shipped a Vector browser entry
+        // advertising a binding this host does not have. BOTH arms have to fall
+        // to the platform verdict, not just the count: an app depending on
+        // `@lunora/bindings` for `ctx.kv` would otherwise keep the page.
+        writeFileSync(join(workdir, "package.json"), `{ "name": "gated", "dependencies": { "@lunora/bindings": "*", "@lunora/d1": "*" } }`, "utf8");
+        appendTable(`    docs: defineTable({ body: v.string() }).vectorize("body", { dimensions: 768, index: "docs_search", metric: "cosine" }),`);
+
+        const result = codegen();
+
+        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(result.generated.shard).toContain(`"vectors": false`);
+        // The sibling `@lunora/bindings` feature stays on — the verdict is
+        // per-capability, and `keyValueStore` is `emulated` on this target.
+        expect(result.generated.shard).toContain(`"kv": true`);
+    });
+
     it("gates ctx.browser reached through @lunora/agent's browserTool exactly as it gates a direct import", () => {
         expect.assertions(4);
 

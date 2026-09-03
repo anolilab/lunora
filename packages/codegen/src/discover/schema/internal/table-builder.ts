@@ -832,4 +832,4 @@ const parseBaseTables = (object: ObjectLiteralExpression): TableIR[] => {
     return tables;
 };
 
-export { assertTableNameAllowed, parseBaseTables, parseTableBuilder };
+export { assertTableNameAllowed, parseBaseTables, parseTableBuilder, TABLE_NAME_IDENTIFIER_RE };

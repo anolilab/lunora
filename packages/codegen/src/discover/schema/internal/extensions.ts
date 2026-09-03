@@ -5,7 +5,7 @@ import { diagnosticAt } from "../../../diagnostics";
 import type { TableIR, VectorIndexIR } from "../../../ir";
 import { resolvePackageExtension } from "../../../resolve-package-extension";
 import { asMetric, getNumberProperty, getStringProperty, objectPropertyInitializer } from "./properties";
-import { assertTableNameAllowed, parseTableBuilder } from "./table-builder";
+import { assertTableNameAllowed, parseTableBuilder, TABLE_NAME_IDENTIFIER_RE } from "./table-builder";
 
 /** Read the `source.table` literal off a `defineVectorIndex({ source: { table } })` options object. */
 const sourceTableOf = (optionsExpression: ObjectLiteralExpression): string => {
@@ -82,9 +82,6 @@ const parseStandaloneVectorIndexes = (object: ObjectLiteralExpression): VectorIn
  */
 const prefixTableName = (key: string, bareName: string): string => `${key}_${bareName}`;
 
-/** Same shape as `assertTableNameAllowed`'s identifier gate — the key is a prefix of a table name. */
-const EXTENSION_KEY_IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/u;
-
 /**
  * Reject an extension key that cannot survive {@link prefixTableName}.
  *
@@ -100,7 +97,9 @@ const EXTENSION_KEY_IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/u;
  * @throws when the key is not a valid JS identifier.
  */
 const assertExtensionKeyAllowed = (key: string, node: TsNode): void => {
-    if (EXTENSION_KEY_IDENTIFIER_RE.test(key)) {
+    // The very gate `assertTableNameAllowed` applies — the key is a PREFIX of a
+    // table name, so it can be no laxer, and one constant keeps it from drifting.
+    if (TABLE_NAME_IDENTIFIER_RE.test(key)) {
         return;
     }
 
@@ -399,15 +398,14 @@ const namespaceExtension = (
     bareVectorIndexes: ReadonlyArray<VectorIndexIR>,
     node: TsNode,
 ): MergedExtension => {
-    // Both paths reach the prefixing through here, which is why the validation
-    // lives here: the AST path checked an extension's bare table names and never
-    // its key, and the package-runtime path (`resolvePackageExtension`) checked
-    // neither. Everything unchecked ended up spliced into a generated identifier.
+    // The KEY is checked here because both paths reach the prefixing through
+    // here and NEITHER checked it — an unchecked key ends up spliced into a
+    // generated identifier the same way an unchecked table name does. The bare
+    // TABLE names are not: the AST path validates each one at its own name node
+    // in `parseExtensionTables` (a `file:line:column` the user can act on), so a
+    // second, coarser check here would only ever fire for the package-runtime
+    // path — which is where it now lives, in `mergeExtendCall`.
     assertExtensionKeyAllowed(key, node);
-
-    for (const table of bareTables) {
-        assertTableNameAllowed(table.name, node);
-    }
 
     const bareNames = new Set(bareTables.map((table) => table.name));
     const tables = bareTables.map((table) => namespaceExtensionTable(table, key, bareNames));
@@ -452,6 +450,16 @@ const mergeExtendCall = (extendCall: CallExpression, projectRoot: string | undef
                 // The `.extend(...)` argument is the only node there is for a
                 // package extension — the user cannot edit the package, but they
                 // can at least see which extension is at fault and from where.
+                //
+                // This path builds its bare tables from `Object.entries` with no
+                // name check at all — the AST path gets one per name node inside
+                // `parseExtensionTables`, which is why the check is here and not
+                // in `namespaceExtension`: there it sat behind the path that had
+                // already thrown, and never ran for the path that had nothing.
+                for (const table of fromPackage.bareTables) {
+                    assertTableNameAllowed(table.name, extendArgument);
+                }
+
                 return namespaceExtension(fromPackage.key, fromPackage.bareTables, fromPackage.bareVectorIndexes, extendArgument);
             }
         }

@@ -236,13 +236,14 @@ interface EmitAppOptions {
     hasR2sql: boolean;
     hasScheduler: boolean;
     hasStorage: boolean;
-    hasVectors: boolean;
+    hasVectors?: boolean;
     hasWorkflow: boolean;
     hasX402: boolean;
     identity?: IdentityIR;
     jurisdiction?: JurisdictionIR;
     tableNames: ReadonlyArray<string>;
     useUmbrella: boolean;
+    vectorIndexCount?: number;
     voiceAgents?: ReadonlyArray<{
         bindingName: string;
         exportName: string;
@@ -1180,7 +1181,7 @@ const emitApi: (options: EmitApiOptions) => string;
 ### `emitApp` (const)
 
 ```ts
-const emitApp: (options: EmitAppOptions) => string;
+const emitApp: (rawOptions: EmitAppOptions) => string;
 ```
 
 ### `emitCollections` (const)

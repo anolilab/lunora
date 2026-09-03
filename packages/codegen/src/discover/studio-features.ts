@@ -38,6 +38,15 @@ interface StudioFeatureSignals {
     storageRuleCount: number;
     /** Number of declared vector indexes. */
     vectorIndexCount: number;
+
+    /**
+     * The platform gate's `vectorStore` verdict. `false` withholds the page
+     * outright — the one signal that overrides the fail-open rule above, because
+     * the host has no vector binding for the panel to read through. Codegen
+     * withholds `ctx.vectors` and the shard's whole Vectorize wiring on the same
+     * verdict; leaving the nav entry on advertises a binding that is not there.
+     */
+    vectorStoreSupported: boolean;
     /** Number of declared workflows — any `defineWorkflow` means the workflows page is relevant. */
     workflowCount: number;
 }
@@ -56,6 +65,13 @@ interface StudioFeatureSignals {
  * `vectors` all ship inside `@lunora/bindings`, so all three test that one name;
  * testing `"@lunora/bindings/kv"` (as they did) matched nothing, and the arm
  * that exists to fail open could never fire.
+ *
+ * `vectors` is the one feature a signal can also force OFF: the platform gate's
+ * `vectorStore` verdict AND's the whole expression. Failing open is the right
+ * default against a scan that cannot see the wiring, but not against a host that
+ * has no vector binding at all — codegen withholds `ctx.vectors` and the shard's
+ * Vectorize imports on that verdict, and a nav entry pointing at what was just
+ * withheld is worse than a hidden page.
  *
  * `payments` is the lone exception: it has no dependency arm. Its panel reads the
  * `subscriptions`/`events` tables directly, which the app must hand-declare in its
@@ -78,7 +94,7 @@ const buildStudioFeatures = (usage: FeatureUsage, signals: StudioFeatureSignals)
         queues: signals.queueCount > 0 || signals.dependencies.has("@lunora/queue"),
         scheduler: usage.scheduler || signals.cronCount > 0 || signals.dependencies.has("@lunora/scheduler"),
         storage: usage.storage || signals.storageRuleCount > 0 || signals.storageColumnCount > 0 || signals.dependencies.has("@lunora/storage"),
-        vectors: usage.vectors || signals.vectorIndexCount > 0 || signals.dependencies.has("@lunora/bindings"),
+        vectors: signals.vectorStoreSupported && (usage.vectors || signals.vectorIndexCount > 0 || signals.dependencies.has("@lunora/bindings")),
         workflows: usage.workflows || signals.workflowCount > 0 || signals.dependencies.has("@lunora/workflow"),
     };
 };
