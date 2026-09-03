@@ -364,6 +364,22 @@ describe("shardDO", () => {
         expect(JSON.parse(matching.sent[0]!)).toMatchObject({ delta: { op: "insert", table: "messages" }, id: "a", type: "delta" });
     });
 
+    it("broadcastDelta does not deliver to a socket whose credential expired", () => {
+        expect.assertions(2);
+
+        const live = createFakeWebSocket();
+        const lapsed = createFakeWebSocket();
+
+        shard.registerSocket(live, { subs: { a: { table: "messages" } } });
+        shard.registerSocket(lapsed, { expiresAt: 1000, subs: { b: { table: "messages" } } });
+
+        shard.emit({ key: "m1", op: "insert", row: { id: "m1" }, table: "messages" });
+
+        expect(live.sent).toHaveLength(1);
+        // The expired socket gets the TOKEN_EXPIRED drop, never the row.
+        expect(lapsed.sent.map((raw) => (JSON.parse(raw) as { code?: string; type: string }).code)).toStrictEqual(["TOKEN_EXPIRED"]);
+    });
+
     it("broadcastDelta visits own subscriptions only, never inherited ones", () => {
         expect.assertions(2);
 
