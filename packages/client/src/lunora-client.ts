@@ -176,6 +176,15 @@ const SOCKET_STABLE_MS = 5000;
  * reconnect can never grow the queue unbounded.
  */
 const MAX_PENDING_STREAMS = 64;
+
+/**
+ * How many identities keep a cached mutator watermark. The nesting exists so
+ * signing back into a previous identity recovers its watermark rather than
+ * re-deriving `1` against a server watermark already past it (the `OUT_OF_ORDER`
+ * wedge), so this can't be 1 — but it is unbounded without a cap, and only the
+ * few most recent identities of a session are ever signed back into.
+ */
+const MAX_WATERMARK_IDENTITIES = 8;
 const SHARD_TRAFFIC_PATH = "/_lunora/admin/shard-traffic";
 const SCHEDULED_PATH = "/_lunora/admin/scheduled";
 const SCHEDULED_STATUS_PATH = "/_lunora/admin/scheduled/status";
@@ -1041,6 +1050,20 @@ class LunoraClient {
     private authSubject: string | null | undefined = undefined;
 
     /**
+     * The bearer token `authSubject` was last asserted against. A subject
+     * is a claim about WHO a specific credential belongs to; once the token
+     * rotates, the sticky label is carried forward on the assumption it is the
+     * same user — but nothing has confirmed that yet, and the alternative (an
+     * account switch) would replay one user's queued writes as another. While
+     * this is out of step with `authToken` the identity counts as unconfirmed
+     * and every replay verdict is `"unknown"` (hold), until the next session
+     * resolve re-asserts the subject. Only used when a subject is established;
+     * a token-hash identity is self-confirming.
+     */
+    // eslint-disable-next-line unicorn/no-null -- mirrors `authToken`'s "no credential" sentinel
+    private subjectToken: string | null = null;
+
+    /**
      * Identity stamp recorded against each queued offline mutation, keyed by
      * the queue-assigned mutation id. Captured at enqueue from the auth token
      * in effect at the time, and re-checked at flush so a queued write can
@@ -1295,12 +1318,20 @@ class LunoraClient {
      * doesn't read as an identity change and discard queued writes. The subject is
      * **sticky**: a later call that omits it (or passes `undefined`) keeps the
      * established subject — so `setAuthToken(refreshedToken)` after a prior
-     * `setAuthToken(token, user.id)` retains the identity. Pass `null` to clear it
-     * (an explicit sign-out). Establishing the subject for the first time on an
-     * UNCHANGED token (e.g. the user id resolves a tick after the token was set)
-     * re-stamps any in-flight queued writes rather than dropping them — same
-     * credential, just a more stable label. A real user switch (the token AND
-     * subject both change) still drops the previous user's writes.
+     * `setAuthToken(token, user.id)` retains the identity. Clearing the token
+     * clears it too — a credential-less subject would let the NEXT sign-in
+     * inherit the previous user's identity (and their queue and read cache).
+     * Establishing the subject on an UNCHANGED token (e.g. the user id resolves a
+     * tick after the token was set — see {@link getCurrentUser}, which does this
+     * for every adapter) re-stamps any in-flight queued writes rather than
+     * dropping them: same credential, just a more stable label. A real user
+     * switch still drops the previous user's writes.
+     *
+     * A sticky subject carried across a token change is not re-confirmed until
+     * the next session resolve says which user the NEW credential belongs to.
+     * Queued writes are HELD (never sent, never dropped) for that window — see
+     * {@link replayIdentityVerdict} — so a refresh can't replay them and an
+     * account switch can't replay the previous user's writes as the new one.
      *
      * Does NOT update the WebSocket auth — the WS token is fixed at upgrade
      * time and lives in the URL. To refresh live WS auth, call
@@ -1313,32 +1344,49 @@ class LunoraClient {
         // raw token, so a same-subject refresh doesn't trip the identity-change
         // drain. Capture the old fingerprint before mutating the inputs.
         const previousIdentity = this.identityFingerprint();
+        // Was the outgoing subject established against the token being replaced?
+        // Only then is a relabel provably the SAME credential, which is what makes
+        // migrating (rather than dropping) the queue safe. An unestablished
+        // subject is the first-resolve case and equally safe.
+        const subjectWasConfirmed = this.authSubject === undefined || this.subjectToken === this.authToken;
 
         this.authToken = token;
         // Sticky: only an explicit value (incl. `null` = sign-out) changes the
-        // subject; omitting it keeps the established one.
+        // subject; omitting it keeps the established one. Clearing the token is
+        // the exception — see the docblock.
         if (subject !== undefined) {
             this.authSubject = subject;
+            this.subjectToken = token;
+        } else if (token === null) {
+            this.authSubject = undefined;
+            // eslint-disable-next-line unicorn/no-null -- mirrors `authToken`'s cleared value so `subjectToken === authToken` holds
+            this.subjectToken = null;
         }
 
         const newIdentity = this.identityFingerprint();
 
         if (newIdentity !== previousIdentity) {
-            if (tokenChanged) {
-                // A genuine credential change — drain and reject any in-memory
-                // offline writes queued under the previous identity so they can
-                // never replay as the new user. (Flush also re-checks each stamp.)
-                this.rejectQueuedForIdentityChange();
-            } else {
+            if (!tokenChanged && subjectWasConfirmed) {
                 // The token is unchanged (same credential) — the identity label
                 // just got more stable (a subject resolved). Migrate queued writes
                 // AND cached watermarks to the new fingerprint instead of dropping
                 // them — losing the watermark here would re-derive `stale + 1`
                 // against the same server-side identity and reintroduce the exact
                 // OUT_OF_ORDER wedge composite-keying `clientWatermarks` fixes, in
-                // reverse (contract §3.2, plan 316).
+                // reverse (contract §3.2, plan 316). The still-open sockets carry
+                // the same credential too, so their stamp moves with it — without
+                // that, every read cached for the rest of the session is filed
+                // under a fingerprint the next session can no longer match.
                 this.restampQueuedIdentity(previousIdentity, newIdentity);
                 this.restampWatermarks(previousIdentity, newIdentity);
+                this.restampConnectionIdentity(previousIdentity, newIdentity);
+            } else {
+                // A genuine credential change — reject the in-memory offline
+                // writes that can no longer replay as the identity now signed in.
+                // Writes whose stamp still matches (or is still undecidable) are
+                // kept: this path is reached on a plain sign-in too, where the
+                // queue belongs to the very user who just signed in.
+                this.rejectQueuedForIdentityChange(previousIdentity);
             }
 
             // The cross-tab channel name embeds the identity fingerprint (see
@@ -1375,6 +1423,17 @@ class LunoraClient {
         if (tokenChanged) {
             this.authTokenListeners.emit(token);
         }
+
+        // A write held because nobody was signed in yet — the normal state of
+        // every reload until the app's token read resolves — becomes replayable
+        // the moment an identity is established. Nothing else re-runs the flush:
+        // the socket's `open` already fired, and only a reconnect fires it
+        // again. Gated on being connected so this stays a re-flush of an
+        // already-live connection, never a reason to start replaying a queue
+        // the client deliberately holds while offline.
+        if (this.offlineQueue.size > 0 && this.computeStatus() === "connected") {
+            this.flushAllOfflineQueues();
+        }
     }
 
     public getAuthToken(): string | null {
@@ -1408,11 +1467,20 @@ class LunoraClient {
      * is `null` for both), which is the safe conflation: holding a write for a
      * signed-out app costs a retry, dropping it costs the write.
      *
+     * A sticky subject carried across a token change is `"unknown"` for the same
+     * reason: the label says user A, the credential in hand has not been checked
+     * against it, and the two answers (a refresh vs an account switch) call for
+     * opposite verdicts. Hold until the next session resolve settles it.
+     *
      * `"mismatch"` is a different identity signed in, and is the one that must be
      * terminal: replaying would attribute one user's write to another and pass
      * THEIR row-level security.
      */
     public replayIdentityVerdict(stamped: null | string | undefined): "match" | "mismatch" | "unknown" {
+        if (this.subjectAwaitingReconfirm()) {
+            return "unknown";
+        }
+
         const current = this.identityFingerprint();
 
         if (stamped === current) {
@@ -1507,6 +1575,10 @@ class LunoraClient {
             let bucketWatermarks = this.clientWatermarks.get(identity ?? "");
 
             if (bucketWatermarks === undefined) {
+                // Bound the identity dimension: nothing reclaims an identity's
+                // bucket map on a real sign-out/sign-in, so an unbounded map would
+                // grow one entry per identity for the process lifetime.
+                evictOldestEntry(this.clientWatermarks, MAX_WATERMARK_IDENTITIES);
                 bucketWatermarks = new Map();
                 this.clientWatermarks.set(identity ?? "", bucketWatermarks);
             }
@@ -1541,6 +1613,13 @@ class LunoraClient {
      *
      * Framework-agnostic: pair it with {@link onAuthTokenChange} to refetch when
      * the token changes (that's what `@lunora/react`'s `useAuth` does).
+     *
+     * A resolved user also ESTABLISHES the identity subject for the credential
+     * that resolved it ({@link setAuthToken}'s second argument). This is the one
+     * call every adapter's identity store already makes, and the only place that
+     * knows the answer — leaving it to each adapter is what left the sticky-subject
+     * contract unreached in every shipped one, so a routine JWT refresh read as a
+     * user switch and discarded the user's own queued writes and read cache.
      */
     public async getCurrentUser(): Promise<User | null> {
         if (this.closed || !this.fetchImpl) {
@@ -1549,6 +1628,9 @@ class LunoraClient {
         }
 
         const headers: Record<string, string> = {};
+        // The credential this answer is about. A token that rotates while the
+        // request is in flight makes the answer stale — see `adoptResolvedSubject`.
+        const requestToken = this.authToken;
 
         if (this.authToken) {
             headers["authorization"] = `Bearer ${this.authToken}`;
@@ -1569,9 +1651,12 @@ class LunoraClient {
             // better-auth returns `{ user, session }` when authenticated and
             // `null` (or an empty body) when not. Narrow defensively.
             const body: { user?: User } | null = await response.json();
-
             // eslint-disable-next-line unicorn/no-null -- explicit signed-out sentinel
-            return body?.user ?? null;
+            const user = body?.user ?? null;
+
+            this.adoptResolvedSubject(requestToken, user);
+
+            return user;
         } catch {
             // eslint-disable-next-line unicorn/no-null -- network/parse failure ⇒ treat as signed out
             return null;
@@ -4121,6 +4206,17 @@ class LunoraClient {
                     this.sendSubscribeIfOpen(state);
                 }
 
+                // …and for every shard with a write queued on it. A hydrated
+                // durable write warms its own shard through `ensureSocket`,
+                // which no-ops while this tab is a follower — including the
+                // whole startup claim window a SOLE tab spends before
+                // self-promoting, which is when hydration runs. A write-only
+                // shard has no subscription to carry it in the loop above, so
+                // without this its restored writes never flush at all.
+                for (const shardKey of this.queuedOfflineShardKeys) {
+                    this.ensureSocket(shardKey);
+                }
+
                 // Broadcast our aggregate status once immediately, so a
                 // follower that was mirroring the PREVIOUS leader isn't
                 // stuck displaying a stale value until this tab's own
@@ -6620,16 +6716,76 @@ class LunoraClient {
     }
 
     /**
-     * Drain every in-memory offline write and reject it because the auth
-     * identity changed. Durable entries are also dropped from persistence so a
-     * later `hydrate` can't resurrect another user's writes. Stamps are cleared
-     * alongside. Persisted entries restored without a live awaiter still get
-     * unpersisted here.
+     * Key the offline-queue identity on the resolved user id rather than the
+     * token bytes, so the NEXT token refresh keeps the same identity.
+     *
+     * Only a resolved user labels anything. A 401, a network failure or an
+     * empty session resolves `null` for reasons that say nothing about who is
+     * signed in, and a token that rotated mid-flight belongs to a session this
+     * answer predates — both leave the established label alone rather than
+     * clearing it (which would look like an identity change and drop the queue).
      */
-    private rejectQueuedForIdentityChange(): void {
+    private adoptResolvedSubject(requestToken: string | null, user: User | null): void {
+        if (this.closed || user === null || this.authToken !== requestToken) {
+            return;
+        }
+
+        this.setAuthToken(requestToken, user.id);
+    }
+
+    /**
+     * True while an established subject labels a credential it was never checked
+     * against — see the `subjectToken` field. Every replay verdict is
+     * `"unknown"` (hold) until the next session resolve re-asserts the subject.
+     */
+    private subjectAwaitingReconfirm(): boolean {
+        // An unestablished (`undefined`) or explicitly cleared (`null`) subject
+        // has nothing to re-confirm: identity falls back to the token itself.
+        return this.authSubject !== undefined && this.authSubject !== null && this.subjectToken !== this.authToken;
+    }
+
+    /**
+     * The identity a queued write is stamped with. The live `queuedIdentities`
+     * map is the source of truth for this session; a hydrated write whose id
+     * isn't in it falls back to the stamp persisted with the record. `Map.get`
+     * returns `undefined` for unstamped/hydrated ids and `item.identity` is
+     * `undefined` for legacy records (persisted before stamps were durable),
+     * while a persisted `null` (queued while signed out) is a real value that
+     * must not collapse into `undefined` — hence `=== undefined`, not `??`.
+     */
+    private stampOf(item: QueuedMutation): null | string | undefined {
+        const liveStamp = item.id === undefined ? undefined : this.queuedIdentities.get(item.id);
+
+        return liveStamp === undefined ? item.identity : liveStamp;
+    }
+
+    /**
+     * Reject the in-memory offline writes that can no longer replay under the
+     * identity now signed in, dropping their durable records so a later
+     * `hydrate` can't resurrect another user's writes.
+     *
+     * Per item, not wholesale: this runs on a plain sign-in too (`null` → a
+     * signed-in identity is a credential change like any other), where the
+     * queue is the *signing-in user's own* restored writes. Every stamp goes
+     * through {@link replayIdentityVerdict}, the one comparison, and only
+     * `"mismatch"` is terminal — `"match"` and `"unknown"` stay queued.
+     *
+     * The durable read cache is cleared only when there WAS a previous identity
+     * to protect. Wiping it on a sign-in from signed-out would destroy the
+     * offline-first cache on every cold boot, and buys nothing: cache entries
+     * are identity-stamped and gated at every read.
+     */
+    private rejectQueuedForIdentityChange(previousIdentity: string | null): void {
         const drained = this.offlineQueue.drain();
+        const held: QueuedMutation[] = [];
 
         for (const item of drained) {
+            if (this.replayIdentityVerdict(this.stampOf(item)) !== "mismatch") {
+                held.push(item);
+
+                continue;
+            }
+
             this.queuedIdentities.delete(item.id ?? "");
             this.unpersist(item.id);
 
@@ -6640,7 +6796,30 @@ class LunoraClient {
             this.emitItemSettled(item, "rejected", error);
         }
 
-        this.clearQueryCacheForIdentityChange();
+        this.offlineQueue.requeue(held);
+
+        if (previousIdentity !== null) {
+            this.clearQueryCacheForIdentityChange();
+        }
+    }
+
+    /**
+     * Move the identity stamp of every open shard socket from `from` to `to` —
+     * the sibling of {@link restampQueuedIdentity} for the read cache. A socket
+     * pins the identity it was upgraded under (see `ShardConnection.identity`)
+     * and {@link persistQueryValue} stamps cached reads with it, deliberately,
+     * so a still-open previous-user socket can't file frames under the new
+     * user's stamp. A same-credential relabel is the one case where that pin is
+     * stale rather than protective: without this, every read cached for the rest
+     * of the session is filed under a fingerprint the next session's identity
+     * gate rejects, and the durable read cache silently yields nothing.
+     */
+    private restampConnectionIdentity(from: string | null, to: string | null): void {
+        for (const conn of this.connections.values()) {
+            if (conn.identity === from) {
+                conn.identity = to;
+            }
+        }
     }
 
     /* eslint-disable no-secrets/no-secrets -- the back-ticked method name in the prose below, not a credential */
@@ -6809,20 +6988,35 @@ class LunoraClient {
             return;
         }
 
-        // Gate every drained write against ONE identity snapshot. A batch is a
-        // single authenticated request, so all its entries necessarily run under
-        // one identity; the single-write path likewise has no between-item `await`
-        // where a `setAuthToken` / token rotation could slip in, so an up-front
-        // snapshot re-gates exactly what the old per-item read did. Mismatches are
-        // rejected (not silently dropped) so awaiting callers see a deterministic
-        // failure; the rest keep their FIFO order.
-        const currentIdentity = this.identityFingerprint();
+        // Gate every drained write against the identity in effect right now. The
+        // loop is synchronous — no `setAuthToken` / token rotation can slip in
+        // between items — so every entry is judged against one identity, which a
+        // batch (one authenticated request) requires. Mismatches are rejected
+        // (not silently dropped) so awaiting callers see a deterministic failure;
+        // writes whose identity is not yet KNOWN go back on the queue, in order,
+        // for the flush that follows the session resolving.
         const sendable: QueuedMutation[] = [];
+        const held: QueuedMutation[] = [];
 
         for (const item of drained) {
-            if (this.passesReplayIdentityGate(item, currentIdentity)) {
+            const verdict = this.replayGateVerdict(item);
+
+            if (verdict === "send") {
                 sendable.push(item);
+            } else if (verdict === "hold") {
+                held.push(item);
             }
+        }
+
+        this.offlineQueue.requeue(held);
+
+        if (held.length > 0 && this.subjectAwaitingReconfirm()) {
+            // Held because a token refresh hasn't been re-attributed to a user
+            // yet. The app's own session resolve may already have failed (it
+            // fires on the token change, which is typically while offline), so
+            // ask again from here — nothing else would, and the writes would
+            // stay held for the life of the session.
+            this.getCurrentUser().catch(() => undefined);
         }
 
         if (sendable.length === 0) {
@@ -6962,47 +7156,56 @@ class LunoraClient {
     }
 
     /**
-     * Identity guard for one queued write about to replay: a write stamped under
-     * one identity must never replay under another. The live `queuedIdentities`
-     * map is the source of truth for the current session; a hydrated write whose
-     * id isn't in the map falls back to the stamp persisted with the record
-     * (`item.identity`), so a reload can't replay another user's queued writes.
-     * Only legacy records (persisted before stamps were durable —
-     * `item.identity === undefined`) replay under whatever identity is current.
+     * Identity gate for one queued write about to replay: a write stamped under
+     * one identity must never replay under another, and must never be DESTROYED
+     * because the identity isn't known yet.
      *
-     * `Map.get` returns `undefined` for unstamped/hydrated ids and `item.identity`
-     * is `undefined` for legacy records; a persisted `null` (queued while signed
-     * out) is a real value that must not collapse into `undefined` — hence the
-     * explicit `=== undefined` check rather than `??`. Returns `true` when the
-     * write may replay; otherwise settles it `OFFLINE_IDENTITY_CHANGED` and returns
-     * `false`. Either way the live stamp is consumed.
+     * The three-way verdict is {@link replayIdentityVerdict}'s, not a second
+     * hand-rolled comparison — `@lunora/db`'s durable outbox holds on `"unknown"`
+     * through the same call, and this path (the default for the standalone
+     * client) used to drop there instead, purging the queuing user's own write
+     * on every reload that opened its socket before the session resolved.
+     *
+     * `"send"` replays it and consumes the live stamp. `"hold"` leaves it queued
+     * and persisted, stamp intact, for a later flush once an identity is
+     * established (see `setAuthToken`). `"reject"` means a different identity is
+     * signed in: settle it terminally `OFFLINE_IDENTITY_CHANGED` and purge the
+     * durable record.
      */
-    private passesReplayIdentityGate(item: QueuedMutation, currentIdentity: string | null): boolean {
-        const liveStamp = item.id === undefined ? undefined : this.queuedIdentities.get(item.id);
-        const stamped = liveStamp === undefined ? item.identity : liveStamp;
+    private replayGateVerdict(item: QueuedMutation): "hold" | "reject" | "send" {
+        const stamped = this.stampOf(item);
 
-        // A stamp that mismatches the current identity is still replayable when it
-        // is a token-hash of the credential still held now — the subject label
-        // resolved after the write was stamped/persisted, but the credential never
-        // changed (setAuthToken's documented re-stamp promise). Without this, a
-        // reload or a transient-failure requeue falls back to the stale token-hash
-        // and wrongly rejects the same user's durable write.
-        if (stamped !== undefined && stamped !== currentIdentity && !this.isSameCredentialUnderTokenHash(stamped)) {
+        // Legacy records — persisted before stamps were durable — carry no
+        // stamp at all and replay under whatever identity is current. There is
+        // nothing to hold FOR: waiting on an identity to match would strand
+        // them forever.
+        if (stamped === undefined) {
             this.queuedIdentities.delete(item.id ?? "");
-            this.unpersist(item.id);
 
-            const error = new Error("offline mutation skipped: auth identity changed before replay");
+            return "send";
+        }
 
-            (error as Error & { code?: string }).code = "OFFLINE_IDENTITY_CHANGED";
-            item.reject(error);
-            this.emitItemSettled(item, "rejected", error);
+        const verdict = this.replayIdentityVerdict(stamped);
 
-            return false;
+        if (verdict === "unknown") {
+            return "hold";
         }
 
         this.queuedIdentities.delete(item.id ?? "");
 
-        return true;
+        if (verdict === "match") {
+            return "send";
+        }
+
+        this.unpersist(item.id);
+
+        const error = new Error("offline mutation skipped: auth identity changed before replay");
+
+        (error as Error & { code?: string }).code = "OFFLINE_IDENTITY_CHANGED";
+        item.reject(error);
+        this.emitItemSettled(item, "rejected", error);
+
+        return "reject";
     }
 
     /** Settle a write that replayed successfully: confirm its optimistic layer against the echoed commit cursor BEFORE resolving, so the gapless drop is in place when the awaiter (and any confirming frame) observes the settle. */
