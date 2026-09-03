@@ -29,7 +29,9 @@ import { tryCreateMysqlHarness } from "./_helpers/mysql-mem";
  * `mysql-memory-server` downloads the MySQL binary on first use; in sandboxes
  * where that download is blocked (e.g. an egress proxy answering 403) the whole
  * suite skips — with the captured reason — instead of failing on an environment
- * limitation.
+ * limitation. CI runs it under `LUNORA_MYSQL_TESTS=1` (the `test-mysql` job),
+ * where the same failure is raised rather than captured, so a green run means
+ * the cases executed rather than that they were skipped.
  */
 const FIXED_CLOCK = 1_700_000_000_000;
 const STARTUP_TIMEOUT = 180_000;

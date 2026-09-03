@@ -252,4 +252,27 @@ describe("createSeedClient", () => {
         expect(a.users).toEqual(b.users);
         expect(a.users).not.toEqual(c.users);
     });
+
+    // Ids are hashed from `seed` alone, so the determinism the other cases prove
+    // survives an unpinned clock. Time-valued columns do not: without `now` they
+    // fall back to `Date.now()` per call, and two runs of the same seed differ.
+    it("pins time-valued columns to the supplied now", async () => {
+        expect.hasAssertions();
+
+        const temporalSchema = defineSchema({ sessions: defineTable({ expiresAt: v.timestamp() }) });
+        const rowsAt = async (now: number): Promise<ReadonlyArray<Record<string, unknown>>> => {
+            const seed = createSeedClient<{ sessions: { expiresAt: number } }>(temporalSchema, { now, seed: 5 });
+
+            await seed.sessions(3);
+
+            return seed.$store.sessions ?? [];
+        };
+
+        const pinned = await rowsAt(1_700_000_000_000);
+        const earlier = await rowsAt(1_600_000_000_000);
+
+        expect(pinned).toStrictEqual(await rowsAt(1_700_000_000_000));
+        expect(pinned.map((row) => row.expiresAt)).not.toStrictEqual(earlier.map((row) => row.expiresAt));
+        expect(pinned.every((row) => typeof row.expiresAt === "number" && row.expiresAt <= 1_700_000_000_000)).toBe(true);
+    });
 });

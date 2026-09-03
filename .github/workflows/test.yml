@@ -254,6 +254,91 @@
               "run": |
                   pnpm --filter "@lunora/${{ matrix.package }}" run test --project workerd
 
+    # `@lunora/hyperdrive`'s MySQL suites — the only gate proving the SQL the store
+    # core renders for a `.global()` MySQL backend actually executes. mysqld comes
+    # from `mysql-memory-server`, provisioned from npm like pglite and workerd
+    # rather than from a service container, so the job needs no `services:` block.
+    #
+    # The point of the job is that the suites cannot report green having run
+    # nothing. They skip when the binary is unobtainable, and no CI job had ever
+    # declared that mysqld was expected — so a suite that had never been observed
+    # to run reported success on every PR. `LUNORA_MYSQL_TESTS=1` turns that skip
+    # into a failure (`__tests__/_helpers/mysql-mem.ts`), and the assertion below
+    # closes the other half: a run that executes zero cases, or skips any, fails
+    # here instead of passing quietly.
+    "test-mysql":
+        "name": "MySQL integration (@lunora/hyperdrive)"
+        "if": "needs.files-changed.outputs.packages == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 20
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  # `mysql-memory-server` fetches mysqld from cdn.mysql.com on first use.
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "test-mysql"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # The run step names its suites by path, so a fourth one added against the
+            # same harness would not be picked up and nothing else would notice — the
+            # same hazard the workerd matrix assertion above exists for.
+            - "name": "Assert the run covers every suite using the MySQL harness"
+              "run": |
+                  declared="$(grep -rl '_helpers/mysql-mem' packages/hyperdrive/__tests__/*.test.ts | sort | tr '\n' ' ')"
+                  expected='packages/hyperdrive/__tests__/create-hyperdrive.test.ts packages/hyperdrive/__tests__/global-collation-parity.test.ts packages/hyperdrive/__tests__/global-mysql.integration.test.ts '
+                  if [ "$declared" != "$expected" ]; then
+                    echo "::error file=.github/workflows/test.yml::Suites using the MySQL harness are [$declared] but this job runs [$expected]. Update the run step below."
+                    exit 1
+                  fi
+
+            - "name": "Build package and dependencies"
+              "run": |
+                  pnpm exec vis run build --query "project=hyperdrive"
+
+            - "name": "Run the MySQL suites against a real mysqld"
+              "env":
+                  "LUNORA_MYSQL_TESTS": "1"
+              "run": |
+                  pnpm --filter "@lunora/hyperdrive" run test \
+                      __tests__/create-hyperdrive.test.ts \
+                      __tests__/global-collation-parity.test.ts \
+                      __tests__/global-mysql.integration.test.ts \
+                      --reporter=default --reporter=json --outputFile.json=test-results/mysql.json
+
+            - "name": "Assert the suites executed their cases"
+              "run": |
+                  node -e '
+                      const { appendFileSync, readFileSync } = require("node:fs");
+
+                      const report = JSON.parse(readFileSync("packages/hyperdrive/test-results/mysql.json", "utf8"));
+                      const passed = report.numPassedTests;
+                      const skipped = report.numPendingTests + report.numTodoTests;
+
+                      appendFileSync(
+                          process.env.GITHUB_STEP_SUMMARY,
+                          `- MySQL parity on \`@lunora/hyperdrive\`: **${passed} cases executed** against a real mysqld (${skipped} skipped).\n`,
+                      );
+
+                      if (passed === 0 || skipped > 0) {
+                          console.error(`::error::The MySQL suites passed ${passed} and skipped ${skipped} cases. This job exists so the gate cannot pass by skipping.`);
+                          process.exit(1);
+                      }
+                  '
+
     "e2e":
         "name": "E2E (Playwright + Miniflare)"
         "if": "needs.files-changed.outputs.e2e == 'true'"
@@ -662,7 +747,7 @@
     # skipped (so a no-package-change PR with all jobs skipped still passes).
     "test-required-check":
         "name": "Check Test Run"
-        "needs": ["files-changed", "test", "test-workerd", "e2e", "templates", "worker-size", "sdk-conformance"]
+        "needs": ["files-changed", "test", "test-workerd", "test-mysql", "e2e", "templates", "worker-size", "sdk-conformance"]
         "if": "always()"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5
