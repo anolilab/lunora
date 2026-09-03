@@ -7,7 +7,7 @@ import { queryParameter } from "../core/browser-location";
 import { createEmailOtpController } from "../core/email-otp";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createForgotPasswordController } from "../core/forgot-password";
-import { readLastLoginMethod } from "../core/last-login-method";
+import { LAST_METHOD_EMAIL, LAST_METHOD_MAGIC_LINK, readLastLoginMethod } from "../core/last-login-method";
 import { createMagicLinkController } from "../core/magic-link";
 import { createResetPasswordController } from "../core/reset-password";
 import { createResetPasswordOtpController } from "../core/reset-password-otp";
@@ -76,7 +76,13 @@ const SignInCard = (props: SignInCardProps = {}): JSX.Element => {
                     <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
                     <FormField actions={actions} autoComplete="current-password" field="password" label={t.passwordLabel} state={state} type="password" />
                     <AuthLink href={props.forgotPasswordHref ?? "/forgot-password"}>{t.forgotPasswordLink}</AuthLink>
-                    <SubmitButton pending={state.status === "submitting"}>{t.signIn}</SubmitButton>
+                    <SubmitButton pending={state.status === "submitting"}>
+                        {t.signIn}
+                        {/* better-auth records a password sign-in as "email", so without this the badge is invisible for the most common route there is. */}
+                        <Show when={lastUsed === LAST_METHOD_EMAIL}>
+                            <span class="lunora-auth-social__badge">{t.lastUsed}</span>
+                        </Show>
+                    </SubmitButton>
                 </form>
             </Show>
         </AuthCard>
@@ -207,13 +213,21 @@ const MagicLinkCard = (props: MagicLinkCardProps = {}): JSX.Element => {
     }
 
     const [state, actions] = createController(createMagicLinkController);
+    // Read once when the card is created rather than in an effect: it is a
+    // cookie, it is available before the first paint, and it only picks a badge.
+    const lastUsed = readLastLoginMethod();
 
     return (
         <AuthCard footer={<AuthLink href={props.signInHref ?? "/sign-in"}>{t.backToSignIn}</AuthLink>} title={t.magicLink}>
             <form class="lunora-auth-form" novalidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
-                <SubmitButton pending={state.status === "submitting"}>{t.magicLink}</SubmitButton>
+                <SubmitButton pending={state.status === "submitting"}>
+                    {t.magicLink}
+                    <Show when={lastUsed === LAST_METHOD_MAGIC_LINK}>
+                        <span class="lunora-auth-social__badge">{t.lastUsed}</span>
+                    </Show>
+                </SubmitButton>
             </form>
         </AuthCard>
     );

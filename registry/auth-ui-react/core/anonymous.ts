@@ -9,12 +9,13 @@
 import type { ControllerContext } from "./config";
 import { assertOk } from "./map-error";
 import { notifyError } from "./notify-error";
+import { resolveAfterSignIn } from "./redirect-to";
 
 const signInAnonymously = async (context: ControllerContext): Promise<void> => {
     try {
         assertOk(await context.authClient.signIn.anonymous());
         context.onSessionChange?.();
-        context.nav.replace(context.redirects.afterSignIn);
+        context.nav.replace(resolveAfterSignIn(context.redirects.afterSignIn));
     } catch (error) {
         notifyError(context, error, context.localization.signInFailed);
     }

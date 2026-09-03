@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { readLastLoginMethod } from "../core/last-login-method";
+import { LAST_METHOD_EMAIL, readLastLoginMethod } from "../core/last-login-method";
 import { createSignInController } from "../core/sign-in";
 import { signInWithSocial } from "../core/social";
 import AnonymousButton from "./AnonymousButton.vue";
@@ -56,7 +56,11 @@ const onSocial = (provider: string): void => {
             <FormField :actions="actions" field="email" :fields="state.fields" :label="t.emailLabel" type="email" autoComplete="email" />
             <FormField :actions="actions" field="password" :fields="state.fields" :label="t.passwordLabel" type="password" autoComplete="current-password" />
             <AuthLink :href="forgotPasswordHref">{{ t.forgotPasswordLink }}</AuthLink>
-            <SubmitButton :pending="state.status === 'submitting'">{{ t.signIn }}</SubmitButton>
+            <SubmitButton :pending="state.status === 'submitting'">
+                {{ t.signIn }}
+                <!-- better-auth records a password sign-in as "email", so without this the badge is invisible for the most common route there is. -->
+                <span v-if="lastUsed === LAST_METHOD_EMAIL" class="lunora-auth-social__badge">{{ t.lastUsed }}</span>
+            </SubmitButton>
         </form>
         <template v-if="context.signUp" #footer>
             <AuthLink :href="signUpHref">{{ t.noAccount }}</AuthLink>
