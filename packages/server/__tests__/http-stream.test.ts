@@ -204,3 +204,47 @@ describe("httpRoute stream() mid-stream cancel", () => {
         expect(errors).not.toHaveBeenCalled();
     });
 });
+
+describe("httpRoute.stream — .output() is enforced per chunk", () => {
+    it("parses every chunk through the declared output validator", async () => {
+        expect.assertions(1);
+
+        // `applyOutput`'s contract: "Every result-parsing site (RPC, REST, any
+        // future transport) must route through this helper". SSE was the one that
+        // did not — `.output()` was accepted, type-checked against, and then
+        // silently discarded, so a chunk went straight to `JSON.stringify`.
+        const route = httpRoute
+            .get("/tick")
+            .output(v.object({ id: v.string() }))
+            .stream(async function* okGen() {
+                yield { id: "a" };
+                yield { id: "b" };
+            });
+
+        const response = await dispatch(route, "GET", "/tick", new Request("https://x.example/tick"));
+        const { events } = await readSse(response);
+
+        expect(events.filter((entry) => entry.event === "message").map((entry) => entry.data)).toEqual([{ id: "a" }, { id: "b" }]);
+    });
+
+    it("a chunk that violates the output schema becomes an error frame, not raw data", async () => {
+        expect.assertions(2);
+
+        const route = httpRoute
+            .get("/bad")
+            .output(v.object({ id: v.string() }))
+            .stream(async function* badGen() {
+                yield { id: "ok" };
+                yield { id: 42 } as unknown as { id: string };
+            });
+
+        const response = await dispatch(route, "GET", "/bad", new Request("https://x.example/bad"));
+        const { events } = await readSse(response);
+
+        // The good chunk still shipped; the violating one is a redacted error
+        // frame (an output mismatch is a server contract bug → INTERNAL, so
+        // `toErrorBody` redacts the message) rather than `data: {"id":42}`.
+        expect(events.map((entry) => entry.event)).toEqual(["message", "error"]);
+        expect(events[0]?.data).toEqual({ id: "ok" });
+    });
+});

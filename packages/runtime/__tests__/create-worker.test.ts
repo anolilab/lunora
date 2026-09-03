@@ -1410,6 +1410,50 @@ describe("createWorker — x402 paid procedures", () => {
         expect(shard.calls).toHaveLength(0);
     });
 
+    it("warns once when an x402Charge gate is configured with no `functions` registry", async () => {
+        expect.assertions(3);
+
+        // The third fail-closed condition, and the one that was silent: with no
+        // registry there is nothing to read `.x402` off, so every paid procedure
+        // dispatches FREE under a "fail-closed by construction" docblock. A
+        // hand-rolled `createWorker({ shardDO, x402Charge })` is a real, committed
+        // shape (`examples/payment-demo/src/server/index.ts`). Same treatment the
+        // identical missing-registry condition gets for `replicaReads`.
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        try {
+            const x402Charge = vi.fn<ChargeGateStub>(() => Promise.resolve(new Response(null, { status: 402 })));
+            const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace, x402Charge });
+
+            await worker.fetch(paidRpc("reports:latest"), {}, fakeContext);
+            await worker.fetch(paidRpc("reports:latest"), {}, fakeContext);
+
+            expect(warn).toHaveBeenCalledTimes(1);
+            expect(warn.mock.calls[0]?.[0]).toMatch(/`x402Charge` has no effect without `functions`/);
+            // Warn-once, not refuse: taking a free app down over a paid-function
+            // config would be the worse trade. The dispatch still happened.
+            expect(shard.calls).toHaveLength(2);
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    it("does not warn when no x402Charge gate is configured either", async () => {
+        expect.assertions(1);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        try {
+            const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace });
+
+            await worker.fetch(paidRpc("reports:latest"), {}, fakeContext);
+
+            expect(warn).not.toHaveBeenCalled();
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
     it("runs the injected charge gate around dispatch and withholds the shard when unpaid", async () => {
         expect.assertions(4);
 

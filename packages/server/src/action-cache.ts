@@ -44,6 +44,15 @@
  * the key). For the case this targets — repeated identical requests spread over
  * time — the duplicate is a cold-start cost, not a steady-state one.
  *
+ * **The cache is GLOBAL, not per-caller.** The key is a digest of `(name, args)`
+ * and nothing else — no identity component, ever. So
+ * `cache.wrap(ctx, "summary", { docId }, () => fetchFor(ctx.auth.userId))` serves
+ * the first caller's result to every other caller for the whole TTL: the closure
+ * reads an identity the key never saw. Anything that varies by caller has to be
+ * IN `args` (`{ docId, userId: ctx.auth.userId }`), which is also what makes the
+ * dependence visible at the call site. Nothing here can detect the omission — a
+ * `compute` closure is opaque — so this paragraph is the whole guard rail.
+ *
  * **The stored value goes through the wire codec**, the same encoding an RPC
  * response uses — so `bigint`, `Date`, `Map`, `Set` and bytes round-trip as
  * themselves. A value the wire refuses (a class instance, a cyclic graph) throws.
@@ -206,6 +215,9 @@ const serializeArgs = (args: unknown): string => (args === undefined ? "" : stab
  * @param name the logical cache namespace (usually the action's name)
  * @param argumentsKey the arguments, already serialized by {@link serializeArgs}
  */
+// SCOPE: `name` + args, with NO identity component — the cache is global to the
+// shard. Per-caller results must carry the caller in `args`; see the module
+// docblock's "What it does not do".
 const cacheKeyFor = async (name: string, argumentsKey: string): Promise<string> => {
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${name}\u0000${argumentsKey}`));
 

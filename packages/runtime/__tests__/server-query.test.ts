@@ -374,3 +374,70 @@ describe("serverQuery — x402 paywall parity", () => {
         expect(shard.calls).toHaveLength(1);
     });
 });
+
+describe("reserved-prefix parity — the fan-out-only relation read is refused on every dispatch surface", () => {
+    /**
+     * `__lunora_relation__:*` reads RAW, RLS-blind rows for whatever `args.table`
+     * names. The binding that pins `args.table` to the AUTHORIZED `fanOut.table`
+     * lives in `parseEnvelope` and runs only when a `fanOut` is present, and the
+     * DO applies no gate of its own — its comment cites the worker's refusal as
+     * the reason ("worker refuses this prefix on a single-shard envelope, so it's
+     * only reachable through the authorizeFanOut-gated fan-out path"). So the
+     * guard being skipped on a surface means nothing checks it at all.
+     */
+    const relationRead = { __lunoraRef: "__lunora_relation__:read" } as const;
+
+    it("serverQuery refuses it, byte-identically to /_lunora/rpc", async () => {
+        expect.assertions(4);
+
+        const shard = createEchoShardSpy();
+        const worker = createWorker({ shardDO: shard.namespace });
+
+        const httpRes = await worker.fetch(rpcRequest({ args: { table: "payments" }, functionPath: "__lunora_relation__:read" }), {}, fakeContext);
+        const serverRes = await worker.serverQuery(
+            new Request("https://app.example/loader"),
+            {},
+            relationRead,
+            { table: "payments" },
+            { context: fakeContext },
+        );
+
+        expect(httpRes.status).toBe(403);
+        expect(serverRes.status).toBe(403);
+        // `serverQuery`'s stated contract is a byte-identical result to the HTTP path.
+        await expect(serverRes.text()).resolves.toBe(await httpRes.text());
+        // Nothing reached a shard on either path.
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("an httpRoute's ctx.run* refuses it", async () => {
+        expect.assertions(2);
+
+        const shard = createEchoShardSpy();
+        let thrown: unknown;
+
+        const worker = createWorker({
+            httpRouter: {
+                fetch: async (_request: Request, env: unknown) => {
+                    const ctx = (env as { __lunoraCtx: { runQuery: (reference: unknown, args: Record<string, unknown>) => Promise<unknown> } }).__lunoraCtx;
+
+                    try {
+                        await ctx.runQuery(relationRead, { table: "payments" });
+                    } catch (error: unknown) {
+                        thrown = error;
+                    }
+
+                    return new Response("ok");
+                },
+            },
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/webhook", { method: "POST" }), {}, fakeContext);
+
+        // `ctx.run*` additionally stamps `x-lunora-system: "1"`, so an unguarded
+        // dispatch here reaches the shard as a TRUSTED caller.
+        expect((thrown as { code?: string } | undefined)?.code).toBe("FORBIDDEN");
+        expect(shard.calls).toHaveLength(0);
+    });
+});

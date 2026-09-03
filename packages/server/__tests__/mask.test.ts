@@ -817,6 +817,25 @@ describe("mask — custom strategies & bypass", () => {
         expect(result?.["email"]).toBe("a@x.com");
     });
 
+    it("bypass returning a truthy NON-boolean does not skip the mask", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([{ _id: "u1", email: "a@x.com", table: "users" }]);
+
+        // The canonical mistake: a `bypass` that forgets the `.can(...)`/`=== "admin"`
+        // and hands back the claim itself. A truthy string is NOT a grant — evaluated
+        // by truthiness it served every masked column in the clear, with no error and
+        // nothing in the logs. Same narrowing every sibling gate uses (`rls`,
+        // `storageRules`, `http-storage`'s serve gate, the runtime's `grants`).
+        const handler = lunora.query
+            .use(maskForTest({ users: { email: "redact" } }, { bypass: (() => "admin") as unknown as () => boolean }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findFirst("users"));
+
+        const result = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(result?.["email"]).toBeNull();
+    });
+
     it("fails closed: a throwing MaskFn redacts the cell to null", async () => {
         expect.assertions(1);
 

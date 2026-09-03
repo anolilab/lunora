@@ -16,10 +16,17 @@
 import type { Permission, Role } from "../rls/types";
 
 /**
- * Operations a storage rule can gate. `read` covers `download` / `getMetadata`
- * / `getSignedUrl` / `getUrl`; `write` covers `store` / `generateUploadUrl`;
- * `delete` is `delete`; `list` is a prefix listing (governed via the file
- * browser / admin path, not `ctx.storage` which has no `list`).
+ * Operations a storage rule can gate. `read` covers `download` / `getMetadata` /
+ * `head` / `getSignedUrl` / `getUrl`; `write` covers `store` /
+ * `generateUploadUrl`; `delete` covers `delete` and the `deleteAfterCommit`
+ * enqueue; `list` is a prefix listing.
+ *
+ * `list` governs `ctx.db.system.query("_storage")` — the object enumeration
+ * reachable from a handler — plus the file browser / admin path. It governs
+ * nothing on `ctx.storage`, which exposes no `list` (and `storageRules` drops
+ * any). Note the enumeration is additionally narrowed by the bucket's `read`
+ * rules, so a `read` prefix rule scopes what a handler can enumerate even with
+ * no `list` rule declared.
  */
 export type StorageOperation = "delete" | "list" | "read" | "write";
 

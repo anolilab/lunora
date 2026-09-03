@@ -1094,7 +1094,18 @@ const mask = <Context extends MaskContextIn = MaskContextIn>(
 
         // Procedure-wide escape hatch: a privileged caller sees raw values, so
         // we forward the unwrapped ctx untouched (no wrap, no facade rebind).
-        if (options.bypass?.(maskContext)) {
+        //
+        // SECURITY: narrowed to the exact `true`, like every sibling gate
+        // (`rls`'s `decision === true`, `storageRules`' `rule.when(...) === true`,
+        // `http-storage`'s serve authorizer, the runtime's `grants`). `bypass` is
+        // DECLARED to answer a boolean but it is app code, and the canonical
+        // mistake — `bypass: ({ auth }) => auth.identity?.role`, the `.can(...)` or
+        // `=== "admin"` forgotten — hands back a TRUTHY string. Evaluated by
+        // truthiness that skipped the whole mask for every caller whose claim was
+        // merely present, serving `ssn` / `email` / `hashedPassword` raw with no
+        // error and nothing in the logs. This is the one direction that must fail
+        // closed: a weird value now masks rather than unmasks.
+        if (options.bypass?.(maskContext) === true) {
             return next();
         }
 
