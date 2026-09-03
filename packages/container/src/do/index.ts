@@ -22,7 +22,21 @@ type DurableObjectContext = ConstructorParameters<typeof Container>[0];
 /** Interval between `readyOn` probe attempts while waiting for the app to come up. */
 const READINESS_POLL_INTERVAL_MS = 500;
 
-/** Upper bound on how long the `readyOn` probes block container start before failing. */
+/**
+ * Upper bound on how long the `readyOn` probes block container start before failing.
+ *
+ * Equal to the platform's own ceiling, which is why this wait must stay OUTSIDE
+ * `blockConcurrencyWhile` (see {@link LunoraContainer.afterContainerStart}).
+ * Cloudflare's Durable Object state docs: "To help mitigate deadlocks there is a
+ * 30 second timeout applied when executing the callback. If this timeout is
+ * exceeded, the Durable Object will be reset." Inside the gate the reset wins the
+ * race — the `LunoraError` below naming the failing check, port and budget is
+ * then unreachable on the very path it exists for — and the same docs call
+ * blocking the gate on I/O (`fetch`, KV, R2) an anti-pattern outright, which a
+ * `readyOn` probe is.
+ *
+ * https://developers.cloudflare.com/durable-objects/api/state/
+ */
 const READINESS_TIMEOUT_MS = 30_000;
 
 /**
