@@ -732,11 +732,21 @@ const assertReducibleBySql = (definition: SchemaLike["tables"][string], field: s
  * Deliberately wider than {@link assertReducibleBySql}'s test, which stays on the
  * declared kind because it REFUSES a read. This one only decides whether the
  * min/max write path reduces in SQL or folds in JS, and over-including costs a
- * scan where under-including writes a confident wrong number. `sqliteEncode`
+ * paged scan where under-including writes a confident wrong number. `sqliteEncode`
  * keys off the RUNTIME type, so a `v.any()` / `v.union()` / `v.from()` column
  * holding a bigint is stored as a padded key exactly like a declared one; gating
  * on the declared kind alone is how the shard twin wrote ~1e39 into a companion,
  * one declaration away.
+ *
+ * The widening only pays off because `sqliteDecode` reverses those columns'
+ * keys too — it did not at first, and the fold then coerced 40 characters of
+ * padding to `undefined` and left the companion holding a stale extreme. Widening
+ * the detector and widening the decoder are one change, not two.
+ *
+ * `mayHoldProjectedValue` in `@lunora/shard-engine`'s `sql-projection.ts` is the
+ * same rule for the DO plane, over `bigint` + `bytes` rather than `bigint` alone.
+ * They belong together — beside the codec pair the two planes already share, in
+ * `sql-projection.ts` — but the widths differ, so merging them is its own change.
  * @returns `true` when a value in this column may be a `bigint` key
  */
 const mayHoldBigintKey = (validator: SchemaLike["tables"][string]["shape"][string] | undefined): boolean => {
@@ -1521,25 +1531,66 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     };
 
     /**
+     * Reduce one group's extreme in JS, off the decoded rows, for a column
+     * {@link mayHoldBigintKey} matches — through {@link foldAggregateTally}, the
+     * same fold both backfills seed a group with, so a recomputed extreme cannot
+     * disagree with a rebuilt one.
+     *
+     * Pages by keyset on `id` like {@link ensureRankBackfilled} rather than
+     * selecting the group in one statement: the fold reads every surviving row,
+     * and one write against a 200k-row group otherwise put 200k rows in the
+     * isolate — for a predicate most matching columns never need.
+     * @returns the surviving extreme, or `null` when the group has no numeric row
+     */
+    const foldGroupExtreme = async (
+        definition: SchemaLike["tables"][string],
+        tableName: string,
+        index: AggregateIndexDefinitionLike,
+        conditions: SQL[],
+    ): Promise<null | number> => {
+        // Single-group, so the tally key is the empty string and only `value` is
+        // read — the caller pins `__count__` from its own tracked tally.
+        const tallies = new Map<string, AggregateTally>();
+        let cursorId: string | undefined;
+        let hasMore = true;
+
+        while (hasMore) {
+            const seek = cursorId === undefined ? conditions : [...conditions, sql`${sql.identifier("id")} > ${cursorId}`];
+            const pageWhere = seek.length > 0 ? sql` WHERE ${sql.join(seek, sql` AND `)}` : sql``;
+            // `id` rides along only as the keyset cursor; the fold reads just the
+            // reduced column, and `decodeRow` skips whatever the projection left out.
+            // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently sequential: each page's WHERE depends on the prior page's last id.
+            const pageRows = await queryAll(
+                exec,
+                dialect,
+                sql`SELECT ${sql.identifier("id")}, ${columnRefSql(index.field ?? "")} FROM ${sql.identifier(tableName)}${pageWhere} ORDER BY ${sql.identifier("id")} ASC LIMIT ${sql.raw(String(BACKFILL_BATCH_SIZE))}`,
+            );
+
+            for (const decoded of decodeRows(definition, pageRows)) {
+                foldAggregateTally(tallies, "", index, decoded);
+            }
+
+            cursorId = pageRows.at(-1)?.["id"] as string | undefined;
+            hasMore = pageRows.length === BACKFILL_BATCH_SIZE;
+        }
+
+        // eslint-disable-next-line unicorn/no-null -- an extreme-less group stores NULL, matching what both backfills seed
+        return tallies.get("")?.value ?? null;
+    };
+
+    /**
      * Recompute a min/max group's extreme from the source table, scoped to the
      * group's `by`-tuple and the index's static `where`, against the D1 column
      * dialect. Runs AFTER the physical row write, so it sees the post-write
      * source and returns the surviving extreme (`null` when none survives). The
      * caller pins `__count__` from its own tracked tally.
      *
-     * A `bigint` is stored as the order-preserving key {@link bigintSqlKey}
-     * builds, and `MIN`/`MAX` over that hands back padded text whose `Number()`
-     * is `1e+39` for a group whose real extreme is `900`. The reader refuses that
-     * coercion on its own scan ({@link assertReducibleBySql}), but this is the
-     * write path: refusing here would break `delete`. So a column that may hold
-     * one is reduced in JS off the decoded rows instead — through
-     * {@link foldAggregateTally}, the same fold both backfills seed a group with,
-     * so a recomputed extreme cannot disagree with a rebuilt one.
-     *
-     * Not `ORDER BY <col> LIMIT 1` either: the key is order-preserving only
-     * against other keys, and SQLite orders every TEXT after every numeric — so
-     * on a mixed `v.any()` column the extreme would be decided by storage class
-     * rather than by magnitude.
+     * A column that may hold an order-preserving key goes to
+     * {@link foldGroupExtreme} rather than to `MIN`/`MAX`. Not
+     * `ORDER BY <col> LIMIT 1` either: the key is order-preserving only against
+     * other keys, and SQLite orders every TEXT after every numeric — so on a
+     * mixed `v.any()` column the extreme would be decided by storage class rather
+     * than by magnitude.
      */
     const recomputeExtreme = async (tableName: string, index: AggregateIndexDefinitionLike, document: Record<string, unknown>): Promise<null | number> => {
         const field = index.field ?? "";
@@ -1563,21 +1614,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         const definition = schema.tables[tableName];
 
         if (definition && mayHoldBigintKey(definition.shape[field])) {
-            // Just the reduced column — the fold reads nothing else, and this
-            // runs inside a request against a remote engine. `decodeRow` skips
-            // the columns the projection left out.
-            const rows = await queryAll(exec, dialect, sql`SELECT ${columnRefSql(field)} FROM ${sql.identifier(tableName)}${whereSql}`);
-            // The canonical reducer, not a second copy of it. Single-group, so
-            // the key is the empty string and only `value` is read — the caller
-            // pins `__count__` from its own tracked tally.
-            const tallies = new Map<string, AggregateTally>();
-
-            for (const decoded of decodeRows(definition, rows)) {
-                foldAggregateTally(tallies, "", index, decoded);
-            }
-
-            // eslint-disable-next-line unicorn/no-null -- an extreme-less group stores NULL, matching what both backfills seed
-            return tallies.get("")?.value ?? null;
+            return foldGroupExtreme(definition, tableName, index, conditions);
         }
 
         const sqlFunction = aggregateSqlFunction(index.op);

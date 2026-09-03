@@ -73,41 +73,39 @@ const canonicalizeForHash = (value: unknown): unknown => {
 };
 
 /**
- * Derive a deterministic id for an id-less insert.
+ * Derive a deterministic id for an id-less insert, from the row's CONTENT.
  *
  * A random `crypto.randomUUID()` here would make replay non-deterministic:
  * re-applying the exact same {@link TableDiff} twice (e.g. once live, once on
  * catch-up replay from the event log) would mint two DIFFERENT row keys for
  * the same logical row, leaving duplicate rows / divergent replicas
- * (REPLICA-05). Hashing the diff's own content instead means the SAME diff
- * always derives the SAME id — the property required for safe replay.
+ * (REPLICA-05).
  *
- * The hash is over the table name, the diff's stable `id` (falling back to
- * `timestamp` for diffs built without one — `timestamp` alone is NOT a
- * unique diff identity, since multiple diffs can share a millisecond), the
- * change's position within the diff (so two id-less inserts carrying
- * identical `data` in one diff still get distinct ids), and a canonical
- * encoding of `data` — never the wall clock or any other apply-time-only value.
+ * Content is the identity, not the diff that carried it. `subscribeToMirror`
+ * re-emits an un-keyed row (an aggregate, or a projection that drops the pk) on
+ * EVERY frame and stamps each frame with `Date.now()`; a digest over the diff's
+ * `id`/`timestamp` and the change's position therefore minted a fresh key per
+ * frame, so a shard writing once a second grew the mirror by ~86,400 rows a day
+ * and every read returned the whole history. Over the row's own data instead,
+ * a repeated frame upserts onto the key it already wrote.
+ *
+ * Two consequences, both deliberate. Two id-less inserts carrying identical
+ * `data` collapse onto one row, in one diff or across diffs — nothing downstream
+ * can tell such rows apart, the next frame included, so one row is the only
+ * answer that stays stable. And an un-keyed row whose content CHANGES lands
+ * beside its predecessor rather than replacing it: it is a different key, and
+ * `subscribeToMirror` never records un-keyed rows in `known`, so no delete is
+ * ever derived for the old one. That leaves a residue bounded by the number of
+ * distinct contents rather than by frames, which is the difference between a leak
+ * and a table that grows without limit.
+ *
+ * `table` stays in the digest and is interpolated (not concatenated as parts)
+ * because it is declared `string` but arrives as untyped JSON over the poke
+ * protocol — a template literal coerces a stray number into the digest instead
+ * of contributing nothing to it. Covered in `apply-diff-canonical.test.ts`.
  */
-const deriveInsertId = (diff: Pick<TableDiff, "id" | "table" | "timestamp">, changeIndex: number, data: Record<string, unknown>): string => {
-    const diffIdentity = diff.id ?? String(diff.timestamp);
-    /*
-     * Interpolation (not an array of parts) is load-bearing: `table` and `id` are
-     * declared `string` but arrive as untyped JSON over the poke protocol, and a
-     * template literal coerces a stray number into the digest instead of silently
-     * contributing nothing to it — which would make two distinct diffs derive the
-     * SAME row key. Covered in `apply-diff-canonical.test.ts`.
-     *
-     * That fixes type erasure, not value ambiguity: the `::`-joined format still
-     * maps `id: 1` and `id: "1"` to one digest, as would an id containing a
-     * literal `::`. Both fields are server-generated and row maps are per-table,
-     * so this is noted rather than fixed — changing the separator would rewrite
-     * every derived id for no reachable benefit.
-     */
-    const input = `${diff.table}::${diffIdentity}::${String(changeIndex)}::${JSON.stringify(canonicalizeForHash(data))}`;
-
-    return `row-${fnv1a64Hex(input)}`;
-};
+const deriveInsertId = (diff: Pick<TableDiff, "table">, data: Record<string, unknown>): string =>
+    `row-${fnv1a64Hex(`${diff.table}::${JSON.stringify(canonicalizeForHash(data))}`)}`;
 
 /**
  * Apply a diff's changes onto `target` **in place**.
@@ -117,16 +115,25 @@ const deriveInsertId = (diff: Pick<TableDiff, "id" | "table" | "timestamp">, cha
  * into one map with a single copy up front instead of one copy per diff.
  */
 const applyDiffInto = (target: Map<string, Record<string, unknown>>, diff: TableDiff): void => {
-    for (const [changeIndex, change] of diff.changes.entries()) {
+    for (const change of diff.changes) {
         switch (change.type) {
             case "delete": {
                 target.delete(change.id);
                 break;
             }
             case "insert": {
-                // Insert uses the row data itself (id may or may not be inside data)
+                // Insert uses the row data itself (id may or may not be inside
+                // data). `bigint` belongs with the other two: the wire decoder
+                // hands one back for an int64 column, and rejecting it derived a
+                // content hash for a row that HAS a key — the SQLite path in
+                // `diff-applier.ts` accepts it, so the two disagreed on where the
+                // same row lands. This map is keyed by `id` by contract, so it has
+                // no equivalent of that path's configurable `pkColumn`; a table
+                // with a differently-named primary key is mirrored through
+                // `applyDiffToDb`, not through here.
                 const rawId = (change.data as { id?: unknown }).id;
-                const id = typeof rawId === "string" || typeof rawId === "number" ? String(rawId) : deriveInsertId(diff, changeIndex, change.data);
+                const id =
+                    typeof rawId === "bigint" || typeof rawId === "number" || typeof rawId === "string" ? String(rawId) : deriveInsertId(diff, change.data);
 
                 target.set(id, { ...change.data, id });
                 break;
