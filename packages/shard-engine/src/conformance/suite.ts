@@ -311,7 +311,7 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
              * routing pokes through the op-log fails loudly here instead of
              * quietly passing on work the relay tier is supposed to avoid.
              */
-            const relayFor = (sockets: SocketHost, seeds: ReadonlyArray<{ cursor: number; epoch?: string; frames: string[] }>) => {
+            const relayFor = (sockets: SocketHost, sql: SqlExec, seeds: ReadonlyArray<{ cursor: number; epoch?: string; frames: string[] }>) => {
                 let pokeId = 0;
                 let seedIndex = 0;
                 const unreachable = (member: string) => () => {
@@ -373,7 +373,13 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     resolveShape: unreachable("resolveShape"),
                     rlsMetadata: unreachable("rlsMetadata"),
                     shardBinding: () => "SHARD",
-                    sql: unreachable("sql"),
+                    // A relay's cohort memos are durable (`__lunora_relay_memos`),
+                    // so this runs on the host under test rather than a double:
+                    // a relay is evicted between owner pokes as a matter of
+                    // course, and a host whose SQL can't carry the memos silently
+                    // stops delivering to every relayed subscriber after the
+                    // first wake.
+                    sql: () => sql,
                 } as unknown as RelayHost;
 
                 const link = createRelayLink(host);
@@ -412,10 +418,10 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                 });
 
             it("frames a poke as pokeStart → pokePart per shape → pokeEnd, under one poke id", async () => {
-                const { close, createSocket, readFrames, sockets } = factory();
+                const { close, createSocket, host, readFrames, sockets } = factory();
 
                 try {
-                    const relay = relayFor(sockets, [{ cursor: 10, epoch: "e1", frames: [] }]);
+                    const relay = relayFor(sockets, host.sql, [{ cursor: 10, epoch: "e1", frames: [] }]);
                     const alice = acceptSubscriber(sockets, createSocket, "c-alice", "s1");
 
                     await seedSocket(relay, alice, "s1");
@@ -438,12 +444,12 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
             });
 
             it("delivers a poke only to sockets whose cursor matches, and advances them past it", async () => {
-                const { close, createSocket, readFrames, sockets } = factory();
+                const { close, createSocket, host, readFrames, sockets } = factory();
 
                 try {
                     // Bob seeded mid-flush, at an earlier cursor than the poke's
                     // `fromCursor` — the case the memo gate exists for.
-                    const relay = relayFor(sockets, [
+                    const relay = relayFor(sockets, host.sql, [
                         { cursor: 10, epoch: "e1", frames: [] },
                         { cursor: 7, epoch: "e1", frames: [] },
                     ]);
@@ -481,10 +487,10 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
             });
 
             it("skips a socket whose cursor matches under a different CDC epoch", async () => {
-                const { close, createSocket, readFrames, sockets } = factory();
+                const { close, createSocket, host, readFrames, sockets } = factory();
 
                 try {
-                    const relay = relayFor(sockets, [{ cursor: 10, epoch: "e1", frames: [] }]);
+                    const relay = relayFor(sockets, host.sql, [{ cursor: 10, epoch: "e1", frames: [] }]);
                     const alice = acceptSubscriber(sockets, createSocket, "c-alice", "s1");
 
                     await seedSocket(relay, alice, "s1");
