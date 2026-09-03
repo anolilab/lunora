@@ -26,6 +26,20 @@ const MAX_VIEWPORT_WIDTH = 3840;
 const MAX_VIEWPORT_HEIGHT = 4320;
 
 /**
+ * The window Browser Rendering accepts for `keep_alive`, expressed in the
+ * SECONDS this package's `launch({ keepAlive })` takes (the provider's own unit
+ * is milliseconds: `keep_alive?: number // from 10_000ms to 600_000ms`).
+ *
+ * Outside it the launch is rejected by the provider, so a `keepAlive: 1` or
+ * `keepAlive: 3600` reaches Cloudflare only to come back as an opaque launch
+ * failure — after the caller has already been told, by this package's own
+ * types, that any finite positive number of seconds holds the session open.
+ * Checking it here names the bound that was actually violated.
+ */
+const MIN_KEEP_ALIVE_SECONDS = 10;
+const MAX_KEEP_ALIVE_SECONDS = 600;
+
+/**
  * Hard ceiling on a single DoH lookup. Without it the `fetch` could stall
  * indefinitely and pin the worker before the browser even launches — a hung
  * resolver would defeat the whole point of paying for the pre-launch re-check.
@@ -260,6 +274,21 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         // `finally` exists to prevent. The sibling numeric inputs are
         // non-finite-safe the same way — see `resolveTimeout`, `clampDimension`.
         const keepAlive = requestedKeepAlive !== undefined && Number.isFinite(requestedKeepAlive) && requestedKeepAlive > 0 ? requestedKeepAlive : undefined;
+
+        // A positive duration outside the provider's window is a DIFFERENT
+        // failure from the ambiguous values above: the caller did ask for a
+        // held-open session, and Browser Rendering will refuse the launch. Say
+        // which bound was missed rather than forwarding it and surfacing a
+        // provider error, and rather than silently degrading to the always-close
+        // path (which would hand back a session id that is already dead).
+        if (keepAlive !== undefined && (keepAlive < MIN_KEEP_ALIVE_SECONDS || keepAlive > MAX_KEEP_ALIVE_SECONDS)) {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `@lunora/browser: keepAlive must be between ${String(MIN_KEEP_ALIVE_SECONDS)} and ${String(
+                    MAX_KEEP_ALIVE_SECONDS,
+                )} seconds (Browser Rendering accepts keep_alive from 10s to 10min; got ${String(requestedKeepAlive)})`,
+            );
+        }
 
         // `keep_alive` (seconds) holds the Browser Rendering session open after
         // this worker detaches so a later `connect(sessionId)` can re-attach.

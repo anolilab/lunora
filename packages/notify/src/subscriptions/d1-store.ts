@@ -212,6 +212,26 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
         await database.prepare(`DELETE FROM ${table} WHERE id = ?1`).bind(id).run();
     };
 
+    /**
+     * One statement, so the owner predicate and the removal cannot be separated
+     * by a re-registration. `RETURNING id` reports whether a row matched without
+     * needing `run()`'s result metadata, which {@link D1PreparedLike} does not
+     * expose.
+     * @param id The subscription id.
+     * @param userId The owner the row must carry, or `null` for unowned.
+     * @returns `true` when a row was removed.
+     */
+    const removeOwned = async (id: string, userId: string | null): Promise<boolean> => {
+        await ensureSchema();
+
+        const statement =
+            userId === null
+                ? database.prepare(`DELETE FROM ${table} WHERE id = ?1 AND user_id IS NULL RETURNING id`).bind(id)
+                : database.prepare(`DELETE FROM ${table} WHERE id = ?1 AND user_id = ?2 RETURNING id`).bind(id, userId);
+
+        return (await statement.first<{ id: string }>()) !== null;
+    };
+
     const list = async (filter?: SubscriptionFilter): Promise<StoredSubscription[]> => {
         await ensureSchema();
 
@@ -272,7 +292,7 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
             .run();
     };
 
-    return { delete: remove, get, list, markStatus, put };
+    return { delete: remove, deleteOwned: removeOwned, get, list, markStatus, put };
 };
 
 export type { D1Like, D1PreparedLike, D1StoreOptions };

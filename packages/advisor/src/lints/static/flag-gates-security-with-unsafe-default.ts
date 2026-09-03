@@ -62,20 +62,65 @@ const tokenize = (key: string): string[] =>
         .filter((token) => token.length > 0);
 
 /**
- * The boolean default that fails CLOSED for `key`, or `undefined` when the key's
- * polarity is indeterminate.
+ * How many {@link NEGATION_TOKENS} negate the WHOLE key, counted as a run inward
+ * from each end.
+ *
+ * A negation only inverts the flag when it applies to the name entire —
+ * `disableRls`, `rlsDisabled`, `skipEnforcement`. In the middle it qualifies the
+ * noun beside it instead: `allowWithoutAuth` still GRANTS something (access
+ * without auth), so its safe default is a permission's `false`, not `true`.
+ * Counting every position flipped that key and had the rule suppress a genuinely
+ * unsafe `true` default while recommending the wrong value — the failure this
+ * rule exists to catch, produced by the rule itself.
+ *
+ * Runs rather than just the two end slots, so the double negation the parity
+ * count exists for still lands back on the un-negated polarity: `disableSkipRls`
+ * has a leading run of two.
+ * @param tokens The key's tokens, in order.
+ * @returns The number of negations that apply to the whole key.
+ */
+const negationsAtEdges = (tokens: ReadonlyArray<string>): number => {
+    let leading = 0;
+
+    while (leading < tokens.length && NEGATION_TOKENS.has(tokens[leading] as string)) {
+        leading += 1;
+    }
+
+    if (leading === tokens.length) {
+        return leading;
+    }
+
+    let trailing = 0;
+
+    while (trailing < tokens.length - leading && NEGATION_TOKENS.has(tokens[tokens.length - 1 - trailing] as string)) {
+        trailing += 1;
+    }
+
+    return leading + trailing;
+};
+
+/**
+ * What a security-shaped key guards, and the boolean default that fails CLOSED
+ * for it — or `undefined` when the key's polarity is indeterminate.
  *
  * A key with a *protection* token (`enforce`/`rls`/`gate`/`lockdown`/`disallow`)
  * must default `true`; one with a *permission* token (`allow`/`permit`/`bypass`)
- * must default `false`. Each {@link NEGATION_TOKENS} token in the key flips that,
- * so `disableRls`/`rlsDisabled`/`skipEnforcement` must default `false` — counted
- * by parity, so a double negation (`disableSkipRls`) lands back on the
- * un-negated polarity.
+ * must default `false`. A {@link NEGATION_TOKENS} token flips that when it negates
+ * the whole key — see {@link negationsAtEdges} — so
+ * `disableRls`/`rlsDisabled`/`skipEnforcement` must default `false`, counted by
+ * parity so a double negation (`disableSkipRls`) lands back on the un-negated
+ * polarity, while a mid-name qualifier (`allowWithoutAuth`) flips nothing.
+ *
+ * `protects` is reported ALONGSIDE `safeDefault` rather than derived from it,
+ * because negation decouples the two: `enforceRls` and `disableRls` both guard a
+ * protection but have opposite safe defaults. Reading "grants a permission" off
+ * the unsafe VALUE (`true` ⇒ permission) is what gets a negated key's finding
+ * detail backwards — `disableRls: true` disables RLS, it grants nothing.
  *
  * A key with neither family (a bare `auth`/`admin`) or with both is deliberately
  * indeterminate and never flagged — the lowest-false-positive subset.
  */
-const safeDefaultFor = (key: string): boolean | undefined => {
+const polarityOf = (key: string): { protects: boolean; safeDefault: boolean } | undefined => {
     const tokens = tokenize(key);
     const isProtect = tokens.some((token) => PROTECT_TOKENS.has(token));
     const isPermit = tokens.some((token) => PERMIT_TOKENS.has(token));
@@ -84,9 +129,7 @@ const safeDefaultFor = (key: string): boolean | undefined => {
         return undefined;
     }
 
-    const negated = tokens.filter((token) => NEGATION_TOKENS.has(token)).length % 2 === 1;
-
-    return negated ? !isProtect : isProtect;
+    return { protects: isProtect, safeDefault: negationsAtEdges(tokens) % 2 === 1 ? !isProtect : isProtect };
 };
 
 /**
@@ -100,7 +143,7 @@ const safeDefaultFor = (key: string): boolean | undefined => {
  * a flag-backend outage silently disables the protection or grants the
  * permission for every request. A negating token in the key
  * (`disable*`/`*Disabled`/`skip*`/`no*`) inverts that — see
- * {@link safeDefaultFor}.
+ * {@link polarityOf}.
  *
  * Runs only when the codegen feeder supplies flag-default evidence
  * (`context.flagSecurityDefaults`); a runtime caller flags nothing. Deliberately
@@ -123,19 +166,26 @@ const flagGatesSecurityWithUnsafeDefault: Lint = {
             return [];
         }
 
-        return context.flagSecurityDefaults
-            .filter((row) => {
-                const safeDefault = safeDefaultFor(row.key);
+        return context.flagSecurityDefaults.flatMap((row) => {
+            const polarity = polarityOf(row.key);
 
-                return safeDefault !== undefined && safeDefault !== row.defaultValue;
-            })
-            .map((row) =>
+            if (polarity === undefined || polarity.safeDefault === row.defaultValue) {
+                return [];
+            }
+
+            // Which harm the outage causes follows the key's FAMILY, not the
+            // default's value: a protection key is disabled, a permission key is
+            // granted, whether or not the key is negated.
+            const harm = polarity.protects ? "disabling the guarded protection" : "granting the guarded permission";
+
+            return [
                 emit(flagGatesSecurityWithUnsafeDefault, {
                     cacheKey: `flag_gates_security_with_unsafe_default:${row.file}:${row.line.toString()}`,
-                    detail: `\`ctx.flags.boolean("${row.key}", ${String(row.defaultValue)})\` in \`${row.exportName}\` (${row.file}:${row.line.toString()}) fails open to the permissive branch — a provider outage returns \`${String(row.defaultValue)}\`, ${row.defaultValue ? "granting the guarded permission" : "disabling the guarded protection"}. Fail closed: default it to \`${String(!row.defaultValue)}\`.`,
+                    detail: `\`ctx.flags.boolean("${row.key}", ${String(row.defaultValue)})\` in \`${row.exportName}\` (${row.file}:${row.line.toString()}) fails open to the permissive branch — a provider outage returns \`${String(row.defaultValue)}\`, ${harm}. Fail closed: default it to \`${String(polarity.safeDefault)}\`.`,
                     metadata: { defaultValue: row.defaultValue, exportName: row.exportName, file: row.file, key: row.key, line: row.line },
                 }),
-            );
+            ];
+        });
     },
     source: "static",
     title: "Security flag fails open to the permissive branch",

@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { copycat } from "./copycat";
 import type { Constraints } from "./generate-value";
-import { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, isTimestampField, NUMBER_RANGE } from "./generate-value";
+import { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, isTimestampField, NUMBER_RANGE, resolveRange } from "./generate-value";
 import type { FieldSpec } from "./introspect";
 import { metaOf } from "./introspect";
 
@@ -163,18 +163,22 @@ const anonymousDeal: UniqueDeal = { capacity: Number.POSITIVE_INFINITY, valueAt:
 /**
  * Pick the numeric deal for a column: the declared range when it has one (the
  * range is then a hard capacity the planner must refuse past), otherwise an
- * ascending count. A partially-declared range is completed with the generator's
- * own default for the other side, so the dealt values stay inside the interval
- * the generator would have drawn from.
+ * ascending count.
+ *
+ * A partially-declared range is completed by {@link resolveRange} — the very
+ * interval the generator would have drawn from — so the two paths cannot drift.
+ * Completing it here with the raw default instead reported a capacity of ZERO
+ * for `v.bigint().max(-1).unique()`, refusing at plan time a column with
+ * infinitely many values below its bound.
  */
-const boundedNumeric = (constraints: Constraints, defaults: { max: number; min: number }): UniqueDeal => {
-    const { maximum, minimum } = constraints;
-
-    if (maximum === undefined && minimum === undefined) {
+const boundedNumeric = (constraints: Constraints, defaults: { max: number; min: number }, column: string): UniqueDeal => {
+    if (constraints.maximum === undefined && constraints.minimum === undefined) {
         return countingDeal;
     }
 
-    return rangeDeal(minimum ?? defaults.min, maximum ?? defaults.max);
+    const { max, min } = resolveRange(constraints, defaults, column);
+
+    return rangeDeal(min, max);
 };
 
 /** Refuse a column whose value shape the seeder cannot make unique without violating it. */
@@ -282,7 +286,7 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
         }
 
         case "bigint": {
-            return boundedNumeric(constraints, BIGINT_RANGE);
+            return boundedNumeric(constraints, BIGINT_RANGE, field.name);
         }
 
         case "boolean": {
@@ -324,7 +328,7 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
                 return temporalDeal(now);
             }
 
-            return boundedNumeric(constraints, NUMBER_RANGE);
+            return boundedNumeric(constraints, NUMBER_RANGE, field.name);
         }
 
         case "union": {

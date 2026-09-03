@@ -85,12 +85,22 @@ export const registerDevice = mutation
     .input({ replacedEndpoint: v.optional(v.string()), subscription: v.any() })
     .mutation(async ({ ctx, args: { replacedEndpoint, subscription } }) => {
         if (replacedEndpoint !== undefined) {
-            await ctx.push.unregister(webPushId(replacedEndpoint));
+            await ctx.push.unregister(webPushId(replacedEndpoint), { userId: ctx.auth?.userId });
         }
 
         await ctx.push.register({ subscription, userId: ctx.auth?.userId });
     });
 ```
+
+`unregister`'s owner argument is **required**, and the row is removed only when
+it carries that same owner. A subscription id is derived from the endpoint, so
+`replacedEndpoint` is a caller-controlled key and nothing about it proves the
+browser that sent it ever held the subscription it names — without the scope,
+anyone who could guess or observe another user's endpoint could silence that
+device's notifications. A row owned by someone else is left alone silently, so
+the call cannot be used to probe which endpoints exist. Register with the same
+`userId` you unregister with; devices registered anonymously all share the one
+anonymous scope and get no separation from this check.
 
 ## Send from an action
 

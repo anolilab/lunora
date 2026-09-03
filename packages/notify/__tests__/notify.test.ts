@@ -104,6 +104,113 @@ describe("ctx.push lifecycle", () => {
 
         await expect(push.send("nope", { body: "x" })).rejects.toThrow(/no registered subscription/u);
     });
+
+    it("unregisters the caller's own subscription", async () => {
+        expect.hasAssertions();
+
+        const { push, store } = setup();
+        const stored = await push.register({ subscription: okSub, userId: "u1" });
+
+        await push.unregister(stored.id, { userId: "u1" });
+
+        await expect(store.get(stored.id)).resolves.toBeUndefined();
+    });
+
+    it("leaves another user's subscription in place (IDOR: the id is a caller-controlled key)", async () => {
+        expect.hasAssertions();
+
+        // A subscription id is `webPushId(endpoint)` — derived from a value the
+        // client supplies as `replacedEndpoint` after a VAPID rotation. Deleting
+        // by id alone let any caller who could guess or observe another user's
+        // endpoint silence that device (CWE-639).
+        const { push, store } = setup();
+        const victim = await push.register({ subscription: okSub, userId: "victim" });
+
+        await push.unregister(victim.id, { userId: "attacker" });
+
+        await expect(store.get(victim.id)).resolves.toMatchObject({ userId: "victim" });
+    });
+
+    it("keeps an owned row and an anonymous row apart", async () => {
+        expect.hasAssertions();
+
+        // `undefined` and `null` are the same anonymous bucket (that is how the
+        // store's own `userId` filter reads them), and an anonymous caller must
+        // not reach a row someone signed in registered.
+        const { push, store } = setup();
+        const owned = await push.register({ subscription: okSub, userId: "u1" });
+        const anonymous = await push.register({ subscription: goneSub });
+
+        await push.unregister(owned.id, { userId: undefined });
+
+        await expect(store.get(owned.id)).resolves.toMatchObject({ userId: "u1" });
+
+        await push.unregister(anonymous.id, { userId: null });
+
+        await expect(store.get(anonymous.id)).resolves.toBeUndefined();
+    });
+
+    // A read-then-write `unregister` (a `get` that checks the owner, then a
+    // `delete` that acts on it) can have the row replaced in between: the check
+    // passes for the caller and the removal lands on whoever re-registered.
+    //
+    // There is no way to stage that interleave against the fixed code, and that
+    // IS the fix — the window has no interior to schedule into. So this pins the
+    // two halves that make it true: the call reads nothing before writing, and
+    // the removal is conditional on the owner the row carries at deletion time.
+    // The store below would expose a read if one happened, by re-registering the
+    // id to someone else the moment anything calls `get`.
+    it("removes nothing by reading first — the owner check IS the delete", async () => {
+        expect.hasAssertions();
+
+        const backing = memorySubscriptionStore();
+        const gets: string[] = [];
+        const owned: [string, string | null][] = [];
+        const racing = {
+            ...backing,
+            deleteOwned: async (id: string, userId: string | null) => {
+                owned.push([id, userId]);
+
+                return backing.deleteOwned(id, userId);
+            },
+            get: async (id: string) => {
+                gets.push(id);
+
+                const current = await backing.get(id);
+
+                if (current !== undefined) {
+                    await backing.put({ ...current, userId: "second-owner" });
+                }
+
+                return current;
+            },
+        };
+
+        const providerMock = mockPushProvider();
+        const { push } = createNotify(baseDefinition(racing), {}, { engine: mockEngine({ push: providerMock.provider }), silent: true });
+        const stored = await push.register({ subscription: okSub, userId: "first-owner" });
+
+        gets.length = 0;
+
+        await push.unregister(stored.id, { userId: "first-owner" });
+
+        // Nothing was read, so nothing could go stale between the check and the
+        // removal — the store was asked one owner-scoped question.
+        expect(gets).toStrictEqual([]);
+        expect(owned).toStrictEqual([[stored.id, "first-owner"]]);
+        await expect(backing.get(stored.id)).resolves.toBeUndefined();
+    });
+
+    it("is a silent no-op for an id that was never registered", async () => {
+        expect.hasAssertions();
+
+        // Same answer, and the same absence of a write, as a row owned by
+        // someone else — so the call cannot be used to probe which endpoints
+        // exist.
+        const { push } = setup();
+
+        await expect(push.unregister("nope", { userId: "u1" })).resolves.toBeUndefined();
+    });
 });
 
 describe("ctx.push.broadcast", () => {

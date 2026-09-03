@@ -32,7 +32,12 @@ interface DocsMcpServerOptions {
     /** The documentation source the tools read. */
     index: DocsIndex;
 
-    /** Largest accepted request body, in bytes. Defaults to `DEFAULT_MAX_REQUEST_BYTES`, re-exported at the foot of this module. */
+    /**
+     * Largest accepted request body, in bytes — enforced while the body streams
+     * in, not after it is buffered. Defaults to `DEFAULT_MAX_REQUEST_BYTES`
+     * (re-exported at the foot of this module), which a value that is not a
+     * non-negative safe integer also falls back to.
+     */
     maxRequestBytes?: number;
 
     /**

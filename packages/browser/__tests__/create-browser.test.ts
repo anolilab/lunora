@@ -444,6 +444,41 @@ describe("session reuse", () => {
         expect(harness.closed).toHaveBeenCalledTimes(1);
     });
 
+    it.each([
+        ["below the 10s floor", 1],
+        ["just below the floor", 9],
+        ["above the 10min ceiling", 601],
+    ])("rejects a keepAlive %s instead of sending it", async (_label, keepAlive) => {
+        expect.assertions(3);
+
+        // Browser Rendering documents `keep_alive` as 10_000ms–600_000ms, so
+        // `keepAlive: 1` sends 1_000 and the launch fails at Cloudflare with an
+        // error that names none of this. Refuse at the boundary — and never
+        // reach `launch`, since a partially-launched session is the billed leak
+        // the whole surface is built around.
+        const harness = makeSessionHarness();
+        const browser = createBrowser({ binding, launch: harness.launch });
+
+        await expect(browser.launch(async () => "done", { keepAlive })).rejects.toThrow(/keepAlive must be between 10 and 600 seconds/u);
+
+        expect(harness.launchOptions).toHaveLength(0);
+        expect(harness.closed).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ["the floor", 10],
+        ["the ceiling", 600],
+    ])("accepts a keepAlive at %s", async (_label, keepAlive) => {
+        expect.assertions(2);
+
+        const harness = makeSessionHarness();
+        const browser = createBrowser({ binding, launch: harness.launch });
+
+        await expect(browser.launch(async () => "done", { keepAlive })).resolves.toBe("done");
+
+        expect(harness.launchOptions[0]).toStrictEqual({ keep_alive: keepAlive * 1000 });
+    });
+
     it("connect re-attaches without closing, unless asked", async () => {
         expect.assertions(4);
 

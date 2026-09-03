@@ -27,12 +27,85 @@ const DEFAULT_MAX_REQUEST_BYTES: number = 128 * 1024;
 
 /** What {@link serveStateless} accepts on top of the transport's own options. */
 interface ServeStatelessOptions extends HandleRequestOptions {
-    /** Largest accepted request body, in bytes. Defaults to {@link DEFAULT_MAX_REQUEST_BYTES}. */
+    /**
+     * Largest accepted request body, in bytes — enforced while the body streams
+     * in, not after it is buffered. Defaults to
+     * {@link DEFAULT_MAX_REQUEST_BYTES}, which a value that is not a
+     * non-negative safe integer also falls back to (see `resolveLimit`).
+     */
     maxRequestBytes?: number;
 }
 
-/** UTF-8 byte length of `value` — what a byte limit must actually measure. */
-const byteLength = (value: string): number => new TextEncoder().encode(value).length;
+/**
+ * The byte budget one read is allowed, from a caller-supplied `maxRequestBytes`.
+ *
+ * `NaN`, `Infinity`, a negative value and a fractional one all describe a bound
+ * no comparison can enforce — `total > NaN` is always `false` and `total >
+ * Infinity` never fires — so a nonsense option would leave the surface with no
+ * limit at all. Anything that is not a non-negative safe integer therefore falls
+ * back to {@link DEFAULT_MAX_REQUEST_BYTES}: a misconfigured deployment gets the
+ * documented 128 KiB bound rather than an unbounded one.
+ */
+const resolveLimit = (limit: number | undefined): number =>
+    limit !== undefined && Number.isSafeInteger(limit) && limit >= 0 ? limit : DEFAULT_MAX_REQUEST_BYTES;
+
+/**
+ * Drain a request body to text, aborting the moment cumulative bytes exceed
+ * `limit`; `undefined` signals that abort.
+ *
+ * `request.text()` cannot serve here: it buffers the WHOLE body into the isolate
+ * before any check can look at it, so a chunked POST — one that omits
+ * `content-length`, or lies about it — pushes an arbitrary number of bytes
+ * through before a size check ever runs. The limit has to be applied as the
+ * bytes arrive, which also means counting UTF-8 bytes off the wire rather than
+ * `String.length` (UTF-16 code units: 128 KiB of three-byte UTF-8 is ~43k units,
+ * which a naive length check would wave through). The reader is cancelled on the
+ * abort so the rest of the upload is never pulled.
+ */
+const readBoundedText = async (request: Request, limit: number): Promise<string | undefined> => {
+    if (!request.body) {
+        return "";
+    }
+
+    const reader = request.body.getReader();
+    const decoder = new TextDecoder();
+    let total = 0;
+    let text = "";
+
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- drain the body stream until the reader signals `done`
+    while (true) {
+        // eslint-disable-next-line no-await-in-loop -- stream reads are inherently sequential; each chunk depends on the prior read
+        const { done, value } = await reader.read();
+
+        if (done) {
+            break;
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- a stream read can yield `done: false` with an undefined `value`; guard before reading byteLength
+        if (value) {
+            total += value.byteLength;
+
+            if (total > limit) {
+                // Stop pulling; release the underlying stream so the remaining
+                // chunks are never read into the isolate.
+                //
+                // NOT awaited. The paid gate screens `request.clone()`, whose
+                // body is one branch of a tee, and `tee()`'s cancel promise
+                // settles only once BOTH branches are cancelled — awaiting it
+                // there hangs the handler forever on the exact oversized request
+                // this limit exists to shed. Nothing downstream needs the
+                // cancellation to have completed.
+                reader.cancel().catch(() => undefined);
+
+                return undefined;
+            }
+
+            text += decoder.decode(value, { stream: true });
+        }
+    }
+
+    return text + decoder.decode();
+};
 
 /** Either a rejection to return as-is, or the parsed body to hand to the transport. */
 type ScreenedRequest = { parsedBody: unknown } | { response: Response };
@@ -52,7 +125,11 @@ const rpcError = (status: number, code: number, message: string): Response =>
 const batchRefusal = (): Response => rpcError(400, -32_600, "batched requests are not supported: send one JSON-RPC message per request");
 
 /**
- * Read and JSON-parse a POST body, bounded by `maxRequestBytes`.
+ * Read and JSON-parse a POST body, bounded by `maxRequestBytes` **as the bytes
+ * arrive** ({@link readBoundedText}) rather than after the body is buffered, so
+ * a chunked upload carrying no honest `content-length` is cut off at the limit
+ * instead of being read whole and measured afterwards. A nonsense limit is
+ * itself rejected — see {@link resolveLimit}.
  *
  * The size limit lives HERE rather than inside {@link screenRequest} because a
  * caller that needs the body before the transport does — the paid-tool gate,
@@ -73,24 +150,22 @@ const readScreenedBody = async (request: Request, limit?: number): Promise<Scree
         return { parsedBody: undefined };
     }
 
-    const maxRequestBytes = limit ?? DEFAULT_MAX_REQUEST_BYTES;
+    const maxRequestBytes = resolveLimit(limit);
     const tooLarge = { response: rpcError(413, -32_600, `request body exceeds ${String(maxRequestBytes)} bytes`) };
     const declaredLength = Number(request.headers.get("content-length"));
 
-    // Reject on the declared length FIRST, so an oversized body is refused
-    // before it is buffered into the isolate. A chunked request without the
-    // header still has to be read, which is why the authoritative check below
-    // stays — but the common case costs nothing.
+    // Reject on the declared length FIRST, so an honestly-labelled oversized
+    // body is refused without opening the stream at all. The header is
+    // forgeable and a chunked request omits it entirely, which is why the
+    // authoritative bound is the streaming one below — but the common case
+    // costs nothing.
     if (Number.isFinite(declaredLength) && declaredLength > maxRequestBytes) {
         return tooLarge;
     }
 
-    const body = await request.text();
+    const body = await readBoundedText(request, maxRequestBytes);
 
-    // `String.length` counts UTF-16 code units, so a limit expressed in bytes
-    // has to be measured in bytes: 128 KiB of three-byte UTF-8 is ~43k units,
-    // which a naive length check would wave through.
-    if (byteLength(body) > maxRequestBytes) {
+    if (body === undefined) {
         return tooLarge;
     }
 

@@ -618,6 +618,74 @@ describe("seedPlan — unique foreign keys", () => {
         expect(links).toStrictEqual(rows.slice(0, -1).map((row) => row._id));
     });
 
+    it("deals a .unique() column whose one-sided bound sits outside the default window", () => {
+        expect.hasAssertions();
+
+        // `boundedNumeric` completed the missing side with the raw default, so
+        // `max(-1)` read as the range [0, -1] — a capacity of ZERO, and the
+        // planner refused at plan time a column with infinitely many values
+        // below its bound.
+        const { rows } = seedPlan(defineSchema({ readings: defineTable({ drift: v.number().max(-1).unique() }) }), {
+            counts: { readings: 8 },
+            now: 1_700_000_000_000,
+            seed: 1,
+        }).find((entry) => entry.table === "readings")!;
+        const values = rows.map((row) => row.drift as number);
+
+        expect(values.filter((value) => value > -1)).toStrictEqual([]);
+        expect(new Set(values).size).toBe(8);
+    });
+
+    it("refuses a .unique() self-reference into a table that already holds rows", () => {
+        expect.assertions(2);
+
+        // This case used to be seeded, asserting the NEW rows' links were
+        // distinct from each other. That never established the constraint:
+        // `existingIds` carries the table's row IDS, not the values those rows
+        // already store in this very column, so a new row could be dealt a
+        // parent an existing row had already taken and the insert would violate
+        // the UNIQUE the deal exists to satisfy. `indexOffset` keeps `_id` from
+        // repeating and says nothing about this column.
+        //
+        // Nothing available at plan time can rule that out, so it is refused with
+        // the column named — the same answer the pool-capacity check gives, and
+        // the one the docs promise instead of a silent violation.
+        const plan = () =>
+            seedPlan(defineSchema({ nodes: defineTable({ previousId: v.optional(v.id("nodes").unique()) }) }), {
+                counts: { nodes: 12 },
+                existingIds: { nodes: ["n-old-1", "n-old-2"] },
+                now: 1_700_000_000_000,
+                seed: 1,
+            });
+
+        expect(plan).toThrow(/unique self-referencing column "previousId"/u);
+        // Seeding the same table from empty still works, so the first run — the
+        // common case — is untouched.
+        expect(() =>
+            seedPlan(defineSchema({ nodes: defineTable({ previousId: v.optional(v.id("nodes").unique()) }) }), {
+                counts: { nodes: 12 },
+                now: 1_700_000_000_000,
+                seed: 1,
+            }),
+        ).not.toThrow();
+    });
+
+    it("lets a caller supplying the self-reference column decide its uniqueness", () => {
+        expect.assertions(1);
+
+        // The escape hatch the refusal names: an override means the caller owns
+        // the values, so the planner does not need to know what is stored.
+        expect(() =>
+            seedPlan(defineSchema({ nodes: defineTable({ previousId: v.optional(v.id("nodes").unique()) }) }), {
+                counts: { nodes: 3 },
+                existingIds: { nodes: ["n-old-1"] },
+                now: 1_700_000_000_000,
+                overrides: { nodes: { previousId: null } },
+                seed: 1,
+            }),
+        ).not.toThrow();
+    });
+
     it("leaves an ordinary foreign key drawing with replacement", () => {
         expect.hasAssertions();
 
