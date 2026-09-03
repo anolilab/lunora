@@ -353,16 +353,45 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
             return;
         }
 
-        if (meta.identity !== client.currentIdentity()) {
-            throw new NonRetriableError("outbox write dropped: identity changed since it was queued");
-        }
+        try {
+            if (meta.identity !== client.currentIdentity()) {
+                throw new NonRetriableError("outbox write dropped: identity changed since it was queued");
+            }
 
-        // Replay under the *original* idempotency key (not a fresh one), so a
-        // committed-but-unacked write that the executor retries is deduped by the
-        // server instead of applied twice.
-        await runOutboxMutation(() =>
-            client.mutation({ __lunoraRef: meta.functionPath }, meta.args, { mutationId: meta.idempotencyKey, shardKey: meta.shardKey }),
-        );
+            // Replay under the *original* idempotency key (not a fresh one), so a
+            // committed-but-unacked write that the executor retries is deduped by the
+            // server instead of applied twice.
+            await runOutboxMutation(() =>
+                client.mutation({ __lunoraRef: meta.functionPath }, meta.args, { mutationId: meta.idempotencyKey, shardKey: meta.shardKey }),
+            );
+        } catch (error) {
+            // Same aggregate-channel report the per-collection handler makes, for the
+            // same reason: without it this path rolls the optimistic row back with no
+            // UI signal — the precise failure `onWriteRejected` was added to prevent.
+            // It covers the identity drop above AND a server-coded rejection from the
+            // replay, because reporting only the first would leave this handler with
+            // exactly the half-guarded shape it is being fixed for.
+            if (error instanceof NonRetriableError && options.onWriteRejected) {
+                try {
+                    options.onWriteRejected({
+                        code: (error as Error & { code?: string }).code,
+                        // A raw outbox write targets a function, not a collection — the
+                        // path is the only identifier it carries, and it is what a
+                        // consumer needs to name the dropped write.
+                        collection: meta.functionPath,
+                        error,
+                        // No `row`: the write rides the transport carrier, whose
+                        // transaction holds no optimistic collection row to hand back.
+                    });
+                } catch {
+                    // A throwing listener must not escape and replace the
+                    // NonRetriableError — that would turn a terminal verdict retriable
+                    // (poison-message loop) and skip the rollback.
+                }
+            }
+
+            throw error;
+        }
     };
 
     // The transport carrier for outbox-routed raw writes (see

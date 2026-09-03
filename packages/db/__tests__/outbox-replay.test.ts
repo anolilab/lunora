@@ -201,6 +201,32 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(mutation).not.toHaveBeenCalled();
     });
 
+    // No `expect.assertions` here (nor in this file's other 14 `vi.waitFor` tests):
+    // waitFor re-runs its callback until it passes, so the assertion count is a
+    // function of timing, not of what the test checked.
+    it("reports the reserved handler's identity drop on onWriteRejected instead of dropping it silently", async () => {
+        const { client } = makeClient({ identity: "user-b" });
+        const onWriteRejected = vi.fn<(event: { code?: string; collection: string; error: Error; row?: { _id: string } }) => void>();
+        const database = buildDatabase(client, { onWriteRejected });
+
+        await database.executor.waitForInit();
+
+        const sink = createExecutorOutboxSink(database.executor);
+
+        await sink.enqueue(outboxWrite({ identity: "user-a" }));
+
+        await vi.waitFor(() => {
+            expect(onWriteRejected).toHaveBeenCalledTimes(1);
+        });
+
+        const event = onWriteRejected.mock.calls[0]![0];
+
+        // The raw outbox path targets a function, not a collection, so the
+        // persisted path is what names the dropped write to the consumer.
+        expect(event.collection).toBe("messages:send");
+        expect(event.error.message).toContain("identity changed");
+    });
+
     it("retries a transient (code-less) failure until the write lands", { timeout: 10_000 }, async () => {
         let attempts = 0;
         const { client, mutation } = makeClient({
