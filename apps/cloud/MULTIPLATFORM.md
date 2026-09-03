@@ -503,7 +503,33 @@ the no-lock-in promise than a fork would be:
   adapters under a celld capability matrix), and it is a real enterprise line
   item against every Workers-shaped competitor.
 - **Fully-managed "Later" (`ROADMAP.md` phase 2).** Operating a celld fleet
-  needs no fork either — Apache-2.0, `celld deploy` works today.
+  needs no fork either — Apache-2.0, `celld deploy` works today. It needs a
+  different shape, though: see the tenancy boundary below.
+
+**The celld tenancy boundary — read before costing a managed tier.** celld's own
+`docs/security.md` is explicit: it "is an alpha", it "is not safe for hostile
+multi-tenant use", and "one fleet runs one application… do not run code from
+mutually distrusting tenants in one fleet". Cell fencing protects storage
+consistency and is _not_ an isolation boundary between hostile applications.
+Security fixes land on the latest release only, so an older alpha build gets
+none.
+
+Two consequences, and the first is a cost model rather than a disclaimer:
+
+- **A managed tier is one fleet per tenant, not one fleet.** Per-tenant nodes
+  plus a per-tenant object store, with no bin-packing across customers — which
+  is most of the margin the "own the runtime" case was arguing for. It also
+  forces continuous upgrades, because only the latest release is patched.
+- **Self-host is the honest tier today**, and it is honest precisely because it
+  is single-tenant by construction: the customer's fleet runs the customer's
+  app, which is the deployment shape celld supports.
+
+So a shared managed deployment is gated, not planned. Two gates before it is
+offered to anyone: celld states a hostile-multi-tenant isolation boundary we can
+point at, and there is a security-fix channel we can meet an SLA with (a
+supported release line, or patches we carry — per "when to revisit" below). This
+sharpens reason 2 above rather than competing with it: on our own fleet the
+isolation boundary is ours to answer for.
 
 **When to revisit.** Two triggers, both concrete: a patch upstream refuses (they
 take `git format-patch` by email under a CLA assigning rights, so friction is
