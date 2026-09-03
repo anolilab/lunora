@@ -618,6 +618,50 @@ describe("seedPlan — unique foreign keys", () => {
         expect(links).toStrictEqual(rows.slice(0, -1).map((row) => row._id));
     });
 
+    it("deals a .unique() column whose one-sided bound sits outside the default window", () => {
+        expect.hasAssertions();
+
+        // `boundedNumeric` completed the missing side with the raw default, so
+        // `max(-1)` read as the range [0, -1] — a capacity of ZERO, and the
+        // planner refused at plan time a column with infinitely many values
+        // below its bound.
+        const { rows } = seedPlan(defineSchema({ readings: defineTable({ drift: v.number().max(-1).unique() }) }), {
+            counts: { readings: 8 },
+            now: 1_700_000_000_000,
+            seed: 1,
+        }).find((entry) => entry.table === "readings")!;
+        const values = rows.map((row) => row.drift as number);
+
+        expect(values.filter((value) => value > -1)).toStrictEqual([]);
+        expect(new Set(values).size).toBe(8);
+    });
+
+    it("keeps a .unique() self-reference distinct when the table already holds rows", () => {
+        expect.hasAssertions();
+
+        // `fkPool` appends `existingIds` AFTER the freshly-generated ones, so
+        // taking the pool's last entry handed every row the same pre-existing id
+        // — 12 rows, one value, and a UNIQUE violation on the second insert. The
+        // batch has to be bigger than the pre-existing set for the collision to
+        // show at all: with one new row there is nothing for it to collide with.
+        const existing = ["n-old-1", "n-old-2"];
+        const { rows } = seedPlan(defineSchema({ nodes: defineTable({ previousId: v.optional(v.id("nodes").unique()) }) }), {
+            counts: { nodes: 12 },
+            existingIds: { nodes: existing },
+            now: 1_700_000_000_000,
+            seed: 1,
+        }).find((entry) => entry.table === "nodes")!;
+        const links = rows.map((row) => row.previousId as string);
+        const reachable = new Set([...existing, ...rows.map((row) => row._id as string)]);
+
+        expect(new Set(links).size).toBe(links.length);
+        expect(links.filter((id) => !reachable.has(id))).toStrictEqual([]);
+
+        // Still no forward reference: a row may only point at a pre-existing row
+        // or at one this batch emitted before it.
+        expect(links.filter((id, index) => !existing.includes(id) && !rows.slice(0, index).some((row) => row._id === id))).toStrictEqual([]);
+    });
+
     it("leaves an ordinary foreign key drawing with replacement", () => {
         expect.hasAssertions();
 

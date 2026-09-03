@@ -67,7 +67,11 @@ describe("flag_gates_security_with_unsafe_default", () => {
         const findings = flagGatesSecurityWithUnsafeDefault.run({ flagSecurityDefaults: [row(key, defaultValue, 1)], schema: schema() });
 
         expect(findings).toHaveLength(1);
-        expect(findings[0]?.detail).toContain("granting the guarded permission");
+        // Every key here names a PROTECTION being switched off, so the harm is
+        // that the protection is disabled — nothing is granted. (This assertion
+        // previously read "granting the guarded permission", which was the
+        // implementation's own inverted clause written back as an expectation.)
+        expect(findings[0]?.detail).toContain("disabling the guarded protection");
     });
 
     it.each([["disableRls"], ["rlsDisabled"], ["skipEnforcement"], ["disable_rls"], ["noGate"]] as const)(
@@ -117,6 +121,25 @@ describe("flag_gates_security_with_unsafe_default", () => {
 
         expect(negated?.detail).toContain("default it to `false`");
         expect(plain?.detail).toContain("default it to `true`");
+    });
+
+    // A security linter whose explanation contradicts its own remediation is the
+    // defect this rule exists to catch. Which harm the outage causes follows the
+    // key's FAMILY (protection vs permission), not the unsafe value: `disableRls:
+    // true` turns RLS off — it grants nothing — while `noBypass: false` leaves
+    // the bypass on and grants everything.
+    it.each([
+        ["disableRls", true, "disabling the guarded protection", "granting the guarded permission"],
+        ["enforceRls", false, "disabling the guarded protection", "granting the guarded permission"],
+        ["noBypass", false, "granting the guarded permission", "disabling the guarded protection"],
+        ["permitUpload", true, "granting the guarded permission", "disabling the guarded protection"],
+    ])("describes the harm from the key family, not the default value (%s)", (key, defaultValue, expected, wrong) => {
+        expect.assertions(2);
+
+        const [finding] = flagGatesSecurityWithUnsafeDefault.run({ flagSecurityDefaults: [row(key, defaultValue, 1)], schema: schema() });
+
+        expect(finding?.detail).toContain(expected);
+        expect(finding?.detail).not.toContain(wrong);
     });
 
     it("does not flag a permission key that defaults to the restrictive branch", () => {

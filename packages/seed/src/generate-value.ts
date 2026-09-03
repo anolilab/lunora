@@ -99,6 +99,40 @@ const BIGINT_RANGE = { max: 1_000_000, min: 0 } as const;
 const TIMESTAMP_WINDOW_MS = 180 * 24 * 60 * 60 * 1000;
 
 /**
+ * The interval a numeric column actually draws from: its declared bounds, with
+ * the default range supplying only the side the column left open.
+ *
+ * A ONE-SIDED bound that falls outside the default window SLIDES that window
+ * rather than crossing it. Completing the missing side with the raw default
+ * produced `min: 0, max: -1` for `v.bigint().max(-1)` and `min: 1_000_001, max:
+ * 1_000_000` for `v.bigint().min(1_000_001)` — empty intervals no generator can
+ * draw from, and the `.unique()` twin read the same pair as a capacity of zero
+ * and refused the column outright. A one-sided bound that still overlaps the
+ * default window leaves it alone, so `v.number().max(5)` keeps drawing a rating
+ * from `[0, 5]` instead of from a window slid a thousand below zero.
+ *
+ * Two declared bounds that cross are the schema's own contradiction, and are
+ * refused with the column named rather than passed on as a raw generator error.
+ */
+const resolveRange = (constraints: Constraints, defaults: { max: number; min: number }, fieldName: string): { max: number; min: number } => {
+    const { maximum, minimum } = constraints;
+
+    if (maximum !== undefined && minimum !== undefined && minimum > maximum) {
+        throw new LunoraError(
+            "INTERNAL",
+            `Seed constraint error for field "${fieldName}": minimum (${String(minimum)}) > maximum (${String(maximum)}). Adjust the schema constraints.`,
+        );
+    }
+
+    const width = defaults.max - defaults.min;
+
+    return {
+        max: maximum ?? (minimum !== undefined && minimum > defaults.max ? minimum + width : defaults.max),
+        min: minimum ?? (maximum !== undefined && maximum < defaults.min ? maximum - width : defaults.min),
+    };
+};
+
+/**
  * Whether `fieldName` names a moment in time.
  *
  * Matches on the LAST WORD, not on a substring: `format` ends in "at",
@@ -329,7 +363,7 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
             // SQLite layer must coerce this back to BigInt before insert (see
             // testing.ts). Declared bounds win over the default, the same as the
             // `number` arm and the `.unique()` twin's `boundedNumeric`.
-            return copycat.int(input, { max: constraints.maximum ?? BIGINT_RANGE.max, min: constraints.minimum ?? BIGINT_RANGE.min });
+            return copycat.int(input, resolveRange(constraints, BIGINT_RANGE, fieldName));
         }
 
         case "boolean": {
@@ -383,24 +417,14 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
         }
 
         case "number": {
-            const { maximum, minimum } = constraints;
-
             // A time-named column with no explicit bounds is epoch-ms, not a
             // quantity. Declared bounds win — a schema that says `minimum: 0,
             // maximum: 5` means a rating, whatever the column is called.
-            if (maximum === undefined && minimum === undefined && isTimestampField(fieldName)) {
+            if (constraints.maximum === undefined && constraints.minimum === undefined && isTimestampField(fieldName)) {
                 return generateTimestamp(input, now);
             }
 
-            if (maximum !== undefined && minimum !== undefined && minimum > maximum) {
-                throw new LunoraError(
-                    "INTERNAL",
-                    `Seed constraint error for field "${fieldName}": minimum (${String(minimum)}) > maximum (${String(maximum)}). Adjust the schema constraints.`,
-                );
-            }
-
-            const min = minimum ?? NUMBER_RANGE.min;
-            const max = maximum ?? NUMBER_RANGE.max;
+            const { max, min } = resolveRange(constraints, NUMBER_RANGE, fieldName);
 
             // `v.number()` is a float column, so honour non-integer bounds with a
             // float (faker's integer generator rejects fractional min/max).
@@ -454,5 +478,5 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
     }
 };
 
-export { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, generateValue, isTimestampField, NUMBER_RANGE, TIMESTAMP_WINDOW_MS };
+export { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, generateValue, isTimestampField, NUMBER_RANGE, resolveRange, TIMESTAMP_WINDOW_MS };
 export type { Constraints };

@@ -121,7 +121,7 @@ interface LunoraPush {
     list: (filter?: SubscriptionFilter) => Promise<PushSubscriptionDevice[]>;
     register: (input: RegisterInput) => Promise<StoredSubscription>;
     send: (target: StoredSubscription | string, payload: PushContent) => Promise<Receipt>;
-    unregister: (id: string) => Promise<void>;
+    unregister: (id: string, owner: PushOwner) => Promise<void>;
 }
 ```
 
@@ -205,6 +205,14 @@ interface PushBroadcastPageOutcome {
     failedIds: string[];
     nextFilter?: SubscriptionFilter;
     result: BroadcastResult;
+}
+```
+
+### `PushOwner` (interface)
+
+```ts
+interface PushOwner {
+    userId: string | null | undefined;
 }
 ```
 

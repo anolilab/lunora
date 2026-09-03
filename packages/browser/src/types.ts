@@ -318,11 +318,13 @@ export interface Browser {
      * `fn` (e.g. for multi-page flows or APIs not surfaced here).
      *
      * The browser is **always closed** when `fn` resolves or throws — unless
-     * `keepAlive` is a finite, positive number of seconds, which holds the
+     * `keepAlive` is a number of seconds **between 10 and 600**, which holds the
      * session open for that long so a later {@link Browser.connect} can
      * re-attach. `0`, a negative value and `NaN` all mean "do not keep alive"
      * and take the always-close path (a held session is billed, so the
-     * ambiguous values fall to the safe side). Do not retain references to the
+     * ambiguous values fall to the safe side); a positive value outside the
+     * 10–600s window Browser Rendering accepts throws `BAD_REQUEST` rather than
+     * being sent on for the provider to refuse. Do not retain references to the
      * browser past the callback either way.
      */
     launch: <T>(function_: (browser: BrowserLike) => Promise<T>, options?: { keepAlive?: number }) => Promise<T>;

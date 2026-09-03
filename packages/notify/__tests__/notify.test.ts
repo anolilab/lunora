@@ -104,6 +104,62 @@ describe("ctx.push lifecycle", () => {
 
         await expect(push.send("nope", { body: "x" })).rejects.toThrow(/no registered subscription/u);
     });
+
+    it("unregisters the caller's own subscription", async () => {
+        expect.hasAssertions();
+
+        const { push, store } = setup();
+        const stored = await push.register({ subscription: okSub, userId: "u1" });
+
+        await push.unregister(stored.id, { userId: "u1" });
+
+        await expect(store.get(stored.id)).resolves.toBeUndefined();
+    });
+
+    it("leaves another user's subscription in place (IDOR: the id is a caller-controlled key)", async () => {
+        expect.hasAssertions();
+
+        // A subscription id is `webPushId(endpoint)` — derived from a value the
+        // client supplies as `replacedEndpoint` after a VAPID rotation. Deleting
+        // by id alone let any caller who could guess or observe another user's
+        // endpoint silence that device (CWE-639).
+        const { push, store } = setup();
+        const victim = await push.register({ subscription: okSub, userId: "victim" });
+
+        await push.unregister(victim.id, { userId: "attacker" });
+
+        await expect(store.get(victim.id)).resolves.toMatchObject({ userId: "victim" });
+    });
+
+    it("keeps an owned row and an anonymous row apart", async () => {
+        expect.hasAssertions();
+
+        // `undefined` and `null` are the same anonymous bucket (that is how the
+        // store's own `userId` filter reads them), and an anonymous caller must
+        // not reach a row someone signed in registered.
+        const { push, store } = setup();
+        const owned = await push.register({ subscription: okSub, userId: "u1" });
+        const anonymous = await push.register({ subscription: goneSub });
+
+        await push.unregister(owned.id, { userId: undefined });
+
+        await expect(store.get(owned.id)).resolves.toMatchObject({ userId: "u1" });
+
+        await push.unregister(anonymous.id, { userId: null });
+
+        await expect(store.get(anonymous.id)).resolves.toBeUndefined();
+    });
+
+    it("is a silent no-op for an id that was never registered", async () => {
+        expect.hasAssertions();
+
+        // Same answer, and the same absence of a write, as a row owned by
+        // someone else — so the call cannot be used to probe which endpoints
+        // exist.
+        const { push } = setup();
+
+        await expect(push.unregister("nope", { userId: "u1" })).resolves.toBeUndefined();
+    });
 });
 
 describe("ctx.push.broadcast", () => {

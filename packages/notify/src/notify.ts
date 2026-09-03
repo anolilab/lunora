@@ -17,6 +17,7 @@ import type {
     NotifyLogger,
     NotifyMetrics,
     PushContent,
+    PushOwner,
     PushSubscriptionDevice,
     RegisterInput,
     StoredSubscription,
@@ -577,7 +578,20 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
 
             return receipt;
         },
-        unregister: (id: string): Promise<void> => subscriptionStore.delete(id),
+        unregister: async (id: string, owner: PushOwner): Promise<void> => {
+            // Ownership is checked HERE rather than pushed into the store: the
+            // store is an app-implementable interface, and a scope parameter an
+            // implementation is free to ignore is not a check. The internal
+            // gone-pruning path (`deliver`) keeps calling `store.delete`
+            // directly — it acts on a delivery receipt, not on a caller's key.
+            const stored = await subscriptionStore.get(id);
+
+            if (stored === undefined || (stored.userId ?? null) !== (owner.userId ?? null)) {
+                return;
+            }
+
+            await subscriptionStore.delete(id);
+        },
     };
 
     const sendToChannel = async (channel: "chat" | "inapp" | "webhook", payload: unknown): Promise<Receipt> => {
