@@ -112,7 +112,13 @@ type PaidMcpChargeConfig = X402ChargeSettings;
 interface PaidMcpServerConfig {
     /** The worker-level x402 charge config; each paid tool supplies only its own `price`. */
     charge: PaidMcpChargeConfig;
-    /** Largest accepted request body, in bytes. Defaults to `DEFAULT_MAX_REQUEST_BYTES` (128 KiB). */
+
+    /**
+     * Largest accepted request body, in bytes — enforced while the body streams
+     * in, not after it is buffered. Defaults to `DEFAULT_MAX_REQUEST_BYTES`
+     * (128 KiB), which a value that is not a non-negative safe integer also
+     * falls back to.
+     */
     maxRequestBytes?: number;
     /** Name/version advertised in the MCP `initialize` handshake. Defaults to `lunora-paid-mcp`. */
     serverInfo?: { name: string; version: string };

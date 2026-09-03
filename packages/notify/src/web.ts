@@ -9,7 +9,7 @@
  *
  * const { replacedEndpoint, subscription } = await subscribeToPush({ serviceWorkerUrl: "/sw.js", vapidPublicKey });
  * // `replacedEndpoint` is set after a VAPID rotation — pass it on so the server
- * // can drop the stale row (`ctx.push.unregister(webPushId(replacedEndpoint))`).
+ * // can drop the stale row (`ctx.push.unregister(webPushId(replacedEndpoint), { userId: ctx.auth?.userId })`).
  * await client.mutation("registerDevice", { replacedEndpoint, subscription });
  * ```
  * @packageDocumentation
@@ -34,8 +34,9 @@ interface SubscribeToPushResult {
      * VAPID-rotation path, where the stale subscription is unsubscribed and a
      * new one minted under the current key.
      *
-     * Send it to the server and unregister it
-     * (`ctx.push.unregister(webPushId(replacedEndpoint))`). The new subscription
+     * Send it to the server and unregister it — owner-scoped, since this is a
+     * caller-supplied key
+     * (`ctx.push.unregister(webPushId(replacedEndpoint), { userId: ctx.auth?.userId })`). The new subscription
      * carries a NEW endpoint, hence a new store id, so it never upserts over the
      * old row — and `403 VapidPkHashMismatch`, which every send to that row now
      * answers, is correctly not a "gone" signal, so nothing prunes it either.

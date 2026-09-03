@@ -50,7 +50,11 @@ export const registerDevice = mutation
     .use(rateLimit(mutationLimiter, "write", byCaller))
     .mutation(async ({ args: { replacedEndpoint, subscription }, ctx }): Promise<void> => {
         if (replacedEndpoint !== undefined) {
-            await ctx.push.unregister(webPushId(replacedEndpoint));
+            // `replacedEndpoint` is a caller-controlled key, so the removal is
+            // scoped to the caller's own rows. This demo has no sign-in, so
+            // every row is anonymous and the scope separates nothing here —
+            // it is what an app WITH auth passes `ctx.auth?.userId` for.
+            await ctx.push.unregister(webPushId(replacedEndpoint), { userId: undefined });
         }
 
         await ctx.push.register({ subscription });

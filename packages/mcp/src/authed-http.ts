@@ -94,7 +94,12 @@ type McpAuthProtect = (handler: (request: Request, claims: McpAccessTokenClaims)
 type AuthedMcpServerOptions = ((claims: McpAccessTokenClaims) => LunoraMcpServerOptions | Promise<LunoraMcpServerOptions>) | LunoraMcpServerOptions;
 
 interface AuthedMcpFetchHandlerOptions {
-    /** Largest accepted request body, in bytes. Defaults to `DEFAULT_MAX_REQUEST_BYTES` (128 KiB). */
+    /**
+     * Largest accepted request body, in bytes — enforced while the body streams
+     * in, not after it is buffered. Defaults to `DEFAULT_MAX_REQUEST_BYTES`
+     * (128 KiB), which a value that is not a non-negative safe integer also
+     * falls back to.
+     */
     maxRequestBytes?: number;
 
     /**

@@ -159,4 +159,69 @@ describe("createMcpFetchHandler", () => {
         expect(response.status).toBe(413);
         await expect(response.text()).resolves.toContain("exceeds");
     });
+
+    // The whole point of a body limit is that the bytes are never read. A
+    // buffer-then-measure guard still returns 413, so status alone proves
+    // nothing — `pulls` is what distinguishes "cut the upload off" from "read
+    // the whole thing, then complain".
+    it("stops reading a chunked body at the limit instead of buffering it", async () => {
+        expect.assertions(3);
+
+        const chunkBytes = 256;
+        const chunkCount = 1000;
+        let pulls = 0;
+
+        const body = new ReadableStream<Uint8Array>({
+            pull(controller) {
+                if (pulls >= chunkCount) {
+                    controller.close();
+
+                    return;
+                }
+
+                pulls += 1;
+                controller.enqueue(new Uint8Array(chunkBytes).fill(0x7a));
+            },
+        });
+
+        const handle = createMcpFetchHandler({ client: mockClient(), maxRequestBytes: 1024 });
+        // A streamed body carries no `content-length`, so the cheap header
+        // fast-path cannot fire and the streaming bound is the only guard left.
+        const request = new Request("https://worker.example/mcp", {
+            body,
+            // `duplex` is required for a stream body but missing from the DOM
+            // `RequestInit` lib type, hence the assertion below.
+            duplex: "half",
+            headers: { accept: "application/json, text/event-stream", "content-type": "application/json" },
+            method: "POST",
+        } as RequestInit);
+        const response = await handle(request);
+
+        expect(response.status).toBe(413);
+        expect(request.headers.get("content-length")).toBeNull();
+        // 1024/256 = 4 chunks fit, the 5th trips the limit. Anything near
+        // `chunkCount` means the body was drained before it was measured.
+        expect(pulls).toBeLessThanOrEqual(8);
+    });
+
+    it.each([
+        ["NaN", Number.NaN],
+        ["Infinity", Number.POSITIVE_INFINITY],
+        ["negative", -1],
+        ["fractional", 1.5],
+    ])("falls back to the default bound when maxRequestBytes is %s", async (_label, maxRequestBytes) => {
+        expect.assertions(2);
+
+        const handle = createMcpFetchHandler({ client: mockClient(), maxRequestBytes });
+        const oversized = {
+            id: 1,
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: { arguments: { path: "z".repeat(DEFAULT_MAX_REQUEST_BYTES) }, name: "lunora_run_query" },
+        };
+        const response = await handle(mcpRequest(oversized));
+
+        expect(response.status).toBe(413);
+        await expect(response.text()).resolves.toContain(String(DEFAULT_MAX_REQUEST_BYTES));
+    });
 });

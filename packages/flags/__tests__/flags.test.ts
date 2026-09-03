@@ -351,6 +351,124 @@ describe("createFlags", () => {
         await expect(createFlags(definition, env, { provider }).boolean("dark-mode", false)).resolves.toBe(true); // second request rebinds
         expect(attempts).toBe(2);
     });
+
+    // The reporter is the ONE place this package is loud, and its only call site
+    // is a `.catch()` on a floating promise — so an app logger that throws turned
+    // the report into an unhandled rejection. Reporting must never change
+    // control flow: the evaluation still fails closed and the failure still
+    // reaches a tail.
+    it("survives a logger that throws while reporting a failed bind", async () => {
+        expect.assertions(3);
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+        const unhandled = vi.fn<(reason: unknown) => void>();
+
+        process.on("unhandledRejection", unhandled);
+
+        const noop = (): void => {};
+        const hostile = defineFlags({
+            logger: {
+                debug: noop,
+                error: () => {
+                    throw new Error("logger exploded");
+                },
+                info: noop,
+                warn: noop,
+            },
+            provider: () => {
+                throw new Error('no binding "FLAGS" found on env');
+            },
+        });
+
+        try {
+            await expect(createFlags(hostile, env).boolean("kill-switch", true)).resolves.toBe(true);
+
+            // Let any rejection settle onto the microtask queue and past the
+            // turn where Node would report it as unhandled.
+            await new Promise((resolve) => {
+                setTimeout(resolve, 0);
+            });
+
+            expect(unhandled).not.toHaveBeenCalled();
+            // The throwing logger falls through to the console, so the
+            // misconfiguration is still visible rather than swallowed twice.
+            expect(consoleError).toHaveBeenCalledTimes(1);
+        } finally {
+            process.off("unhandledRejection", unhandled);
+        }
+    });
+
+    // `Logger.error` is typed `void`, which does not stop an app shipping an
+    // `async` one. Its rejected promise is then dropped on the floor — the same
+    // unhandled rejection the synchronous case above fixed, through the other
+    // half of the door.
+    it("survives a logger whose error method rejects asynchronously", async () => {
+        expect.assertions(3);
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+        const unhandled = vi.fn<(reason: unknown) => void>();
+
+        process.on("unhandledRejection", unhandled);
+
+        const noop = (): void => {};
+        const hostile = defineFlags({
+            logger: {
+                debug: noop,
+                // eslint-disable-next-line @typescript-eslint/no-misused-promises -- the misuse IS the case under test: `Logger.error` is declared `void` and an app can still ship an async one
+                error: async (): Promise<void> => {
+                    await Promise.reject(new Error("logger exploded later"));
+                },
+                info: noop,
+                warn: noop,
+            },
+            provider: () => {
+                throw new Error('no binding "FLAGS" found on env');
+            },
+        });
+
+        try {
+            await expect(createFlags(hostile, env).boolean("kill-switch", true)).resolves.toBe(true);
+
+            await new Promise((resolve) => {
+                setTimeout(resolve, 0);
+            });
+
+            expect(unhandled).not.toHaveBeenCalled();
+            // The async logger accepted the message, so the console fallback is
+            // NOT used — unlike the synchronous throw, which never delivered it.
+            expect(consoleError).not.toHaveBeenCalled();
+        } finally {
+            process.off("unhandledRejection", unhandled);
+        }
+    });
+
+    // The generated `evaluateFlags` reads flags one `await` at a time. Because a
+    // failed bind is dropped from the per-isolate memo so the NEXT request can
+    // retry, each sequential read used to start its own bind — one provider
+    // `initialize` and one log line per flag, not per request.
+    it("attempts one bind per request across sequential reads of distinct flags", async () => {
+        expect.assertions(4);
+
+        const error = vi.fn<(...arguments_: unknown[]) => void>();
+        const noop = (): void => {};
+        let attempts = 0;
+        const broken = defineFlags({
+            logger: { debug: noop, error, info: noop, warn: noop },
+            provider: () => {
+                attempts += 1;
+
+                throw new Error('no binding "FLAGS" found on env');
+            },
+        });
+
+        const flags = createFlags(broken, env);
+
+        await expect(flags.boolean("kill-switch", true)).resolves.toBe(true);
+        await expect(flags.boolean("new-checkout", false)).resolves.toBe(false);
+        await expect(flags.string("tier", "free")).resolves.toBe("free");
+
+        expect([attempts, error.mock.calls.length]).toStrictEqual([1, 1]);
+    });
 });
 
 describe("keyed client memo", () => {

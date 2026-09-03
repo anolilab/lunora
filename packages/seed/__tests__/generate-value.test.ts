@@ -69,6 +69,51 @@ describe("generateValue — number constraints", () => {
     });
 });
 
+describe("generateValue — a one-sided bound outside the default window", () => {
+    /** Enough rows that a range wide enough to vary is visibly not a single pinned value. */
+    const ROWS = 40;
+
+    const seedColumn = (validator: Validator, field: string): ReadonlyArray<number> =>
+        Array.from({ length: ROWS }, (_unused, index) => generateValue(validator, field, [field, index], NOW) as number);
+
+    it.each([
+        ["a bigint capped below the default floor", v.bigint(), { maximum: -1 }, Number.NEGATIVE_INFINITY, -1],
+        ["a bigint floored above the default ceiling", v.bigint(), { minimum: 1_000_001 }, 1_000_001, Number.POSITIVE_INFINITY],
+        ["a number capped below the default floor", v.number(), { maximum: -1 }, Number.NEGATIVE_INFINITY, -1],
+        ["a number floored above the default ceiling", v.number(), { minimum: 5000 }, 5000, Number.POSITIVE_INFINITY],
+    ])("draws %s from an interval that is not empty", (_label, base, constraints, min, max) => {
+        expect.assertions(2);
+
+        // Completing the missing side with the raw default crossed the declared
+        // one — `v.bigint().max(-1)` resolved to `min: 0, max: -1` — so the
+        // generator drew from an empty interval and answered with the bound it
+        // was told to stay under, for every row.
+        const values = seedColumn(withConstraints(base, constraints), "amount");
+
+        expect(values.filter((value) => !Number.isInteger(value) || value < min || value > max)).toStrictEqual([]);
+        expect(new Set(values).size).toBeGreaterThan(1);
+    });
+
+    it.each([
+        ["a rating", { maximum: 5 }, 0, 5],
+        ["a floor inside the default window", { minimum: 10 }, 10, 1000],
+    ])("leaves %s drawing from the default window it still overlaps", (_label, constraints, min, max) => {
+        expect.assertions(1);
+
+        // Only a bound the default window CANNOT reach slides it: a `max(5)`
+        // rating must not start seeding negative scores.
+        const values = seedColumn(withConstraints(v.number(), constraints), "score");
+
+        expect(values.filter((value) => value < min || value > max)).toStrictEqual([]);
+    });
+
+    it("throws when a bigint declares minimum > maximum (the schema's own contradiction)", () => {
+        expect.assertions(1);
+
+        expect(() => generateValue(withConstraints(v.bigint(), { maximum: 10, minimum: 100 }), "amount", "input", NOW)).toThrow(/minimum.*maximum/u);
+    });
+});
+
 describe("generateValue — record key validator", () => {
     it("generates keys via the key validator, honouring its constraints (regression: key validator was ignored)", () => {
         expect.hasAssertions();

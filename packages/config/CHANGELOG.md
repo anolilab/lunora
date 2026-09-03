@@ -1,3 +1,16 @@
+## @lunora/config [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.185...@lunora/config@1.0.0-alpha.186) (2026-09-03)
+
+### Bug Fixes
+
+* audit rounds 14-16 ([#586](https://github.com/anolilab/lunora/issues/586)) ([6a09b74](https://github.com/anolilab/lunora/commit/6a09b746cfc9fb36f451c208b7a1c3eac16e56f4))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.152
+* **@lunora/seed:** upgraded to 1.0.0-alpha.103
+* **@lunora/studio:** upgraded to 1.0.0-alpha.148
+
 ## @lunora/config [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.184...@lunora/config@1.0.0-alpha.185) (2026-09-03)
 
 ### ⚠ BREAKING CHANGES

@@ -332,18 +332,39 @@ const describe = (command, args, cwd) => `${cwd === undefined ? "" : `cd ${cwd} 
  *
  * Digest rather than the bytes: some generated trees run to megabytes and the two
  * snapshots are held simultaneously.
+ *
+ * `-z` rather than the default text format, for two reasons that both end in a
+ * silently empty digest. A RENAME prints as `XY <old> -> <new>`, so the whole
+ * arrow expression was taken as the path, nothing could be read at it, and both
+ * snapshots stored the same empty digest — a renamed generated file that a
+ * generator then rewrote reported NO drift, which is exactly the file most
+ * likely to have some. And a path with a space or a non-ASCII byte is C-quoted
+ * in the text format, which `readFileSync` cannot open either. `-z` NUL-separates
+ * the records, never quotes, and puts a rename's new path first with the old one
+ * as its own trailing field.
  */
 const dirtySet = () => {
-    const raw = execFileSync("git", ["status", "--porcelain=v1"], { cwd: rootDir, encoding: "utf8" });
+    const raw = execFileSync("git", ["status", "--porcelain=v1", "-z"], { cwd: rootDir, encoding: "utf8" });
+    const records = raw.split("\0");
     const entries = new Map();
 
-    for (const line of raw.split("\n")) {
-        if (line.trim() === "") {
+    for (let index = 0; index < records.length; index += 1) {
+        const record = records[index];
+
+        if (record === "") {
             continue;
         }
 
-        // `XY <path>` — the status code is the first two columns.
-        const path = line.slice(3).trim();
+        // `XY <path>` — the status code is the first two columns, then one space.
+        const status = record.slice(0, 2);
+        const path = record.slice(3);
+
+        // A rename/copy carries its SOURCE path as the next field. Skip it: the
+        // file that exists — and that a generator would rewrite — is this one.
+        if (status.startsWith("R") || status.startsWith("C")) {
+            index += 1;
+        }
+
         let digest = "";
 
         try {
@@ -351,12 +372,12 @@ const dirtySet = () => {
                 .update(readFileSync(join(rootDir, path)))
                 .digest("hex");
         } catch {
-            // A deletion or a rename's old half has no file to read; the status
-            // code alone carries the change for those.
+            // A deletion has no file to read; the status code alone carries the
+            // change for those.
             digest = "";
         }
 
-        entries.set(path, `${line.slice(0, 2)}:${digest}`);
+        entries.set(path, `${status}:${digest}`);
     }
 
     return entries;

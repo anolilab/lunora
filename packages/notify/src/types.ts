@@ -135,6 +135,31 @@ export interface SubscriptionFilter {
 export interface SubscriptionStore {
     /** Remove a subscription by id (idempotent). */
     delete: (id: string) => Promise<void>;
+
+    /**
+     * Remove a subscription by id ONLY if it is owned by `userId`, and report
+     * whether it was.
+     *
+     * Separate from {@link SubscriptionStore.delete} because the caller-facing
+     * `unregister` must not be a read followed by a write: between a `get` that
+     * checks the owner and a `delete` that acts on it, a re-registration can
+     * replace the row, so the check passes for one owner and the removal lands on
+     * another's subscription.
+     *
+     * **The predicate and the removal must be ONE operation.** A store that
+     * cannot do that atomically should say so in its own documentation rather
+     * than implement this as a get-then-delete, which reintroduces the race this
+     * method exists to remove. Both shipped stores manage it: the in-memory one
+     * because a `Map` check-and-delete has no await between the two, and the D1
+     * one with a single `DELETE … WHERE id = ? AND user_id = ? RETURNING id`.
+     *
+     * `userId` is `null` for an anonymous subscription, and matches only a row
+     * that is itself unowned.
+     * @param id The subscription id.
+     * @param userId The owner the row must carry, or `null` for unowned.
+     * @returns `true` when a row was removed.
+     */
+    deleteOwned: (id: string, userId: string | null) => Promise<boolean>;
     /** Read a subscription by id, or `undefined`. */
     get: (id: string) => Promise<StoredSubscription | undefined>;
 
@@ -287,8 +312,39 @@ export interface LunoraPush {
     register: (input: RegisterInput) => Promise<StoredSubscription>;
     /** Send a push to a single stored subscription (by id or record); `to` is derived from it. */
     send: (target: StoredSubscription | string, payload: PushContent) => Promise<Receipt>;
-    /** Remove a subscription by id (idempotent). */
-    unregister: (id: string) => Promise<void>;
+
+    /**
+     * Remove ONE of `owner`'s subscriptions by id (idempotent).
+     *
+     * `owner` is not optional, and the removal happens only when the stored row
+     * carries that same owner. A subscription id is derived from the endpoint
+     * (`webPushId`) or the FCM token, so it is a **caller-controlled key**: the
+     * intended call is a mutation forwarding `subscribeToPush`'s
+     * `replacedEndpoint` after a VAPID rotation, and nothing about that argument
+     * proves the browser sending it ever held the subscription it names.
+     * Deleting by id alone let any caller that could guess or observe another
+     * user's endpoint silence that device's notifications (CWE-639).
+     *
+     * A row belonging to someone else is left alone SILENTLY rather than
+     * refused, so the call cannot be used to probe which endpoints exist — the
+     * same answer, and the same absence of a write, as an id that was never
+     * registered.
+     *
+     * `{ userId: null }` (or `undefined`, which normalises to it) addresses the
+     * anonymous rows — those registered with no `userId`. An app that registers
+     * every device anonymously therefore gets no separation from this check;
+     * pass `ctx.auth?.userId` and register with it to get any.
+     */
+    unregister: (id: string, owner: PushOwner) => Promise<void>;
+}
+
+/** Who a {@link LunoraPush.unregister} call is acting as. */
+export interface PushOwner {
+    /**
+     * The authenticated caller (`ctx.auth?.userId`), or `null`/`undefined` for
+     * an anonymous registration. Required — see {@link LunoraPush.unregister}.
+     */
+    userId: string | null | undefined;
 }
 
 /** A push payload without its `to` target — the facade derives `to` from the stored subscription. */
