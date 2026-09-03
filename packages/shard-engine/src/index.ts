@@ -306,7 +306,7 @@ export type {
     RelayShapeUnsubscribe,
 } from "./relay";
 export { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor, shapeRoutingKey } from "./relay";
-export type { RelayHost } from "./relay-hub";
+export type { RelayHost, RelayPokeDelivery } from "./relay-hub";
 export { createRelayLink, DEFAULT_MAX_RELAYS, OwnerRelay, RelayMember } from "./relay-hub";
 export type { ReplicaFollowerHost, ReplicaOwnerHost, ReplicaReadiness, ShardSiblingHost } from "./replica";
 export { createReplicaLink, gateReplicaDispatch, handleReplicaControl } from "./replica";

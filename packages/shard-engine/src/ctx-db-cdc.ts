@@ -667,15 +667,11 @@ const applyCdcChange = async (writer: DatabaseWriterLike, change: CdcChange): Pr
         // row's original creation time instead of resetting it to the replay
         // clock (the default mutation path mints a fresh `clock()`).
         //
-        // `change.table` is passed as `expectedTable` for the same reason the
-        // delete and insert above carry it (DO-02): without it `replace` falls
-        // back to `locateRowById(id, undefined)`, which probes every non-global
-        // table in declaration order on the premise that ids are unique across
-        // tables. That premise does not hold for `.source()` tables — `liftSourceId`
-        // sets `_id` to the UPSTREAM natural primary key, so two sourced tables
-        // with `id serial` both own a row whose id is `"1"` and an orders update
-        // lands in the users row. Pinning the table also stops a shard-local
-        // replay document falling through to the `.global()` D1 backend.
+        // `change.table` is passed as `expectedTable` like the delete and insert
+        // above: an unscoped `replace` probes every table on the premise that ids
+        // are unique across them, which `.source()` tables break — `liftSourceId`
+        // sets `_id` to the upstream natural primary key, so an orders update
+        // lands in the users row.
         const fields = { ...document };
 
         delete fields["_id"];
