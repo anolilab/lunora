@@ -58,6 +58,14 @@ const classifyOne = (raw: string, at: number): ScriptStatement[] => {
     const offset = at + raw.indexOf(sql);
     const rejection = classifyStatement(sql);
 
+    // Whitespace and comments alone are not a statement. The gate says so with
+    // `SQL_EMPTY`, and a script's trailing `-- note` after the last `;` arrives
+    // here as exactly that — reported as a refused statement ("the query is
+    // empty") that the operator never wrote.
+    if (rejection?.code === "SQL_EMPTY") {
+        return [];
+    }
+
     return [rejection === undefined ? { offset, sql } : { offset, rejection, sql }];
 };
 

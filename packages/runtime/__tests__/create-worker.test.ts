@@ -372,6 +372,39 @@ describe("createWorker", () => {
         expect(shard.calls[0]!.request.headers.get("x-lunora-identity")).toBeNull();
     });
 
+    it("refuses a client-supplied shard key carrying a reserved relay/replica infix", async () => {
+        expect.assertions(4);
+
+        // `::relay::` / `::replica::` are minted by the runtime alone: a DO reads
+        // its own name to learn its role, so forwarding a client-named
+        // `<victim>::relay::0` hands traffic to a DO that believes it relays for
+        // another shard. Only the replica ROUTING path checked the infixes; the
+        // WS relay mint and every RPC forward did not.
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace });
+
+        const upgrade = new Request(`https://app.example/_lunora/ws?shard=${encodeURIComponent("victim::relay::0")}`, {
+            headers: { Upgrade: "websocket" },
+        });
+
+        const upgradeResponse = await worker.fetch(upgrade, {}, fakeContext);
+
+        expect(upgradeResponse.status).toBe(403);
+
+        const rpc = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "posts:list", shardKey: "victim::replica::weur" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(rpc.status).toBe(403);
+        await expect(rpc.json()).resolves.toMatchObject({ error: { code: "FORBIDDEN_SHARD" } });
+        expect(shard.calls).toHaveLength(0);
+    });
+
     it("rejects /_lunora/ws without upgrade header", async () => {
         expect.assertions(1);
 
@@ -656,12 +689,12 @@ describe("createWorker", () => {
         });
 
         it("never re-targets a shard key that already carries a reserved role infix", async () => {
-            expect.assertions(1);
+            expect.assertions(2);
 
             const { calls, namespace } = createReplicaNamespace(() => Response.json({ result: [] }));
             const worker = createWorker({ allowUnauthenticatedShardAccess: true, functions, replicaReads: true, shardDO: namespace });
 
-            await worker.fetch(
+            const response = await worker.fetch(
                 Object.assign(
                     new Request("https://app.example/_lunora/rpc", {
                         body: JSON.stringify({ functionPath: "posts:list", shardKey: "tenant-7::replica::weur" }),
@@ -673,8 +706,13 @@ describe("createWorker", () => {
                 fakeContext,
             );
 
-            // A replica of a replica follows a DO nobody feeds.
-            expect(calls.map((call) => call.name)).toStrictEqual(["tenant-7::replica::weur"]);
+            // `replicaTargetFor` refuses to mint a replica of a replica (which
+            // would follow a DO nobody feeds) and still does so for the
+            // server-initiated dispatch that never crosses the shard gate. A
+            // CLIENT-supplied key never gets that far any more: the reserved
+            // infix is refused outright, so the owner is not addressed either.
+            expect(response.status).toBe(403);
+            expect(calls).toHaveLength(0);
         });
 
         it("names the shard it resolved, so the client can key one cursor for it", async () => {

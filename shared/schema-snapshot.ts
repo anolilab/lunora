@@ -86,7 +86,12 @@ interface RelationSnapshot {
 
 /** Structural snapshot of one table. */
 interface TableSnapshot {
-    /** Field name → {@link FieldSnapshot}, in declared order. */
+    /**
+     * Field name → {@link FieldSnapshot}, keys sorted by UTF-16 code unit (see
+     * `sortKeys` below). Declaration order was tried and abandoned: the snapshot
+     * is HASHED, so moving a field up a line reported drift and consumed a
+     * version slot for an edit that changed nothing.
+     */
     fields: Record<string, FieldSnapshot>;
     /** Index name → {@link IndexSnapshot}. */
     indexes: Record<string, IndexSnapshot>;

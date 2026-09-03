@@ -32,7 +32,7 @@
  *
  * 1. any word is a secret word on its own ({@link SECRET_WORD_TOKENS}:
  *    `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `PASSPHRASE`, `DSN`,
- *    `CREDENTIAL(S)`) — so `AUTH_TOKEN` hits and `TOKENIZER` / `SECRETARY` do
+ *    `CREDENTIAL`) — so `AUTH_TOKEN` hits and `TOKENIZER` / `SECRETARY` do
  *    not; or
  * 2. the normalized name ends in a compound secret-bearing key suffix
  *    ({@link SECRET_KEY_SUFFIXES}: `API_KEY`, `ACCESS_KEY`, `PRIVATE_KEY`,
@@ -40,6 +40,14 @@
  * 3. the raw name ends in one of the unambiguous run-together forms
  *    ({@link SECRET_TAIL}) that no word split can recover — `APITOKEN`,
  *    `MYPASSWORD`, `OPENAI_APIKEY`.
+ *
+ * Each of the three is checked against the {@link singular} of what it matches,
+ * so a PLURAL is not a separate spelling to remember: `TOKENS`, `API_KEYS` and
+ * `MYPASSWORDS` classify exactly as their singulars do. The list used to carry
+ * `CREDENTIALS` beside `CREDENTIAL` and nothing else, so every other plural —
+ * `SECRETS`, `TOKENS`, `PASSWORDS`, `API_KEYS`, `PRIVATE_KEYS`, `SIGNING_KEYS` —
+ * read as ordinary config, and `TOKENS=<value>` reached a thrown env error in
+ * the clear.
  *
  * …unless the name advertises itself as public ({@link isPublicKeyName}:
  * `PUBLIC` / `PUBLISHABLE`), which wins: `NEXT_PUBLIC_API_KEY` and
@@ -59,6 +67,14 @@
  * case in each consumer's suite — never a private copy.
  */
 
+/**
+ * `TOKENS` -> `TOKEN`. A single trailing `S` is dropped so each word list below
+ * is written in the singular and matches both numbers; a word that is not a
+ * plural of anything in those lists is unchanged by it in the ways that matter
+ * (`ACCESS` -> `ACCES` matches nothing either way).
+ */
+const singular = (word: string): string => (word.endsWith("S") ? word.slice(0, -1) : word);
+
 /** Split a key on `_` / `-` / camelCase boundaries and upper-case the words. */
 const keyWords = (key: string): string[] =>
     key
@@ -72,7 +88,7 @@ const keyWords = (key: string): string[] =>
  * against a split word exactly, so `TOKEN` hits `AUTH_TOKEN` but not
  * `TOKENIZER`, and `SECRET` hits `WEBHOOK_SECRET` but not `SECRETARY`.
  */
-const SECRET_WORD_TOKENS: ReadonlySet<string> = new Set(["CREDENTIAL", "CREDENTIALS", "DSN", "PASSPHRASE", "PASSWD", "PASSWORD", "SECRET", "TOKEN"]);
+const SECRET_WORD_TOKENS: ReadonlySet<string> = new Set(["CREDENTIAL", "DSN", "PASSPHRASE", "PASSWD", "PASSWORD", "SECRET", "TOKEN"]);
 
 /**
  * Compound `*_KEY` names that ARE secret-bearing (unlike a bare `KEY`). Matched
@@ -83,11 +99,18 @@ const SECRET_KEY_SUFFIXES: ReadonlyArray<string> = ["ACCESS_KEY", "API_KEY", "EN
 
 /**
  * Run-together spellings no word split can recover (`APITOKEN`, `MYPASSWORD`,
- * `OPENAI_APIKEY`). Every entry is a word that does not appear as the tail of an
- * ordinary English compound, which is why bare `key` is absent — `MONKEY` and
- * `APIKEY` are otherwise structurally identical.
+ * `OPENAI_APIKEY`, `MY_PRIVATEKEY`), with an optional plural `S`.
+ *
+ * DERIVED from the two lists above rather than written out again: this used to be
+ * a third hand-maintained spelling of the same vocabulary and it drifted from
+ * both — it carried `apikey` but not `privatekey`/`signingkey`, so `MY_APIKEY`
+ * was a secret and `MY_PRIVATEKEY` was not. Every source entry is a word that
+ * does not appear as the tail of an ordinary English compound, which is why bare
+ * `key` is absent from both lists — `MONKEY` and `APIKEY` are otherwise
+ * structurally identical, and only the COMPOUND `*_KEY` suffixes contribute a
+ * `…key` tail here.
  */
-const SECRET_TAIL = /(?:apikey|passphrase|passwd|password|secret|token)$/iu;
+const SECRET_TAIL = new RegExp(`(?:${[...SECRET_WORD_TOKENS, ...SECRET_KEY_SUFFIXES.map((suffix) => suffix.replaceAll("_", ""))].join("|")})S?$`, "iu");
 
 /**
  * Whole words marking a key as public/publishable — meant to ship in cleartext
@@ -110,11 +133,13 @@ const isSecretKeyName = (key: string): boolean => {
 
     const words = keyWords(key);
 
-    if (words.some((word) => SECRET_WORD_TOKENS.has(word))) {
+    if (words.some((word) => SECRET_WORD_TOKENS.has(singular(word)))) {
         return true;
     }
 
-    const normalized = words.join("_");
+    // The normalized name ends with its last word, so dropping ONE trailing `S`
+    // off the whole string de-pluralizes exactly that word: `API_KEYS` -> `API_KEY`.
+    const normalized = singular(words.join("_"));
 
     return SECRET_KEY_SUFFIXES.some((suffix) => normalized === suffix || normalized.endsWith(`_${suffix}`)) || SECRET_TAIL.test(key);
 };

@@ -215,7 +215,7 @@ module Lunora
     when "inf" then ::Float::INFINITY
     when "-inf" then -::Float::INFINITY
     when "bigint" then decode_bigint(value)
-    when "date" then WireDate.new(decode_wire(payload(value, "date"), depth + 1))
+    when "date" then decode_date(value, depth)
     when "url" then WireUrl.new(payload_of(value, "url", ::String))
     when "map" then decode_map(value, depth)
     when "set" then WireSet.new(payload_of(value, "set", ::Array).map { |item| decode_wire(item, depth + 1) })
@@ -245,6 +245,17 @@ module Lunora
     raise WireFormatError, "wire-codec: malformed #{tag} tag" unless slot.is_a?(type)
 
     slot
+  end
+
+  # Epoch milliseconds, and nothing else. The payload is DECODED first (a nested
+  # +[TAG, "nan"]+ is how an invalid date travels), then type-checked: without
+  # that, +nil+ or a string became a WireDate carrying a value no arithmetic can
+  # use, which re-encoded as a legitimate-looking date tag.
+  def decode_date(value, depth)
+    epoch = decode_wire(payload(value, "date"), depth + 1)
+    raise WireFormatError, "wire-codec: malformed date tag" unless epoch.is_a?(::Numeric)
+
+    WireDate.new(epoch)
   end
 
   def decode_bigint(value)

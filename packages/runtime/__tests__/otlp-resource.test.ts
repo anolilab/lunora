@@ -75,6 +75,17 @@ describe("shared/otlp-resource", () => {
             );
         });
 
+        it("reports an explicitly named pod without the in-cluster service env", () => {
+            expect.assertions(1);
+
+            // The `KUBERNETES_SERVICE_HOST` gate exists for the HOSTNAME fallback —
+            // a machine name is not a pod name. `KUBERNETES_POD_NAME` needs no such
+            // corroboration: it says what it is. Gating it too dropped the
+            // attribute wherever the pod name is injected without the in-cluster
+            // service env alongside it.
+            expect(detectHostResource(readerFromRecord({ HOSTNAME: "box-1", KUBERNETES_POD_NAME: "pod-7" }))["k8s.pod.name"]).toBe("pod-7");
+        });
+
         it("omits process.pid when the host has none", () => {
             expect.assertions(1);
 

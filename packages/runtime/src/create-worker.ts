@@ -2650,6 +2650,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * {@link WorkerOptions.authorizeShard} for why.
      */
     const assertShardAuthorized = async (identity: ResolvedIdentity | null, shardKey: string): Promise<void> => {
+        // `::relay::` / `::replica::` are RESERVED: only the runtime mints those
+        // names, and a DO reads its own name to learn its role. A client-supplied
+        // key carrying either infix therefore addresses a DO that believes it is
+        // another shard's relay or replica — and this is the one gate every
+        // client-originated key crosses (RPC, REST, `serverQuery`, WS upgrade), so
+        // it is refused here rather than at each mint site. Ahead of
+        // `authorizeShard`: the name is malformed whatever the policy says.
+        if (shardKey.includes(RELAY_NAME_INFIX) || shardKey.includes(REPLICA_NAME_INFIX)) {
+            throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
+        }
+
         if (options.authorizeShard) {
             const allowed = await grants(options.authorizeShard({ identity, shardKey }));
 

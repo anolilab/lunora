@@ -166,7 +166,8 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> => {
  * identity answers `true` — a false positive costs one wasted encode, while a
  * false negative writes different bytes than the store expects, which is silent
  * corruption. It lives next to `encodeWire` for the same reason: the two must
- * agree, so they have to be read together. `shared/__tests__` fuzzes the
+ * agree, so they have to be read together.
+ * `packages/shard-engine/__tests__/needs-wire-encoding.test.ts` fuzzes the
  * property that matters — `needsWireEncoding(v) === false` implies
  * `JSON.stringify(encodeWire(v)) === JSON.stringify(v)`.
  * @returns `true` when the value must go through {@link encodeWire}
@@ -439,18 +440,24 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
                     return BigInt(raw);
                 }
                 case "date": {
-                    // A conforming encoder always emits the payload slot. Without
-                    // this guard `[TAG,"date"]` decoded `undefined` into an Invalid
-                    // Date and re-encoded as `[TAG,"date",[TAG,"nan"]]` — inventing
-                    // a NaN timestamp out of a truncated frame, which is the silent
-                    // corruption this codec exists to refuse. Every non-JS port
-                    // already rejects it; this makes the reference agree rather than
-                    // asking eight languages to reproduce `new Date(undefined)`.
-                    if (value.length < 3) {
-                        throw new TypeError("wire-codec: malformed date — missing payload");
+                    // A conforming encoder always emits an epoch-ms NUMBER in the
+                    // payload slot. The arity check alone was not that guard: it
+                    // stopped `[TAG,"date"]` (which decoded `undefined` into an
+                    // Invalid Date and re-encoded as `[TAG,"date",[TAG,"nan"]]`)
+                    // while `[TAG,"date",null]` still coerced to epoch 0 and
+                    // `[TAG,"date","abc"]` to an Invalid Date — inventing a
+                    // timestamp out of a malformed frame either way, which is the
+                    // silent corruption this codec exists to refuse. Every non-JS
+                    // port already rejects a non-number epoch; this makes the
+                    // reference agree rather than asking eight languages to
+                    // reproduce `new Date(null)`.
+                    const epoch = decodeWire(value[2], depth + 1);
+
+                    if (typeof epoch !== "number") {
+                        throw new TypeError("wire-codec: malformed date — epoch must be a number");
                     }
 
-                    return new Date(decodeWire(value[2], depth + 1) as number);
+                    return new Date(epoch);
                 }
                 case "map": {
                     const entries = value[2] as unknown[];
@@ -474,7 +481,18 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
                     return new Set((value[2] as unknown[]).map((item) => decodeWire(item, depth + 1)));
                 }
                 case "url": {
-                    return new URL(value[2] as string);
+                    // `new URL` ToString-coerces, so an asserted non-string href
+                    // was accepted whenever its coercion happened to parse:
+                    // `[TAG,"url",["http://x/"]]` decoded to a real URL and
+                    // re-encoded as the string form. Every port refuses a
+                    // non-string href; so does this one.
+                    const href = value[2];
+
+                    if (typeof href !== "string") {
+                        throw new TypeError("wire-codec: malformed url — href must be a string");
+                    }
+
+                    return new URL(href);
                 }
                 case "error": {
                     const name = value[2] as string;
@@ -528,7 +546,19 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
                     return error;
                 }
                 case "bytes": {
-                    const bytes = fromBase64(value[2] as string);
+                    // Type-CHECK, not a type-assert: `atob` takes a string, so an
+                    // asserted `null`/`true`/`1234` was ToString-coerced and
+                    // decoded as the base64 of `"null"` — three invented bytes
+                    // that re-encode as a legitimate-looking `bytes` tag. The
+                    // sibling `date`, `map` and `error` cases each refuse their
+                    // slot the same way, as do all eight ports.
+                    const encoded = value[2];
+
+                    if (typeof encoded !== "string") {
+                        throw new TypeError("wire-codec: malformed bytes — payload must be a base64 string");
+                    }
+
+                    const bytes = fromBase64(encoded);
                     const ctorName = (value[3] as string | undefined) ?? "Uint8Array";
 
                     if (ctorName === "ArrayBuffer") {
