@@ -1,6 +1,6 @@
 {
     "name": "@lunora/mcp",
-    "version": "1.0.0-alpha.107",
+    "version": "1.0.0-alpha.108",
     "description": "Model Context Protocol server exposing a Lunora deployment to AI agents",
     "keywords": [
         "ai-agents",
