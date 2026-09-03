@@ -1,6 +1,6 @@
 {
     "name": "@lunora/seed",
-    "version": "1.0.0-alpha.103",
+    "version": "1.0.0-alpha.104",
     "description": "Schema-driven, deterministic database seeding for Lunora: realistic fake data from defineSchema",
     "keywords": [
         "cloudflare",
