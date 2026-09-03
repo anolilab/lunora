@@ -41,8 +41,11 @@ const MAX_CYCLES = 100;
  * blowup on acyclic input. Each circuit is enumerated exactly once from its
  * lowest-indexed member (vertices are ordered lexicographically), so overlapping
  * / chord cycles that share interior nodes are each detected independently. The
- * emitted cycle is still canonicalized to its lexicographically smallest
- * rotation for a stable cacheKey.
+ * emitted cycle is then canonicalized to its lexicographically smallest rotation
+ * for a stable cacheKey: the search order is locale-collated (`localeCompare`)
+ * while the rotation compares by codepoint, and the two disagree on mixed-case
+ * table names — so the rotation, not the start vertex, is what pins the cacheKey
+ * across ICU builds.
  */
 const circularFk: Lint = {
     categories: ["SCHEMA"],

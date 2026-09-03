@@ -18,11 +18,15 @@ const WELCOME: AdvisorWorkflow = { exportName: "channelWelcome" };
 const CLEANUP: AdvisorWorkflow = { exportName: "nightlyCleanup" };
 
 describe("workflow_unused", () => {
-    it("finds nothing when no declaration evidence is supplied", () => {
-        expect.assertions(1);
+    it("finds nothing without both the declared set and the call sites", () => {
+        expect.assertions(2);
 
-        // A runtime caller (no workflow feeder) must not flag anything.
+        // A runtime caller (no workflow feeder) must not flag anything, and
+        // neither must a caller that supplies declarations without call sites:
+        // with no usage evidence the "started" set is empty, so every declared
+        // workflow would otherwise be reported as never started.
         expect(workflowUnused.run(context({}))).toHaveLength(0);
+        expect(workflowUnused.run(context({ workflows: [WELCOME, CLEANUP] }))).toHaveLength(0);
     });
 
     it("flags a declared workflow nothing starts", () => {

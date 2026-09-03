@@ -1289,6 +1289,15 @@ export interface KvKeyAccessIR {
     line: number;
     /** The `ctx.kv` method invoked: `get` / `getRaw` / `getWithMetadata` / `put` / `delete`. */
     method: string;
+
+    /**
+     * Visibility of the enclosing procedure. `internal` procedures have no
+     * untrusted caller by construction — see `owner_field_from_args_not_auth`'s
+     * identical split — so `kv_unscoped_user_key_idor` drops the finding to
+     * INFO rather than ERROR there. `undefined` when the access sits outside any
+     * registered procedure the feeder could attribute it to.
+     */
+    visibility?: "internal" | "public";
 }
 
 /**
