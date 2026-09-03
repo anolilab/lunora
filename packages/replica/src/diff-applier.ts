@@ -85,7 +85,7 @@ const applySingleDiff = (database: SqliteAdapter, diff: TableDiff, pkColumn: str
     const table = escapeIdentifier(diff.table);
     const pk = escapeIdentifier(pkColumn);
 
-    for (const [changeIndex, change] of diff.changes.entries()) {
+    for (const change of diff.changes) {
         switch (change.type) {
             case "delete": {
                 database.exec(`DELETE FROM ${table} WHERE ${pk} = ?`, [normalizeBindValue(change.id)]);
@@ -112,12 +112,14 @@ const applySingleDiff = (database: SqliteAdapter, diff: TableDiff, pkColumn: str
                 // So derive the id the way the in-memory apply path already does
                 // — same function, so the two paths agree on the key a given row
                 // lands under, and a replayed diff upserts instead of
-                // accumulating rows.
+                // accumulating rows. A derived id is `row-` plus 16 hex
+                // characters; an application key of that literal shape would
+                // collide with one, so the two must not share a table.
                 const rawId = data[pkColumn];
                 const row =
                     typeof rawId === "bigint" || typeof rawId === "number" || typeof rawId === "string"
                         ? data
-                        : { ...data, [pkColumn]: deriveInsertId(diff, changeIndex, data) };
+                        : { ...data, [pkColumn]: deriveInsertId(diff, data) };
                 const keys = Object.keys(row);
 
                 const sql = `INSERT OR REPLACE INTO ${table} ${colList(keys)} VALUES ${valueList(keys.length)}`;

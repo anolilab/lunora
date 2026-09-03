@@ -681,9 +681,13 @@ describe(applyDiff, () => {
         expect(first.get(firstKey as string)).toStrictEqual(second.get(secondKey as string));
     });
 
-    it("derives DIFFERENT ids for id-less inserts at different positions in the same diff, even with identical data", () => {
+    it("derives ONE id for id-less inserts with identical data, whatever their position in the diff", () => {
         expect.assertions(1);
 
+        // Position was in the digest so two identical rows in one diff stayed
+        // distinct; it also made a re-emitted mirror frame land under a new key
+        // whenever the row moved. Content-only keying trades the first for the
+        // second, which is the one that grew without bound.
         const diff = createTableDiff(
             "t",
             [
@@ -695,7 +699,7 @@ describe(applyDiff, () => {
 
         const next = applyDiff(new Map(), diff);
 
-        expect(next.size).toBe(2);
+        expect(next.size).toBe(1);
     });
 
     it("derives DIFFERENT ids for id-less inserts with different content", () => {

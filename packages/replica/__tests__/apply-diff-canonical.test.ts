@@ -144,22 +144,23 @@ describe("derived id determinism", () => {
         expect(collisions.filter(([, first, current]) => first !== current)).toStrictEqual([]);
     });
 
-    it("keeps the table name and diff id inside the digest", () => {
+    it("keeps the table name — and only the table name — outside the row data", () => {
         expect.hasAssertions();
 
         const data = { name: "alice" };
 
-        // Two diffs differing ONLY in `id` must not derive the same row key —
-        // otherwise the second id-less insert silently overwrites the first.
-        expect(derived(data, "diff-a")).not.toBe(derived(data, "diff-b"));
+        // The diff that CARRIED the row is not part of its identity. It used to
+        // be, and since `subscribeToMirror` stamps each frame with `Date.now()`,
+        // a re-emitted un-keyed row landed under a fresh key every frame.
+        expect(derived(data, "diff-a")).toBe(derived(data, "diff-b"));
 
         // Same for a non-string id arriving from untyped wire JSON.
         const numericA = applyDiff(new Map(), { changes: [{ data, type: "insert" }], id: 5 as never, table: "t", timestamp: 1 });
         const numericB = applyDiff(new Map(), { changes: [{ data, type: "insert" }], id: 7 as never, table: "t", timestamp: 1 });
 
-        expect([...numericA.keys()]).not.toStrictEqual([...numericB.keys()]);
+        expect([...numericA.keys()]).toStrictEqual([...numericB.keys()]);
 
-        // And for a non-string table name.
+        // The table still separates, including as a non-string from wire JSON.
         const tableA = applyDiff(new Map(), { changes: [{ data, type: "insert" }], id: "d", table: 1 as never, timestamp: 1 });
         const tableB = applyDiff(new Map(), { changes: [{ data, type: "insert" }], id: "d", table: 2 as never, timestamp: 1 });
 

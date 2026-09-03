@@ -165,7 +165,15 @@ interface MaterializerRuntimeOptions {
     snapshotStore?: SnapshotStore;
 
     /**
-     * How to handle events whose type no materializer handles.
+     * How to handle an event that every materializer explicitly DECLINED — one
+     * for which each reducer returned {@link UNHANDLED}.
+     *
+     * A reducer that instead falls through to `return state` for a type it does
+     * not recognise has, as far as the runtime can tell, handled the event: it
+     * changed nothing, but it did not decline. `"fail"` and `"warn"` are inert
+     * for such a reducer, and no option here can make them otherwise — write the
+     * reducer's default branch as `return UNHANDLED` if you want to hear about
+     * unknown types.
      * @default "warn"
      */
     unknownEventHandling?: UnknownEventHandling;

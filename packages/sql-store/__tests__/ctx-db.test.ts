@@ -1768,3 +1768,157 @@ describe("createSqlCtxDb — a NULL in an optional column decodes as absent", ()
         expect((row as Record<string, unknown>)["title"]).toBe("t");
     });
 });
+
+/**
+ * The same min/max shape as {@link bigintExtremeSchema}, but over a `v.any()`
+ * column. `sqliteEncode` keys off the RUNTIME type, so this column holds the
+ * same order-preserving key a declared `v.bigint()` one does — which is the
+ * whole reason `mayHoldBigintKey` matches `any`/`union`/`from`. What the
+ * declared fixture cannot catch is the DECODE half: an untyped column's key has
+ * to come back as a `bigint` for the fold to reduce it.
+ */
+const untypedBigintExtremeSchema: SchemaLike = {
+    tables: {
+        payments: {
+            aggregateIndexes: [
+                { by: ["tenant"], field: "amount", name: "maxAmount", on: "payments", op: "max" },
+                { by: ["tenant"], field: "amount", name: "minAmount", on: "payments", op: "min" },
+            ],
+            indexes: [],
+            shape: { amount: col("any"), tenant: col("string") },
+            shardMode: { kind: "global" },
+        },
+    },
+} as never;
+
+describe("createSqlCtxDb — a bigint in an untyped column", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("reads a bigint back out of a v.any() column as a bigint, not as the stored key", async () => {
+        expect.assertions(2);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedBigintExtremeSchema });
+
+        const id = await writer.insert("payments", { amount: 900n, tenant: "a" });
+
+        await expect(writer.get(id)).resolves.toMatchObject({ amount: 900n });
+
+        const negative = await writer.insert("payments", { amount: -900n, tenant: "a" });
+
+        await expect(writer.get(negative)).resolves.toMatchObject({ amount: -900n });
+    });
+
+    it("recomputes both extremes of an untyped column from the decoded bigints", async () => {
+        expect.assertions(4);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedBigintExtremeSchema });
+
+        const lowest = await writer.insert("payments", { amount: 7n, tenant: "a" });
+        const highest = await writer.insert("payments", { amount: 1234n, tenant: "a" });
+
+        await writer.insert("payments", { amount: 42n, tenant: "a" });
+        await writer.insert("payments", { amount: 900n, tenant: "a" });
+
+        // Removing the row that IS the stored extreme is what forces the recompute.
+        await writer.delete(lowest);
+
+        await expect(writer.aggregate("payments", { field: "amount", op: "min", where: { tenant: "a" } })).resolves.toBe(42);
+        await expect(writer.aggregate("payments", { field: "amount", op: "max", where: { tenant: "a" } })).resolves.toBe(1234);
+
+        await writer.delete(highest);
+
+        await expect(writer.aggregate("payments", { field: "amount", op: "max", where: { tenant: "a" } })).resolves.toBe(900);
+        await expect(writer.aggregate("payments", { field: "amount", op: "min", where: { tenant: "a" } })).resolves.toBe(42);
+    });
+
+    /*
+     * The collision the untyped-column decode admits, pinned so a change to this
+     * codec has to argue with it rather than rediscover it.
+     *
+     * `decodeBigintSqlKey` accepts exactly 40 characters: `"0"` or `"1"`, then 39
+     * digits. A *string* of that shape in an untyped column is indistinguishable
+     * from a stored key — a padded account number or a numeric external id can
+     * reach it — and reads back as a `bigint`. Storage genuinely cannot tell them
+     * apart: `sqliteEncode` writes the string verbatim and writes the key by the
+     * same rule, so the two are byte-identical on disk.
+     */
+    it("cannot tell a 40-character digit string in an untyped column from a stored key", async () => {
+        expect.assertions(3);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedBigintExtremeSchema });
+
+        // Exactly the accepted shape: leading "1", then 39 digits.
+        const collides = `1${"0".repeat(36)}900`;
+
+        expect(collides).toHaveLength(40);
+
+        const id = await writer.insert("payments", { amount: collides, tenant: "a" });
+
+        // Reads back as the bigint that shape encodes, NOT as the string written.
+        await expect(writer.get(id)).resolves.toMatchObject({ amount: 900n });
+
+        // One character outside the shape is unambiguous and survives as a string.
+        const safe = await writer.insert("payments", { amount: `2${"0".repeat(36)}900`, tenant: "a" });
+
+        await expect(writer.get(safe)).resolves.toMatchObject({ amount: `2${"0".repeat(36)}900` });
+    });
+});
+
+describe("createSqlCtxDb — recomputing an extreme over a large group", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("pages the fold instead of selecting the whole group into the isolate", async () => {
+        expect.assertions(2);
+
+        let widest = 0;
+        const counting: SqlCtxExec = {
+            all: async (query, parameters) => {
+                const rows = await harness.exec.all(query, parameters);
+
+                widest = Math.max(widest, rows.length);
+
+                return rows;
+            },
+            run: async (query, parameters) => harness.exec.run(query, parameters),
+        };
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: counting, schema: untypedBigintExtremeSchema });
+
+        // One group, comfortably past a single page of the keyset walk.
+        const total = BACKFILL_BATCH_SIZE + 20;
+        let lowest = "";
+
+        for (let index = 0; index < total; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- companion maintenance is per-write and sequential; concurrent inserts would interleave the min/max bump.
+            const id = await writer.insert("payments", { amount: BigInt(index + 1), tenant: "a" });
+
+            if (index === 0) {
+                lowest = id;
+            }
+        }
+
+        widest = 0;
+
+        // Removing the row that IS the stored extreme is what forces the recompute.
+        await writer.delete(lowest);
+
+        await expect(writer.aggregate("payments", { field: "amount", op: "min", where: { tenant: "a" } })).resolves.toBe(2);
+        expect(widest).toBeLessThanOrEqual(BACKFILL_BATCH_SIZE);
+    });
+});

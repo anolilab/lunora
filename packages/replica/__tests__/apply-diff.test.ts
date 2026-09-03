@@ -55,8 +55,8 @@ const canonicalize = (value: unknown): unknown => {
     return value;
 };
 
-const expectedDerivedId = (diff: TableDiff, changeIndex: number, data: Record<string, unknown>): string =>
-    `row-${referenceFnv1a64(`${diff.table}::${diff.id ?? String(diff.timestamp)}::${String(changeIndex)}::${JSON.stringify(canonicalize(data))}`)}`;
+const expectedDerivedId = (diff: TableDiff, data: Record<string, unknown>): string =>
+    `row-${referenceFnv1a64(`${diff.table}::${JSON.stringify(canonicalize(data))}`)}`;
 
 /**
  * The derived-id keys of an applyDiff result, in insertion order.
@@ -189,7 +189,7 @@ describe("deriveInsertId (via id-less inserts)", () => {
         const data = { name: "alice" };
         const diff = diffOf([{ data, type: "insert" }]);
 
-        expect(derivedKeys(applyDiff(new Map(), diff))).toStrictEqual([deriveInsertId(diff, 0, data)]);
+        expect(derivedKeys(applyDiff(new Map(), diff))).toStrictEqual([deriveInsertId(diff, data)]);
     });
 
     it("matches the BigInt FNV-1a reference digest", () => {
@@ -200,7 +200,7 @@ describe("deriveInsertId (via id-less inserts)", () => {
 
         const next = applyDiff(new Map(), diff);
 
-        expect(derivedKeys(next)).toStrictEqual([expectedDerivedId(diff, 0, data)]);
+        expect(derivedKeys(next)).toStrictEqual([expectedDerivedId(diff, data)]);
     });
 
     it("matches the reference digest for astral code points", () => {
@@ -211,7 +211,7 @@ describe("deriveInsertId (via id-less inserts)", () => {
 
         const next = applyDiff(new Map(), diff);
 
-        expect(derivedKeys(next)).toStrictEqual([expectedDerivedId(diff, 0, data)]);
+        expect(derivedKeys(next)).toStrictEqual([expectedDerivedId(diff, data)]);
     });
 
     it("derives the same id when the same diff is replayed", () => {
@@ -246,12 +246,15 @@ describe("deriveInsertId (via id-less inserts)", () => {
         const data = { B: 1, a: 2 };
         const diff = diffOf([{ data, type: "insert" }]);
 
-        expect(derivedKeys(applyDiff(new Map(), diff))).toStrictEqual([expectedDerivedId(diff, 0, data)]);
+        expect(derivedKeys(applyDiff(new Map(), diff))).toStrictEqual([expectedDerivedId(diff, data)]);
     });
 
-    it("distinguishes two identical id-less inserts within one diff", () => {
+    it("collapses two identical id-less inserts within one diff onto one row", () => {
         expect.assertions(1);
 
+        // Content IS the identity. Nothing downstream can tell two id-less rows
+        // carrying the same data apart — not the next frame either — so one row
+        // is the only answer that stays stable across replays.
         const next = applyDiff(
             new Map(),
             diffOf([
@@ -260,16 +263,19 @@ describe("deriveInsertId (via id-less inserts)", () => {
             ]),
         );
 
-        expect(next.size).toBe(2);
+        expect(next.size).toBe(1);
     });
 
-    it("distinguishes diffs that share a timestamp but differ in id", () => {
+    it("keys the same row identically across diffs that differ in id and timestamp", () => {
         expect.assertions(1);
 
-        const a = applyDiff(new Map(), diffOf([{ data: { name: "x" }, type: "insert" }], "diff-a"));
-        const b = applyDiff(new Map(), diffOf([{ data: { name: "x" }, type: "insert" }], "diff-b"));
+        // `subscribeToMirror` stamps every frame with `Date.now()`, so a digest
+        // over the diff's identity minted a fresh key per frame and the mirror
+        // grew by one row per frame forever.
+        const a = applyDiff(new Map(), { changes: [{ data: { name: "x" }, type: "insert" }], id: "diff-a", table: "users", timestamp: 1 });
+        const b = applyDiff(new Map(), { changes: [{ data: { name: "x" }, type: "insert" }], id: "diff-b", table: "users", timestamp: 2 });
 
-        expect([...a.keys()]).not.toStrictEqual([...b.keys()]);
+        expect([...a.keys()]).toStrictEqual([...b.keys()]);
     });
 
     it("matches JSON.stringify's treatment of undefined in objects and arrays", () => {
@@ -286,7 +292,7 @@ describe("deriveInsertId (via id-less inserts)", () => {
         const holeData = { list: [1, undefined, 3] };
         const holeDiff = diffOf([{ data: holeData, type: "insert" }]);
 
-        expect(derivedKeys(applyDiff(new Map(), holeDiff))).toStrictEqual([expectedDerivedId(holeDiff, 0, { list: [1, null, 3] })]);
+        expect(derivedKeys(applyDiff(new Map(), holeDiff))).toStrictEqual([expectedDerivedId(holeDiff, { list: [1, null, 3] })]);
     });
 });
 
