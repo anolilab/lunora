@@ -226,8 +226,10 @@ export interface RagLexicalStore {
      * Rank chunks by lexical relevance to `query`. `filter` carries the same
      * (RLS-merged) metadata predicate handed to the vector leg — a store that
      * indexes metadata MUST honour it so hybrid retrieval can't surface a row
-     * the RLS filter would exclude; a namespace-only store (the reference
-     * adapter) isolates by `namespace` and documents that it ignores `filter`.
+     * the RLS filter would exclude. The shipped `bm25LexicalStore` does — it
+     * evaluates the predicate against each document's stored `metadata`. A store
+     * that indexes no metadata has nothing to filter on and must fail CLOSED on
+     * every filtered query rather than ignore the predicate.
      */
     search: (query: string, options: { filter?: Record<string, unknown>; namespace?: string; topK: number }) => Promise<ReadonlyArray<LexicalMatch>>;
 }
@@ -579,7 +581,18 @@ export interface RetrieveOptions {
      * call time, catching spelling mistakes early.
      */
     filter?: Record<string, unknown> | string;
-    /** Drop matches whose (importance-adjusted) score falls below this threshold. */
+
+    /**
+     * Drop matches whose (importance-adjusted) score falls below this threshold.
+     *
+     * Applied to the VECTOR leg, where the score is still the cosine scale this
+     * option is documented against — every fusion below replaces `score` with an
+     * RRF score, and thresholding that against a cosine number keeps or drops
+     * chunks essentially at random. A chunk the vector leg rejected here stays
+     * rejected even if the lexical leg also ranks it; a lexical-only hit the
+     * vector leg never scored is NOT gated, since its BM25 score is not on this
+     * scale (see `hybridRank`).
+     */
     minScore?: number;
     namespace?: string;
 

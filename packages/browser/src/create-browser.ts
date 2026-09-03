@@ -250,7 +250,17 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
      * so this is the one real footgun. The close error is swallowed (we never
      * mask the caller's original error with a close failure).
      */
-    const withBrowser = async <T>(use: (browser: BrowserLike) => Promise<T>, keepAlive?: number): Promise<T> => {
+    const withBrowser = async <T>(use: (browser: BrowserLike) => Promise<T>, requestedKeepAlive?: number): Promise<T> => {
+        // Only a FINITE, POSITIVE duration asks for a held-open session. `0` is
+        // the natural spelling of "do not keep alive", and what a `Number(...)`
+        // over an unset env var yields; `NaN` is what a failed parse of one
+        // yields. Treating either as a
+        // keep-alive request both sent a nonsense `keep_alive` AND skipped the
+        // always-close `finally`, leaking exactly the billed session that
+        // `finally` exists to prevent. The sibling numeric inputs are
+        // non-finite-safe the same way — see `resolveTimeout`, `clampDimension`.
+        const keepAlive = requestedKeepAlive !== undefined && Number.isFinite(requestedKeepAlive) && requestedKeepAlive > 0 ? requestedKeepAlive : undefined;
+
         // `keep_alive` (seconds) holds the Browser Rendering session open after
         // this worker detaches so a later `connect(sessionId)` can re-attach.
         // Closing it here would defeat that, so the close is skipped — the

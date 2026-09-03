@@ -53,6 +53,60 @@ describe("normalizeRegisterInput", () => {
         expect(stored).toMatchObject({ id: fcmId("device-token-1"), kind: "fcm", token: "device-token-1" });
         expect(() => normalizeRegisterInput({ kind: "fcm", token: "" })).toThrow(/non-empty `token`/u);
     });
+
+    it("discriminates on `kind`, not on the mere presence of a `token` key", () => {
+        expect.hasAssertions();
+
+        // `RegisterInput` declares `kind` as the discriminator, but the runtime
+        // branched on `"token" in input`. A web-push registration spread from an
+        // object with an optional token field (`{ ...form, token: undefined }`)
+        // carries the KEY, so it was routed to FCM and rejected as a missing
+        // token — a registration the declared type says is valid.
+        const stored = normalizeRegisterInput({ subscription: webPushSub, token: undefined }, 1000);
+
+        expect(stored.kind).toBe("web-push");
+        expect(stored.id).toBe(webPushId(webPushSub.endpoint));
+    });
+});
+
+describe("normalizeRegisterInput field caps (NOTIFY-02)", () => {
+    it("rejects an oversized web-push endpoint", () => {
+        expect.hasAssertions();
+
+        // `metadata` is capped because a client controls it end-to-end and it
+        // lands in the row unbounded. `endpoint`, `token` and `keys` are exactly
+        // as client-controlled and land in the SAME row — a 1 MB endpoint was
+        // accepted while a 4 KB metadata blob was refused.
+        const endpoint = `https://push.example/${"a".repeat(5000)}`;
+
+        expect(() => normalizeRegisterInput({ subscription: { ...webPushSub, endpoint } })).toThrow(/`endpoint` is \d+ bytes/u);
+    });
+
+    it("rejects oversized web-push keys", () => {
+        expect.hasAssertions();
+
+        expect(() => normalizeRegisterInput({ subscription: { ...webPushSub, keys: { auth: "a".repeat(5000), p256dh: "P256KEY" } } })).toThrow(
+            /`keys\.auth` is \d+ bytes/u,
+        );
+        expect(() => normalizeRegisterInput({ subscription: { ...webPushSub, keys: { auth: "AUTHKEY", p256dh: "p".repeat(5000) } } })).toThrow(
+            /`keys\.p256dh` is \d+ bytes/u,
+        );
+    });
+
+    it("rejects an oversized FCM token", () => {
+        expect.hasAssertions();
+
+        expect(() => normalizeRegisterInput({ kind: "fcm", token: "t".repeat(5000) })).toThrow(/`token` is \d+ bytes/u);
+    });
+
+    it("still accepts realistically-sized values", () => {
+        expect.hasAssertions();
+
+        // A real FCM registration token is ~160 chars and a real push endpoint
+        // ~200; the cap must not be tight enough to refuse a live device.
+        expect(() => normalizeRegisterInput({ kind: "fcm", token: "t".repeat(512) })).not.toThrow();
+        expect(() => normalizeRegisterInput({ subscription: { ...webPushSub, endpoint: `https://push.example/${"a".repeat(800)}` } })).not.toThrow();
+    });
 });
 
 describe("normalizeRegisterInput metadata validation (NOTIFY-02)", () => {
@@ -240,6 +294,24 @@ describe("targetOf / ids / isGoneError", () => {
         expect(isGoneError("HTTP 400: invalid token")).toBe(false);
         expect(isGoneError("503 transient upstream error")).toBe(false);
         expect(isGoneError(undefined)).toBe(false);
+    });
+
+    it("does not apply the FCM-only codes to a web-push failure", () => {
+        expect.hasAssertions();
+
+        // The web-push provider echoes the push service's response BODY into
+        // `HTTP ${status}: ${body}`, so a 4xx whose prose happens to contain
+        // "not registered" matched the FCM-only pattern and permanently deleted
+        // a live subscription. The patterns are documented as provider-specific;
+        // pass the kind so they are applied that way.
+        expect(isGoneError("HTTP 403: sender not registered for this endpoint", "web-push")).toBe(false);
+        expect(isGoneError("HTTP 400: UNREGISTERED sender id", "web-push")).toBe(false);
+
+        // The FCM codes still prune an FCM device, and the shared HTTP 404/410
+        // status still prunes either kind (FCM HTTP v1 answers 404 for a dead token).
+        expect(isGoneError("FCM push failed: UNREGISTERED", "fcm")).toBe(true);
+        expect(isGoneError("HTTP 404: Not Found", "fcm")).toBe(true);
+        expect(isGoneError("HTTP 410: Gone", "web-push")).toBe(true);
     });
 });
 

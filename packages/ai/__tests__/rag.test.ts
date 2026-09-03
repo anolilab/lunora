@@ -1134,6 +1134,28 @@ describe(defineRag, () => {
             await expect(rag.retrieve("hello", { filter: "nonexistent" })).rejects.toThrow(LunoraError);
         });
 
+        it.each(["constructor", "__proto__", "toString", "valueOf", "hasOwnProperty"])(
+            "refuses the inherited Object.prototype key %s instead of retrieving unfiltered",
+            async (inherited) => {
+                expect.assertions(2);
+
+                // `config.filters?.[name]` walks the prototype chain, so
+                // `Object.prototype.constructor` answered truthy, skipped the
+                // NOT_FOUND guard, and then `resolved.filter` was `undefined` —
+                // an UNFILTERED retrieval from a name the caller may forward
+                // straight out of a request parameter.
+                const { queryCalls, vectors } = memoryVectors();
+                const ctx = fakeCtx(vectors);
+                const docs = defineRag({ allowSharedNamespace: true, filters: { published: { filter: { status: "published" } } }, index: "docs" });
+                const rag = docs(ctx);
+
+                await rag.index({ id: "doc-1", text: "hello world" });
+
+                await expect(rag.retrieve("hello", { filter: inherited })).rejects.toThrow(LunoraError);
+                expect(queryCalls).toHaveLength(0);
+            },
+        );
+
         it("passes through a literal Record filter unchanged", async () => {
             expect.assertions(1);
 
@@ -1229,6 +1251,66 @@ describe(defineRag, () => {
             expect(result.chunks.map((chunk) => chunk.sourceId)).toContain("doc-2");
             // The genuine semantic match still passes the (unaffected) vector-leg threshold.
             expect(result.chunks.map((chunk) => chunk.sourceId)).toContain("doc-1");
+        });
+
+        it("recovers importance and caller metadata for a lexical-only hit", async () => {
+            expect.assertions(3);
+
+            // The lexical leg minted its chunks with a hard-coded
+            // `importance: 1, metadata: undefined`, so a source deliberately
+            // demoted to `importance: 0` got FULL weight the moment a keyword hit
+            // surfaced it (exactly the case hybrid retrieval exists to create),
+            // and `sources[].metadata` — which a caller filters or badges on —
+            // read `undefined`.
+            const { vectors } = memoryVectors();
+            const ctx = fakeCtx(vectors);
+            const lexicalOnly: RagLexicalStore = {
+                index: async () => {},
+                search: async () => [{ id: "doc-2#0", score: 0.3, text: "gizmo contraption" }],
+            };
+            // `candidates: 1` keeps the vector leg's pool to the single best
+            // chunk, so doc-2 reaches fusion through the LEXICAL leg alone —
+            // which is what "lexical-only" means in practice (`index()` always
+            // writes both stores; the chunk is present, just out of the pool).
+            const docs = defineRag({ allowSharedNamespace: true, candidates: 1, chunk: pipeChunker, index: "docs", lexicalStore: lexicalOnly });
+            const rag = docs(ctx);
+
+            await rag.index({ id: "doc-1", text: "rain storm cloud" });
+            await rag.index({ id: "doc-2", importance: 0, metadata: { orgId: "org-a" }, text: "gizmo contraption" });
+
+            const result = await rag.retrieve("rain storm cloud", { topK: 5 });
+            const demoted = result.sources.find((source) => source.id === "doc-2");
+
+            expect(demoted).toBeDefined();
+            expect(demoted?.weight).toBe(0);
+            expect(demoted?.metadata).toStrictEqual({ orgId: "org-a" });
+        });
+
+        it("does not re-admit a chunk the vector leg rejected for minScore", async () => {
+            expect.assertions(2);
+
+            // A lexical-only hit the vector leg never scored is legitimately not
+            // gated (see the test above) — but a chunk the vector leg DID score
+            // and rejected must stay rejected. Re-admitting it through the
+            // lexical leg contradicts the caller's explicit instruction about
+            // that exact chunk, and made `minScore` unreachable once a
+            // `lexicalStore` was attached.
+            const { vectors } = memoryVectors();
+            const ctx = fakeCtx(vectors);
+            const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs", lexicalStore: bm25LexicalStore() });
+            const rag = docs(ctx);
+
+            await rag.index({ id: "doc-1", text: "rain storm cloud" });
+
+            // No cosine similarity can reach 1.5, so the vector leg rejects every chunk.
+            const gated = await rag.retrieve("rain storm cloud", { minScore: 1.5 });
+
+            expect(gated.chunks).toStrictEqual([]);
+
+            // Sanity: without the gate the same query DOES find it.
+            const ungated = await rag.retrieve("rain storm cloud");
+
+            expect(ungated.chunks).not.toStrictEqual([]);
         });
 
         it("removes chunks from the lexical store on remove()", async () => {
