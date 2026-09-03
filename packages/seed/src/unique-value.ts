@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { copycat } from "./copycat";
 import type { Constraints } from "./generate-value";
-import { BIGINT_RANGE, constraintsOf, isTimestampField, NUMBER_RANGE, TIMESTAMP_WINDOW_MS } from "./generate-value";
+import { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, isTimestampField, NUMBER_RANGE, TIMESTAMP_WINDOW_MS } from "./generate-value";
 import type { FieldSpec } from "./introspect";
 import { metaOf } from "./introspect";
 
@@ -63,9 +63,6 @@ const shuffleDomain = (domain: ReadonlyArray<unknown>, table: string, column: st
 
     return out;
 };
-
-/** Domain used when a column must hold an address but the generator produced a bare word. */
-const FALLBACK_EMAIL_DOMAIN = "@example.com";
 
 /**
  * Make a generated string row-unique while keeping the shape the generator just
