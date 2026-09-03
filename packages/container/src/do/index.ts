@@ -137,6 +137,18 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     }
 
     /**
+     * The start path `containerFetch` takes (and the one an app can call itself).
+     * The base's last act is `blockConcurrencyWhile(… onStart())`, so this
+     * override resumes on the far side of that gate — which is where
+     * {@link afterContainerStart} has to run. See its docblock.
+     */
+    public override async startAndWaitForPorts(...args: Parameters<Container<Env>["startAndWaitForPorts"]>): Promise<void> {
+        await super.startAndWaitForPorts(...args);
+
+        await this.afterContainerStart();
+    }
+
+    /**
      * Explicit start (`ctx.containers.<name>.get(id).start()`). Resolves the
      * `secretsStore` bindings into `envVars` first, mirroring
      * {@link containerFetch}. A per-instance `start({ envVars })` replaces the
@@ -153,7 +165,9 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
             await this.resolveSecretsStoreEnv();
         }
 
-        return super.start(...args);
+        await super.start(...args);
+
+        await this.afterContainerStart();
     }
 
     public override async onActivityExpired(): Promise<void> {
@@ -181,14 +195,6 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         this.surfaceInStudioLogs(envelope);
 
         await super.onStart();
-
-        // The base calls `onStart()` after the ports are healthy and inside a
-        // `blockConcurrencyWhile`, and `containerFetch` routes through that same
-        // start path — so arming the hard timeout here makes it count from the
-        // real start, and awaiting readiness here gates request proxying until
-        // the app reports ready.
-        await this.armHardTimeout();
-        await this.awaitContainerReadiness();
     }
 
     /**
@@ -225,6 +231,35 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         this.surfaceInStudioLogs(envelope);
 
         await super.onStop(parameters);
+    }
+
+    /**
+     * Arm the hard timeout and block on the `readyOn` probes — the work that has
+     * to happen once per real start, **outside** the base's start gate.
+     *
+     * It cannot live in `onStart`, which is the obvious home for it: the base
+     * invokes that hook as `blockConcurrencyWhile(async () => { … onStart() })`
+     * (`@cloudflare/containers`, both `start()` and `startAndWaitForPorts()`),
+     * and workerd treats a *rejecting* `blockConcurrencyWhile` closure as
+     * unrecoverable — it aborts the Durable Object, discards its in-memory state
+     * and every hibernating socket on it, and flattens the error to a plain
+     * `Error`. A readiness timeout is an ordinary, diagnosable failure: it must
+     * surface as the `LunoraError` naming the check, the port and the budget,
+     * not cost the object its life and arrive as an opaque message. (The same
+     * reasoning, and the same settle-outside-the-gate remedy, is written up on
+     * `ShardHost.runSerialized` in `@lunora/platform-cloudflare`.) A 30-second
+     * wait also has no business inside a gate that blocks every other dispatch
+     * to the object.
+     *
+     * Both start entry points call this immediately after `super`, so it still
+     * runs once per start and still gates request proxying: `containerFetch`
+     * starts through `startAndWaitForPorts` and only proxies once it returns, so
+     * a throw here fails the request instead of forwarding it to an app that
+     * never reported ready.
+     */
+    private async afterContainerStart(): Promise<void> {
+        await this.armHardTimeout();
+        await this.awaitContainerReadiness();
     }
 
     /**

@@ -211,7 +211,9 @@ const db = defineCollections(client, defs, {
         // collection's post-rollback state.
     },
     // Optional: a write whose target collection was removed/renamed in a deploy
-    // arrives here too, with `code: "UNKNOWN_MUTATION_FN"`.
+    // arrives here too, with `code: "UNKNOWN_MUTATION_FN"`. So does one queued
+    // under a user who is no longer signed in — identity is the trust boundary,
+    // so it is dropped rather than replayed under whoever holds the bearer now.
     onStorageFailure: ({ code, message }) => {
         // The durable outbox couldn't persist (IndexedDB blocked in private mode,
         // quota exceeded, …) — the write won't survive a reload. Warn the user.
@@ -420,12 +422,15 @@ clears only once every concurrent call settles.
 - `scopeBy?`: a field that scopes the list (a shard key); makes the collection
   re-pointable via `db.scope.<table>`.
 - `shardKey?`: routes the `list` subscription — and the confirmed-mutation
-  watermark its frames advance the checkpoint gate from — to a specific shard's
-  Durable Object. **Set this on any collection whose table is `.shardBy()`'d.**
-  Without it the overlay gate compares against the default `""` watermark
-  bucket, which that shard's sequence line never advances, so optimistic rows
-  are held or dropped against a watermark that is not theirs — silent staleness,
-  with no error anywhere.
+  watermark its frames advance the checkpoint gate from, and the `insert`
+  writes — to a specific shard's Durable Object. **Set this on any collection
+  whose table is `.shardBy()`'d.** Without it the overlay gate compares against
+  the default `""` watermark bucket, which that shard's sequence line never
+  advances, so optimistic rows are held or dropped against a watermark that is
+  not theirs, and the writes themselves land in the default shard while the
+  subscription reads another — committed, ack'd, and invisible. Silent
+  staleness, with no error anywhere. Each queued write captures the shard key it
+  was made under, so a write that outlives a reload still follows its own shard.
 - `load?`: `"eager"` to sync at boot, or `"lazy"` (default) to sync on first use
   (see [When collections load](#when-collections-load)).
 - `insert?`: `{ mutation, optimistic, toArgs }` to make the table writable

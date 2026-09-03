@@ -67,7 +67,10 @@ export interface CollectionDef<TList extends FunctionReference, TInput = never> 
      * Routes the `list` subscription (and the confirmed-mutation watermark its
      * frames advance the checkpoint gate from) to a specific shard's DO — so a
      * sharded collection's overlay gate compares against that shard's mutator
-     * sequence line, not the default ("") watermark bucket.
+     * sequence line, not the default ("") watermark bucket. `insert` writes are
+     * routed with it too, and to the shard that was set when the write was
+     * queued: subscriptions and the writes they observe have to land on the same
+     * Durable Object, and the server derives no shard from a mutation's args.
      */
     shardKey?: string;
 }
@@ -124,6 +127,21 @@ const warnDuplicateTable = (client: LunoraClient, name: string): void => {
             `read stale rows. Bind every table in a single defineCollections call (see the "One source of truth per table" docs section).`,
     );
 };
+
+/**
+ * Provenance stamped onto every `db.actions.*` transaction at enqueue time and
+ * read back by its replay handler. The persisted mutation carries the row and
+ * nothing else, so without this the replay cannot answer either question a
+ * durable write raises once it outlives its session: WHO queued it, and WHICH
+ * shard it belongs to. The reserved `__lunora_outbox__` handler reads the same
+ * two fields off {@link OutboxMutationMetadata}.
+ */
+interface CollectionWriteMetadata extends Record<string, unknown> {
+    /** `client.currentIdentity()` when the write was queued; the replay drops the write when it no longer matches. */
+    identity: null | string;
+    /** The collection's `shardKey` when the write was queued — captured, not re-read, so a queued write follows the shard it was made against even if the app reboots pointed at another. */
+    shardKey?: string;
+}
 
 /** A queued write that was permanently dropped, passed to {@link DefineCollectionsOptions.onWriteRejected}. */
 export interface WriteRejectedEvent {
@@ -258,6 +276,8 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
 
         if (insert) {
             mutationFns[name] = async ({ idempotencyKey, transaction }) => {
+                const meta = transaction.metadata as CollectionWriteMetadata | undefined;
+
                 for (const [mutationIndex, mutation] of transaction.mutations.entries()) {
                     const row = mutation.modified as unknown as Row;
                     // Replay under the executor's stable idempotency key (suffixed
@@ -271,8 +291,31 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
                     const mutationId = `${idempotencyKey}:${String(mutationIndex)}`;
 
                     try {
+                        // Identity is the trust boundary. A durable write outlives the
+                        // session that queued it — a reload, or a sign-out/sign-in in the
+                        // same browser profile — so replaying it under whoever holds the
+                        // bearer now would attribute one user's write to another and pass
+                        // THEIR row-level security. Drop it instead: the same verdict the
+                        // reserved `__lunora_outbox__` handler reaches, and the one
+                        // `@lunora/client`'s queue settles as OFFLINE_IDENTITY_CHANGED.
+                        // Re-read per mutation, not once per transaction: a batched
+                        // transaction awaits between its writes, which is exactly where a
+                        // `setAuthToken` can slip in. A write persisted without the stamp
+                        // (queued by an older build) has no provenance to check, so it
+                        // fails closed too. Thrown inside the try so the drop reaches
+                        // `onWriteRejected` rather than rolling the row back in silence.
+                        if (meta?.identity !== client.currentIdentity()) {
+                            throw new NonRetriableError("outbox write dropped: identity changed since it was queued");
+                        }
+
                         // eslint-disable-next-line no-await-in-loop -- sequential keeps the outbox's FIFO ordering
-                        await runOutboxMutation(() => client.mutation(insert.mutation, insert.toArgs(row), { mutationId }));
+                        await runOutboxMutation(() =>
+                            // `shardKey` routes the write to the DO the collection's `list`
+                            // subscription reads. The server derives no shard from args, so
+                            // omitting it lands a `.shardBy()`'d collection's writes in the
+                            // default shard — committed, ack'd, and invisible to the reader.
+                            client.mutation(insert.mutation, insert.toArgs(row), { mutationId, shardKey: meta.shardKey }),
+                        );
                     } catch (error) {
                         // A permanent (coded) rejection: the executor will roll the
                         // optimistic row back. Report it on the aggregate channel so a
@@ -370,13 +413,6 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
             continue;
         }
 
-        const action = executor.createOfflineAction<{ id: string; input: unknown }>({
-            mutationFnName: name,
-            onMutate: ({ id, input }) => {
-                collection.insert(insert.optimistic(input, id));
-            },
-        });
-
         actions[name] = (input) => {
             // `safeRandomUUID` (from @tanstack/db) falls back to
             // `crypto.getRandomValues` when `crypto.randomUUID` is unavailable —
@@ -384,7 +420,24 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
             // `crypto.randomUUID` is undefined and a bare call would throw,
             // breaking every `db.actions.*` invocation.
             const id = safeRandomUUID();
-            const transaction = action({ id, input });
+            // Built from `createOfflineTransaction` rather than the executor's
+            // `createOfflineAction`, which takes no `metadata`: the identity and
+            // shard have to be captured HERE, while the issuing session is still
+            // the current one. Both are persisted with the transaction and
+            // restored with it, so a replay after a reload still knows them.
+            const metadata: CollectionWriteMetadata = { identity: client.currentIdentity(), shardKey: definition.shardKey };
+            const offline = executor.createOfflineTransaction({ autoCommit: false, metadata, mutationFnName: name });
+            const transaction = offline.mutate(() => {
+                collection.insert(insert.optimistic(input, id));
+            });
+
+            // Commit explicitly (not via `autoCommit`, whose upstream failure
+            // handler rethrows inside its own .catch — every terminal verdict
+            // would surface as an unhandled rejection) and swallow the outcome:
+            // retries are the executor's job, permanent drops are reported
+            // through `onWriteRejected`, and the caller can still await the
+            // returned `transaction`. Mirrors `createExecutorOutboxSink`.
+            offline.commit().catch(() => undefined);
 
             return { id, transaction };
         };
