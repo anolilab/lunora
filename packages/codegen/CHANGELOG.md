@@ -1,3 +1,30 @@
+## @lunora/codegen [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.150...@lunora/codegen@1.0.0-alpha.151) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* 34 public API changes across mail, storage, payment, replica,
+studio, workflow, agent, codegen, cli and the shard runtime. The full list is in
+
+### Bug Fixes
+
+* audit rounds 7-11 ([#579](https://github.com/anolilab/lunora/issues/579)) ([224a42a](https://github.com/anolilab/lunora/commit/224a42a741f524e0110da55917c79fd08c90a885))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.106
+* **@lunora/agent:** upgraded to 1.0.0-alpha.83
+* **@lunora/container:** upgraded to 1.0.0-alpha.41
+* **@lunora/errors:** upgraded to 1.0.0-alpha.30
+* **@lunora/platform:** upgraded to 1.0.0-alpha.25
+* **@lunora/queue:** upgraded to 1.0.0-alpha.43
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.50
+* **@lunora/values:** upgraded to 1.0.0-alpha.38
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.43
+* **@lunora/do:** upgraded to 1.0.0-alpha.115
+* **@lunora/server:** upgraded to 1.0.0-alpha.100
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.53
+
 ## @lunora/codegen [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.149...@lunora/codegen@1.0.0-alpha.150) (2026-09-02)
 
 
