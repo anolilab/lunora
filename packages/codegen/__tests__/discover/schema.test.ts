@@ -993,6 +993,34 @@ describe("discoverSchema", () => {
         expect(buckets?.indexes).toEqual([{ fields: ["key"], name: "by_key", unique: true }]);
     });
 
+    it("throws a located diagnostic for an extension key that is not a valid JS identifier", () => {
+        expect.assertions(4);
+
+        // The key is concatenated into every one of the extension's table names
+        // (`${key}_${bareName}`), so a hyphen in it reached `emitDataModel` as
+        // `rate-limit_buckets` — an unlocated `INTERNAL` throw naming a table the
+        // user never typed, with no file, no line and no mention of the call that
+        // produced it.
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                todos: defineTable({ title: v.string() }),
+            }).extend(
+                defineSchemaExtension("rate-limit", {
+                    tables: {
+                        buckets: defineTable({ tokens: v.number() }),
+                    },
+                }),
+            );
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(CodegenDiagnosticError);
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/rate-limit/u);
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/defineSchemaExtension/u);
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/schema\.ts:\d+:\d+\)/u);
+    });
+
     it("records the contributing extension key so app-declared tables stay distinguishable", () => {
         expect.assertions(2);
 
@@ -1277,6 +1305,51 @@ describe("discoverSchema", () => {
             expect(schema.tables.map((table) => table.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["ratelimit_buckets", "todos"]);
             expect(Object.keys(buckets?.shape ?? {}).toSorted((a, b) => a.localeCompare(b))).toEqual(["key", "prev", "ts", "value"]);
             expect(buckets?.indexes).toEqual([{ fields: ["key"], name: "by_key" }]);
+        } finally {
+            rmSync(root, { force: true, recursive: true });
+        }
+    });
+
+    it("throws a located diagnostic for a package extension whose table name is not an identifier", () => {
+        expect.assertions(3);
+
+        // The package-runtime path builds its bare tables from `Object.entries`
+        // with no name check at all, so a published add-on shipping
+        // `tables: { "user-profiles": … }` walked straight past the assert the
+        // AST path calls and died in emit with an unlocated `INTERNAL` naming
+        // `pkg_user-profiles`. The user cannot fix the package, but the
+        // `.extend(...)` call naming it is theirs.
+        const root = mkdtempSync(join(tmpdir(), "lunora-pkgext-bad-"));
+
+        try {
+            const pkgDir = join(root, "node_modules", "test-bad-ext");
+
+            mkdirSync(pkgDir, { recursive: true });
+            writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ exports: "./index.mjs", main: "index.mjs", name: "test-bad-ext", type: "module" }));
+            writeFileSync(
+                join(pkgDir, "index.mjs"),
+                `const s = (kind) => ({ kind, _meta: { column: { notNull: true } } });
+                 const profiles = { shape: { key: s("string") }, indexes: [], shardMode: { kind: "root" } };
+                 export const bad = { key: "pkg", extension: { key: "pkg", tables: { "user-profiles": profiles } } };
+                `,
+            );
+
+            mkdirSync(join(root, "lunora"), { recursive: true });
+            const schemaPath = join(root, "lunora", "schema.ts");
+
+            writeFileSync(
+                schemaPath,
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+                 import { bad } from "test-bad-ext";
+                 export const schema = defineSchema({ todos: defineTable({ title: v.string() }) }).extend(bad.extension);
+                `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true });
+
+            expect(() => discoverSchema(project, schemaPath, root)).toThrow(CodegenDiagnosticError);
+            expect(() => discoverSchema(project, schemaPath, root)).toThrow(/user-profiles/u);
+            expect(() => discoverSchema(project, schemaPath, root)).toThrow(/schema\.ts:\d+:\d+\)/u);
         } finally {
             rmSync(root, { force: true, recursive: true });
         }

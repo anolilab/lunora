@@ -282,7 +282,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // Before either render: a schema needing an uninstalled add-on must fail as an
     // actionable error naming the package, not as a `tsc` failure reported inside
     // a generated file the user did not write.
-    assertRequiredPackages(schema, declaredDependencies);
+    assertRequiredPackages(schema, declaredDependencies, { hasVectors: platformGate.signals.vectorStore !== false });
 
     const hasFlags = existsSync(join(lunoraDirectory, "flags.ts"));
     const hasNotify = existsSync(join(lunoraDirectory, "notify.ts"));

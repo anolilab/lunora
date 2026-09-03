@@ -829,10 +829,28 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
             // should tick once a month. Both halves are asserted in one leg so
             // the negative one cannot pass vacuously on a host whose cron never
             // ticks at all.
+            //
+            // A missing `cronTicks` is NOT a reason to skip. Skipping on either
+            // half made the whole leg vanish for precisely the host the contract
+            // forbids — one whose `cron` is present and inert — because such a
+            // host has no ticks to expose either. `SchedulerHost.cron`'s docblock
+            // is explicit that a host without dynamic cron OMITS the method
+            // rather than supplying one that throws or silently no-ops, so a
+            // declared `cron` the suite cannot observe is a conformance failure.
             it("ticks a cron on schedule, and not before its next occurrence", async (context) => {
                 await withHost(async (host) => {
-                    if (host.scheduler?.cron === undefined || host.cronTicks === undefined) {
-                        context.skip(`${name} does not implement SchedulerHost.cron, or cannot observe its ticks`);
+                    if (host.scheduler?.cron === undefined) {
+                        context.skip(`${name} does not implement SchedulerHost.cron`);
+
+                        return;
+                    }
+
+                    const { cronTicks } = host;
+
+                    if (cronTicks === undefined) {
+                        expect.fail(
+                            `${name} declares SchedulerHost.cron but no cronTicks — presence of cron is the claim that dynamic cron works, so it must be observable`,
+                        );
 
                         return;
                     }
@@ -855,8 +873,8 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                         setTimeout(resolve, 1200);
                     });
 
-                    expect(host.cronTicks("tasks/tick")).toBeGreaterThanOrEqual(1);
-                    expect(host.cronTicks("tasks/far")).toBe(0);
+                    expect(cronTicks("tasks/tick")).toBeGreaterThanOrEqual(1);
+                    expect(cronTicks("tasks/far")).toBe(0);
                 });
             });
         });

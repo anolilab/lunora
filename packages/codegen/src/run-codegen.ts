@@ -425,7 +425,16 @@ const inferToFixpoint = (options: {
     // Two files whose sanitized namespaces collide (`a-b.ts` + `a_b.ts`) would
     // emit the same key twice into `_generated/api.ts` — a TS2300 inside
     // generated code, with no pointer back to the two files that caused it.
+    //
+    // Once per namespace SPACE: `api.*` and `httpStreams.*` are separate emitted
+    // objects, so a function file may share a namespace with a route file, but
+    // two streaming-route files may not — and only `.stream()` routes are
+    // grouped by namespace at all, so the plain verbs stay out of it.
     assertNoNamespaceCollisions([...functions, ...mutators].map((definition) => definition.filePath));
+    assertNoNamespaceCollisions(
+        httpRoutes.filter((route) => route.stream).map((route) => route.filePath),
+        "http-stream",
+    );
 
     for (let pass = 1; ; pass += 1) {
         const apiContent = emitApi({ agents, functions, httpRoutes, mutators, useUmbrella, workflows });
@@ -833,6 +842,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasPayments: featureUsage.payments,
         hasPipelines: featureUsage.pipelines,
         hasR2sql: featureUsage.r2sql,
+        // The gate's verdict, exactly as `emitServer`/`emitApp` receive it. The
+        // shard emitter recomputed the flag from `schema.vectorIndexes` instead,
+        // so the DO kept the whole Vectorize wiring on a host rating
+        // `vectorStore: "unsupported"` — a `generated.shard` byte-identical to
+        // the Cloudflare one while the type surface was withheld. Absent means
+        // never declared, which must not withhold.
+        hasVectors: platformGate.signals.vectorStore !== false,
         hasX402: featureUsage.x402,
         maskMetadata,
         mutators,

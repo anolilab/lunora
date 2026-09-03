@@ -52,6 +52,7 @@ interface NodePlatform<Queues extends Record<string, {
     close: () => void;
     directory: ShardDirectory;
     drain: () => Promise<void>;
+    globalTables?: NodeGlobalStore;
     kv: ShardKvStore;
     objectStorage?: R2BucketLike;
     queues?: NodeQueueHost<Queues>;
@@ -70,6 +71,7 @@ type NodePlatformOptions<Queues extends Record<string, {
 }> = Record<string, never>, Workflows extends Record<string, {
     isLunoraWorkflow: true;
 }> = Record<string, never>> = {
+    globalTablesPath?: string;
     objectStorageDirectory?: string;
     onQueueBatch?: NodeQueueHostOptions<Queues>["onBatch"];
     queues?: Queues;

@@ -82,6 +82,34 @@ const parseStandaloneVectorIndexes = (object: ObjectLiteralExpression): VectorIn
  */
 const prefixTableName = (key: string, bareName: string): string => `${key}_${bareName}`;
 
+/** Same shape as `assertTableNameAllowed`'s identifier gate — the key is a prefix of a table name. */
+const EXTENSION_KEY_IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/u;
+
+/**
+ * Reject an extension key that cannot survive {@link prefixTableName}.
+ *
+ * The key is concatenated into every table the extension contributes, so its
+ * characters land in generated type names (`Doc_<name>`) and unquoted property
+ * keys exactly as a table name's do. Nothing checked it: `defineSchemaExtension("rate-limit", …)`
+ * discovered cleanly and then died in `emit.ts` with an unlocated `INTERNAL`
+ * naming `rate-limit_buckets` — a table the user never typed, with no file, no
+ * line and no mention of the call that composed it. Validating the KEY reports
+ * what the user actually wrote, where they wrote it.
+ * @param key the `defineSchemaExtension` key.
+ * @param node the node to point the diagnostic at (the key literal, or the `.extend(...)` argument for a package extension).
+ * @throws when the key is not a valid JS identifier.
+ */
+const assertExtensionKeyAllowed = (key: string, node: TsNode): void => {
+    if (EXTENSION_KEY_IDENTIFIER_RE.test(key)) {
+        return;
+    }
+
+    throw diagnosticAt(
+        node,
+        `defineSchemaExtension key ${JSON.stringify(key)} is not a valid JS identifier — it is prefixed onto every table the extension contributes (\`${key}_<table>\`), and table names are used in generated type names (Doc_<name>) and must match [A-Za-z_$][A-Za-z0-9_$]*. Rename the extension key.`,
+    );
+};
+
 /**
  * Rewrite a single intra-extension table reference to its prefixed name. A
  * reference is "intra-extension" only when its target is one of the extension's
@@ -282,8 +310,8 @@ const resolveSchemaExtensionCall = (argument: TsNode): CallExpression | undefine
     return undefined;
 };
 
-/** Read the `{ tables: {...}, vectorIndexes?: {...} }` options object off a `defineSchemaExtension(key, options)` call. */
-const extensionPartsOf = (call: CallExpression): { key: string; options: ObjectLiteralExpression } | undefined => {
+/** Read the `{ tables: {...}, vectorIndexes?: {...} }` options object off a `defineSchemaExtension(key, options)` call, with the key's node for diagnostics. */
+const extensionPartsOf = (call: CallExpression): { key: string; keyNode: TsNode; options: ObjectLiteralExpression } | undefined => {
     const [keyArgument, optionsArgument] = call.getArguments();
 
     if (!keyArgument || !Node.isStringLiteral(keyArgument)) {
@@ -294,7 +322,7 @@ const extensionPartsOf = (call: CallExpression): { key: string; options: ObjectL
         return undefined;
     }
 
-    return { key: keyArgument.getLiteralText(), options: optionsArgument };
+    return { key: keyArgument.getLiteralText(), keyNode: keyArgument, options: optionsArgument };
 };
 
 /** Parse the `tables: {...}` property of a `defineSchemaExtension` options object into bare-named {@link TableIR}s. */
@@ -365,7 +393,22 @@ interface MergedExtension {
  * rewrite) to an extension's BARE tables + standalone vector indexes — the step
  * shared by the AST path and the package-runtime path ({@link resolvePackageExtension}).
  */
-const namespaceExtension = (key: string, bareTables: ReadonlyArray<TableIR>, bareVectorIndexes: ReadonlyArray<VectorIndexIR>): MergedExtension => {
+const namespaceExtension = (
+    key: string,
+    bareTables: ReadonlyArray<TableIR>,
+    bareVectorIndexes: ReadonlyArray<VectorIndexIR>,
+    node: TsNode,
+): MergedExtension => {
+    // Both paths reach the prefixing through here, which is why the validation
+    // lives here: the AST path checked an extension's bare table names and never
+    // its key, and the package-runtime path (`resolvePackageExtension`) checked
+    // neither. Everything unchecked ended up spliced into a generated identifier.
+    assertExtensionKeyAllowed(key, node);
+
+    for (const table of bareTables) {
+        assertTableNameAllowed(table.name, node);
+    }
+
     const bareNames = new Set(bareTables.map((table) => table.name));
     const tables = bareTables.map((table) => namespaceExtensionTable(table, key, bareNames));
 
@@ -379,8 +422,8 @@ const namespaceExtension = (key: string, bareTables: ReadonlyArray<TableIR>, bar
 };
 
 /** Apply runtime namespacing to one AST-resolved `defineSchemaExtension(...)` options object. */
-const mergeExtension = (key: string, options: ObjectLiteralExpression): MergedExtension =>
-    namespaceExtension(key, parseExtensionTables(options), parseExtensionVectorIndexes(options));
+const mergeExtension = (key: string, keyNode: TsNode, options: ObjectLiteralExpression): MergedExtension =>
+    namespaceExtension(key, parseExtensionTables(options), parseExtensionVectorIndexes(options), keyNode);
 
 /**
  * Resolve + merge one `.extend(...)` call into a {@link MergedExtension}, or
@@ -406,7 +449,10 @@ const mergeExtendCall = (extendCall: CallExpression, projectRoot: string | undef
             const fromPackage = resolvePackageExtension(extendArgument, projectRoot);
 
             if (fromPackage) {
-                return namespaceExtension(fromPackage.key, fromPackage.bareTables, fromPackage.bareVectorIndexes);
+                // The `.extend(...)` argument is the only node there is for a
+                // package extension — the user cannot edit the package, but they
+                // can at least see which extension is at fault and from where.
+                return namespaceExtension(fromPackage.key, fromPackage.bareTables, fromPackage.bareVectorIndexes, extendArgument);
             }
         }
 
@@ -427,7 +473,7 @@ const mergeExtendCall = (extendCall: CallExpression, projectRoot: string | undef
         return undefined;
     }
 
-    return mergeExtension(parts.key, parts.options);
+    return mergeExtension(parts.key, parts.keyNode, parts.options);
 };
 
 /**
