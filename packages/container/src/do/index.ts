@@ -243,6 +243,15 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
 
         this.surfaceInStudioLogs(envelope);
 
+        // The gate belongs to the run that just ended. Left in place, the next
+        // start would find it already settled and skip both `armHardTimeout` and
+        // the `readyOn` probes — so a restarted app would be proxied to before it
+        // reported ready, and its hard timeout would never be re-armed. Cleared
+        // here rather than at the top of a start so that single-flight still holds
+        // WITHIN a run: two concurrent starts must share one gate, or they each
+        // arm a schedule stamped with the same generation.
+        this.lunoraReadiness = undefined;
+
         await super.onStop(parameters);
     }
 

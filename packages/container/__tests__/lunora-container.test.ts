@@ -523,6 +523,38 @@ describe("lunoraContainer lifecycle logging", () => {
         expect((thrown as Error).message).toContain('readiness check "/ready"');
     });
 
+    it("re-arms and re-probes after a stop instead of reusing the finished run's gate", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const definition = defineContainer({ defaultPort: 8080, hardTimeout: "30s", image: "./app", readyOn: [{ path: "/ready" }] });
+        const context = fakeDurableObjectContext({
+            container: {
+                getTcpPort: () => {
+                    return { fetch: async () => new Response("ok", { status: 200 }) };
+                },
+                running: false,
+            },
+        });
+        const instance = new LunoraContainer(context as never, {}, definition, "transcoder");
+        const scheduleSpy = vi.spyOn(instance, "schedule").mockResolvedValue(undefined as never);
+
+        baseStartGate();
+
+        await instance.startAndWaitForPorts();
+
+        expect(scheduleSpy).toHaveBeenCalledTimes(1);
+
+        // The container stops and is started again. The gate belongs to the run
+        // that ended: reusing it would skip the hard timeout AND the readiness
+        // probes, so the restarted app is proxied to before it reports ready.
+        await instance.onStop({ exitCode: 0, reason: "exit" } as never);
+        await instance.startAndWaitForPorts();
+
+        expect(scheduleSpy).toHaveBeenCalledTimes(2);
+    });
+
     it("arms a hard-timeout schedule on start, stamped with the bumped run generation", async () => {
         expect.assertions(2);
 
