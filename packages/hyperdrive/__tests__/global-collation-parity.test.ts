@@ -26,9 +26,10 @@ import createPgliteHarness from "./_helpers/pglite-exec";
  *
  * MySQL is provisioned by `mysql-memory-server`, which downloads mysqld on first
  * use. Where that download is blocked the MySQL half cannot run, so the suite
- * skips with the captured reason — see `_helpers/mysql-mem.ts`. That is a real
- * hole: no CI workflow provisions MySQL today, so this gate can pass by skipping.
- * The always-runs half of the same guarantee is the DDL assertion in
+ * skips with the captured reason — see `_helpers/mysql-mem.ts`. CI runs it under
+ * `LUNORA_MYSQL_TESTS=1` (the `test-mysql` job), where that same failure is
+ * raised instead of captured, so the gate cannot pass by skipping. The
+ * always-runs half of the same guarantee is the DDL assertion in
  * `global-dialect.test.ts`, which needs no server.
  */
 const FIXED_CLOCK = 1_700_000_000_000;

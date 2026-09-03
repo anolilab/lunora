@@ -429,4 +429,12 @@ describe("signedUrl", () => {
         // shift `key`/`exp` on re-split.
         await expect(buildSignedUrl({ baseUrl: "https://cdn.test", bucketName: "a\nb", key: "x.png", secret: "shh" })).rejects.toThrow(/control character/);
     });
+
+    it("rejects an empty key, as every other storage operation does", async () => {
+        expect.assertions(1);
+
+        // Minting one produced `https://cdn.test/?exp=…`, which verify then
+        // accepted and handed the serving route as `key: ""`.
+        await expect(buildSignedUrl({ baseUrl: "https://cdn.test", bucketName: "default", key: "", secret: "shh" })).rejects.toThrow(/key must not be empty/);
+    });
 });
