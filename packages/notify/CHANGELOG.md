@@ -1,3 +1,19 @@
+## @lunora/notify [1.0.0-alpha.36](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.35...@lunora/notify@1.0.0-alpha.36) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* `SubscriptionStore` requires `deleteOwned(id, userId)`. Both
+shipped stores implement it; an external store must make the predicate and the
+removal atomic rather than reintroduce the read-then-write race. Seeding a
+`.unique()` self-referencing column into a non-empty table is now refused.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* close twelve review findings, three fail-open ([#587](https://github.com/anolilab/lunora/issues/587)) ([74c2ac0](https://github.com/anolilab/lunora/commit/74c2ac0028a77c357870ca120e0b76d65627581e))
+
 ## @lunora/notify [1.0.0-alpha.35](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.34...@lunora/notify@1.0.0-alpha.35) (2026-09-03)
 
 ### Bug Fixes
