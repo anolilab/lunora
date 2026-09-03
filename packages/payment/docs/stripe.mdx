@@ -288,6 +288,7 @@ request body, so the endpoint runs at the Worker edge via `httpAction` (no
 
 ```ts
 // lunora/http.ts
+import { webhookResponse } from "@lunora/payment";
 import { httpAction, httpRouter } from "lunorash/server";
 import { processWebhook } from "./billing";
 
@@ -299,7 +300,10 @@ app.post(
         const body = await request.text();
         const signature = request.headers.get("stripe-signature") ?? "";
 
-        return Response.json(await ctx.runAction(processWebhook, { body, signature }));
+        // `webhookResponse`, not `Response.json(...)`: only the JSON payload crosses the
+        // `runAction` hop, so building the response by hand collapses the deliberate 500 on an
+        // orphaned (out-of-order) event to a 200 and Stripe never redelivers it.
+        return webhookResponse(await ctx.runAction(processWebhook, { body, signature }));
     }),
 );
 ```
