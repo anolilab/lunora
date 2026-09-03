@@ -37,8 +37,19 @@ import { assertValidCronExpression } from "./validate-cron";
 
 /** Sub-day recurrence. Exactly one unit must be provided. */
 interface IntervalSchedule {
+    /** 1–23, and must divide 24 (an interval repeats *within* a day). */
     hours?: number;
+    /** 1–59, and must divide 60. */
     minutes?: number;
+
+    /**
+     * Accepted by the type, **rejected at definition time**: Cloudflare Cron
+     * Triggers have a one-minute floor, so the 6-field expression this compiles
+     * to would survive codegen and land in the committed `wrangler.jsonc`, then
+     * fail at `wrangler deploy` naming neither the job nor the file. Declared so
+     * the rejection can name the job instead. Use `ctx.scheduler.runAfter`/
+     * `runAt` for sub-minute recurrence, or `{ minutes: 1 }`.
+     */
     seconds?: number;
 }
 
@@ -310,7 +321,7 @@ interface CronJobsBuilder {
     daily: <T extends CronTarget>(name: string, schedule: DailySchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
     /** Hourly at `minuteUTC` past the hour. The target may be a function or a durable workflow (`workflows.<name>`). */
     hourly: <T extends CronTarget>(name: string, schedule: HourlySchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
-    /** Every `{ seconds | minutes | hours }`. The target may be a function or a durable workflow (`workflows.<name>`). */
+    /** Every `{ minutes | hours }` — `{ seconds }` throws (Cron Triggers have a one-minute floor). The target may be a function or a durable workflow (`workflows.<name>`). */
     interval: <T extends CronTarget>(name: string, schedule: IntervalSchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
     /** Snapshot of the registered jobs, in declaration order. */
     jobs: () => ReadonlyArray<CronJob>;

@@ -372,6 +372,39 @@ describe("createWorker", () => {
         expect(shard.calls[0]!.request.headers.get("x-lunora-identity")).toBeNull();
     });
 
+    it("refuses a client-supplied shard key carrying a reserved relay/replica infix", async () => {
+        expect.assertions(4);
+
+        // `::relay::` / `::replica::` are minted by the runtime alone: a DO reads
+        // its own name to learn its role, so forwarding a client-named
+        // `<victim>::relay::0` hands traffic to a DO that believes it relays for
+        // another shard. Only the replica ROUTING path checked the infixes; the
+        // WS relay mint and every RPC forward did not.
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace });
+
+        const upgrade = new Request(`https://app.example/_lunora/ws?shard=${encodeURIComponent("victim::relay::0")}`, {
+            headers: { Upgrade: "websocket" },
+        });
+
+        const upgradeResponse = await worker.fetch(upgrade, {}, fakeContext);
+
+        expect(upgradeResponse.status).toBe(403);
+
+        const rpc = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "posts:list", shardKey: "victim::replica::weur" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(rpc.status).toBe(403);
+        await expect(rpc.json()).resolves.toMatchObject({ error: { code: "FORBIDDEN_SHARD" } });
+        expect(shard.calls).toHaveLength(0);
+    });
+
     it("rejects /_lunora/ws without upgrade header", async () => {
         expect.assertions(1);
 
@@ -656,12 +689,12 @@ describe("createWorker", () => {
         });
 
         it("never re-targets a shard key that already carries a reserved role infix", async () => {
-            expect.assertions(1);
+            expect.assertions(2);
 
             const { calls, namespace } = createReplicaNamespace(() => Response.json({ result: [] }));
             const worker = createWorker({ allowUnauthenticatedShardAccess: true, functions, replicaReads: true, shardDO: namespace });
 
-            await worker.fetch(
+            const response = await worker.fetch(
                 Object.assign(
                     new Request("https://app.example/_lunora/rpc", {
                         body: JSON.stringify({ functionPath: "posts:list", shardKey: "tenant-7::replica::weur" }),
@@ -673,8 +706,13 @@ describe("createWorker", () => {
                 fakeContext,
             );
 
-            // A replica of a replica follows a DO nobody feeds.
-            expect(calls.map((call) => call.name)).toStrictEqual(["tenant-7::replica::weur"]);
+            // `replicaTargetFor` refuses to mint a replica of a replica (which
+            // would follow a DO nobody feeds) and still does so for the
+            // server-initiated dispatch that never crosses the shard gate. A
+            // CLIENT-supplied key never gets that far any more: the reserved
+            // infix is refused outright, so the owner is not addressed either.
+            expect(response.status).toBe(403);
+            expect(calls).toHaveLength(0);
         });
 
         it("names the shard it resolved, so the client can key one cursor for it", async () => {
@@ -1056,6 +1094,31 @@ describe("createWorker", () => {
         expect(res.status).toBe(403);
         await expect(res.json()).resolves.toMatchObject({ error: { code: "FORBIDDEN_SHARD" } });
         // The gate must short-circuit before any shard dispatch happens.
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("denies a single-shard RPC when authorizeShard returns a truthy non-boolean", async () => {
+        expect.assertions(2);
+
+        // The gate is app code and untyped JS reaches it. The canonical slip is
+        // returning the verifier's result object instead of its boolean field —
+        // `{ valid: false }` is a DENIAL that reads TRUTHY. Only an exact `true`
+        // may open a shard.
+        const worker = createWorker({
+            authorizeShard: () => ({ valid: false }) as unknown as boolean,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list", shardKey: "channel-42" }),
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(res.status).toBe(403);
         expect(shard.calls).toHaveLength(0);
     });
 
@@ -1776,6 +1839,56 @@ describe("createWorker — HTTP actions", () => {
         expect(probe.status).toBe(201);
     });
 
+    it("hands the handler a ctx.waitUntil that reaches the execution context's", async () => {
+        expect.assertions(3);
+
+        // "Ack the webhook now, finish the work after" is the shape an HTTP
+        // action exists for, and work started but not awaited is cancelled when
+        // the response resolves. Wrappers that need deferral (`@lunora/x402`'s
+        // `withX402`, whose receipt sink must outlive the response) read
+        // `waitUntil` structurally off the ctx, so its absence made them
+        // silently no-op.
+        const deferred: Promise<unknown>[] = [];
+        const context: ExecutionContextLike = {
+            passThroughOnException: () => undefined,
+            waitUntil: (promise) => {
+                deferred.push(promise);
+            },
+        };
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.get("/hook", (c) => {
+                    c.var.lunora.waitUntil?.(Promise.resolve("after"));
+
+                    return new Response("accepted", { status: 202 });
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/hook"), {}, context);
+
+        expect(res.status).toBe(202);
+        expect(deferred).toHaveLength(1);
+        await expect(deferred[0]).resolves.toBe("after");
+    });
+
+    it("leaves ctx.waitUntil absent when the host supplied no waitUntil", async () => {
+        expect.assertions(2);
+
+        // Absent rather than a no-op stub, for the same reason `storage` is:
+        // a handler can tell "no deferral available here" from "deferred".
+        const worker = createWorker({
+            httpRouter: honoApp((app) => app.get("/probe", (c) => new Response(String(c.var.lunora.waitUntil === undefined), { status: 200 }))),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/probe"), {}, { passThroughOnException: () => undefined });
+
+        expect(res.status).toBe(200);
+        await expect(res.text()).resolves.toBe("true");
+    });
+
     it("leaves ctx.storage absent when the app declared no storage", async () => {
         expect.assertions(2);
 
@@ -2273,6 +2386,25 @@ describe("createWorker auth-metrics instrumentation (PLAN3 §2.3)", () => {
         const body = await recordCall!.request.json<{ args: { outcome: string } }>();
 
         expect(body.args.outcome).toBe("ok");
+    });
+
+    it("applies the shared 1 MiB body cap to `/api/auth/*`, so the docs cannot claim a bypass", async () => {
+        expect.assertions(2);
+
+        const authHandler = vi.fn<(request: Request) => Promise<Response>>(async () => new Response("ok", { status: 200 }));
+
+        const worker = createWorker({ adminToken: "s3cret", authHandler, shardDO: shard.namespace });
+
+        // The pre-check reads `content-length` only, so no body is needed to trip it.
+        const res = await worker.fetch(
+            new Request("https://app.example/api/auth/scim/v2/Bulk", { headers: { "content-length": String(2 * 1024 * 1024) }, method: "POST" }),
+            {},
+            collectingContext,
+        );
+
+        expect(res.status).toBe(413);
+        // Rejected BEFORE dispatch, so better-auth never sees the request.
+        expect(authHandler).not.toHaveBeenCalled();
     });
 
     it("does NOT record for a non-attempt auth route (get-session)", async () => {

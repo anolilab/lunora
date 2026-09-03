@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
+import { collectPages } from "../../../shared/collect-pages";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
@@ -11,6 +12,7 @@ import { ClientQueryStore } from "./client-query-store";
 import { TabCoordinator } from "./cross-tab";
 import { applyDelta, isMutationDelta } from "./delta-merge";
 import type { LunoraErrorCode } from "./errors";
+import { TransportError } from "./errors";
 import { httpStream } from "./http-stream";
 import Listeners from "./listeners";
 import type { OptimisticUpdate } from "./local-store";
@@ -24,6 +26,15 @@ import { resolvePersistenceAdapter } from "./persistence";
 import { queryCacheKey, resolveQueryCacheAdapter } from "./query-cache";
 import type { ReconnectCalculator } from "./reconnect";
 import { createReconnect } from "./reconnect";
+import {
+    isTransientReplayFailure,
+    MAX_BATCH_BODY_BYTES,
+    replayRetryDelayMs,
+    retryAfterData,
+    TRANSIENT_REPLAY_ERROR_CODES,
+    unparseableResponseError,
+    utf8ByteLength,
+} from "./replay";
 import createSnapshotPrecondition from "./snapshot-precondition";
 import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
@@ -577,7 +588,9 @@ const buildSubscriptionError = (message: ServerErrorMessage): SubscriptionError 
  * set and tore the shared registration out from under the second consumer.
  * Passes `undefined` through so an unset `onError`/`onCheckpoint` stays unset.
  */
-const wrapSubscriber = <A>(callback: ((argument: A) => void) | undefined): ((argument: A) => void) | undefined => {
+function wrapSubscriber<A>(callback: (argument: A) => void): (argument: A) => void;
+function wrapSubscriber<A>(callback: ((argument: A) => void) | undefined): ((argument: A) => void) | undefined;
+function wrapSubscriber<A>(callback: ((argument: A) => void) | undefined): ((argument: A) => void) | undefined {
     if (callback === undefined) {
         return undefined;
     }
@@ -585,7 +598,7 @@ const wrapSubscriber = <A>(callback: ((argument: A) => void) | undefined): ((arg
     return (argument: A): void => {
         callback(argument);
     };
-};
+}
 
 /** Fan an error out to every registered `onError` callback, swallowing throws so one bad listener can't starve the rest. */
 const fanSubscriptionError = (callbacks: Iterable<SubscriptionErrorCallback>, error: SubscriptionError): void => {
@@ -735,6 +748,28 @@ const reconstructError = (errorBody: { code?: string; data?: unknown; docsUrl?: 
 };
 
 /**
+ * Rebuild a thrown `Error` from a server `{ error }` envelope ({@link reconstructError})
+ * with any `Retry-After` response header folded into `data.retryAfterMs` — the ONE
+ * channel a retry hint travels on, and the only one the public `getRetryAfterMs`
+ * reads. The runtime's REST limiter sends its hint as the header (whole seconds)
+ * where an application limiter puts milliseconds in the envelope, so both replay
+ * paths normalise it here rather than each in their own way.
+ */
+const reconstructErrorWithRetryAfter = (
+    errorBody: { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string },
+    retryAfterHeader: null | string,
+): LunoraClientError => {
+    const error = reconstructError(errorBody);
+    const data = retryAfterData(error, retryAfterHeader);
+
+    if (data !== undefined) {
+        error.data = data;
+    }
+
+    return error;
+};
+
+/**
  * Wire-encode a call's `args`/payload, tagging an encode failure with the call it
  * came from. The bare codec error ("wire-codec: cannot encode a RegExp …") names
  * the type but not the operation — which is useless on the fire-and-forget whisper
@@ -777,17 +812,6 @@ const demuxBatchResults = (rawResults: { body?: unknown; id?: number }[], count:
 
     return slots.map((slot) => slot ?? { error: new Error("batch call returned no result"), ok: false });
 };
-
-/**
- * Per-slot error codes the worker injects for a **transient** shard/transport
- * failure rather than an application verdict: a whole sub-batch that couldn't
- * reach its shard (`SHARD_UNAVAILABLE`) or whose shard response was unusable /
- * partial (`SHARD_ERROR`). For a single-shard outbox flush these fail every entry
- * uniformly, so a durable-outbox replay **re-queues** them for the next reconnect
- * instead of dropping the write — mirroring the single-call path's "codeless =
- * transient" rule. Every other coded error is a server verdict (terminal).
- */
-const TRANSIENT_BATCH_ERROR_CODES = new Set(["SHARD_ERROR", "SHARD_UNAVAILABLE"]);
 
 /**
  * @internal
@@ -1125,6 +1149,28 @@ class LunoraClient {
      */
     private readonly offlineFlushes = new Map<string, Promise<void>>();
     /* eslint-enable jsdoc/check-indentation */
+
+    /**
+     * Per-shard replay backoff, keyed by {@link connectionKey} exactly as the
+     * flushes and their timers are: `delayMs` is the longest hint the CURRENT
+     * flush of that key was given (written by
+     * {@link LunoraClient.noteReplayRetryDelay}, consumed once by
+     * {@link LunoraClient.scheduleRateLimitedRetry} at the end of the drain), and
+     * `attempts` counts its consecutive failed flushes, which is what the
+     * hintless backoff ramps on.
+     *
+     * Keyed, not a single field: flushes are per shard key and run concurrently,
+     * so one field means one limited shard sets the wait for every other shard
+     * and two flushes overwrite — then consume — each other's delay, leaving one
+     * of them with nothing scheduled at all. Evicted by
+     * {@link LunoraClient.scheduleRateLimitedRetry} the moment a key has nothing
+     * left to retry, so an app that shards per document does not accumulate an
+     * entry per document it ever wrote.
+     */
+    private readonly replayRetryState = new Map<string, { attempts: number; delayMs: number | undefined }>();
+
+    /** Pending rate-limit retry flushes, keyed by {@link connectionKey}, so `close()` can cancel them. */
+    private readonly replayRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
     private readonly shapeSubscriptions = new Map<string, ShapeSubscriptionState>();
 
@@ -2478,19 +2524,14 @@ class LunoraClient {
         // one, so stopping at the first page would hide exactly the backlog the
         // operator opened it for. Returning `records` alone made this silently
         // truncate the moment the route grew its limit.
-        const records: ScheduleRecord[] = [];
-        let cursor: string | undefined;
-
-        do {
-            const path = cursor === undefined ? SCHEDULED_DEAD_PATH : `${SCHEDULED_DEAD_PATH}?cursor=${encodeURIComponent(cursor)}`;
-            // eslint-disable-next-line no-await-in-loop -- each page's request needs the PRIOR page's cursor; there is nothing to parallelise
-            const body = (await this.adminFetch(path, "GET")) as { cursor?: string; records?: ScheduleRecord[]; truncated?: boolean };
-
-            records.push(...(body.records ?? []));
-            cursor = body.truncated === true ? body.cursor : undefined;
-        } while (cursor !== undefined);
-
-        return records;
+        return await collectPages<ScheduleRecord>(
+            async (cursor) =>
+                (await this.adminFetch(cursor === undefined ? SCHEDULED_DEAD_PATH : `${SCHEDULED_DEAD_PATH}?cursor=${encodeURIComponent(cursor)}`, "GET")) as {
+                    cursor?: string;
+                    records?: ScheduleRecord[];
+                    truncated?: boolean;
+                },
+        );
     }
 
     /**
@@ -3431,10 +3472,12 @@ class LunoraClient {
      * `subscribe` for the same triple joins the existing registration and shares
      * its value, cursor and optimistic layers.
      *
-     * Not available on a `crossTabSync` FOLLOWER tab: the cross-tab channel only
-     * carries the LEADER's own subscriptions outward, so a follower would receive
-     * this query's frames only if the leader happened to hold it too. Throws
-     * `NOT_IMPLEMENTED` there — see {@link LunoraClientOptions.crossTabSync}.
+     * Available on a `crossTabSync` FOLLOWER tab, unlike the other socket-backed
+     * surfaces: registering here is exactly what lets the cross-tab relay deliver
+     * the leader's broadcasts (see the note in the body). The caveat is that the
+     * channel only carries the LEADER's own subscriptions outward, so a follower
+     * sees this query's frames only while the leader holds it too — see
+     * {@link LunoraClientOptions.crossTabSync}.
      */
     public subscribe<F extends FunctionReference>(
         function_: F,
@@ -3464,7 +3507,7 @@ class LunoraClient {
         // A fresh closure per `subscribe()` call gives each consumer its own
         // slot, its own delivery, and its own unsubscribe. Mirrored below for
         // `onError`/`onCheckpoint`, which have the same shape.
-        const subscriptionCallback = wrapSubscriber(callback as SubscriptionCallback) as SubscriptionCallback;
+        const subscriptionCallback: SubscriptionCallback = wrapSubscriber(callback as SubscriptionCallback);
         const errorCallback = wrapSubscriber(options.onError);
         const checkpointCallback = wrapSubscriber(options.onCheckpoint);
 
@@ -3810,6 +3853,15 @@ class LunoraClient {
         }
 
         this.adminSocketTeardowns.clear();
+
+        // Rate-limit retry flushes are the one timer that outlives the socket
+        // teardown above (they fire against an open connection, not a reconnect).
+        for (const timer of this.replayRetryTimers.values()) {
+            clearTimeout(timer);
+        }
+
+        this.replayRetryTimers.clear();
+        this.replayRetryState.clear();
 
         this.offlineQueue.clear();
         this.queuedIdentities.clear();
@@ -4393,11 +4445,22 @@ class LunoraClient {
     }
 
     /**
-     * Load every cached query into {@link hydratedQueryCache} so the next
-     * `subscribe()` for each key seeds its initial value off disk. A
-     * subscription created before this resolves simply misses the cache (it
-     * gets a live snapshot as before); the gate at seed time also drops any
-     * entry whose stamped identity no longer matches the current one.
+     * Load every cached query so a `subscribe()` for the key seeds its initial
+     * value off disk.
+     *
+     * The load is asynchronous but every framework adapter subscribes
+     * SYNCHRONOUSLY at mount, so the subscriptions that most want the cache
+     * already exist by the time it lands. Those are seeded here and their entry
+     * is dropped: an entry that stayed in {@link hydratedQueryCache} behind a
+     * live subscription would be consumed by the NEXT subscribe of the same key
+     * (a remount after navigating away) and replay the previous session's value
+     * over whatever the socket had since delivered. A cache entry therefore
+     * never outlives a live subscription for its key — it is either handed to
+     * that subscription or discarded.
+     *
+     * Only keys with no live subscription are held for a later `subscribe()`;
+     * the identity gate applies to both paths, so a signed-out cache never leaks
+     * into a new session.
      */
     private async hydrateQueryCache(): Promise<void> {
         if (!this.queryCache) {
@@ -4406,6 +4469,14 @@ class LunoraClient {
 
         try {
             const entries = await this.queryCache.load();
+
+            // Index the already-open subscriptions by READ-CACHE key (the
+            // registry keys on the raw args object, the cache on `argsKey`).
+            const live = new Map<string, SubscriptionState>();
+
+            for (const state of this.subscriptions.all()) {
+                live.set(queryCacheKey(state.fn.__lunoraRef, state.argsKey, state.shardKey), state);
+            }
 
             for (const { key, ...entry } of entries) {
                 // Version gate: a value persisted under a different app/schema
@@ -4416,11 +4487,47 @@ class LunoraClient {
                     continue;
                 }
 
+                const openSubscription = live.get(key);
+
+                if (openSubscription) {
+                    this.seedSubscriptionFromCache(openSubscription, entry);
+
+                    continue;
+                }
+
                 this.hydratedQueryCache.set(key, entry);
             }
         } catch {
             /* durable store unavailable — boot without restored reads */
         }
+    }
+
+    /**
+     * Hand a loaded read-cache entry to a subscription that was opened before
+     * the load resolved — the same value, cursor and epoch {@link subscribe}
+     * would have taken from {@link takeHydratedCache} had the load finished
+     * first, so the cursor still rides the `subscribe` frame as `sinceSeq` (that
+     * frame only goes out once the socket opens, well after this microtask).
+     *
+     * A no-op once the socket has delivered anything for this key: a live value
+     * always beats the cache. Identity-gated exactly like `takeHydratedCache`.
+     */
+    private seedSubscriptionFromCache(state: SubscriptionState, entry: CachedQuery): void {
+        if (state.serverBase !== undefined || state.lastValue !== undefined || entry.identity !== this.identityFingerprint()) {
+            return;
+        }
+
+        // eslint-disable-next-line no-param-reassign -- in-place seed of the shared subscription state, mirroring `notifySubscription`
+        state.serverBase = entry.value;
+        // eslint-disable-next-line no-param-reassign -- in-place seed of the shared subscription state
+        state.serverCursor = entry.serverCursor;
+
+        if (entry.serverEpoch !== undefined) {
+            // eslint-disable-next-line no-param-reassign -- in-place seed of the shared subscription state
+            state.serverEpoch = entry.serverEpoch;
+        }
+
+        notifySubscription(state, foldOptimistic(entry.value, state.optimisticLayers));
     }
 
     /**
@@ -4829,7 +4936,7 @@ class LunoraClient {
         } = {},
     ): Promise<unknown> {
         if (!this.fetchImpl) {
-            throw new LunoraError("INTERNAL", "LunoraClient: no `fetch` implementation available");
+            throw new TransportError("LunoraClient: no `fetch` implementation available");
         }
 
         const headers = this.rpcRequestHeaders(flags, shardKey);
@@ -4856,24 +4963,27 @@ class LunoraClient {
         try {
             body = await response.json();
         } catch {
-            const statusText = response.statusText ? ` ${response.statusText}` : "";
-
-            throw new LunoraError("INTERNAL", `LunoraClient: response was not JSON (status ${response.status.toString()}${statusText})`);
+            // Not a Lunora envelope at all — an edge's HTML page, a captive
+            // portal, a truncated body. The HTTP status is the only verdict
+            // there is, and `unparseableResponseError` is where the outbox's
+            // "unknown fate, re-queue" / "refused, settle" split is decided.
+            throw unparseableResponseError(response.status, response.statusText, response.headers.get("retry-after"));
         }
 
         if ("error" in body) {
-            // Reconstruct the thrown error with its `.code` and (for an app
-            // `LunoraError`) wire-decoded `.data`.
-            throw reconstructError(body.error);
+            // Rebuilt with its `.code` and (for an app `LunoraError`) wire-decoded
+            // `.data`, plus any `Retry-After` normalised into that `data` — the
+            // one channel the hint travels on.
+            throw reconstructErrorWithRetryAfter(body.error, response.headers.get("retry-after"));
         }
 
         // A non-2xx response whose body parsed as JSON but carried no `error`
-        // envelope would otherwise be treated as a successful result. Surface the
-        // HTTP status so callers get an actionable error instead.
+        // envelope would otherwise be treated as a successful result. Classified
+        // by status, exactly as an unparseable body is: a 5xx re-queues a durable
+        // write rather than dropping it over a gateway blip, a 4xx settles it
+        // rather than replaying a refusal forever.
         if (!response.ok) {
-            const statusText = response.statusText ? ` ${response.statusText}` : "";
-
-            throw new LunoraError("INTERNAL", `LunoraClient: request failed (status ${response.status.toString()}${statusText})`);
+            throw unparseableResponseError(response.status, response.statusText, response.headers.get("retry-after"));
         }
 
         flags.onMutationAck?.(body.lastMutationId);
@@ -6695,7 +6805,8 @@ class LunoraClient {
         // into `/_lunora/rpc-batch` round trips (plan 088 follow-on) — the
         // flaky-reconnect win (N queued writes → a handful of RTTs, not N).
         if (encodable.length === 1) {
-            await this.replaySequential(encodable);
+            await this.replaySequential(encodable, shardKey);
+            this.scheduleRateLimitedRetry(shardKey);
 
             return;
         }
@@ -6710,7 +6821,7 @@ class LunoraClient {
         for (let start = 0; start < encodable.length; start += MAX_BATCH_ENTRIES) {
             const chunk = encodable.slice(start, start + MAX_BATCH_ENTRIES);
             // eslint-disable-next-line no-await-in-loop -- chunks replay sequentially to preserve FIFO ordering across the flush
-            const outcome = await this.replayBatched(chunk);
+            const outcome = await this.replayBatched(chunk, shardKey);
 
             toRequeue.push(...outcome.requeue);
 
@@ -6726,6 +6837,69 @@ class LunoraClient {
         if (toRequeue.length > 0) {
             this.offlineQueue.requeue(toRequeue);
         }
+
+        this.scheduleRateLimitedRetry(shardKey);
+    }
+
+    /**
+     * Remember the longest delay this shard's flush was told (or worked out) to
+     * wait, so the drain can honour it before trying again
+     * ({@link LunoraClient.replayRetryState}). Counts the attempt either way:
+     * that is what a hintless refusal backs off on.
+     */
+    private noteReplayRetryDelay(shardKey: string | undefined, error: unknown): void {
+        const key = connectionKey(shardKey);
+        const previous = this.replayRetryState.get(key);
+        const attempts = (previous?.attempts ?? 0) + 1;
+        const delay = replayRetryDelayMs(error, attempts);
+
+        this.replayRetryState.set(key, {
+            attempts,
+            delayMs: delay === undefined ? previous?.delayMs : Math.max(previous?.delayMs ?? 0, delay),
+        });
+    }
+
+    /**
+     * Consume this shard's retry delay and re-flush it once the delay has
+     * elapsed.
+     *
+     * Only a failure the server or an edge ANSWERED schedules anything (see
+     * {@link replayRetryDelayMs}): a `fetch` that never landed is already covered
+     * by the reconnect that will flush the queue, whereas a refused flush happens
+     * over a socket that stays open — so without this the writes sit queued
+     * indefinitely. One pending timer per shard; a second delay replaces it
+     * rather than stacking flushes.
+     *
+     * Nothing left to retry on this key (drained, closed, or no delay) drops its
+     * backoff state, which is both the reset after progress and what bounds the
+     * map.
+     */
+    private scheduleRateLimitedRetry(shardKey: string | undefined): void {
+        const key = connectionKey(shardKey);
+        const state = this.replayRetryState.get(key);
+        const delay = state?.delayMs;
+
+        if (state === undefined || delay === undefined || this.closed || this.offlineQueue.size === 0) {
+            this.replayRetryState.delete(key);
+
+            return;
+        }
+
+        state.delayMs = undefined;
+
+        const existing = this.replayRetryTimers.get(key);
+
+        if (existing !== undefined) {
+            clearTimeout(existing);
+        }
+
+        this.replayRetryTimers.set(
+            key,
+            setTimeout(() => {
+                this.replayRetryTimers.delete(key);
+                this.flushOfflineQueue(shardKey).catch(() => undefined);
+            }, delay),
+        );
     }
 
     /**
@@ -6881,13 +7055,16 @@ class LunoraClient {
      * Replay already-identity-gated writes one at a time on the single-call `/rpc`
      * path, preserving FIFO order (parallel `.then()` chains would race the
      * ordering callers depend on). Each replays under its stable `mutationId` so
-     * the server dedups a write it already committed (exactly-once). A coded error
-     * is a server verdict (drop it); a codeless (transport/transient) failure stops
-     * the flush and re-queues this write and every unreplayed one for the next
-     * reconnect — their callers stay pending, and the identity guard re-applies on
-     * retry via each record's persisted stamp.
+     * the server dedups a write it already committed (exactly-once). A server verdict
+     * drops the write; a transient failure ({@link isTransientReplayFailure} — a
+     * transport error, a shard the worker couldn't reach, a rate-limit refusal, or a
+     * non-2xx carrying no `{ error }` envelope) stops the flush and re-queues this
+     * write and every unreplayed one for the next reconnect — their callers stay
+     * pending, and the identity guard re-applies on retry via each record's persisted
+     * stamp. The batch path classifies a slot by the same rule, so a durable write's
+     * fate never depends on how many siblings happened to be queued alongside it.
      */
-    private async replaySequential(items: QueuedMutation[]): Promise<void> {
+    private async replaySequential(items: QueuedMutation[], shardKey: string | undefined): Promise<void> {
         for (let index = 0; index < items.length; index += 1) {
             const item = items[index];
 
@@ -6911,12 +7088,13 @@ class LunoraClient {
 
                 this.settleReplaySuccess(item, value, commitCursor);
             } catch (error) {
-                if ((error as { code?: string }).code !== undefined) {
+                if (!isTransientReplayFailure(error)) {
                     this.settleReplayTerminal(item, error);
 
                     continue;
                 }
 
+                this.noteReplayRetryDelay(shardKey, error);
                 this.offlineQueue.requeue(items.slice(index));
 
                 return;
@@ -6931,45 +7109,60 @@ class LunoraClient {
      * per-entry `mutationId` idempotency and in-order application are inherited from
      * the proven path. Per-slot demux mirrors {@link replaySequential}'s
      * classification: success confirms the optimistic layer against the echoed
-     * `commitCursor`; a coded application verdict is terminal; a transient shard
-     * failure (`SHARD_UNAVAILABLE`/`SHARD_ERROR`), a missing slot, or a whole-batch
+     * `commitCursor`; a coded application verdict is terminal; a {@link
+     * TRANSIENT_REPLAY_ERROR_CODES} code, a missing slot, or a whole-batch
      * transport failure re-queues for the next reconnect (never dropping a durable
      * write). A whole-batch coded rejection (bad request / authorization denial the
      * server reached a verdict on) is terminal for every entry.
+     *
+     * The body is also held under {@link MAX_BATCH_BODY_BYTES}: the worker caps a
+     * batch body at 1 MiB and answers `413`, which is ONE refusal covering every
+     * write in the chunk. An over-budget chunk is halved before it is sent, and a
+     * `413` for a chunk of more than one write halves it and retries rather than
+     * settling the whole chunk terminally — so a backlog of large writes still
+     * commits, one bisection deeper.
      *
      * Returns the writes that must be re-queued and `stop` — `true` when the whole
      * chunk failed at the transport level, so the caller leaves later chunks queued
      * rather than sending on. The caller re-queues once, in order, so requeuing is
      * NOT done here.
      */
-    private async replayBatched(items: QueuedMutation[]): Promise<{ requeue: QueuedMutation[]; stop: boolean }> {
+    private async replayBatched(items: QueuedMutation[], shardKey: string | undefined): Promise<{ requeue: QueuedMutation[]; stop: boolean }> {
         if (!this.fetchImpl) {
             return { requeue: items, stop: true };
+        }
+
+        const body = JSON.stringify({
+            calls: items.map((item, index) => {
+                return {
+                    args: encodeCallArgs(item.args, `args for '${item.functionPath}'`),
+                    functionPath: item.functionPath,
+                    id: index,
+                    // Stable per-write key so the DO dedups a write it already
+                    // committed (exactly-once), exactly as the single-call replay.
+                    // `clientId` rides with it: the DO namespaces an ANONYMOUS
+                    // caller's dedup row by it, and without one the batch entry
+                    // has no namespace and the write re-runs. Per entry, not on
+                    // the outer request — a batch is one transport hop but its
+                    // entries are dispatched as independent single calls.
+                    clientId: item.clientId ?? this.clientId,
+                    mutationId: item.id,
+                    shardKey: item.shardKey,
+                };
+            }),
+        });
+
+        // Over the worker's body cap — sending it would earn one `413` covering
+        // every write in the chunk. Halve and retry instead.
+        if (items.length > 1 && utf8ByteLength(body) > MAX_BATCH_BODY_BYTES) {
+            return await this.replayBatchedHalves(items, shardKey);
         }
 
         let response: Response;
 
         try {
             response = await this.fetchImpl(joinUrl(this.url, RPC_BATCH_PATH), {
-                body: JSON.stringify({
-                    calls: items.map((item, index) => {
-                        return {
-                            args: encodeCallArgs(item.args, `args for '${item.functionPath}'`),
-                            functionPath: item.functionPath,
-                            id: index,
-                            // Stable per-write key so the DO dedups a write it already
-                            // committed (exactly-once), exactly as the single-call replay.
-                            // `clientId` rides with it: the DO namespaces an ANONYMOUS
-                            // caller's dedup row by it, and without one the batch entry
-                            // has no namespace and the write re-runs. Per entry, not on
-                            // the outer request — a batch is one transport hop but its
-                            // entries are dispatched as independent single calls.
-                            clientId: item.clientId ?? this.clientId,
-                            mutationId: item.id,
-                            shardKey: item.shardKey,
-                        };
-                    }),
-                }),
+                body,
                 // No shard key: a batch's entries may target several shards, and
                 // one outbound `x-lunora-min-seq` cannot state a requirement for
                 // all of them. Writes go to the owner regardless, so omitting it
@@ -6989,33 +7182,86 @@ class LunoraClient {
             this.bookmark.set(bookmark);
         }
 
-        let body: { error?: { code?: string; data?: unknown; message?: string }; results?: { body?: RpcResponseBody; id?: number }[] };
+        // The body cap the client measured against is not the one that counts —
+        // the header framing rides along, and a proxy may impose its own. A `413`
+        // is a verdict on the REQUEST, not on the writes inside it, so halve and
+        // retry; only a lone write that is itself over the cap falls through to
+        // the terminal envelope below (replaying it can never succeed).
+        if (response.status === 413 && items.length > 1) {
+            return await this.replayBatchedHalves(items, shardKey);
+        }
+
+        let payload: { error?: { code?: string; data?: unknown; message?: string }; results?: { body?: RpcResponseBody; id?: number }[] };
+
+        const retryAfterHeader = response.headers.get("retry-after");
 
         try {
-            body = await response.json();
+            payload = await response.json();
         } catch {
-            // Non-JSON body (an edge 5xx, say) — transient, don't lose the writes.
+            // Not a Lunora envelope at all (an edge's HTML page) — classified by
+            // HTTP status, since re-queuing every such reply unconditionally
+            // parks a chunk the edge REFUSED at the head of the outbox forever.
+            return this.settleWholeBatchError(items, unparseableResponseError(response.status, response.statusText, retryAfterHeader), shardKey);
+        }
+
+        // Whole-batch rejection with no per-slot results: one outcome covering
+        // every entry in the chunk — a coded `{ error }` the server sent, or the
+        // status of a non-2xx that carried no envelope.
+        if (!payload.results) {
+            const error =
+                payload.error === undefined
+                    ? unparseableResponseError(response.status, response.statusText, retryAfterHeader)
+                    : reconstructErrorWithRetryAfter(payload.error, retryAfterHeader);
+
+            return this.settleWholeBatchError(items, error, shardKey);
+        }
+
+        return { requeue: this.settleReplayBatchSlots(items, payload.results, shardKey), stop: false };
+    }
+
+    /**
+     * Classify a `/_lunora/rpc-batch` reply that carried no per-slot results — one
+     * outcome covering every entry in the chunk. A {@link TRANSIENT_REPLAY_ERROR_CODES}
+     * code (an unreachable shard, a rate-limit refusal) or a
+     * {@link TransportError} (an edge reply with no verdict in it) leaves every
+     * write durable for the next attempt; anything else is a verdict reached on
+     * the request itself, and settles all of them.
+     */
+    private settleWholeBatchError(
+        items: QueuedMutation[],
+        error: Error & { code?: string },
+        shardKey: string | undefined,
+    ): { requeue: QueuedMutation[]; stop: boolean } {
+        if (error instanceof TransportError || (error.code !== undefined && TRANSIENT_REPLAY_ERROR_CODES.has(error.code))) {
+            this.noteReplayRetryDelay(shardKey, error);
+
             return { requeue: items, stop: true };
         }
 
-        // Whole-batch rejection with no per-slot results: a coded `{ error }` (bad
-        // request / authorization denial) is a verdict on every entry — terminal;
-        // a non-2xx WITHOUT a coded envelope is a transient transport error.
-        if (!body.results) {
-            if (body.error) {
-                const error = reconstructError(body.error);
-
-                for (const item of items) {
-                    this.settleReplayTerminal(item, error);
-                }
-
-                return { requeue: [], stop: false };
-            }
-
-            return { requeue: items, stop: true };
+        for (const item of items) {
+            this.settleReplayTerminal(item, error);
         }
 
-        return { requeue: this.settleReplayBatchSlots(items, body.results), stop: false };
+        return { requeue: [], stop: false };
+    }
+
+    /**
+     * Split an over-large batch chunk in half and replay each half, preserving
+     * FIFO order. Recurses through {@link replayBatched}, so a chunk keeps halving
+     * until it fits (or reaches one write, which is then the server's verdict to
+     * give). A `stop` on the first half leaves the second unsent and queued.
+     */
+    private async replayBatchedHalves(items: QueuedMutation[], shardKey: string | undefined): Promise<{ requeue: QueuedMutation[]; stop: boolean }> {
+        const middle = Math.ceil(items.length / 2);
+        const first = await this.replayBatched(items.slice(0, middle), shardKey);
+
+        if (first.stop) {
+            return { requeue: [...first.requeue, ...items.slice(middle)], stop: true };
+        }
+
+        const second = await this.replayBatched(items.slice(middle), shardKey);
+
+        return { requeue: [...first.requeue, ...second.requeue], stop: second.stop };
     }
 
     /**
@@ -7023,11 +7269,15 @@ class LunoraClient {
      * in input order. Each slot's envelope classifies its write the same way
      * {@link replaySequential} does: a success confirms the optimistic layer
      * against the echoed `commitCursor`; a coded application verdict is terminal;
-     * a transient shard failure ({@link TRANSIENT_BATCH_ERROR_CODES}) or a slot the
+     * a transient failure ({@link TRANSIENT_REPLAY_ERROR_CODES}) or a slot the
      * server never returned is returned for the caller to re-queue.
      * @returns the writes that must be re-queued (transient slots), in input order
      */
-    private settleReplayBatchSlots(items: QueuedMutation[], results: { body?: RpcResponseBody; id?: number }[]): QueuedMutation[] {
+    private settleReplayBatchSlots(
+        items: QueuedMutation[],
+        results: { body?: RpcResponseBody; id?: number }[],
+        shardKey: string | undefined,
+    ): QueuedMutation[] {
         const bySlot = new Map<number, RpcResponseBody>();
 
         for (const entry of results) {
@@ -7046,7 +7296,8 @@ class LunoraClient {
                 // committed; retry under the same `mutationId` (idempotent).
                 requeue.push(item);
             } else if ("error" in inner) {
-                if (TRANSIENT_BATCH_ERROR_CODES.has(inner.error.code)) {
+                if (TRANSIENT_REPLAY_ERROR_CODES.has(inner.error.code)) {
+                    this.noteReplayRetryDelay(shardKey, reconstructError(inner.error));
                     requeue.push(item);
                 } else {
                     this.settleReplayTerminal(item, reconstructError(inner.error));

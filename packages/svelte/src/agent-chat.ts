@@ -1,4 +1,4 @@
-import type { FunctionReference, LunoraClient, OptimisticMessage } from "@lunora/client";
+import type { FunctionReference, LunoraClient, OptimisticMessage, SubscriptionErrorCallback } from "@lunora/client";
 import { maxSeq, reconcileOptimistic } from "@lunora/client";
 import type { Readable } from "svelte/store";
 import { writable } from "svelte/store";
@@ -123,6 +123,13 @@ interface AgentChatOptions {
     limit?: number;
 
     /**
+     * Called when the live history or thread subscription reports an error (a
+     * session expiry, an RLS denial). Without it such an error is dropped and
+     * `messages` / `status` freeze at their last value.
+     */
+    onError?: SubscriptionErrorCallback;
+
+    /**
      * The app mutation that starts (or continues) a run — a thin wrapper over
      * `ctx.agents[name].run(...)`. Called with `{ threadKey, input }` merged with
      * {@link AgentChatOptions.sendArgs} and the per-call args.
@@ -182,7 +189,7 @@ interface AgentChatHandle {
 const NO_STREAM_REF: AgentTokenStreamReference = { __lunoraRef: "" };
 
 const createAgentChatHandle = (client: LunoraClient, options: AgentChatOptions): AgentChatHandle => {
-    const { api, cancel: cancelReference, limit, send: sendReference, sendArgs, stream: streamReference, threadKey } = options;
+    const { api, cancel: cancelReference, limit, onError, send: sendReference, sendArgs, stream: streamReference, threadKey } = options;
 
     const sendMutation = mutation(client, sendReference);
     const cancelMutation = mutation(client, cancelReference ?? NO_MUTATION_REF);
@@ -275,17 +282,27 @@ const createAgentChatHandle = (client: LunoraClient, options: AgentChatOptions):
 
     const historyArgs = limit === undefined ? { key: threadKey } : { key: threadKey, limit };
     const unsubscribeHistory = isBrowser()
-        ? client.subscribe(api.agents.agentMessages, historyArgs, (value) => {
-              durable = value as unknown as ReadonlyArray<AgentChatMessage>;
-              recompute();
-              recomputeStreamingText();
-          })
+        ? client.subscribe(
+              api.agents.agentMessages,
+              historyArgs,
+              (value) => {
+                  durable = value as unknown as ReadonlyArray<AgentChatMessage>;
+                  recompute();
+                  recomputeStreamingText();
+              },
+              { onError },
+          )
         : (): void => undefined;
     const unsubscribeThread = isBrowser()
-        ? client.subscribe(api.agents.agentThread, { key: threadKey }, (value) => {
-              latestThread = value as AgentThreadRecord | undefined;
-              statusStore.set(latestThread?.status);
-          })
+        ? client.subscribe(
+              api.agents.agentThread,
+              { key: threadKey },
+              (value) => {
+                  latestThread = value as AgentThreadRecord | undefined;
+                  statusStore.set(latestThread?.status);
+              },
+              { onError },
+          )
         : (): void => undefined;
 
     const send = async (input: string, arguments_?: Record<string, unknown>): Promise<void> => {

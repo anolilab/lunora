@@ -1,3 +1,4 @@
+import { jsonSchema } from "ai";
 import { describe, expect, it } from "vitest";
 
 import { codeTool, resolveReferences, runToolScript } from "../src/code-tool";
@@ -11,6 +12,8 @@ const GATED_TOOL_PATTERN = /cannot compose "gated"/u;
 const DUPLICATE_ID_PATTERN = /duplicate code step id "dup"/u;
 const BOOM_PATTERN = /boom/u;
 const MAX_STEPS_PATTERN = /`maxSteps` must be a positive integer/u;
+const TOO_MANY_STEPS_PATTERN = /code_tool_too_many_steps — the script has 10 steps, over the cap of 3/u;
+const INVALID_STEP_INPUT_PATTERN = /code step "a" input is invalid for tool "charge": amount must be a number/u;
 
 // `step` is required on AgentToolContext — production always threads a real
 // durable handle — so a hand-built context supplies the pass-through double.
@@ -25,7 +28,7 @@ const fakeTool = (output: unknown, calls: unknown[] = []): AgentToolDefinition =
 
             return output;
         },
-        inputSchema: {} as never,
+        inputSchema: jsonSchema({ additionalProperties: true, type: "object" }),
         isLunoraAgentTool: true,
     };
 };
@@ -144,7 +147,7 @@ describe(runToolScript, () => {
 
                 return "done";
             },
-            inputSchema: {} as never,
+            inputSchema: jsonSchema({ additionalProperties: true, type: "object" }),
             isLunoraAgentTool: true,
         };
 
@@ -166,17 +169,52 @@ describe(runToolScript, () => {
         expect((echoInput as { data: string }).data).toBe(big);
     });
 
-    it("caps the number of steps run", async () => {
+    it("rejects a script over `maxSteps` instead of running its prefix", async () => {
         const calls: unknown[] = [];
         const tools = { t: fakeTool("ok", calls) };
         const steps = Array.from({ length: 10 }, (_, index) => {
             return { id: `s${String(index)}`, tool: "t" };
         });
 
-        const result = await runToolScript({ steps }, tools, context, 3);
+        // Truncating ran the first 3 steps and reported SUCCESS, silently dropping
+        // the trailing 7 — typically the writes the earlier reads were gathered for.
+        await expect(runToolScript({ steps }, tools, context, 3)).rejects.toThrow(TOO_MANY_STEPS_PATTERN);
+        expect(calls).toHaveLength(0);
+    });
 
-        expect(calls).toHaveLength(3);
-        expect(result.results).toHaveLength(3);
+    it("validates a step's resolved input against the composed tool's own inputSchema", async () => {
+        const calls: unknown[] = [];
+        const tools = {
+            charge: {
+                description: "charge",
+                execute: (input: unknown) => {
+                    calls.push(input);
+
+                    return "ok";
+                },
+                inputSchema: jsonSchema<{ amount: number }>(
+                    { additionalProperties: false, properties: { amount: { type: "number" } }, required: ["amount"], type: "object" },
+                    {
+                        validate: (value) => {
+                            if (typeof (value as { amount?: unknown }).amount === "number") {
+                                return { success: true, value: value as { amount: number } };
+                            }
+
+                            return { error: new Error("amount must be a number"), success: false };
+                        },
+                    },
+                ),
+                isLunoraAgentTool: true,
+            } as AnyAgentTool,
+        };
+
+        // The model-facing step schema is `additionalProperties: true`, so nothing in
+        // the script shape can reject this — only the composed tool's own schema can,
+        // and until now nothing consulted it between `resolveReferences` and `execute`.
+        await expect(
+            runToolScript({ steps: [{ id: "a", input: { amount: "NaN-string", drop_table: true }, tool: "charge" }] }, tools, context, 4),
+        ).rejects.toThrow(INVALID_STEP_INPUT_PATTERN);
+        expect(calls).toStrictEqual([]);
     });
 
     it("gives each step its own idempotency key / tool-call id derived from the code tool's", async () => {
@@ -188,7 +226,7 @@ describe(runToolScript, () => {
 
                 return "ok";
             },
-            inputSchema: {} as never,
+            inputSchema: jsonSchema({ additionalProperties: true, type: "object" }),
             isLunoraAgentTool: true,
         };
         const baseContext = { idempotencyKey: "tool:code:call_1", step: passthroughStep, toolCallId: "call_1" } as AgentToolContext;
@@ -232,7 +270,7 @@ describe(runToolScript, () => {
 
                 return "c-ok";
             },
-            inputSchema: {} as never,
+            inputSchema: jsonSchema({ additionalProperties: true, type: "object" }),
             isLunoraAgentTool: true,
         };
 

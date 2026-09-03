@@ -38,6 +38,11 @@ export interface RegisteredLunoraFunction {
     lifecycle?: "connect" | "disconnect" | "init" | "reactor";
     /** `"internal"` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
+    /**
+     * `.x402({ price })` tag on a paid public procedure. The origin worker
+     * paywalls it; the shard refuses to subscribe it (`isPaidFunction`).
+     */
+    x402?: { readonly price: number | string };
 }
 
 /**
@@ -77,6 +82,14 @@ return { "body": source["body"], "title": source["title"] };
 installCompiledValidatorMap(lunora_push_0.registerDevice.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+let __has1 = false;
+let __val1;
+if (source["replacedEndpoint"] !== undefined) {
+if (typeof source["replacedEndpoint"] !== "string") return DEFER;
+if (source["replacedEndpoint"].length > 2048) return DEFER;
+__val1 = source["replacedEndpoint"];
+__has1 = true;
+}
 if (typeof source["subscription"] !== "object" || source["subscription"] === null || Array.isArray(source["subscription"])) return DEFER;
 if (Object.getPrototypeOf(source["subscription"]) !== Object.prototype && Object.getPrototypeOf(source["subscription"]) !== null) return DEFER;
 if (typeof source["subscription"]["endpoint"] !== "string") return DEFER;
@@ -87,9 +100,9 @@ if (typeof source["subscription"]["keys"]["auth"] !== "string") return DEFER;
 if (source["subscription"]["keys"]["auth"].length > 256) return DEFER;
 if (typeof source["subscription"]["keys"]["p256dh"] !== "string") return DEFER;
 if (source["subscription"]["keys"]["p256dh"].length > 256) return DEFER;
-const __obj1 = { "auth": source["subscription"]["keys"]["auth"], "p256dh": source["subscription"]["keys"]["p256dh"] };
-const __obj2 = { "endpoint": source["subscription"]["endpoint"], "keys": __obj1 };
-return { "subscription": __obj2 };
+const __obj2 = { "auth": source["subscription"]["keys"]["auth"], "p256dh": source["subscription"]["keys"]["p256dh"] };
+const __obj3 = { "endpoint": source["subscription"]["endpoint"], "keys": __obj2 };
+return { ...(__has1 ? { "replacedEndpoint": __val1 } : {}), "subscription": __obj3 };
 });
 
 /**
@@ -141,7 +154,7 @@ export interface Caller {
         announce: (args: { body: string; title: string }) => Promise<Id<"announcements">>;
         broadcast: (args: { body: string; title: string }) => Promise<{ failed: number; pruned: number; sent: number; total: number; }>;
         listAnnouncements: (args?: {}) => Promise<{ _id: Id<"announcements">; body: string; sentAt: number; title: string }[]>;
-        registerDevice: (args: { subscription: { endpoint: string; keys: { auth: string; p256dh: string } } }) => Promise<void>;
+        registerDevice: (args: { replacedEndpoint?: string; subscription: { endpoint: string; keys: { auth: string; p256dh: string } } }) => Promise<void>;
     };
 }
 
@@ -150,6 +163,27 @@ const callRegistered = async <R>(context: CallerCtx, functionPath: string, args:
 
     if (!registered) {
         throw new LunoraError("FUNCTION_NOT_FOUND", `function not registered: ${functionPath}`);
+    }
+
+    // A mutation is routed through the caller's own `ctx.runMutation` rather than
+    // invoked directly, so `createCaller(ctx).ns.someMutation()` gets exactly what
+    // `ctx.runMutation(api.ns.someMutation)` gets: the BEGIN/COMMIT span (or the
+    // enclosing one, when the caller is already inside a transaction), the jobs it
+    // schedules held until that span commits, and the deferred object deletes
+    // flushed only once it has. Called straight, a mutation composed from an action
+    // or a stream had none of the three — its writes autocommitted one row at a
+    // time and its `ctx.scheduler` calls dispatched immediately, so a mid-handler
+    // throw left the earlier writes durable and the job already enqueued.
+    //
+    // The fallback covers a context that is not a shard dispatch (`runMutation` is
+    // installed by `buildCtx` on every kind but a query's TYPE omits it); there is
+    // no transaction to join in that case, so a direct call is all there is.
+    if (registered.kind === "mutation") {
+        const { runMutation } = context as { runMutation?: (reference: { __lunoraRef: string }, args: Record<string, unknown>) => Promise<unknown> };
+
+        if (typeof runMutation === "function") {
+            return (await runMutation.call(context, { __lunoraRef: functionPath }, args ?? {})) as R;
+        }
     }
 
     return (await registered.handler(context, args ?? {})) as R;

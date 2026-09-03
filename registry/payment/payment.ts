@@ -25,13 +25,19 @@
  *   1. Wire `payment: (env) => ({ adapter: ..., ... })` in your worker entry
  *      `createShardDO({ ... })` call — the adapter reads `STRIPE_SECRET_KEY`
  *      and `STRIPE_WEBHOOK_SECRET` from env.
- *   2. Add the webhook HTTP route via `httpRouter()`:
+ *   2. Add the webhook HTTP route via `httpRouter()`. Answer with
+ *      `webhookResponse(result)` — NOT `Response.json(result)`: only the JSON
+ *      payload crosses the `runAction` boundary, so the status has to be
+ *      re-applied at the edge. Otherwise an orphaned (out-of-order) event's
+ *      deliberate 500 becomes a 200, the provider never retries it, and the
+ *      update is lost for good.
  *      ```ts
+ *      import { webhookResponse } from "@lunora/payment";
+ *
  *      app.post("/payment/webhook", httpAction(async (ctx, request) => {
  *          const body = await request.text();
  *          const signature = request.headers.get("stripe-signature") ?? "";
- *          const result = await ctx.runAction(processWebhook, { body, signature });
- *          return Response.json(result);
+ *          return webhookResponse(await ctx.runAction(processWebhook, { body, signature }));
  *      }));
  *      ```
  *   3. Run `lunora codegen` to wire `ctx.payments` onto ActionCtx.
@@ -41,6 +47,7 @@
  */
 import { env } from "cloudflare:workers";
 
+import { LunoraError } from "@lunora/errors";
 import { action, internalAction, query, v } from "#lunora/_generated/server.js";
 
 import { SUBSCRIPTIONS_TABLE } from "./schema.js";
@@ -74,7 +81,9 @@ export const checkout = action.input({ priceId: v.string().max(512) }).action(as
     const referenceId = ctx.auth.userId;
 
     if (!referenceId) {
-        throw new Error("@lunora/payment: checkout requires an authenticated user — pass `resolveIdentity` to `createWorker`");
+        // Coded, not a bare `Error`: an uncoded throw is redacted to a generic
+        // 500, so the caller sees a server fault instead of "sign in first".
+        throw new LunoraError("UNAUTHORIZED", "@lunora/payment: checkout requires an authenticated user — pass `resolveIdentity` to `createWorker`");
     }
 
     const result = await ctx.payments.createCheckout({
@@ -97,7 +106,7 @@ export const track = action.action(async ({ ctx }): Promise<{ recorded: boolean 
     const referenceId = ctx.auth.userId;
 
     if (!referenceId) {
-        throw new Error("@lunora/payment: track requires an authenticated user");
+        throw new LunoraError("UNAUTHORIZED", "@lunora/payment: track requires an authenticated user");
     }
 
     const result = await ctx.payments.track({ featureId: "api_calls", referenceId });
@@ -113,7 +122,7 @@ export const check = action.action(async ({ ctx }): Promise<{ allowed: boolean; 
     const referenceId = ctx.auth.userId;
 
     if (!referenceId) {
-        throw new Error("@lunora/payment: check requires an authenticated user");
+        throw new LunoraError("UNAUTHORIZED", "@lunora/payment: check requires an authenticated user");
     }
 
     const result = await ctx.payments.check({ featureId: "api_calls", referenceId });
@@ -130,7 +139,7 @@ export const portal = action.action(async ({ ctx }): Promise<{ url: string }> =>
     const referenceId = ctx.auth.userId;
 
     if (!referenceId) {
-        throw new Error("@lunora/payment: portal requires an authenticated user");
+        throw new LunoraError("UNAUTHORIZED", "@lunora/payment: portal requires an authenticated user");
     }
 
     return ctx.payments.createPortalSession(referenceId, `${appOrigin()}/account`);
@@ -159,7 +168,7 @@ export const mySubscriptions = query.query(async ({ ctx }): Promise<Subscription
     const referenceId = ctx.auth.userId;
 
     if (!referenceId) {
-        throw new Error("@lunora/payment: mySubscriptions requires an authenticated user");
+        throw new LunoraError("UNAUTHORIZED", "@lunora/payment: mySubscriptions requires an authenticated user");
     }
 
     const rows = await ctx.db

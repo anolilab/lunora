@@ -68,8 +68,9 @@ import { ratelimit } from "./ratelimit/index.js";
 
 const c = initLunora.dataModel<DataModel>().create();
 
-export const sendMessage = c.mutation.use(ratelimit.middleware).handler(async (ctx, args) => {
-    const status = await ctx.api.ratelimit.limit("send", { key: ctx.userId });
+export const sendMessage = c.mutation.use(ratelimit.middleware).mutation(async ({ ctx }) => {
+    const status = await ctx.api.ratelimit.limit("send", { key: ctx.auth.userId ?? ctx.ip ?? "anon" });
+
     if (!status.ok) {
         throw new Error("slow down");
     }

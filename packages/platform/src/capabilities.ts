@@ -451,7 +451,7 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
     features: {
         shardedState: {
             level: "emulated",
-            note: "One better-sqlite3 database per shard key, one process — no distributed placement or failover. Shard keys are percent-encoded into basenames with A-Z escaped, so `Tenant` and `tenant` stay two databases on a case-insensitive volume (APFS, NTFS) rather than folding into one",
+            note: "One better-sqlite3 database per shard key, one process — no distributed placement or failover. Shard keys are percent-encoded into basenames with A-Z escaped, so `Tenant` and `tenant` stay two databases on a case-insensitive volume (APFS, NTFS) rather than folding into one. There is also no input gate: Cloudflare defers every other dispatch for the span of a mutation, whereas this host can only refuse — SQL issued from another task while a transaction is open throws a retryable `SHARD_UNAVAILABLE` (503) rather than reading rows that are about to roll back, so a read that merely arrived mid-mutation is retried instead of failing the request",
         },
         globalTables: {
             level: "emulated",
@@ -480,7 +480,7 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         shardAlarms: {
             level: "emulated",
-            note: "setTimeout over a durable row, dispatched to onAlarm and re-armed on construction, so an alarm survives a restart and one whose time elapsed while the process was down fires late rather than never",
+            note: "setTimeout over a durable row, dispatched to onAlarm and re-armed on construction, so an alarm survives a restart and one whose time elapsed while the process was down fires late rather than never. Delivery is at-least-once as it is on workerd: a handler that throws is re-delivered with exponential backoff (6 attempts, from 100ms) and then abandoned, and an alarm set or deleted inside a transaction is armed only if that transaction commits",
         },
         shardPlacement: { level: "unsupported", note: "One process — every shard lives where the process does, so a location hint has nowhere to place it" },
         shardReadReplicas: {

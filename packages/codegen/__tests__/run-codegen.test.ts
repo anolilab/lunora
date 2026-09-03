@@ -1339,6 +1339,22 @@ export default crons;
             expect(result.generated.functions).toContain('list: (args: { channelId: Id<"channels">; limit?: number }) => Promise<unknown>;');
         });
 
+        it("routes a mutation reached through createCaller into the caller's transaction", () => {
+            expect.assertions(2);
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            // `createCaller(ctx).ns.someMutation()` used to invoke the handler
+            // directly, so a mutation composed this way from an action or a stream
+            // got none of what `ctx.runMutation` gets: no BEGIN/COMMIT span, no
+            // deferred schedules, no deferred-delete flush. Its writes autocommitted
+            // one row at a time and its `ctx.scheduler` calls dispatched at once, so
+            // a mid-handler throw left the earlier writes durable and the job
+            // already enqueued.
+            expect(result.generated.functions).toContain('if (registered.kind === "mutation") {');
+            expect(result.generated.functions).toContain("await runMutation.call(context, { __lunoraRef: functionPath }, args ?? {})");
+        });
+
         it("keeps dataModel.ts importable by a package with no server dependency (#18)", () => {
             expect.assertions(4);
 

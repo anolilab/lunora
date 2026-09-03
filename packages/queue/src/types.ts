@@ -105,7 +105,7 @@ export interface QueueConsumerTuning {
     maxBatchSize?: number;
     /** Max seconds to wait before delivering a partial batch (0–60, default 5). */
     maxBatchTimeout?: number;
-    /** Max delivery attempts before a message is dropped / dead-lettered (default 3). */
+    /** Retries **after** the initial delivery, before a message is dropped / dead-lettered. Default 3, so up to 4 deliveries in total. */
     maxRetries?: number;
     /** Delay in seconds before a failed batch is retried. */
     retryDelay?: number;

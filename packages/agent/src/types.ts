@@ -83,6 +83,15 @@ export interface AgentToolContext {
     idempotencyKey: string;
 
     /**
+     * Verified owner of the thread this run belongs to (the loop copies it off
+     * {@link AgentRunInput.owner}); `undefined` on an anonymous/single-tenant
+     * thread. `agent.asTool` forwards it to the CHILD run, so a sub-agent thread
+     * under an owned parent inherits the same RLS scope instead of being created
+     * ownerless — which left it readable by anyone who knew its key.
+     */
+    owner?: string;
+
+    /**
      * Emit an EPHEMERAL progress event for this tool call on the agent's live
      * channel — the same live-only sink the streamed token deltas ride. NOT
      * persisted and NEVER replayed: it fires only while `execute` runs inside the
@@ -93,6 +102,7 @@ export interface AgentToolContext {
      * {@link AgentToolContext.toolCallId}. `data` must be JSON-serializable.
      */
     reportProgress: (data: unknown) => void;
+
     /** Dispatch a Lunora function (the workflow `ctx.run`). */
     run: AgentRunFunction;
 
@@ -914,7 +924,7 @@ export interface AgentAsToolOptions {
     /** What the sub-agent does — shown to the parent's model (it decides from it). */
     description: string;
 
-    /** Cap on child-run status polls before giving up — a positive integer. Default 120. */
+    /** Cap on child-run status polls before giving up — a positive integer. Default 600 (with the 500 ms default interval, a five-minute budget). */
     maxPolls?: number;
 
     /**
@@ -1106,6 +1116,15 @@ export interface AgentMessageRow {
 export interface AgentToolCall {
     id: string;
     input: unknown;
+
+    /**
+     * Why this call was REJECTED before it could run: the model's arguments
+     * failed the tool's input schema, or did not parse as JSON. Present only on
+     * a rejected call — the loop records it as a recoverable tool result and
+     * never executes the tool, because the `input` above is the raw value the
+     * provider sent, not a validated one.
+     */
+    invalid?: string;
     name: string;
 }
 

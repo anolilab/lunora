@@ -1,5 +1,6 @@
 import { toBase64Url } from "../../../shared/base64";
 import { jsonResponse } from "../../../shared/json-response";
+import resolveScheduleId from "./resolve-schedule-id";
 import type { RetryPolicy, ScheduleRecord } from "./types";
 
 /**
@@ -82,7 +83,7 @@ const HEADER_PREFIX = "id:";
 const RETRY_PREFIX = "retry:";
 const DEAD_PREFIX = "dead:";
 const POOL_PREFIX = "pool:";
-// Default page size for listRecords() (the `/list` + WS `jobs` view) and the
+// Default page size for the `/list` + WS `jobs` view (listPage()) and the
 // page size used internally by the exact-count cursor loop (forEachPage()).
 // Mirrors the alarm path's existing `limit: 100` bound so the whole file has
 // one bounded-page convention: every storage.list() here carries a limit.
@@ -143,8 +144,6 @@ const padTime = (n: number): string => String(n).padStart(TIME_PAD, "0");
  */
 const isIndexableTime = (value: number): boolean => Number.isInteger(value) && value > 0 && value <= MAX_SCHEDULED_FOR_MS;
 
-const generateId = (): string => toBase64Url(crypto.getRandomValues(new Uint8Array(12)));
-
 interface ScheduleRequestBody {
     args: Record<string, unknown>;
 
@@ -154,6 +153,16 @@ interface ScheduleRequestBody {
      * {@link ScheduleRequestBody.workflow}. Exactly one of the two is set.
      */
     functionPath?: string;
+
+    /**
+     * Job id chosen by the caller instead of minted here. Set by
+     * `@lunora/server`'s deferred-schedule facade, which has to hand a mutation
+     * handler the id synchronously while holding the call back until the
+     * transaction commits. Ignored unless it is a safe key segment (see `resolveScheduleId`)
+     * — the id becomes part of two storage keys, so a value carrying a `:` would
+     * corrupt the time index.
+     */
+    id?: string;
 
     /**
      * The scheduler/workpool instance name the enqueuing client routed to
@@ -383,6 +392,13 @@ class SchedulerDO {
 
     protected readonly env: SchedulerEnv;
 
+    /**
+     * Whether {@link SchedulerDO.reindexOrphanedRecords} has already run in THIS
+     * instance. Once is enough: an orphan can only be minted by an eviction, and
+     * an eviction ends the instance that minted it.
+     */
+    private reindexed = false;
+
     public constructor(state: SchedulerDOState, env: SchedulerEnv) {
         this.state = state;
         this.env = env;
@@ -391,6 +407,16 @@ class SchedulerDO {
     }
 
     public async fetch(request: Request): Promise<Response> {
+        // An orphan is minted by a death DURING dispatch — after the claim
+        // deleted the `t:` entry and before `rescheduleAlarm()` re-armed — so
+        // the instance that comes back has no alarm left to recover from, and
+        // recovering from `alarm()` alone would never run. Every route needs the
+        // recovery anyway: `/list` and `/status` under-report an orphan, and
+        // `armAlarmIfEarlier` on a fresh `/schedule` compares against a clock
+        // derived from `t:` alone. Guarded by `reindexed`, so this is one boolean
+        // read per request after the first.
+        await this.reindexOrphanedRecords();
+
         const url = new URL(request.url);
 
         // `/ws` gates on the Upgrade header rather than the HTTP method, so it
@@ -440,6 +466,10 @@ class SchedulerDO {
 
     /** Called by the Workers runtime when the alarm previously set by `_rescheduleAlarm()` fires. */
     public async alarm(): Promise<void> {
+        // BEFORE the due slice is read, so a job recovered here fires in this
+        // very pass rather than waiting for the next one.
+        await this.reindexOrphanedRecords();
+
         const now = Date.now();
         const due: ScheduleRecord[] = [];
 
@@ -806,7 +836,7 @@ class SchedulerDO {
         // Seed the new subscriber with the current (bounded) list so its first
         // value arrives over the same channel as later changes, in the same
         // `{ records, truncated }` shape `broadcastChange()` and `/list` use.
-        const seed = await this.listRecords();
+        const seed = await this.listPage(HEADER_PREFIX, DEFAULT_LIST_LIMIT);
 
         server.send(JSON.stringify({ records: seed.records, truncated: seed.truncated, type: "jobs" }));
 
@@ -815,7 +845,7 @@ class SchedulerDO {
     }
 
     /**
-     * Re-list the jobs (bounded — see {@link listRecords}) and push them to
+     * Re-list the jobs (bounded — see {@link listPage}) and push them to
      * every connected subscriber. Called after any change (schedule / cancel /
      * alarm-fire) so live studios reflect it immediately. A no-op when the
      * runtime doesn't support hibernated sockets.
@@ -827,7 +857,7 @@ class SchedulerDO {
             return;
         }
 
-        const { records, truncated } = await this.listRecords();
+        const { records, truncated } = await this.listPage(HEADER_PREFIX, DEFAULT_LIST_LIMIT);
         const message = JSON.stringify({ records, truncated, type: "jobs" });
 
         for (const socket of sockets) {
@@ -869,30 +899,19 @@ class SchedulerDO {
     }
 
     /**
-     * The current pending job records (shared by `/list` and the live channel),
-     * bounded to `limit` (default {@link DEFAULT_LIST_LIMIT}) so a large backlog
-     * can't be JSON-serialized and fanned out to every socket in one shot.
-     */
-    private async listRecords(
-        limit: number = DEFAULT_LIST_LIMIT,
-        startAfter?: string,
-    ): Promise<{ cursor?: string; records: ScheduleRecord[]; truncated: boolean }> {
-        return this.listPage(HEADER_PREFIX, limit, startAfter);
-    }
-
-    /**
      * Page through every row under `prefix` exactly once with bounded per-page
      * memory (a `limit`+`startAfter` cursor loop), invoking `visit` for each.
      * Unlike {@link listPage}, which intentionally truncates for the studio's
      * live view, `/status` and `/pool` need EXACT counts — this walks the full
      * set, but never materializes more than one page at a time.
      */
-    private async forEachPage(prefix: string, visit: (value: unknown, key: string) => void, pageSize: number = DEFAULT_LIST_LIMIT): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- T types the stored rows for the caller and is forwarded to `storage.list`; without it every visitor casts.
+    private async forEachPage<T>(prefix: string, visit: (value: T, key: string) => void, pageSize: number = DEFAULT_LIST_LIMIT): Promise<void> {
         let startAfter: string | undefined;
 
         for (;;) {
             // eslint-disable-next-line no-await-in-loop -- each page's cursor (startAfter) depends on the previous page's last key, so the pages are inherently sequential
-            const page = await this.state.storage.list(startAfter === undefined ? { limit: pageSize, prefix } : { limit: pageSize, prefix, startAfter });
+            const page = await this.state.storage.list<T>(startAfter === undefined ? { limit: pageSize, prefix } : { limit: pageSize, prefix, startAfter });
 
             if (page.size === 0) {
                 break;
@@ -991,7 +1010,7 @@ class SchedulerDO {
         await this.state.storage.put(`${DEAD_PREFIX}${record.id}`, { ...record, attempts });
         // Park is terminal; clear the pending retry row AND the live header row
         // in one batched delete. Leaving `id:<id>` behind would keep the dead job
-        // visible in listRecords()/`/list` (and the studio) as a scheduled job
+        // visible in `/list` (and the studio) as a scheduled job
         // that can never fire — only the `dead:` record should survive.
         await this.state.storage.delete([`${RETRY_PREFIX}${record.id}`, `${HEADER_PREFIX}${record.id}`]);
 
@@ -1080,8 +1099,8 @@ class SchedulerDO {
 
         // Exact count via a bounded cursor loop — never materializes the whole
         // header set at once (see forEachPage()).
-        await this.forEachPage(HEADER_PREFIX, (value) => {
-            if ((value as ScheduleRecord).pool === name) {
+        await this.forEachPage<ScheduleRecord>(HEADER_PREFIX, (record) => {
+            if (record.pool === name) {
                 queued += 1;
             }
         });
@@ -1108,9 +1127,7 @@ class SchedulerDO {
         // exactly as handlePoolStatus() counts for one pool.
         const queuedByPool = new Map<string, number>();
 
-        await this.forEachPage(HEADER_PREFIX, (value) => {
-            const record = value as ScheduleRecord;
-
+        await this.forEachPage<ScheduleRecord>(HEADER_PREFIX, (record) => {
             if (record.pool !== undefined) {
                 queuedByPool.set(record.pool, (queuedByPool.get(record.pool) ?? 0) + 1);
             }
@@ -1124,8 +1141,7 @@ class SchedulerDO {
         // row per pool name is small in every app anyone has written, but the
         // names come from user code and nothing caps how many there are, so this
         // file has exactly one convention and no unlimited list() left in it.
-        await this.forEachPage(POOL_PREFIX, (value, key) => {
-            const pool = value as PoolState;
+        await this.forEachPage<PoolState>(POOL_PREFIX, (pool, key) => {
             const name = key.slice(POOL_PREFIX.length);
             // Defend against a corrupted row (`inFlight` should never go negative)
             // exactly as loadPool() does on the alarm path.
@@ -1140,6 +1156,63 @@ class SchedulerDO {
         const status: SchedulerStatus = { backlog, inFlight, pools };
 
         return SchedulerDO.json(status);
+    }
+
+    /**
+     * Persist (or refresh) a pool's concurrency cap, so the alarm-time gate has
+     * a durable `maxConcurrency` even after the enqueuing client is gone.
+     */
+    private async persistPoolCap(pool: string, requestedMaxConcurrency: number | undefined): Promise<void> {
+        const current = await this.loadPool(pool, requestedMaxConcurrency);
+
+        await this.savePool(pool, {
+            inFlight: current.inFlight,
+            // Preserve the in-flight id set so refreshing the cap on a new
+            // enqueue can't wipe the held-slot bookkeeping (which would let a
+            // later /complete over-release).
+            ...(current.inFlightIds === undefined ? {} : { inFlightIds: current.inFlightIds }),
+            maxConcurrency: SchedulerDO.normalizeConcurrency(requestedMaxConcurrency, current.maxConcurrency),
+        });
+    }
+
+    /**
+     * The `409` a caller-supplied id earns when something durable already holds
+     * it, or `undefined` when the id is free.
+     *
+     * A pending header is the obvious half: `put` on `id:<id>` overwrites, but
+     * the `t:` index is keyed by TIME as well as id, so the OLD entry survives.
+     * The drain then dispatches the NEW record at the OLD time and deletes the
+     * entry it should have fired at — the job runs early and never runs again.
+     * Refused rather than made a replace: `RunOptions.id` exists so a deferred
+     * schedule can name its own job, and silently retiming someone else's is the
+     * worse failure.
+     *
+     * The `dead:` row holds the id too, and for a worse reason. A dead record
+     * keeps NO `id:` header, so a pending-only check leaves the id apparently
+     * free — and a later `/dead/retry` writes the revived corpse straight over
+     * the new job's header and adds a SECOND time index under the same id. The
+     * new job is gone and the dead one fires in its place. Recovering a dead job
+     * is an operator action taken minutes or days after the schedule, so nothing
+     * at schedule time would ever have surfaced the collision.
+     */
+    private async idConflict(id: string): Promise<Response | undefined> {
+        if ((await this.state.storage.get<ScheduleRecord>(`${HEADER_PREFIX}${id}`)) !== undefined) {
+            return SchedulerDO.error(
+                409,
+                "DUPLICATE_SCHEDULE_ID",
+                `a job with id "${id}" is already scheduled — cancel it first, or schedule under a different id`,
+            );
+        }
+
+        if ((await this.state.storage.get<ScheduleRecord>(`${DEAD_PREFIX}${id}`)) !== undefined) {
+            return SchedulerDO.error(
+                409,
+                "DUPLICATE_SCHEDULE_ID",
+                `id "${id}" is held by a dead-letter record — retry or cancel it (POST /dead/retry, POST /dead/cancel) first, or schedule under a different id`,
+            );
+        }
+
+        return undefined;
     }
 
     private async handleSchedule(request: Request): Promise<Response> {
@@ -1176,7 +1249,17 @@ class SchedulerDO {
         const pool = typeof body.pool === "string" && body.pool.length > 0 ? body.pool : undefined;
         const instanceName = typeof body.instanceName === "string" && body.instanceName.length > 0 ? body.instanceName : undefined;
         const retry = SchedulerDO.normalizeRetry(body.retry);
-        const id = generateId();
+        const id = resolveScheduleId(body.id);
+
+        // Only an id the CALLER chose can collide — a minted one is 96 random
+        // bits — so this costs two `get`s on the deferred path and nothing on
+        // the ordinary one.
+        const conflict = id === body.id ? await this.idConflict(id) : undefined;
+
+        if (conflict) {
+            return conflict;
+        }
+
         const record: ScheduleRecord = {
             // body is parsed from an untrusted request; args may be absent at runtime
             // despite the type, so the ?? fallback is a real guard.
@@ -1193,19 +1276,8 @@ class SchedulerDO {
             ...(workflow === undefined ? {} : { workflow }),
         };
 
-        // Persist (or refresh) the pool's concurrency cap so the alarm-time gate
-        // has a durable maxConcurrency even after the enqueuing client is gone.
         if (pool !== undefined) {
-            const current = await this.loadPool(pool, body.maxConcurrency);
-
-            await this.savePool(pool, {
-                inFlight: current.inFlight,
-                // Preserve the in-flight id set so refreshing the cap on a new
-                // enqueue can't wipe the held-slot bookkeeping (which would let
-                // a later /complete over-release).
-                ...(current.inFlightIds === undefined ? {} : { inFlightIds: current.inFlightIds }),
-                maxConcurrency: SchedulerDO.normalizeConcurrency(body.maxConcurrency, current.maxConcurrency),
-            });
+            await this.persistPoolCap(pool, body.maxConcurrency);
         }
 
         await this.state.storage.put(`${HEADER_PREFIX}${id}`, record);
@@ -1253,7 +1325,7 @@ class SchedulerDO {
      * them (`createScheduler.list()` walks every page; the studio shows one).
      */
     private async handleList(url: URL): Promise<Response> {
-        const { cursor, records, truncated } = await this.listRecords(DEFAULT_LIST_LIMIT, url.searchParams.get("cursor") ?? undefined);
+        const { cursor, records, truncated } = await this.listPage(HEADER_PREFIX, DEFAULT_LIST_LIMIT, url.searchParams.get("cursor") ?? undefined);
 
         return SchedulerDO.json({ cursor, records, truncated });
     }
@@ -1360,6 +1432,58 @@ class SchedulerDO {
 
         if (current === null || scheduledFor < current) {
             await this.state.storage.setAlarm(scheduledFor);
+        }
+    }
+
+    /**
+     * Re-index every pending job whose time-index entry is gone.
+     *
+     * {@link SchedulerDO.drainRecordGuarded} claims a job by DELETING its `t:`
+     * entry, awaited (so durable) BEFORE {@link SchedulerDO.dispatch}'s outbound
+     * fetch. If the Durable Object is evicted or crashes during that fetch, the
+     * `id:` header (and any `retry:` row) survives with no `t:` entry — and
+     * nothing puts one back: {@link SchedulerDO.rescheduleAlarm} derives the
+     * clock from `t:` alone, and `alarm()`'s inline reconciliation only handles
+     * the INVERSE orphan (a `t:` entry whose header is gone). The job then sits
+     * in `/list` and `/status.backlog` forever, never fires, never reaches
+     * `/dead`. The at-least-once contract `drainRecordGuarded` documents covers
+     * a thrown storage op, not a lost instance.
+     *
+     * Re-firing is safe: the dispatch carries the record id as
+     * `x-lunora-mutation-id`, which the receiver dedups on, so a job that DID
+     * reach the origin before the crash is not run twice.
+     *
+     * Two bounded walks (all `t:` values, then all `id:` headers) rather than a
+     * per-header `get`, so the cost is one pass over each prefix.
+     */
+    private async reindexOrphanedRecords(): Promise<void> {
+        if (this.reindexed) {
+            return;
+        }
+
+        this.reindexed = true;
+
+        const indexed = new Set<string>();
+
+        await this.forEachPage<string>("t:", (recordId) => {
+            indexed.add(recordId);
+        });
+
+        const orphans: ScheduleRecord[] = [];
+
+        await this.forEachPage<ScheduleRecord>(HEADER_PREFIX, (record) => {
+            // A record whose `scheduledFor` is not representable as an index key
+            // is deliberately unindexed (see `isIndexableTime`) — leave it alone.
+            if (!indexed.has(record.id) && isIndexableTime(record.scheduledFor)) {
+                orphans.push(record);
+            }
+        });
+
+        for (const record of orphans) {
+            // eslint-disable-next-line no-await-in-loop -- Durable Object storage is single-threaded local state; the index write and the alarm arm must land in order per record
+            await this.state.storage.put(SchedulerDO.indexKey(record.scheduledFor, record.id), record.id);
+            // eslint-disable-next-line no-await-in-loop -- same
+            await this.armAlarmIfEarlier(record.scheduledFor);
         }
     }
 

@@ -68,20 +68,28 @@ The headers are sent on both **200 OK** and **204 No Content** responses, as wel
 
 ## Programmatic cache purging
 
-Actions run in the Worker (not inside the Durable Object), so they receive the `ctx.cache` binding. Purge by tag, or purge everything:
+`ctx.cache` is built by the Worker, so it reaches **HTTP action handlers only** — the ones mounted on `httpRouter()`. Purge by tag, or purge everything:
 
 ```ts
-import { action } from "@/lunora/_generated/server";
+// lunora/http.ts
+import { httpAction, httpRouter } from "lunorash/server";
 
-export const refreshProducts = action.action(async ({ ctx }) => {
-    if (!ctx.cache) {
-        throw new Error("Workers Cache is not enabled in wrangler.jsonc");
-    }
+const app = httpRouter();
 
-    await ctx.cache.purge({ tags: ["products"] });
+app.post(
+    "/admin/refresh-products",
+    httpAction(async (ctx) => {
+        if (!ctx.cache) {
+            return new Response("Workers Cache is not enabled in wrangler.jsonc", { status: 501 });
+        }
 
-    return { ok: true };
-});
+        await ctx.cache.purge({ tags: ["products"] });
+
+        return Response.json({ ok: true });
+    }),
+);
+
+export default app;
 ```
 
 `ctx.cache.purge` accepts:
@@ -89,9 +97,11 @@ export const refreshProducts = action.action(async ({ ctx }) => {
 - `tags?: string[]` purges every cached response whose `Cache-Tag` matches any listed tag.
 - `purgeEverything?: boolean` wipes the entire cache for this worker.
 
-## Why only actions?
+## Why only HTTP actions?
 
-Queries and mutations run inside the **Durable Object**, where the Cloudflare cache binding is not available. Actions run in the **Worker** itself, alongside the fetch handler, so they can reach `ExecutionContext.cache`. If you need to invalidate cache as a side effect of a mutation, schedule an action from the mutation or call `ctx.runAction` from the mutation's handler.
+Queries, mutations, and RPC actions all run inside the **Durable Object**, where the Cloudflare cache binding does not exist — `ctx.cache` is `undefined` for every one of them, which is why the example above branches on it. Only an HTTP action's context is built in the **Worker** itself, alongside the fetch handler, so only it can reach `ExecutionContext.cache`.
+
+So a mutation cannot purge, and there is no ctx hop that gets it one: `MutationCtx` has no `runAction`, and an action reached through `ctx.runMutation`/`ctx.runAction` runs on the caller's DO context, without a `cache`. Drive the write from an HTTP route instead — call the mutation with `ctx.runMutation`, then purge in the same handler once it returns.
 
 ## Memoizing an expensive action result
 

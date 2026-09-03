@@ -45,6 +45,24 @@ describe("createWorker — adminGate (async Access-style admin authorization)", 
         expect(response.status).toBe(403);
     });
 
+    it("denies (403) when adminGate resolves a truthy non-boolean", async () => {
+        expect.assertions(1);
+
+        // Polarity here GRANTS on truthy, so an app gate that returns its claims
+        // object (or anything else non-`false` it happened to compute) instead of a
+        // boolean would unlock every `/_lunora/admin/*` route. Only an exact `true`
+        // grants.
+        const worker = createWorker({
+            adminGate: async () => ({ groups: [] }) as unknown as boolean,
+            functions: REGISTRY,
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(new Request(ADMIN_PATH, { method: "GET" }), {}, fakeContext);
+
+        expect(response.status).toBe(403);
+    });
+
     it("still accepts the static admin bearer when adminGate resolves false", async () => {
         expect.assertions(1);
 

@@ -275,6 +275,7 @@ interface SessionRecord {
 ```ts
 abstract class ShardDO {
     protected static readonly MAX_STREAMS_PER_SOCKET = 8;
+    protected static readonly MAX_ATTACHMENT_BYTES = 16384;
     protected static readonly MAX_SUBSCRIPTIONS_PER_SOCKET = 32;
     protected static readonly MAX_REACTOR_RUNS_PER_DRAIN = 8;
     protected static readonly GLOBAL_SHAPE_POLL_INTERVAL_MS = 2e3;
@@ -383,7 +384,8 @@ abstract class ShardDO {
         strict?: boolean;
     }): void;
     protected runShardApplyCdc(_args: RunShardApplyCdcArgs): Promise<RunShardApplyCdcResult>;
-    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "serialize_failed" | "too_many";
+    protected isPaidFunction(_functionPath: string): boolean;
+    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "paid" | "serialize_failed" | "too_many";
     protected unsubscribe(ws: ShardSocketLike, subId: string): void;
     protected shapeSubscribe(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery): "ok" | "serialize_failed" | "too_many";
     protected shapeUnsubscribe(ws: ShardSocketLike, subId: string): void;
@@ -404,7 +406,7 @@ abstract class ShardDO {
     protected recordShardInitError(hookPath: string, error: unknown, trace?: TraceRefLike): void;
     protected recordExternalSourceError(table: string, error: unknown, trace?: TraceRefLike): void;
     protected recordExternalSourceWarning(table: string, message: string, trace?: TraceRefLike): void;
-    protected executeStream(_functionPath: string, _args: Record<string, unknown>): null | {
+    protected executeStream(_functionPath: string, _args: Record<string, unknown>, _identity?: SubscriptionIdentity): null | {
         durable?: {
             ttlMs?: number;
         };
@@ -421,7 +423,7 @@ abstract class ShardDO {
     };
     protected isQueryFunction(_functionPath: string): boolean;
     protected transactionLimits(): Partial<TransactionLimits>;
-    protected transactionHeadroom(): TransactionHeadroomTracker | undefined;
+    protected transactionHeadroom(): TransactionHeadroomTracker;
     protected subscriptionHeadroom(): TransactionHeadroomTracker;
     protected alarmHeadroom(): TransactionHeadroomTracker;
     protected recordChangedTable(table: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): void;

@@ -28,7 +28,15 @@
  * auto-provision.
  */
 import type { FieldSnapshot } from "@lunora/codegen";
-import { columnRef, frameworkColumnDdl, MAX_D1_TABLE_COLUMNS, physicalIndexName, quoteIdentifier, sqlAffinityForKind } from "@lunora/d1/dialect";
+import {
+    columnRef,
+    frameworkColumnDdl,
+    MAX_D1_TABLE_COLUMNS,
+    OCC_VERSION_COLUMN,
+    physicalIndexName,
+    quoteIdentifier,
+    sqlAffinityForKind,
+} from "@lunora/d1/dialect";
 import { LunoraError } from "@lunora/errors";
 
 /** Compact snapshot of a single global table — what we persist + diff. */
@@ -120,7 +128,12 @@ const renderColumnDefinition = (name: string, column: ColumnSnapshot): string =>
  */
 const renderCreateTable = (table: TableSnapshot): string => {
     const columns = Object.entries(table.columns).map(([columnName, column]) => `    ${renderColumnDefinition(columnName, column)}`);
-    const frameworkColumns = frameworkColumnDdl();
+    // The runtime auto-provisioner adds an optimistic-concurrency row version
+    // alongside the dialect's framework columns, and the guarded-write CAS reads
+    // it. Emitting it here too keeps a hand-applied migration file and the
+    // auto-provisioner agreeing on both the physical shape and the column budget
+    // — off the one shared `OCC_VERSION_COLUMN`, so the name cannot drift.
+    const frameworkColumns = [...frameworkColumnDdl(), `${quoteIdentifier(OCC_VERSION_COLUMN)} INTEGER`];
     const total = frameworkColumns.length + columns.length;
 
     if (total > MAX_D1_TABLE_COLUMNS) {

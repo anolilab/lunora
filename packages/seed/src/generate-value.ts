@@ -124,13 +124,148 @@ const isTimestampField = (fieldName: string): boolean => {
  */
 const generateTimestamp = (input: unknown, now: number): number => now - copycat.int(input, { max: TIMESTAMP_WINDOW_MS, min: 0 });
 
-/** Heuristic string generation by column name (mirrors the studio data generator). */
-const generateString = (fieldName: string, input: unknown, constraints: Constraints): string => {
+/**
+ * Refuse a column the seeder cannot invent a conforming value for, naming it.
+ *
+ * Falling through to the generic `copycat.word` would produce a value the very
+ * next `ctx.db.insert` rejects, reported as a validation failure on a row
+ * nobody wrote by hand. The `.unique()` twin (`planUniqueDeal`) refuses the
+ * same shapes for the same reason, so the two paths agree on which columns are
+ * seedable at all.
+ */
+const refuseColumn = (fieldName: string, why: string): never => {
+    throw new LunoraError(
+        "INTERNAL",
+        `@lunora/seed: column "${fieldName}" ${why}. ` +
+            `Supply a value via \`overrides\` (\`{ <table>: { ${fieldName}: … } }\`) or restrict the run with \`only\` so the table is skipped.`,
+    );
+};
+
+/** The length window a generated string has to land in. `max` is `Infinity` when the column declares no `maxLength`. */
+interface LengthBounds {
+    max: number;
+    min: number;
+}
+
+/**
+ * The shortest string inside `bounds` that `seed` can reach: repeated until it
+ * clears `bounds.min`, then cut to `bounds.max`. An empty seed repeats `"x"` so
+ * the result is never the empty string.
+ *
+ * Safe on a SHAPELESS value only — repeating or cutting one that has to satisfy
+ * a `format` is what {@link FormatSpec.fit} exists to do properly.
+ */
+const stretch = (seed: string, bounds: LengthBounds): string => {
+    const base = seed === "" ? "x" : seed;
+    const length = Math.min(Math.max(base.length, bounds.min), bounds.max);
+
+    return base.padEnd(length, base).slice(0, length);
+};
+
+/**
+ * Domain a refitted address is rebuilt around when the generated one leaves no
+ * room for a local part. Shared with `unique-value.ts`, whose `stringCapacity`
+ * budgets for this exact width — the two have to agree, or one path refuses a
+ * column the other happily seeds over its `maxLength`.
+ */
+const FALLBACK_EMAIL_DOMAIN = "@example.com";
+
+/** Scheme a refitted `uri` value is rebuilt on. */
+const URL_SCHEME = "https://";
+
+/** Characters `v.string().email()`'s pattern forbids in the local part. */
+const NOT_EMAIL_LOCAL = /[\s@]/gu;
+
+/** Everything but an ASCII alphanumeric. A purely alphanumeric label is a valid host at EVERY length, so a host reduced to one survives any cut or repeat. */
+const NOT_HOST_ALNUM = /[^a-z\d]/gu;
+
+/**
+ * Rebuild `value` as an address inside `bounds`, keeping its generated domain
+ * when the column is wide enough for it and falling back to
+ * {@link FALLBACK_EMAIL_DOMAIN} when it is not. Only the local part is cut or
+ * repeated — it is the one span whose length the address's shape does not
+ * depend on.
+ */
+const fitEmail = (value: string, bounds: LengthBounds): string => {
+    const at = value.lastIndexOf("@");
+    const generated = at > 0 ? value.slice(at) : "";
+    // A generated domain as wide as the whole column leaves nothing for a local
+    // part, and an address with an empty local part is not one.
+    const domain = generated.length > 0 && generated.length < bounds.max ? generated : FALLBACK_EMAIL_DOMAIN;
+    const local = (at > 0 ? value.slice(0, at) : value).replaceAll(NOT_EMAIL_LOCAL, "");
+
+    return `${stretch(local, { max: bounds.max - domain.length, min: Math.max(1, bounds.min - domain.length) })}${domain}`;
+};
+
+/**
+ * Rebuild `value` as an `https:` URL inside `bounds`. The host is reduced to its
+ * alphanumerics before being cut or repeated, so the result parses at every
+ * length the bounds admit — cutting the generated URL in place instead is what
+ * produced `"https://"` and `"https:/"` for a narrow column.
+ */
+const fitUrl = (value: string, bounds: LengthBounds): string => {
+    const host = URL.canParse(value) ? new URL(value).hostname.replaceAll(NOT_HOST_ALNUM, "") : "";
+
+    return `${URL_SCHEME}${stretch(host, { max: bounds.max - URL_SCHEME.length, min: Math.max(1, bounds.min - URL_SCHEME.length) })}`;
+};
+
+/**
+ * How one JSON Schema `format` keyword a string column can declare
+ * (`v.string().email()` → `email`, `v.string().url()` → `uri`) is generated and,
+ * when the column's length bounds exclude what was generated, rebuilt.
+ *
+ * A declared format is authoritative over the field-name heuristics below — the
+ * column's own validator re-checks it on insert, and it is the same rule the
+ * `number` arm applies to declared bounds ("a schema that says `minimum: 0,
+ * maximum: 5` means a rating, whatever the column is called").
+ */
+interface FormatSpec {
+    /** Rebuild a conforming value inside `bounds`. Called only when the generated one falls outside them. */
+    fit: (value: string, bounds: LengthBounds) => string;
+    /** Produce a conforming value, ignoring length. */
+    generate: (input: unknown) => string;
+    /** Shortest value {@link FormatSpec.fit} can build. A `maxLength` below it admits no conforming value at all. */
+    minimum: number;
+}
+
+const FORMAT_SPECS: Readonly<Record<string, FormatSpec>> = {
+    email: { fit: fitEmail, generate: (input) => copycat.email(input), minimum: FALLBACK_EMAIL_DOMAIN.length + 1 },
+    uri: { fit: fitUrl, generate: (input) => copycat.url(input), minimum: URL_SCHEME.length + 1 },
+};
+
+/** Field-name heuristic generation for a column that declares no `format`. */
+const generateHeuristicString = (fieldName: string, input: unknown): string => {
     const lower = fieldName.toLowerCase();
     const rule = STRING_HEURISTICS.find((entry) => entry.keywords.some((keyword) => lower.includes(keyword)));
-    const value = rule === undefined ? copycat.word(input) : rule.generate(input);
 
-    const { maxLength, minLength } = constraints;
+    return rule === undefined ? copycat.word(input) : rule.generate(input);
+};
+
+/**
+ * Generate a string column's value: a declared shape first, the field-name
+ * heuristics otherwise, then the declared length bounds.
+ *
+ * The bounds are applied THROUGH the shape, never over it. A format-constrained
+ * value has spans whose length carries meaning — an address's domain, a URL's
+ * scheme — and cutting or repeating it blindly emits a value the column's own
+ * validator rejects on the very next insert (`v.string().email().max(20)` seeded
+ * `"preston.crist+0@yaho"`), reported as a validation failure on a row nobody
+ * wrote by hand. A shapeless value has no such spans and is simply stretched.
+ *
+ * A `maxLength` too narrow for ANY conforming value is refused with the column
+ * named, the same as the `.pattern()` and unknown-format cases and for the same
+ * reason: it is a property of the schema, not of the value that happened to be
+ * generated, so the refusal is deterministic rather than a coin flip per row.
+ */
+const generateString = (fieldName: string, input: unknown, constraints: Constraints): string => {
+    const { format, maxLength, minLength, pattern } = constraints;
+
+    if (pattern !== undefined) {
+        return refuseColumn(
+            fieldName,
+            `is constrained to the pattern /${pattern}/, and the seeder cannot invent a value matching an arbitrary regular expression`,
+        );
+    }
 
     if (maxLength !== undefined && minLength !== undefined && minLength > maxLength) {
         throw new LunoraError(
@@ -139,15 +274,28 @@ const generateString = (fieldName: string, input: unknown, constraints: Constrai
         );
     }
 
-    // Truncate first so we never exceed maxLength.
-    const truncated = maxLength !== undefined && value.length > maxLength ? value.slice(0, maxLength) : value;
+    const bounds: LengthBounds = { max: maxLength ?? Number.POSITIVE_INFINITY, min: minLength ?? 0 };
 
-    // Pad to minLength by repeating the generated value until long enough.
-    if (minLength !== undefined && truncated.length < minLength) {
-        return truncated.padEnd(minLength, truncated.length > 0 ? truncated : "x");
+    if (format === undefined) {
+        return stretch(generateHeuristicString(fieldName, input), bounds);
     }
 
-    return truncated;
+    const spec = FORMAT_SPECS[format];
+
+    if (spec === undefined) {
+        return refuseColumn(fieldName, `declares format "${format}", which the seeder has no generator for`);
+    }
+
+    if (bounds.max < spec.minimum) {
+        return refuseColumn(
+            fieldName,
+            `declares format "${format}" with maxLength ${String(maxLength)}, and the shortest ${format} value the seeder can build is ${String(spec.minimum)} characters`,
+        );
+    }
+
+    const value = spec.generate(input);
+
+    return value.length >= bounds.min && value.length <= bounds.max ? value : spec.fit(value, bounds);
 };
 
 const generateValue = (validator: Validator, fieldName: string, input: unknown, now: number): unknown => {
@@ -176,10 +324,12 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
         case "bigint": {
             // Emit a plain number so the value survives JSON serialisation on every
             // adapter path (CLI NDJSON, studio JSON response, testing harness). The
-            // range [0, 1_000_000] is well within Number.MAX_SAFE_INTEGER, so no
-            // integer precision is lost. Adapters that write to the DO's SQLite
-            // layer must coerce this back to BigInt before insert (see testing.ts).
-            return copycat.int(input, { max: BIGINT_RANGE.max, min: BIGINT_RANGE.min });
+            // default range [0, 1_000_000] is well within Number.MAX_SAFE_INTEGER,
+            // so no integer precision is lost. Adapters that write to the DO's
+            // SQLite layer must coerce this back to BigInt before insert (see
+            // testing.ts). Declared bounds win over the default, the same as the
+            // `number` arm and the `.unique()` twin's `boundedNumeric`.
+            return copycat.int(input, { max: constraints.maximum ?? BIGINT_RANGE.max, min: constraints.minimum ?? BIGINT_RANGE.min });
         }
 
         case "boolean": {
@@ -198,21 +348,23 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
 
         case "date":
         case "timestamp": {
-            // Lunora stores dates as epoch-ms numbers.
-            return new Date(copycat.dateString(input)).getTime();
+            // Lunora stores dates as epoch-ms numbers, anchored on the caller's
+            // `now` like every other time-valued column — the `number` arm's
+            // `isTimestampField` branch below, and the `.unique()` twin's
+            // `temporalDeal`. A generator-local window would put two spellings
+            // of the same column (`v.timestamp()` and `v.timestamp().unique()`)
+            // decades apart, and would ignore the one input `SeedOptions.now`
+            // exists to pin.
+            return generateTimestamp(input, now);
         }
 
         case "from": {
             // `v.from(externalSchema)` delegates to a Standard Schema library, and
             // there is nothing here to introspect — the seeder cannot know whether
-            // it wants a UUID, an ISO date, or a 20-field object. Falling through
-            // to the generic `copycat.word` would produce a value the very next
-            // `ctx.db.insert` rejects, reported as a validation failure on a row
-            // nobody wrote by hand. Refuse by name instead.
-            throw new LunoraError(
-                "INTERNAL",
-                `@lunora/seed: column "${fieldName}" is a v.from() validator, whose external Standard Schema the seeder cannot introspect to invent a conforming value. ` +
-                    `Supply one via \`overrides\` (\`{ <table>: { ${fieldName}: … } }\`), restrict the run with \`only\` so the table is skipped, or give the column a concrete v.* type.`,
+            // it wants a UUID, an ISO date, or a 20-field object.
+            return refuseColumn(
+                fieldName,
+                "is a v.from() validator, whose external Standard Schema the seeder cannot introspect to invent a conforming value (give the column a concrete v.* type instead)",
             );
         }
 
@@ -302,5 +454,5 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
     }
 };
 
-export { BIGINT_RANGE, constraintsOf, generateValue, isTimestampField, NUMBER_RANGE, TIMESTAMP_WINDOW_MS };
+export { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, generateValue, isTimestampField, NUMBER_RANGE, TIMESTAMP_WINDOW_MS };
 export type { Constraints };

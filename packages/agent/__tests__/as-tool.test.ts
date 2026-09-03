@@ -18,6 +18,7 @@ const NON_EMPTY_DESCRIPTION = /non-empty `description`/u;
 const QUOTA_EXCEEDED = /quota exceeded/u;
 const MAX_POLLS_PATTERN = /`maxPolls` must be a positive integer/u;
 const DEPTH_EXCEEDED = /delegation depth/u;
+const TURN_CAP_PATTERN = /Sub-agent "research" hit its turn cap \(maxTurns\)/u;
 
 /**
  * A mock `AGENT_<NAME>` Workflow binding: `create` records the params + id, and
@@ -25,14 +26,16 @@ const DEPTH_EXCEEDED = /delegation depth/u;
  * (models a run progressing to a terminal state) and whose thread the caller
  * seeds via `finalMessages`.
  */
-const mockAgentBinding = (statuses: ReadonlyArray<string>): AgentWorkflowBindingLike & { created: { id?: string; params?: unknown }[] } => {
+const mockAgentBinding = (statuses: ReadonlyArray<string>, output?: unknown): AgentWorkflowBindingLike & { created: { id?: string; params?: unknown }[] } => {
     const created: { id?: string; params?: unknown }[] = [];
     const remaining = [...statuses];
 
     const instance: AgentWorkflowInstanceLike = {
         sendEvent: async () => {},
         status: async () => {
-            return { status: remaining.length > 1 ? remaining.shift() : remaining[0] };
+            // A real `InstanceStatus` carries the workflow's return value — for an
+            // agent run, the `AgentRunResult` saying why the loop stopped.
+            return { output, status: remaining.length > 1 ? remaining.shift() : remaining[0] };
         },
         terminate: async () => {},
     };
@@ -345,5 +348,36 @@ describe("sub-agent recursion bound", () => {
         const tool = agentAsTool({ description: "d", maxPolls: 2, name: "research", wait: immediate });
 
         await expect(tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run))).resolves.toMatch(DID_NOT_FINISH);
+    });
+});
+
+describe("child-run reporting", () => {
+    it("says the child hit its turn cap instead of returning an empty answer", async () => {
+        // A run that stops on `maxTurns` still COMPLETES its workflow, and it has no
+        // assistant turn without pending tool calls — so `finalAnswer` came back "".
+        const binding = mockAgentBinding(["complete"], { stopped: "maxTurns", turns: 8 });
+        const { run } = runWithChildThread([{ content: "", role: "assistant", seq: 1, toolCalls: [{ id: "c", input: {}, name: "t" }] }]);
+
+        const tool = agentAsTool({ description: "d", name: "research", wait: immediate });
+
+        await expect(tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run))).resolves.toMatch(TURN_CAP_PATTERN);
+    });
+
+    it("creates the child thread under the PARENT run's owner", async () => {
+        const binding = mockAgentBinding(["complete"]);
+        const { run } = runWithChildThread([{ content: "the answer", role: "assistant", seq: 1 }]);
+
+        const tool = agentAsTool({ description: "d", name: "research", wait: immediate });
+
+        await tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run, { owner: "user-7" }));
+
+        // Created ownerless, the sub-thread of an owned conversation was readable by
+        // anyone who knew its (derivable) key.
+        expect(binding.created[0]?.params).toStrictEqual({
+            depth: 1,
+            input: "go",
+            owner: "user-7",
+            threadKey: "thread-1::sub::research::call_9",
+        });
     });
 });

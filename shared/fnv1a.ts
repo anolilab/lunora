@@ -36,10 +36,16 @@ const FNV1A_PRIME = 0x01_00_01_93;
 
 /**
  * FNV-1a (32-bit) digest of `input`, as zero-padded 8-char lowercase hex. Fast,
- * deterministic and non-cryptographic: same input → same token. Iterates by
- * `codePointAt` per UTF-16 index (so a non-BMP character contributes its astral
- * code point at the first index and a lone low surrogate at the second);
- * `Math.imul` keeps the multiply in 32-bit space.
+ * deterministic and non-cryptographic: same input → same token. `Math.imul`
+ * keeps the multiply in 32-bit space.
+ *
+ * Iterates UTF-16 code UNITS (`charCodeAt`), which is what
+ * `@lunora/client`'s `hashToken` and the Dart SDK's `_hashToken` do — the three
+ * are the same digest and must stay byte-for-byte identical. The earlier
+ * `codePointAt`-per-index walk folded an astral character TWICE (its full code
+ * point at the first index, then its trailing low surrogate at the second), so
+ * `fnv1aHex("😀")` produced `0faeabcd` where every other implementation of the
+ * algorithm produces `cb31c4b8`.
  *
  * `offset` exists only so `shared/content-digest.ts` can run the same hash under
  * a second basis and concatenate the two. It is not a salt — FNV-1a is unkeyed,
@@ -50,7 +56,8 @@ const fnv1aHex = (input: string, offset: number = FNV1A_OFFSET_BASIS): string =>
     let hash = offset;
 
     for (let index = 0; index < input.length; index += 1) {
-        hash ^= input.codePointAt(index) ?? 0;
+        // eslint-disable-next-line unicorn/prefer-code-point -- code UNITS: matches @lunora/client's hashToken and the Dart SDK, and keeps an astral char from being folded twice
+        hash ^= input.charCodeAt(index);
         hash = Math.imul(hash, FNV1A_PRIME);
     }
 
@@ -62,6 +69,15 @@ const hex4 = (limb: number): string => limb.toString(16).padStart(4, "0");
 
 /**
  * FNV-1a (64-bit) digest of `input`, as 16 lowercase hex digits.
+ *
+ * Iterates UTF-16 code UNITS (`charCodeAt`), like {@link fnv1aHex}. It used to
+ * walk `codePointAt` PER INDEX, which is neither units nor points: an astral
+ * character was folded twice — its whole code point at the first index, then its
+ * trailing low surrogate at the second — the exact defect the 32-bit digest
+ * above records having fixed. Two digests in one file may not disagree about
+ * what they iterate, and there is no cross-language port of this one to hold to
+ * the old answer. Digests of BMP-only input (every ASCII, Latin or CJK key) are
+ * unchanged; one containing an emoji is not.
  *
  * The hash state is held as four 16-bit limbs in plain `number`s rather than a
  * `BigInt`. BigInt allocates a heap object per operation, and this runs once per
@@ -95,11 +111,8 @@ const fnv1a64Hex = (input: string): string => {
     let h3 = 0xcb_f2;
 
     for (let index = 0; index < input.length; index += 1) {
-        const point = input.codePointAt(index) ?? 0;
-
-        // A code point above the BMP occupies limbs 0 and 1.
-        h0 ^= point & 0xff_ff;
-        h1 ^= (point >>> 16) & 0xff_ff;
+        // eslint-disable-next-line unicorn/prefer-code-point -- code UNITS, exactly as `fnv1aHex` above: `codePointAt` per INDEX folds an astral character twice
+        h0 ^= input.charCodeAt(index);
 
         const p0 = h0 * 0x01_b3;
         const p1 = h1 * 0x01_b3;

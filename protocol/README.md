@@ -274,7 +274,12 @@ twice. The single-call endpoint carries the same value in the
 `x-lunora-client-id` header. Reserved
 `__lunora_relation__:` / `__lunora_admin__` paths cannot be batched. A batch is
 capped at **500** entries; a longer flush chunks, and the chunks must be sent
-sequentially to preserve order.
+sequentially to preserve order. That number is normative and lives in
+`protocol/fixtures/offline-optimistic.json` as `offlineQueue.batchReplay.maxEntries`;
+the `batch_entry_cap_matches_protocol` conformance case makes every port compare
+its own constant against it, because a client still chunking at a superseded cap
+takes the coded 400 below — a terminal verdict — and discards durable writes
+rather than retrying them.
 
 Response:
 
@@ -284,16 +289,44 @@ Response:
 
 Each slot's `body` is exactly a §4.2 envelope — `{ result }` or `{ error }` — so
 a client classifies a slot the way it classifies a whole single-call response.
-Three rules a conforming client MUST follow, because each one is a durable write:
+Four rules a conforming client MUST follow, because each one is a durable write:
 
-- A slot whose `error.code` is `SHARD_UNAVAILABLE` or `SHARD_ERROR` is
-  **transient**: the server reached no verdict on that entry, so it is retried
-  rather than reported failed. Every other coded error is a verdict, and terminal.
+- A slot whose `error.code` is `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `RATE_LIMITED`
+  or `TOO_MANY_REQUESTS` is **transient**: the server reached no verdict on that
+  entry — it could not reach the shard, or a limiter refused to look — so it is
+  retried rather than reported failed. Every other coded error is a verdict, and
+  terminal. A rate-limited retry SHOULD wait out the hint the server sent, either
+  `error.data.retryAfterMs` or the `Retry-After` header — which RFC 9110 defines
+  as EITHER delta-seconds or an HTTP-date, so a client that parses only the first
+  must treat the second as absent rather than as `NaN`. A transient refusal that
+  carried NO hint still needs one: the socket stays open through a 429 or a 503,
+  so nothing reconnects to trigger the next flush, and a client MUST fall back to
+  a bounded, jittered backoff rather than leave the write parked.
 - A slot the server never returned is **retried** — it may or may not have
   committed, and the entry's `mutationId` is what makes that safe.
-- A body with **no** `results` array is a whole-batch outcome: a coded `{ error }`
-  is a verdict on every entry and terminal, anything else (a non-JSON body, a
-  bare 5xx) is transient and retries the whole chunk.
+- A body with **no** `results` array is a whole-batch outcome, classified by the
+  same rule: a transient code retries the whole chunk, and any other coded
+  `{ error }` is a verdict on every entry and terminal. A reply carrying no
+  envelope to read at all — a non-JSON body, an edge's HTML page — is classified
+  by HTTP STATUS instead, per the paragraph below.
+- A `413` is a verdict on the REQUEST, not on the writes inside it: a chunk of
+  more than one entry MUST be split and retried rather than settled. A client
+  also holds the request body under the 1 MiB cap up front, splitting before it
+  sends — chunking by the 500-entry cap alone refuses a whole chunk of durable
+  writes as soon as they average a couple of KiB each.
+
+The same classification governs a **single-call** replay, so a durable write's
+fate never depends on how many siblings were queued alongside it.
+
+A response carrying no `{ error }` envelope to classify — a proxy's HTML page, a
+captive portal, a truncated body — is classified by its HTTP status, and MUST be:
+unclassified, it is neither retried nor discarded, and it parks the head of the
+outbox in front of every write behind it. `408`, any `5xx`, and any status outside
+400-599 leave the write's fate UNKNOWN (it may have committed at the origin behind
+the proxy) and are transient. `429` is transient too, with any `Retry-After` it
+carried. Every other `4xx` is a refusal of the REQUEST that resending can only
+reproduce, and is terminal for the write: dropping a write the edge refused is the
+lesser harm against replaying it forever.
 
 No golden fixtures, and no case in `conformance-cases.json`: the endpoint is
 optional, so requiring it would fail the seven SDKs that correctly do not

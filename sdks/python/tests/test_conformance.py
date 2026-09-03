@@ -138,6 +138,36 @@ class TestWsFrameBuilders(unittest.TestCase):
         shape = load("ws-frames.json")["shape"]
         self.assertEqual(build_shape_subscribe_frame("shape_1", "roomMessages", {"room": "general"}), shape["shape-subscribe-cold"])
 
+    def test_shape_subscriptions_resend_after_reconnect(self):
+        covers("shape_subscriptions_resend_after_reconnect")
+
+        client = LunoraClient("https://app.example")
+        client.attach_socket(lambda _frame: None)
+        client.subscribe("messages:list", {"channel": "general"}, lambda _rows: None)
+        client.subscribe_shape("roomMessages", {"room": "general"}, lambda _rows: None)
+
+        # The cursors a resume carries are written by the frame handler, so they
+        # have to exist before the resend is built.
+        client.handle_frame({"cursor": 9, "data": [], "epoch": "e1", "id": "sub_1", "type": "data"})
+        client.handle_frame({"epoch": "e1", "pokeId": "poke-1", "type": "pokeStart"})
+        client.handle_frame({"pokeId": "poke-1", "reset": True, "rowsPatch": [], "shapeId": "shape_1", "type": "pokePart"})
+        client.handle_frame({"checkpoint": 5, "epoch": "e1", "pokeId": "poke-1", "type": "pokeEnd"})
+
+        resent: list = []
+        client.attach_socket(resent.append)
+        client.resend_subscriptions()
+
+        # BOTH registries. A resend that walks only the queries leaves every
+        # shape view subscribed to a socket that no longer exists — silently, and
+        # for the rest of the process's life.
+        self.assertEqual([frame["type"] for frame in resent], ["subscribe", "shape_subscribe"])
+        self.assertEqual(resent[0]["query"]["sinceSeq"], 9)
+        self.assertEqual(resent[1]["id"], "shape_1")
+        self.assertEqual(resent[1]["shape"]["name"], "roomMessages")
+        self.assertEqual(resent[1]["shape"]["args"], {"room": "general"})
+        self.assertEqual(resent[1]["sinceCheckpoint"], 5)
+        self.assertEqual(resent[1]["sinceEpoch"], "e1")
+
 
 class TestWsFrameConsumer(unittest.TestCase):
     def test_server_frames(self):

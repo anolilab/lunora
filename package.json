@@ -43,6 +43,7 @@
         "generate:packages-list": "node scripts/list-packages.js && prettier --write README.md",
         "lint:affected:eslint": "vis affected lint:eslint --fail-fast",
         "lint:affected:types": "vis affected lint:types --fail-fast",
+        "lint:batch-cap": "node scripts/check-batch-cap-drift.js",
         "lint:catalog-drift": "node scripts/check-catalog-drift.js",
         "lint:generated": "node scripts/check-generated-files.mjs",
         "lint:peer-catalog-refs": "node scripts/check-peer-catalog-refs.js",

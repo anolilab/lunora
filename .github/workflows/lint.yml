@@ -22,6 +22,7 @@
         "timeout-minutes": 5
         "outputs":
             "api_surface": "${{ steps.changes.outputs.api_surface }}"
+            "batch_cap": "${{ steps.changes.outputs.batch_cap }}"
             "dependency_manifests": "${{ steps.changes.outputs.dependency_manifests }}"
             "frontend_lintable": "${{ steps.changes.outputs.frontend_lintable }}"
             "generated_files": "${{ steps.changes.outputs.generated_files }}"
@@ -394,6 +395,40 @@
             - "name": "Check node capabilities docs match NODE_CAPABILITIES"
               "run": "pnpm run lint:node-capabilities-docs"
 
+    # Both batch caps against the literal each of the eight non-JS ports,
+    # protocol/README.md and the offline fixture restate. The ports only ever see a cap
+    # as a number they typed once. Over the entry cap, a client's chunk is refused with a
+    # terminal 400, which discards those durable writes rather than retrying them; the
+    # byte budget is additionally DERIVED from the worker's own request-body cap, so
+    # raising that cap stales all nine clients at once with nothing else noticing.
+    "batch-cap":
+        "name": "Lint (batch cap)"
+        "if": "needs.files-changed.outputs.batch_cap == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 10
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "lint"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Check every copy of the batch caps agrees"
+              "run": "pnpm run lint:batch-cap"
+
     "yaml-lint":
         "name": "Lint (yaml)"
         "if": "needs.files-changed.outputs.yaml_lintable == 'true'"
@@ -522,6 +557,7 @@
                 "secrets",
                 "registry-sync",
                 "node-capabilities-docs",
+                "batch-cap",
                 "yaml-lint",
                 "dependency-manifests",
                 "generated-files",

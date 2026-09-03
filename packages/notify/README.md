@@ -39,15 +39,29 @@ Generate a VAPID keypair once: `npx web-push generate-vapid-keys`.
 ```ts
 import { subscribeToPush } from "@lunora/notify/web";
 
-const subscription = await subscribeToPush({ serviceWorkerUrl: "/sw.js", vapidPublicKey });
-await client.mutation("registerDevice", { subscription });
+const { replacedEndpoint, subscription } = await subscribeToPush({ serviceWorkerUrl: "/sw.js", vapidPublicKey });
+await client.mutation("registerDevice", { replacedEndpoint, subscription });
 ```
+
+`replacedEndpoint` is set only after a **VAPID key rotation**: the stale browser
+subscription is dropped and a new one minted, and the new one has a new endpoint
+— hence a new store id — so it never upserts over the old row. Every send to that
+row now answers `403 VapidPkHashMismatch`, which is (correctly) not a "gone"
+signal, so nothing prunes it either. Forward it and unregister it:
 
 ```ts
 // lunora/registerDevice.ts (a mutation — storage write is fine here)
-export const registerDevice = mutation.input({ subscription: v.any() }).mutation(async ({ ctx, args: { subscription } }) => {
-    await ctx.push.register({ subscription, userId: ctx.auth?.userId });
-});
+import { webPushId } from "@lunora/notify";
+
+export const registerDevice = mutation
+    .input({ replacedEndpoint: v.optional(v.string()), subscription: v.any() })
+    .mutation(async ({ ctx, args: { replacedEndpoint, subscription } }) => {
+        if (replacedEndpoint !== undefined) {
+            await ctx.push.unregister(webPushId(replacedEndpoint));
+        }
+
+        await ctx.push.register({ subscription, userId: ctx.auth?.userId });
+    });
 ```
 
 ## Send (from an action)
@@ -87,12 +101,13 @@ await enqueuePushBroadcast(ctx.queues.push, { payload: { title: "New drop", body
 // lunora/notify-fanout.ts — an INTERNAL ACTION, because that is where
 // `ctx.push` and `ctx.queues` exist.
 export const deliverPage = internalAction.input({ job: v.any() }).action(async ({ args: { job }, ctx }) => {
-    const { failedIds, nextCursor } = await runPushBroadcastPage(ctx.push, job);
+    const { failedIds, nextFilter } = await runPushBroadcastPage(ctx.push, job);
 
-    // One message = ONE bounded page. Discarding `nextCursor` delivers only the
+    // One message = ONE bounded page. Discarding `nextFilter` delivers only the
     // first page (default 250 devices) and reports success for the whole audience.
-    if (nextCursor !== undefined) {
-        await enqueuePushBroadcast(ctx.queues.push, { payload: job.payload, filter: { ...job.filter, after: nextCursor } });
+    // Pass it verbatim — it carries the cursor AND the remaining `filter.limit`.
+    if (nextFilter !== undefined) {
+        await enqueuePushBroadcast(ctx.queues.push, { payload: job.payload, filter: nextFilter });
     }
 
     // Redeliver ONLY the recipients that failed — a retry of the whole page would
@@ -144,9 +159,11 @@ client-supplied data, so the facade enforces two boundaries:
 - **No secrets on the app facade.** `ctx.push.list()`
   returns the registered devices with the delivery **secrets stripped** — the Web
   Push `keys` (`auth`/`p256dh`) and the FCM `token`, which together with the
-  endpoint are enough to deliver arbitrary push to a device. The raw rows are
-  reachable only through the internal `SubscriptionStore` (which handlers never
-  hold); the broadcast path uses the store directly.
+  endpoint are enough to deliver arbitrary push to a device. Every other facade
+  read is projected the same way; the broadcast path uses the store directly. The
+  one place a handler does see a raw row is the return of `ctx.push.register(...)`,
+  which echoes back the record the caller just supplied — nothing it did not
+  already hold, and never another device's.
 
 ## Delivery observability
 

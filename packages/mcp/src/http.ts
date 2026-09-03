@@ -18,16 +18,31 @@
 import type { McpFetchHandler } from "./serve-stateless";
 import { serveStateless } from "./serve-stateless";
 import type { LunoraMcpServerOptions } from "./server";
-import { createLunoraMcpServer } from "./server";
+import { createLunoraMcpServer, resolveClient } from "./server";
+
+/** {@link createMcpFetchHandler} options: the server's, plus this transport's body limit. */
+export interface McpFetchHandlerOptions extends LunoraMcpServerOptions {
+    /** Largest accepted request body, in bytes. Defaults to `DEFAULT_MAX_REQUEST_BYTES` (128 KiB). */
+    maxRequestBytes?: number;
+}
 
 /**
  * Build a stateless Streamable-HTTP fetch handler for a Lunora MCP server. Each
  * invocation constructs a fresh proxy server and serves the request through
  * {@link serveStateless}.
+ *
+ * The `LunoraClient` is resolved ONCE, here, and shared by every request: it is
+ * the same deployment on each one, and the public-function registry memo in
+ * `./tools` is keyed by client identity, so a per-request client would re-fetch
+ * that registry on every tool call. A misconfiguration (`url` without `token`)
+ * therefore throws when the handler is built rather than on first request,
+ * which is where `createLunoraMcpServer` already documents reporting it.
  */
-export const createMcpFetchHandler =
-    (options: LunoraMcpServerOptions): McpFetchHandler =>
-    (request: Request): Promise<Response> =>
-        serveStateless(createLunoraMcpServer(options), request);
+export const createMcpFetchHandler = (options: McpFetchHandlerOptions): McpFetchHandler => {
+    const client = resolveClient(options);
 
-export { type McpFetchHandler, serveStateless } from "./serve-stateless";
+    return (request: Request): Promise<Response> =>
+        serveStateless(createLunoraMcpServer({ ...options, client }), request, { maxRequestBytes: options.maxRequestBytes });
+};
+
+export { DEFAULT_MAX_REQUEST_BYTES, type McpFetchHandler, serveStateless, type ServeStatelessOptions } from "./serve-stateless";

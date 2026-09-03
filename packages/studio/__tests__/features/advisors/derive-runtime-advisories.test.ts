@@ -1,7 +1,6 @@
-import { RUNTIME_LINTS } from "@lunora/advisor";
 import { describe, expect, it } from "vitest";
 
-import { declaredIndexesFor, deriveRuntimeAdvisories, DRIVABLE_RUNTIME_LINTS } from "../../../src/features/advisors/derive-runtime-advisories";
+import { declaredIndexesFor, deriveRuntimeAdvisories } from "../../../src/features/advisors/derive-runtime-advisories";
 import type { FunctionCallStat, MetricsIndexHit } from "../../../src/lib/admin";
 
 /** A used index — recorded reads > 0, so it must NOT be flagged dead. */
@@ -237,28 +236,5 @@ describe("declaredIndexesFor", () => {
             { index: "byAuthor", table: "posts" },
             { index: "byTitle", table: "posts" },
         ]);
-    });
-});
-
-describe("runtime lints this call site can actually drive", () => {
-    /**
-     * Asserts the derived list, not the absence of a finding.
-     *
-     * The earlier version of this test checked that no `constraint_validator`
-     * finding came out of a studio-shaped context — which could never fail, because
-     * the inputs type has no samples field: someone adding one would write a
-     * new literal, this test would keep passing its old one, and the lint would stay
-     * silent. A deaf canary.
-     *
-     * This trips instead on the change that actually matters — putting the lint back
-     * into the driven set, which is what enabling it requires.
-     */
-    it("excludes only constraint_validator, and keeps every other runtime lint", () => {
-        expect.assertions(2);
-
-        const driven = new Set(DRIVABLE_RUNTIME_LINTS.map((lint) => lint.name));
-
-        expect(driven.has("constraint_validator")).toBe(false);
-        expect([...RUNTIME_LINTS].every((lint) => lint.name === "constraint_validator" || driven.has(lint.name))).toBe(true);
     });
 });

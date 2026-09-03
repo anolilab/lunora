@@ -955,6 +955,7 @@ interface HttpActionContext {
     runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     scheduler?: SchedulerContext;
     storage?: unknown;
+    waitUntil?: (promise: Promise<unknown>) => void;
 }
 ```
 
@@ -1399,6 +1400,7 @@ interface OtlpSinkOptions extends OnlyErrorsOption {
     endpoint: string;
     headers?: Record<string, string>;
     postProcessor?: OtlpPostProcessor;
+    redactLogs?: boolean;
     resourceAttributes?: OtlpResourceAttributes;
     serviceName?: string;
     serviceNamespace?: string;
@@ -1863,6 +1865,7 @@ interface ShardClientOptions {
 
 ```ts
 interface ShardError {
+    code: string;
     message: string;
     shardKey: string;
     timedOut: boolean;

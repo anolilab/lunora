@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { fromServerSchema } from "../src";
 import geoIndexFieldNotGeopoint from "../src/lints/static/geo-index-field-not-geopoint";
+import type { AdvisorSchema } from "../src/schema";
 
 const run = (schema: ReturnType<typeof defineSchema>) => geoIndexFieldNotGeopoint.run({ schema: fromServerSchema(schema) });
 
@@ -35,6 +36,24 @@ describe("geo_index_field_not_geopoint", () => {
             cacheKey: "geo_index_field_not_geopoint:places:by_location:location",
             metadata: { field: "location", index: "by_location", kind: "string", table: "places" },
         });
+    });
+
+    it("ignores a geo index over an Object.prototype member that is not a declared column", () => {
+        expect.assertions(1);
+
+        const schema: AdvisorSchema = {
+            tables: [
+                {
+                    columnKinds: { name: "string" },
+                    fields: ["name"],
+                    indexes: [{ fields: ["constructor"], kind: "geo", name: "by_location" }],
+                    name: "places",
+                    relations: [],
+                },
+            ],
+        };
+
+        expect(geoIndexFieldNotGeopoint.run({ schema })).toHaveLength(0);
     });
 
     it("ignores tables without a geo index", () => {

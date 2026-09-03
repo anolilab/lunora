@@ -813,6 +813,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `StorageServeAuthorizer` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageServeAuthzContext` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `SystemDatabaseReader` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1053,6 +1061,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `beginDeferredSchedules` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `bindOrm` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1290,6 +1302,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/values` — signature tracked at its source.
 
 ### `withDeferredDeletes` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `withDeferredSchedules` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1724,6 +1740,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `TabCoordinator` (class)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `TransportError` (class)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -5507,6 +5527,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `StorageServeAuthorizer` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageServeAuthzContext` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `SystemDatabaseReader` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5747,6 +5775,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `beginDeferredSchedules` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `bindOrm` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5984,6 +6016,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/values` — signature tracked at its source.
 
 ### `withDeferredDeletes` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `withDeferredSchedules` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

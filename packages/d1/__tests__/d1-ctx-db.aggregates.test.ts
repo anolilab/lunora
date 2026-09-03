@@ -86,6 +86,7 @@ const setupWriter = async (schema: SchemaLike): Promise<DatabaseWriterLike> => {
         `CREATE TABLE "todos" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
+            "_version" INTEGER,
             "archived" INTEGER,
             "projectId" TEXT,
             "seq" INTEGER
@@ -137,6 +138,7 @@ describe("d1 aggregateIndex parity", () => {
             `CREATE TABLE "todos" (
                 "id" TEXT PRIMARY KEY,
                 "_creationTime" INTEGER NOT NULL,
+                "_version" INTEGER,
                 "archived" INTEGER,
                 "projectId" TEXT,
                 "seq" INTEGER
@@ -312,6 +314,7 @@ describe("d1 aggregateIndex parity", () => {
                 `CREATE TABLE "todos" (
                     "id" TEXT PRIMARY KEY,
                     "_creationTime" INTEGER NOT NULL,
+                    "_version" INTEGER,
                     "archived" INTEGER,
                     "projectId" TEXT,
                     "seq" INTEGER

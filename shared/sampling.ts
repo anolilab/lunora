@@ -6,11 +6,21 @@
  * tiers and must not gain a runtime dependency edge on each other, so this lives
  * in `shared/` and is inlined into each `dist` rather than published.
  *
- * The model mirrors Cloudflare Workers' `head_sampling_rate`: a per-trace head
- * decision derived deterministically from the trace id — so the same trace yields
- * the same verdict on the worker and on every shard/container beneath it, and a
- * trace is kept or dropped *whole* (never half) — biased to always keep traces
- * that produced an error (tail bias) so failures are never sampled away.
+ * The model mirrors Cloudflare Workers' `head_sampling_rate`: one deterministic
+ * head decision per trace, taken ONCE at the worker's entry and then propagated
+ * — so a trace is kept or dropped *whole* (never half) — biased to always keep
+ * traces that produced an error (tail bias) so failures are never sampled away.
+ *
+ * **What the verdict is keyed on is the caller's choice, not this module's.**
+ * `resolveTraceSampling` hashes whatever id it is handed. The worker
+ * (`otel-trace.ts`'s `beginDispatchTrace`) hands it the inbound TRACE id only
+ * when `trustInboundTraceContext` accepted the upstream; otherwise it hands it
+ * the freshly-minted SPAN id, because a client that could choose the trace id
+ * could otherwise choose its own verdict — dropping itself out of every trace,
+ * or forcing capture to inflate the operator's ingest bill. Shards and
+ * containers do NOT re-derive anything: they read the settled verdict off the
+ * propagated `traceparent` sampled flag (`trace-context.ts`), which is what
+ * actually keeps the trace whole across tiers.
  *
  * Pure and dependency-free (only built-ins) so inlining stays sound. Only trace
  * spans are governed here; metrics and application logs are never sampled.
@@ -56,14 +66,27 @@ interface TraceSamplingDecision {
 }
 
 /**
- * Map a trace id to a stable value in `[0, 1)` from its first 8 hex characters
- * (32 bits) divided by `2^32`. Same id → same value everywhere, so the head
- * decision is identical on the worker, the shard, and any container. A malformed
- * or empty id parses to `NaN` and falls back to `0` (the keep-leaning end), so a
- * bad id is never silently dropped.
+ * Map a trace id to a stable value in `[0, 1)` from its LAST 8 hex characters
+ * (the low 32 bits) divided by `2^32`. Same id → same value everywhere, so the
+ * head decision is identical on the worker, the shard, and any container. A
+ * malformed or empty id parses to `NaN` and falls back to `0` (the keep-leaning
+ * end), so a bad id is never silently dropped.
+ *
+ * The LOW bits, not the high ones, because an inbound trace id is not
+ * necessarily uniformly random across its 128 bits. The OpenTelemetry
+ * specification's `TraceIdRatioBased` sampler is defined over the *rightmost*
+ * portion of the id for exactly this reason: a 64-bit-id system propagating into
+ * a W3C context left-pads with 16 zero hex digits, and AWS X-Ray puts the
+ * request's epoch seconds in the leading 8. Keying on the first 8 characters
+ * therefore gave every zero-padded trace the value `0` (kept at ANY rate above
+ * 0) and every X-Ray trace of the current era a value near `1` (dropped at any
+ * rate below ~0.9) — i.e. 100% or 0% sampling instead of the configured rate.
+ * `@lunora/runtime`'s `otel-trace.ts` keys on the upstream id whenever
+ * `trustInboundTraceContext` is set, so both shapes reach here in practice.
+ * Locally minted ids are uniformly random, so they are unaffected either way.
  */
 const traceIdToUnitInterval = (traceId: string): number => {
-    const int = Number.parseInt(traceId.slice(0, 8), 16);
+    const int = Number.parseInt(traceId.slice(-8), 16);
 
     return Number.isFinite(int) ? int / 0x1_0000_0000 : 0;
 };

@@ -25,7 +25,7 @@ const notifySendOutsideAction: Lint = {
     level: "WARN",
     name: "notify_send_outside_action",
     remediation:
-        "Move the `ctx.notify`/`ctx.push` send into an `action(...)`, where external I/O is allowed. If a query/mutation must trigger a notification, have it enqueue the send (`enqueuePushBroadcast` via `@lunora/queue`) or schedule an action — the queue/scheduler runs the send exactly once, off the transactional path.",
+        "Move the `ctx.notify`/`ctx.push` send into an `action(...)`, where external I/O is allowed. If a query/mutation must trigger a notification, have it enqueue the send (`enqueuePushBroadcast` from `@lunora/notify`, onto a `ctx.queues.*` producer) or schedule an action — the queue/scheduler runs the send exactly once, off the transactional path.",
     run: (context) => {
         // No send evidence supplied → nothing to assert (mirrors hyperdrive_outside_action).
         if (context.notifyCalls === undefined) {

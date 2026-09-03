@@ -1,6 +1,6 @@
 {
     "name": "@lunora/queue",
-    "version": "1.0.0-alpha.42",
+    "version": "1.0.0-alpha.44",
     "description": "Cloudflare Queues for Lunora: defineQueue producers + consumers, the ctx.queues surface, and the generated queue() worker handler",
     "keywords": [
         "background-jobs",
@@ -58,8 +58,8 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.29",
-        "@lunora/platform": "1.0.0-alpha.24"
+        "@lunora/errors": "1.0.0-alpha.30",
+        "@lunora/platform": "1.0.0-alpha.25"
     },
     "devDependencies": {
         "@cloudflare/vitest-plugin": "catalog:cloudflare",

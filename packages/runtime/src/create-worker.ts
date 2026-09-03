@@ -4,6 +4,7 @@ import type { HttpCacheLike } from "@lunora/platform";
 import { asBucketStorage } from "../../../shared/as-bucket-storage";
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
+import { collectPages } from "../../../shared/collect-pages";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
@@ -142,6 +143,17 @@ interface HttpActionContext {
      * dependency; the server side narrows it to the real `Storage`.
      */
     storage?: unknown;
+
+    /**
+     * The request's `ExecutionContext.waitUntil`, forwarded so a handler can
+     * keep work alive past the returned `Response` — the shape an HTTP action
+     * exists for ("ack the webhook now, finish the work after"). Optional
+     * because {@link ExecutionContextLike.waitUntil} is: a framework mount seam
+     * or a unit test may hand over a partial context, and this is absent rather
+     * than a throwing stub so a caller can tell "no deferral available here"
+     * from "deferred". Mirrors `HttpActionCtx.waitUntil` on the server side.
+     */
+    waitUntil?: (promise: Promise<unknown>) => void;
 }
 
 /**
@@ -1598,6 +1610,19 @@ const STATUS_PATH = "/_lunora/status";
 const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
 
 /**
+ * Narrow an app-supplied authorization verdict to an exact `true`.
+ *
+ * SECURITY: every `WorkerOptions` gate below (`authorizeShard`,
+ * `authorizeFanOut`, `adminGate`) is DECLARED to answer a boolean, but it is app
+ * code and untyped JavaScript reaches it — `catch`-less `as` casts too. The
+ * canonical mistake is `authorize: async ({ request }) => verifySignedUrl(url,
+ * secret)` with `.valid` forgotten: it hands back `{ valid: false }`, a DENIAL
+ * that is TRUTHY, and a `if (!allowed)` test then grants. Awaiting into `unknown`
+ * and comparing to `true` means a broken gate can only ever deny.
+ */
+const grants = async (verdict: unknown): Promise<boolean> => (await verdict) === true;
+
+/**
  * Read the optional caller identity a server-initiated dispatch may forward on
  * the `x-lunora-userid` / `x-lunora-identity` headers, returning the shape
  * `dispatchToShard` threads to the shard (or `undefined` when neither is set).
@@ -2625,8 +2650,19 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * {@link WorkerOptions.authorizeShard} for why.
      */
     const assertShardAuthorized = async (identity: ResolvedIdentity | null, shardKey: string): Promise<void> => {
+        // `::relay::` / `::replica::` are RESERVED: only the runtime mints those
+        // names, and a DO reads its own name to learn its role. A client-supplied
+        // key carrying either infix therefore addresses a DO that believes it is
+        // another shard's relay or replica — and this is the one gate every
+        // client-originated key crosses (RPC, REST, `serverQuery`, WS upgrade), so
+        // it is refused here rather than at each mint site. Ahead of
+        // `authorizeShard`: the name is malformed whatever the policy says.
+        if (shardKey.includes(RELAY_NAME_INFIX) || shardKey.includes(REPLICA_NAME_INFIX)) {
+            throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
+        }
+
         if (options.authorizeShard) {
-            const allowed = await options.authorizeShard({ identity, shardKey });
+            const allowed = await grants(options.authorizeShard({ identity, shardKey }));
 
             if (!allowed) {
                 throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
@@ -2941,7 +2977,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         if (!authenticated) {
-            throw new LunoraError("Scheduler dispatch requires a valid signature or admin bearer", { code: "FORBIDDEN", status: 403 });
+            // `DISPATCH_UNAUTHENTICATED`, never a plain `FORBIDDEN`: this refusal
+            // is about the CALLER's credentials, not about the function it asked
+            // for. Dispatch consumers (`@lunora/queue`, `@lunora/workflow`) treat
+            // a 403 as deterministic and ack the message instead of retrying — so
+            // a rotated secret would silently drain the queue one message per
+            // delivery. The distinct code is what keeps this retryable.
+            throw new LunoraError("Scheduler dispatch requires a valid signature or admin bearer", { code: "DISPATCH_UNAUTHENTICATED", status: 403 });
         }
 
         let body: unknown;
@@ -3378,27 +3420,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
          * The DO answers ONE bounded page (`{ records, truncated, cursor }`), so
          * handing the raw body back both breaks the declared
          * `Record<string, unknown>[]` contract and silently drops every job past
-         * the page size. Mirrors `@lunora/scheduler`'s `createScheduler.list()`
-         * — the shard-side client of the same route.
+         * the page size. The walk itself is `shared/collect-pages.ts`, which
+         * `@lunora/scheduler`'s `createScheduler.list()` — the shard-side client
+         * of the same route — also uses, so the two cannot drift apart.
          */
-        const listAll = async (): Promise<Record<string, unknown>[]> => {
-            const all: Record<string, unknown>[] = [];
-            let cursor: string | undefined;
-
-            for (;;) {
-                const query = cursor === undefined ? "" : `?cursor=${encodeURIComponent(cursor)}`;
-                // eslint-disable-next-line no-await-in-loop -- each page's cursor comes from the previous page, so the round-trips are inherently sequential
-                const page = await call<{ cursor?: string; records?: Record<string, unknown>[]; truncated?: boolean }>(`/list${query}`, { method: "GET" });
-
-                all.push(...(Array.isArray(page.records) ? page.records : []));
-
-                if (page.truncated !== true || typeof page.cursor !== "string" || page.cursor.length === 0) {
-                    return all;
-                }
-
-                cursor = page.cursor;
-            }
-        };
+        const listAll = async (): Promise<Record<string, unknown>[]> =>
+            await collectPages<Record<string, unknown>>(async (cursor) =>
+                call<{ cursor?: string; records?: Record<string, unknown>[]; truncated?: boolean }>(
+                    cursor === undefined ? "/list" : `/list?cursor=${encodeURIComponent(cursor)}`,
+                    { method: "GET" },
+                ),
+            );
 
         const schedule = async (scheduledFor: number, target: unknown, args: Record<string, unknown> = {}): Promise<string> => {
             const { id } = await post<{ id: string }>("/schedule", { args, scheduledFor, ...targetFields(target) });
@@ -3411,19 +3443,26 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             get: async (id) => await call<Record<string, unknown> | null>(`/get?id=${encodeURIComponent(id)}`, { method: "GET" }),
             list: listAll,
             runAfter: async (delayMs, target, args) => {
+                // `@lunora/scheduler`'s `assertScheduleDelay`, restated: this
+                // package does not depend on `@lunora/scheduler` (it speaks to the
+                // SchedulerDO over HTTP), and pulling it in for one guard would
+                // add `cron-parser` to the worker entry. The CODE is kept in step
+                // by hand — a caller's bad argument, never `INTERNAL`.
                 if (!Number.isFinite(delayMs) || delayMs < 0) {
-                    throw new LunoraError("ctx.scheduler.runAfter: `delayMs` must be a non-negative finite number", { code: "BAD_REQUEST", status: 400 });
+                    throw new LunoraError("ctx.scheduler.runAfter: `delayMs` must be a non-negative finite number", { code: "INVALID_INPUT", status: 400 });
                 }
 
                 return await schedule(Date.now() + delayMs, target, args);
             },
             runAt: async (timestampMs, target, args) => {
-                // Same guard as `runAfter`: an unchecked NaN/Infinity serializes
-                // to `null` through JSON and reaches the DO as a malformed
-                // `scheduledFor`, instead of failing here with something the
-                // caller can act on.
+                // `@lunora/scheduler`'s `assertScheduleInstant`, restated for the
+                // same reason `runAfter` restates its guard above — and to the same
+                // CODE and MESSAGE, byte for byte. An unchecked NaN/Infinity
+                // serializes to `null` through JSON and reaches the DO as a
+                // malformed `scheduledFor`; an instant already in the past is an
+                // overdue job, not a bad argument, so it passes.
                 if (!Number.isFinite(timestampMs)) {
-                    throw new LunoraError("ctx.scheduler.runAt: `timestampMs` must be a finite epoch-millisecond number", { code: "BAD_REQUEST", status: 400 });
+                    throw new LunoraError("ctx.scheduler.runAt: `date` must be a non-negative finite number", { code: "INVALID_INPUT", status: 400 });
                 }
 
                 return await schedule(timestampMs, target, args);
@@ -3493,6 +3532,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             runMutation: run,
             runQuery: run,
             ...(schedulerDO === undefined ? {} : { scheduler: buildHttpScheduler(schedulerDO) }),
+            // Bound to the execution context so a handler — or a wrapper reading
+            // it structurally, e.g. `@lunora/x402`'s `withX402` receipt sink —
+            // can outlive the response. Omitted entirely when the host supplied
+            // no `waitUntil`, so the optional member stays honest.
+            ...(context.waitUntil === undefined ? {} : { waitUntil: context.waitUntil.bind(context) }),
             // Built over the worker's own R2 bindings — an HTTP handler runs
             // where an action does, so this needs no shard hop. Absent (rather
             // than a throwing stub) when the app declared no `.storage()`, which
@@ -3682,7 +3726,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // path default-denies unconditionally. Routing it through the helper would
         // admit a caller who names the default shard as their `threadKey`.
         if (options.authorizeShard) {
-            const allowed = await options.authorizeShard({ identity, shardKey: threadKey });
+            const allowed = await grants(options.authorizeShard({ identity, shardKey: threadKey }));
 
             if (!allowed) {
                 // The same typed error the helper throws, so a denied voice caller
@@ -3724,7 +3768,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         identity: ResolvedIdentity | null,
     ): Promise<void> => {
         if (options.authorizeFanOut) {
-            const allowed = await options.authorizeFanOut(identity, fanOut.table, functionPath);
+            const allowed = await grants(options.authorizeFanOut(identity, fanOut.table, functionPath));
 
             if (!allowed) {
                 throw new LunoraError("Forbidden fan-out", { code: "FORBIDDEN_FANOUT", status: 403 });
@@ -4823,7 +4867,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         try {
-            if (await options.adminGate(request, executionContextByRequest.get(request))) {
+            // Polarity here is INVERTED — truthy GRANTS admin — so an unnarrowed
+            // verdict is the worst of the three: a gate returning a claims object,
+            // a `Response`, or `{ ok: false }` would unlock every `/_lunora/admin/*`
+            // route. `grants` requires the exact `true`.
+            if (await grants(options.adminGate(request, executionContextByRequest.get(request)))) {
                 accessAdminGrants.add(request);
             }
         } catch {

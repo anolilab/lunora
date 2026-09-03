@@ -305,6 +305,50 @@ const otlpLogBody = (event: LogEvent): unknown => {
 /** Above this serialized size, an OTLP body is gzipped; tiny single-span posts skip it (the CPU isn't worth the few saved bytes). */
 const OTLP_GZIP_THRESHOLD = 1024;
 
+/** How many rejected OTLP posts one isolate reports before it goes quiet. */
+const MAX_OTLP_REJECTION_REPORTS = 5;
+
+/** Rejections already reported by {@link reportOtlpRejection} in this isolate. */
+let otlpRejectionReports = 0;
+
+/**
+ * Surface a collector that is REFUSING the export, at most
+ * {@link MAX_OTLP_REJECTION_REPORTS} times per isolate.
+ *
+ * Mirrors the rate-limited `console.error` `otlpSink` already uses for a
+ * throwing `tailSampler`, and for the same reason: without it, a wrong token
+ * (401), a wrong path (404), or a collector rejecting the body (422) is
+ * indistinguishable from a working pipeline — every post "succeeds", nothing is
+ * ever logged, and the only symptom is telemetry that never arrives, on every
+ * isolate, forever. Rate-limited because the failure is by definition on every
+ * export, and an unbounded `console.error` in a Workers runtime is the noise
+ * loop the batching pipeline exists to avoid.
+ *
+ * Only the status and the endpoint HOST are reported — never the response body
+ * or the URL's path/query, either of which can echo credentials or user data
+ * back into the platform log.
+ */
+const reportOtlpRejection = (url: string, status: number): void => {
+    if (otlpRejectionReports >= MAX_OTLP_REJECTION_REPORTS) {
+        return;
+    }
+
+    otlpRejectionReports += 1;
+
+    let host: string;
+
+    try {
+        host = new URL(url).host;
+    } catch {
+        host = "<unparseable endpoint>";
+    }
+
+    const silencing = otlpRejectionReports === MAX_OTLP_REJECTION_REPORTS ? " Further OTLP rejections are silenced until the isolate restarts." : "";
+
+    // eslint-disable-next-line no-console
+    console.error(`[lunora:otlp] collector ${host} rejected the export with HTTP ${String(status)}; the batch is DROPPED (there is no retry).${silencing}`);
+};
+
 /** Gzip a UTF-8 string to an `ArrayBuffer` (a `BodyInit`) via the platform `CompressionStream` (no dependency). */
 const gzipEncode = async (text: string): Promise<ArrayBuffer> => {
     const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
@@ -320,6 +364,16 @@ const gzipEncode = async (text: string): Promise<ArrayBuffer> => {
  * window it handed to `waitUntil`), while the unbatched paths only need
  * fire-and-forget — so this promise-returning form is the primitive and
  * {@link otlpPost} is the thin wrapper over it.
+ *
+ * **There is no retry, by design.** A Workers isolate can vanish between the
+ * buffer and the network, so a retry queue would trade bounded, understandable
+ * data loss for unbounded memory inside the request path; durability is the
+ * collector's problem. A dropped batch is therefore permanently dropped — which
+ * is exactly why a REJECTED post (a non-2xx status: bad token, wrong path,
+ * unacceptable body) is reported once per isolate through
+ * {@link reportOtlpRejection} rather than swallowed. A transport error stays
+ * silent: it is the ordinary, self-healing failure, and it cannot be told apart
+ * from a collector that is offline for a moment.
  */
 const otlpSend = async (url: string, body: unknown, headers: Record<string, string>, keepAlive?: KeepAlive): Promise<void> => {
     try {
@@ -334,9 +388,18 @@ const otlpSend = async (url: string, body: unknown, headers: Record<string, stri
                 ? fetch(url, { body: json, headers, method: "POST" })
                 : gzipEncode(json).then((gz) => fetch(url, { body: gz, headers: { ...headers, "content-encoding": "gzip" }, method: "POST" }))
         ).then(
-            () => undefined,
+            (response) => {
+                if (!response.ok) {
+                    reportOtlpRejection(url, response.status);
+                }
+
+                return undefined;
+            },
             () => {
-                // Network error / non-OK response / gzip failure — intentionally ignored.
+                // Network error / gzip failure — intentionally ignored: transient,
+                // self-healing, and indistinguishable from a collector that is
+                // offline for a moment. A REJECTION (handled above) is the durable
+                // misconfiguration worth a line in the log.
             },
         );
 

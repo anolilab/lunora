@@ -87,6 +87,7 @@ interface AgentChatOptions {
     api: AgentChatApi;
     cancel?: FunctionReference<"mutation">;
     limit?: number;
+    onError?: SubscriptionErrorCallback;
     send: FunctionReference<"mutation">;
     sendArgs?: Record<string, unknown>;
     stream?: AgentTokenStreamReference;
@@ -119,6 +120,7 @@ type AgentLiveEvent = AgentProgressEvent | AgentTokenDelta;
 interface AgentOptions {
     api: AgentApi;
     cancel?: FunctionReference<"mutation">;
+    onError?: SubscriptionErrorCallback;
     run: FunctionReference<"mutation">;
     runArgs?: Record<string, unknown>;
     threadKey: string;
@@ -314,6 +316,7 @@ type HeartbeatReference = FunctionReference<"mutation", {
 
 ```ts
 interface InfiniteQueryHandle<T> {
+    error: Readable<SubscriptionError | undefined>;
     fetchNextPage: (numberItems?: number) => void;
     hasNextPage: Readable<boolean>;
     isFetchingNextPage: Readable<boolean>;
@@ -328,6 +331,7 @@ interface InfiniteQueryHandle<T> {
 ```ts
 interface InfiniteQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -398,6 +402,7 @@ type PaginatedArgs<F extends FunctionReference> = Omit<ArgsOf<F>, "paginationOpt
 
 ```ts
 interface PaginatedQueryHandle<T> {
+    error: Readable<SubscriptionError | undefined>;
     isLoading: Readable<boolean>;
     loadMore: (numberItems: number) => void;
     results: Readable<T[]>;
@@ -410,6 +415,7 @@ interface PaginatedQueryHandle<T> {
 ```ts
 interface PaginatedQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -518,6 +524,7 @@ type StreamStatus = "complete" | "error" | "idle" | "streaming";
 
 ```ts
 interface StreamStoreOptions {
+    durable?: boolean;
     maxBuffer?: number;
     shardKey?: string;
 }
@@ -678,7 +685,9 @@ const getLunoraClient: () => LunoraClient;
 ### `hydratePreloaded` (const)
 
 ```ts
-const hydratePreloaded: <T>(preloaded: Preloaded<T>, client?: LunoraClient) => Readable<T>;
+const hydratePreloaded: <T>(preloaded: Preloaded<T>, client?: LunoraClient, options?: {
+    onError?: SubscriptionErrorCallback;
+}) => Readable<T>;
 ```
 
 ### `infiniteQuery` (function)

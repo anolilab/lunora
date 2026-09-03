@@ -202,9 +202,11 @@ const client = new EventLogDOClient({
 const [entry] = await client.append([{ type: "order.placed", payload: { orderId: "123" } }], { batchId: "order-123" });
 
 // The log is append-only and ordered, so reads are by sequence number — there
-// is no filter-by-type query. `getSince(0)` returns the whole log.
-const since = await client.getSince(entry.seq);
-const { entries, hasMore } = await client.getRange(0, 50);
+// is no filter-by-type query. `getSince` returns ONE bounded page (500 entries
+// by default, 1000 max); keep passing the returned `cursor` back while
+// `truncated` is true to walk the whole log.
+const { entries, truncated, cursor } = await client.getSince(entry.seq);
+const page = await client.getSince(0, 50);
 const size = await client.getSize();
 ```
 

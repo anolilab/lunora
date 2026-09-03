@@ -15,10 +15,11 @@ use std::sync::{Arc, Mutex};
 use lunora::client::{Client, ClientError};
 use lunora::offline::{
     identity_allows_replay, is_stale_version, random_id, same_shard, Identity, OfflineQueue, PersistenceAdapter, QueuedMutation, CODE_CLIENT_CLOSED,
-    CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW, CODE_OFFLINE_WRITE_UNENCODABLE,
+    CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW, CODE_OFFLINE_WRITE_UNDECODABLE,
+    CODE_OFFLINE_WRITE_UNENCODABLE, MAX_BATCH_ENTRIES, MAX_RETRY_AFTER_MS,
 };
 use lunora::submit::{MutationStatus, SubmitOptions};
-use lunora::wire::{decode_wire, WireValue, MAX_DEPTH};
+use lunora::wire::{decode_wire, encode_wire, WireValue, MAX_DEPTH};
 use serde_json::{json, Value};
 
 use crate::fixture;
@@ -354,6 +355,12 @@ pub fn optimistic_cursorless_frame_preserves_cursor() {
 }
 
 /// A persistence adapter that records every call.
+///
+/// It JSON round-trips every record on `append` and `load`, which an adapter
+/// holding the value by reference does not — and that is the whole point: a file,
+/// a SQLite text column or a preferences store all serialise, so a record that
+/// carried the codec's native wrappers would be written as something that does
+/// not read back. Holding references made this suite blind to that.
 #[derive(Clone, Default)]
 struct MemoryStore {
     inner: Arc<Mutex<MemoryStoreState>>,
@@ -385,23 +392,34 @@ impl MemoryStore {
         self.inner.lock().expect("store lock").appended.len()
     }
 
+    fn appended_at(&self, index: usize) -> Value {
+        self.inner.lock().expect("store lock").appended[index].clone()
+    }
+
     fn records(&self) -> usize {
         self.inner.lock().expect("store lock").records.len()
     }
 }
 
+/// A record as it comes back out of durable storage: through the port's JSON
+/// encoder and decoder, never by reference.
+fn serialised(record: &Value) -> Value {
+    serde_json::from_str(&record.to_string()).expect("a durable record must be JSON")
+}
+
 impl PersistenceAdapter for MemoryStore {
     fn append(&mut self, record: &Value) -> Result<(), String> {
         let mut state = self.inner.lock().expect("store lock");
+        let stored = serialised(record);
 
-        state.appended.push(record.clone());
-        state.records.push(record.clone());
+        state.appended.push(stored.clone());
+        state.records.push(stored);
 
         Ok(())
     }
 
     fn load(&mut self) -> Result<Vec<Value>, String> {
-        Ok(self.inner.lock().expect("store lock").records.clone())
+        Ok(self.inner.lock().expect("store lock").records.iter().map(serialised).collect())
     }
 
     fn remove(&mut self, mutation_id: &str) -> Result<(), String> {
@@ -624,7 +642,7 @@ pub fn offline_queue_hydrates_persisted_writes() {
         queue.enqueue(entry(&id, None), Ok(json!({})));
     }
 
-    let (mut shard_keys, evicted) = queue.hydrate(|raw| decode_wire(raw).unwrap_or(WireValue::Null)).expect("hydrate");
+    let (mut shard_keys, evicted) = queue.hydrate(|raw| decode_wire(raw).map_err(|error| error.to_string())).expect("hydrate");
 
     assert!(evicted.is_empty(), "nothing exceeded the default capacity");
     // The durable store's order is authoritative: a prior-session write is always
@@ -654,7 +672,7 @@ pub fn offline_queue_hydrates_persisted_writes() {
         .with_max_items(overflow["maxItems"].as_u64().expect("cap") as usize)
         .with_persistence(Box::new(store.clone()))
         .with_version(overflow["version"].as_str().expect("version"));
-    let (shard_keys, evicted) = queue.hydrate(|raw| decode_wire(raw).unwrap_or(WireValue::Null)).expect("hydrate");
+    let (shard_keys, evicted) = queue.hydrate(|raw| decode_wire(raw).map_err(|error| error.to_string())).expect("hydrate");
 
     assert_eq!(queued_ids(&queue), ids(&overflow["queuedAfterHydrate"]), "hydration respects the cap");
     assert_eq!(evicted.iter().map(|item| item.entry.id.clone()).collect::<Vec<_>>(), ids(&overflow["evicted"]));
@@ -667,6 +685,9 @@ pub fn offline_queue_hydrates_persisted_writes() {
             .map(|entry| entry.as_str().map(str::to_string))
             .collect::<Vec<_>>()
     );
+
+    typed_args_survive_a_serialising_store();
+    a_persisted_record_that_cannot_be_decoded_settles_rejected();
 
     // Version gating is OFF until a version is configured.
     assert!(!is_stale_version(None, None));
@@ -823,6 +844,17 @@ pub fn offline_flush_replays_and_confirms_optimistic() {
     submit_queues_while_offline(case["confirmedCommitCursor"].as_i64().expect("cursor"));
     submit_before_first_connect_fails_fast();
     overflow_during_submit_settles();
+}
+
+/// The entry cap is not a port's to choose: the worker and the shard DO both
+/// refuse a larger batch with a coded 400, which `protocol/README.md` 4.3 makes a
+/// TERMINAL verdict — so a client chunking at a stale value discards durable
+/// writes instead of retrying them. It was a bare 500 in ten independent places
+/// with nothing reconciling them.
+pub fn batch_entry_cap_matches_protocol() {
+    let expected = queue_case("batchReplay")["maxEntries"].as_u64().expect("maxEntries");
+
+    assert_eq!(MAX_BATCH_ENTRIES as u64, expected);
 }
 
 /// Two or more queued writes coalesce into ONE `/_lunora/rpc-batch` round trip,
@@ -1027,6 +1059,288 @@ pub fn offline_flush_unencodable_write_settles_terminal() {
         "the unencodable write settles terminally, with the documented code"
     );
     assert_eq!(case["code"].as_str(), Some(CODE_OFFLINE_WRITE_UNENCODABLE));
+}
+
+/// A queued write carrying a bigint, bytes and a date round-trips through a
+/// SERIALISING store.
+///
+/// Every one of those is a native wrapper the codec understands and a JSON
+/// encoder does not. Persisting the native form reports the write "queued" while
+/// the adapter fails, or writes whatever its stringification makes of an opaque
+/// value and replays after a restart with CORRUPTED args — so the durable record
+/// has to hold the WIRE form, and hydration has to decode it back.
+fn typed_args_survive_a_serialising_store() {
+    let args = WireValue::Object(vec![
+        ("amount".into(), WireValue::BigInt("7".into())),
+        ("blob".into(), WireValue::Bytes(vec![1, 2, 3, 4])),
+        ("when".into(), WireValue::Date(Box::new(WireValue::Number(1_700_000_000_000.0)))),
+    ]);
+    let store = MemoryStore::default();
+    let errors = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::clone(&errors);
+    let mut queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+
+    queue.on_persistence_error = Some(Box::new(move |operation, _error, mutation_id| {
+        observer
+            .lock()
+            .expect("errors")
+            .push((operation.to_string(), mutation_id.unwrap_or_default().to_string()));
+    }));
+
+    let mut item = QueuedMutation::new("ledger:add", args.clone(), None, "m-typed");
+
+    item.args = args.clone();
+    queue.enqueue(item, encode_wire(&args).map_err(|error| error.to_string()));
+
+    assert!(
+        errors.lock().expect("errors").is_empty(),
+        "the record must serialise, so nothing is reported as a failed append"
+    );
+    assert_eq!(
+        store.appended_at(0)["args"],
+        encode_wire(&args).expect("encode"),
+        "the durable record holds the WIRE form"
+    );
+
+    let mut restored = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+    let (_shard_keys, evicted) = restored.hydrate(|raw| decode_wire(raw).map_err(|error| error.to_string())).expect("hydrate");
+
+    assert!(evicted.is_empty());
+    assert_eq!(queued_ids(&restored), vec!["m-typed".to_string()]);
+    // Decoded back to the SAME native values, so the replay sends the write that
+    // was made rather than whatever the adapter's stringification left.
+    assert_eq!(restored.items()[0].args, args);
+}
+
+/// A persisted record whose args do not decode is purged and settled `rejected`,
+/// never replayed with substitute args and never fatal to the restart.
+fn a_persisted_record_that_cannot_be_decoded_settles_rejected() {
+    // A wire tag with no readable payload: the store was corrupted, or written by
+    // an incompatible build. Replaying it with substitute args would commit a
+    // DIFFERENT write than the caller made, which is corruption rather than
+    // failure.
+    let store = MemoryStore::seeded(vec![json!({
+        "args": { "amount": ["$lunora.wire$", "bigint", "not-a-number"] },
+        "functionPath": "ledger:add",
+        "id": "m-bad",
+    })]);
+    let settled = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::clone(&settled);
+    let mut client = Client::new("https://app.example", None);
+
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+    client.on_mutation_settled(Box::new(move |event| {
+        observer.lock().expect("settled").push((
+            event.mutation_id.clone(),
+            event.status,
+            event.error.as_ref().map(|error| error.code.clone()).unwrap_or_default(),
+        ));
+    }));
+
+    let shard_keys = client.hydrate_offline_queue().expect("hydrate must survive one unreadable row");
+
+    assert!(shard_keys.is_empty(), "nothing was restored, so no shard needs a socket");
+    assert!(queued_ids(&client.offline_queue).is_empty(), "and nothing is queued for replay");
+    assert_eq!(
+        *settled.lock().expect("settled"),
+        vec![("m-bad".to_string(), MutationStatus::Rejected, CODE_OFFLINE_WRITE_UNDECODABLE.to_string())],
+        "it settles terminally with the documented code"
+    );
+    assert_eq!(
+        store.removed(),
+        vec!["m-bad".to_string()],
+        "the unreadable record is purged, not left to fail every restart"
+    );
+}
+
+/// A batch the worker refuses for SIZE is split and retried, not settled
+/// `rejected` whole.
+///
+/// The worker reads a batch body under a 1 MiB budget
+/// (`packages/runtime/src/body-readers.ts`) and answers `413 PAYLOAD_TOO_LARGE`
+/// past it. A whole-batch coded envelope is a verdict on every entry, so a
+/// count-only chunker settled the lot `rejected` — 500 durable writes dropped,
+/// each of which would have committed alone.
+pub fn offline_flush_batch_splits_on_payload_too_large() {
+    // Far under `MAX_BATCH_BYTES`, so the chunker cannot pre-empt the 413: the
+    // SPLIT is what this case asserts, and the estimate deliberately cannot see
+    // the framing the worker measures.
+    const BUDGET: usize = 400;
+
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&bodies);
+    let store = MemoryStore::default();
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |_url, _headers, body: &[u8]| {
+            recorder.lock().expect("bodies").push(body.len());
+
+            if body.len() > BUDGET {
+                return Ok((413, br#"{"error":{"code":"PAYLOAD_TOO_LARGE","message":"Body too large"}}"#.to_vec()));
+            }
+
+            let request: Value = serde_json::from_slice(body).map_err(|error| error.to_string())?;
+            let slots: Vec<Value> = request["calls"]
+                .as_array()
+                .expect("calls")
+                .iter()
+                .map(|call| json!({ "id": call["id"], "body": { "commitCursor": 1, "result": Value::Null } }))
+                .collect();
+
+            Ok((200, serde_json::to_vec(&json!({ "results": slots })).expect("body")))
+        })),
+    );
+
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+
+    let queued: Vec<String> = (0..4).map(|index| format!("m-{index}")).collect();
+    let args = WireValue::Object(vec![("text".into(), WireValue::String("x".repeat(120)))]);
+
+    for id in &queued {
+        let mut item = QueuedMutation::new("messages:send", args.clone(), None, id.as_str());
+
+        item.client_id = Some("c-1".to_string());
+        client.offline_queue.enqueue(item, encode_wire(&args).map_err(|error| error.to_string()));
+    }
+
+    let report = client.flush_offline_queue(None);
+
+    assert_eq!(
+        report.committed, queued,
+        "every write commits; none is dropped for the size of the batch it shared"
+    );
+    assert!(report.rejected.is_empty());
+    assert!(report.requeued.is_empty());
+    assert!(queued_ids(&client.offline_queue).is_empty(), "the queue drains");
+    assert_eq!(store.removed(), queued, "and every durable record is forgotten");
+    assert!(
+        bodies.lock().expect("bodies").iter().any(|size| *size > BUDGET),
+        "the first attempt has to be the over-budget one, or nothing was split"
+    );
+
+    a_rate_limited_replay_requeues_and_defers_the_next_flush();
+    a_lone_queued_write_survives_an_envelope_less_502();
+}
+
+/// A 429 is "not now", not "no": the write is valid and the server asked for it
+/// later, so dropping it loses data for being punctual.
+fn a_rate_limited_replay_requeues_and_defers_the_next_flush() {
+    let posts = Arc::new(Mutex::new(0_usize));
+    let counter = Arc::clone(&posts);
+    let store = MemoryStore::default();
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |_url, _headers, _body| {
+            *counter.lock().expect("posts") += 1;
+
+            Ok((
+                429,
+                br#"{"error":{"code":"TOO_MANY_REQUESTS","data":{"retryAfterMs":60000},"message":"slow down"}}"#.to_vec(),
+            ))
+        })),
+    );
+
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+    client.offline_queue.enqueue(entry("m-429", None), Ok(json!({})));
+
+    let report = client.flush_offline_queue(None);
+
+    assert!(report.rejected.is_empty(), "a rate limit is not a verdict on the write");
+    assert_eq!(report.requeued, vec!["m-429".to_string()]);
+    assert_eq!(report.retry_after_ms, Some(60_000));
+    assert!(store.removed().is_empty(), "the durable record stays, because the write is still good");
+
+    let again = client.flush_offline_queue(None);
+
+    assert_eq!(
+        *posts.lock().expect("posts"),
+        1,
+        "the second flush must wait out the delay rather than earn the same 429"
+    );
+    assert!(
+        again.retry_after_ms.is_some_and(|remaining| remaining > 0),
+        "the deferred flush reports what is left of the delay, got {:?}",
+        again.retry_after_ms
+    );
+    assert_eq!(queued_ids(&client.offline_queue), vec!["m-429".to_string()]);
+
+    a_rate_limited_batch_slot_is_retried_and_its_hint_clamped();
+}
+
+/// A rate-limited SLOT is classified by the same predicate as a whole batch and a
+/// single call, and its hint is clamped.
+///
+/// `protocol/README.md` §4.3: a slot's `body` is exactly a §4.2 envelope, so a
+/// durable write's fate must not depend on which of the three paths carried it —
+/// keying the slot loop on its own code set left a rate-limited entry in a batch
+/// settled `rejected` while the identical answer to a lone write was retried.
+fn a_rate_limited_batch_slot_is_retried_and_its_hint_clamped() {
+    let store = MemoryStore::default();
+    let settled = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::clone(&settled);
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(|_url, _headers, _body| {
+            // Slot 0 commits; slot 1 is refused by a limiter naming a delay far
+            // past the clamp.
+            Ok((
+                200,
+                br#"{"results":[{"id":0,"body":{"commitCursor":1,"result":null}},{"id":1,"body":{"error":{"code":"RATE_LIMITED","data":{"retryAfterMs":900000},"message":"slow down"}}}]}"#
+                    .to_vec(),
+            ))
+        })),
+    );
+
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+    client.on_mutation_settled(Box::new(move |event| {
+        observer.lock().expect("settled").push((event.mutation_id.clone(), event.status));
+    }));
+    client.offline_queue.enqueue(entry("m-ok", None), Ok(json!({})));
+    client.offline_queue.enqueue(entry("m-limited", None), Ok(json!({})));
+
+    let report = client.flush_offline_queue(None);
+
+    assert_eq!(report.committed, vec!["m-ok".to_string()]);
+    assert!(report.rejected.is_empty(), "a rate-limited slot is not a verdict on that write");
+    assert_eq!(report.requeued, vec!["m-limited".to_string()]);
+    assert_eq!(
+        report.retry_after_ms,
+        Some(MAX_RETRY_AFTER_MS),
+        "the slot's hint is honoured, clamped at the ceiling"
+    );
+    assert_eq!(store.removed(), vec!["m-ok".to_string()], "only the committed write is un-persisted");
+    assert_eq!(
+        *settled.lock().expect("settled"),
+        vec![("m-ok".to_string(), MutationStatus::Committed)],
+        "the requeued write settles nothing: no verdict was reached on it"
+    );
+}
+
+/// A 502 carrying no error envelope is transport, not a verdict — on a flush of
+/// exactly ONE write as much as on a batch.
+///
+/// The same response with two or more writes was already classified transient, so
+/// whether a gateway blip LOST a durable write depended on the queue's depth.
+fn a_lone_queued_write_survives_an_envelope_less_502() {
+    let store = MemoryStore::default();
+    let settled = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::clone(&settled);
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(|_url, _headers, _body| Ok((502, br#"{"message":"bad gateway"}"#.to_vec())))),
+    );
+
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+    client.on_mutation_settled(Box::new(move |event| observer.lock().expect("settled").push(event.mutation_id.clone())));
+    client.offline_queue.enqueue(entry("m-502", None), Ok(json!({})));
+
+    let report = client.flush_offline_queue(None);
+
+    assert!(report.rejected.is_empty());
+    assert_eq!(report.requeued, vec!["m-502".to_string()]);
+    assert_eq!(queued_ids(&client.offline_queue), vec!["m-502".to_string()]);
+    assert!(settled.lock().expect("settled").is_empty(), "nothing settled: no verdict was ever reached");
+    assert!(store.removed().is_empty(), "the durable record stays, because the write is still good");
 }
 
 /// A hydrated write evicted on overflow reports through the CLIENT.

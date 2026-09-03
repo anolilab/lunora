@@ -40,13 +40,22 @@ const trimTrailingSlashes = (value: string): string => {
 };
 
 /**
- * Non-enumerable brand stamped on every error {@link toDispatchError} builds.
- * A step body can throw an unrelated `LunoraError` that happens to share one
- * of {@link DETERMINISTIC_DISPATCH_STATUSES} (e.g. a genuine 404 from a
- * storage lookup) — the brand is what lets {@link isDeterministicDispatchFailure}
- * tell "this specific error came from a dispatch response" from "this error
- * merely has a matching status", so classification stays scoped to actual
- * dispatch failures instead of every step-body error in the allowlisted range.
+ * Non-enumerable brand stamped on an error {@link toDispatchError} reconstructed
+ * from a well-formed `{ error: { code, … } }` dispatch envelope.
+ *
+ * Two things are gated on it. First, a step body can throw an unrelated
+ * `LunoraError` that happens to share one of
+ * {@link DETERMINISTIC_DISPATCH_STATUSES} (e.g. a genuine 404 from a storage
+ * lookup) — the brand lets {@link isDeterministicDispatchFailure} tell "this
+ * came from a dispatch response" from "this merely has a matching status".
+ *
+ * Second, and the reason it is stamped on the parsed path ONLY: an unparseable
+ * body means the status did not come from the dispatch endpoint at all. An edge
+ * challenge, a WAF block or a misrouted error page answers 403/404 with HTML,
+ * and that failure is transient — the caller retries once the rule or the route
+ * is fixed. Branding it too would make {@link isDeterministicDispatchFailure}
+ * classify it on status alone and permanently dead-letter the queue batch /
+ * burn the workflow step.
  */
 const DISPATCH_FAILURE_BRAND = Symbol("lunoraDispatchFailure");
 
@@ -59,15 +68,20 @@ const DISPATCH_FAILURE_BRAND = Symbol("lunoraDispatchFailure");
 // eslint-disable-next-line no-secrets/no-secrets -- false positive: a Symbol description identifying this slot, not a credential
 const DISPATCH_MESSAGE_ID = Symbol("lunoraDispatchMessageId");
 
-/** Stamp `error` with {@link DISPATCH_FAILURE_BRAND} (and {@link DISPATCH_MESSAGE_ID}, when given) and return it. */
-const markAsDispatchFailure = (error: LunoraError, messageId?: string): LunoraError => {
-    Object.defineProperty(error, DISPATCH_FAILURE_BRAND, { value: true });
-
+/** Stamp `error` with {@link DISPATCH_MESSAGE_ID} when the caller scoped the call to one, and return it. */
+const attachMessageId = (error: LunoraError, messageId: string | undefined): LunoraError => {
     if (messageId !== undefined) {
         Object.defineProperty(error, DISPATCH_MESSAGE_ID, { value: messageId });
     }
 
     return error;
+};
+
+/** Stamp `error` with {@link DISPATCH_FAILURE_BRAND} (and {@link DISPATCH_MESSAGE_ID}, when given) and return it. */
+const markAsDispatchFailure = (error: LunoraError, messageId?: string): LunoraError => {
+    Object.defineProperty(error, DISPATCH_FAILURE_BRAND, { value: true });
+
+    return attachMessageId(error, messageId);
 };
 
 /**
@@ -94,11 +108,12 @@ const getDispatchMessageId = (error: unknown): string | undefined =>
  * attributed message (via {@link getDispatchMessageId}) instead of retrying the
  * whole batch, when the handler scoped its `ctx.run` call with a `messageId`.
  * An unparseable or unrecognized body falls back to a generic `INTERNAL`
- * carrying the HTTP status and the raw text (never deterministic, since it
- * isn't in the allowlist). `messageId`, when the caller
- * supplied one via {@link RunFunctionOptions.messageId}, is stamped onto the
- * built error via {@link markAsDispatchFailure} for {@link getDispatchMessageId}
- * to read back.
+ * carrying the HTTP status and the raw text, deliberately left UNBRANDED so it
+ * is never deterministic: a 4xx that did not carry a dispatch envelope did not
+ * come from the dispatch endpoint (an edge challenge, a WAF block, a proxy's
+ * 404 page), and those clear. `messageId`, when the caller
+ * supplied one via {@link RunFunctionOptions.messageId}, is stamped on either
+ * way for {@link getDispatchMessageId} to read back.
  */
 const toDispatchError = (label: string, status: number, rawBody: string, messageId: string | undefined): LunoraError => {
     try {
@@ -114,7 +129,7 @@ const toDispatchError = (label: string, status: number, rawBody: string, message
         // Not JSON / not the expected envelope — fall through to the generic error.
     }
 
-    return markAsDispatchFailure(new LunoraError("INTERNAL", `${label}: function dispatch failed (${String(status)}): ${rawBody}`, { status }), messageId);
+    return attachMessageId(new LunoraError("INTERNAL", `${label}: function dispatch failed (${String(status)}): ${rawBody}`, { status }), messageId);
 };
 
 /**
@@ -127,9 +142,23 @@ const toDispatchError = (label: string, status: number, rawBody: string, message
 const DETERMINISTIC_DISPATCH_STATUSES: ReadonlySet<number> = new Set([400, 403, 404, 422]);
 
 /**
- * True when `error` is a {@link LunoraError} actually built by
- * {@link toDispatchError} (carrying its {@link DISPATCH_FAILURE_BRAND}) whose
- * `status` is in {@link DETERMINISTIC_DISPATCH_STATUSES} — i.e. a dispatch
+ * Codes that share a deterministic STATUS but describe the dispatch
+ * INFRASTRUCTURE rather than the call. `DISPATCH_UNAUTHENTICATED` is the
+ * dispatch endpoint refusing our own signature/bearer — a missing, wrong, or
+ * rotated `LUNORA_SCHEDULER_SECRET`/`LUNORA_ADMIN_TOKEN`. It is a 403 like an
+ * RLS `FORBIDDEN`, but it says nothing about the message: retrying after the
+ * secret is fixed succeeds, so classifying it as deterministic would ack every
+ * queued message one delivery at a time and drain the queue while the operator
+ * is still fixing the credential.
+ */
+const INFRASTRUCTURE_DISPATCH_CODES: ReadonlySet<string> = new Set(["DISPATCH_UNAUTHENTICATED"]);
+
+/**
+ * True when `error` is a {@link LunoraError} {@link toDispatchError} rebuilt
+ * from a real dispatch error envelope (carrying its
+ * {@link DISPATCH_FAILURE_BRAND}) whose
+ * `status` is in {@link DETERMINISTIC_DISPATCH_STATUSES} and whose `code` is not
+ * one of {@link INFRASTRUCTURE_DISPATCH_CODES} — i.e. a dispatch
  * failure a consumer (`@lunora/workflow`'s `createRunStep`, `@lunora/queue`'s
  * consumer) should treat as non-retryable rather than rethrowing for the
  * platform's default retry-on-throw. The brand check is what keeps this
@@ -140,7 +169,8 @@ const DETERMINISTIC_DISPATCH_STATUSES: ReadonlySet<number> = new Set([400, 403, 
 const isDeterministicDispatchFailure = (error: unknown): error is LunoraError =>
     isLunoraError(error) &&
     (error as { [DISPATCH_FAILURE_BRAND]?: unknown })[DISPATCH_FAILURE_BRAND] === true &&
-    DETERMINISTIC_DISPATCH_STATUSES.has(error.status);
+    DETERMINISTIC_DISPATCH_STATUSES.has(error.status) &&
+    !INFRASTRUCTURE_DISPATCH_CODES.has(error.code);
 
 /**
  * Build the error a timed-out dispatch rejects with. Deliberately a 5xx-class

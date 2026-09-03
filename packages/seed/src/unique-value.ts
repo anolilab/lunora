@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { copycat } from "./copycat";
 import type { Constraints } from "./generate-value";
-import { BIGINT_RANGE, constraintsOf, isTimestampField, NUMBER_RANGE, TIMESTAMP_WINDOW_MS } from "./generate-value";
+import { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, isTimestampField, NUMBER_RANGE } from "./generate-value";
 import type { FieldSpec } from "./introspect";
 import { metaOf } from "./introspect";
 
@@ -64,9 +64,6 @@ const shuffleDomain = (domain: ReadonlyArray<unknown>, table: string, column: st
     return out;
 };
 
-/** Domain used when a column must hold an address but the generator produced a bare word. */
-const FALLBACK_EMAIL_DOMAIN = "@example.com";
-
 /**
  * Make a generated string row-unique while keeping the shape the generator just
  * produced: an address keeps its form via a plus-tag (`local+3@domain`),
@@ -85,9 +82,17 @@ const uniquifyString = (value: string, index: number, constraints: Constraints):
     if (at > 0) {
         const local = value.slice(0, at);
         const domain = value.slice(at);
-        const room = maxLength === undefined ? local.length : Math.max(0, maxLength - domain.length - tag.length - 1);
+        const room = maxLength === undefined ? local.length : maxLength - domain.length - tag.length - 1;
 
-        return `${local.slice(0, room)}+${tag}${domain}`;
+        // A generated address whose own domain fills the column leaves no room
+        // for a plus-tag: clamping to zero here would emit `+7@a-very-long.example`
+        // OVER `maxLength`, which is the overflow this reservation exists to
+        // prevent. Fall through instead — an `email` column rebuilds the address
+        // around the fixed fallback domain {@link stringCapacity} budgeted for,
+        // and anything else takes the plain index suffix.
+        if (room >= 0) {
+            return `${local.slice(0, room)}+${tag}${domain}`;
+        }
     }
 
     // The column declares `format: "email"` but the field-name heuristics didn't
@@ -130,7 +135,7 @@ const rangeDeal = (min: number, max: number): UniqueDeal => {
 
 /**
  * A deal over epoch-ms, stepping back from `now` one {@link TIMESTAMP_STEP_MS}
- * per row. Unbounded: the first {@link TIMESTAMP_WINDOW_MS} worth of rows land
+ * per row. Unbounded: the first `TIMESTAMP_WINDOW_MS` (`./generate-value`) worth of rows land
  * inside the same window the generator uses, and a batch large enough to run
  * past it simply keeps walking backwards rather than wrapping onto a value an
  * earlier row already took.
@@ -147,6 +152,13 @@ const temporalDeal = (now: number): UniqueDeal => {
  * range is a real capacity limit.
  */
 const countingDeal: UniqueDeal = { capacity: Number.POSITIVE_INFINITY, valueAt: (index) => index };
+
+/**
+ * The deal for a column whose value is built from the per-cell hash (a uuid, or
+ * a composite of them): already distinct per row, so the generator's own value
+ * stands and there is no capacity to refuse past.
+ */
+const anonymousDeal: UniqueDeal = { capacity: Number.POSITIVE_INFINITY, valueAt: (_index, generate) => generate() };
 
 /**
  * Pick the numeric deal for a column: the declared range when it has one (the
@@ -178,13 +190,28 @@ const refuse = (table: string, column: string, why: string): never => {
  * How many distinct values a string column can hold once every value has to
  * carry an index tag. A narrow column runs out long before the alphabet does:
  * `maxLength` of 1 leaves no room for even `-0`.
+ *
+ * The overhead an `email` column pays is the whole {@link FALLBACK_EMAIL_DOMAIN},
+ * not the one-character separator: {@link uniquifyString} rebuilds the address
+ * around that domain whenever the generated one leaves no room for a plus-tag,
+ * so it is the fixed cost the tag has to fit around. Budgeting the cheaper
+ * suffix form is what let `v.string().email().max(10).unique()` report a
+ * billion possible values and then seed `0@example.com` — thirteen characters
+ * into a ten-character column, rejected by the column's own validator on
+ * insert, which is exactly the outcome the capacity check exists to pre-empt.
+ *
+ * With this budget the largest index the planner admits is `10 ** (maxLength -
+ * overhead) - 1`, whose tag is at most `maxLength - overhead` characters — so
+ * `tag + overhead` always fits.
  */
-const stringCapacity = (maxLength: number | undefined): number => {
+const stringCapacity = ({ format, maxLength }: Constraints): number => {
     if (maxLength === undefined) {
         return Number.POSITIVE_INFINITY;
     }
 
-    return maxLength <= 1 ? 0 : 10 ** (maxLength - 1);
+    const overhead = format === "email" ? FALLBACK_EMAIL_DOMAIN.length : "-".length;
+
+    return maxLength <= overhead ? 0 : 10 ** (maxLength - overhead);
 };
 
 /**
@@ -208,10 +235,25 @@ const stringDeal = (constraints: Constraints, table: string, column: string): Un
     }
 
     return {
-        capacity: stringCapacity(constraints.maxLength),
+        capacity: stringCapacity(constraints),
         valueAt: (index, generate) => uniquifyString(String(generate()), index, constraints),
     };
 };
+
+/**
+ * The deal a `.unique()` FOREIGN KEY takes: the parent pool drawn without
+ * replacement, in a fixed shuffled order.
+ *
+ * A foreign key's value comes from the plan layer rather than the generator,
+ * but it comes from a finite domain like any other — so it is dealt like one.
+ * The uniform draw the ordinary path uses (`copycat.oneOf`) picks WITH
+ * replacement, which is exactly the collision `.unique()` promises not to make:
+ * `v.id("users").unique()`, the natural way to spell a 1:1 relation, produced 7
+ * distinct parents across 10 rows. The pool's size is a real capacity, so a
+ * batch larger than the parent table is refused at plan time with the column
+ * named, the same as a boolean or a three-value enum.
+ */
+const planUniqueFkDeal = (pool: ReadonlyArray<string>, table: string, column: string): UniqueDeal => domainDeal(pool, table, column);
 
 /**
  * Decide how one `.unique()` column deals its values.
@@ -285,14 +327,30 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
             return boundedNumeric(constraints, NUMBER_RANGE);
         }
 
+        case "union": {
+            // A union of literals is a closed domain — the same shape as an
+            // enum, and the very case `docs/index.mdx` names ("a three-literal
+            // `v.union()` … is refused at plan time"). The generator picks a
+            // member per row WITH replacement, so without a deal here eight rows
+            // over a two-literal union simply repeat and nothing refuses.
+            const members = metaOf(field.validator).members ?? [];
+            const literals = members.filter((member) => member.kind === "literal").map((member) => metaOf(member).value);
+
+            if (literals.length > 0 && literals.length === members.length) {
+                return domainDeal(literals, table, field.name);
+            }
+
+            return anonymousDeal;
+        }
+
         default: {
-            // `id`, `storage`, `array`, `object`, `record`, `union` — every one
-            // of these derives from the per-cell hash (a uuid, or a composite
-            // built from uuids), so it is already distinct per row.
-            return { capacity: Number.POSITIVE_INFINITY, valueAt: (_index, generate) => generate() };
+            // `id`, `storage`, `array`, `object`, `record` — every one of these
+            // derives from the per-cell hash (a uuid, or a composite built from
+            // uuids), so it is already distinct per row.
+            return anonymousDeal;
         }
     }
 };
 
-export { planUniqueDeal };
+export { planUniqueDeal, planUniqueFkDeal };
 export type { UniqueDeal };

@@ -9,7 +9,7 @@ const deployCommand: Command = {
         ["lunora deploy", "Deploy to Cloudflare"],
         ["lunora deploy --env production", "Deploy to a named environment"],
         ["lunora deploy --dry-run", "Validate + bundle without publishing"],
-        ["lunora deploy --migrate", "Deploy, then run pending data migrations"],
+        ["lunora deploy --migrate --migrate-yes --migrate-url <url>", "Deploy, then run pending data migrations"],
     ],
     group: "Deploy",
     loader: () =>

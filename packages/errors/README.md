@@ -21,7 +21,8 @@ throw new LunoraError("NOT_FOUND", `no message with id ${id}`);
 // Attach structured data + an actionable hint.
 throw new LunoraError("TOO_MANY_REQUESTS", "slow down", { data: { retryAfterMs: 1_000 } });
 
-// Realm-safe structural guard (works on wire-decoded errors too).
+// Realm-safe structural guard (works on wire-decoded errors too; requires the
+// `VisulimaError` brand, so a foreign error with code+status is not matched).
 if (isLunoraError(error)) {
     console.log(error.code, error.status, error.hint);
 }

@@ -107,6 +107,27 @@ The underlying fields are `expiresIn`, `updateAge`, `freshAge`,
 `disableSessionRefresh`, and `cookieCache`; see better-auth's `session` option
 for the full list.
 
+### The session cookie cache is on by default
+
+`createAuth` fills `session.cookieCache` with `{ enabled: true, maxAge: 60 }`
+whenever the caller does not set it — on **every** wiring, not just the DO
+scaffold. Sessions are then served from the signed cookie instead of a database
+read, which is what keeps `ctx.auth` off the hot path.
+
+<Callout type="warn">
+    **A revoked session keeps authenticating for up to `maxAge` (60 seconds by default.)** A sign-out on another device, a ban, a session deletion, or a role
+    change is not seen until the cached cookie expires, because nothing in the request path reads the `session` row while the cache is warm. Turn it off where
+    that window is unacceptable:
+
+    ```ts
+    createAuth({ secret: env.AUTH_SECRET, database: lunoraD1Adapter(env.DB), session: { cookieCache: { enabled: false } } });
+    ```
+
+    Any explicit `cookieCache` you pass is forwarded verbatim — `enabled: false` is never re-enabled, and a shorter `maxAge` shortens the window rather than
+    removing it. `sessionPresets.strict` sets its own.
+
+</Callout>
+
 ## OAuth providers
 
 OAuth is entirely better-auth's. Built-in social providers run through its
@@ -289,10 +310,14 @@ Both `PATCH` and `DELETE` answer `204` with no body; re-read the resource with `
 you need the resulting state.
 
 The IdP drives these endpoints with `PUT`, `PATCH`, and `DELETE`. Lunora's dispatch is
-method-agnostic and runs auth ahead of function routing, so those pass straight
-through. Auth routes bypass the runtime's request-body limits (the caps in
-`body-readers.ts` apply to Lunora's own routes, not to `/api/auth/*`), so a very large
-SCIM payload is bounded by the platform, not by Lunora.
+method-agnostic and runs auth ahead of function routing, so those pass straight through.
+
+The runtime's **1 MiB body cap applies to `/api/auth/*` as well**: a `POST` or `PUT`
+declaring a `Content-Length` above it is answered `413` before better-auth sees the
+request, so size a SCIM bulk request under 1 MiB and page it if it does not fit. Past
+that header pre-check nothing in Lunora reads or caps the auth body — the streaming
+readers in `body-readers.ts` are only on Lunora's own routes — so a chunked request
+declaring no length is bounded by the platform, not by Lunora.
 
 ### SCIM's database requirement, and `lunoraDoAdapter`
 
@@ -371,9 +396,10 @@ the auth tables directly from the worker, which DO storage does not permit, so i
 reports "not configured" rather than returning empty data.
 
 Identity resolution costs a round-trip to the object on requests that touch `ctx.auth`.
-Enable better-auth's `session.cookieCache` to serve most of them from the signed cookie
-instead, accepting a staleness window on revocation. The `vis generate lunora-auth-do`
-scaffold turns it on by default for that reason.
+`createAuth` already serves most of them from the signed cookie instead: `session.cookieCache`
+is filled with `{ enabled: true, maxAge: 60 }` unless you set it, so a revoked session keeps
+authenticating for up to 60 seconds here as everywhere else — see
+[the session cookie cache](#the-session-cookie-cache-is-on-by-default).
 
 ### Scaffolding it
 
@@ -642,8 +668,9 @@ export const signUp = mutation.input({ email: v.string(), password: v.string() }
     ```
 
     `ctx.args` is typed from the input validator declared **so far**, so `.use()` placed before `.input()` sees an empty `args` and the selector will not
-    type-check. It is a frozen shallow copy taken after validation — middleware cannot rewrite what the handler then receives, and the gate never sees input
-    that has not crossed the validator.
+    type-check. It is a frozen **shallow** copy taken after validation, so a middleware cannot rebind a top-level field the handler then reads, and the gate
+    never sees input that has not crossed the validator. Shallow is literal: nested objects and arrays are the same references the handler gets, so
+    `ctx.args.profile.email = …` from a middleware does reach it. Don't rely on `ctx.args` for deep immutability.
 
     Calling `assertEmailAllowed` in the handler, as above, stays equally valid — prefer it when the check depends on something the handler computes.
 
@@ -690,8 +717,12 @@ const signIns = await readAuthAuditLog(executor, { event: "sign-in", limit: 100 
 ```
 
 Each row captures the actor (id + email), event type, client IP/User-Agent,
-timestamp, and outcome. The free-form `detail` payload is scrubbed with
-`@visulima/redact` before it is persisted, so a token/password that leaks into an
-event's context never reaches the durable table. The trail lives in the reserved
+timestamp, and outcome. The built-in better-auth hook records only the request
+path in `detail` — deliberately, since the surrounding better-auth context is
+where credentials live. `detail` is free-form for entries you append yourself
+with `appendAuthAuditEntry`, and every payload is scrubbed with
+`@visulima/redact` before it is persisted (pass `redactDetail: false` to opt
+out), so a token or password that leaks into one never reaches the durable
+table. The trail lives in the reserved
 `__lunora_auth_audit__` table (auto-hidden from the data browser); retention is
 configurable via `retention` and defaults to unbounded.

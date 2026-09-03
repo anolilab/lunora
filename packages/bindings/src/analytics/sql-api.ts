@@ -15,6 +15,8 @@
 
 import { LunoraError } from "@lunora/errors";
 
+import { capErrorBody } from "../../../../shared/cap-error-body";
+
 /** Shape of the AE SQL-API JSON body (the fields we read). */
 interface RawSqlResponse {
     data?: Record<string, unknown>[];
@@ -77,10 +79,21 @@ export interface AnalyticsSqlResult {
     rows: Record<string, unknown>[];
 }
 
-/** Thrown when the SQL API responds with a non-2xx status; a `LunoraError` subclass carrying the HTTP `status` + body for the caller to surface. */
+/**
+ * Thrown when the SQL API responds with a non-2xx status; a `LunoraError`
+ * subclass carrying the HTTP `status` + a capped body preview, with the full
+ * body on `cause`.
+ *
+ * The preview is capped because AE's SQL error text quotes the query back, and
+ * `ANALYTICS_SQL_ERROR` is non-internal — the message reaches the browser.
+ */
 export class AnalyticsSqlError extends LunoraError {
     public constructor(status: number, body: string) {
-        super("ANALYTICS_SQL_ERROR", `Analytics Engine SQL API returned ${String(status)}: ${body}`, { name: "AnalyticsSqlError", status });
+        super("ANALYTICS_SQL_ERROR", `Analytics Engine SQL API returned ${String(status)}: ${capErrorBody(body)}`, {
+            cause: body,
+            name: "AnalyticsSqlError",
+            status,
+        });
     }
 }
 

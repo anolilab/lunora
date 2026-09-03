@@ -70,12 +70,15 @@ const createMockSql = () => {
                     table = table.filter((r) => r.seq >= Number(params[0]));
                 }
 
-                const limitMatch = query.match(/LIMIT\s+(\d+)/i);
+                // ORDER BY seq ASC — before the limit, as SQLite does.
+                table.sort((a, b) => a.seq - b.seq);
+
+                // LIMIT ? (bound — the handlers' form) or LIMIT <n>
+                const limitMatch = query.match(/LIMIT\s+(\?|\d+)/i);
                 if (limitMatch) {
-                    table = table.slice(0, Number(limitMatch[1]));
+                    table = table.slice(0, limitMatch[1] === "?" ? Number(params.at(-1)) : Number(limitMatch[1]));
                 }
 
-                table.sort((a, b) => a.seq - b.seq);
                 return { toArray: () => table };
             }
 
@@ -121,13 +124,13 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
 
         const since = await client.getSince(1);
 
-        expect(since).toHaveLength(1);
-        expect(since[0]!.seq).toBe(1);
-        expect(since[0]!.type).toBe("test.b");
+        expect(since.entries).toHaveLength(1);
+        expect(since.entries[0]!.seq).toBe(1);
+        expect(since.entries[0]!.type).toBe("test.b");
     });
 
-    it("paginates via getRange", async () => {
-        expect.assertions(7);
+    it("paginates via getSince", async () => {
+        expect.assertions(8);
 
         const do_ = createDO();
         const client = createClient(do_);
@@ -138,17 +141,18 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
             { type: "c", payload: {} },
         ]);
 
-        const page1 = await client.getRange(0, 2);
+        const page1 = await client.getSince(0, 2);
 
         expect(page1.entries).toHaveLength(2);
-        expect(page1.hasMore).toBe(true);
+        expect(page1.truncated).toBe(true);
+        expect(page1.cursor).toBe(2);
         expect(page1.entries[0]!.seq).toBe(0);
         expect(page1.entries[1]!.seq).toBe(1);
 
-        const page2 = await client.getRange(2, 2);
+        const page2 = await client.getSince(page1.cursor!, 2);
 
         expect(page2.entries).toHaveLength(1);
-        expect(page2.hasMore).toBe(false);
+        expect(page2.truncated).toBe(false);
         expect(page2.entries[0]!.seq).toBe(2);
     });
 
@@ -288,6 +292,144 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
         // Second initialize — should replay 0 new entries
         await expect(runtime.initialize()).resolves.toBe(0);
         expect(counter.state).toEqual({ total: 2 });
+    });
+
+    it("materializerRuntime initialize yields instead of chasing a log that keeps growing", async () => {
+        expect.assertions(2);
+
+        // A writer faster than the reader keeps `truncated` true on every page,
+        // so "walk until the log is exhausted" never terminates and startup
+        // never completes. The log stops growing here at 1500 only so an
+        // unbounded walk terminates and reports the overrun instead of hanging
+        // the suite.
+        const client = {
+            getSince: async (sinceSeq: number) => {
+                return {
+                    cursor: sinceSeq + 1,
+                    entries: [{ seq: sinceSeq, type: "increment", payload: {}, timestamp: sinceSeq }],
+                    truncated: sinceSeq < 1500,
+                };
+            },
+        } as unknown as EventLogDOClient;
+
+        const counter = defineMaterializer({
+            name: "counter",
+            initial: () => {
+                return { total: 0 };
+            },
+            handle: (state, entry) => {
+                if (entry.type === "increment") {
+                    return { total: state.total + 1 };
+                }
+                return state;
+            },
+        });
+
+        const runtime = new MaterializerRuntime([counter], { doClient: client });
+
+        await expect(runtime.initialize()).resolves.toBe(1000);
+        // The watermark carries the progress, so a later call resumes from here.
+        expect(runtime.appliedSeq).toBe(1000);
+    });
+
+    it("appendEvent closes an unfinished catch-up before applying its own entry", async () => {
+        expect.assertions(3);
+
+        // The same faster-than-the-reader log as above, plus an append. A
+        // bounded `initialize()` stops at 1000 with 500 entries still
+        // unprocessed; applying an appended entry over that gap advances every
+        // watermark to its `seq + 1`, so the next `initialize()` starts past the
+        // backlog and those 500 entries are never read by anyone.
+        const client = {
+            append: async () => [{ seq: 1500, type: "increment", payload: {}, timestamp: 1500 }],
+            getSince: async (sinceSeq: number) => {
+                return {
+                    cursor: sinceSeq + 1,
+                    entries: [{ seq: sinceSeq, type: "increment", payload: {}, timestamp: sinceSeq }],
+                    truncated: sinceSeq < 1500,
+                };
+            },
+        } as unknown as EventLogDOClient;
+
+        const counter = defineMaterializer({
+            name: "counter",
+            initial: () => {
+                return { total: 0 };
+            },
+            handle: (state, entry) => {
+                if (entry.type === "increment") {
+                    return { total: state.total + 1 };
+                }
+                return state;
+            },
+        });
+
+        const runtime = new MaterializerRuntime([counter], { doClient: client });
+
+        await expect(runtime.initialize()).resolves.toBe(1000);
+
+        await runtime.appendEvent({ type: "increment", payload: {} });
+
+        // 0..1500 inclusive — the backlog the first pass could not reach, then
+        // the appended entry itself (re-fetched by the walk, so `applyEntries`
+        // skips it as already applied).
+        expect(counter.state).toEqual({ total: 1501 });
+        expect(runtime.appliedSeq).toBe(1501);
+    });
+
+    it("appendEvent leaves its entry unapplied when the catch-up cannot close the gap", async () => {
+        expect.assertions(6);
+
+        // The gap the walk cannot close in one call. `#catchUp` is bounded by
+        // MAX_CATCHUP_PAGES (1000), so a backlog deeper than the bound is STILL
+        // open when the walk returns — the previous fixture kept the remainder
+        // under the bound and so could not tell the two behaviours apart.
+        // Applying the appended entry here would advance every lagging
+        // watermark to `entry.seq + 1`, and the events in between would never
+        // be fetched by anyone again. The entry is persisted either way; it
+        // waits for the backlog ahead of it instead.
+        const client = {
+            append: async () => [{ seq: 2500, type: "increment", payload: {}, timestamp: 2500 }],
+            getSince: async (sinceSeq: number) => {
+                return {
+                    cursor: sinceSeq + 1,
+                    entries: [{ seq: sinceSeq, type: "increment", payload: {}, timestamp: sinceSeq }],
+                    truncated: sinceSeq < 2500,
+                };
+            },
+        } as unknown as EventLogDOClient;
+
+        const counter = defineMaterializer({
+            name: "counter",
+            initial: () => {
+                return { total: 0 };
+            },
+            handle: (state, entry) => {
+                if (entry.type === "increment") {
+                    return { total: state.total + 1 };
+                }
+                return state;
+            },
+        });
+
+        const runtime = new MaterializerRuntime([counter], { doClient: client });
+
+        // First pass: 0..999, one page each, then the budget runs out.
+        await expect(runtime.initialize()).resolves.toBe(1000);
+
+        const entry = await runtime.appendEvent({ type: "increment", payload: {} });
+
+        // The append still persisted and still reports its seq.
+        expect(entry.seq).toBe(2500);
+        // A second budget carried 1000..1999. Seqs 2000..2500 are still ahead of
+        // the watermark — NOT stepped over — so nothing is lost.
+        expect(counter.state).toEqual({ total: 2000 });
+        expect(runtime.appliedSeq).toBe(2000);
+
+        // The backlog is still reachable: the next pass reads 2000..2500,
+        // including the appended entry, in seq order.
+        await expect(runtime.initialize()).resolves.toBe(501);
+        expect(counter.state).toEqual({ total: 2501 });
     });
 
     it("appendEvent throws when no doClient configured", async () => {

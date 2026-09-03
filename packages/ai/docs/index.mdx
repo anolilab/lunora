@@ -113,8 +113,10 @@ What you get beyond the manual loop:
 
 - **Deterministic chunk ids** (`${sourceId}#${n}`): re-indexing a source replaces
   its chunks; shrinking documents have stale trailing chunks deleted automatically.
-- **Content-hash short-circuit**: re-indexing unchanged text skips chunking,
+- **Content-hash short-circuit**: re-indexing an unchanged source skips chunking,
   embedding, and every write (`{ unchanged: true }`), so periodic re-syncs are free.
+  The hash covers `text`, `metadata` and `importance` together, so changing a
+  document's tenant or ACL tags over an unchanged body still re-indexes.
 - **Tenant isolation**: thread `namespace` (your shard/tenant key) through both
   sides; a namespace-less call gets a one-time dev warning (Vectorize indexes are
   account-global). Multi-tenant apps should set `requireNamespace: true` to turn
@@ -539,11 +541,15 @@ The object source is **injected**, so this runs over an R2 bucket, S3, a
 filesystem, or a database table without `@lunora/ai` depending on any of them.
 `list` may be an async generator, so the caller decides how to page a large
 bucket. One pass collects the keys it yields — it needs the full current set to
-work out what disappeared — but never more than one object's body at a time.
+work out what disappeared — while object bodies are fetched `concurrency` at a
+time (`concurrency`, default **4**), so peak memory is that many bodies, not one.
+Lower it when the objects are large.
 
-**Re-syncing is free.** `rag.index` short-circuits on a content hash, so an
-unchanged object costs one `get` and no embedding — which makes running this on
-a cron the normal way to use it.
+**Re-syncing is free.** `rag.index` short-circuits on a content hash — over the
+object's body, `metadata` and `importance` together — so an unchanged object
+costs one `get` and no embedding, which makes running this on a cron the normal
+way to use it. An object whose `metadata` changed is not unchanged: it re-indexes,
+so a tenant move never leaves the old scope on the vectors.
 
 **Pruning keeps the index a mirror**, and it is the caller's set. Pass
 `knownKeys` — the keys you believe the index holds — and anything missing from

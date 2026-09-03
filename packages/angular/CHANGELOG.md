@@ -1,3 +1,20 @@
+## @lunora/angular [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.55...@lunora/angular@1.0.0-alpha.56) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* 34 public API changes across mail, storage, payment, replica,
+studio, workflow, agent, codegen, cli and the shard runtime. The full list is in
+
+### Bug Fixes
+
+* audit rounds 7-11 ([#579](https://github.com/anolilab/lunora/issues/579)) ([224a42a](https://github.com/anolilab/lunora/commit/224a42a741f524e0110da55917c79fd08c90a885))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.72
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.36
+
 ## @lunora/angular [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.54...@lunora/angular@1.0.0-alpha.55) (2026-09-02)
 
 

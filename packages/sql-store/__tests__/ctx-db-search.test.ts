@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSqlCtxDb } from "../src/ctx-db";
 import type { SearchStage } from "../src/ctx-db-search";
 import { backfillSqlSearchIndexes, createSearchSync, runSqlSearch, runSqlSearchMigrations } from "../src/ctx-db-search";
+import { migrateSearchState, readSearchIndexCoverage, SEARCH_STATE_TABLE, writeSearchBackfillState } from "../src/ctx-db-search-state";
 import type { SqlDialect } from "../src/dialect";
 import { companionFor } from "../src/search-layout";
 import type { SqlCtxExec } from "../src/sql-exec";
@@ -375,6 +376,47 @@ describe("global search provisioning", () => {
             );
         });
 
+        it("refuses again while a re-POINTED index rebuilds, instead of answering from the old column", async () => {
+            expect.assertions(2);
+
+            createNotesTable();
+
+            for (let index = 0; index < 250; index += 1) {
+                insertNote(`d${String(index).padStart(4, "0")}`, `hello note${String(index)}`, `channel${String(index)}`);
+            }
+
+            await backfillSqlSearchIndexes(exec, searchSchema, dialect);
+
+            // Re-point the index at `channel`. Same companion, same columns, but
+            // every stored row now holds the text of the column the index was just
+            // pointed AWAY from — so until the re-walk finishes, matching on `hello`
+            // returns rows the new declaration says nothing about. `covered` latched
+            // on the completed `body` walk and kept the reader serving them.
+            const byChannel: SearchIndexDefinitionLike = { ...BY_BODY, field: "channel" };
+
+            await runSqlSearchMigrations(exec, tableWith([byChannel]), dialect);
+
+            expect(companionDocumentCount()).toBe(250);
+
+            await expect(runSqlSearch(exec, dialect, notesDefinition, "notes", { ...bodyStage("hello", byChannel), field: "channel" }, 300)).rejects.toThrow(
+                /still backfilling/u,
+            );
+        });
+
+        it("keeps serving while only the ANALYSIS rebuilds — the rows still answer about the right column", async () => {
+            expect.assertions(1);
+
+            createNotesTable();
+            insertPastOnePage();
+
+            await backfillSqlSearchIndexes(exec, searchSchema, dialect);
+            await runSqlSearchMigrations(exec, englishSchema, dialect);
+
+            const rows = await runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello", { ...BY_BODY, language: "en" }), 300);
+
+            expect(rows).toHaveLength(250);
+        });
+
         it("serves a fully indexed table without refusing", async () => {
             expect.assertions(1);
 
@@ -695,6 +737,59 @@ describe("global search provisioning", () => {
                     [Symbol.asyncIterator]() // eslint-disable-line no-unexpected-multiline -- continues the chain above, not a new statement; Prettier owns this line-wrap
                     .next(),
             ).rejects.toThrow(/legacy query\(\)\/withIndex\(\) reader is not available/u);
+        });
+    });
+
+    /**
+     * How this plane spells `searchCoverageSurvives`' answer in SQL — the
+     * `covered = covered` no-op assignment against the replace, over the
+     * portable UPDATE-or-INSERT the three dialects force.
+     *
+     * WHEN the latch may carry, and what it costs when it may not, is decided and
+     * argued once in `@lunora/search-core` (`searchCoverageSurvives`) and tested
+     * there. These cases exist because the two engines write the flag with
+     * different statements, and a shared policy spelled wrong on one plane is
+     * still wrong.
+     */
+    describe("coverage upsert", () => {
+        /** A row as an earlier build left it: finished, latched, nothing recorded about what analyzed it. */
+        const seedLegacyRow = async (): Promise<void> => {
+            await migrateSearchState(exec, dialect);
+            raw(`INSERT INTO "${SEARCH_STATE_TABLE}" ("companion", "cursor", "done", "profile", "covered") VALUES (?, NULL, 1, NULL, 1)`, COMPANION);
+        };
+
+        it("replaces coverage on the first incomplete page of a rebuild it cannot vouch for", async () => {
+            expect.assertions(2);
+
+            await seedLegacyRow();
+
+            await expect(readSearchIndexCoverage(exec, dialect, COMPANION)).resolves.toBe(true);
+
+            await writeSearchBackfillState(exec, dialect, COMPANION, "d0100", false, "en-v1:body");
+
+            await expect(readSearchIndexCoverage(exec, dialect, COMPANION)).resolves.toBe(false);
+        });
+
+        it("re-latches coverage once that rewalk reaches the end of the table", async () => {
+            expect.assertions(1);
+
+            await seedLegacyRow();
+            await writeSearchBackfillState(exec, dialect, COMPANION, "d0100", false, "en-v1:body");
+            await writeSearchBackfillState(exec, dialect, COMPANION, "d0249", true, "en-v1:body");
+
+            await expect(readSearchIndexCoverage(exec, dialect, COMPANION)).resolves.toBe(true);
+        });
+
+        it("holds a latched 1 against an incomplete page of a rebuild it can vouch for", async () => {
+            expect.assertions(1);
+
+            // `covered = covered` rather than the replace: the second write
+            // carries `done = 0`, and assigning it would drop the flag.
+            await migrateSearchState(exec, dialect);
+            await writeSearchBackfillState(exec, dialect, COMPANION, "d0249", true, "en-v1:body");
+            await writeSearchBackfillState(exec, dialect, COMPANION, "d0100", false, "en-v2:body");
+
+            await expect(readSearchIndexCoverage(exec, dialect, COMPANION)).resolves.toBe(true);
         });
     });
 });

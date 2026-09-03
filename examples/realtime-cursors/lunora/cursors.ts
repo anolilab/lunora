@@ -18,7 +18,7 @@ interface CursorDoc {
  * cross-shard fan-out and every connected client subscribes to the same
  * stream of deltas.
  */
-export const listCursors = query.input({ roomId: v.string() }).query(async ({ args: { roomId }, ctx }): Promise<CursorDoc[]> => {
+export const listCursors = query.input({ roomId: v.string().max(64) }).query(async ({ args: { roomId }, ctx }): Promise<CursorDoc[]> => {
     const rows = await ctx.db
         .query("cursors")
         .withIndex("by_room_session", (q) => q.eq("roomId", roomId))
@@ -33,10 +33,10 @@ export const listCursors = query.input({ roomId: v.string() }).query(async ({ ar
  */
 export const joinRoom = mutation
     .input({
-        roomId: v.string(),
-        sessionId: v.string(),
-        name: v.string(),
-        color: v.string(),
+        roomId: v.string().max(64),
+        sessionId: v.string().max(64),
+        name: v.string().max(80),
+        color: v.string().max(32),
     })
     .mutation(async ({ args: { roomId, sessionId, name, color }, ctx }): Promise<void> => {
         const existing = await ctx.db
@@ -67,8 +67,8 @@ export const joinRoom = mutation
  */
 export const updateCursor = mutation
     .input({
-        roomId: v.string(),
-        sessionId: v.string(),
+        roomId: v.string().max(64),
+        sessionId: v.string().max(64),
         x: v.number(),
         y: v.number(),
     })

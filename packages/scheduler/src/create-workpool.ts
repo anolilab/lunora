@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { ArgsOf, EnqueueOptions, FunctionReference, Workpool, WorkpoolOptions } from "./types";
+import assertScheduleDelay from "./validate-delay";
 
 /**
  * Bounded-concurrency action queue — the Lunora equivalent of
@@ -49,9 +50,7 @@ const createWorkpool = (options: WorkpoolOptions): Workpool => {
     ): Promise<{ id: string; scheduledFor: number }> => {
         const delayMs = options_.delayMs ?? 0;
 
-        if (!Number.isFinite(delayMs) || delayMs < 0) {
-            throw new LunoraError("INTERNAL", "@lunora/scheduler: `delayMs` must be a non-negative finite number");
-        }
+        assertScheduleDelay(delayMs, "workpool.enqueue");
 
         return callDO<{ id: string; scheduledFor: number }>(options, "/schedule", {
             args,

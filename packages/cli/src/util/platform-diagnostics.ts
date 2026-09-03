@@ -8,12 +8,13 @@
  * them ships that mismatch to production, which is the failure the whole target
  * seam exists to prevent.
  *
- * Shared rather than copied because five paths report through it — `codegen`,
- * `deploy`, `verify` and the dev watcher here, plus the Vite plugin's own
- * inlined equivalent in `@lunora/vite` — and a reporting rule that lives in five
- * places is a rule that ends up applied in four. `verify` was the one it ended
- * up not applied in: it resolves and validates the deploy target, runs codegen
- * with it, and used to drop the diagnostics on the floor.
+ * Shared rather than copied. The callers are `commands/codegen/handler.ts`,
+ * `commands/deploy/handler.ts`, `commands/verify/handler.ts` and the dev
+ * watcher in `util/codegen-watch.ts`; `@lunora/vite`'s codegen plugin renders
+ * the same diagnostics through its own `advisoryLine`. A reporting rule copied
+ * per caller is a rule that one caller ends up without — `verify` was that
+ * caller: it resolves and validates the deploy target, runs codegen with it,
+ * and used to drop the diagnostics on the floor.
  *
  * Two further `runCodegen` calls deliberately stay silent, and both are covered
  * elsewhere: `dev`'s pre-sidecar warm-up (the codegen watcher it starts reports

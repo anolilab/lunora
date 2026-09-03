@@ -199,8 +199,13 @@ export interface LunoraBrowserOptions {
      * trailing-dot-normalized, IPv6 brackets stripped). This is the only guard
      * that fully closes DNS rebinding: a public hostname that resolves to a
      * private/metadata IP can still be pinned out if it isn't on the list. Set it
-     * whenever you pass client-controlled URLs to the browser. Leave it unset (the
-     * default) to keep the previous behavior (only the string-based SSRF guard).
+     * whenever you pass client-controlled URLs to the browser.
+     *
+     * Leaving it unset (the default) is NOT unguarded: it turns
+     * {@link LunoraBrowserOptions.resolveDns} on, so every host is resolved over
+     * DoH and refused if it maps to a private address. Setting an allowlist turns
+     * that re-check off (the allowlist is the stronger guard, and may deliberately
+     * name an internal host); `resolveDns: true` forces both.
      */
     allowedHosts?: string[];
 
@@ -313,9 +318,12 @@ export interface Browser {
      * `fn` (e.g. for multi-page flows or APIs not surfaced here).
      *
      * The browser is **always closed** when `fn` resolves or throws — unless
-     * `keepAlive` is set, which holds the session open for that many seconds so
-     * a later {@link Browser.connect} can re-attach. Do not retain references to
-     * the browser past the callback either way.
+     * `keepAlive` is a finite, positive number of seconds, which holds the
+     * session open for that long so a later {@link Browser.connect} can
+     * re-attach. `0`, a negative value and `NaN` all mean "do not keep alive"
+     * and take the always-close path (a held session is billed, so the
+     * ambiguous values fall to the safe side). Do not retain references to the
+     * browser past the callback either way.
      */
     launch: <T>(function_: (browser: BrowserLike) => Promise<T>, options?: { keepAlive?: number }) => Promise<T>;
 

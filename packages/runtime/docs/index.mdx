@@ -319,12 +319,19 @@ NDJSON object and feed it to `lunora backup restore <file>` (optionally with
 
 ## `LunoraError` / `toErrorResponse` / `LunoraErrorBody`
 
-The runtime's typed error class. Throwing a
-`LunoraError(message, { code, status })` inside a handler causes a
-`{ error: { code, message, ... } }` body to come back over RPC instead of an
-HTTP 500. `toErrorResponse(err)` is the same mapping exposed for add-ons.
+The runtime's transport-level error class, for the **worker entry and runtime
+add-ons** — HTTP routes, middleware you mount on `createWorker`, host adapters.
+Throwing a `LunoraError(message, { code, status })` produces a
+`{ error: { code, message, ... } }` body instead of an HTTP 500.
+`toErrorResponse(err)` is the same mapping exposed for add-ons.
 
-The message comes **first**; `code` and `status` are options:
+<Callout type="warn">
+    **This is not the class you throw inside a query, mutation, or action.** Those use `LunoraError` from `lunorash/server` (`@lunora/errors`), whose signature
+    is `(code, message?, options?)` — the **code first**, resolved against the shared error catalog. The two classes share a name and a wire shape but take
+    their arguments in opposite orders, so always import deliberately.
+</Callout>
+
+Here the message comes **first**; `code` and `status` are options:
 
 ```ts
 import { LunoraError } from "@lunora/runtime";

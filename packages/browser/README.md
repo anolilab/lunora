@@ -107,7 +107,9 @@ If you deliberately drive the browser at an internal service reachable through a
 const browser = createBrowser({ binding: env.BROWSER, launch, allowPrivateTargets: true });
 ```
 
-Only set `allowPrivateTargets` when every URL is trusted — it re-opens the SSRF surface. The guard does not resolve DNS, so a public hostname that resolves to a private address (DNS rebinding) is out of scope; keep caller-supplied URLs trusted regardless.
+Only set `allowPrivateTargets` when every URL is trusted — it re-opens the SSRF surface.
+
+DNS rebinding is covered too: whenever `allowedHosts` is unset, the host is resolved over DoH and refused if it maps to a private address, before the browser launches and again on every redirect hop. Setting `allowedHosts` turns that re-check off, because an exact-host allowlist already closes rebinding and may deliberately name an internal host reachable over a Tunnel; pass `resolveDns: true` to force both.
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/browser)**.
 

@@ -83,7 +83,7 @@ export interface ReconnectOptions {
 }
 
 /** Which durable-storage operation failed, passed to {@link OfflineQueueOptions.onPersistenceError}. */
-export type PersistenceOperation = "append" | "clear" | "load" | "remove";
+export type PersistenceOperation = "append" | "clear" | "load" | "remove" | "replace";
 
 /** Context handed to a persistence-error handler. */
 export interface PersistenceErrorContext {
@@ -174,6 +174,23 @@ export interface PersistenceAdapter {
     load: () => Promise<PersistedMutation[]>;
     /** Remove a mutation by id once it has been replayed (resolved or rejected). */
     remove: (id: string) => Promise<void>;
+
+    /**
+     * Overwrite an already-persisted mutation IN PLACE, keeping its position in
+     * FIFO order. Used when a queued write's identity stamp is rewritten after a
+     * sign-in / sign-out.
+     *
+     * Must be atomic: a `remove` + `append` pair has a window where a process
+     * stop leaves the mutation in no durable store at all, and the in-memory
+     * entry has already advanced, so a reload loses the write outright. It also
+     * moved the record to the BACK of the queue, replaying it out of the order
+     * it was issued in. Implementations do the whole swap under one transaction
+     * (or one serialized blob write).
+     *
+     * A mutation whose id is not present is left alone — the record was drained
+     * concurrently and re-inserting it would replay a settled write.
+     */
+    replace: (mutation: PersistedMutation) => Promise<void>;
 }
 
 /**
@@ -375,10 +392,17 @@ export interface LunoraClientOptions {
     heartbeatIntervalMs?: number;
 
     /**
-     * When `true` and a `queryCache` is active, framework hooks (React, Vue, …)
-     * wait for the durable cache to finish hydrating before their first render
-     * with an enabled subscription, so users see cached data instead of an
-     * undefined flash before the socket round-trip. Defaults to `false`.
+     * When `true` and a `queryCache` is active, React's `useQuery` holds its
+     * TanStack query disabled until the durable cache has finished loading
+     * (`whenReady()`), so its first enabled render can seed the cached value
+     * instead of issuing an HTTP read that the cache would immediately
+     * overwrite. Defaults to `false`.
+     *
+     * It is ONLY React's `useQuery` that defers — the Vue, Svelte, Solid and
+     * Angular hooks subscribe at mount regardless of this flag, and so does
+     * React's own subscription registry. They do not need the gate: a
+     * subscription opened before the load completes is seeded by the load
+     * itself, so a cached value reaches the first subscriber either way.
      *
      * Requires `queryCache` to be set (not `false`); silently ignored otherwise.
      */

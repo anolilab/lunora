@@ -1,3 +1,25 @@
+## @lunora/browser [1.0.0-alpha.38](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.37...@lunora/browser@1.0.0-alpha.38) (2026-09-03)
+
+### Bug Fixes
+
+* audit rounds 14-16 ([#586](https://github.com/anolilab/lunora/issues/586)) ([6a09b74](https://github.com/anolilab/lunora/commit/6a09b746cfc9fb36f451c208b7a1c3eac16e56f4))
+
+## @lunora/browser [1.0.0-alpha.37](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.36...@lunora/browser@1.0.0-alpha.37) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* 34 public API changes across mail, storage, payment, replica,
+studio, workflow, agent, codegen, cli and the shard runtime. The full list is in
+
+### Bug Fixes
+
+* audit rounds 7-11 ([#579](https://github.com/anolilab/lunora/issues/579)) ([224a42a](https://github.com/anolilab/lunora/commit/224a42a741f524e0110da55917c79fd08c90a885))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.30
+
 ## @lunora/browser [1.0.0-alpha.36](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.35...@lunora/browser@1.0.0-alpha.36) (2026-09-02)
 
 

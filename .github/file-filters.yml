@@ -13,6 +13,19 @@
 # carries the assertion that some matrix leg still runs on an FTS5-capable Node, so a PR
 # that drops that leg by editing the matrix must not be able to skip the job that would
 # have caught it.
+#
+# `shared/**` is in the build graph even though it is not a workspace: those files are
+# bundler-inlined into every consumer's dist, and 290 files across 40 packages import
+# them by relative path (199 under `src`, 87 under `__tests__`). Their ONLY coverage is
+# the package suites this filter gates — `shared/` has no suite of its own — so a
+# `shared/`-only PR used to skip `test`, `test-workerd` and `test-mysql` entirely while
+# the required check stayed green on `skipped`. That is the widest blast radius in the
+# repo getting the least verification.
+#
+# `protocol/**` for the reason one level over: `protocol/fixtures/*.json` are read at
+# runtime by JS suites (`packages/client/__tests__/protocol-conformance.test.ts`,
+# `packages/ratelimit/__tests__/middleware.test.ts`), so a fixture edit matched only the
+# `sdks` filter and the reference implementation's own assertions never re-ran.
 packages: &packages
     - ".github/workflows/test.yml"
     - ".github/file-filters.yml"
@@ -24,6 +37,8 @@ packages: &packages
     - "apps/**"
     - "examples/**"
     - "registry/**"
+    - "shared/**"
+    - "protocol/**"
     - "tools/**"
     - "vis.config.ts"
 
@@ -32,6 +47,10 @@ packages: &packages
 # .d.ts surface, plus the snapshots and the tool itself.
 api_surface:
     - "packages/**"
+    # Inlined, so it is part of the built surface: a `shared/` type that a package
+    # re-exports lands in that package's .d.ts, and the dist bytes `dist-production`
+    # weighs are the inlined copy. Neither job could see a `shared/`-only change.
+    - "shared/**"
     - "api-snapshots/**"
     - "scripts/api-snapshot.js"
     # `dist-production` rides on this same filter, so its checker is listed here
@@ -118,12 +137,14 @@ yaml_lintable:
     - "**/*.yaml"
 
 # E2E exercises the playground app and the five showcase examples, plus the
-# runtime/client/do/auth packages they all run on.
+# runtime/client/do/auth packages they all run on — and `shared/`, which is inlined
+# into every one of those packages and reaches the browser as part of their bundles.
 e2e:
     - "apps/playground/**"
     - "examples/**"
     - "tests/e2e/**"
     - "packages/**"
+    - "shared/**"
     - "pnpm-lock.yaml"
     - ".github/workflows/test.yml"
     - ".github/file-filters.yml"
@@ -149,10 +170,6 @@ registry_sync:
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
 
-# The template scaffold+install+build+typecheck matrix: too slow for every PR, but the
-# only gate proving `lunora init` still installs and that the copy-in auth-ui payload
-# compiles against a meta-framework's own tsconfig. Both regressions it has caught came
-# from packages/registry changes, not from the templates — hence the wide globs.
 # Worker size budget. Separate from `packages` per the self-listing rule at the top.
 worker_size:
     - "scripts/check-worker-size.js"
@@ -180,18 +197,58 @@ sdks:
     # §3 — a change to either is a wire change every port must mirror.
     - "shared/base64.ts"
     - "shared/wire-key.ts"
+    # The batch transport's entry shape and its `MAX_BATCH_ENTRIES` cap, which every
+    # port mirrors as its own literal. `scripts/check-batch-cap-drift.js` reconciles the
+    # values; this listing is what re-runs the ports against the fixtures when the
+    # entry shape itself moves.
+    - "shared/batch-wire.ts"
     - ".github/workflows/test.yml"
     - ".github/file-filters.yml"
 
+# The template scaffold+install+build+typecheck matrix: too slow for every PR, but the
+# only gate proving `lunora init` still installs and that the copy-in auth-ui payload
+# compiles against a meta-framework's own tsconfig. Both regressions it has caught came
+# from packages/registry changes, not from the templates — hence the wide globs.
+#
+# `packages/**` rather than the cli + auth-ui pair it used to name: the smoke script
+# packs EVERY workspace manifest called `@lunora/*` or `lunorash` and writes all of them
+# into each scaffold's `overrides` (scripts/template-build-smoke.sh, "Pack all base
+# packages"), and `assert_no_registry_lunora` fails the run if any resolves from npm
+# instead. So a break in any of the ~50 other packages reaches a scaffold, and the two
+# named ones were only the two whose regressions happened to be caught first.
+#
+# `shared/**` for the same reason as in `packages` above: it is inlined into every one
+# of those tarballs.
+#
+# This does mean the job now runs on most package PRs. That is the trade the header
+# rule names — `e2e` and `worker-size` already sit on `packages` for the same reason —
+# and it is the only alternative to a gate that is green because it did not run.
 templates:
     - "templates/**"
     - "registry/**"
-    - "packages/cli/**"
-    - "packages/auth-ui/**"
+    - "packages/**"
+    - "shared/**"
     - "scripts/template-build-smoke.sh"
     - "pnpm-lock.yaml"
     - "pnpm-workspace.yaml"
     - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+
+# The two batch caps — `MAX_BATCH_ENTRIES` (shared/batch-wire.ts) and `MAX_BATCH_BYTES`
+# (packages/client/src/replay.ts, derived from the worker's own body cap in
+# packages/runtime/src/body-readers.ts) — vs the literal every non-JS port,
+# protocol/README.md and the offline fixture restate. Separate from `sdks` because the
+# reconciliation is a node script, not a conformance suite: it must run on a change to any
+# one of the copies without paying for eight toolchains.
+batch_cap:
+    - "shared/batch-wire.ts"
+    - "packages/client/src/replay.ts"
+    - "packages/runtime/src/body-readers.ts"
+    - "protocol/README.md"
+    - "protocol/fixtures/offline-optimistic.json"
+    - "sdks/**"
+    - "scripts/check-batch-cap-drift.js"
+    - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
 
 # packages/platform-node/docs/index.mdx's capability table vs NODE_CAPABILITIES in

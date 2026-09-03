@@ -95,8 +95,10 @@ change: set `LUNORA_ALLOWED_ORIGINS` as a `var` and the worker picks it up at
 request time (see [Security](/docs/concepts/security)).
 
 <Callout type="warn">
-    Lunora never logs secret values, and the `wrangler-validator` plugin warns when a binding marked `secret: true` in your schema is missing from your secret
-    list, so a forgotten `wrangler secret put` is a build-time warning, not a production 500.
+    Lunora never logs secret values. Nothing warns at build time about a missing secret — there is no "required secret" declaration for a validator to check
+    against. What catches a forgotten `wrangler secret put` is `lunora deploy`'s remote-secret gate, and it is best-effort: a first deploy or an
+    unauthenticated wrangler cannot be queried, so it is skipped. Run `lunora env diff --env <name>` against the target to compare local and deployed secret
+    names before shipping.
 </Callout>
 
 ## Accessing `env` inside your app

@@ -208,6 +208,40 @@ describe("createTracedFetch error-message redaction", () => {
     });
 });
 
+describe("ctx.trace start-attribute bound", () => {
+    // The other bypass: start attributes were spread into the recorded span
+    // uncapped, so `ctx.trace(name, fn, req.body)` shipped whatever the client
+    // sent — a high-cardinality bag is what destroys a collector's aggregates,
+    // and the cap only ever covered the post-hoc writers.
+    it("bounds the start attributes a ctx.trace span records", async () => {
+        expect.assertions(3);
+
+        const { recorded, trace } = setup();
+
+        await trace("scan", () => undefined, Object.fromEntries(Array.from({ length: 500 }, (_, index) => [`row.${String(index)}`, "done"])));
+
+        expect(Object.keys(recorded[0]!.attributes!)).toHaveLength(128);
+        expect(recorded[0]!.attributes!["row.0"]).toBe("done");
+        expect(recorded[0]!.attributes!["row.499"]).toBeUndefined();
+    });
+
+    it("lets a post-hoc write win on a key the start bag already claimed", async () => {
+        expect.assertions(1);
+
+        const { recorded, trace } = setup();
+
+        await trace(
+            "scan",
+            (_span, handle) => {
+                handle.setAttribute("status", "settled");
+            },
+            { status: "pending" },
+        );
+
+        expect(recorded[0]!.attributes!["status"]).toBe("settled");
+    });
+});
+
 describe("createSpanCollector attribute bound", () => {
     it("keeps the first 128 attribute keys and drops the rest", () => {
         expect.assertions(3);
@@ -224,6 +258,25 @@ describe("createSpanCollector attribute bound", () => {
         expect(Object.keys(collected.attributes)).toHaveLength(128);
         expect(collected.attributes["row.0"]).toBe("done");
         expect(collected.attributes["row.499"]).toBeUndefined();
+    });
+
+    // The per-item bags on `addEvent`/`addLink` used to skip the bound entirely:
+    // a handler that forwards a request body as event attributes could mint
+    // unbounded keys through a door the "shared by all three writers" claim did
+    // not actually cover.
+    it("bounds the per-item attribute bag on addEvent and addLink", () => {
+        expect.assertions(4);
+
+        const { collected, handle } = createSpanCollector({ spanId: "span0000span0000", traceId: anchor.traceId });
+        const bag = Object.fromEntries(Array.from({ length: 500 }, (_, index) => [`row.${String(index)}`, "done"]));
+
+        handle.addEvent("rows.scanned", bag);
+        handle.addLink({ attributes: bag, spanId: "span1111span1111", traceId: anchor.traceId });
+
+        expect(Object.keys(collected.events[0]!.attributes!)).toHaveLength(128);
+        expect(collected.events[0]!.attributes!["row.0"]).toBe("done");
+        expect(Object.keys(collected.links[0]!.attributes!)).toHaveLength(128);
+        expect(collected.links[0]!.attributes!["row.499"]).toBeUndefined();
     });
 
     it("still updates a key already in the bag once full", () => {

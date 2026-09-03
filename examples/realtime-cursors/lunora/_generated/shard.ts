@@ -3,7 +3,7 @@
 
 import type { AdvisorProcedure, AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, ExportRow, ImportShardResult, KeyRange, MaskPoliciesResult, MigrationRunResult, QueryReadScope, RunShardApplyCdcArgs, RunShardExportArgs, RunShardImportArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, TransactionHeadroomTracker, SchemaLike, ShardDOState, ShardRankPageResult, SqlExec, StorageRulesResult, StudioFeaturesResult, SystemReaderStorageLike, TelemetrySink } from "lunorash/do";
 import { applyCdcChanges, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, markUnvouchableReads, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "lunorash/do";
-import { asBucketStorage, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes } from "lunorash/server";
+import { asBucketStorage, beginDeferredSchedules, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "lunorash/server";
 import { bindOrm, bindTableFacade } from "lunorash/server";
 
 import schema from "../schema.js";
@@ -193,139 +193,6 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "name": "public_mutation_without_ratelimit",
         "remediation": "Attach a rate limit: `.use(rateLimit(limiter, \"<bucket>\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.",
         "title": "Public write without a rate limit"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:cursors:listCursors:roomId",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `roomId` of public procedure `listCursors` (cursors:21) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "roomId",
-            "exportName": "listCursors",
-            "file": "cursors",
-            "line": 21
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:cursors:joinRoom:roomId",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `roomId` of public procedure `joinRoom` (cursors:34) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "roomId",
-            "exportName": "joinRoom",
-            "file": "cursors",
-            "line": 34
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:cursors:joinRoom:sessionId",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `sessionId` of public procedure `joinRoom` (cursors:34) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "sessionId",
-            "exportName": "joinRoom",
-            "file": "cursors",
-            "line": 34
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:cursors:joinRoom:name",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `name` of public procedure `joinRoom` (cursors:34) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "name",
-            "exportName": "joinRoom",
-            "file": "cursors",
-            "line": 34
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:cursors:joinRoom:color",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `color` of public procedure `joinRoom` (cursors:34) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "color",
-            "exportName": "joinRoom",
-            "file": "cursors",
-            "line": 34
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:cursors:updateCursor:roomId",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `roomId` of public procedure `updateCursor` (cursors:68) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "roomId",
-            "exportName": "updateCursor",
-            "file": "cursors",
-            "line": 68
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
-    },
-    {
-        "cacheKey": "unbounded_string_arg:cursors:updateCursor:sessionId",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `sessionId` of public procedure `updateCursor` (cursors:68) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
-        "facing": "EXTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "argument": "sessionId",
-            "exportName": "updateCursor",
-            "file": "cursors",
-            "line": 68
-        },
-        "name": "unbounded_string_arg",
-        "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
-        "title": "Public string argument has no length bound"
     },
     {
         "cacheKey": "procedure_without_structured_event:cursors:joinRoom",
@@ -542,7 +409,32 @@ const storageStub = {
 const MAX_RUN_DEPTH = 32;
 let runDepth = 0;
 
-const dispatchRun = async (expected: FunctionKind, functionPath: string, args: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
+const dispatchRun = async (
+    expected: FunctionKind,
+    functionPath: string,
+    args: Record<string, unknown>,
+    ctx: unknown,
+    // The kind of the context making the call, and — for a mutation target — the
+    // transaction wrapper to run it under. Both are supplied by `buildCtx`, which
+    // is the only place that knows which dispatch this `ctx` belongs to. Widened
+    // past `FunctionKind` because the registry also carries `"stream"`, and
+    // `undefined` for a ctx built outside a registered function (admin, migration).
+    callerKind?: "stream" | FunctionKind,
+    runTransactional?: (work: () => Promise<unknown>) => Promise<unknown>,
+): Promise<unknown> => {
+    // A query is read-only. The ctx object installs `run*` on every kind (one
+    // shape, built once), so the TYPE is all that stops a query from writing —
+    // and a cast walks straight past it, inside a subscription re-run that can
+    // execute many times per write. Checked on the CALLER, before the registry
+    // lookup, so `ctx.runMutation` from a query fails identically whatever it
+    // aimed at.
+    if (callerKind === "query" && expected !== "query") {
+        throw new LunoraError(
+            "RUN_KIND_FORBIDDEN",
+            `ctx.run${expected[0]!.toUpperCase()}${expected.slice(1)}: a query may only compose other queries (tried to run "${functionPath}")`,
+        );
+    }
+
     const registered = LUNORA_FUNCTIONS[functionPath];
 
     if (!registered) {
@@ -560,6 +452,18 @@ const dispatchRun = async (expected: FunctionKind, functionPath: string, args: R
     runDepth += 1;
 
     try {
+        // A mutation composed from an action (or an http action) is the shape the
+        // docs prescribe for atomicity — "do the transactional reads and writes in
+        // a mutation and call it from the action". It only holds if the composed
+        // dispatch gets the same BEGIN/COMMIT span and single-writer gate the
+        // top-level mutation path gets; without it every write autocommits and a
+        // mid-handler throw leaves the earlier ones durable. A `runMutation` from
+        // inside a mutation rides the enclosing span instead of opening a second
+        // one (see `runMutationTransaction`).
+        if (runTransactional) {
+            return await runTransactional(async () => registered.handler(ctx, args));
+        }
+
         return await registered.handler(ctx, args);
     } finally {
         runDepth -= 1;
@@ -588,6 +492,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
         protected override isQueryFunction(functionPath: string): boolean {
             return LUNORA_FUNCTIONS[functionPath]?.kind === "query";
+        }
+
+        protected override isPaidFunction(functionPath: string): boolean {
+            return LUNORA_FUNCTIONS[functionPath]?.x402 !== undefined;
         }
 
         private migrated = false;
@@ -621,50 +529,113 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // stamp no deps.
             const ctx = this.buildCtx({ functionPath, headroom, scope, trusted: registered.lifecycle === "init" });
 
-            // A mutation's writes must commit all-or-nothing: wrap its dispatch in
-            // the DO's BEGIN/COMMIT span so any throw (a validator, an RLS denial,
-            // an OCC conflict, a failed row mid-`insertMany`/`patchMany`) rolls
-            // back every write the mutation made. Queries are read-only and actions
-            // do external I/O that can't be rolled back, so both dispatch directly.
-            // `ctx.run*` composition runs inside this span (it never re-enters
-            // handleRpc); runInTransaction's own guard rejects accidental nesting.
+            // A mutation's writes must commit all-or-nothing, so its dispatch runs
+            // under `runMutationTransaction` — the ONE place that opens the span,
+            // settles the deferred schedules and flushes the deferred deletes. The
+            // same helper backs `ctx.runMutation` and `runReactor`, because a
+            // mutation reached by composition is promised exactly these guarantees
+            // and used to get none of them.
             //
             // The replay bookkeeping (idempotency dedup row + custom-mutator
-            // watermark advance) commits INSIDE this span via
+            // watermark advance) commits INSIDE the span via
             // `commitMutationBookkeeping`, so the writes, the dedup row, and the
             // watermark are atomic — a crash can't leave the writes durable without
-            // the replay guard.
+            // the replay guard. It is deliberately NOT in the shared helper: it is
+            // per-REQUEST bookkeeping, and a composed sub-mutation has no request of
+            // its own to record.
             if (registered.kind === "mutation") {
-                const result = await this.runInTransaction(async () => {
+                return await this.runMutationTransaction(ctx, async () => {
                     const value = await registered.handler(ctx, args);
 
                     this.commitMutationBookkeeping(value);
 
                     return value;
                 });
-
-                // The transaction committed, so the rows are durable and the objects
-                // their deletion orphaned can go. Deliberately AFTER the span, never
-                // inside it: an R2 delete cannot roll back, so a delete issued from
-                // within a transaction that later aborts destroys data the surviving
-                // row still points at. A throw above skips this entirely and the
-                // queue dies with `ctx`.
-                //
-                // `flushDeferredDeletes` never rejects — the mutation has already
-                // succeeded, so a failed cleanup must not turn into a failed response.
-                // A leaked object is reported through `ctx.log` instead, with its key.
-                await this.deferPastResponse(flushDeferredDeletes(ctx));
-
-                return result;
             }
 
             const result = await registered.handler(ctx, args);
 
             // An action is not itself transactional, but `ctx.runMutation` runs its
-            // submutations on THIS ctx, so their queued deletes land here — this is
-            // the first point at which those writes are known to have committed. A
-            // dispatch with nothing queued no-ops.
+            // submutations on THIS ctx, so anything they queued after their own
+            // transaction settled lands here. A dispatch with nothing queued no-ops.
             await this.deferPastResponse(flushDeferredDeletes(ctx));
+
+            return result;
+        }
+
+        /**
+         * Run one mutation handler with the atomicity every caller of a mutation is
+         * promised: a BEGIN/COMMIT span (with the single-writer gate
+         * `ShardRunner.runInTransaction` composes in front of it), scheduled jobs
+         * held until that span commits, and the deferred object deletes flushed
+         * only once it has.
+         *
+         * Shared by the three entry points that dispatch a mutation handler — the
+         * top-level RPC, `ctx.runMutation` from an action or http action, and a
+         * reactor — because the guarantee is a property of the mutation, not of how
+         * it was reached. The docs tell users to put the transactional part in a
+         * mutation and call it from the action precisely so that composition is
+         * atomic.
+         *
+         * A `ctx.runMutation` issued from inside a mutation is NESTED: SQLite-in-DO
+         * has no savepoints and `runInTransaction` rejects a second open, so it
+         * rides the enclosing span, which also owns its commit and therefore its
+         * scheduler flush.
+         */
+        private async runMutationTransaction<T>(ctx: unknown, work: () => Promise<T>): Promise<T> {
+            const settleSchedules = beginDeferredSchedules(ctx as { scheduler?: unknown });
+
+            if (this.isInTransaction()) {
+                try {
+                    const nested = await work();
+
+                    await settleSchedules(true);
+
+                    return nested;
+                } catch (error) {
+                    await settleSchedules(false);
+
+                    throw error;
+                }
+            }
+
+            let result: T;
+
+            try {
+                result = await this.runInTransaction(work);
+            } catch (error) {
+                // The span rolled back, so the rows are gone and the jobs that were
+                // to run "after I commit" must go with them. Dropping them is the
+                // whole point of buffering: a persisted job for a write that never
+                // landed fires against state that does not exist.
+                await settleSchedules(false);
+
+                throw error;
+            }
+
+            // Committed. Schedules first and AWAITED: `runAfter(0, ...)` is
+            // documented as the deterministic equivalent of an `afterCommit` hook,
+            // so the job must be enqueued after the commit, and a failure to enqueue
+            // it must be visible rather than swallowed.
+            //
+            // In a `finally`, because both halves of this are post-commit cleanup
+            // and neither is allowed to cancel the other. `settleSchedules` drains
+            // its whole queue and then rethrows what failed, so a SchedulerDO that
+            // refused one job used to take the object cleanup down with it — the
+            // rows were durably gone and their objects leaked with nothing logged.
+            try {
+                await settleSchedules(true);
+            } finally {
+                // Then the objects whose rows are now durably gone. Deliberately AFTER
+                // the span, never inside it: an R2 delete cannot roll back, so a delete
+                // issued from within a transaction that later aborts destroys data the
+                // surviving row still points at.
+                //
+                // `flushDeferredDeletes` never rejects — the mutation has already
+                // succeeded, so a failed cleanup must not turn into a failed response.
+                // A leaked object is reported through `ctx.log` instead, with its key.
+                await this.deferPastResponse(flushDeferredDeletes(ctx));
+            }
 
             return result;
         }
@@ -699,7 +670,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return { ranges: footprint.ranges(), result, tables: footprint.tables };
         }
 
-        protected override executeStream(functionPath: string, args: Record<string, unknown>): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
+        protected override executeStream(functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             if (!registered || registered.kind !== "stream" || registered.visibility === "internal") {
@@ -710,7 +681,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             return {
                 ...(registered.durable ? { durable: registered.durable as { ttlMs?: number } } : {}),
-                iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx({ functionPath }), args, signal),
+                // Identity threaded EXPLICITLY from the socket, exactly as
+                // `executeSubscription` above: the iterator is pulled after this
+                // frame returned, interleaved with unrelated dispatches, so
+                // `buildCtx`'s per-request fallback would run an `rls()` /
+                // `ctx.auth` stream as nobody — or as a concurrent RPC's caller.
+                iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx({ functionPath, identity }), args, signal),
             };
         }
 
@@ -730,10 +706,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         // the new baseline and the footprint as the "should I even re-run this"
         // gate, instead of pushing a frame down a socket.
         //
-        // Wrapped in `runInTransaction` because a reactor handler is a mutation
-        // and its writes must commit all-or-nothing. Safe to open here: the refresh
-        // drain runs OUTSIDE any dispatch transaction (it is post-flush background
-        // work), so this never nests.
+        // Dispatched through `runMutationTransaction` because a reactor handler is
+        // a mutation: its writes must commit all-or-nothing, the jobs it schedules
+        // must wait for that commit, and the objects its row deletes orphaned must
+        // be flushed once it lands. Safe to open a span here: the refresh drain
+        // runs OUTSIDE any dispatch transaction (it is post-flush background work),
+        // so this never nests.
         //
         // NO identity is threaded, and the ctx is built `trusted`. A reactor fires
         // because data moved, not because anyone asked, so there is no user for RLS
@@ -752,17 +730,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             const footprint = createReadFootprint();
             const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(), onRead: footprint.onRead, onReadRange: footprint.onReadRange, trusted: true });
-            const outcome = (await this.runInTransaction(async () => registered.handler(ctx, { previousDigest } as unknown as Record<string, unknown>))) as {
+            const outcome = (await this.runMutationTransaction(ctx, async () =>
+                registered.handler(ctx, { previousDigest } as unknown as Record<string, unknown>),
+            )) as {
                 digest: string;
                 ran: boolean;
             };
-
-            // A reactor IS a mutation, so its ctx carries the deferred-delete queue
-            // and its transaction has just committed. Without this the queue would
-            // die with `ctx` and the objects would leak with nothing to find: no
-            // error, no warning, no failed request — a reactor that reaps orphaned
-            // rows is a textbook use of one.
-            await this.deferPastResponse(flushDeferredDeletes(ctx));
 
             return { digest: outcome.digest, ran: outcome.ran, tables: [...footprint.tables] };
         }
@@ -1042,11 +1015,37 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             const secrets = createSecrets(env);
 
+            // Which dispatch this ctx belongs to. Drives the two deferral facades
+            // below and the `ctx.run*` caller guard; a ctx built for an
+            // admin/lifecycle path has no registered function, and so no kind.
+            const contextKind = LUNORA_FUNCTIONS[options.functionPath ?? ""]?.kind;
             // `list`/`get` are the two methods `ctx.db.system.query("_scheduled_functions")`
             // reaches through, and pending jobs live in the SchedulerDO — nothing the
             // CDC changelog records — so reading them must forfeit a delta resume.
             // The scheduler's own `runAfter`/`runAt`/`cancel` are writes and stay unstamped.
-            const scheduler = markUnvouchableReads((config.scheduler?.(env) ?? schedulerStub) as SchedulerLike, options.onRead, ["get", "list"]);
+            const schedulerBase = markUnvouchableReads((config.scheduler?.(env) ?? schedulerStub) as SchedulerLike, options.onRead, ["get", "list"]);
+            // `ctx.scheduler.runAfter(0, ...)` is documented as the deterministic
+            // equivalent of an `afterCommit` hook, and the SchedulerDO persists the
+            // job the moment it is called — so inside a mutation the call is BUFFERED
+            // and replayed after the transaction commits (a rollback drops it).
+            // Wrapped on the same dispatches as the deferred-delete queue and for the
+            // same reason: `ctx.runMutation` hands the CALLER's ctx to the callee, so
+            // a mutation reached from an action schedules through the action's ctx.
+            // An action's own schedules stay immediate — the window is only open
+            // while a transaction is (see `runMutationTransaction`).
+            //
+            // Every kind but `query` is wrapped, because `runMutationTransaction`
+            // is installed on `ctx.runMutation` for every kind but `query`: a
+            // STREAM ctx, and an admin/lifecycle ctx with no registered kind at all,
+            // both get the BEGIN/COMMIT span for a mutation they compose, and used
+            // to get it with the deferral missing — so that mutation's job reached
+            // the SchedulerDO while its transaction was still open, and survived the
+            // rollback. A query cannot host a mutation handler (`dispatchRun`
+            // refuses it) and its ctx is built on the hot subscription path, so it
+            // stays unwrapped.
+            //
+            // Wrapped OUTSIDE the read-stamping facade so `get`/`list` stay stamped.
+            const scheduler = contextKind === "query" ? schedulerBase : withDeferredSchedules(schedulerBase);
             // Build the storage adapter once and share it between `ctx.storage`
             // and `ctx.db.system._storage` so both read the same R2 binding. The
             // `storageStub` fallback satisfies SystemReaderStorageLike structurally
@@ -1081,7 +1080,6 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // resolves through it and stays stamped, and applied only to
             // `ctx.storage` so `ctx.db.system._storage` (which shares the adapter
             // above) is untouched.
-            const contextKind = LUNORA_FUNCTIONS[options.functionPath ?? ""]?.kind;
             const contextStorage = contextKind === "mutation" || contextKind === "action" ? withDeferredDeletes(storage) : storage;
             // `ctx.log`: the DO base builds the attributed logger (structured
             // fields + `.with(...)` child + trace correlation) and routes each call
@@ -1188,8 +1186,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 secrets,
             };
 
-            ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, ctx);
-            ctx.runMutation = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("mutation", reference.__lunoraRef, fnArgs, ctx);
+            ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, ctx, contextKind);
+            // The composed mutation runs under the SAME wrapper the top-level RPC
+            // uses, so "do the transactional work in a mutation and call it from the
+            // action" — the recipe the docs give for atomicity — actually is atomic.
+            ctx.runMutation = (reference: FunctionReference, fnArgs: Record<string, unknown>) =>
+                dispatchRun("mutation", reference.__lunoraRef, fnArgs, ctx, contextKind, async (work) => this.runMutationTransaction(ctx, work));
             // `ctx.runQuery(ref, args, { untracked: true })` runs the sub-query on
             // its OWN context, built without the subscription's read-footprint
             // hooks — so its reads never enter this subscription's footprint and a
@@ -1210,6 +1212,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     runOptions?.untracked === true
                         ? this.buildCtx({ functionPath: options.functionPath, headroom: options.headroom, identity: { identity, userId }, scope: options.scope })
                         : ctx,
+                    contextKind,
                 );
 
             return ctx;

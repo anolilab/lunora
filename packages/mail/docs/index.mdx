@@ -135,10 +135,13 @@ env, ctx)` export, a sibling of `fetch`/`scheduled`. Export one built by
 `createInboundEmailHandler`:
 
 ```ts
-import { createInboundEmailHandler, dispatchToLunoraFunction, parseInboundEmail } from "@lunora/mail/inbound";
+import { authenticatesFrom, createInboundEmailHandler, dispatchToLunoraFunction, parseInboundEmail } from "@lunora/mail/inbound";
 
 export const email = createInboundEmailHandler({
     parse: parseInboundEmail,
+    // The sender gate. `authenticatesFrom` accepts only a DMARC/SPF/DKIM pass
+    // that is ALIGNED with the `From` domain — see the warning below.
+    verify: authenticatesFrom,
     dispatch: dispatchToLunoraFunction({
         shard: env.SHARD,
         functionPath: "inbound:onEmail",
@@ -152,7 +155,9 @@ The handler reads `message.raw`, parses it into a normalised `InboundEmail`
 html?, attachments, authentication }`, every header CR/LF-checked), and
 dispatches it. `dispatchToLunoraFunction` posts an RPC envelope to the root shard
 stub (the same admin-RPC-over-shard path the dev mail catcher uses), calling the
-named mutation/action with the parsed message as its args. It needs
+named mutation/action with the parsed message as its args. The RPC is marked a
+**trusted system dispatch** — the same marker the scheduler and cron paths set —
+so the target may be an `internalMutation` / `internalAction`. It needs
 `LUNORA_ADMIN_TOKEN` to authorize the RPC (read from `env` by default).
 
 Failures split by whether a redelivery could ever succeed. A **parse or verify**
@@ -186,21 +191,26 @@ throwing, so it bounces without being queued for a retry that can never succeed.
 
 <Callout type="warn">
     Inbound mail is untrusted and dispatch is privileged. Cloudflare Email Routing authenticates only the recipient domain, not the sender (`email.from` and the
-    body are trivially spoofable), and `dispatchToLunoraFunction` runs the target function in a system/admin context with RLS bypassed. Never make a trust
-    decision on `email.from`. Gate on the DKIM/SPF/DMARC verdicts in `email.authentication` via the `verify` hook before dispatch, and treat the function input
-    as fully attacker-controlled. A bare `spf === "pass"` or `dkim === "pass"` is not enough: SPF vouches for the envelope `MAIL FROM` domain and DKIM for the
-    signing `d=`, both of which the sender picks. Each verdict carries the domain it is about (`spfDomain`, `dkimDomain`, `dmarcDomain`) — accept an SPF or DKIM
-    pass only when that domain equals the `From` address's domain, and treat a pass with a `null` domain as unauthenticated. A DMARC pass already checked
-    alignment.
+    body are trivially spoofable), and `dispatchToLunoraFunction` dispatches as a trusted system call, so make the target an `internalMutation` /
+    `internalAction`: a **public** `mutation` reachable from inbound mail is equally reachable from any browser client, which can post a forged
+    `from`/`to`/`text` straight into your inbox table. The dispatch carries no caller identity, so an `rls()` policy on the target sees an anonymous caller — it
+    is not bypassed; do the authorization in the handler. Never make a trust decision on `email.from`. Gate on the DKIM/SPF/DMARC verdicts in
+    `email.authentication` via the `verify` hook before dispatch, and treat the function input as fully attacker-controlled. A bare `pass` is not enough: SPF
+    vouches for the envelope `MAIL FROM` domain and DKIM for the signing `d=`, both of which the sender picks. `authentication.dkim` / `.spf` / `.dmarc` are
+    **lists** — one header legitimately reports a method more than once (an ESP-relayed message is DKIM-signed twice) — and each entry carries the `domain` it
+    is about. Do not hand-roll that check: pass `verify: authenticatesFrom` and let `@lunora/mail` answer it. It accepts only when ANY entry has `result ===
+    "pass"` **and** a `domain` equal to the `From` address's domain, treating an entry with a `null` domain as unauthenticated and an empty list as "not
+    reported" (a DMARC pass already checked alignment). Every copy of this predicate written by hand has been one `&&` away from accepting a genuine `spf=pass`
+    + `dkim=pass` for the attacker's OWN domain on a message forging someone else's `From`.
 </Callout>
 
-The receiving function is an ordinary mutation/action (the default `resolveArgs`
-passes the whole `InboundEmail`, so declare the fields you use):
+The receiving function is an ordinary internal mutation/action (the default
+`resolveArgs` passes the whole `InboundEmail`, so declare the fields you use):
 
 ```ts
-import { mutation, v } from "@/lunora/_generated/server";
+import { internalMutation, v } from "@/lunora/_generated/server";
 
-export const onEmail = mutation
+export const onEmail = internalMutation
     .input({
         from: v.string(),
         to: v.array(v.string()),
@@ -247,8 +257,10 @@ rules; that lifecycle stays in Cloudflare.
 | Type-only                             | `Mailer`, `MailTransport`, `SendOptions`, `SendPayload`, `QueueLike`, `LunoraMailOptions`, `QueuedSend`, `CapturedMail`, `MailboxSink`, `CloudflareSend`, `CloudflareTransportOptions`, `FromEnvOptions`, `MailEnv` |
 
 `@lunora/mail/inbound`: `createInboundEmailHandler(options)`,
-`dispatchToLunoraFunction(options)`, `parseInboundEmail(raw)`, and the inbound
-types (`InboundEmail`, `InboundAttachment`, `InboundAuthentication`,
+`dispatchToLunoraFunction(options)`, `parseInboundEmail(raw)`,
+`authenticatesFrom(email)` (the canonical `verify` gate — true only for a
+DMARC/SPF/DKIM pass aligned with the `From` domain), and the inbound types
+(`InboundEmail`, `InboundAttachment`, `InboundAuthentication`,
 `InboundEmailHandlerOptions`, `InboundDispatch`, `InboundVerify`, …).
 
 `@lunora/mail/testing` (dev/test-only): `waitForMail(options)`,

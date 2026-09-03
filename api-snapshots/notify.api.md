@@ -201,8 +201,10 @@ interface PushBroadcastJob {
 ### `PushBroadcastPageOutcome` (interface)
 
 ```ts
-interface PushBroadcastPageOutcome extends BroadcastPageResult {
+interface PushBroadcastPageOutcome {
     failedIds: string[];
+    nextFilter?: SubscriptionFilter;
+    result: BroadcastResult;
 }
 ```
 
@@ -407,7 +409,7 @@ const fcmId: (token: string) => string;
 ### `isGoneError` (const)
 
 ```ts
-const isGoneError: (message: string | undefined) => boolean;
+const isGoneError: (message: string | undefined, kind?: StoredSubscription["kind"]) => boolean;
 ```
 
 ### `isNotifyDefinition` (const)
@@ -483,6 +485,15 @@ interface SubscribeToPushOptions {
 }
 ```
 
+### `SubscribeToPushResult` (interface)
+
+```ts
+interface SubscribeToPushResult {
+    replacedEndpoint?: string;
+    subscription: SerializedPushSubscription;
+}
+```
+
 ### `isPushSupported` (const)
 
 ```ts
@@ -492,7 +503,7 @@ const isPushSupported: () => boolean;
 ### `subscribeToPush` (const)
 
 ```ts
-const subscribeToPush: (options: SubscribeToPushOptions) => Promise<SerializedPushSubscription>;
+const subscribeToPush: (options: SubscribeToPushOptions) => Promise<SubscribeToPushResult>;
 ```
 
 ### `unsubscribeFromPush` (const)

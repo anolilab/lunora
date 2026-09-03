@@ -5,7 +5,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
-import { runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand, runMigrateToHyperdriveCommand } from "../../src/commands/migrate/handler";
+import {
+    execute as migrateExecute,
+    runMigrateCreateCommand,
+    runMigrateDataCommand,
+    runMigrateGenerateCommand,
+    runMigrateToHyperdriveCommand,
+} from "../../src/commands/migrate/handler";
 import type { FetchLike } from "../../src/commands/run/handler";
 import type { Logger } from "../../src/util/logger";
 
@@ -57,7 +63,7 @@ describe("lunora migrate", () => {
         });
 
         it("first run on a global table emits CREATE TABLE", () => {
-            expect.assertions(10);
+            expect.assertions(11);
 
             writeSchema(
                 `import { defineSchema, defineTable, v } from "@lunora/server";
@@ -86,6 +92,10 @@ export const schema = defineSchema({
             expect(sql).toContain('CREATE TABLE IF NOT EXISTS "users"');
             expect(sql).toContain('"id" TEXT PRIMARY KEY');
             expect(sql).toContain('"_creationTime" REAL NOT NULL');
+            // The optimistic-concurrency row version the runtime auto-provisioner
+            // also adds — emitted here so a hand-applied migration and the
+            // auto-provisioner agree on the physical shape and the column budget.
+            expect(sql).toContain('"_version" INTEGER');
             expect(sql).toContain('"email" TEXT NOT NULL');
             expect(sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "users_by_email"');
 
@@ -97,6 +107,39 @@ export const schema = defineSchema({
             const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as { tables: Record<string, unknown> };
 
             expect(Object.keys(snapshot.tables)).toEqual(["users"]);
+        });
+
+        it("ignores a hyperdrive-backed global table", () => {
+            expect.assertions(3);
+
+            // `.global({ backend: "hyperdrive" })` stores the table in a
+            // Postgres/MySQL database reached through Hyperdrive, which
+            // provisions itself from the schema at runtime. The generator renders
+            // through `@lunora/d1/dialect` and has no dialect seam, so including
+            // it wrote SQLite DDL — double-quoted identifiers, `REAL` affinity —
+            // into a file the docs label "D1 SQL": a phantom table if it is ever
+            // applied to D1, and invalid syntax on MySQL.
+            writeSchema(
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    accounts: defineTable({
+        email: v.string(),
+    }).global({ backend: "hyperdrive" }).index("by_email", ["email"]),
+});
+`,
+            );
+
+            const result = runMigrateGenerateCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                name: "init",
+                now: fixedNow,
+            });
+
+            expect(result.code).toBe(0);
+            expect(result.empty).toBe(true);
+            expect(result.migrationFile).toBe("");
         });
 
         it("ignores sharded (non-global) tables", () => {
@@ -663,6 +706,55 @@ export const backfillReadBy = defineMigration({
             }
 
             expect(calls[0]?.headers?.authorization).toBe("Bearer from-env");
+        });
+
+        it("falls back to the .dev.vars token against a local worker", async () => {
+            expect.hasAssertions();
+
+            const calls: CapturedCall[] = [];
+            const previous = process.env.LUNORA_ADMIN_TOKEN;
+
+            delete process.env.LUNORA_ADMIN_TOKEN;
+            // eslint-disable-next-line no-secrets/no-secrets -- a throwaway .dev.vars fixture in a temp directory, not a credential
+            writeFileSync(join(workdir, ".dev.vars"), 'LUNORA_ADMIN_TOKEN="local"\n', "utf8");
+
+            try {
+                await runMigrateDataCommand({
+                    cwd: workdir,
+                    fetchImpl: captureFetch(calls, okResponse()),
+                    id: "backfill-read-by",
+                    logger: silentLogger(),
+                    subcommand: "up",
+                });
+            } finally {
+                if (previous !== undefined) {
+                    process.env.LUNORA_ADMIN_TOKEN = previous;
+                }
+            }
+
+            expect(calls[0]?.headers?.authorization).toBe("Bearer local");
+        });
+
+        // The documented invocation is `lunora migrate up <id>` — the docs once
+        // showed a bare `up`/`status`, which exits 1. Pin the requirement so the
+        // examples cannot drift back.
+        it.each(["up", "down", "status"])("requires a migration id for %s", async (subcommand) => {
+            expect.assertions(1);
+
+            let exitCode: number | undefined;
+
+            await migrateExecute({
+                argument: [subcommand],
+                options: {},
+                process: {
+                    cwd: workdir,
+                    exit: (code: number) => {
+                        exitCode = code;
+                    },
+                },
+            } as unknown as Parameters<typeof migrateExecute>[0]);
+
+            expect(exitCode).toBe(1);
         });
 
         it("errors when no admin token is available", async () => {

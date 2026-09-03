@@ -1,3 +1,35 @@
+## @lunora/mcp [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.106...@lunora/mcp@1.0.0-alpha.107) (2026-09-03)
+
+### Bug Fixes
+
+* audit rounds 14-16 ([#586](https://github.com/anolilab/lunora/issues/586)) ([6a09b74](https://github.com/anolilab/lunora/commit/6a09b746cfc9fb36f451c208b7a1c3eac16e56f4))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.73
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.54
+* **@lunora/x402:** upgraded to 1.0.0-alpha.50
+
+## @lunora/mcp [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.105...@lunora/mcp@1.0.0-alpha.106) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* 34 public API changes across mail, storage, payment, replica,
+studio, workflow, agent, codegen, cli and the shard runtime. The full list is in
+
+### Bug Fixes
+
+* audit rounds 7-11 ([#579](https://github.com/anolilab/lunora/issues/579)) ([224a42a](https://github.com/anolilab/lunora/commit/224a42a741f524e0110da55917c79fd08c90a885))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.72
+* **@lunora/errors:** upgraded to 1.0.0-alpha.30
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.53
+* **@lunora/x402:** upgraded to 1.0.0-alpha.49
+
 ## @lunora/mcp [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.104...@lunora/mcp@1.0.0-alpha.105) (2026-09-02)
 
 

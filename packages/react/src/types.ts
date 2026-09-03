@@ -1,4 +1,4 @@
-import type { OptimisticUpdate, SubscriptionErrorCallback, User } from "@lunora/client";
+import type { OptimisticUpdate, SubscriptionError, SubscriptionErrorCallback, User } from "@lunora/client";
 import type { PaginationStatus } from "@lunora/client/pagination";
 
 export interface UseQueryOptions {
@@ -31,10 +31,21 @@ export interface UseSubscriptionResult<T> {
 export interface UsePaginatedQueryOptions {
     /** Page size for the first page (and the default for `loadMore`). */
     initialNumItems: number;
+
+    /** Called when a page subscription (or its initial fetch) fails; also surfaced on `error`. */
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 
 export interface UsePaginatedQueryResult<T> {
+    /**
+     * The last page failure, or `undefined`. A tail page that fails before its
+     * first frame is dropped so `status` returns to `"CanLoadMore"` and
+     * `loadMore` can retry it; the first page has nothing to fall back to and
+     * stays `"LoadingFirstPage"` with this set. Cleared by the next successful
+     * frame, by `loadMore`, or by an args change.
+     */
+    error: SubscriptionError | undefined;
     /** `true` while the first page or a `loadMore` page is in flight. */
     isLoading: boolean;
     /** Request the next page. A no-op unless `status === "CanLoadMore"`. */
@@ -47,10 +58,15 @@ export interface UsePaginatedQueryResult<T> {
 export interface UseInfiniteQueryOptions {
     /** Page size for the first page (and the default for `fetchNextPage`). */
     initialNumItems: number;
+
+    /** Called when a page subscription (or its initial fetch) fails; also surfaced on `error`. */
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 
 export interface UseInfiniteQueryResult<T> {
+    /** The last page failure, or `undefined` — see `UsePaginatedQueryResult.error`. */
+    error: SubscriptionError | undefined;
     /** Request the next page. A no-op unless `status === "CanLoadMore"`. */
     fetchNextPage: (numberItems?: number) => void;
     /** `true` when the loaded tail reports it can load another page. */

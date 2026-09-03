@@ -1,8 +1,11 @@
 import { LunoraError } from "@lunora/errors";
 
+import { collectPages } from "../../../shared/collect-pages";
 import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { CronTarget, LunoraSchedulerOptions, RunOptions, Scheduler, ScheduleRecord, ScheduleTargetArgs } from "./types";
 import { isWorkflowReference } from "./types";
+import assertScheduleDelay from "./validate-delay";
+import assertScheduleInstant from "./validate-instant";
 
 /**
  * Client-side scheduler — forwards `runAfter` / `runAt` / `cancel` calls to a
@@ -21,6 +24,12 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
     const runAt = async <T extends CronTarget>(date: Date | number, target: T, args: ScheduleTargetArgs<T>, options_: RunOptions = {}): Promise<string> => {
         const scheduledFor = date instanceof Date ? date.getTime() : date;
 
+        // The bound `runAfter` has always applied, restated for the absolute form.
+        // Without it `runAt` was the door a `NaN`/`Infinity` instant walked through
+        // — `JSON.stringify` renders it `null`, and the DO stores a `scheduledFor`
+        // no alarm can fire, so the job is accepted and then never runs.
+        assertScheduleInstant(scheduledFor, Date.now(), "ctx.scheduler.runAt");
+
         // Shared envelope; the target-specific field (`functionPath` xor
         // `workflow`) is merged in below.
         //
@@ -32,6 +41,10 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
         // rides along only when `pool` is set (mirroring `createWorkpool`).
         const base = {
             args,
+            // Pre-minted id, when the caller decided it before the call could be
+            // made (see `RunOptions.id`). Absent for an ordinary schedule, and the
+            // DO mints one.
+            id: options_.id,
             instanceName: options.instanceName ?? "default",
             maxConcurrency: options_.pool === undefined ? undefined : options_.maxConcurrency,
             originUrl: options.originUrl,
@@ -67,9 +80,7 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
     };
 
     const runAfter = async <T extends CronTarget>(delayMs: number, target: T, args: ScheduleTargetArgs<T>, options_: RunOptions = {}): Promise<string> => {
-        if (!Number.isFinite(delayMs) || delayMs < 0) {
-            throw new LunoraError("INTERNAL", "@lunora/scheduler: `delayMs` must be a non-negative finite number");
-        }
+        assertScheduleDelay(delayMs, "ctx.scheduler.runAfter");
 
         return runAt(Date.now() + delayMs, target, args, options_);
     };
@@ -89,26 +100,13 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
      * unbounded duplicates. Paging keeps that promise while each individual
      * response stays bounded.
      */
-    const listAll = async (path: string): Promise<ScheduleRecord[]> => {
-        const all: ScheduleRecord[] = [];
-        let cursor: string | undefined;
-
-        for (;;) {
-            const query = cursor === undefined ? "" : `?cursor=${encodeURIComponent(cursor)}`;
-            // eslint-disable-next-line no-await-in-loop -- each page's cursor comes from the previous page, so the round-trips are inherently sequential
-            const body = await getDO<{ cursor?: string; records?: ScheduleRecord[]; truncated?: boolean }>(options, `${path}${query}`);
-
-            // Keep the return type honest (never `undefined`) if the DO ever
-            // responds 200 without a `records` array.
-            all.push(...(Array.isArray(body.records) ? body.records : []));
-
-            if (body.truncated !== true || typeof body.cursor !== "string" || body.cursor.length === 0) {
-                return all;
-            }
-
-            cursor = body.cursor;
-        }
-    };
+    const listAll = async (path: string): Promise<ScheduleRecord[]> =>
+        await collectPages<ScheduleRecord>(async (cursor) =>
+            getDO<{ cursor?: string; records?: ScheduleRecord[]; truncated?: boolean }>(
+                options,
+                cursor === undefined ? path : `${path}?cursor=${encodeURIComponent(cursor)}`,
+            ),
+        );
 
     // The DO's `/list` returns one bounded page of the pending `id:` headers;
     // `listAll` walks them all so callers see every pending job.

@@ -25,6 +25,7 @@ const AGENT_STATUS_TOOL_NAME = "lunora_agent_status";
 
 ```ts
 interface AuthedMcpFetchHandlerOptions {
+    maxRequestBytes?: number;
     protect: McpAuthProtect;
     server: AuthedMcpServerOptions;
 }
@@ -46,6 +47,12 @@ interface CallAgentToolOptions {
     pollIntervalMs?: number;
     wait?: (ms: number) => Promise<void>;
 }
+```
+
+### `DEFAULT_MAX_REQUEST_BYTES` (const)
+
+```ts
+const DEFAULT_MAX_REQUEST_BYTES: number;
 ```
 
 ### `LOCAL_SERVER_NAME` (const)
@@ -92,6 +99,7 @@ interface LunoraMcpServerOptions {
     agentPollIntervalMs?: number;
     agents?: ReadonlyArray<McpAgentExposure>;
     allowAgents?: boolean;
+    allowObservability?: boolean;
     allowWrites?: boolean;
     client?: LunoraClient;
     fetch?: typeof fetch;
@@ -132,6 +140,14 @@ type McpAuthProtect = (handler: (request: Request, claims: McpAccessTokenClaims)
 type McpFetchHandler = (request: Request) => Promise<Response>;
 ```
 
+### `McpFetchHandlerOptions` (interface)
+
+```ts
+interface McpFetchHandlerOptions extends LunoraMcpServerOptions {
+    maxRequestBytes?: number;
+}
+```
+
 ### `McpServerInfo` (interface)
 
 ```ts
@@ -168,11 +184,25 @@ const OBSERVABILITY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition>;
 type PaidMcpChargeConfig = X402ChargeSettings;
 ```
 
+### `PaidMcpExecutionContext` (interface)
+
+```ts
+interface PaidMcpExecutionContext {
+    waitUntil?: (promise: Promise<unknown>) => void;
+}
+```
+
+### `PaidMcpFetchHandler` (type)
+
+```ts
+type PaidMcpFetchHandler = (request: Request, env?: unknown, context?: PaidMcpExecutionContext) => Promise<Response>;
+```
+
 ### `PaidMcpServer` (interface)
 
 ```ts
 interface PaidMcpServer {
-    readonly fetchHandler: McpFetchHandler;
+    readonly fetchHandler: PaidMcpFetchHandler;
     paidTool: (options: RegisterPaidToolOptions, handler: ToolHandler) => void;
     tool: (options: RegisterToolOptions, handler: ToolHandler) => void;
 }
@@ -183,6 +213,7 @@ interface PaidMcpServer {
 ```ts
 interface PaidMcpServerConfig {
     charge: PaidMcpChargeConfig;
+    maxRequestBytes?: number;
     serverInfo?: {
         name: string;
         version: string;
@@ -212,6 +243,14 @@ interface RegisterToolOptions {
     description: string;
     inputSchema: ToolInputSchema;
     name: string;
+}
+```
+
+### `ServeStatelessOptions` (interface)
+
+```ts
+interface ServeStatelessOptions extends HandleRequestOptions {
+    maxRequestBytes?: number;
 }
 ```
 
@@ -277,7 +316,7 @@ const callAgentTool: (client: LunoraClient, name: string, input: Record<string, 
 ### `callTool` (const)
 
 ```ts
-const callTool: (client: LunoraClient, name: string, input: Record<string, unknown>, allowWrites?: boolean, hasAdminToken?: boolean) => Promise<ToolResult>;
+const callTool: (client: LunoraClient, name: string, input: Record<string, unknown>, allowWrites?: boolean, allowObservability?: boolean) => Promise<ToolResult>;
 ```
 
 ### `connectLocalStdio` (const)
@@ -313,7 +352,7 @@ const createLunoraMcpServer: (options: LunoraMcpServerOptions) => Server;
 ### `createMcpFetchHandler` (const)
 
 ```ts
-const createMcpFetchHandler: (options: LunoraMcpServerOptions) => McpFetchHandler;
+const createMcpFetchHandler: (options: McpFetchHandlerOptions) => McpFetchHandler;
 ```
 
 ### `createPaidMcpServer` (const)
@@ -349,13 +388,13 @@ const parseAgentsEnv: (raw: string | undefined) => McpAgentExposure[];
 ### `serveStateless` (const)
 
 ```ts
-const serveStateless: (server: Server, request: Request, options?: HandleRequestOptions) => Promise<Response>;
+const serveStateless: (server: Server, request: Request, options?: ServeStatelessOptions) => Promise<Response>;
 ```
 
 ### `toolDefinitions` (const)
 
 ```ts
-const toolDefinitions: (allowWrites: boolean, hasAdminToken?: boolean) => ReadonlyArray<ToolDefinition>;
+const toolDefinitions: (allowWrites: boolean, allowObservability?: boolean) => ReadonlyArray<ToolDefinition>;
 ```
 
 ## `@lunora/mcp/docs`

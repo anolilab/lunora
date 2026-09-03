@@ -9,7 +9,7 @@ A minimal Lunora app wiring [`@lunora/payment`](../../packages/payment) end-to-e
     - `checkout` (action) calls `ctx.payments.createCheckout(...)` and returns the hosted-checkout `{ url }`. Reaching for `ctx.payments` is what tells codegen to wire the typed facade onto `ActionCtx`.
     - `mySubscriptions` (query) reads the synced `subscriptions` table — re-renders the instant a webhook lands.
     - `processWebhook` (internal action) reconstructs the request and calls `ctx.payments.handleWebhook(...)` inside the shard, where the store exists.
-- **`lunora/http.ts`** mounts `POST /payment/webhook` as an `httpAction` — it runs at the Worker edge with the **raw** request (needed for signature verification) and forwards the body + signature into the shard via `ctx.runAction(processWebhook, …)`.
+- **`lunora/http.ts`** mounts `POST /payment/webhook` as an `httpAction` — it runs at the Worker edge with the **raw** request (needed for signature verification) and forwards the body + signature into the shard via `ctx.runAction(processWebhook, …)`, then answers with `webhookResponse(result)` — only the JSON payload crosses that hop, so the status has to be re-applied or an orphaned event's deliberate `500` becomes a `200` and Stripe never retries it.
 - **`src/server/index.ts`** passes `payment: (env) => ({ adapter: createStripeAdapter({ client: new Stripe(env.STRIPE_SECRET_KEY), webhookSecret: env.STRIPE_WEBHOOK_SECRET }) })` to `createShardDO`. The generated ShardDO assembles `ctx.payments` per request with the store on `ctx.db`.
 - **`src/client/App.tsx`** uses `@lunora/react/payment`'s `CheckoutButton` (redirect-on-URL) wired to the `checkout` action, plus a reactive `useQuery(api.billing.mySubscriptions)`.
 

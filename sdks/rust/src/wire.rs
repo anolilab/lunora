@@ -423,7 +423,20 @@ fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
 
             WireValue::BigInt(raw.to_string())
         }
-        "date" => WireValue::Date(Box::new(decode_at(items.get(2).ok_or(WireError::Malformed("date"))?, depth + 1)?)),
+        "date" => {
+            // Epoch milliseconds, and nothing else. The payload is DECODED first
+            // (a nested `[TAG, "nan"]` is how an invalid date travels), then
+            // checked: `null` or a string would otherwise become a `Date` holding
+            // a value no epoch arithmetic can use, re-encoded as a
+            // legitimate-looking date tag.
+            let epoch = decode_at(items.get(2).ok_or(WireError::Malformed("date"))?, depth + 1)?;
+
+            if !matches!(epoch, WireValue::Number(_) | WireValue::NaN | WireValue::Infinity | WireValue::NegInfinity) {
+                return Err(WireError::Malformed("date"));
+            }
+
+            WireValue::Date(Box::new(epoch))
+        }
         "url" => WireValue::Url(items.get(2).and_then(Value::as_str).ok_or(WireError::Malformed("url"))?.to_string()),
         "map" => {
             let raw = items.get(2).and_then(Value::as_array).ok_or(WireError::Malformed("map"))?;

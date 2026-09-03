@@ -467,10 +467,18 @@ class AppBuilder<Env extends object> {
                 // is anonymous. better-auth hands back a `Date`; anything else means
                 // the adapter did not hydrate it, and omitting beats guessing.
                 const expiresAt = session.session.expiresAt;
+                // `email` and `name` are the claims `ctx.auth.getIdentity()` is
+                // documented to carry ("email, name, roles, custom claims"). Without
+                // them the documented `me` query — `identity?.email` — resolves
+                // `undefined` on the built-in wiring. Empty strings are dropped so an
+                // absent claim reads as absent rather than as "".
+                const user = session.user as { email?: unknown; name?: unknown; role?: unknown };
 
                 return {
+                    ...(typeof user.email === "string" && user.email.length > 0 ? { email: user.email } : {}),
                     ...(expiresAt instanceof Date ? { expiresAtMs: expiresAt.getTime() } : {}),
-                    role: (session.user as { role?: unknown }).role,
+                    ...(typeof user.name === "string" && user.name.length > 0 ? { name: user.name } : {}),
+                    role: user.role,
                     userId: session.user.id,
                 };
             };

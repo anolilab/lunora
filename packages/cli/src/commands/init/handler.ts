@@ -1,4 +1,4 @@
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import { applyLintIgnores, BADGES, detectLintTools, isInteractive } from "@lunora/config";
@@ -18,7 +18,7 @@ import { addArgsFor, detectInstalledManagers, detectPackageManager, installArgsF
 import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
 import { PromptCancelledError } from "../../util/prompt-cancelled";
-import { resolveDistTag, resolvePinnedSourceRef, resolveSourceRef, resolveTagVersions } from "../../util/source-ref";
+import { resolveDistTag, resolvePinnedRepoRef, resolvePinnedSourceRef, resolveSourceRef, resolveTagVersions } from "../../util/source-ref";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { NextStep } from "../../util/tui-prompts";
@@ -420,6 +420,29 @@ const collectFiles = (directory: string): ReadonlyArray<string> => {
     }
 
     return out;
+};
+
+/** The upstream repo `lunora init --vite` fetches its stock create-vite base from. */
+const CREATE_VITE_REPO = "vitejs/vite";
+
+/**
+ * Copy every REAL file under `source` into `target`, preserving the tree.
+ *
+ * Deliberately not `cpSync(..., { recursive: true })`: that reproduces symlinks
+ * verbatim, so a base carrying a link to `~/.ssh/id_rsa` plants that link inside
+ * the user's fresh project. {@link collectFiles} already drops symlinks for the
+ * bespoke-template path; this is the same rule for the create-vite base, which
+ * comes from a third-party repo at a moving ref.
+ */
+const copyRealFiles = (source: string, target: string): void => {
+    for (const file of collectFiles(source)) {
+        const destination = join(target, relative(source, file));
+
+        mkdirSync(dirname(destination), { recursive: true });
+        // `copyFileSync` reads through the source path; `collectFiles` has
+        // already guaranteed it is a regular file, never a link.
+        copyFileSync(file, destination);
+    }
 };
 
 const copyTemplate = async (sourceDirectory: string, target: string, name: string): Promise<ReadonlyArray<string>> => {
@@ -880,17 +903,23 @@ const scaffoldViteOverlay = async (options: {
 
         const copyBase = async (): Promise<void> => {
             if (localBase !== undefined) {
-                cpSync(localBase, target, { recursive: true });
+                copyRealFiles(localBase, target);
 
                 return;
             }
 
             const stagingDirectory = join(stagingRoot, "base");
-            const remote = `github:vitejs/vite/packages/create-vite/template-${adapter.createViteTemplate}#main`;
+            // Pin `main` to the commit it points at right now, the same way the
+            // bespoke template path pins its own repo: the base is third-party
+            // code copied verbatim into the user's project, so the SHA it came
+            // from is logged and auditable. Falls back to the branch (with a
+            // warning) when the API can't be reached.
+            const baseRef = await resolvePinnedRepoRef(CREATE_VITE_REPO, "main", logger);
+            const remote = `github:${CREATE_VITE_REPO}/packages/create-vite/template-${adapter.createViteTemplate}#${baseRef}`;
 
             await downloadTemplate(remote, { cwd: stagingRoot, dir: stagingDirectory, force: true, install: false, silent: true });
             renameCreateViteDotfiles(stagingDirectory);
-            cpSync(stagingDirectory, target, { recursive: true });
+            copyRealFiles(stagingDirectory, target);
         };
 
         let written: ReadonlyArray<string> = [];

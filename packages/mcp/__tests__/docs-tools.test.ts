@@ -115,6 +115,10 @@ describe("normalizeDocUrl", () => {
         ["a backslash traversal", String.raw`/docs/..\..\..\api/internal`],
         ["a mixed slash/backslash traversal", String.raw`/docs/..\../admin`],
         ["an encoded backslash segment", "/docs/%5c..%5cadmin"],
+        // The separator itself is encoded, so the raw string has no `/` to split
+        // on and the whole traversal hides inside one segment.
+        ["an encoded traversal with an encoded separator", "/docs/%2e%2e%2fapi"],
+        ["an encoded traversal reaching the site root", "/docs/%2e%2e%2f%2e%2e%2fapi%2fsearch"],
     ])("rejects %s", (_label, input) => {
         expect.assertions(1);
 

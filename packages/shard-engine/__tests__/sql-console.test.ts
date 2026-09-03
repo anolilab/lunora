@@ -163,6 +163,20 @@ describe("classifyStatement offsets", () => {
         expect(classifyStatement("SELECT 1;")).toBeUndefined();
     });
 
+    it("allows a comment after the trailing semicolon", () => {
+        expect.assertions(3);
+
+        // A comment is whitespace to SQLite, so `SELECT 1; -- note` is one
+        // statement. The trailing-`;` strip ran on the RAW text, where the comment
+        // sits between the `;` and the end, so the regex missed it and the `;` was
+        // read as a batch separator — the editor refused a draft the operator
+        // could run by deleting the note.
+        expect(classifyStatement("SELECT 1;\n-- a closing note")).toBeUndefined();
+        expect(classifyStatement("SELECT 1; /* note */")).toBeUndefined();
+        // …and the tail is still not a place to hide a second statement.
+        expect(classifyStatement("SELECT 1; -- note\nSELECT 2")?.code).toBe("SQL_MULTIPLE_STATEMENTS");
+    });
+
     it.each([
         ["a string literal", "SELECT ';' AS a"],
         ["a doubled-quote escape inside one", "SELECT 'a''b;c' AS x"],

@@ -610,6 +610,9 @@ extension ConformanceTests {
             ids(overflow["evicted"]).compactMap { $0 },
             "dropping the oldest restored write"
         )
+        try assertTypedArgsSurviveASerialisingStore()
+        try assertAnUndecodableRecordSettlesRejected()
+
         // Only the shards whose writes SURVIVED — a key gathered before eviction
         // would send the caller to open a socket with nothing queued behind it.
         XCTAssertEqual(cappedKeys.map { $0 ?? "" }, ids(overflow["shardKeys"]).map { $0 ?? "" })
@@ -691,6 +694,203 @@ extension ConformanceTests {
 
     /// Two or more queued writes coalesce into ONE `/_lunora/rpc-batch` round trip,
     /// and each slot is classified exactly as a whole single-call response is.
+    /// A queued write carrying `bigint`, `bytes` and `Date` args round-trips a
+    /// store that serialises.
+    ///
+    /// Persisting the NATIVE wrappers reports the write "queued" while the adapter
+    /// throws and nothing durable is written — or writes whatever the adapter
+    /// makes of an opaque value and replays it after a restart with corrupted
+    /// args.
+    private func assertTypedArgsSurviveASerialisingStore() throws {
+        let args: [String: Any] = [
+            "amount": WireBigInt("7"),
+            "blob": WireBytes(data: Data([1, 2, 3, 4]), ctor: "Int32Array"),
+            "when": WireDate(1_700_000_000_000),
+        ]
+        let store = MemoryPersistence()
+        let queue = LunoraOfflineQueue(persistence: store)
+        var failures: [String] = []
+
+        queue.onPersistenceError = { operation, _, _ in failures.append(operation) }
+        queue.enqueue(LunoraQueuedMutation(id: "m-typed", functionPath: "ledger:add", args: args))
+
+        XCTAssertEqual(failures, [], "the record must serialise, so nothing is reported as a failed append")
+        XCTAssertEqual(
+            canonical((store.appended.first?["args"] as? [String: Any])?["amount"]),
+            canonical([Wire.tag, "bigint", "7"]),
+            "the durable record holds the WIRE form"
+        )
+
+        let restored = LunoraOfflineQueue(persistence: store)
+
+        _ = try restored.hydrate()
+
+        XCTAssertEqual(queuedIDs(restored), ["m-typed"])
+
+        // Decoded back to the SAME native values, so the replay sends the write
+        // that was made rather than whatever the adapter's stringification left.
+        let back = try XCTUnwrap(restored.items().first?.args as? [String: Any])
+
+        XCTAssertEqual(back["amount"] as? WireBigInt, WireBigInt("7"))
+        XCTAssertEqual(back["blob"] as? WireBytes, WireBytes(data: Data([1, 2, 3, 4]), ctor: "Int32Array"))
+        XCTAssertEqual(back["when"] as? WireDate, WireDate(1_700_000_000_000))
+    }
+
+    /// A persisted record whose args do not decode is purged and settled, never
+    /// replayed with substitute args — that would commit a DIFFERENT write than
+    /// the caller made — and never thrown out of hydrate, which would kill the
+    /// whole restart path.
+    private func assertAnUndecodableRecordSettlesRejected() throws {
+        let store = MemoryPersistence(records: [
+            ["args": ["amount": [Wire.tag, "bigint", "not-a-number"]], "functionPath": "ledger:add", "id": "m-bad"]
+        ])
+        var settled: [LunoraMutationSettled] = []
+        let client = LunoraClient(url: "https://app.example")
+
+        client.offlineQueue = LunoraOfflineQueue(persistence: store)
+        client.onMutationSettled { settled.append($0) }
+
+        _ = try client.hydrateOfflineQueue()
+
+        XCTAssertEqual(queuedIDs(client.offlineQueue), [])
+        XCTAssertEqual(settled.map { $0.mutationID }, ["m-bad"])
+        XCTAssertEqual(settled.first?.status, .rejected)
+        XCTAssertEqual((settled.first?.error as? LunoraAPIError)?.code, LunoraOfflineCode.writeUndecodable)
+        XCTAssertEqual(store.removed, ["m-bad"], "the unreadable record is purged, not left to fail every restart")
+    }
+
+    /// A batch the worker refuses for SIZE is split and retried, not rejected.
+    ///
+    /// The worker reads a batch body under a 1 MiB budget
+    /// (`packages/runtime/src/body-readers.ts`) and answers 413
+    /// `PAYLOAD_TOO_LARGE` past it. A whole-batch coded envelope is a verdict on
+    /// every entry, so a count-only chunker settled the lot `rejected` — 500
+    /// durable writes dropped for the size of the batch they shared.
+    func caseOfflineFlushBatchSplitsOnPayloadTooLarge() throws {
+        let budget = 400
+        var bodies: [Int] = []
+        let store = MemoryPersistence()
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, body in
+                bodies.append(body.count)
+
+                if body.count > budget {
+                    return (413, Data("{\"error\":{\"code\":\"PAYLOAD_TOO_LARGE\",\"message\":\"Body too large\"}}".utf8))
+                }
+
+                return (200, echoBatchSlots(body, commitCursor: 1))
+            }
+        )
+
+        client.clientID = "c-1"
+        client.offlineQueue = LunoraOfflineQueue(persistence: store)
+
+        let queued = (0..<4).map { "m-\($0)" }
+
+        for id in queued {
+            client.offlineQueue.enqueue(entry(id, args: ["text": String(repeating: "x", count: 120)]))
+        }
+
+        let report = client.flushOfflineQueue()
+
+        XCTAssertEqual(report.committed, queued, "every write commits; none is dropped for the size of the batch it shared")
+        XCTAssertEqual(report.rejected, [])
+        XCTAssertTrue(report.requeued.isEmpty)
+        XCTAssertEqual(queuedIDs(client.offlineQueue), [])
+        XCTAssertGreaterThan(bodies.max() ?? 0, budget, "the first attempt has to be the over-budget one, or nothing was split")
+    }
+
+    /// An envelope-less non-2xx and a 429 are both "not now", never "no".
+    ///
+    /// A 502 edge page is coded `INTERNAL` by `parseRPCResponse`, so a flush of
+    /// exactly ONE queued write used to drop it terminally while the same response
+    /// with two or more was transient — whether a gateway blip LOST a durable
+    /// write depended on the queue's depth. And a rate limit is the one verdict a
+    /// durable queue must never honour: the write is valid and the server asked
+    /// for it later.
+    func testATransportFailureAndARateLimitBothRequeueALoneWrite() throws {
+        var settled: [LunoraMutationSettled] = []
+        let gatewayStore = MemoryPersistence()
+        let gateway = LunoraClient(url: "https://app.example", post: { _, _, _ in (502, Data("{\"message\":\"bad gateway\"}".utf8)) })
+
+        gateway.offlineQueue = LunoraOfflineQueue(persistence: gatewayStore)
+        gateway.onMutationSettled { settled.append($0) }
+        gateway.offlineQueue.enqueue(entry("m-502"))
+
+        let blip = gateway.flushOfflineQueue()
+
+        XCTAssertEqual(blip.rejected, [])
+        XCTAssertEqual(blip.requeued, ["m-502"])
+        XCTAssertEqual(queuedIDs(gateway.offlineQueue), ["m-502"])
+        XCTAssertTrue(settled.isEmpty, "nothing settled: no verdict was ever reached")
+        XCTAssertEqual(gatewayStore.removed, [], "the durable record stays, because the write is still good")
+
+        var posts = 0
+        let limited = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, _ in
+                posts += 1
+
+                let envelope = "{\"error\":{\"code\":\"TOO_MANY_REQUESTS\",\"data\":{\"retryAfterMs\":900000},\"message\":\"slow down\"}}"
+
+                return (429, Data(envelope.utf8))
+            }
+        )
+
+        limited.offlineQueue = LunoraOfflineQueue(persistence: MemoryPersistence())
+        limited.offlineQueue.enqueue(entry("m-429"))
+
+        let first = limited.flushOfflineQueue()
+
+        XCTAssertEqual(first.rejected, [])
+        XCTAssertEqual(first.requeued, ["m-429"])
+        XCTAssertEqual(first.retryAfterMs, lunoraMaxRetryAfterMs, "a delay past the clamp is honoured only up to it")
+
+        let again = limited.flushOfflineQueue()
+
+        XCTAssertEqual(posts, 1, "the second flush must wait out the delay rather than earn the same 429")
+        XCTAssertGreaterThan(again.retryAfterMs ?? 0, 0)
+        XCTAssertEqual(queuedIDs(limited.offlineQueue), ["m-429"])
+
+        // And per SLOT, through that same predicate: a batch reply that rate-limits
+        // one entry is not a verdict on it either.
+        let batched = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, _ in
+                let slots = [
+                    "{\"id\":0,\"body\":{\"commitCursor\":1,\"result\":null}}",
+                    "{\"id\":1,\"body\":{\"error\":{\"code\":\"TOO_MANY_REQUESTS\",\"data\":{\"retryAfterMs\":30000},\"message\":\"slow down\"}}}",
+                ]
+
+                return (200, Data("{\"results\":[\(slots.joined(separator: ","))]}".utf8))
+            }
+        )
+
+        batched.offlineQueue = LunoraOfflineQueue(persistence: MemoryPersistence())
+        batched.offlineQueue.enqueue(entry("m-ok"))
+        batched.offlineQueue.enqueue(entry("m-slot-429"))
+
+        let slotted = batched.flushOfflineQueue()
+
+        XCTAssertEqual(slotted.committed, ["m-ok"])
+        XCTAssertEqual(slotted.rejected, [], "a rate-limited slot is retried, not reported failed")
+        XCTAssertEqual(slotted.requeued, ["m-slot-429"])
+        XCTAssertEqual(slotted.retryAfterMs, 30000, "and the slot's own hint is what the next flush waits out")
+    }
+
+    /// The entry cap is not a port's to choose: the worker and the shard DO both
+    /// refuse a larger batch with a coded 400, which `protocol/README.md` 4.3
+    /// makes a TERMINAL verdict — so a client chunking at a stale value discards
+    /// durable writes instead of retrying them. It was a bare 500 in ten
+    /// independent places with nothing reconciling them.
+    func caseBatchEntryCapMatchesProtocol() throws {
+        let testCase = try scenario("offlineQueue", "batchReplay")
+        let expected = try XCTUnwrap((testCase["maxEntries"] as? NSNumber)?.intValue)
+
+        XCTAssertEqual(lunoraMaxBatchEntries, expected)
+    }
+
     func caseOfflineFlushBatchesMultipleWrites() throws {
         let testCase = try scenario("offlineQueue", "batchReplay")
         let slots = testCase["slots"] as? [[String: Any]] ?? []
@@ -1097,6 +1297,12 @@ private final class DrainedFlag {
 }
 
 /// A persistence adapter that records every call.
+///
+/// It JSON round-trips every record, which an adapter holding the dictionaries by
+/// reference does not — and that is the whole point: a file, a SQLite text column
+/// or a preferences store all serialise, so a record carrying the codec's native
+/// wrappers either throws here or is written as something that does not read
+/// back. Holding references made this suite blind to both.
 final class MemoryPersistence: LunoraPersistenceAdapter {
     var records: [[String: Any]]
     var appended: [[String: Any]] = []
@@ -1108,11 +1314,19 @@ final class MemoryPersistence: LunoraPersistenceAdapter {
     }
 
     func append(_ record: [String: Any]) throws {
-        appended.append(record)
-        records.append(record)
+        let serialised = try MemoryPersistence.roundTrip(record)
+
+        appended.append(serialised)
+        records.append(serialised)
     }
 
-    func load() throws -> [[String: Any]] { records }
+    func load() throws -> [[String: Any]] { try records.map(MemoryPersistence.roundTrip) }
+
+    private static func roundTrip(_ record: [String: Any]) throws -> [String: Any] {
+        let data = try JSONSerialization.data(withJSONObject: record)
+
+        return try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+    }
 
     func remove(_ mutationID: String) throws {
         removed.append(mutationID)

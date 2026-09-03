@@ -1,6 +1,6 @@
 {
     "name": "@lunora/values",
-    "version": "1.0.0-alpha.37",
+    "version": "1.0.0-alpha.38",
     "description": "Validators for Lunora: the v.* validator suite with end-to-end return-type inference",
     "keywords": [
         "cloudflare",
@@ -61,7 +61,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.29",
+        "@lunora/errors": "1.0.0-alpha.30",
         "@standard-schema/spec": "catalog:types"
     },
     "devDependencies": {

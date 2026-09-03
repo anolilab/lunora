@@ -36,10 +36,26 @@ type HttpMethod = "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PU
  * the helper even on the branches that never went near storage.
  */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
-type HttpActionCtx = Pick<ActionContext, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery"> & {
+type HttpActionCtx = {
     readonly scheduler?: ActionContext["scheduler"];
     readonly storage?: ActionContext["storage"];
-};
+
+    /**
+     * The request's `ExecutionContext.waitUntil` — keep a promise alive past the
+     * returned `Response`. Present whenever the host supplied one (a real
+     * Cloudflare `ExecutionContext` always does; a partial context from a
+     * framework mount seam or a unit test may not), hence optional.
+     *
+     * An HTTP action is the one ctx that routinely returns before its work is
+     * done — "acknowledge the webhook in 200ms, then do the real thing" — and
+     * without this a handler had no way to defer anything: work started and not
+     * awaited is cancelled when the response resolves. Wrappers that need it
+     * (`@lunora/x402`'s `withX402`, whose receipt sink must outlive the
+     * response) read it structurally off whatever context they are handed, so
+     * its absence made them silently no-op rather than fail.
+     */
+    readonly waitUntil?: (promise: Promise<unknown>) => void;
+} & Pick<ActionContext, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery">;
 
 /** A raw handler wrapped by {@link httpAction}. Receives the raw request, returns the raw response. */
 type HttpActionHandler = (context: HttpActionCtx, request: Request) => Promise<Response> | Response;
@@ -651,73 +667,6 @@ const httpRoute: HttpRoute = {
 };
 
 /**
- * Structural view of an R2 object body, as returned by `@lunora/storage`'s
- * `download()`. Re-declared here (not imported) so `@lunora/server` takes no
- * runtime dependency on `@lunora/storage`; the real binding satisfies the shape.
- */
-interface StorageObjectBody {
-    /** The object body stream (`null` for a zero-byte object). */
-    body: ReadableStream | null;
-    etag: string;
-    httpMetadata?: { contentType?: string };
-    key: string;
-    /** Hex SHA-256, when R2 carries a checksum (surfaced by `@lunora/storage`). */
-    sha256?: string;
-    /** Base64 SHA-256 (RFC 9530 digest encoding), when R2 carries a checksum. */
-    sha256Base64?: string;
-    size: number;
-}
-
-/** Byte window forwarded to `download()` so R2 streams just the requested slice. */
-interface StorageRange {
-    length: number;
-    offset: number;
-}
-
-/**
- * The minimal storage surface {@link serveStorageObject} needs: a metadata-rich
- * `download`, plus the body-free `head` a range request resolves against.
- *
- * `head` is required rather than optional-with-a-fallback because the fallback
- * is the bug: without it a ranged request has to start a full-object `download`
- * just to learn the size, then throw that body away. `@lunora/storage`'s `head`
- * already degrades internally to a 0-length ranged `get()` on a binding with no
- * HEAD, so there is nothing a caller here could usefully do that it does not.
- */
-interface StorageHead {
-    /** Object metadata with no body. `size` is the FULL object size (mirrors R2). */
-    head: (key: string) => Promise<Omit<StorageObjectBody, "body"> | null>;
-}
-
-/** The storage surface {@link serveStorageObject} reads through. */
-interface StorageDownloader extends StorageHead {
-    download: (key: string, options?: { range?: StorageRange }) => Promise<StorageObjectBody | null>;
-}
-
-/** Any ctx that carries a {@link StorageDownloader} on `.storage` (Query/Mutation/Action ctx all do). */
-interface ContextWithStorage {
-    storage: StorageDownloader;
-}
-
-/** Hoisted so the single-range matcher isn't recompiled on every request. */
-const SINGLE_BYTE_RANGE_RE = /^bytes=(\d*)-(\d*)$/;
-
-/**
- * RFC 7232 requires an `ETag` field-value to be a quoted-string (or `W/`-prefixed
- * weak validator). R2's `object.etag` is the *unquoted* MD5 hex, so emitting it
- * verbatim produces a malformed header that conditional-request clients and CDNs
- * will never match against `If-None-Match: "…"`. Wrap it in quotes unless the
- * source already carries them (or a weak prefix).
- */
-const toHttpEtag = (etag: string): string => {
-    if (etag.startsWith('"') || etag.startsWith('W/"')) {
-        return etag;
-    }
-
-    return `"${etag}"`;
-};
-
-/**
  * True when `value` is safe to use as an HTTP header field-value: no CR, LF, or
  * NUL. Guards against response-header injection / `Headers`-construction throws
  * when reflecting attacker-influenced object metadata (e.g. a stored
@@ -727,201 +676,7 @@ const toHttpEtag = (etag: string): string => {
  */
 const isSafeHeaderValue = (value: string): boolean => !(value.includes("\r") || value.includes("\n") || value.includes("\0"));
 
-/**
- * Outcome of parsing a `Range` header. `kind: "full"` → no/ignorable range
- * (serve the whole object as 200); `kind: "partial"` → a resolved inclusive
- * `[start, end]` (serve 206); `kind: "unsatisfiable"` → syntactically valid but
- * out of bounds (serve 416).
- */
-type RangeResult = { end: number; kind: "partial"; start: number } | { kind: "full" } | { kind: "unsatisfiable" };
-
-/**
- * Parse a single-range `Range: bytes=start-end` header against a known object
- * `size`. Only a single byte range is supported; a multi-range request
- * (`bytes=0-1,3-4`) is ignored and the full object is served — the common
- * media-streaming case is a single range, and multipart/byteranges responses
- * add disproportionate complexity.
- */
-const parseRange = (header: null | string, size: number): RangeResult => {
-    if (header === null) {
-        return { kind: "full" };
-    }
-
-    const match = SINGLE_BYTE_RANGE_RE.exec(header.trim());
-
-    if (!match) {
-        // Multi-range or malformed — ignore and serve the whole object.
-        return { kind: "full" };
-    }
-
-    const startRaw = match[1] ?? "";
-    const endRaw = match[2] ?? "";
-
-    if (startRaw === "" && endRaw === "") {
-        return { kind: "full" };
-    }
-
-    let start: number;
-    let end: number;
-
-    if (startRaw === "") {
-        // Suffix range `bytes=-N`: the final N bytes.
-        const suffix = Number(endRaw);
-
-        if (suffix === 0) {
-            return { kind: "unsatisfiable" };
-        }
-
-        start = Math.max(0, size - suffix);
-        end = size - 1;
-    } else {
-        start = Number(startRaw);
-        end = endRaw === "" ? size - 1 : Math.min(Number(endRaw), size - 1);
-    }
-
-    if (start > end || start >= size) {
-        return { kind: "unsatisfiable" };
-    }
-
-    return { end, kind: "partial", start };
-};
-
-/**
- * The headers every representation of an object carries — its content-type, its
- * validator, and the RFC 9530 digest when R2 recorded a checksum.
- *
- * `contentType` originates from object metadata set at upload time, so it is
- * attacker-influenced. A value carrying CR/LF (or other control chars) would
- * either throw inside `Response`/`Headers` construction (→ unhandled 500) or,
- * on a permissive runtime, smuggle an injected response header. Reject any
- * unsafe value and fall back to the safe default rather than reflecting it.
- */
-const storageObjectHeaders = (object: Omit<StorageObjectBody, "body">): Record<string, string> => {
-    const rawContentType = object.httpMetadata?.contentType;
-    const headers: Record<string, string> = {
-        "accept-ranges": "bytes",
-        "content-type": rawContentType !== undefined && isSafeHeaderValue(rawContentType) ? rawContentType : "application/octet-stream",
-        etag: toHttpEtag(object.etag),
-    };
-
-    if (object.sha256Base64 !== undefined) {
-        // RFC 9530 representation digest so clients can verify integrity. The
-        // value is a structured-field byte-sequence (base64 wrapped in colons),
-        // and it covers the full representation, so it's correct on a 206 too.
-        headers["repr-digest"] = `sha-256=:${object.sha256Base64}:`;
-    }
-
-    return headers;
-};
-
-/**
- * Whether `header` degrades to the whole object no matter how big the object is:
- * absent, multi-range, malformed, or a bare `bytes=-`.
- *
- * Every branch of {@link parseRange} that answers `"full"` returns before `size`
- * is read, so probing with `0` is a header-only question — which lets a request
- * that can never be a 206 skip the metadata read instead of paying for one and
- * throwing it away.
- */
-const rangeDegradesToWholeObject = (header: null | string): boolean => parseRange(header, 0).kind === "full";
-
-/** The whole object as a `200`, streamed from a single `download()`. */
-const serveWholeStorageObject = async (context: ContextWithStorage, key: string): Promise<Response> => {
-    const object = await context.storage.download(key);
-
-    if (!object) {
-        return new Response("Not Found", { status: 404 });
-    }
-
-    return new Response(object.body, {
-        headers: { ...storageObjectHeaders(object), "content-length": String(object.size) },
-        status: 200,
-    });
-};
-
-/**
- * Stream a stored object as an HTTP {@link Response} from an `httpAction`
- * handler, with correct `Content-Type`, `ETag`, and `Accept-Ranges: bytes`.
- * Honors a single-range `Range` request → **206 Partial Content** with
- * `Content-Range` + `Content-Length`; otherwise **200**. A missing object is a
- * **404**; an out-of-bounds range is a **416** with a `Content-Range` of
- * `bytes` star-slash-size.
- *
- * A range request resolves its window against a body-free `head()`, then issues
- * ONE `download()` with the resolved `{ offset, length }` so R2 streams just
- * those bytes — the slice is never buffered in the isolate, and no full-object
- * body transfer is started only to be cancelled. A request that cannot produce a
- * 206 at all (no `Range`, multi-range, malformed) skips the `head()` entirely and
- * streams straight from a single `download()`. For very
- * large objects a signed URL (`ctx.storage.getSignedUrl`) is still cheaper since
- * the client then ranges against R2/CDN directly with no Worker hop.
- */
-const serveStorageObject = async (context: ContextWithStorage, key: string, request: Request): Promise<Response> => {
-    const rangeHeader = request.headers.get("range");
-
-    // No `Range`, or one that cannot produce a 206 anyway (multi-range, malformed):
-    // the object's own metadata rides along with its body, so there is nothing to
-    // look up first — and paying for a `head()` here would only add a round trip
-    // and a window for the object to vanish between the two reads.
-    if (rangeDegradesToWholeObject(rangeHeader)) {
-        return serveWholeStorageObject(context, key);
-    }
-
-    // A range has to be resolved against the object's size before it can be
-    // requested, so this read exists only for the metadata — which is exactly why
-    // it is a `head()` and not a `download()`.
-    const metadata = await context.storage.head(key);
-
-    if (!metadata) {
-        return new Response("Not Found", { status: 404 });
-    }
-
-    const range = parseRange(rangeHeader, metadata.size);
-
-    if (range.kind === "unsatisfiable") {
-        // The body here is a plain-text error, not the object — so it carries
-        // neither the object's `Content-Type` nor its digest. Only the
-        // range-relevant headers (and the resource ETag) ride along.
-        return new Response("Range Not Satisfiable", {
-            headers: {
-                "accept-ranges": "bytes",
-                "content-range": `bytes */${String(metadata.size)}`,
-                "content-type": "text/plain; charset=utf-8",
-                etag: toHttpEtag(metadata.etag),
-            },
-            status: 416,
-        });
-    }
-
-    // Unreachable: the whole-object check at the top already answered this, and
-    // its answer does not depend on `size`. Kept so the union stays exhaustive.
-    if (range.kind === "full") {
-        return serveWholeStorageObject(context, key);
-    }
-
-    const length = range.end - range.start + 1;
-    const slice = await context.storage.download(key, { range: { length, offset: range.start } });
-
-    if (!slice) {
-        // Raced with a delete between the metadata read and the ranged read.
-        return new Response("Not Found", { status: 404 });
-    }
-
-    // Headers come from `metadata`, not `slice`: the validator, the digest and the
-    // `Content-Range` total must all describe the ONE representation the window
-    // was resolved against. (An object replaced between the two reads is a
-    // pre-existing race either way — this at least keeps the header set coherent.)
-    return new Response(slice.body, {
-        headers: {
-            ...storageObjectHeaders(metadata),
-            "content-length": String(length),
-            "content-range": `bytes ${String(range.start)}-${String(range.end)}/${String(metadata.size)}`,
-        },
-        status: 206,
-    });
-};
-
-export { httpAction, httpRoute, httpRouter, isSafeHeaderValue, serveStorageObject };
+export { httpAction, httpRoute, httpRouter, isSafeHeaderValue };
 
 export type {
     HttpActionCtx,

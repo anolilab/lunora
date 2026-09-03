@@ -8,25 +8,10 @@
  * order-preserving text key {@link bigintSqlKey} builds). `SqlDialect` deliberately carries NO codec member: an engine-native
  * one there would never run, and a dialect author writing one would only learn
  * that at runtime. Adding one means routing the core through it first.
- *
- * A `bigint` column is TEXT (SQLite/Postgres) or `VARCHAR(64)` (MySQL) on every
- * engine, because no engine's native integer type holds the full range exactly
- * and `Number(value)` collapses everything past 2^53 onto the nearest double —
- * which makes `=` return *false positives* and a `.unique()` index reject two
- * genuinely different ids as duplicates. The cost of the padded key is
- * `SUM`/`AVG`/`MIN`/`MAX`: `"1000…0010"` is not a number any engine can reduce,
- * so `aggregate`/`groupBy` refuse a `v.bigint()` field on the scan path rather
- * than return the 1.5e40 that falls out of coercing padded text, and name the
- * `aggregateIndex` that answers it instead.
  */
 import { LunoraError } from "@lunora/errors";
 import type { ValidatorLike } from "@lunora/shard-engine";
-// Same width, same sign characters, same complement as the shard plane, because
-// the two MUST agree: a `.global()` table and a shard-local one are queried
-// through the same `where`/`orderBy` surface, and the parity suite compares
-// their answers row for row. Imported rather than restated — the reasoning for
-// the scheme is written down in full at its definition in `@lunora/shard-engine`.
-import { BIGINT_KEY_DIGITS, BIGINT_KEY_NEGATIVE as NEGATIVE, BIGINT_KEY_NON_NEGATIVE as NON_NEGATIVE, bigintSqlKey } from "@lunora/shard-engine";
+import { BIGINT_KEY_DIGITS, bigintSqlKey, decodeBigintSqlKey } from "@lunora/shard-engine";
 
 import { effectiveKind } from "../../../shared/effective-kind";
 import { decodeWire, encodeWire, needsWireEncoding, WIRE_TAG } from "../../../shared/wire-codec";
@@ -57,43 +42,6 @@ const WIRE_PREFIX = WIRE_TAG;
  */
 const decodeJsonColumn = (raw: string, parse: (text: string) => unknown): unknown =>
     raw.startsWith(WIRE_PREFIX) ? decodeWire(parse(raw.slice(WIRE_PREFIX.length))) : parse(raw);
-
-/** A key's magnitude half: digits only, so a stored value that merely happens to be 40 characters cannot be mistaken for one. */
-const BIGINT_KEY_DIGITS_RE = /^\d+$/u;
-
-/** Nines' complement of a digit string — its own inverse, which is what makes the decode a re-application. */
-const ninesComplement = (digits: string): string => Array.from(digits, (digit) => String(9 - Number(digit))).join("");
-
-/**
- * Inverse of {@link bigintSqlKey}, or `undefined` when `raw` is not a key.
- *
- * The shape test is exact rather than heuristic: a key is always 40 characters,
- * a sign character in `{"0","1"}` followed by 39 digits. `BigInt.prototype
- * .toString()` never emits a leading zero, so no decimal string a previous build
- * stored can be mistaken for a `"0"`-prefixed key, and a `"1"`-prefixed one
- * would have to be a 40-digit value ≥ 1e39 — past what {@link bigintSqlKey} will
- * store at all. That is the whole legacy-read story: a column written before this
- * encoding still decodes, through the plain `BigInt(raw)` fallback in
- * {@link decodeBigint}.
- */
-const decodeBigintSqlKey = (raw: string): bigint | undefined => {
-    if (raw.length !== BIGINT_KEY_DIGITS + 1) {
-        return undefined;
-    }
-
-    const sign = raw.slice(0, 1);
-    const digits = raw.slice(1);
-
-    if (!BIGINT_KEY_DIGITS_RE.test(digits)) {
-        return undefined;
-    }
-
-    if (sign === NON_NEGATIVE) {
-        return BigInt(digits);
-    }
-
-    return sign === NEGATIVE ? -BigInt(ninesComplement(digits)) : undefined;
-};
 
 /** Map a JS value onto its SQLite storage form — SQLite has no boolean, so true/false → 1/0. */
 export const sqliteEncode = (value: unknown): unknown => {
@@ -272,7 +220,7 @@ export const sqliteDecode = (raw: unknown, kind: string | undefined): unknown =>
 
 /**
  * Full width of a stored key: one sign character plus {@link BIGINT_KEY_DIGITS}
- * of magnitude. Exported for the provisioning pass in `ctx-db.ts`, whose
+ * of magnitude. Exported for the provisioning pass in `ctx-db-migrations.ts`, whose
  * `WHERE LENGTH(col) <> 40` probe is how it finds a column still holding the
  * plain decimal text an earlier build wrote.
  */

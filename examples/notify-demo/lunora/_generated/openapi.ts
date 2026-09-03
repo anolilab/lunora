@@ -266,6 +266,9 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
+                                            "replacedEndpoint": {
+                                                "type": "string"
+                                            },
                                             "subscription": {
                                                 "additionalProperties": false,
                                                 "properties": {

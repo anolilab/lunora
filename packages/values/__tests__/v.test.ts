@@ -731,6 +731,32 @@ describe("v.union() edge cases", () => {
         expect(result.error.message).not.toMatch(/union of/u);
     });
 
+    it("a union miss never echoes a value one of its members redacted", () => {
+        expect.hasAssertions();
+
+        // Alone, the refined member reports `received string` — `.check()` failures
+        // redact so a password never reaches the 400 body. The union's own
+        // diagnostic wraps the same miss and must withhold the same literal,
+        // whichever position the refined member sits in.
+        const strong = v.string().check((value) => value.length >= 12, "strong password");
+
+        for (const schema of [v.union(strong, v.number()), v.union(v.number(), strong)]) {
+            const result = schema.safeParse("hunter2");
+
+            assertOk(!result.ok, "expected parse to fail");
+
+            expect(result.error.message).not.toContain("hunter2");
+            expect(result.error.received).toBe("string");
+        }
+
+        // A plain type miss keeps its literal: nothing redacted it.
+        const plain = v.union(v.literal("draft"), v.literal("published")).safeParse("Draft");
+
+        assertOk(!plain.ok, "expected parse to fail");
+
+        expect(plain.error.received).toBe('string "Draft"');
+    });
+
     it("a single-member union accepts a valid value", () => {
         expect.assertions(1);
 

@@ -34,9 +34,24 @@ touches the change log.
 Everything below talks to admin-gated endpoints on a running worker, so each
 command needs an admin bearer token. Prefer the `LUNORA_ADMIN_TOKEN` environment
 variable over `--token`, which is visible to other local processes through the
-process table. Targeting anything other than localhost requires `--prod`
-together with an explicit `--url`, the guardrail that stops a production script
-from quietly hitting `http://localhost:8787`.
+process table.
+
+Two separate guardrails apply to the target, and neither is `--prod` on its own:
+
+- `--prod` requires an explicit `--url`. It never _grants_ a remote target and
+  never _gates_ one — a `--url https://…` is accepted with or without it.
+- A non-loopback `--url` must be `https:`, so the admin bearer is never sent in
+  the clear.
+
+What gates a destructive verb is the resolved URL, not the flag: a PITR
+`--restore` against any non-loopback worker refuses without `--yes`, whether or
+not `--prod` was passed. `prune` always confirms — `--yes` or an interactive
+prompt — because an object-store delete has no undo.
+
+<Callout type="warn">
+    Omitting `--prod` does **not** keep a script off production. `lunora backup create --url https://prod.example.com` exports production with no extra flag. If
+    you need a script that can only ever hit local state, withhold the production URL and the admin token, not `--prod`.
+</Callout>
 
 ## Point-in-time recovery
 
@@ -156,9 +171,14 @@ way the answer is `--tables` / `backupTables`, or `--dir` plus
 ### Scheduled backups into R2
 
 <Callout type="warn">
-    **Scheduled backups never delete.** `backupRetain` sets the window; `lunora backup prune` is the only command that removes a backup, and it confirms before
-    it does. `lunora backup retention` shows what a prune would remove, from the same selection, so the preview cannot drift from the deletion. A bucket
-    therefore grows until you prune it. Every scheduled run reports how many snapshots sit past the window, so that is not a surprise either.
+    **The built-in `backupCron` never deletes.** `backupRetain` sets the window, but the scheduled run only reports how many snapshots sit past it —
+    `lunora backup prune` is the one command that removes a backup, and it confirms before it does. `lunora backup retention` shows what a prune would remove,
+    from the same selection, so the preview cannot drift from the deletion. A bucket therefore grows until you prune it.
+
+    The `backup` **registry item** is the exception, and deliberately so: it copies a `prune` internal action into your project alongside its `snapshot`, and
+    you schedule the pair on your own cron so the loop is self-managing. That one deletes — `{ keepDays, keepLast }` is its retention window, and it refuses to
+    run with neither set. If you added that item, the "grows until you prune it" sentence above does not describe your bucket.
+
 </Callout>
 
 ```bash

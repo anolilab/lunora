@@ -35,6 +35,37 @@ const TEMPLATE_DIR = join(REPO_ROOT, "templates", "expo");
  */
 const SHARED_APP_FILES = ["src/Chat.tsx", "src/Login.tsx", "lunora/messages.ts"];
 
+/**
+ * `src/server/index.ts` is deliberately NOT in {@link SHARED_APP_FILES} — its
+ * docblock and branding differ between the two copies — but the one security
+ * decision inside it must hold in both.
+ *
+ * Both copies fold the WebSocket handshake's `?token=` into an `Authorization`
+ * header, because a browser cannot set headers on a WS upgrade. That fold has to
+ * be gated on `Upgrade: websocket`: ungated, every URL becomes a bearer token, so
+ * session tokens land in access logs, `Referer` headers and shared links, and a
+ * cross-origin link can authenticate a plain HTTP request.
+ */
+const SERVER_ENTRY = "src/server/index.ts";
+
+describe.each([
+    ["templates/expo", TEMPLATE_DIR],
+    ["examples/expo", EXAMPLE_DIR],
+])("%s/src/server/index.ts", (label, directory) => {
+    test("folds the WebSocket `?token=` into a header only on an upgrade request", () => {
+        const source = readFileSync(join(directory, SERVER_ENTRY), "utf8");
+        const tokenReads = source.split("\n").filter((line) => line.includes(`searchParams.get("token")`));
+
+        expect(tokenReads, `${label}/${SERVER_ENTRY} no longer reads the ?token= query parameter`).not.toStrictEqual([]);
+
+        for (const line of tokenReads) {
+            expect(line, `${label}/${SERVER_ENTRY} reads ?token= without gating on Upgrade: websocket`).toMatch(/\bisUpgrade\b/);
+        }
+
+        expect(source, `${label}/${SERVER_ENTRY} never derives isUpgrade from the Upgrade header`).toMatch(/const isUpgrade = .*\bupgrade\b.*websocket/);
+    });
+});
+
 describe("examples/expo ↔ templates/expo shared app-logic identity", () => {
     describe.each(SHARED_APP_FILES)("%s", (file) => {
         test("the example and template copies are byte-identical", () => {

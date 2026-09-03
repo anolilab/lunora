@@ -14,21 +14,25 @@
  *     {@link TABLES} via `ctx.db` and writes one timestamped NDJSON object to the
  *     `BACKUP_BUCKET` R2 bucket. *Internal* (server-only) so a client can never
  *     trigger a full-table dump; drive it from a cron (see the README).
+ *     **Shard-local** — see {@link snapshot}'s "What this snapshot covers".
  *   - **prune** (internalAction) — lists the snapshot objects in `BACKUP_BUCKET`
  *     and deletes those that fall outside your retention window, so the scheduled
  *     snapshot loop is self-managing. Also *internal*; schedule it alongside
  *     `snapshot` as the second half of the PITR cron pair.
  *
- * Together with the `lunora backup restore` CLI (which imports the nearest
- * snapshot and can roll the CDC changelog forward to an arbitrary `--to` time),
- * these two actions close the managed point-in-time-recovery loop:
+ * Together with the `lunora backup restore` CLI these two actions close the
+ * off-platform recovery loop:
  *   - **Table list is explicit.** Lunora has no `ctx.db.listTables()`, so a
  *     generic "snapshot everything" isn't reachable from an action context. You
  *     MUST keep {@link TABLES} in sync with your `lunora/schema.ts` — see the
  *     TODO below.
  *   - **Restore is out-of-band.** Pull an object back and feed it to
- *     `lunora backup restore <id|file>` (the CLI imports NDJSON through the admin
- *     `/apply` endpoint), optionally with `--to <ISO>` for CDC replay.
+ *     `lunora backup restore <id|file>` — the CLI imports NDJSON through the
+ *     admin `/apply` endpoint. It restores to the snapshot boundary, not to an
+ *     arbitrary moment: there is no `--to` and no CDC replay on this path. For
+ *     in-place time-travel to any point in the last 30 days use native PITR
+ *     (`lunora backup pitr --at <ISO>`), which reads the platform's own change
+ *     log rather than a snapshot.
  */
 import { internalAction, v } from "#lunora/_generated/server.js";
 import { createStorage } from "@lunora/storage";
@@ -52,25 +56,231 @@ const TABLES: readonly string[] = [
 const BACKUP_PREFIX = "snapshots";
 
 /**
- * Serialise an array of rows as NDJSON (one JSON document per line). NDJSON is
- * the same line-delimited format `lunora backup` / the admin export endpoint
- * emit, so a snapshot written here is consumable by `lunora backup restore`.
+ * The transport's tagged-value sentinel. Every wire-encoded leaf below is an
+ * array whose first element is this string; `lunora backup restore` runs the
+ * admin `/apply` reader, which decodes exactly this form back to real values.
  */
-const toNdjson = (rows: ReadonlyArray<Record<string, unknown>>): string => rows.map((row) => JSON.stringify(row)).join("\n");
+const WIRE_TAG = "$lunora.wire$";
+
+/** Nesting limit, matching the transport codec — a runaway structure fails here, not on the stack. */
+const MAX_WIRE_DEPTH = 64;
+
+/**
+ * Base64 in fixed-size chunks so a large `v.bytes()` column never overflows
+ * `String.fromCharCode`'s argument ceiling via a single spread.
+ */
+const toBase64 = (bytes: Uint8Array): string => {
+    let binary = "";
+    const chunk = 0x80_00;
+
+    for (let index = 0; index < bytes.length; index += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+    }
+
+    return btoa(binary);
+};
+
+/**
+ * Encode one document value into the JSON-safe tagged form the transport uses.
+ *
+ * **This is why `JSON.stringify` alone is not enough.** `ctx.db` hands back
+ * DECODED values: a `v.bigint()` column is a real `bigint` and a `v.bytes()`
+ * column a real `ArrayBuffer`. `JSON.stringify(1n)` **throws**
+ * (`TypeError: Do not know how to serialize a BigInt`), so a single bigint
+ * column means the cron fails and no snapshot is ever written; an `ArrayBuffer`
+ * silently flattens to `{}`, which is worse — `rows`/`bytes` look healthy and
+ * the loss is only discovered at recovery. `Date`, `Map`, `Set`, `URL` and
+ * `Error` have no own enumerable keys and flatten the same way.
+ *
+ * The platform's own export path wraps every admin result in the same codec for
+ * exactly this reason, which is what makes a snapshot written here and one
+ * written by `lunora backup create` interchangeable — both are decoded by
+ * `/apply` on the way back in. The codec is the identity on pure-JSON values,
+ * so a document with no special leaves produces byte-identical JSON to a bare
+ * `JSON.stringify`.
+ *
+ * A non-plain object with no supported case (a `RegExp`, a class instance)
+ * throws rather than encoding to `{}`: a loud failure beats a snapshot that
+ * restores empty columns.
+ */
+const encodeWire = (value: unknown, depth = 0): unknown => {
+    if (depth > MAX_WIRE_DEPTH) {
+        throw new RangeError(`backup/snapshot: document nesting exceeds the ${String(MAX_WIRE_DEPTH)}-level limit`);
+    }
+
+    if (value === undefined) {
+        // Only reachable in an array position — object fields are dropped below,
+        // as `JSON.stringify` does. Tagged so the slot is not coerced to `null`.
+        return [WIRE_TAG, "undefined"];
+    }
+
+    if (value === null) {
+        return null;
+    }
+
+    if (typeof value === "bigint") {
+        return [WIRE_TAG, "bigint", value.toString()];
+    }
+
+    if (typeof value === "number") {
+        if (Number.isNaN(value)) {
+            return [WIRE_TAG, "nan"];
+        }
+
+        if (value === Infinity) {
+            return [WIRE_TAG, "inf"];
+        }
+
+        if (value === -Infinity) {
+            return [WIRE_TAG, "-inf"];
+        }
+
+        return value;
+    }
+
+    if (typeof value !== "object") {
+        // string, boolean — JSON-safe as-is.
+        return value;
+    }
+
+    if (value instanceof Date) {
+        // Epoch-ms, routed back through this function so an Invalid Date's `NaN`
+        // survives as a tag instead of becoming `null` (i.e. epoch 0).
+        return [WIRE_TAG, "date", encodeWire(value.getTime(), depth + 1)];
+    }
+
+    if (value instanceof Error) {
+        const error = value as Error & Record<string, unknown>;
+        const properties: Record<string, unknown> = {};
+
+        for (const key of Object.keys(error)) {
+            if (error[key] !== undefined) {
+                properties[key] = encodeWire(error[key], depth + 1);
+            }
+        }
+
+        // `stack` is deliberately omitted; `cause` is a non-enumerable own prop,
+        // so it rides in a positional slot rather than in `properties`.
+        const encodedError: unknown[] = [WIRE_TAG, "error", error.name, error.message, properties];
+
+        if (error.cause !== undefined) {
+            encodedError.push(encodeWire(error.cause, depth + 1));
+        }
+
+        return encodedError;
+    }
+
+    if (value instanceof URL) {
+        return [WIRE_TAG, "url", value.href];
+    }
+
+    if (value instanceof Map) {
+        return [WIRE_TAG, "map", [...value.entries()].map(([key, item]) => [encodeWire(key, depth + 1), encodeWire(item, depth + 1)])];
+    }
+
+    if (value instanceof Set) {
+        return [WIRE_TAG, "set", [...value].map((item) => encodeWire(item, depth + 1))];
+    }
+
+    if (value instanceof ArrayBuffer) {
+        return [WIRE_TAG, "bytes", toBase64(new Uint8Array(value)), "ArrayBuffer"];
+    }
+
+    if (ArrayBuffer.isView(value)) {
+        const name = value.constructor.name;
+        const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+
+        // `Uint8Array` keeps the 2-element form; every other view carries its
+        // constructor name so the decoder rebuilds the exact view type.
+        return name === "Uint8Array" ? [WIRE_TAG, "bytes", toBase64(bytes)] : [WIRE_TAG, "bytes", toBase64(bytes), name];
+    }
+
+    if (Array.isArray(value)) {
+        const encoded = value.map((item) => encodeWire(item, depth + 1));
+
+        // Escape a real array that would otherwise be mistaken for a tagged value
+        // because its first element is literally the sentinel string.
+        return encoded.length > 0 && encoded[0] === WIRE_TAG ? [WIRE_TAG, "arr", encoded] : encoded;
+    }
+
+    const proto: unknown = Object.getPrototypeOf(value);
+
+    if (proto !== null && proto !== Object.prototype) {
+        const name = (value as { constructor?: { name?: string } }).constructor?.name ?? "value";
+
+        throw new TypeError(
+            `backup/snapshot: cannot serialise a ${name} — only plain objects, arrays and the supported built-ins (Date, Error, URL, Map, Set, ArrayBuffer/typed arrays, bigint) survive a snapshot/restore round-trip`,
+        );
+    }
+
+    const source = value as Record<string, unknown>;
+    const result: Record<string, unknown> = {};
+
+    for (const key of Object.keys(source)) {
+        const field = source[key];
+
+        if (field === undefined) {
+            continue;
+        }
+
+        const encoded = encodeWire(field, depth + 1);
+
+        if (key === "__proto__") {
+            // A plain assignment fires the prototype SETTER instead of creating an
+            // own property, silently dropping a literal `__proto__` field.
+            Object.defineProperty(result, key, { configurable: true, enumerable: true, value: encoded, writable: true });
+        } else {
+            result[key] = encoded;
+        }
+    }
+
+    return result;
+};
+
+/**
+ * Serialise a table's rows as NDJSON in the import format: one
+ * `{"table":"<name>","doc":{…}}` object per line, each document run through
+ * {@link encodeWire} first.
+ *
+ * The `table` is on **every** line rather than in a header line above the block.
+ * That is not a style choice: `lunora backup restore` streams the file through
+ * the admin `/apply` endpoint, whose reader rejects any line without its own
+ * `table` and `doc` (`BAD_ROW: row is missing \`table\``). A header-framed body
+ * therefore restored ZERO rows, and the operator found out at recovery time.
+ */
+const toNdjson = (table: string, rows: ReadonlyArray<Record<string, unknown>>): string =>
+    rows.map((doc) => JSON.stringify({ doc: encodeWire(doc), table })).join("\n");
 
 /**
  * Snapshot the configured {@link TABLES} into one timestamped object in
  * `BACKUP_BUCKET`. Returns the written key plus per-table and total row counts.
  *
- * The object body is a single NDJSON stream framed by per-table header lines
- * (`{"__table":"<name>"}`) so a restorer can split rows back into their tables:
+ * The object body is a single NDJSON stream in the import format — one
+ * `{"table":…,"doc":…}` per row, which is exactly what `lunora backup restore`
+ * feeds to the admin `/apply` endpoint:
  *
  * ```ndjson
- * {"__table":"messages"}
- * {"_id":"…","body":"hi"}
- * {"__table":"users"}
- * {"_id":"…","name":"Ada"}
+ * {"table":"messages","doc":{"_id":"…","body":"hi"}}
+ * {"table":"users","doc":{"_id":"…","name":"Ada"}}
  * ```
+ *
+ * # What this snapshot covers
+ *
+ * `ctx.db` is **shard-local**. A `.global()` table is read from the replicated
+ * plane and is therefore complete, but a shard-local table yields only the rows
+ * of the shard this action is running on — and a cron dispatches to the default
+ * shard. On a `.shardBy(...)` deployment that means every other shard's rows are
+ * missing from the object, while `rows`/`tables` still report plausible counts,
+ * so nothing about the run looks wrong until a restore brings back one tenant
+ * out of hundreds.
+ *
+ * Fanning out is not reachable from here: shard discovery lives behind the
+ * query coordinator, and neither `ctx.db` nor `ctx.scheduler` takes a shard key.
+ * So the run says so out loud instead ({@link snapshot} logs a warning every
+ * time), and a sharded deployment should take its whole-deployment snapshots
+ * with `lunora backup create --bucket` or the platform's `backupCron`, both of
+ * which fan out over every shard. Delete the warning if you have confirmed your
+ * schema declares no `.shardBy()` table — this item is yours.
  */
 export const snapshot = internalAction
     .input({
@@ -94,6 +304,16 @@ export const snapshot = internalAction
 
         const storage = createStorage({ bucket, bucketName: "default" });
 
+        // Said out loud, once per run, to the operator whose backup is short:
+        // `ctx.db` only sees this shard, and the returned counts cannot tell a
+        // partial snapshot from a deployment that genuinely has one shard. The
+        // platform's own exporter prints the same warning when it cannot fan
+        // out. Delete this if your schema declares no `.shardBy()` table.
+        ctx.log.warn("backup/snapshot: reads through a shard-local `ctx.db`, so a `.shardBy()` deployment's other shards are NOT in this object", {
+            remedy: "take whole-deployment snapshots with `lunora backup create --bucket`, or the platform's `backupCron`",
+            tables: targets,
+        });
+
         const perTable: Record<string, number> = {};
         const chunks: string[] = [];
         let total = 0;
@@ -105,7 +325,7 @@ export const snapshot = internalAction
             // eslint-disable-next-line no-await-in-loop -- ordered, bounded per-table reads (see above)
             const rows = await ctx.db.query(table).collect();
 
-            chunks.push(JSON.stringify({ __table: table }), toNdjson(rows));
+            chunks.push(toNdjson(table, rows));
             perTable[table] = rows.length;
             total += rows.length;
         }

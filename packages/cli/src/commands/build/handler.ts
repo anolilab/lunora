@@ -2,14 +2,12 @@ import { resolve } from "node:path";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
-import { writeBindingManifestFile } from "../../util/binding-manifest-file";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
-import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 import type { DeployCommandResult } from "../deploy/handler";
 import { runDeployCommand } from "../deploy/handler";
 import type { BundleSize } from "./bundle-size";
@@ -78,85 +76,6 @@ const stderrOnlySpawner: Spawner = async (descriptor) => defaultSpawner({ ...des
 const kib = (bytes: number): string => `${(bytes / 1024).toFixed(1)} KiB`;
 
 /**
- * Write the binding manifest for the project at `projectRoot`.
- *
- * Runs AFTER the pre-deploy pipeline, deliberately: that pipeline is what infers
- * the app's requirements and reconciles them into `wrangler.jsonc`, so the config
- * is only the resolved answer once it has finished. Reading it earlier would
- * describe the requirements the project happened to have written down, not the
- * ones the bundle actually has.
- *
- * That is also why `build` — not the deploy pipeline — owns the dry-run rollback
- * (see {@link snapshotWranglerConfig}): this read is the LAST one that has to see
- * the provisioned config, and a rollback that fired before it produced a
- * requirements document saying `"crons": []` for an app with a nightly cron.
- */
-const writeBindingManifest = (projectRoot: string, target: string, logger: Logger): { error?: string } =>
-    writeBindingManifestFile({ destination: target, logger, projectRoot });
-
-/**
- * The build proper, run while the provisioned `wrangler.jsonc` is still on disk.
- * Split from {@link runBuildCommand} only so the rollback there is a plain
- * `try`/`finally` around one call rather than around every early return.
- */
-const buildWithProvisionedConfig = async (
-    options: BuildCommandOptions,
-    outDirectory: string,
-    jsonMode: boolean,
-    logger: Logger,
-    emit: (result: BuildCommandResult) => BuildCommandResult,
-): Promise<BuildCommandResult> => {
-    const result = await runDeployCommand({
-        allowSchemaDrift: options.allowSchemaDrift,
-        apiSpec: options.apiSpec,
-        // So the drift gate names `build` and offers only the flags `build`
-        // registers — it does NOT accept `--update-schema-baseline`, because it
-        // publishes nothing and re-blessing a baseline for an artifact that never
-        // shipped is what lets a breaking change through on the retry.
-        commandName: "build",
-        cwd: options.cwd,
-        dryRun: true,
-        format: undefined,
-        interactive: jsonMode ? false : undefined,
-        logger,
-        outDir: outDirectory,
-        spawner: options.spawner ?? (jsonMode ? stderrOnlySpawner : undefined),
-        target: options.target,
-    });
-
-    if (result.code !== 0) {
-        return emit(result);
-    }
-
-    logger.success(`build complete — bundle written to ${outDirectory}`);
-
-    const bundle = measureBundle(resolve(options.cwd ?? process.cwd(), outDirectory));
-
-    if (bundle === undefined) {
-        // Never report 0 bytes for this: an out-dir layout we no longer
-        // recognise would measure as the healthiest possible bundle.
-        logger.warn(`could not weigh the bundle — nothing uploadable was found in ${outDirectory}`);
-    } else {
-        logger.info(
-            `bundle: ${kib(bundle.rawBytes)} raw, ${kib(bundle.gzipBytes)} gzipped across ${String(bundle.files)} file(s) — ` +
-                `Cloudflare's Worker size limit (3 MB Free, 10 MB Paid) applies to the gzipped number`,
-        );
-    }
-
-    if (options.emitBindings !== undefined) {
-        const { error } = writeBindingManifest(options.cwd ?? process.cwd(), options.emitBindings, logger);
-
-        if (error !== undefined) {
-            logger.error(error);
-
-            return emit({ ...result, bundle, code: 1 });
-        }
-    }
-
-    return emit({ ...result, bundle });
-};
-
-/**
  * Build the Worker without deploying: this is `deploy` in its dry-run +
  * `--outdir` mode, so it reuses the entire pre-deploy pipeline (codegen, the
  * schema-drift gate, binding provisioning, container preflight, wrangler
@@ -187,16 +106,48 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
         return { code: 1, descriptor: undefined, error: formatError, validation: { problems: [], wranglerPath: undefined } };
     }
 
-    // `build` is `deploy --dry-run`, so provisioning's writes to the committed
-    // `wrangler.jsonc` are rolled back — but only once the bundle AND the binding
-    // manifest below have been derived from them.
-    const restoreWrangler = snapshotWranglerConfig(options.cwd ?? process.cwd());
+    const result = await runDeployCommand({
+        allowSchemaDrift: options.allowSchemaDrift,
+        apiSpec: options.apiSpec,
+        // So the drift gate names `build` and offers only the flags `build`
+        // registers — it does NOT accept `--update-schema-baseline`, because it
+        // publishes nothing and re-blessing a baseline for an artifact that never
+        // shipped is what lets a breaking change through on the retry.
+        commandName: "build",
+        cwd: options.cwd,
+        dryRun: true,
+        // The requirements document has to describe the PROVISIONED config, so
+        // deploy writes it inside its own dry-run rollback window rather than
+        // handing it back here, where the committed config is already restored.
+        emitBindings: options.emitBindings,
+        format: undefined,
+        interactive: jsonMode ? false : undefined,
+        logger,
+        outDir: outDirectory,
+        spawner: options.spawner ?? (jsonMode ? stderrOnlySpawner : undefined),
+        target: options.target,
+    });
 
-    try {
-        return await buildWithProvisionedConfig(options, outDirectory, jsonMode, logger, emit);
-    } finally {
-        restoreWrangler();
+    if (result.code !== 0) {
+        return emit(result);
     }
+
+    logger.success(`build complete — bundle written to ${outDirectory}`);
+
+    const bundle = measureBundle(resolve(options.cwd ?? process.cwd(), outDirectory));
+
+    if (bundle === undefined) {
+        // Never report 0 bytes for this: an out-dir layout we no longer
+        // recognise would measure as the healthiest possible bundle.
+        logger.warn(`could not weigh the bundle — nothing uploadable was found in ${outDirectory}`);
+    } else {
+        logger.info(
+            `bundle: ${kib(bundle.rawBytes)} raw, ${kib(bundle.gzipBytes)} gzipped across ${String(bundle.files)} file(s) — ` +
+                `Cloudflare's Worker size limit (3 MB Free, 10 MB Paid) applies to the gzipped number`,
+        );
+    }
+
+    return emit({ ...result, bundle });
 };
 
 /** `lunora build` handler (lazy-loaded via the command's `loader`). */

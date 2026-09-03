@@ -703,10 +703,11 @@ interface GeoPointInput {
 ### `HttpActionCtx` (type)
 
 ```ts
-type HttpActionCtx = Pick<ActionCtx, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery"> & {
+type HttpActionCtx = {
     readonly scheduler?: ActionCtx["scheduler"];
     readonly storage?: ActionCtx["storage"];
-};
+    readonly waitUntil?: (promise: Promise<unknown>) => void;
+} & Pick<ActionCtx, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery">;
 ```
 
 ### `HttpActionHandler` (type)
@@ -1903,8 +1904,8 @@ interface Scheduler {
     }>;
     get: (id: string) => Promise<ScheduledJob | null>;
     list: () => Promise<ScheduledJob[]>;
-    runAfter: (delayMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
+    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
 }
 ```
 
@@ -2179,6 +2180,21 @@ type StorageRuleDecision = boolean | undefined;
 ```ts
 interface StorageRulesOptions {
     readonly roles?: ReadonlyArray<Role>;
+}
+```
+
+### `StorageServeAuthorizer` (type)
+
+```ts
+type StorageServeAuthorizer = (context: StorageServeAuthzContext) => boolean | Promise<boolean>;
+```
+
+### `StorageServeAuthzContext` (interface)
+
+```ts
+interface StorageServeAuthzContext {
+    key: string;
+    request: Request;
 }
 ```
 
@@ -2810,6 +2826,12 @@ const anyApi: AnyApi;
 const asBucketStorage: (raw: unknown) => unknown;
 ```
 
+### `beginDeferredSchedules` (const)
+
+```ts
+const beginDeferredSchedules: (context: DeferredScheduleContext) => ((committed: boolean) => Promise<void>);
+```
+
 ### `bindOrm` (const)
 
 ```ts
@@ -3156,7 +3178,7 @@ const rls: <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray
 ### `serveStorageObject` (const)
 
 ```ts
-const serveStorageObject: (context: ContextWithStorage, key: string, request: Request) => Promise<Response>;
+const serveStorageObject: (context: ContextWithStorage, key: string, request: Request, authorize: StorageServeAuthorizer, cacheControl?: string) => Promise<Response>;
 ```
 
 ### `storageRules` (const)
@@ -3179,6 +3201,12 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 
 ```ts
 const withDeferredDeletes: (storage: unknown) => unknown;
+```
+
+### `withDeferredSchedules` (const)
+
+```ts
+const withDeferredSchedules: <S extends SchedulerLike>(scheduler: S) => S;
 ```
 
 ## `@lunora/server/data-model`

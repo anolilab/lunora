@@ -95,9 +95,15 @@ On the client, opt in per call so the reconnect resumes rather than fails:
 const { chunks, status } = useStream(api.chat.answer, { threadId, prompt }, { durable: true });
 ```
 
-Transcripts are trimmed after 24 hours by default, per procedure
-(`{ durable: { ttlMs } }` to change it), and a run is capped at 50,000 chunks so
-a runaway generator cannot fill the shard's storage.
+Transcripts are eligible for trimming after 24 hours by default, per procedure
+(`{ durable: { ttlMs } }` to change it) — the sweep runs on an attach and at most
+once an hour, so expiry is an earliest-time, not a deadline.
+
+A run is capped on two axes so a runaway generator cannot fill the shard's
+storage: **50,000 chunks** and **64 MiB** of encoded chunk bytes. Whichever binds
+first ends the run with `STREAM_TOO_LONG` (HTTP 507), so a stream yielding ~1 MiB
+frames (image or audio chunks) stops around chunk 65, nowhere near the chunk
+count. Yield smaller frames, or drop `durable`.
 
 If the Durable Object is evicted mid-run, what happens depends on who asks next.
 A client **resuming** that transcript gets `STREAM_INTERRUPTED`: its tail cannot

@@ -30,6 +30,14 @@ import type { AppendEventInput, EventLogDOClient } from "./event-log-do-client";
 import type { EventReducer, UnknownEventHandling } from "./event-source";
 import type { SnapshotStore } from "./snapshot-store";
 
+/**
+ * Pages {@link MaterializerRuntime.initialize} walks before yielding, however
+ * much log is left. A live writer keeps `truncated` true forever, so an
+ * unbounded walk never returns; the budget leaves the remainder to the next
+ * call, at the advanced watermark.
+ */
+const MAX_CATCHUP_PAGES = 1000;
+
 // ── Types ────────────────────────────────────────────────────────────────
 
 /**
@@ -364,11 +372,23 @@ class MaterializerRuntime {
      *
      * 1. Recover materialized state from snapshots (if a snapshotStore is
      * configured).
-     * 2. Fetch all entries since the MINIMUM per-materializer watermark from
+     * 2. Fetch entries since the MINIMUM per-materializer watermark from
      * the DO — not the maximum — so a materializer with no snapshot (or a
      * lower one) still receives every event it hasn't seen (REPLICA-04).
      * 3. Apply them through the materializers; `applyEntries` skips each
      * entry for any materializer already past it, so nothing is double-applied.
+     *
+     * The DO answers one BOUNDED page per request, so step 2/3 walk pages until
+     * the log is exhausted — applying each page as it arrives, rather than
+     * holding the whole backlog in memory. Taking only the first page (and
+     * dropping `truncated`) would silently leave every materializer short of
+     * the log's head whenever the backlog exceeds a page.
+     *
+     * The walk is bounded by {@link MAX_CATCHUP_PAGES}: against a log written
+     * faster than it is read, "until the log is exhausted" never arrives and
+     * startup would never finish. Hitting the budget returns what was applied
+     * with every materializer's watermark advanced, so a later `initialize()`
+     * (or the ordinary append path) picks up exactly where this left off.
      *
      * Call this once on startup / after the DO binding is available.
      * @returns The number of entries applied during catch-up.
@@ -381,16 +401,45 @@ class MaterializerRuntime {
         // 1. Recover from snapshots — sets each materializer's own watermark.
         await this.recoverFromSnapshots();
 
-        // 2. Fetch entries since the LOWEST watermark across materializers.
-        const minWatermark = this.#watermarks.length > 0 ? Math.min(...this.#watermarks) : 0;
-        const entries = await this.#doClient.getSince(minWatermark);
+        // 2/3. Walk pages from the LOWEST watermark across materializers,
+        // applying each page as it arrives.
+        return this.#catchUp();
+    }
 
-        if (entries.length === 0) {
+    /**
+     * Walk the log from the lowest per-materializer watermark, applying each
+     * bounded page as it arrives, until the log is exhausted or
+     * {@link MAX_CATCHUP_PAGES} pages have been read.
+     *
+     * Shared by `initialize()` and `appendEvent()` — the second needs the walk
+     * WITHOUT `recoverFromSnapshots()`, which would overwrite the state the
+     * runtime has already materialized.
+     * @returns The number of entries applied to at least one materializer.
+     */
+    async #catchUp(): Promise<number> {
+        const client = this.#doClient;
+
+        if (!client) {
             return 0;
         }
 
-        // 3. Apply through materializers
-        return this.applyEntries(entries);
+        let sinceSeq = this.appliedSeq;
+        let applied = 0;
+
+        for (let pages = 0; pages < MAX_CATCHUP_PAGES; pages += 1) {
+            // eslint-disable-next-line no-await-in-loop -- each page's cursor comes from the previous page, so the round-trips are inherently sequential
+            const page = await client.getSince(sinceSeq);
+
+            applied += this.applyEntries(page.entries);
+
+            if (!page.truncated || page.cursor === undefined || page.cursor <= sinceSeq) {
+                return applied;
+            }
+
+            sinceSeq = page.cursor;
+        }
+
+        return applied;
     }
 
     /**
@@ -400,7 +449,8 @@ class MaterializerRuntime {
      * This is a convenience over calling `doClient.append(...)` +
      * `runtime.applyEntries(...)` yourself — it persists the event
      * **then** applies the returned entry (with its assigned seq).
-     * @returns The persisted entry with its DO-assigned `seq`.
+     * @returns The persisted entry with its DO-assigned `seq` — always, whether
+     * or not the entry could be applied to the materializers (see below).
      */
     public async appendEvent(input: AppendEventInput): Promise<EventLogEntry> {
         if (!this.#doClient) {
@@ -412,6 +462,34 @@ class MaterializerRuntime {
 
         if (!entry) {
             throw new Error("MaterializerRuntime.appendEvent: DO returned empty result");
+        }
+
+        // Close any gap between the runtime and this entry BEFORE applying it.
+        // `applyEntries` advances every behind materializer's watermark to
+        // `entry.seq + 1`, so applying an appended entry over an unfinished
+        // catch-up — `initialize()` stopping at MAX_CATCHUP_PAGES, or a runtime
+        // that never initialized at all — steps the watermark past the backlog
+        // and skips it permanently: the next `initialize()` starts after the
+        // gap and nothing ever reads those entries. The walk re-fetches this
+        // entry too; `applyEntries` skips it as already applied, so the call
+        // below stays correct either way.
+        if (this.#materializers.length > 0 && this.appliedSeq < entry.seq) {
+            await this.#catchUp();
+
+            // `#catchUp` is bounded by MAX_CATCHUP_PAGES, so a backlog deeper
+            // than the bound leaves the gap OPEN. Applying the entry now would
+            // do exactly what the walk above exists to prevent — step every
+            // lagging watermark to `entry.seq + 1` over events nothing has read
+            // — and the resulting state is not "slightly behind" but
+            // permanently derived from a subset of the log, with no record that
+            // anything is missing. Leave the entry unapplied instead: it is
+            // durably persisted, the watermarks still point INTO the backlog,
+            // and the next catch-up (this method's own, or `initialize()`)
+            // applies the backlog and this entry in seq order. State converges
+            // late rather than settling wrong.
+            if (this.appliedSeq < entry.seq) {
+                return entry;
+            }
         }
 
         this.applyEntries([entry]);

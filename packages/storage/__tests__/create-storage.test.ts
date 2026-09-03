@@ -68,6 +68,16 @@ describe("createStorage", () => {
         expect(() => createStorage({})).toThrow(BUCKET_RE);
     });
 
+    it("exposes the bucketName it signs with, so downstream tagging agrees with the HMAC", () => {
+        expect.assertions(1);
+
+        // `asBucketStorage` reads this to tag a single-bucket `ctx.storage`, and
+        // `storageRules` scopes `(bucket, operation)` rules by that tag. Without
+        // it the tag fell back to "default" while `getSignedUrl` canonicalized
+        // "avatars" — an `{ bucket: "avatars" }` rule then read as unreachable.
+        expect(createStorage({ bucket: fakeBucket(), bucketName: "avatars" }).bucketName).toBe("avatars");
+    });
+
     it("upload() forwards content-type + metadata", async () => {
         expect.assertions(2);
 

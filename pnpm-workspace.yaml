@@ -249,6 +249,9 @@ catalogs:
     husky: ^9.1.7
     prettier: 3.9.6
     prettier-plugin-svelte: 4.1.1
+    # Bump `version` in .github/workflows/react-doctor.yml to match. Nothing
+    # enforces the pair, and CI running an older tool than the repo installs
+    # reports findings a contributor cannot reproduce locally.
     react-doctor: 0.9.11
   node:
     # Exact-pinned (no caret): this is the parser `wrangler dev` runs over

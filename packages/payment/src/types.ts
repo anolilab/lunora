@@ -319,6 +319,32 @@ export interface RefundInput {
 }
 
 /**
+ * What an adapter's `refundPayment` returns: the provider-shaped session, plus the provider's own id
+ * for the refund it just issued.
+ *
+ * `RefundResult` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
+export interface RefundResult extends PaymentSession {
+    /**
+     * The provider accepted the refund but has NOT moved the money yet — Dodo answers
+     * `refunds.create` with `pending`/`review` and settles later via `refund.succeeded`, or never,
+     * via `refund.failed`. The facade leaves its ledger untouched for one of these and lets the
+     * confirming webhook carry the money, because a `refund.failed` reverses nothing. Absent (the
+     * default) means the refund is already settled — Stripe and Polar refund synchronously.
+     */
+    readonly pending?: boolean;
+
+    /**
+     * The provider's id for THIS refund — Stripe and Polar `Refund.id`, Dodo `refund_id`. It is the
+     * identity the facade keys its local refund marker on, so two in-flight refunds of the same
+     * amount on one session stay distinct. `undefined` only where a provider reports no id, which
+     * falls the marker back to the (colliding) amount.
+     */
+    readonly refundId?: string;
+}
+
+/**
  * `CancelSubscriptionOptions` is part of the experimental `@lunora/payment` API and may change without a major version bump.
  * @experimental
  */
@@ -391,6 +417,13 @@ export interface WebhookAction {
     /** Raw provider event, retained for the events log / debugging. */
     readonly raw?: unknown;
     readonly referenceId?: string;
+
+    /**
+     * Provider id of the refund this event reports (refund actions only). Carries the per-refund
+     * identity the sync layer matches against the marker `refundPayment` left behind, so a second
+     * facade refund of the same amount is not mistaken for the first one's confirmation.
+     */
+    readonly refundId?: string;
     readonly sessionId?: string;
     readonly subscriptionId?: string;
     readonly type: WebhookActionType;

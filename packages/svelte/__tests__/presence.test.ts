@@ -7,9 +7,13 @@ import { presence } from "../src/presence";
 
 const HEARTBEAT = { __lunoraRef: "presence:heartbeat" } as unknown as HeartbeatReference;
 const LIST_PRESENT = { __lunoraRef: "presence:listPresent" } as unknown as ListPresentReference;
-// `randomSessionId`'s fallback path is unprefixed (shared/random-session-id.ts);
-// this just asserts the no-`crypto` path yields a non-empty id without throwing.
-const SESS_ID_PATTERN = /^[\da-z]+$/;
+// `randomSessionId`'s non-`randomUUID` arm (shared/random-session-id.ts) hex-encodes
+// 16 bytes of `crypto.getRandomValues`, so the id is exactly 32 lowercase hex chars.
+// There is deliberately no arm below that: a runtime with no Web Crypto throws
+// rather than mint a `Date.now()` string two sessions can share.
+const SESS_ID_PATTERN = /^[\da-f]{32}$/;
+/** The message `randomSessionId` throws when no Web Crypto is present at all. */
+const NO_WEB_CRYPTO = /no Web Crypto available/;
 
 const createPresenceFakeClient = () => {
     type Callback = (value: unknown) => void;
@@ -177,12 +181,17 @@ describe("presence (Svelte)", () => {
         handle.teardown();
     });
 
-    it("generates fallback session id when crypto is unavailable", () => {
+    it("mints a session id from getRandomValues when crypto.randomUUID is unavailable", () => {
         const fake = createPresenceFakeClient();
         // eslint-disable-next-line n/no-unsupported-features/node-builtins -- accessing globalThis.crypto to save/restore it for the test
         const originalCrypto = globalThis.crypto;
 
-        Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+        // A non-secure origin (a plain-HTTP LAN dev/preview server) leaves
+        // `crypto.randomUUID` undefined while still shipping `getRandomValues`.
+        Object.defineProperty(globalThis, "crypto", {
+            configurable: true,
+            value: { getRandomValues: (array: Uint8Array) => array.fill(171) },
+        });
 
         try {
             const handle = presence(fake.client, "room-1", {
@@ -194,6 +203,29 @@ describe("presence (Svelte)", () => {
             expect(handle.sessionId).toMatch(SESS_ID_PATTERN);
 
             handle.teardown();
+        } finally {
+            Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
+        }
+    });
+
+    it("refuses to mint a session id when Web Crypto is absent entirely", () => {
+        const fake = createPresenceFakeClient();
+        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- accessing globalThis.crypto to save/restore it for the test
+        const originalCrypto = globalThis.crypto;
+
+        Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+
+        try {
+            // `randomSessionId` used to fall back to `Date.now().toString(36)` here.
+            // That is not an id: two sessions opened in the same millisecond collide
+            // onto one presence row, and the value is guessable. Throwing is correct.
+            expect(() =>
+                presence(fake.client, "room-1", {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 500,
+                    listPresent: LIST_PRESENT,
+                }),
+            ).toThrow(NO_WEB_CRYPTO);
         } finally {
             Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
         }

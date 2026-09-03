@@ -54,14 +54,6 @@ const copycat = {
         return seeded(input, () => faker.location.country());
     },
 
-    /** ISO-8601 date string between `min`/`max` (default years 1980–2020). */
-    dateString(input: unknown, options?: { max?: Date; min?: Date }): string {
-        const min = options?.min ?? new Date("1980-01-01T00:00:00.000Z");
-        const max = options?.max ?? new Date("2020-01-01T00:00:00.000Z");
-
-        return seeded(input, () => faker.date.between({ from: min, to: max }).toISOString());
-    },
-
     email(input: unknown): string {
         return seeded(input, () => faker.internet.email().toLowerCase());
     },

@@ -30,7 +30,7 @@ export interface FakeStreamCall {
     iterable: StreamIterable<unknown>;
     /** Spy invoked when the primitive cancels its iterator (teardown). */
     onCancel: ReturnType<typeof vi.fn>;
-    options?: { maxBuffer?: number; shardKey?: string };
+    options?: { durable?: boolean; maxBuffer?: number; shardKey?: string };
 }
 
 export interface FakeConnectionContext {
@@ -153,7 +153,7 @@ export const createFakeClient = (initialStatus: ConnectionStatus = "idle"): Fake
         stream: (
             function_: FunctionReference<"stream">,
             args: Record<string, unknown>,
-            options: { maxBuffer?: number; shardKey?: string } = {},
+            options: { durable?: boolean; maxBuffer?: number; shardKey?: string } = {},
         ): StreamIterable<unknown> => {
             const onCancel = vi.fn<() => void>();
             const { handle, iterable } = createStream<unknown>({ maxBuffer: options.maxBuffer, onCancel });

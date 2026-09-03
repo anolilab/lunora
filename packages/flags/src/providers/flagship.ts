@@ -31,8 +31,17 @@ interface FlagshipHttpOptions {
     accountId?: string;
     /** Flagship app id; the SDK builds the evaluation URL (mutually exclusive with `endpoint`). */
     appId?: string;
-    /** Bearer token added as an `Authorization: Bearer` header to every request. */
-    authToken?: string;
+
+    /**
+     * Bearer token added as an `Authorization: Bearer` header to every request.
+     * Either the literal token, or a thunk resolved against the Worker `env` at
+     * construction (`(env) => env.FLAGSHIP_TOKEN`) so the secret never has to be
+     * inlined in source. A thunk resolving to anything but a non-empty string
+     * throws from the bind (`createFlags` logs it and evaluations fall back to
+     * their caller-supplied defaults): `Bearer undefined` would otherwise make
+     * every evaluation fall back with nothing said.
+     */
+    authToken?: ((env: Record<string, unknown>) => unknown) | string;
     /** Base URL override (only used with `appId`). */
     baseUrl?: string;
     cacheMaxSize?: number;
@@ -62,8 +71,9 @@ const isBindingOptions = (options: FlagshipProviderOptions): options is Flagship
  * // Binding mode (recommended) — reads env.FLAGS at request time:
  * flagshipProvider({ binding: "FLAGS" })
  *
- * // HTTP mode:
+ * // HTTP mode — the token is a literal, or a thunk read off the Worker env:
  * flagshipProvider({ appId: "app-abc", accountId: "acct", authToken: "tok" })
+ * flagshipProvider({ appId: "app-abc", accountId: "acct", authToken: (env) => env.FLAGSHIP_TOKEN })
  * ```
  */
 const flagshipProvider = (options: FlagshipProviderOptions): FlagsProviderFactory => {
@@ -85,11 +95,12 @@ const flagshipProvider = (options: FlagshipProviderOptions): FlagsProviderFactor
         };
     }
 
-    // HTTP mode carries no env-resolved binding, so — unlike binding mode — the
-    // full config is known here. Validate it up front: a misconfiguration must
-    // surface as a directed error at `defineFlags` time, not get swallowed into
-    // silent fail-closed defaults by `createFlags` (which buries any provider
-    // construction/initialize failure in `EvaluationDetails.errorMessage`).
+    // `appId`/`endpoint` need no env, so — unlike the binding and `authToken`
+    // checks below — they are known here and refused at `defineFlags` time,
+    // where the throw reaches the developer directly. The env-dependent
+    // refusals cannot run this early; they throw from inside the factory, which
+    // `createFlags` catches, logs (see `reportBindFailure`), and falls back to
+    // the caller's default for.
     const { appId, endpoint } = options;
 
     if (appId === undefined && endpoint === undefined) {
@@ -104,8 +115,34 @@ const flagshipProvider = (options: FlagshipProviderOptions): FlagsProviderFactor
         throw new LunoraError("INTERNAL", "flagshipProvider: `appId` and `endpoint` are mutually exclusive in HTTP mode — pass exactly one.");
     }
 
-    // Defer construction to the factory so the isolate-level memo owns its lifetime.
-    return (): FlagshipServerProvider => new FlagshipServerProvider(options);
+    // Defer construction to the factory so the isolate-level memo owns its
+    // lifetime — and so an `authToken` thunk can read the Worker `env`, which is
+    // the only place a deployment's secret exists.
+    const { authToken, ...rest } = options;
+
+    return (env: Record<string, unknown>): FlagshipServerProvider => {
+        if (typeof authToken !== "function") {
+            return new FlagshipServerProvider({ ...rest, ...(authToken === undefined ? {} : { authToken }) });
+        }
+
+        // A thunk was written to supply a token, so resolving to nothing is a
+        // misconfigured deployment, not "no auth": the unset secret would go out
+        // as `Bearer undefined` and every evaluation would fail closed to its
+        // default. Throwing here makes `createFlags` log the bind failure rather
+        // than let the fleet drift onto checked-in defaults unremarked. Only an
+        // OMITTED `authToken` means "no token".
+        const resolved = authToken(env);
+
+        if (typeof resolved !== "string" || resolved.length === 0) {
+            throw new LunoraError(
+                "INTERNAL",
+                "flagshipProvider: `authToken` resolved to an empty or non-string value — check that the env var the thunk reads is set. " +
+                    "An unset secret would send `Bearer undefined`, and every evaluation would silently fall back to its default.",
+            );
+        }
+
+        return new FlagshipServerProvider({ ...rest, authToken: resolved });
+    };
 };
 
 export { flagshipProvider };

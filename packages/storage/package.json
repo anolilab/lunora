@@ -1,6 +1,6 @@
 {
     "name": "@lunora/storage",
-    "version": "1.0.0-alpha.47",
+    "version": "1.0.0-alpha.49",
     "description": "R2-backed storage for Lunora: typed buckets and signed URLs",
     "keywords": [
         "cloudflare",
@@ -65,8 +65,8 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.29",
-        "@lunora/platform": "1.0.0-alpha.24",
+        "@lunora/errors": "1.0.0-alpha.30",
+        "@lunora/platform": "1.0.0-alpha.25",
         "@visulima/storage": "catalog:storage",
         "aws4fetch": "catalog:storage"
     },

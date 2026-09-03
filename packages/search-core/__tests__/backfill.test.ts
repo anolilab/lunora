@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createSearchAnalyzer } from "../src/analyzer";
-import { planSearchBackfillPass, searchIndexProfile } from "../src/backfill";
+import { planSearchBackfillPass, searchCoverageSurvives, searchIndexField, searchIndexProfile } from "../src/backfill";
 
 describe(searchIndexProfile, () => {
     it("names the analyzer profile and the indexed field, so re-pointing an index changes it", () => {
@@ -64,5 +64,59 @@ describe(planSearchBackfillPass, () => {
             finished: false,
             wipe: true,
         });
+    });
+});
+
+/**
+ * The one place this policy is decided. Both engines persist a `covered` flag and
+ * both used to ask this question in their own words, in their own comment, under
+ * their own near-identical test suite; the engine suites now pin only how each
+ * spells the resulting SQL.
+ */
+describe(searchCoverageSurvives, () => {
+    const profile = "en-v2:body";
+
+    it("carries the latch through an analyzer bump — the rows still answer about the column that was asked for", () => {
+        expect.assertions(2);
+
+        expect(searchCoverageSurvives("en-v1:body", profile)).toBe(true);
+        // A backend's layout suffix is not the field either.
+        expect(searchCoverageSurvives("en-v1:body/blob", "en-v2:body/json")).toBe(true);
+    });
+
+    it("breaks the latch when the index was re-pointed at another field", () => {
+        expect.assertions(2);
+
+        expect(searchCoverageSurvives("en-v2:title", profile)).toBe(false);
+        expect(searchCoverageSurvives("en-v1:title/blob", "en-v2:body/blob")).toBe(false);
+    });
+
+    it("breaks the latch when nothing was recorded — unverifiable is treated as unverified", () => {
+        expect.assertions(3);
+
+        // Every shape a state row that predates profile tracking comes back as,
+        // across the drivers. Reading any of them as "unchanged" would serve a
+        // whole table's matches over a column nothing can confirm.
+        expect(searchCoverageSurvives(null, profile)).toBe(false);
+        expect(searchCoverageSurvives(undefined, profile)).toBe(false);
+        expect(searchCoverageSurvives("", profile)).toBe(false);
+    });
+});
+
+describe(searchIndexField, () => {
+    it("reads back the field a profile was built for, so a re-point is told from a re-analysis", () => {
+        expect.assertions(2);
+
+        expect(searchIndexField(searchIndexProfile({ field: "body", language: "en" }))).toBe("body");
+        expect(searchIndexField(searchIndexProfile({ field: "title" }))).toBe("title");
+    });
+
+    it("ignores a physical layout a backend appended, which is a fourth fact and not the field", () => {
+        expect.assertions(2);
+
+        expect(searchIndexField("en-v2:body/blob")).toBe("body");
+        // Only the LAST slash separates the layout: a field cannot contain one,
+        // but a layout identity may.
+        expect(searchIndexField("en-v2:body/blob/v3")).toBe("body/blob");
     });
 });

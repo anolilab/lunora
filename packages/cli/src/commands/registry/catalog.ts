@@ -21,13 +21,6 @@ interface IndexItem extends CatalogItem {
     title?: string;
 }
 
-/**
- * Optional-aware wrapper over the shared display sanitizer ({@link safe}): a
- * hostile `--source` registry can embed escape or BIDI sequences in a `name`/
- * `description` to spoof `list` output.
- */
-const stripControlChars = (value: string | undefined): string | undefined => (value === undefined ? undefined : safe(value));
-
 /** Names of the subdirectories under `root` that ship a `registry.json`. */
 const listItemDirectories = (root: string): string[] =>
     readdirSync(root).filter((entry) => {
@@ -52,9 +45,10 @@ const collectCatalog = (root: string): CatalogItem[] => {
             return parsed.items
                 .filter((entry): entry is CatalogItem => typeof entry === "object" && entry !== null && typeof (entry as CatalogItem).name === "string")
                 .map((entry) => {
-                    // Strip control bytes from the untrusted remote strings before they
-                    // can reach the terminal (ANSI/OSC escape-injection hardening).
-                    return { description: stripControlChars(entry.description), name: stripControlChars(entry.name) ?? entry.name };
+                    // Sanitize the untrusted remote strings before they can reach the
+                    // terminal: escape/BIDI sequences AND newlines, since each entry
+                    // is one `list` line.
+                    return { description: entry.description === undefined ? undefined : safe(entry.description), name: safe(entry.name) };
                 });
         }
     }
@@ -62,7 +56,11 @@ const collectCatalog = (root: string): CatalogItem[] => {
     return listItemDirectories(root).map((name) => {
         const raw = JSON.parse(readFileSync(join(root, name, "registry.json"), "utf8")) as { description?: string };
 
-        return { description: stripControlChars(raw.description), name };
+        // The directory NAME is as untrusted as the manifest text beside it — a
+        // remote registry is unpacked into this root, and a tarball entry may
+        // carry escape or BIDI bytes in its path. `list` renders it, so it is
+        // sanitized like every other rendered value.
+        return { description: raw.description === undefined ? undefined : safe(raw.description), name: safe(name) };
     });
 };
 

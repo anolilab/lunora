@@ -189,8 +189,12 @@ const validateImportRow = (schema: SchemaLike, table: string, record: Record<str
     // framework-managed `_id`/`_creationTime` already stripped above).
     // Otherwise an undeclared field passes validation untouched and gets
     // persisted verbatim by the writer.
+    //
+    // `Object.hasOwn`, never `key in shape`: `in` walks the prototype chain, so
+    // `constructor`, `toString` and `__proto__` passed as declared fields and
+    // reached the writer unvalidated.
     for (const key of Object.keys(payload)) {
-        if (!(key in definition.shape)) {
+        if (!Object.hasOwn(definition.shape, key)) {
             return `unexpected field "${key}": not declared in table "${table}"`;
         }
     }

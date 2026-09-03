@@ -1,7 +1,7 @@
-import type { FunctionReference } from "@lunora/client";
+import type { FunctionReference, SubscriptionErrorCallback } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
 import { usePaginatedQuery } from "../src/use-paginated-query";
@@ -26,12 +26,16 @@ const makePaginator =
 
 interface HarnessProps {
     initialNumItems?: number;
+    onError?: SubscriptionErrorCallback;
     onLoadMore?: (loadMore: (numberItems: number) => void) => void;
     skip?: boolean;
 }
 
-const Harness = ({ initialNumItems: initialNumberItems = 2, onLoadMore, skip = false }: HarnessProps): ReactElement => {
-    const { isLoading, loadMore, results, status } = usePaginatedQuery(makeRef("items:list"), skip ? "skip" : {}, { initialNumItems: initialNumberItems });
+const Harness = ({ initialNumItems: initialNumberItems = 2, onError, onLoadMore, skip = false }: HarnessProps): ReactElement => {
+    const { error, isLoading, loadMore, results, status } = usePaginatedQuery(makeRef("items:list"), skip ? "skip" : {}, {
+        initialNumItems: initialNumberItems,
+        onError,
+    });
 
     onLoadMore?.(loadMore);
 
@@ -40,11 +44,85 @@ const Harness = ({ initialNumItems: initialNumberItems = 2, onLoadMore, skip = f
             <span data-testid="status">{status}</span>
             <span data-testid="loading">{String(isLoading)}</span>
             <span data-testid="results">{(results as string[]).join(",")}</span>
+            <span data-testid="error">{error?.message ?? ""}</span>
         </div>
     );
 };
 
+/** A paginator that rejects for the page starting at `failAtCursor`, and serves the rest. */
+const makeFailingPaginator = (items: string[], failAtCursor: null | string) => {
+    const serve = makePaginator(items);
+
+    return (ref: string, args: unknown): { continueCursor: null | string; isDone: boolean; page: string[] } => {
+        const { paginationOpts } = args as { paginationOpts: { cursor: null | string } };
+
+        if (paginationOpts.cursor === failAtCursor) {
+            throw new Error("page unavailable");
+        }
+
+        return serve(ref, args);
+    };
+};
+
 describe("usePaginatedQuery", () => {
+    it("surfaces a first-page failure instead of loading forever", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient(makeFailingPaginator(["a", "b", "c"], null));
+        const onError = vi.fn<SubscriptionErrorCallback>();
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Harness onError={onError} />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId("error").textContent).toBe("page unavailable");
+        });
+
+        // The first page has nothing to fall back to, so it stays loading — but
+        // the consumer can now see WHY.
+        expect(screen.getByTestId("status").textContent).toBe("LoadingFirstPage");
+        expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: "page unavailable" }));
+    });
+
+    it("drops a failed tail page so the feed leaves LoadingMore and loadMore can retry", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient(makeFailingPaginator(["a", "b", "c", "d", "e"], "2"));
+
+        let loadMore: (numberItems: number) => void = (_numberItems) => undefined;
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Harness
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback used once to capture the hook's `loadMore`.
+                    onLoadMore={(next) => {
+                        loadMore = next;
+                    }}
+                />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId("results").textContent).toBe("a,b");
+        });
+
+        act(() => {
+            loadMore(2);
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("error").textContent).toBe("page unavailable");
+        });
+
+        // The failed tail is gone: the feed shows what it has and `loadMore` is
+        // live again rather than pinned at "LoadingMore" forever.
+        expect(screen.getByTestId("results").textContent).toBe("a,b");
+        expect(screen.getByTestId("status").textContent).toBe("CanLoadMore");
+    });
+
     it("loads the first page and reports CanLoadMore when more remain", async () => {
         expect.hasAssertions();
 

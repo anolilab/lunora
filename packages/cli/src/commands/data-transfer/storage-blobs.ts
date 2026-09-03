@@ -5,6 +5,7 @@
 import { LunoraError } from "@lunora/errors";
 import { STORAGE_UPLOAD_MAX_BODY_BYTES } from "@lunora/runtime";
 
+import { collectPages } from "../../../../../shared/collect-pages";
 import type { Logger } from "../../util/logger";
 import type { ConvexSnapshot, ConvexSnapshotTable } from "../convex-snapshot";
 import { readSnapshotLines, readSnapshotStorageBlob } from "../convex-snapshot";
@@ -180,43 +181,27 @@ interface BlobUploadContext {
 const bucketQuery = (context: BlobUploadContext): string => (context.bucket === undefined ? "" : `&bucket=${encodeURIComponent(context.bucket)}`);
 
 /** List the objects under `prefix`, following the cursor to the end. */
-const listStorageObjects = async (context: BlobUploadContext, prefix: string): Promise<StorageListObject[]> => {
-    const objects: StorageListObject[] = [];
-    let cursor: string | undefined;
-
-    do {
+const listStorageObjects = async (context: BlobUploadContext, prefix: string): Promise<StorageListObject[]> =>
+    await collectPages<StorageListObject>(async (cursor) => {
         // An explicit page size matters here: the host's own default is 100, and
         // the idempotency pre-flight walks the whole key prefix.
         const url = `${context.baseUrl}${STORAGE_ENDPOINT_PATH}?prefix=${encodeURIComponent(prefix)}&limit=${String(STORAGE_LIST_PAGE_SIZE)}${cursor === undefined ? "" : `&cursor=${encodeURIComponent(cursor)}`}${bucketQuery(context)}`;
 
-        // eslint-disable-next-line no-await-in-loop -- cursor paging is sequential by definition
         const response = await context.fetchImpl(url, { headers: { authorization: `Bearer ${context.token}` }, method: "GET" });
 
         if (!response.ok) {
-            // eslint-disable-next-line no-await-in-loop -- error body of the failed page
             const text = await response.text().catch(() => "<no body>");
 
             throw new LunoraError("INTERNAL", `storage list failed (HTTP ${String(response.status)}): ${text}`);
         }
 
-        // eslint-disable-next-line no-await-in-loop -- one page at a time
         const json = (await response.json()) as { cursor?: string; objects?: StorageListObject[]; truncated?: boolean };
 
-        objects.push(...(json.objects ?? []));
-
-        const next = json.truncated === true ? json.cursor : undefined;
-
-        // A host that reports "more" without advancing would loop forever;
-        // stopping is the safe answer, and the caller re-uploads at worst.
-        if (next !== undefined && next === cursor) {
-            throw new LunoraError("INTERNAL", "storage list did not advance its cursor — refusing to page forever");
-        }
-
-        cursor = next;
-    } while (cursor !== undefined);
-
-    return objects;
-};
+        // `collectPages` names the row array `records`; the storage route names
+        // it `objects`. Same page shape otherwise, including the non-advancing
+        // cursor the walker refuses to follow forever.
+        return { cursor: json.cursor, records: json.objects, truncated: json.truncated };
+    });
 
 /**
  * Upload one blob through the checksum-verified admin route. The worker digests

@@ -7,8 +7,10 @@
  * ```ts
  * import { subscribeToPush } from "@lunora/notify/web";
  *
- * const subscription = await subscribeToPush({ serviceWorkerUrl: "/sw.js", vapidPublicKey });
- * await client.mutation("registerDevice", { subscription });
+ * const { replacedEndpoint, subscription } = await subscribeToPush({ serviceWorkerUrl: "/sw.js", vapidPublicKey });
+ * // `replacedEndpoint` is set after a VAPID rotation — pass it on so the server
+ * // can drop the stale row (`ctx.push.unregister(webPushId(replacedEndpoint))`).
+ * await client.mutation("registerDevice", { replacedEndpoint, subscription });
  * ```
  * @packageDocumentation
  */
@@ -20,6 +22,30 @@ interface SerializedPushSubscription {
     endpoint: string;
     expirationTime: number | null;
     keys: { auth: string; p256dh: string };
+}
+
+/**
+ * What {@link subscribeToPush} returns: the (new or reused) subscription, plus
+ * the endpoint of the one it replaced, when it replaced one.
+ */
+interface SubscribeToPushResult {
+    /**
+     * The endpoint of the subscription this call dropped — set ONLY on the
+     * VAPID-rotation path, where the stale subscription is unsubscribed and a
+     * new one minted under the current key.
+     *
+     * Send it to the server and unregister it
+     * (`ctx.push.unregister(webPushId(replacedEndpoint))`). The new subscription
+     * carries a NEW endpoint, hence a new store id, so it never upserts over the
+     * old row — and `403 VapidPkHashMismatch`, which every send to that row now
+     * answers, is correctly not a "gone" signal, so nothing prunes it either.
+     * Dropped instead of returned, the row is billed a POST and a write on every
+     * later broadcast, forever.
+     */
+    replacedEndpoint?: string;
+
+    /** The active subscription, in the serialisable shape `ctx.push.register` accepts. */
+    subscription: SerializedPushSubscription;
 }
 
 /** Options for {@link subscribeToPush}. */
@@ -69,19 +95,26 @@ const matchesVapidKey = (existing: PushSubscription, vapidPublicKey: string): bo
 };
 
 /** A loose view of the browser globals, so support detection reads them without type-narrowing lint. */
-const browserGlobals = globalThis as { navigator?: { serviceWorker?: unknown }; PushManager?: unknown };
+const browserGlobals = globalThis as { navigator?: { serviceWorker?: unknown }; Notification?: unknown; PushManager?: unknown };
 
-/** Whether the current browser supports the Web Push flow (service workers + Push API). */
-const isPushSupported = (): boolean => browserGlobals.navigator?.serviceWorker !== undefined && browserGlobals.PushManager !== undefined;
+/**
+ * Whether the current browser supports the Web Push flow (service workers +
+ * Push API + the Notifications API). `Notification` is part of the check because
+ * {@link subscribeToPush} calls `Notification.requestPermission()` — without it
+ * a browser missing the API got a bare `ReferenceError` rather than the
+ * "not supported" error this predicate exists to produce.
+ */
+const isPushSupported = (): boolean =>
+    browserGlobals.navigator?.serviceWorker !== undefined && browserGlobals.PushManager !== undefined && browserGlobals.Notification !== undefined;
 
 /**
  * Register (or reuse) a service worker and subscribe the browser to Web Push,
  * returning the subscription in serialisable form. Reuses an existing subscription
  * when present. Throws if push is unsupported or the user denies permission.
  */
-const subscribeToPush = async (options: SubscribeToPushOptions): Promise<SerializedPushSubscription> => {
+const subscribeToPush = async (options: SubscribeToPushOptions): Promise<SubscribeToPushResult> => {
     if (!isPushSupported()) {
-        throw new Error("@lunora/notify: Web Push is not supported in this browser (needs service workers + PushManager)");
+        throw new Error("@lunora/notify: Web Push is not supported in this browser (needs service workers + PushManager + Notification)");
     }
 
     let registration: ServiceWorkerRegistration;
@@ -106,11 +139,16 @@ const subscribeToPush = async (options: SubscribeToPushOptions): Promise<Seriali
     // VapidPkHashMismatch` forever — so drop the stale one and re-subscribe.
     const existing = await registration.pushManager.getSubscription();
     let reusable: null | PushSubscription = null;
+    let replacedEndpoint: string | undefined;
 
     if (existing !== null) {
         if (matchesVapidKey(existing, options.vapidPublicKey)) {
             reusable = existing;
         } else {
+            // Read the endpoint BEFORE unsubscribing: it is the only handle on
+            // the server row this rotation orphans — see the result type's
+            // `replacedEndpoint` field for why nothing else ever clears it.
+            replacedEndpoint = existing.endpoint;
             await existing.unsubscribe();
         }
     }
@@ -122,7 +160,7 @@ const subscribeToPush = async (options: SubscribeToPushOptions): Promise<Seriali
             userVisibleOnly: true,
         }));
 
-    return subscription.toJSON() as SerializedPushSubscription;
+    return { replacedEndpoint, subscription: subscription.toJSON() as SerializedPushSubscription };
 };
 
 /** Unsubscribe the browser's current Web Push subscription. Returns whether one was removed. */
@@ -137,5 +175,5 @@ const unsubscribeFromPush = async (): Promise<boolean> => {
     return subscription === null ? false : subscription.unsubscribe();
 };
 
-export type { SerializedPushSubscription, SubscribeToPushOptions };
+export type { SerializedPushSubscription, SubscribeToPushOptions, SubscribeToPushResult };
 export { isPushSupported, subscribeToPush, unsubscribeFromPush };

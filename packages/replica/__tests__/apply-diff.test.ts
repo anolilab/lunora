@@ -22,7 +22,12 @@ const referenceFnv1a64 = (input: string): string => {
     const mask64 = 0xff_ff_ff_ff_ff_ff_ff_ffn;
 
     for (let index = 0; index < input.length; index += 1) {
-        hash ^= BigInt(input.codePointAt(index) ?? 0);
+        // UTF-16 code UNITS. `codePointAt` per INDEX folds an astral character
+        // twice (its code point, then its trailing low surrogate) — a hybrid walk
+        // no other FNV-1a produces, and the one the 32-bit digest was already
+        // fixed for. See `shared/fnv1a.ts`.
+        // eslint-disable-next-line unicorn/prefer-code-point -- see above
+        hash ^= BigInt(input.charCodeAt(index));
         hash = (hash * prime) & mask64;
     }
 
@@ -138,6 +143,20 @@ describe("fnv1a64Hex", () => {
         }
 
         expect(mismatches).toStrictEqual([]);
+    });
+
+    it("folds an astral character ONCE, like the 32-bit digest", () => {
+        expect.assertions(2);
+
+        // The walk was `codePointAt` per INDEX, so a surrogate pair contributed
+        // twice: its whole code point at the first index and its trailing low
+        // surrogate at the second. Neither a code-unit nor a code-point walk, and
+        // no other FNV-1a agrees with it. Folding the two units of the pair is the
+        // same work as folding the two-character string they spell.
+        const pair = "\uD83D\uDE00";
+
+        expect(fnv1a64Hex(pair)).toBe(referenceFnv1a64(pair));
+        expect(fnv1a64Hex(pair)).not.toBe(fnv1a64Hex(`${pair}\uDE00`));
     });
 
     it("matches the reference on boundary inputs", () => {

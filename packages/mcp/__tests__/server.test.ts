@@ -125,10 +125,22 @@ describe("createLunoraMcpServer request handlers", () => {
         expect(result.tools.some((tool) => tool.name.startsWith("lunora_get_") && tool.name !== "lunora_get_function_schema")).toBe(false);
     });
 
-    it("listTools includes the observability tools once a token is configured", async () => {
-        expect.assertions(2);
+    // The admin bearer is what EVERY tool needs, so deriving the privileged
+    // reads from it put production log lines and grouped error messages on the
+    // default surface of every server. They are their own opt-in now.
+    it("listTools omits the observability tools when only a token is configured", async () => {
+        expect.assertions(1);
 
         const server = createLunoraMcpServer({ client: mockClient().asClient, token: "admin-token" });
+        const result = (await handlerFor(server, ListToolsRequestSchema.shape.method.value)({})) as ListToolsResult;
+
+        expect(result.tools.map((tool) => tool.name)).not.toContain("lunora_get_logs");
+    });
+
+    it("listTools includes the observability tools once allowObservability is set", async () => {
+        expect.assertions(2);
+
+        const server = createLunoraMcpServer({ allowObservability: true, client: mockClient().asClient, token: "admin-token" });
         const result = (await handlerFor(server, ListToolsRequestSchema.shape.method.value)({})) as ListToolsResult;
 
         expect(result.tools.map((tool) => tool.name)).toContain("lunora_get_logs");
@@ -137,12 +149,12 @@ describe("createLunoraMcpServer request handlers", () => {
         expect(result.tools.find((tool) => tool.name === "lunora_get_logs")?.outputSchema).toBeDefined();
     });
 
-    it("refuses an observability call fail-closed when no token was configured", async () => {
+    it("refuses an observability call fail-closed when it was not opted in", async () => {
         expect.assertions(2);
 
         const mock = mockClient();
         // The tool isn't advertised, but a client could still name it — dispatch must refuse.
-        const server = createLunoraMcpServer({ client: mock.asClient });
+        const server = createLunoraMcpServer({ client: mock.asClient, token: "admin-token" });
 
         const result = (await handlerFor(
             server,
@@ -162,7 +174,7 @@ describe("createLunoraMcpServer request handlers", () => {
 
         mock.query.mockResolvedValueOnce({ entries: [{ level: "info", message: "hello", timestamp: 1 }] });
 
-        const server = createLunoraMcpServer({ client: mock.asClient, token: "admin-token" });
+        const server = createLunoraMcpServer({ allowObservability: true, client: mock.asClient, token: "admin-token" });
         const result = (await handlerFor(
             server,
             CallToolRequestSchema.shape.method.value,
@@ -171,7 +183,7 @@ describe("createLunoraMcpServer request handlers", () => {
         })) as CallToolResult;
 
         expect(mock.query).toHaveBeenCalledTimes(1);
-        expect(result.structuredContent).toStrictEqual({ entries: [{ level: "info", message: "hello", timestamp: 1 }], total: 1 });
+        expect(result.structuredContent).toStrictEqual({ dropped: 0, entries: [{ level: "info", message: "hello", timestamp: 1 }], total: 1 });
         expect(JSON.parse((result.content[0] as { text: string }).text)).toStrictEqual(result.structuredContent);
     });
 

@@ -83,49 +83,52 @@ IDOR & unscoped access (a user-derived key/id reaches a resource without a serve
 
 RLS, masking & output shape:
 
-| Lint                                         | Level   | Flags                                                                                                         |
-| -------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------- |
-| `external_source_unscoped`                   | `ERROR` | A `.source()` + `.shardBy()` table with no `tenantBy`; every tenant DO replicates the whole multitenant table |
-| `rls_uncovered_table`                        | `WARN`  | An RLS-gated table read without the `rls()` middleware                                                        |
-| `policy_references_unknown_table`            | `WARN`  | An RLS policy bound to a table that doesn't exist                                                             |
-| `public_table_rls_optout_confusion`          | `WARN`  | A `.public()` table that opts out of RLS but carries sensitive columns                                        |
-| `allow_unauthenticated_shard_access_enabled` | `WARN`  | Unauthenticated shard access enabled on an RLS-gapped schema                                                  |
-| `mask_uncovered_pii_column`                  | `WARN`  | A maskable column returned without the `mask()` middleware                                                    |
-| `mask_weak_hash_strategy_on_pii`             | `WARN`  | A `mask()` `"hash"` strategy (unsalted FNV-1a) on a PII column; the value is recoverable                      |
-| `masked_relation_leak_via_with`              | `INFO`  | A masked table surfaced unmasked through a `with`-relation on a public read                                   |
-| `output_projection_missing_on_public_read`   | `INFO`  | A public query returns raw rows with PII columns and no `.output(...)` projection                             |
-| `soft_delete_include_deleted_from_args`      | `INFO`  | Soft-deleted rows resurfaced via `includeDeleted` on a public read                                            |
+| Lint                                         | Level   | Flags                                                                                                            |
+| -------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------- |
+| `external_source_unscoped`                   | `ERROR` | A `.source()` + `.shardBy()` table with no `tenantBy`; every tenant DO replicates the whole multitenant table    |
+| `unrestricted_where_branch`                  | `ERROR` | A shape/policy predicate arm returning `{}` or `undefined` — a filter matching EVERY row, where a deny was meant |
+| `rls_uncovered_table`                        | `WARN`  | An RLS-gated table read without the `rls()` middleware                                                           |
+| `policy_references_unknown_table`            | `WARN`  | An RLS policy bound to a table that doesn't exist                                                                |
+| `public_table_rls_optout_confusion`          | `WARN`  | A `.public()` table that opts out of RLS but carries sensitive columns                                           |
+| `allow_unauthenticated_shard_access_enabled` | `WARN`  | Unauthenticated shard access enabled on an RLS-gapped schema                                                     |
+| `mask_uncovered_pii_column`                  | `WARN`  | A maskable column returned without the `mask()` middleware                                                       |
+| `mask_weak_hash_strategy_on_pii`             | `WARN`  | A `mask()` `"hash"` strategy (unsalted FNV-1a) on a PII column; the value is recoverable                         |
+| `masked_relation_leak_via_with`              | `INFO`  | A masked table surfaced unmasked through a `with`-relation on a public read                                      |
+| `output_projection_missing_on_public_read`   | `INFO`  | A public query returns raw rows with PII columns and no `.output(...)` projection                                |
+| `soft_delete_include_deleted_from_args`      | `INFO`  | Soft-deleted rows resurfaced via `includeDeleted` on a public read                                               |
 
 Auth configuration (`createAuth`):
 
-| Lint                                | Level   | Flags                                                         |
-| ----------------------------------- | ------- | ------------------------------------------------------------- |
-| `auth_csrf_check_disabled`          | `ERROR` | `createAuth` with the CSRF check disabled                     |
-| `auth_secure_cookies_disabled`      | `ERROR` | `createAuth` with secure cookies disabled                     |
-| `auth_trusted_origins_wildcard`     | `ERROR` | `createAuth` `trustedOrigins` set to a wildcard               |
-| `auth_email_verification_disabled`  | `WARN`  | `createAuth` with email verification disabled                 |
-| `auth_session_freshage_zero`        | `WARN`  | `createAuth` session `freshAge` of zero                       |
-| `auth_api_call_without_headers`     | `WARN`  | A privileged `ctx.authApi` call missing request headers       |
-| `identity_undeclared_claim_trusted` | `WARN`  | Authorization trusts an undeclared (forgeable) identity claim |
+| Lint                                | Level   | Flags                                                                                |
+| ----------------------------------- | ------- | ------------------------------------------------------------------------------------ |
+| `auth_csrf_check_disabled`          | `ERROR` | `createAuth` with the CSRF check disabled                                            |
+| `auth_secure_cookies_disabled`      | `ERROR` | `createAuth` with secure cookies disabled                                            |
+| `auth_trusted_origins_wildcard`     | `ERROR` | `createAuth` `trustedOrigins` set to a wildcard                                      |
+| `auth_scim_without_transactions`    | `ERROR` | `scim()` on a database adapter with no native transactions; every SCIM request fails |
+| `auth_email_verification_disabled`  | `WARN`  | `createAuth` with email verification disabled                                        |
+| `auth_session_freshage_zero`        | `WARN`  | `createAuth` session `freshAge` of zero                                              |
+| `auth_api_call_without_headers`     | `WARN`  | A privileged `ctx.authApi` call missing request headers                              |
+| `identity_undeclared_claim_trusted` | `WARN`  | Authorization trusts an undeclared (forgeable) identity claim                        |
 
 HTTP handlers, procedures & rate limits:
 
-| Lint                                      | Level   | Flags                                                                        |
-| ----------------------------------------- | ------- | ---------------------------------------------------------------------------- |
-| `mail_inbound_dispatch_without_verify`    | `ERROR` | An inbound-email handler with no `verify` hook (runs under the admin bearer) |
-| `privileged_dispatch_unvalidated_payload` | `ERROR` | A queue/workflow forwards an untrusted payload into an RLS-gated function    |
-| `admin_route_without_guard`               | `WARN`  | An admin route with no auth guard                                            |
-| `http_action_missing_auth_guard`          | `WARN`  | An HTTP handler that does a side effect but never reads `ctx.auth`           |
-| `http_action_response_header_injection`   | `WARN`  | A response header written from unsanitized request input (CRLF injection)    |
-| `insert_many_unsafe_user_data`            | `WARN`  | A public procedure using `insertManyUnsafe` (bypasses validators + triggers) |
-| `public_arg_uses_any`                     | `WARN`  | A public argument typed `v.any()`                                            |
-| `public_mutation_without_ratelimit`       | `WARN`  | A public write with no rate limit                                            |
-| `user_creating_mutation_without_captcha`  | `WARN`  | An account-creating / mail-sending write with no CAPTCHA                     |
-| `ratelimit_default_memory_store`          | `WARN`  | A `RateLimiter` using the per-isolate default memory store                   |
-| `ratelimit_middleware_fail_open`          | `WARN`  | A fail-open rate-limit / CAPTCHA guard on a sensitive procedure              |
-| `ratelimit_key_spoofable_or_global`       | `WARN`  | A rate-limit key derived from spoofable user input                           |
-| `flag_gates_security_with_unsafe_default` | `WARN`  | A security flag that fails open to the permissive branch                     |
-| `unbounded_string_arg`                    | `INFO`  | A public string argument with no length bound                                |
+| Lint                                        | Level   | Flags                                                                        |
+| ------------------------------------------- | ------- | ---------------------------------------------------------------------------- |
+| `mail_inbound_dispatch_without_verify`      | `ERROR` | An inbound-email handler with no `verify` hook (runs under the admin bearer) |
+| `privileged_dispatch_unvalidated_payload`   | `ERROR` | A queue/workflow forwards an untrusted payload into an RLS-gated function    |
+| `admin_route_without_guard`                 | `WARN`  | An admin route with no auth guard                                            |
+| `http_action_missing_auth_guard`            | `WARN`  | An HTTP handler that does a side effect but never reads `ctx.auth`           |
+| `http_action_response_header_injection`     | `WARN`  | A response header written from unsanitized request input (CRLF injection)    |
+| `insert_many_unsafe_user_data`              | `WARN`  | A public procedure using `insertManyUnsafe` (bypasses validators + triggers) |
+| `public_arg_uses_any`                       | `WARN`  | A public argument typed `v.any()`                                            |
+| `public_mutation_without_ratelimit`         | `WARN`  | A public write with no rate limit                                            |
+| `user_creating_mutation_without_captcha`    | `WARN`  | An account-creating / mail-sending write with no CAPTCHA                     |
+| `signup_mutation_without_disposable_gating` | `WARN`  | An account-creating write with no disposable-email gate                      |
+| `ratelimit_default_memory_store`            | `WARN`  | A `RateLimiter` using the per-isolate default memory store                   |
+| `ratelimit_middleware_fail_open`            | `WARN`  | A fail-open rate-limit / CAPTCHA guard on a sensitive procedure              |
+| `ratelimit_key_spoofable_or_global`         | `WARN`  | A rate-limit key derived from spoofable user input                           |
+| `flag_gates_security_with_unsafe_default`   | `WARN`  | A security flag that fails open to the permissive branch                     |
+| `unbounded_string_arg`                      | `INFO`  | A public string argument with no length bound                                |
 
 Storage, AI, containers & payments:
 
@@ -150,45 +153,60 @@ Storage, AI, containers & payments:
 | Lint                           | Level  | Flags                                                                                                        |
 | ------------------------------ | ------ | ------------------------------------------------------------------------------------------------------------ |
 | `filter_without_index`         | `WARN` | A query filter on a column no index covers                                                                   |
+| `filter_on_primary_key`        | `WARN` | A query filtering on `_id`; `ctx.db.get(id)` fetches the row directly instead of walking the table           |
 | `unbounded_collect`            | `WARN` | A `.collect()` with no index and no filter: the whole table, re-sent to every live subscriber on every write |
 | `shape_targets_global_table`   | `WARN` | A shape replicating from a global (cross-shard) table                                                        |
 | `unindexed_foreign_key`        | `INFO` | A foreign-key column with no index on the owning table                                                       |
 | `unindexed_relation_target`    | `INFO` | The `many`-side foreign key of a relation is unindexed                                                       |
 | `duplicate_index`              | `INFO` | A redundant index already covered by another                                                                 |
 | `container_oversized_instance` | `INFO` | A container instance larger than its workload needs                                                          |
+| `ai_run_without_logging`       | `INFO` | An AI generation with no structured event; spend can't be attributed and a bad answer can't be traced        |
 
 ### Schema
 
-| Lint                                | Level   | Flags                                                                                              |
-| ----------------------------------- | ------- | -------------------------------------------------------------------------------------------------- |
-| `index_references_unknown_field`    | `ERROR` | An index naming a field the table doesn't have                                                     |
-| `relation_references_unknown_field` | `ERROR` | A relation pointing at a field that doesn't exist                                                  |
-| `relation_references_unknown_table` | `ERROR` | A relation pointing at a table that doesn't exist                                                  |
-| `shape_unknown_table`               | `ERROR` | A shape bound to a table that doesn't exist                                                        |
-| `workflow_unknown_target`           | `ERROR` | A workflow call naming a workflow that doesn't exist                                               |
-| `workflow_duplicate_step_name`      | `ERROR` | A durable step name reused within one workflow (the second call returns the first's cached result) |
-| `external_source_on_global`         | `ERROR` | A table that is both `.source()` and `.global()` (contradictory tiers)                             |
-| `circular_fk`                       | `WARN`  | A circular foreign-key dependency between tables                                                   |
-| `empty_index`                       | `WARN`  | An index declared with no fields                                                                   |
-| `nondeterministic_query_mutation`   | `WARN`  | `fetch` / `Date.now` / `Math.random` in a query or mutation                                        |
-| `hyperdrive_outside_action`         | `WARN`  | `ctx.sql` used outside an action                                                                   |
-| `r2sql_outside_action`              | `WARN`  | `ctx.r2sql` used outside an action                                                                 |
-| `flag_read_in_subscription`         | `WARN`  | `ctx.flags` read in a query; a flag flip re-runs no subscription, so the branch goes stale         |
-| `mutator_full_row_replace`          | `WARN`  | A mutator `server` impl overwriting a whole row with `replace`                                     |
-| `queue_without_dlq`                 | `WARN`  | A `defineQueue` with no `deadLetterQueue`; exhausted messages are dropped, not captured            |
-| `table_without_insert`              | `INFO`  | A table no function inserts into                                                                   |
-| `workflow_unused`                   | `INFO`  | A workflow that is never started                                                                   |
+| Lint                                         | Level   | Flags                                                                                                          |
+| -------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------- |
+| `index_references_unknown_field`             | `ERROR` | An index naming a field the table doesn't have                                                                 |
+| `relation_references_unknown_field`          | `ERROR` | A relation pointing at a field that doesn't exist                                                              |
+| `relation_references_unknown_table`          | `ERROR` | A relation pointing at a table that doesn't exist                                                              |
+| `shape_unknown_table`                        | `ERROR` | A shape bound to a table that doesn't exist                                                                    |
+| `workflow_unknown_target`                    | `ERROR` | A workflow call naming a workflow that doesn't exist                                                           |
+| `workflow_duplicate_step_name`               | `ERROR` | A durable step name reused within one workflow (the second call returns the first's cached result)             |
+| `external_source_on_global`                  | `ERROR` | A table that is both `.source()` and `.global()` (contradictory tiers)                                         |
+| `external_source_incremental_no_delete_path` | `ERROR` | An `incremental` `.source()` table with no `reconcileEveryMs`/`softDeleteColumn`; upstream deletes never apply |
+| `export_sink_misconfigured`                  | `ERROR` | A CDC export sink missing a required config field, so the tap silently drains nothing                          |
+| `geo_index_field_not_geopoint`               | `ERROR` | A `.geoIndex(name, { field })` whose field is not a `v.geoPoint()`                                             |
+| `ttl_field_not_timestamp`                    | `ERROR` | A `.ttl(field)` pointing at a column that is not an epoch-millisecond timestamp                                |
+| `circular_fk`                                | `WARN`  | A circular foreign-key dependency between tables                                                               |
+| `empty_index`                                | `WARN`  | An index declared with no fields                                                                               |
+| `nondeterministic_query_mutation`            | `WARN`  | `fetch` / `Date.now` / `Math.random` in a query or mutation                                                    |
+| `hyperdrive_outside_action`                  | `WARN`  | `ctx.sql` used outside an action                                                                               |
+| `r2sql_outside_action`                       | `WARN`  | `ctx.r2sql` used outside an action                                                                             |
+| `flag_read_in_subscription`                  | `WARN`  | `ctx.flags` read in a query; a flag flip re-runs no subscription, so the branch goes stale                     |
+| `mutator_full_row_replace`                   | `WARN`  | A mutator `server` impl overwriting a whole row with `replace`                                                 |
+| `queue_without_dlq`                          | `WARN`  | A `defineQueue` with no `deadLetterQueue`; exhausted messages are dropped, not captured                        |
+| `global_table_near_column_limit`             | `WARN`  | A `.global()` table approaching D1's 100-column ceiling, past which it cannot be created                       |
+| `error_without_catalog`                      | `WARN`  | A bare `new Error(...)` thrown from a procedure; opaque to the caller and unfingerprintable                    |
+| `commit_ordered_hard_delete`                 | `WARN`  | A `.commitOrdered()` table with no `.softDelete()`; a hard delete emits no event a consumer sees               |
+| `action_without_error_handling`              | `WARN`  | An `action` doing outbound I/O (fetch, mail, queues, storage, sql, ai) with no `try`/`catch`                   |
+| `notify_send_outside_action`                 | `WARN`  | `ctx.notify`/`ctx.push` used in a query or mutation — external I/O on a re-runnable path                       |
+| `notify_missing_push_config`                 | `WARN`  | `ctx.push` with neither a Web Push nor an FCM channel configured, so every send fails                          |
+| `migration_stale_import`                     | `WARN`  | A migrated-away platform's SDK still imported from `lunora/` source                                            |
+| `table_without_insert`                       | `INFO`  | A table no function inserts into                                                                               |
+| `workflow_unused`                            | `INFO`  | A workflow that is never started                                                                               |
+| `geo_index_unused`                           | `INFO`  | A `.geoIndex(...)` no handler reads via `withGeoIndex(...)` — a companion column written for nothing           |
+| `procedure_without_structured_event`         | `INFO`  | A public write that emits no structured event, so a failure is visible but not searchable                      |
 
 ## Runtime lints
 
 These read observed signal off a live deployment, so they only fire once a
 worker has traffic.
 
-| Lint                   | Level  | Category      | Flags                                              |
-| ---------------------- | ------ | ------------- | -------------------------------------------------- |
-| `hot_shard`            | `WARN` | `PERFORMANCE` | A shard taking a disproportionate share of traffic |
-| `index_utilization`    | `INFO` | `PERFORMANCE` | A declared index that observed queries never use   |
-| `constraint_validator` | `WARN` | `SCHEMA`      | A constraint violated by rows already in the store |
+| Lint                | Level  | Category      | Flags                                                                                                          |
+| ------------------- | ------ | ------------- | -------------------------------------------------------------------------------------------------------------- |
+| `hot_shard`         | `WARN` | `PERFORMANCE` | A shard taking a disproportionate share of traffic                                                             |
+| `index_utilization` | `INFO` | `PERFORMANCE` | A declared index that observed queries never use                                                               |
+| `fan_out_breadth`   | `WARN` | `PERFORMANCE` | A shard set wide enough to strain a cross-shard read (it would approach the per-invocation subrequest ceiling) |
 
 ## Run the lints yourself
 
@@ -219,16 +237,8 @@ order. Each finding has `level`, `name`, `title`, `detail`, `description`,
 
 ### Feeding the runtime lints
 
-The runtime tier reads `shardTraffic`, `tableScans`, `indexHits`, and
-`tableSamples` off the `LintContext`. The Studio backend fills `shardTraffic`,
-`tableScans`, and `indexHits` from the shards' admin signal.
-
-`tableSamples` has **no shipped feeder**. Nothing in the runtime or the Studio
-reads bounded row samples out of a shard, so `constraint_validator` is a no-op
-unless the caller supplies samples of its own — the Studio drops it from the
-lint set it runs rather than running it against an input it cannot fill. The
-lint and its `AdvisorTableSample` input shape are exported, so you can drive it
-from your own sampling read; there is no built-in one to turn on.
+The runtime tier reads `shardTraffic`, `tableScans`, and `indexHits` off the
+`LintContext`. The Studio backend fills all three from the shards' admin signal.
 
 An Analytics-Engine-backed alternative feeder, `loadAnalyticsRuntimeMetrics`,
 exists in source (`src/ae-metrics.ts`) but is **quarantined**: not exported from

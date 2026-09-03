@@ -80,22 +80,18 @@ export interface NodeShardState {
  */
 export const createNodeShardState = (shard: NodeShard): NodeShardState => {
     return {
+        // The socket host adopts the transport AS its handle and stamps
+        // `serializeAttachment`/`deserializeAttachment`/`close` onto it, so
+        // there is nothing to bridge here and — the part that matters —
+        // `getWebSockets` below hands back the very objects the adapter
+        // accepted. Cloudflare's `createSocketHost` returns the runtime socket
+        // from `accept`/`handleFor` and enumerates the same objects from
+        // `getSockets`; a host that enumerated a second, wrapper object made
+        // every fan-out frame (pokes, deltas, relay broadcast) write into an
+        // in-process array instead of the wire, and made per-socket memos and
+        // `ws !== closing` comparisons miss.
         acceptWebSocket: (socket, tags) => {
-            const handle = shard.sockets.accept(socket, undefined, tags);
-
-            // Cloudflare's `createSocketHost.accept` stamps the attachment onto
-            // the socket AFTER `acceptWebSocket` returns, because its runtime
-            // only tracks attachments for sockets it has accepted. Node's host
-            // mints a separate wrapper handle, so that stamp would land on an
-            // object nobody reads and the durable state would keep `undefined`.
-            // Route the stamp (and mirror the read) into the wrapper's state so
-            // the two agree — the raw socket is the handle the adapter handed
-            // back, and the wrapper is what `getWebSockets` enumerates.
-            const bridge = socket as { deserializeAttachment?: () => unknown; serializeAttachment?: (value: unknown) => void };
-            bridge.serializeAttachment = (value) => {
-                handle.serializeAttachment(value);
-            };
-            bridge.deserializeAttachment = () => handle.deserializeAttachment();
+            shard.sockets.accept(socket, undefined, tags);
         },
         blockConcurrencyWhile: (callback) => shard.shard.runSerialized(callback),
         getWebSockets: (tag) => shard.sockets.getSockets(tag),

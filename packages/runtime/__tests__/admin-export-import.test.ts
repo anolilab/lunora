@@ -1,4 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve as resolvePath } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { transformSync } from "esbuild";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ExecutionContextLike, ShardingInfo } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
@@ -688,6 +695,144 @@ describe("createWorker — admin import endpoint", () => {
 
         expect(body.errors).toHaveLength(1);
         expect(body.errors[0]!.code).toBe("GLOBAL_NOT_CONFIGURED");
+    });
+});
+
+/**
+ * The `backup` registry item's scheduled snapshot, restored through this endpoint.
+ *
+ * The item writes NDJSON to R2 and `lunora backup restore` feeds that object
+ * straight back here — but nothing ever ran the two halves against each other,
+ * which is how the snapshot shipped framed by `{"__table":…}` header lines above
+ * bare rows. This reader needs `table` and `doc` on EVERY line, so a header-framed
+ * snapshot restored zero rows and the operator found out mid-incident.
+ *
+ * The serialiser is lifted out of the shipped item and CALLED rather than
+ * re-typed here, so the assertion is over what the item actually emits.
+ */
+describe("backup registry snapshot → admin import", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "lunora-backup-item-"));
+    const itemPath = resolvePath(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "registry", "backup", "backup.ts");
+
+    afterAll(() => {
+        rmSync(scratch, { force: true, recursive: true });
+    });
+
+    /**
+     * `toNdjson` as the shipped registry item defines it, compiled and imported as
+     * a real module.
+     *
+     * Lifting the item's own expression is the point: a re-typed copy here would
+     * keep passing after the item drifted, which is exactly the gap that let the
+     * header-framed shape ship.
+     *
+     * The item wire-encodes each document through its own `encodeWire` mirror,
+     * which is too large to lift with it (multi-statement, and it closes over two
+     * module constants). The reference encoder is injected instead, because the
+     * question HERE is the NDJSON framing — `table` and `doc` on every line. That
+     * the item's mirror still agrees with the reference is pinned separately, by
+     * `packages/cli/__tests__/commands/registry-backup-item.test.ts`, which builds
+     * its expected bytes from `shared/wire-codec`.
+     */
+    const itemToNdjson = async (): Promise<(table: string, rows: ReadonlyArray<Record<string, unknown>>) => string> => {
+        // Spans lines: the expression is an arrow whose body sits on the next one.
+        const match = /^const toNdjson = ([\s\S]*?);$/mu.exec(readFileSync(itemPath, "utf8"));
+
+        if (match?.[1] === undefined) {
+            throw new Error("could not locate `toNdjson` in registry/backup/backup.ts");
+        }
+
+        const codecPath = resolvePath(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "shared", "wire-codec.ts");
+        const compiled = transformSync(`import { encodeWire } from ${JSON.stringify(pathToFileURL(codecPath).href)};\nexport const toNdjson = ${match[1]};`, {
+            loader: "ts",
+        }).code;
+        const file = join(scratch, `to-ndjson-${randomUUID()}.mjs`);
+
+        writeFileSync(file, compiled);
+
+        const loaded = (await import(pathToFileURL(file).href)) as { toNdjson: (table: string, rows: ReadonlyArray<Record<string, unknown>>) => string };
+
+        return loaded.toNdjson;
+    };
+
+    it("restores every row of a snapshot the registry item produced", async () => {
+        expect.assertions(3);
+
+        const toNdjson = await itemToNdjson();
+        const imported: { doc: Record<string, unknown>; table: string }[] = [];
+        const orchestrateImport = vi.fn<
+            (_namespace: unknown, request: { batches: { rows: { doc: Record<string, unknown>; table: string }[]; shardKey: string }[] }) => Promise<unknown>
+        >(async (_namespace: unknown, request: { batches: { rows: { doc: Record<string, unknown>; table: string }[]; shardKey: string }[] }) => {
+            const inserted: Record<string, number> = {};
+
+            for (const batch of request.batches) {
+                for (const row of batch.rows) {
+                    imported.push(row);
+                    inserted[row.table] = (inserted[row.table] ?? 0) + 1;
+                }
+            }
+
+            return {
+                conflicts: 0,
+                errors: [],
+                failed: 0,
+                inserted,
+                ok: request.batches.length,
+                shards: request.batches.map((batch) => {
+                    return { result: { conflicts: 0, errors: [], inserted: {} }, shardKey: batch.shardKey };
+                }),
+            };
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: orchestrateImport as never,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            resolveTableSharding: (): ShardingInfo => {
+                return { mode: { kind: "root" } };
+            },
+            shardDO: noopNamespace,
+        });
+
+        // The item's own framing: per-table chunks joined by newlines, one
+        // trailing newline (`registry/backup/backup.ts`, the `snapshot` action).
+        const body = `${[
+            toNdjson("messages", [{ _id: "m1", body: "hi" }]),
+            toNdjson("users", [
+                { _id: "u1", name: "Ada" },
+                { _id: "u2", name: "Grace" },
+            ]),
+        ]
+            .filter((chunk) => chunk.length > 0)
+            .join("\n")}\n`;
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/import", {
+                body,
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/x-ndjson" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        const result: { errors: unknown[]; inserted: Record<string, number> } = await response.json();
+
+        // A header-framed snapshot lands here as three `BAD_ROW: row is missing
+        // \`table\`` errors and an empty `inserted` — a restore of nothing.
+        expect(result.errors).toStrictEqual([]);
+        expect(result.inserted).toStrictEqual({ messages: 1, users: 2 });
+        expect(imported.map((row) => row.table)).toStrictEqual(["messages", "users", "users"]);
     });
 });
 

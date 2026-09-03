@@ -282,6 +282,7 @@ interface CreateAgentToolEventsResult {
 ```ts
 interface CreateInfiniteQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -290,6 +291,7 @@ interface CreateInfiniteQueryOptions {
 
 ```ts
 interface CreateInfiniteQueryResult<T> {
+    error: Accessor<SubscriptionError | undefined>;
     fetchNextPage: (numberItems?: number) => void;
     hasNextPage: Accessor<boolean>;
     isFetchingNextPage: Accessor<boolean>;
@@ -304,6 +306,7 @@ interface CreateInfiniteQueryResult<T> {
 ```ts
 interface CreatePaginatedQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -312,6 +315,7 @@ interface CreatePaginatedQueryOptions {
 
 ```ts
 interface CreatePaginatedQueryResult<T> {
+    error: Accessor<SubscriptionError | undefined>;
     isLoading: Accessor<boolean>;
     loadMore: (numberItems: number) => void;
     results: Accessor<T[]>;
@@ -377,6 +381,7 @@ interface CreateRateLimitResult {
 
 ```ts
 interface CreateStreamOptions {
+    durable?: boolean;
     maxBuffer?: number;
     shardKey?: string;
 }
@@ -748,7 +753,9 @@ const createVoiceAgent: (options: CreateVoiceAgentOptions) => CreateVoiceAgentRe
 ### `hydratePreloaded` (const)
 
 ```ts
-const hydratePreloaded: <T>(preloaded: Preloaded<T>) => Accessor<T>;
+const hydratePreloaded: <T>(preloaded: Preloaded<T>, options?: {
+    onError?: SubscriptionErrorCallback;
+}) => Accessor<T>;
 ```
 
 ### `useLunora` (const)

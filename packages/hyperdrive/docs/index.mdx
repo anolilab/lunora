@@ -211,6 +211,8 @@ export const refreshTenant = action.input({ orgId: v.string() }).action(async ({
         map: (row) => ({ body: row.body, orgId: row.orgId, title: row.title }),
     });
 
+    // One mutation, so the whole slice materializes atomically: a failure part
+    // way through leaves the tenant's DO on its previous snapshot, not half-updated.
     await ctx.runMutation(api.documents.ingest, { orgId, docs });
 });
 
@@ -454,14 +456,14 @@ a no-op.
     equality: `{ tags: ["x"] }` also matches a row whose tags are `["x", "y"]`, and
     `{ author: {} }` matches every row carrying an `author` key. A filter value
     JSON cannot represent (`undefined`, a function, a symbol) is rejected, because
-    dropping it would widen the filter to match every row. A comparison operator — a comparison operator like like `{ views: { $gt: 10 } }` and
-    Vectorize's dot-addressed `"author.role"` syntax throw for the same reason.
-    **`returnMetadata: "indexed"` behaves as `"all"`** — note this defeats a
-    deliberate default: `ctx.vectors` asks for `"indexed"` precisely so a query
+    dropping it would widen the filter to match every row. A comparison operator
+    like `{ views: { $gt: 10 } }` and Vectorize's dot-addressed `"author.role"`
+    syntax throw for the same reason. **`returnMetadata: "indexed"` behaves as
+    `"all"`**, since Postgres indexes the whole JSONB document — note this defeats
+    a deliberate default: `ctx.vectors` asks for `"indexed"` precisely so a query
     that opted into nothing does not return every stored field. And **`dimensions`
     is fixed at first provisioning**: `CREATE TABLE IF NOT EXISTS` no-ops on a
-    later change, so writes fail against the original width. **`returnMetadata: "indexed"` behaves as
-    `"all"`**, since Postgres indexes the whole JSONB document. And **`mutationId`
+    later change, so writes fail against the original width. Finally **`mutationId`
     is a local counter**: Vectorize's is a handle for an async mutation queue,
     while a Postgres write is already durable when its promise resolves.
 

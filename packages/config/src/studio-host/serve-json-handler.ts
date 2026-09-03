@@ -13,21 +13,33 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 
+import type { CodegenOptions } from "@lunora/codegen";
+
 import { headerValue } from "./transport-guard";
 
 /** Max request body the local-dev endpoints accept (1 MB) — guards dev against a runaway upload. */
 const MAX_BODY_BYTES = 1_000_000;
 
+/**
+ * The host's project configuration, forwarded verbatim to the handler. Separate
+ * from `projectRoot` (which every host has) because these two come from the
+ * host's own Lunora options.
+ */
+interface LocalEndpointContext {
+    /** API-spec mode the host runs codegen with, so a studio edit regenerates the same spec files. */
+    readonly apiSpec?: CodegenOptions["apiSpec"];
+    /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
+    readonly schemaDirectory?: string;
+}
+
 /** A request adapted from a host transport, passed to a local-dev handler. */
-interface LocalEndpointRequest {
+interface LocalEndpointRequest extends LocalEndpointContext {
     /** Parsed JSON body of the request (`undefined` for `GET` / an empty body). */
     readonly body?: unknown;
     /** HTTP method. */
     readonly method: string;
     /** Project root containing the `lunora/` directory. */
     readonly projectRoot: string;
-    /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
-    readonly schemaDirectory?: string;
 }
 
 /** A response a local-dev handler returns, serialised back as JSON with its status. */
@@ -163,16 +175,17 @@ const csrfRejectionReason = (request: IncomingMessage): string | undefined => {
  * handler's `{ status, body }` is serialised back as JSON. A malformed body is a
  * `400`; an unexpected throw (e.g. the body-size guard) is a `500`.
  *
- * `schemaDirectory` (when the host configures a custom `schemaDir`) is forwarded
- * to the handler so the schema/seed/policy endpoints target the right directory
- * instead of always defaulting to `"lunora"`.
+ * `context` carries the host's own Lunora options through to the handler: its
+ * `schemaDirectory` (so a custom `schemaDir` targets the right directory instead
+ * of defaulting to `"lunora"`) and its `apiSpec`, so a studio edit regenerates
+ * with the same options the host's own codegen run uses.
  */
 const serveJsonHandler = (
     request: IncomingMessage,
     response: ServerResponse,
     handle: LocalEndpointHandler,
     projectRoot: string,
-    schemaDirectory?: string,
+    context: LocalEndpointContext = {},
 ): void => {
     const run = async (): Promise<void> => {
         try {
@@ -197,7 +210,7 @@ const serveJsonHandler = (
                 return;
             }
 
-            const result = handle({ body: parsed, method: request.method ?? "POST", projectRoot, schemaDirectory });
+            const result = handle({ ...context, body: parsed, method: request.method ?? "POST", projectRoot });
 
             respondJson(response, result.status, result.body);
         } catch (error: unknown) {
@@ -211,5 +224,5 @@ const serveJsonHandler = (
     });
 };
 
-export type { LocalEndpointHandler, LocalEndpointRequest, LocalEndpointResponse };
+export type { LocalEndpointContext, LocalEndpointHandler, LocalEndpointRequest, LocalEndpointResponse };
 export { serveJsonHandler };

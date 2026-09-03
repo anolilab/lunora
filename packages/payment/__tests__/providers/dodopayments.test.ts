@@ -97,7 +97,29 @@ describe("dodopayments adapter", () => {
         expect(adapter.capabilities.merchantOfRecord).toBe(true);
         expect(() => adapter.capturePayment({ sessionId: "x" })).toThrow(/does not support/);
         // Refunds ARE supported by Dodo (unlike manual capture).
-        await expect(adapter.refundPayment({ sessionId: "pay_1" })).resolves.toMatchObject({ state: "refunded" });
+        // `refundId` is Dodo's `refund_id` — the same id `refund.succeeded` carries.
+        await expect(adapter.refundPayment({ sessionId: "pay_1" })).resolves.toMatchObject({ pending: false, refundId: "ref_1", state: "refunded" });
+    });
+
+    it("flags a refund Dodo has only accepted, not settled", async () => {
+        expect.assertions(2);
+
+        const client = {
+            ...makeClient(),
+            refunds: {
+                create: async () => {
+                    return { amount: 2500, currency: "USD", payment_id: "pay_1", refund_id: "ref_1", status: "pending" };
+                },
+            },
+        };
+
+        const adapter = createDodoPaymentsAdapter({ client, webhookSecret: SECRET });
+        const result = await adapter.refundPayment({ sessionId: "pay_1" });
+
+        // `pending`/`review` settle later via `refund.succeeded` — or not at all, via `refund.failed`,
+        // which carries no transition. The facade holds its ledger back on this flag.
+        expect(result.pending).toBe(true);
+        expect(result.state).toBe("captured");
     });
 
     it("creates a checkout carrying the pinned reference metadata and product cart", async () => {
@@ -317,15 +339,17 @@ describe("dodopayments adapter", () => {
     });
 
     it("normalizes a refund.succeeded webhook to a refund", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
-        const payload = JSON.stringify({ data: { amount: 1000, currency: "USD", payment_id: "pay_1" }, type: "refund.succeeded" });
+        const payload = JSON.stringify({ data: { amount: 1000, currency: "USD", payment_id: "pay_1", refund_id: "ref_1" }, type: "refund.succeeded" });
         const action = await adapter.parseWebhook({ headers: headersFor("m4", timestamp, sign("m4", timestamp, payload)), payload });
 
         expect(action.type).toBe("payment.refunded");
         expect(action.amount?.minorUnits).toBe(1000n);
+        // Per-refund identity, so the sync layer can tell this event from a same-amount sibling.
+        expect(action.refundId).toBe("ref_1");
     });
 
     it("treats a lost chargeback as a funds reversal, not an unhandled event (regression)", async () => {

@@ -256,7 +256,14 @@ def decode_wire(value: Any, depth: int = 0) -> Any:
                     raise WireFormatError(f"wire-codec: invalid or over-long bigint (max {MAX_BIGINT_DIGITS} digits)")
                 return WireBigInt(int(raw))
             if tag == "date":
-                return WireDate(decode_wire(_payload(value, "date"), depth + 1))
+                # Epoch milliseconds, and nothing else: `None` or a string would
+                # otherwise become a `WireDate` carrying a value no arithmetic can
+                # use, re-encoded as a legitimate-looking date tag. `bool` is an
+                # `int` in Python, so it is excluded explicitly.
+                epoch = decode_wire(_payload(value, "date"), depth + 1)
+                if isinstance(epoch, bool) or not isinstance(epoch, (int, float)):
+                    raise WireFormatError("wire-codec: malformed date tag")
+                return WireDate(epoch)
             if tag == "url":
                 href = _payload(value, "url")
                 if not isinstance(href, str):

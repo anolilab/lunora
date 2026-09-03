@@ -49,6 +49,16 @@ export interface SignalBatcherOptions<T> {
      * Flush as soon as the buffer reaches this many items, without waiting.
      * Bounds both the batch body size and, since the buffer is dropped-oldest
      * beyond it, the memory a runaway loop of spans can hold. Default 512.
+     *
+     * **Precondition: a positive integer.** Not validated here — this file is
+     * bundler-inlined and must stay free of `@lunora/errors`, so the one caller
+     * that takes the value from operator config (`otlpSink`'s `batch.maxItems`)
+     * rejects a bad one with a catalogued `ENV_INVALID` before it reaches this
+     * constructor. It matters because the failure modes are unrecoverable, not
+     * merely wrong: a NEGATIVE cap turns the drop-oldest `while` in `add` into a
+     * synchronous infinite loop that hangs the isolate on its first telemetry
+     * event, and `0` / a fraction empties the buffer before the drain can read
+     * it, so every signal is silently discarded.
      */
     maxItems?: number;
 }

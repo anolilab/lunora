@@ -1,6 +1,6 @@
 {
     "name": "@lunora/ai",
-    "version": "1.0.0-alpha.69",
+    "version": "1.0.0-alpha.71",
     "description": "Workers AI helper for Lunora: provider-agnostic AI SDK access from functions, Workers AI by default",
     "keywords": [
         "ai",
@@ -67,7 +67,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.29",
+        "@lunora/errors": "1.0.0-alpha.30",
         "ai": "catalog:ai",
         "workers-ai-provider": "catalog:ai"
     },
