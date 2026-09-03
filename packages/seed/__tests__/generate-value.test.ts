@@ -129,6 +129,67 @@ describe("generateValue — bytes wire representation", () => {
     });
 });
 
+describe("generateValue — v.date() / v.timestamp()", () => {
+    const SIX_MONTHS_MS = 180 * 24 * 60 * 60 * 1000;
+
+    it.each([
+        ["date", v.date()],
+        ["timestamp", v.timestamp()],
+    ])("anchors a v.%s() column on the caller's `now` rather than a generator-local window", (kind, validator) => {
+        expect.assertions(2);
+
+        // Regression: this arm drew from faker's hard-coded 1980–2020 window and
+        // ignored `now` entirely, so `expiresAt: v.timestamp()` seeded 2012 while
+        // `expiresAt: v.timestamp().unique()` (which uses `now`) seeded 2026.
+        const value = generateValue(validator, "expiresAt", `${kind}-input`, NOW) as number;
+
+        expect(value).toBeLessThanOrEqual(NOW);
+        expect(value).toBeGreaterThanOrEqual(NOW - SIX_MONTHS_MS);
+    });
+
+    it("shifts with `now` instead of staying pinned to a fixed calendar window", () => {
+        expect.assertions(1);
+
+        const later = NOW + 10 * 365 * 24 * 60 * 60 * 1000;
+
+        expect(generateValue(v.timestamp(), "expiresAt", "same-input", later)).toBe(
+            (generateValue(v.timestamp(), "expiresAt", "same-input", NOW) as number) + (later - NOW),
+        );
+    });
+});
+
+describe("generateValue — refined string columns", () => {
+    it("refuses a pattern-constrained column by name instead of seeding a value its own validator rejects", () => {
+        expect.assertions(2);
+
+        // The `.unique()` twin (`stringDeal`) and the `v.from()` arm both refuse
+        // loudly for this reason; the ordinary path used to emit a bare lorem
+        // word — `sku` → "audeo", `safeParse().ok === false`.
+        const sku = v.string().pattern(/^SKU-\d{4}$/u);
+
+        expect(() => generateValue(sku, "sku", "input", NOW)).toThrow(/sku/u);
+        expect(() => generateValue(sku, "sku", "input", NOW)).toThrow(/pattern/u);
+    });
+
+    it("refuses a column declaring a format it has no generator for", () => {
+        expect.assertions(1);
+
+        expect(() => generateValue(withConstraints(v.string(), { format: "ipv6" }), "peer", "input", NOW)).toThrow(/format "ipv6"/u);
+    });
+
+    it.each([
+        ["homepage", v.string().url(), (value: string) => new URL(value).protocol],
+        ["contact", v.string().email(), (value: string) => (/^[^@\s]+@[^@\s]+$/u.test(value) ? "https:" : "")],
+    ])("generates a conforming value for a declared format on %s, whose name no heuristic matches", (field, validator, probe) => {
+        expect.assertions(1);
+
+        // A declared format outranks the field-name heuristics: neither
+        // `homepage` nor `contact` matches a keyword, so both used to fall
+        // through to `copycat.word` — "tremo", "audeo".
+        expect(probe(generateValue(validator, field, `${field}-input`, NOW) as string)).toBe("https:");
+    });
+});
+
 describe("generateValue — time-named number columns", () => {
     const SIX_MONTHS_MS = 180 * 24 * 60 * 60 * 1000;
 
