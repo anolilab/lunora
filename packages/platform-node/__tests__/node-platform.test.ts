@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { defineQueue } from "@lunora/queue";
+import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { defineWorkflow } from "@lunora/workflow";
 import { describe, expect, it } from "vitest";
 
@@ -87,6 +88,50 @@ describe("createNodePlatform", () => {
             expect(bare.objectStorage).toBeUndefined();
         } finally {
             rmSync(bucketDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("binds the declared global-table store, and binds nothing when undeclared", async () => {
+        expect.hasAssertions();
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-node-platform-global-"));
+
+        try {
+            const schema = {
+                tables: {
+                    notes: {
+                        indexes: [],
+                        shape: { body: { _meta: { column: { notNull: true } }, kind: "string" } as ValidatorLike },
+                        shardMode: { kind: "global" },
+                    },
+                },
+            } as unknown as SchemaLike;
+
+            using platform = createNodePlatform({ globalTablesPath: join(workdir, "global.sqlite3") });
+
+            // The fourth member of the same set as queues / workflows / object
+            // storage: `globalTables` is rated `emulated`, codegen emits the whole
+            // `.global()` surface for this target with no diagnostic, and the
+            // composition root bound nothing — so the first `.global()` read or
+            // write failed at runtime with nothing upstream having warned.
+            expect(platform.capabilities.features.globalTables?.level).toBe("emulated");
+
+            const store = platform.globalTables!;
+
+            await store.migrate(schema);
+
+            const writer = store.writer({ schema });
+            const id = await writer.insert("notes", { body: "hello" });
+
+            await expect(writer.get(id)).resolves.toMatchObject({ body: "hello" });
+
+            // Nothing declared, nothing bound — same reasoning as the bucket: a
+            // store silently rooted at `:memory:` loses every write on exit.
+            using bare = createNodePlatform();
+
+            expect(bare.globalTables).toBeUndefined();
+        } finally {
+            rmSync(workdir, { force: true, recursive: true });
         }
     });
 

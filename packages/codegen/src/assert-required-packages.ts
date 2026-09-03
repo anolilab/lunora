@@ -2,6 +2,16 @@ import { LunoraError } from "@lunora/errors";
 
 import type { SchemaIR } from "./ir";
 
+/** What the platform gate decided about the schema features that pull a package in. */
+interface RequiredPackageOptions {
+    /**
+     * The target platform supports a vector store. `false` means the emitted
+     * output withholds the Vectorize wiring, so the binding package it would
+     * have imported is not required either.
+     */
+    hasVectors?: boolean;
+}
+
 /** One package the emitted `_generated/` will import, and the schema feature that pulls it in. */
 interface RequiredPackage {
     /** The npm package name as the generated import spells it. */
@@ -21,7 +31,7 @@ interface RequiredPackage {
  * packages (server, values, runtime, do, client), so an umbrella project still
  * installs these separately.
  */
-const requiredPackagesFor = (schema: SchemaIR): RequiredPackage[] => {
+const requiredPackagesFor = (schema: SchemaIR, options: RequiredPackageOptions = {}): RequiredPackage[] => {
     const required: RequiredPackage[] = [];
     const globalTables = schema.tables.filter((table) => table.shardMode === "global");
 
@@ -39,10 +49,16 @@ const requiredPackagesFor = (schema: SchemaIR): RequiredPackage[] => {
         });
     }
 
-    if (schema.vectorIndexes.length > 0) {
+    // Gated on the platform verdict, not on the raw declaration: when the target
+    // rates `vectorStore` as `unsupported` the shard emitter withholds the
+    // `@lunora/bindings/vectors` import entirely, so demanding the package would
+    // hard-fail the build over an import the generated code does not contain —
+    // for a binding the host does not have, after the gate has already reported
+    // the feature unsupported.
+    if (schema.vectorIndexes.length > 0 && options.hasVectors !== false) {
         required.push({
             name: "@lunora/bindings",
-            reason: "`.vectorize()` indexes make `_generated/vectors.ts` import `@lunora/bindings/vectors`",
+            reason: "`.vectorize()` indexes make `_generated/shard.ts` import `@lunora/bindings/vectors`",
         });
     }
 
@@ -66,12 +82,12 @@ const requiredPackagesFor = (schema: SchemaIR): RequiredPackage[] => {
  * codegen fixtures, an embedded schema, a tool driving `runCodegen` directly)
  * must not be told every add-on is missing. The check simply does not run.
  */
-const assertRequiredPackages = (schema: SchemaIR, dependencies: ReadonlySet<string> | undefined): void => {
+const assertRequiredPackages = (schema: SchemaIR, dependencies: ReadonlySet<string> | undefined, options: RequiredPackageOptions = {}): void => {
     if (dependencies === undefined) {
         return;
     }
 
-    const missing = requiredPackagesFor(schema).filter((entry) => !dependencies.has(entry.name));
+    const missing = requiredPackagesFor(schema, options).filter((entry) => !dependencies.has(entry.name));
 
     if (missing.length === 0) {
         return;
@@ -92,4 +108,4 @@ const assertRequiredPackages = (schema: SchemaIR, dependencies: ReadonlySet<stri
 
 export default assertRequiredPackages;
 export { requiredPackagesFor };
-export type { RequiredPackage };
+export type { RequiredPackage, RequiredPackageOptions };

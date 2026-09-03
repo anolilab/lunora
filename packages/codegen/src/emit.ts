@@ -4275,6 +4275,15 @@ interface EmitShardOptions {
     hasPipelines?: boolean;
     /** A `lunora/` source reads `ctx.r2sql` (R2 SQL) — wires `ctx.r2sql` onto the ActionCtx only. */
     hasR2sql?: boolean;
+
+    /**
+     * The target platform supports a vector store. `false` withholds the whole
+     * Vectorize wiring — the `@lunora/bindings/vectors` imports, the
+     * `createVectorSyncHook` write hook and `vectors` on the runtime ctx — even
+     * when the schema declares an index, mirroring what `emitServer` and
+     * `emitApp` withhold from the type surface for the same verdict.
+     */
+    hasVectors?: boolean;
     /** A `lunora/` source reads `ctx.x402` — wires the agent-wallet pay rail onto the ActionCtx only. */
     hasX402?: boolean;
     maskMetadata?: MaskMetadataIR;
@@ -4322,6 +4331,7 @@ const emitShard = ({
     hasPayments = false,
     hasPipelines = false,
     hasR2sql = false,
+    hasVectors = true,
     hasX402 = false,
     maskMetadata,
     mutators = [],
@@ -4449,7 +4459,14 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // override), both empty unless the project declares workflows.
     const { constant: workflowsMetadataConst, override: workflowsMetadataOverride } = emitWorkflowsMetadataFragments(workflows);
     const { constant: queuesMetadataConst, override: queuesMetadataOverride } = emitQueuesMetadataFragments(queues);
-    const hasVectors = schema.vectorIndexes.length > 0;
+    // The platform gate's verdict AND the app's declaration — the same pairing
+    // `emitServer` makes, and it has to be made here too: this emitter used to
+    // recompute the flag from the raw schema, so a target rating `vectorStore`
+    // as `unsupported` got a `shard.ts` byte-identical to the Cloudflare one
+    // (imports, write hook, runtime ctx field and all) while `server.ts` and
+    // `app.ts` correctly withheld theirs. Defaults to `true` so an emitter
+    // caller that does not gate (tests, fixtures) is unchanged.
+    const hasVectorIndexes = hasVectors && schema.vectorIndexes.length > 0;
     // Cross-tenant leak guard: Vectorize indexes are account-global, so a
     // vector index owned by a `.shardBy()`'d table must scope its auto-sync
     // upserts by the owning DO's shard key, or every tenant's vectors land in
@@ -4477,7 +4494,10 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
             .filter((table) => typeof table.shardMode === "object" && table.shardMode.kind === "shardBy")
             .map((table) => table.name),
     );
-    const hasShardedVectors = schema.vectorIndexes.some((index) => shardedTableNames.has(index.table));
+    // `hasVectorIndexes &&`, not the raw scan: this also gates the `ROOT_SHARD_NAME`
+    // import, which would otherwise be emitted (and unused) on a target whose
+    // matrix withholds the vector wiring the sentinel is only read by.
+    const hasShardedVectors = hasVectorIndexes && schema.vectorIndexes.some((index) => shardedTableNames.has(index.table));
     const hasGlobalTables = schema.tables.some((table) => table.shardMode === "global");
     // Which `.global()` backend(s) the schema uses. A `.global()` table defaults
     // to D1; `.global({ backend: "hyperdrive" })` routes it to a Postgres/MySQL
@@ -4514,7 +4534,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // The facade option types (AggregateOptions/QueryArgs/RestrictableQueryOptions/
     // SearchFilterBuilderLike/…) are no longer imported here — `bindTableFacade`
     // (from `@lunora/server`) now owns the per-table accessor binding.
-    const doTypeImports = buildDoTypeImports(hasVectors, workflows.length > 0, queues.length > 0, hasFlags, hasShardSearchIndexes);
+    const doTypeImports = buildDoTypeImports(hasVectorIndexes, workflows.length > 0, queues.length > 0, hasFlags, hasShardSearchIndexes);
 
     // A shape's `resolveShape` override returns an `effectiveWhere: WhereInput`,
     // so the DO's `WhereInput` type is pulled in only when the project has shapes.
@@ -4637,7 +4657,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
         importLines.push(`import { bindOrm, bindTableFacade } from "${base.server}";`);
     }
 
-    if (hasVectors) {
+    if (hasVectorIndexes) {
         importLines.push(
             `import type { SchemaLike as VectorSchemaLike, VectorizeIndexLike, VectorSearchLike } from "@lunora/bindings/vectors";`,
             `import { createContextVectors, createVectors, createVectorSyncHook } from "@lunora/bindings/vectors";`,
@@ -4673,7 +4693,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
         `import { ${["LUNORA_FUNCTIONS", "LUNORA_LIFECYCLE_HOOKS", "LUNORA_MIGRATIONS", ...(hasMutators ? ["LUNORA_MUTATOR_PATHS"] : []), ...(hasShapes ? ["LUNORA_SHAPES"] : [])].join(", ")} } from "./functions.js";`,
     );
 
-    const vectorsConfigField = hasVectors ? `\n    vectors?: (env: Record<string, unknown>) => Record<string, VectorizeIndexLike>;` : "";
+    const vectorsConfigField = hasVectorIndexes ? `\n    vectors?: (env: Record<string, unknown>) => Record<string, VectorizeIndexLike>;` : "";
 
     // `.global()` tables live in D1, not the DO's SQLite. The runtime D1 binding
     // arrives via an optional `d1` config thunk; when omitted (or for projects
@@ -4734,7 +4754,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
           )
         : "";
 
-    const vectorsStub = hasVectors
+    const vectorsStub = hasVectorIndexes
         ? renderThrowingStub("vectorsStub: VectorSearchLike", vectorsMissing, ["deleteByIds", "getByIds", "query", "upsert", "upsertNow"])
         : "";
 
@@ -4785,7 +4805,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
               .map((index) => JSON.stringify(index.name))
               .join(", ")}] }`
         : "";
-    const vectorsBuild = hasVectors
+    const vectorsBuild = hasVectorIndexes
         ? `
             let vectors: VectorSearchLike;
             let onWrite: WriteHook | undefined;
@@ -4851,7 +4871,7 @@ ${vectorNamespaceField}
                 // Left \`undefined\` when there is no scope so \`createShardCtxDb\`
                 // keeps its own "degrade a provable slice to a whole-table dep"
                 // fallback rather than reporting into a no-op.
-                onReadRange: options.onReadRange ?? (options.scope === undefined ? undefined : this.getCtxDbReadRangeHook(options.scope)),${hasVectors ? "\n                onWrite," : ""}
+                onReadRange: options.onReadRange ?? (options.scope === undefined ? undefined : this.getCtxDbReadRangeHook(options.scope)),${hasVectorIndexes ? "\n                onWrite," : ""}
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -4904,7 +4924,7 @@ ${vectorNamespaceField}
     /** Call the generated {@link adminWriterMethod}; only `runShardWrite` needs a meter. */
     const adminWriterPrelude = (headroomExpression = ""): string => `            const writer = this.adminWriter(${headroomExpression});`;
 
-    const vectorsContextField = hasVectors ? `\n                vectors,` : "";
+    const vectorsContextField = hasVectorIndexes ? `\n                vectors,` : "";
 
     // `ctx.orm` mirrors the per-table facade under a kitcn-style namespace; it
     // only exists when the project declares tables (otherwise `facade` is unbuilt).

@@ -17,6 +17,8 @@ import { LunoraError } from "@lunora/errors";
 import type { PlatformCapabilities, R2BucketLike, SchedulerHost, ShardDirectory, ShardHost, ShardKvStore, SocketHost } from "@lunora/platform";
 import { NODE_CAPABILITIES } from "@lunora/platform";
 
+import type { NodeGlobalStore } from "./node-global-store";
+import { createNodeGlobalStore } from "./node-global-store";
 import { createNodeShardKvStore } from "./node-kv-store";
 import type { NodeQueueHost, NodeQueueHostOptions } from "./node-queue-host";
 import { createNodeQueueHost } from "./node-queue-host";
@@ -80,6 +82,16 @@ export interface NodePlatform<
      */
     drain: () => Promise<void>;
 
+    /**
+     * The `.global()` backend, or `undefined` when the caller named no database
+     * file for it. Same reasoning as `objectStorage`: `globalTables` is rated
+     * `emulated`, so codegen emits the whole `.global()` surface for this target
+     * with no diagnostic, and a store nobody bound fails at the first global read
+     * or write. There is no default path, because a global store silently rooted
+     * at `:memory:` loses every row when the process exits.
+     */
+    globalTables?: NodeGlobalStore;
+
     /** Durable key-value storage backed by the same `better-sqlite3` database as `shard`. */
     kv: ShardKvStore;
 
@@ -124,14 +136,22 @@ export interface NodePlatform<
  * directory resolves for fan-out file-backed too, and `onAlarm` gives their
  * durable alarms somewhere to land.
  *
- * `queues`, `workflows` and `objectStorageDirectory` are the three
- * declarations: each binds its half of an `emulated` capability, and each is
+ * `queues`, `workflows`, `objectStorageDirectory` and `globalTablesPath` are the
+ * four declarations: each binds its half of an `emulated` capability, and each is
  * absent from the returned platform when its declaration is omitted.
  */
 export type NodePlatformOptions<
     Queues extends Record<string, { isLunoraQueue: true }> = Record<string, never>,
     Workflows extends Record<string, { isLunoraWorkflow: true }> = Record<string, never>,
 > = {
+    /**
+     * Database file the `.global()` tables live in — its own file, never a
+     * shard's, because a table every shard reads must not be inside any one of
+     * them. Omit when the app declares no `.global()` table; there is no
+     * default, for the same reason the bucket has none.
+     */
+    globalTablesPath?: string;
+
     /**
      * Directory the object-storage bucket keeps its objects in, one file per
      * key. Omit when the app declares no buckets — there is no default,
@@ -168,12 +188,13 @@ export const createNodePlatform = <
     const { socket: sockets } = createNodeSocketHost(database);
     const { dispose: disposeScheduler, scheduler } = createNodeSchedulerHost(database, options);
 
-    // Queues, workflows and object storage are all composed here rather than
-    // left for a caller to assemble: `NODE_CAPABILITIES` rates all three
-    // `emulated`, and codegen emits the whole `ctx.queues` / `ctx.workflows` /
-    // `ctx.storage` surface for anything not rated `unsupported`. A host that
-    // declares the capability and binds nothing is the one combination that
-    // fails at runtime with no diagnostic anywhere before it.
+    // Queues, workflows, object storage and global tables are all composed here
+    // rather than left for a caller to assemble: `NODE_CAPABILITIES` rates all
+    // four `emulated`, and codegen emits the whole `ctx.queues` / `ctx.workflows` /
+    // `ctx.storage` / `.global()` surface for anything not rated `unsupported`. A
+    // host that declares the capability and binds nothing is the one combination
+    // that fails at runtime with no diagnostic anywhere before it — which is
+    // exactly what `.global()` did while this root composed only the other three.
     const queues =
         options.queues === undefined
             ? undefined
@@ -191,6 +212,11 @@ export const createNodePlatform = <
 
     const objectStorage = options.objectStorageDirectory === undefined ? undefined : createNodeR2Bucket({ directory: options.objectStorageDirectory });
 
+    // Its own connection and its own file: a `.global()` table is shared by every
+    // shard, so keeping it inside a shard's database would make that shard's
+    // lifecycle (and its single-writer gate) the global store's too.
+    const globalTables = options.globalTablesPath === undefined ? undefined : createNodeGlobalStore({ path: options.globalTablesPath });
+
     // The shard's own connection carries the run rows, so a caller that wants
     // durable workflows does not have to configure a second store — and cannot
     // accidentally get the in-process one, which `createNodeWorkflowHost`
@@ -206,6 +232,7 @@ export const createNodePlatform = <
         disposeScheduler();
         disposeShard();
         registry.close();
+        globalTables?.dispose();
     };
 
     return {
@@ -213,6 +240,7 @@ export const createNodePlatform = <
         close,
         directory,
         drain,
+        globalTables,
         kv,
         objectStorage,
         queues,

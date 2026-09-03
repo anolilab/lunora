@@ -676,6 +676,12 @@ const createReferenceHost = (): ReferenceHost => {
         };
     };
 
+    // No `cron`: this host runs no cron timers, and `SchedulerHost.cron`'s
+    // contract is that such a host OMITS the method rather than supplying one
+    // that throws or silently no-ops — presence is the declaration that dynamic
+    // cron works. The inert `async () => {}` that used to sit here was the one
+    // shape the contract forbids, and the suite's cron leg skipped past it
+    // because it also keyed on `cronTicks`, which this host does not expose.
     const scheduler: SchedulerHost = {
         cancel: async (id) => {
             const job = scheduledJobs.get(id);
@@ -688,10 +694,6 @@ const createReferenceHost = (): ReferenceHost => {
             scheduledJobs.delete(id);
 
             return true;
-        },
-        cron: async () => {
-            // Reference host does not support cron execution; cron is tested by
-            // asserting the contract shape, not by running timers.
         },
         deadLetter: {
             list: async () => [...deadJobs].map(([id, job]) => toStatus(id, job)),

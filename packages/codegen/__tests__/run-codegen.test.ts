@@ -170,6 +170,32 @@ export default defineSchema({
             expect(result.generated.dataModel).not.toContain('AppTableName = "nodes" | "ratelimit_buckets"');
         });
 
+        it("rejects two http-stream route files whose namespaces collide", () => {
+            expect.assertions(1);
+
+            // `renderHttpStreamsRef` groups streaming routes by `sanitizeNamespace(file)`
+            // into both the `HttpStreamsRef` interface and the `httpStreams` object
+            // literal, but http routes were never fed to the collision assert — so
+            // `feed-a.ts` + `feed_a.ts` emitted the key `feed_a` twice (TS2300 in the
+            // interface, TS1117 in the literal) inside generated code, with nothing
+            // naming either source file. That is the exact failure the assert exists
+            // to replace.
+            writeFileSync(
+                join(workdir, "lunora", "feed-a.ts"),
+                `import { httpRoute } from "@lunora/server";
+                 export const feed = httpRoute.get("/api/a").stream(async function* () { yield "a"; });
+                `,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "feed_a.ts"),
+                `import { httpRoute } from "@lunora/server";
+                 export const other = httpRoute.get("/api/b").stream(async function* () { yield "b"; });
+                `,
+            );
+
+            expect(() => runCodegen({ lint: false, projectRoot: workdir })).toThrow(/both map to the http-stream namespace "feed_a"/u);
+        });
+
         it("rejects a workflow and an agent that share a deployed name (CODEGEN-01 cross-kind)", () => {
             expect.assertions(1);
 
