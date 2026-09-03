@@ -1,6 +1,6 @@
 {
     "name": "@lunora/mail",
-    "version": "1.0.0-alpha.60",
+    "version": "1.0.0-alpha.61",
     "description": "Email for Lunora: Resend adapter, TSX templates, and queue-backed sends",
     "keywords": [
         "cloudflare",
@@ -69,7 +69,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.29",
+        "@lunora/errors": "1.0.0-alpha.30",
         "@react-email/render": "catalog:mail",
         "@visulima/email": "catalog:mail",
         "postal-mime": "catalog:mail"
