@@ -8,16 +8,16 @@ import { namedValueExportsOf } from "../../../client/__tests__/lib/named-exports
 
 /**
  * `core/index.ts` is the framework-agnostic barrel every port (React, Vue,
- * Svelte, Solid, Angular) is meant to build on: each `create*Controller`
+ * Svelte, Solid, Solid 2, Angular) is meant to build on: each `create*Controller`
  * factory it exports is a flow (sign-in, invitations, two-factor, …) that some
  * port is expected to mount. Nothing enforces that today — a controller can
- * ship, sit unconsumed by all five ports, and nobody notices until an audit
+ * ship, sit unconsumed by every port, and nobody notices until an audit
  * goes looking. Six such orphans shipped that way (see plan 233).
  *
  * This test reads the export list back out of `core/index.ts` itself — not a
  * hand-copied list, which would silently drift the moment a controller is
  * added or renamed — and fails on any `create*Controller` with zero
- * consumers across the five port directories, unless it is named on
+ * consumers across the port directories, unless it is named on
  * {@link DELIBERATELY_UNMOUNTED} with a reason. An unexplained allow-list
  * entry is exactly the silent hole this test exists to close, so every entry
  * must say why: either a still-open follow-up, or a structural reason the
@@ -29,13 +29,18 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const AUTH_UI_SRC = resolve(HERE, "..", "..", "src");
 const CORE_INDEX = join(AUTH_UI_SRC, "core", "index.ts");
 
-const PORT_NAMES = ["react", "vue", "solid", "svelte", "angular"] as const;
+const PORT_NAMES = ["react", "vue", "solid", "solid-v2", "svelte", "angular"] as const;
 
 type PortName = (typeof PORT_NAMES)[number];
 
 const PORT_DIRS: Record<PortName, string> = Object.fromEntries(PORT_NAMES.map((name) => [name, join(AUTH_UI_SRC, name)])) as Record<PortName, string>;
 
-const TS_FILE_RE = /\.tsx?$/;
+/**
+ * Two ports keep their components in single-file components, not `.ts` — a
+ * `.tsx?`-only walk sees Vue and Svelte as five plumbing modules and never
+ * reads a card, so both would count as consuming nothing.
+ */
+const PORT_FILE_RE = /\.(?:svelte|tsx?|vue)$/;
 const CONTROLLER_NAME_RE = /^create[A-Z]\w*Controller$/;
 
 /**
@@ -63,7 +68,7 @@ const filesUnder = (dir: string): string[] =>
             return filesUnder(full);
         }
 
-        return TS_FILE_RE.test(entry.name) ? [full] : [];
+        return PORT_FILE_RE.test(entry.name) ? [full] : [];
     });
 
 /**
@@ -143,5 +148,39 @@ describe("auth-ui controller × port parity", () => {
         const wouldStillPassWithoutEntry = consumersOf(stillUnmounted as string).length > 0 || Object.hasOwn(withoutEntry, stillUnmounted as string);
 
         expect(wouldStillPassWithoutEntry).toBe(false);
+    });
+});
+
+/**
+ * `core/last-login-method.ts` records `"email"` for a password sign-in and
+ * `"magic-link"` for a magic link — not just OAuth provider ids — and its own
+ * docblock warns that badging only the social buttons "makes the feature do
+ * nothing for the most common case there is". Every port read the cookie and
+ * then handed it to `SocialButtons` alone, so a deployment whose users sign in
+ * with a password installed the plugin, paid for the cookie, and showed
+ * nothing at all.
+ *
+ * Read from source rather than rendered per port on purpose: the whole point is
+ * that a *new* port can be added and quietly skip the two non-social badges,
+ * which is exactly what a per-port render test cannot notice.
+ */
+describe("last-used badge × port parity", () => {
+    it.each(PORT_NAMES)("%s badges the password and magic-link methods, not just the social buttons", (port) => {
+        expect.assertions(2);
+
+        const sources = filesUnder(PORT_DIRS[port]).map((file) => readFileSync(file, "utf8"));
+        // Two occurrences: the import, plus at least one comparison that decides
+        // whether the badge renders. An unused import would satisfy a bare
+        // "is it referenced" check without badging anything.
+        const uses = (name: string): number =>
+            sources.reduce((total, source) => total + [...source.matchAll(new RegExp(String.raw`\b${name}\b`, "gu"))].length, 0);
+
+        expect(uses("LAST_METHOD_EMAIL"), `${port} never compares against LAST_METHOD_EMAIL, so a password sign-in shows no "last used" badge`).toBeGreaterThan(
+            1,
+        );
+        expect(
+            uses("LAST_METHOD_MAGIC_LINK"),
+            `${port} never compares against LAST_METHOD_MAGIC_LINK, so a magic-link sign-in shows no "last used" badge`,
+        ).toBeGreaterThan(1);
     });
 });

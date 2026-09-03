@@ -16,7 +16,7 @@ import { createEmailOtpController } from "../core/email-otp";
 import { isFlowEnabled } from "../core/flow-gate";
 import type { ForgotPasswordField } from "../core/forgot-password";
 import { createForgotPasswordController } from "../core/forgot-password";
-import { readLastLoginMethod } from "../core/last-login-method";
+import { LAST_METHOD_EMAIL, LAST_METHOD_MAGIC_LINK, readLastLoginMethod } from "../core/last-login-method";
 import { createMagicLinkController } from "../core/magic-link";
 import type { ResetPasswordField } from "../core/reset-password";
 import { createResetPasswordController } from "../core/reset-password";
@@ -107,7 +107,15 @@ class AnonymousButtonComponent {
                         (blurred)="actions.blur('password')"
                     />
                     <lunora-auth-link [href]="forgotPasswordHref()">{{ t.forgotPasswordLink }}</lunora-auth-link>
-                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.signIn }}</lunora-auth-submit-button>
+                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">
+                        {{ t.signIn }}
+                        <!--
+                          better-auth records a password sign-in as "email", so without this the badge is invisible for the most common route there is.
+                        -->
+                        @if (lastUsedEmail) {
+                            <span class="lunora-auth-social__badge">{{ t.lastUsed }}</span>
+                        }
+                    </lunora-auth-submit-button>
                 </form>
             }
             @if (signUp()) {
@@ -138,6 +146,7 @@ class SignInCardComponent {
     protected readonly anonymous = computed(() => this.context().plugins.anonymous);
     protected readonly credentials = computed(() => this.context().credentials);
     protected readonly lastUsed = computed(() => (this.context().plugins.lastLoginMethod ? this.lastLoginMethod : undefined));
+    protected readonly lastUsedEmail = this.lastLoginMethod === LAST_METHOD_EMAIL;
     protected readonly signUp = computed(() => this.context().signUp);
     protected readonly social = computed(() => this.context().social);
 
@@ -419,7 +428,12 @@ class ResetPasswordOtpCardComponent {
                         (changed)="actions.setField('email', $event)"
                         (blurred)="actions.blur('email')"
                     />
-                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.magicLink }}</lunora-auth-submit-button>
+                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">
+                        {{ t.magicLink }}
+                        @if (lastUsedMagicLink) {
+                            <span class="lunora-auth-social__badge">{{ t.lastUsed }}</span>
+                        }
+                    </lunora-auth-submit-button>
                 </form>
                 <lunora-auth-link lunoraAuthCardFooter [href]="signInHref()">{{ t.backToSignIn }}</lunora-auth-link>
             </lunora-auth-card>
@@ -435,6 +449,10 @@ class MagicLinkCardComponent {
     private readonly bridge = controllerSignal(createMagicLinkController, { context: this.context });
     protected readonly state = this.bridge.state;
     protected readonly actions = this.bridge.actions;
+
+    // Read once rather than per change-detection run: it is a cookie, it is
+    // available before the first paint, and it only picks a badge.
+    protected readonly lastUsedMagicLink = readLastLoginMethod() === LAST_METHOD_MAGIC_LINK;
 }
 
 @Component({

@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { readLastLoginMethod } from "../core/last-login-method";
+    import { LAST_METHOD_EMAIL, readLastLoginMethod } from "../core/last-login-method";
     import { createSignInController } from "../core/sign-in";
     import { signInWithSocial } from "../core/social";
     import AnonymousButton from "./AnonymousButton.svelte";
@@ -62,7 +62,13 @@
             <FormField {actions} autoComplete="email" field="email" fields={$form.fields} label={t.emailLabel} type="email" />
             <FormField {actions} autoComplete="current-password" field="password" fields={$form.fields} label={t.passwordLabel} type="password" />
             <AuthLink href={forgotPasswordHref}>{t.forgotPasswordLink}</AuthLink>
-            <SubmitButton pending={$form.status === "submitting"}>{t.signIn}</SubmitButton>
+            <SubmitButton pending={$form.status === "submitting"}>
+                {t.signIn}
+                <!-- better-auth records a password sign-in as "email", so without this the badge is invisible for the most common route there is. -->
+                {#if lastUsed === LAST_METHOD_EMAIL}
+                    <span class="lunora-auth-social__badge">{t.lastUsed}</span>
+                {/if}
+            </SubmitButton>
         </form>
     {/if}
     {#snippet footer()}

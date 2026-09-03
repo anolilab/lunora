@@ -21,6 +21,17 @@
  * makes the feature do nothing for the most common case there is. A `customResolveMethod`
  * server-side can record anything, so treat an unrecognised value as "no badge"
  * rather than as an error.
+ *
+ * # Under SSR
+ *
+ * There is no `document` server-side, so this returns undefined there and the
+ * badge exists only in the client render — a genuine hydration difference, in
+ * a decorative `<span>` and nothing else. Unlike `core/theme-mode.ts`'s
+ * divergence this one *does* write to the DOM, so an SSR app that wants the two
+ * renders identical has to keep the cookie out of the first paint itself. Every
+ * port reads it at render/setup time for the same reason: it is available
+ * before the first paint, and deferring it to an effect trades the mismatch for
+ * a visible pop-in on the screen users see most.
  */
 
 /** Recorded for `/sign-in/email` and `/sign-up/email`. */

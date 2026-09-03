@@ -6,6 +6,7 @@
  */
 import type { ControllerContext } from "./config";
 import { assertOk, mapAuthError } from "./map-error";
+import { resolveAfterSignIn } from "./redirect-to";
 import { createStore } from "./store";
 import type { Controller, FieldState, FlowStatus } from "./types";
 import { email as validateEmail, required } from "./validators";
@@ -93,7 +94,7 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
 
             store.update({ status: "success" });
             context.onSessionChange?.();
-            context.nav.replace(context.redirects.afterSignIn);
+            context.nav.replace(resolveAfterSignIn(context.redirects.afterSignIn));
         } catch (error_) {
             context.onError?.(error_);
             store.update({ formError: mapAuthError(error_, context.localization, context.localization.twoFactorFailed), status: "error" });

@@ -119,7 +119,7 @@ const createPhoneVerifyController = (context: ControllerContext, options: PhoneV
                     context.onSessionChange?.();
 
                     if (options.updatePhoneNumber !== true) {
-                        context.nav.replace(context.redirects.afterSignIn);
+                        context.nav.replace(resolveAfterSignIn(context.redirects.afterSignIn));
                     }
 
                     return { status: "success", successMessage: context.localization.phoneVerified };

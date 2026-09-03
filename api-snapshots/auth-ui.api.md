@@ -1595,7 +1595,12 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
                         (changed)="actions.setField('email', $event)"
                         (blurred)="actions.blur('email')"
                     />
-                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.magicLink }}</lunora-auth-submit-button>
+                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">
+                        {{ t.magicLink }}
+                        @if (lastUsedMagicLink) {
+                            <span class="lunora-auth-social__badge">{{ t.lastUsed }}</span>
+                        }
+                    </lunora-auth-submit-button>
                 </form>
                 <lunora-auth-link lunoraAuthCardFooter [href]="signInHref()">{{ t.backToSignIn }}</lunora-auth-link>
             </lunora-auth-card>
@@ -1610,6 +1615,7 @@ class MagicLinkCardComponent {
     private readonly bridge = controllerSignal(createMagicLinkController, { context: this.context });
     protected readonly state = this.bridge.state;
     protected readonly actions = this.bridge.actions;
+    protected readonly lastUsedMagicLink = readLastLoginMethod() === LAST_METHOD_MAGIC_LINK;
 }
 ```
 
@@ -2722,7 +2728,15 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
                         (blurred)="actions.blur('password')"
                     />
                     <lunora-auth-link [href]="forgotPasswordHref()">{{ t.forgotPasswordLink }}</lunora-auth-link>
-                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.signIn }}</lunora-auth-submit-button>
+                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">
+                        {{ t.signIn }}
+                        <!--
+                          better-auth records a password sign-in as "email", so without this the badge is invisible for the most common route there is.
+                        -->
+                        @if (lastUsedEmail) {
+                            <span class="lunora-auth-social__badge">{{ t.lastUsed }}</span>
+                        }
+                    </lunora-auth-submit-button>
                 </form>
             }
             @if (signUp()) {
@@ -2743,6 +2757,7 @@ class SignInCardComponent {
     protected readonly anonymous = computed(() => this.context().plugins.anonymous);
     protected readonly credentials = computed(() => this.context().credentials);
     protected readonly lastUsed = computed(() => (this.context().plugins.lastLoginMethod ? this.lastLoginMethod : undefined));
+    protected readonly lastUsedEmail = this.lastLoginMethod === LAST_METHOD_EMAIL;
     protected readonly signUp = computed(() => this.context().signUp);
     protected readonly social = computed(() => this.context().social);
     protected signInSocial(provider: string): void {
@@ -7094,7 +7109,7 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
             assertOk(await context.authClient.signIn.emailOtp({ email: state.email.value.trim(), otp: state.code.value.trim() }));
             store.update({ status: "success" });
             context.onSessionChange?.();
-            context.nav.replace(context.redirects.afterSignIn);
+            context.nav.replace(resolveAfterSignIn(context.redirects.afterSignIn));
         }
         catch (error_) {
             context.onError?.(error_);
@@ -7597,7 +7612,7 @@ const createPhoneVerifyController = (context: ControllerContext, options: PhoneV
                     }));
                     context.onSessionChange?.();
                     if (options.updatePhoneNumber !== true) {
-                        context.nav.replace(context.redirects.afterSignIn);
+                        context.nav.replace(resolveAfterSignIn(context.redirects.afterSignIn));
                     }
                     return { status: "success", successMessage: context.localization.phoneVerified };
                 }, context.localization.twoFactorFailed);
@@ -8840,7 +8855,7 @@ const signInAnonymously = async (context: ControllerContext): Promise<void> => {
     try {
         assertOk(await context.authClient.signIn.anonymous());
         context.onSessionChange?.();
-        context.nav.replace(context.redirects.afterSignIn);
+        context.nav.replace(resolveAfterSignIn(context.redirects.afterSignIn));
     }
     catch (error) {
         notifyError(context, error, context.localization.signInFailed);
