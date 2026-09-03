@@ -1686,6 +1686,74 @@ describe("dataBrowser — structured filters and bulk delete", () => {
         expect(screen.queryByTestId("db-write-error")).toBeNull();
     });
 
+    it("reports the rows a failed drain already committed, not a constant zero", async () => {
+        expect.assertions(2);
+
+        let deletes = 0;
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 2 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.listTablesIndexes) {
+                    return { indexesByTable: {} };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.deleteRows) {
+                    deletes += 1;
+
+                    // Batch one commits and reports more to come; batch two fails. The
+                    // rows batch one removed are on disk — the operator's only signal
+                    // about how much of a destructive op landed must reflect them.
+                    if (deletes === 1) {
+                        return { count: 1, hasMore: true };
+                    }
+
+                    throw new Error("shard unreachable");
+                }
+
+                const { table } = args as { table: string };
+
+                if (table !== "messages") {
+                    throw new Error(`unknown table: ${table}`);
+                }
+
+                return {
+                    columns: ["__id__", "status"],
+                    rows: [
+                        { __id__: "m1", status: "active" },
+                        { __id__: "m2", status: "active" },
+                    ],
+                    total: 2,
+                };
+            },
+        });
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getByTestId("db-add-filter"));
+        fireEvent.change(await screen.findByTestId("db-filter-column"), { target: { value: "status" } });
+        fireEvent.change(await screen.findByTestId("db-filter-value"), { target: { value: "active" } });
+
+        await waitFor(() => {
+            if (screen.getAllByTestId("db-row").length !== 2) {
+                throw new Error("filter not applied yet");
+            }
+        });
+
+        fireEvent.click(screen.getByTestId("db-bulk-delete"));
+        fireEvent.click(screen.getByTestId("db-bulk-delete-confirm"));
+
+        const writeError = await screen.findByTestId("db-write-error");
+
+        expect(writeError.textContent).toContain("shard unreachable");
+        expect(writeError.textContent).toContain("at least 1 rows");
+    });
+
     it("refuses to set a unique column across more than one matching row", async () => {
         expect.assertions(3);
 

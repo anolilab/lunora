@@ -329,6 +329,8 @@ const MESSAGE_IDS = [
     "Permissions",
     "Run as identity (userId)",
     "Leave empty to run as admin",
+    "Required — the identity to probe as",
+    "Not run",
     "Dev only: runs the function as this user so you can test auth and RLS. Forged over the admin gate.",
     "as {userId}",
     // Permissions matrix + playground (plan 025).
@@ -1001,6 +1003,7 @@ const MESSAGE_IDS = [
     "Missing object",
     "→",
     "Showing the first {count} dangling references — the scan was truncated.",
+    "The bucket is larger than the scan's key limit, so dangling references could not be checked.",
     // Phase-7 polish — empty-state descriptions + missed i18n strings.
     "Per-function call counts, error rates, and latency land here after your first request.",
     "Function and request logs for this shard show up here as your app handles traffic.",
