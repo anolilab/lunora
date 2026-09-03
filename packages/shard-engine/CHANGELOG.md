@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.53...@lunora/shard-engine@1.0.0-alpha.54) (2026-09-03)
+
+### Bug Fixes
+
+* audit rounds 14-16 ([#586](https://github.com/anolilab/lunora/issues/586)) ([6a09b74](https://github.com/anolilab/lunora/commit/6a09b746cfc9fb36f451c208b7a1c3eac16e56f4))
+
 ## @lunora/shard-engine [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.52...@lunora/shard-engine@1.0.0-alpha.53) (2026-09-03)
 
 ### ⚠ BREAKING CHANGES
