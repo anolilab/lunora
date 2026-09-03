@@ -286,14 +286,12 @@ interface OutboxExecutor {
 ### `OutboxMutationMetadata` (interface)
 
 ```ts
-interface OutboxMutationMetadata extends Record<string, unknown> {
+interface OutboxMutationMetadata extends WriteProvenance {
     args: Record<string, unknown>;
     clientId: string;
     functionPath: string;
     idempotencyKey: string;
-    identity: string | null;
     mutationId: number;
-    shardKey?: string;
 }
 ```
 

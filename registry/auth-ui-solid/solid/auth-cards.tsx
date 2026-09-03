@@ -1,5 +1,5 @@
 import type { JSX } from "solid-js";
-import { createSignal, Show } from "solid-js";
+import { createSignal, onMount, Show } from "solid-js";
 
 import { signInAnonymously } from "../core/anonymous";
 import { createBackupCodeSignInController } from "../core/backup-codes";
@@ -7,7 +7,7 @@ import { queryParameter } from "../core/browser-location";
 import { createEmailOtpController } from "../core/email-otp";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createForgotPasswordController } from "../core/forgot-password";
-import { readLastLoginMethod } from "../core/last-login-method";
+import { LAST_METHOD_EMAIL, LAST_METHOD_MAGIC_LINK, readLastLoginMethod } from "../core/last-login-method";
 import { createMagicLinkController } from "../core/magic-link";
 import { createResetPasswordController } from "../core/reset-password";
 import { createResetPasswordOtpController } from "../core/reset-password-otp";
@@ -46,14 +46,20 @@ const SignInCard = (props: SignInCardProps = {}): JSX.Element => {
     const context = useAuthUI();
     const { localization: t, social } = context;
     const [state, actions] = createController(createSignInController);
-    // Read once when the card is created rather than in an effect: it is a
-    // cookie, it is available before the first paint, and it only picks a badge.
-    const lastUsed = readLastLoginMethod();
+    // Read after mount, not when the card is created: the server has no cookie,
+    // so a render-time read is a hydration mismatch. See `lastLoginMethodStore`.
+    const [lastUsedAfterMount, setLastUsedAfterMount] = createSignal<string | undefined>();
+
+    onMount(() => {
+        setLastUsedAfterMount(readLastLoginMethod());
+    });
+
+    const lastUsed = () => (context.plugins.lastLoginMethod ? lastUsedAfterMount() : undefined);
 
     return (
         <AuthCard footer={context.signUp ? <AuthLink href={props.signUpHref ?? "/sign-up"}>{t.noAccount}</AuthLink> : undefined} title={t.signIn}>
             <SocialButtons
-                lastUsed={context.plugins.lastLoginMethod ? lastUsed : undefined}
+                lastUsed={lastUsed()}
                 onSelect={(provider) => {
                     void signInWithSocial(context, provider);
                 }}
@@ -76,7 +82,13 @@ const SignInCard = (props: SignInCardProps = {}): JSX.Element => {
                     <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
                     <FormField actions={actions} autoComplete="current-password" field="password" label={t.passwordLabel} state={state} type="password" />
                     <AuthLink href={props.forgotPasswordHref ?? "/forgot-password"}>{t.forgotPasswordLink}</AuthLink>
-                    <SubmitButton pending={state.status === "submitting"}>{t.signIn}</SubmitButton>
+                    <SubmitButton pending={state.status === "submitting"}>
+                        {t.signIn}
+                        {/* better-auth records a password sign-in as "email", so without this the badge is invisible for the most common route there is. */}
+                        <Show when={lastUsed() === LAST_METHOD_EMAIL}>
+                            <span class="lunora-auth-social__badge">{t.lastUsed}</span>
+                        </Show>
+                    </SubmitButton>
                 </form>
             </Show>
         </AuthCard>
@@ -202,6 +214,15 @@ const MagicLinkCard = (props: MagicLinkCardProps = {}): JSX.Element => {
     const context = useAuthUI();
     const { localization: t } = context;
     const [state, actions] = createController(createMagicLinkController);
+    // Read after mount, not when the card is created: the server has no cookie,
+    // so a render-time read is a hydration mismatch. See `lastLoginMethodStore`.
+    const [lastUsedAfterMount, setLastUsedAfterMount] = createSignal<string | undefined>();
+
+    onMount(() => {
+        setLastUsedAfterMount(readLastLoginMethod());
+    });
+
+    const lastUsed = () => (context.plugins.lastLoginMethod ? lastUsedAfterMount() : undefined);
 
     if (!isFlowEnabled(context, "magicLink", "MagicLinkCard")) {
         return null;
@@ -212,7 +233,12 @@ const MagicLinkCard = (props: MagicLinkCardProps = {}): JSX.Element => {
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
-                <SubmitButton pending={state.status === "submitting"}>{t.magicLink}</SubmitButton>
+                <SubmitButton pending={state.status === "submitting"}>
+                    {t.magicLink}
+                    <Show when={lastUsed() === LAST_METHOD_MAGIC_LINK}>
+                        <span class="lunora-auth-social__badge">{t.lastUsed}</span>
+                    </Show>
+                </SubmitButton>
             </form>
         </AuthCard>
     );

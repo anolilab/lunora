@@ -119,6 +119,11 @@ const createAcceptInvitationController = (context: ControllerContext, options: A
 
             store.update({ status: "success" });
             context.onSessionChange?.();
+            // Deliberately NOT `resolveAfterSignIn`: this screen is what
+            // `?redirectTo=<the invitation>` points AT. Resolving it here would
+            // send a user who just accepted the invitation straight back to the
+            // invitation. The parameter is for the doors that bounce through
+            // sign-in, not for the destination itself.
             context.nav.replace(context.redirects.afterSignIn);
         } catch (error) {
             context.onError?.(error);

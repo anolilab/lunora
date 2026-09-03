@@ -55,16 +55,19 @@ plus two React-Native conveniences:
 
 - **`storage`**: React Native `AsyncStorage` (or any `getItem`/`setItem`/`removeItem`
   store). Wires `createAsyncStoragePersistence` so the offline mutation queue
-  survives an app restart. The browser client auto-probes IndexedDB, which React
-  Native lacks, so without this the queue stays in memory.
+  survives an app restart, **and** `createAsyncStorageQueryCache` so query
+  results repaint before the socket reconnects. The browser client auto-probes
+  IndexedDB, which React Native lacks, so without this both stay in memory.
+  Each is opted out of separately — `persistence: false` disables the queue and
+  leaves the query cache writing to `storage`; pass `queryCache: false` for that.
 - **`getAuthHeaders`**: `() => Record<string, string> | undefined`. A generic
   escape hatch for a **custom** credential header (an API-gateway key, a proxy
   token) attached to every HTTP RPC request **and** the WebSocket upgrade. For
   better-auth sessions prefer a bearer token (below); a `Cookie` header here
   would be rejected by the runtime's CSRF guard on an `Origin`-less native request.
 
-An explicit `persistence`, `fetch`, or `WebSocket` takes precedence over the
-convenience derived from `storage` / `getAuthHeaders`.
+An explicit `persistence`, `queryCache`, `fetch`, or `WebSocket` takes precedence
+over the convenience derived from `storage` / `getAuthHeaders`.
 
 ## Hooks & provider
 

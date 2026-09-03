@@ -1392,6 +1392,40 @@ class LunoraClient {
         return this.identityFingerprint();
     }
 
+    /**
+     * Verdict on whether a durable write stamped with `stamped` may be replayed
+     * now. The comparison a replay handler must NOT hand-roll.
+     *
+     * `"match"` is the same identity, or the same credential under a token hash
+     * — which a late-resolving subject would otherwise make look different.
+     *
+     * `"unknown"` is nobody signed in *yet*. A durable replay starts when the
+     * executor is constructed, before the app has resolved its session and
+     * called {@link setAuthToken}, so this is the normal state on every reload.
+     * There is no other identity to replay as, so such a write must be HELD,
+     * never dropped — dropping here destroys the queuing user's own offline
+     * writes. It is indistinguishable from an explicit sign-out (the fingerprint
+     * is `null` for both), which is the safe conflation: holding a write for a
+     * signed-out app costs a retry, dropping it costs the write.
+     *
+     * `"mismatch"` is a different identity signed in, and is the one that must be
+     * terminal: replaying would attribute one user's write to another and pass
+     * THEIR row-level security.
+     */
+    public replayIdentityVerdict(stamped: null | string | undefined): "match" | "mismatch" | "unknown" {
+        const current = this.identityFingerprint();
+
+        if (stamped === current) {
+            return "match";
+        }
+
+        if (stamped !== undefined && this.isSameCredentialUnderTokenHash(stamped)) {
+            return "match";
+        }
+
+        return current === null ? "unknown" : "mismatch";
+    }
+
     /** This client's stable identifier — the watermark key the server's custom-mutator protocol advances per `clientSeq`. */
     public clientIdentifier(): string {
         return this.clientId;

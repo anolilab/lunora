@@ -258,8 +258,9 @@ const handleTestSign = async (request: Request, env: Env): Promise<Response> => 
         // signed value unconditionally, so an unpinned URL only accepts a body
         // with no content type.
         contentType: body.contentType,
-        // The playground declares one bucket, which `createStorage` signs under
-        // the canonical `"default"` tag — mint the e2e URLs the same way or they
+        // The app declares two buckets (`FILES` as the default, `AVATARS` under
+        // the `avatars` tag). `createStorage` signs the unnamed one under the
+        // canonical `"default"` tag — mint the e2e URLs the same way or they
         // verify against a different canonical.
         bucketName: "default",
         expiresInSeconds: body.expiresInSeconds,
@@ -378,8 +379,11 @@ const handleStorageAsset = async (request: Request, env: Env): Promise<null | Re
     }
 
     // The bucket is HMAC-bound, so this is the URL's own claim about which
-    // binding to serve — never a caller-supplied parameter. One bucket is
-    // declared here, so anything else is a URL minted for an app we are not.
+    // binding to serve — never a caller-supplied parameter. Only the default
+    // bucket is served here: the app also declares `avatars`, but nothing mints
+    // a URL against it (`lunora/avatars.ts` writes `avatars/`-prefixed keys into
+    // the default bucket), so a URL naming any other bucket was minted for an
+    // app we are not. Serving `avatars` means resolving the binding here first.
     if (verdict.bucketName !== "default") {
         return new Response("forbidden", { status: 403 });
     }

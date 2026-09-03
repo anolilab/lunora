@@ -405,6 +405,7 @@ class LunoraClient {
     setAuthToken(token: string | null, subject?: string | null): void;
     getAuthToken(): string | null;
     currentIdentity(): string | null;
+    replayIdentityVerdict(stamped: null | string | undefined): "match" | "mismatch" | "unknown";
     clientIdentifier(): string;
     confirmedMutationWatermark(shardKey?: string): number;
     callMutator(functionPath: string, args: Record<string, unknown>, options?: {

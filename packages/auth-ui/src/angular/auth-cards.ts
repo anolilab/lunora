@@ -4,8 +4,8 @@
  * magic-link, email-OTP (two-step), and two-factor verify. Each is a thin
  * standalone component binding a core controller to the shared view primitives.
  */
-import type { OnInit, Signal } from "@angular/core";
-import { ChangeDetectionStrategy, Component, computed, inject, Injector, input, signal } from "@angular/core";
+import type { OnInit, Signal, WritableSignal } from "@angular/core";
+import { afterNextRender, ChangeDetectionStrategy, Component, computed, inject, Injector, input, signal } from "@angular/core";
 
 import { signInAnonymously } from "../core/anonymous";
 import type { BackupCodeSignInField } from "../core/backup-codes";
@@ -16,7 +16,7 @@ import { createEmailOtpController } from "../core/email-otp";
 import { isFlowEnabled } from "../core/flow-gate";
 import type { ForgotPasswordField } from "../core/forgot-password";
 import { createForgotPasswordController } from "../core/forgot-password";
-import { readLastLoginMethod } from "../core/last-login-method";
+import { LAST_METHOD_EMAIL, LAST_METHOD_MAGIC_LINK, readLastLoginMethod } from "../core/last-login-method";
 import { createMagicLinkController } from "../core/magic-link";
 import type { ResetPasswordField } from "../core/reset-password";
 import { createResetPasswordController } from "../core/reset-password";
@@ -40,6 +40,25 @@ import {
     SubmitButtonComponent,
 } from "./primitives";
 import { injectAuthUIContext } from "./provider";
+
+/**
+ * A signal holding the last-used login method, filled in after the first render.
+ *
+ * Read after the first render, not during it: the server has no cookie, so a
+ * render-time read produces markup the server could not have produced (see
+ * `lastLoginMethodStore` in core). `afterNextRender` never runs on the server,
+ * which is exactly the guarantee needed — and calling this from a field
+ * initialiser keeps it inside the component's injection context.
+ */
+const lastLoginMethodAfterRender = (): WritableSignal<string | undefined> => {
+    const method = signal<string | undefined>(undefined);
+
+    afterNextRender(() => {
+        method.set(readLastLoginMethod());
+    });
+
+    return method;
+};
 
 /** "Continue as guest", when the `anonymous` plugin is on. */
 @Component({
@@ -107,7 +126,15 @@ class AnonymousButtonComponent {
                         (blurred)="actions.blur('password')"
                     />
                     <lunora-auth-link [href]="forgotPasswordHref()">{{ t.forgotPasswordLink }}</lunora-auth-link>
-                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.signIn }}</lunora-auth-submit-button>
+                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">
+                        {{ t.signIn }}
+                        <!--
+                          better-auth records a password sign-in as "email", so without this the badge is invisible for the most common route there is.
+                        -->
+                        @if (lastUsedEmail()) {
+                            <span class="lunora-auth-social__badge">{{ t.lastUsed }}</span>
+                        }
+                    </lunora-auth-submit-button>
                 </form>
             }
             @if (signUp()) {
@@ -126,9 +153,7 @@ class SignInCardComponent {
     protected readonly state = this.bridge.state;
     protected readonly actions = this.bridge.actions;
 
-    // Read once rather than per change-detection run: it is a cookie, it is
-    // available before the first paint, and it only picks a badge.
-    private readonly lastLoginMethod = readLastLoginMethod();
+    private readonly lastLoginMethod = lastLoginMethodAfterRender();
 
     /*
      * All derived from the context, so the deployment's real shape — which
@@ -137,7 +162,8 @@ class SignInCardComponent {
      */
     protected readonly anonymous = computed(() => this.context().plugins.anonymous);
     protected readonly credentials = computed(() => this.context().credentials);
-    protected readonly lastUsed = computed(() => (this.context().plugins.lastLoginMethod ? this.lastLoginMethod : undefined));
+    protected readonly lastUsed = computed(() => (this.context().plugins.lastLoginMethod ? this.lastLoginMethod() : undefined));
+    protected readonly lastUsedEmail = computed(() => this.lastUsed() === LAST_METHOD_EMAIL);
     protected readonly signUp = computed(() => this.context().signUp);
     protected readonly social = computed(() => this.context().social);
 
@@ -419,7 +445,12 @@ class ResetPasswordOtpCardComponent {
                         (changed)="actions.setField('email', $event)"
                         (blurred)="actions.blur('email')"
                     />
-                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.magicLink }}</lunora-auth-submit-button>
+                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">
+                        {{ t.magicLink }}
+                        @if (lastUsedMagicLink()) {
+                            <span class="lunora-auth-social__badge">{{ t.lastUsed }}</span>
+                        }
+                    </lunora-auth-submit-button>
                 </form>
                 <lunora-auth-link lunoraAuthCardFooter [href]="signInHref()">{{ t.backToSignIn }}</lunora-auth-link>
             </lunora-auth-card>
@@ -435,6 +466,13 @@ class MagicLinkCardComponent {
     private readonly bridge = controllerSignal(createMagicLinkController, { context: this.context });
     protected readonly state = this.bridge.state;
     protected readonly actions = this.bridge.actions;
+
+    // Computed rather than frozen at mount, like every other context-derived
+    // member here: the deployment's real shape arrives with the discovery answer.
+    private readonly lastLoginMethod = lastLoginMethodAfterRender();
+    protected readonly lastUsedMagicLink = computed(
+        () => (this.context().plugins.lastLoginMethod ? this.lastLoginMethod() : undefined) === LAST_METHOD_MAGIC_LINK,
+    );
 }
 
 @Component({

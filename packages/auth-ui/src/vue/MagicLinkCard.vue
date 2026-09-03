@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, ref } from "vue";
 
 import { isFlowEnabled } from "../core/flow-gate";
+import { LAST_METHOD_MAGIC_LINK, readLastLoginMethod } from "../core/last-login-method";
 import { createMagicLinkController } from "../core/magic-link";
 import AuthCard from "./AuthCard.vue";
 import AuthLink from "./AuthLink.vue";
@@ -26,6 +27,15 @@ const t = context.value.localization;
 // would stay frozen on the pre-discovery answer. See `provider.ts`.
 const enabled = computed(() => isFlowEnabled(context.value, "magicLink", "MagicLinkCard"));
 const { actions, state } = useController(createMagicLinkController);
+// Read after mount, not at setup: the server has no cookie, so a render-time
+// read is a hydration mismatch. See `lastLoginMethodStore`.
+const lastUsedAfterMount = ref<string | undefined>();
+
+onMounted(() => {
+    lastUsedAfterMount.value = readLastLoginMethod();
+});
+
+const lastUsed = computed(() => (context.value.plugins.lastLoginMethod ? lastUsedAfterMount.value : undefined));
 </script>
 
 <template>
@@ -33,7 +43,10 @@ const { actions, state } = useController(createMagicLinkController);
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" :success="state.successMessage" />
             <FormField :actions="actions" field="email" :fields="state.fields" :label="t.emailLabel" type="email" autoComplete="email" />
-            <SubmitButton :pending="state.status === 'submitting'">{{ t.magicLink }}</SubmitButton>
+            <SubmitButton :pending="state.status === 'submitting'">
+                {{ t.magicLink }}
+                <span v-if="lastUsed === LAST_METHOD_MAGIC_LINK" class="lunora-auth-social__badge">{{ t.lastUsed }}</span>
+            </SubmitButton>
         </form>
         <template #footer>
             <AuthLink :href="signInHref">{{ t.backToSignIn }}</AuthLink>
