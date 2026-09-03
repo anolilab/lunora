@@ -1,6 +1,6 @@
 {
     "name": "@lunora/errors",
-    "version": "1.0.0-alpha.29",
+    "version": "1.0.0-alpha.30",
     "description": "Unified error layer for Lunora: one LunoraError base + a central catalog of codes, statuses, and actionable hints, rendered across CLI, overlay, Studio, and the client",
     "keywords": [
         "cloudflare",
