@@ -130,7 +130,14 @@ interface LunoraMcpServerOptions {
     url?: string;
 }
 
-/** Build the `LunoraClient` the tools dispatch against. */
+/**
+ * Build the `LunoraClient` the tools dispatch against.
+ *
+ * Exported for the HTTP handlers, which build one client for the lifetime of
+ * the handler instead of one per request: `listFunctionsCached` in `./tools`
+ * keys its memo on client identity, so a fresh client per request turns every
+ * tool call back into two admin round trips.
+ */
 const resolveClient = (options: LunoraMcpServerOptions): LunoraClient => {
     if (options.client !== undefined) {
         return options.client;
@@ -217,4 +224,4 @@ const connectStdio = async (options: LunoraMcpServerOptions): Promise<Server> =>
 };
 
 export type { LunoraMcpServerOptions };
-export { connectStdio, createLunoraMcpServer };
+export { connectStdio, createLunoraMcpServer, resolveClient };

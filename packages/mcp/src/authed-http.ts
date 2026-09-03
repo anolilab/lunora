@@ -56,7 +56,7 @@
 import type { McpFetchHandler } from "./serve-stateless";
 import { serveStateless } from "./serve-stateless";
 import type { LunoraMcpServerOptions } from "./server";
-import { createLunoraMcpServer } from "./server";
+import { createLunoraMcpServer, resolveClient } from "./server";
 
 /**
  * The verified access-token payload better-auth hands a protected handler.
@@ -94,6 +94,9 @@ type McpAuthProtect = (handler: (request: Request, claims: McpAccessTokenClaims)
 type AuthedMcpServerOptions = ((claims: McpAccessTokenClaims) => LunoraMcpServerOptions | Promise<LunoraMcpServerOptions>) | LunoraMcpServerOptions;
 
 interface AuthedMcpFetchHandlerOptions {
+    /** Largest accepted request body, in bytes. Defaults to `DEFAULT_MAX_REQUEST_BYTES` (128 KiB). */
+    maxRequestBytes?: number;
+
     /**
      * The OAuth gate to mount the MCP server behind. Pass
      * `(handler) => requireMcpAuth(auth, handler, opts)` from
@@ -135,13 +138,22 @@ const mcpTokenScopes = (claims: McpAccessTokenClaims): ReadonlySet<string> => {
  * `server` (resolved against the verified claims) and serves it through
  * {@link serveStateless}, exactly as the unprotected `createMcpFetchHandler`
  * does — the transport behaviour is identical, only the gate is new.
+ *
+ * A fixed `server` object names one deployment, so its `LunoraClient` is
+ * resolved once and shared: the public-function registry memo in `./tools` is
+ * keyed by client identity and never hits when each request builds its own. The
+ * `(claims) => …` form is per-request by construction — the claims decide which
+ * deployment and token to use — so it keeps a client per request.
  */
-const createAuthedMcpFetchHandler = (options: AuthedMcpFetchHandlerOptions): McpFetchHandler =>
-    options.protect(async (request: Request, claims: McpAccessTokenClaims): Promise<Response> => {
-        const resolved = typeof options.server === "function" ? await options.server(claims) : options.server;
+const createAuthedMcpFetchHandler = (options: AuthedMcpFetchHandlerOptions): McpFetchHandler => {
+    const sharedClient = typeof options.server === "function" ? undefined : resolveClient(options.server);
 
-        return await serveStateless(createLunoraMcpServer(resolved), request);
+    return options.protect(async (request: Request, claims: McpAccessTokenClaims): Promise<Response> => {
+        const resolved = typeof options.server === "function" ? await options.server(claims) : { ...options.server, client: sharedClient };
+
+        return await serveStateless(createLunoraMcpServer(resolved), request, { maxRequestBytes: options.maxRequestBytes });
     });
+};
 
 export type { AuthedMcpFetchHandlerOptions, AuthedMcpServerOptions, McpAccessTokenClaims, McpAuthProtect };
 export { createAuthedMcpFetchHandler, mcpTokenScopes };

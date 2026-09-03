@@ -75,6 +75,17 @@ describe("public_mutation_without_ratelimit", () => {
         });
     });
 
+    it("does not call a benign write auth-sensitive on a substring match", () => {
+        expect.assertions(2);
+
+        // "reset" inside `updatePresets`, "subscribe" inside `unsubscribeAll`.
+        const procedures = [procedure({ exportName: "updatePresets" }), procedure({ exportName: "unsubscribeAll" })];
+        const findings = publicMutationWithoutRatelimit.run({ procedureProtections: procedures, schema: schema() });
+
+        expect(findings.map((finding) => finding.metadata?.sensitive)).toStrictEqual([false, false]);
+        expect(findings.every((finding) => !finding.detail.includes("auth/abuse-sensitive"))).toBe(true);
+    });
+
     it("ignores rate-limited writes, internal functions, and queries", () => {
         expect.assertions(1);
 

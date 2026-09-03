@@ -1,7 +1,7 @@
 /* eslint-disable sonarjs/deprecation -- the SDK marks the low-level `Server` @deprecated in favour of the high-level `McpServer`, but explicitly sanctions `Server` for "advanced use cases". Ours qualifies: we dispatch tools defined with plain JSON Schema and bridge structured results ourselves, which avoids McpServer's per-tool zod dependency (matching `server.ts`). */
 
 /**
- * `@lunora/mcp/paid` — x402-gated (paid) MCP tools.
+ * x402-gated (paid) MCP tools, exported from the package root.
  *
  * A Lunora app authors its own MCP tools and prices some of them in USDC. Free
  * `tool()` and `paidTool()` registrations coexist on one server (mirroring
@@ -9,7 +9,11 @@
  * Streamable HTTP (paid tools require an HTTP boundary — an HTTP request can
  * carry `X-PAYMENT`, which stdio cannot), and each `tools/call` for a **paid**
  * tool is gated by the Phase-1 charge middleware: unpaid → `402` +
- * `PAYMENT-REQUIRED`; verified → dispatch, settle, attach `X-PAYMENT-RESPONSE`.
+ * `PAYMENT-REQUIRED`; verified → settle, dispatch, attach `X-PAYMENT-RESPONSE`.
+ * Settlement precedes dispatch (x402's `settleBeforeHandler` default, which this
+ * module does not override), so a tool that throws has already been paid for —
+ * which is why a throwing handler returns an `isError` result rather than a
+ * JSON-RPC protocol error the client may not surface.
  *
  * ```ts
  * const mcp = createPaidMcpServer({ charge: { network: "base", recipient: { evm: env.PAYOUT } } });
@@ -33,7 +37,7 @@ import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 import { memoizePromise } from "../../../shared/promise-memo";
-import { serveStateless } from "./http";
+import { readScreenedBody, serveStateless } from "./serve-stateless";
 import type { ToolInputSchema, ToolResult } from "./tools";
 
 /** A tool handler: receives the call's `arguments` bag, returns an MCP tool result. */
@@ -108,6 +112,8 @@ type PaidMcpChargeConfig = X402ChargeSettings;
 interface PaidMcpServerConfig {
     /** The worker-level x402 charge config; each paid tool supplies only its own `price`. */
     charge: PaidMcpChargeConfig;
+    /** Largest accepted request body, in bytes. Defaults to `DEFAULT_MAX_REQUEST_BYTES` (128 KiB). */
+    maxRequestBytes?: number;
     /** Name/version advertised in the MCP `initialize` handshake. Defaults to `lunora-paid-mcp`. */
     serverInfo?: { name: string; version: string };
 }
@@ -215,17 +221,6 @@ const refuseBatch = (): Response =>
     Response.json({ error: "A JSON-RPC batch may not reference a paid MCP tool; send paid tools/call requests individually." }, { status: 400 });
 
 /**
- * Refuse a POST body this module couldn't parse when any tool is priced. This
- * module decides "is this a priced `tools/call`?" from its own parse of the
- * body; on a parse miss it can't tell, and handing the original request to the
- * SDK transport (which re-reads/re-parses it independently) would let a paid
- * tool dispatch with no `X-PAYMENT` check. Fail closed instead — mirrors
- * {@link refuseBatch}'s envelope/status.
- */
-const refuseUnparseableBody = (): Response =>
-    Response.json({ error: "The request body could not be parsed as JSON; a priced MCP tool is registered, so the call cannot be gated." }, { status: 400 });
-
-/**
  * Create a paid MCP server. Register free tools with `tool()` and priced tools
  * with `paidTool()` (they coexist), then serve `fetchHandler` over HTTP.
  *
@@ -280,9 +275,17 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
                 return { content: [{ text: `unknown tool: ${request.params.name}`, type: "text" }], isError: true };
             }
 
-            const result = await entry.handler(request.params.arguments ?? {});
-
-            return result as CallToolResult;
+            try {
+                return (await entry.handler(request.params.arguments ?? {})) as CallToolResult;
+            } catch (error: unknown) {
+                // An `isError` result, not a rejection — the SDK turns a handler
+                // rejection into a JSON-RPC protocol `error`, which a client that
+                // renders only tool results shows the model as nothing at all. On
+                // this transport the payment has ALREADY settled by the time
+                // dispatch runs, so "paid, and the model saw no answer" is the
+                // failure to avoid. Matches `compose.ts` / `tools.ts`.
+                return { content: [{ text: error instanceof Error ? error.message : String(error), type: "text" }], isError: true };
+            }
         });
 
         return server;
@@ -306,24 +309,29 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
     const fetchHandler: PaidMcpFetchHandler = async (request: Request, _env?: unknown, context?: PaidMcpExecutionContext): Promise<Response> => {
         // Peek the JSON-RPC body from a clone so `request` stays pristine for both
         // the charge middleware (reads headers/URL) and the transport (below).
-        let parsedBody: unknown;
+        // Through the SHARED bounded read: a bare `request.clone().json()` here
+        // buffers whatever the caller sent, and handing the result on as
+        // `parsedBody` enters the transport past its size check — which left
+        // this, the one unauthenticated paid surface, with no body limit at all.
+        const screened = await readScreenedBody(request.clone(), config.maxRequestBytes);
 
-        try {
-            parsedBody = await request.clone().json();
-        } catch {
-            parsedBody = undefined;
+        if ("response" in screened) {
+            return screened.response;
         }
+
+        const { parsedBody } = screened;
 
         // Hand the already-parsed body to the transport so it doesn't re-read the
-        // consumed stream; fall back to letting it read `request` on a parse miss.
-        const dispatch = (): Promise<Response> => serveStateless(buildServer(), request, parsedBody === undefined ? undefined : { parsedBody });
-
-        // Scoped to POST: GET (SSE stream open) and DELETE (session termination)
-        // carry no body by spec and reach this same handler, so a method-blind
-        // check would 400 every legitimate handshake.
-        if (parsedBody === undefined && prices.size > 0 && request.method === "POST") {
-            return refuseUnparseableBody();
-        }
+        // consumed stream. `parsedBody` is `undefined` only for a GET/DELETE
+        // handshake, which carries no body: `readScreenedBody` refuses a POST it
+        // could not parse, so this module never has to guess whether an
+        // unreadable body targeted a priced tool.
+        const dispatch = (): Promise<Response> =>
+            serveStateless(
+                buildServer(),
+                request,
+                parsedBody === undefined ? { maxRequestBytes: config.maxRequestBytes } : { maxRequestBytes: config.maxRequestBytes, parsedBody },
+            );
 
         if (Array.isArray(parsedBody)) {
             return parsedBody.some((message) => prices.has(callToolName(message) ?? "")) ? refuseBatch() : dispatch();

@@ -25,6 +25,7 @@ const AGENT_STATUS_TOOL_NAME = "lunora_agent_status";
 
 ```ts
 interface AuthedMcpFetchHandlerOptions {
+    maxRequestBytes?: number;
     protect: McpAuthProtect;
     server: AuthedMcpServerOptions;
 }
@@ -46,6 +47,12 @@ interface CallAgentToolOptions {
     pollIntervalMs?: number;
     wait?: (ms: number) => Promise<void>;
 }
+```
+
+### `DEFAULT_MAX_REQUEST_BYTES` (const)
+
+```ts
+const DEFAULT_MAX_REQUEST_BYTES: number;
 ```
 
 ### `LOCAL_SERVER_NAME` (const)
@@ -133,6 +140,14 @@ type McpAuthProtect = (handler: (request: Request, claims: McpAccessTokenClaims)
 type McpFetchHandler = (request: Request) => Promise<Response>;
 ```
 
+### `McpFetchHandlerOptions` (interface)
+
+```ts
+interface McpFetchHandlerOptions extends LunoraMcpServerOptions {
+    maxRequestBytes?: number;
+}
+```
+
 ### `McpServerInfo` (interface)
 
 ```ts
@@ -198,6 +213,7 @@ interface PaidMcpServer {
 ```ts
 interface PaidMcpServerConfig {
     charge: PaidMcpChargeConfig;
+    maxRequestBytes?: number;
     serverInfo?: {
         name: string;
         version: string;
@@ -336,7 +352,7 @@ const createLunoraMcpServer: (options: LunoraMcpServerOptions) => Server;
 ### `createMcpFetchHandler` (const)
 
 ```ts
-const createMcpFetchHandler: (options: LunoraMcpServerOptions) => McpFetchHandler;
+const createMcpFetchHandler: (options: McpFetchHandlerOptions) => McpFetchHandler;
 ```
 
 ### `createPaidMcpServer` (const)

@@ -52,6 +52,56 @@ const rpcError = (status: number, code: number, message: string): Response =>
 const batchRefusal = (): Response => rpcError(400, -32_600, "batched requests are not supported: send one JSON-RPC message per request");
 
 /**
+ * Read and JSON-parse a POST body, bounded by `maxRequestBytes`.
+ *
+ * The size limit lives HERE rather than inside {@link screenRequest} because a
+ * caller that needs the body before the transport does — the paid-tool gate,
+ * which prices a `tools/call` from its JSON-RPC `method`/`params` — would
+ * otherwise buffer an unbounded body with `request.json()` and hand the result
+ * over as `parsedBody`, entering {@link screenRequest} past every check. One
+ * bounded read, shared by both, is the only shape where every transport in the
+ * package has a body limit.
+ *
+ * Batches are NOT refused here: the paid gate answers them with its own
+ * envelope (a batch may reference a priced tool), so that decision stays with
+ * each caller.
+ */
+const readScreenedBody = async (request: Request, limit?: number): Promise<ScreenedRequest> => {
+    // GET (SSE stream open) and DELETE (session termination) carry no body by
+    // spec, so there is nothing to bound and nothing to parse.
+    if (request.method !== "POST") {
+        return { parsedBody: undefined };
+    }
+
+    const maxRequestBytes = limit ?? DEFAULT_MAX_REQUEST_BYTES;
+    const tooLarge = { response: rpcError(413, -32_600, `request body exceeds ${String(maxRequestBytes)} bytes`) };
+    const declaredLength = Number(request.headers.get("content-length"));
+
+    // Reject on the declared length FIRST, so an oversized body is refused
+    // before it is buffered into the isolate. A chunked request without the
+    // header still has to be read, which is why the authoritative check below
+    // stays — but the common case costs nothing.
+    if (Number.isFinite(declaredLength) && declaredLength > maxRequestBytes) {
+        return tooLarge;
+    }
+
+    const body = await request.text();
+
+    // `String.length` counts UTF-16 code units, so a limit expressed in bytes
+    // has to be measured in bytes: 128 KiB of three-byte UTF-8 is ~43k units,
+    // which a naive length check would wave through.
+    if (byteLength(body) > maxRequestBytes) {
+        return tooLarge;
+    }
+
+    try {
+        return { parsedBody: JSON.parse(body) };
+    } catch {
+        return { response: rpcError(400, -32_700, "parse error: body is not valid JSON") };
+    }
+};
+
+/**
  * Reject what no MCP handler in this package has a reason to accept, before the
  * transport sees it.
  *
@@ -81,45 +131,20 @@ const screenRequest = async (request: Request, options: ServeStatelessOptions | 
     // A caller that already read the body (the paid-tool gate peeks the
     // JSON-RPC message to price the call) hands it over, so re-reading the
     // consumed stream is neither possible nor needed — only the batch refusal
-    // is left to apply.
+    // is left to apply. Such a caller MUST have read it through
+    // {@link readScreenedBody}: this branch is past the size limit, and the one
+    // that skipped it left a public endpoint with no body bound at all.
     if (options?.parsedBody !== undefined) {
         return Array.isArray(options.parsedBody) ? { response: batchRefusal() } : { parsedBody: options.parsedBody };
     }
 
-    const maxRequestBytes = options?.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES;
-    const tooLarge = { response: rpcError(413, -32_600, `request body exceeds ${String(maxRequestBytes)} bytes`) };
-    const declaredLength = Number(request.headers.get("content-length"));
+    const screened = await readScreenedBody(request, options?.maxRequestBytes);
 
-    // Reject on the declared length FIRST, so an oversized body is refused
-    // before it is buffered into the isolate. A chunked request without the
-    // header still has to be read, which is why the authoritative check below
-    // stays — but the common case costs nothing.
-    if (Number.isFinite(declaredLength) && declaredLength > maxRequestBytes) {
-        return tooLarge;
+    if ("response" in screened) {
+        return screened;
     }
 
-    const body = await request.text();
-
-    // `String.length` counts UTF-16 code units, so a limit expressed in bytes
-    // has to be measured in bytes: 128 KiB of three-byte UTF-8 is ~43k units,
-    // which a naive length check would wave through.
-    if (byteLength(body) > maxRequestBytes) {
-        return tooLarge;
-    }
-
-    let parsed: unknown;
-
-    try {
-        parsed = JSON.parse(body);
-    } catch {
-        return { response: rpcError(400, -32_700, "parse error: body is not valid JSON") };
-    }
-
-    if (Array.isArray(parsed)) {
-        return { response: batchRefusal() };
-    }
-
-    return { parsedBody: parsed };
+    return Array.isArray(screened.parsedBody) ? { response: batchRefusal() } : screened;
 };
 
 /**
@@ -137,7 +162,9 @@ const screenRequest = async (request: Request, options: ServeStatelessOptions | 
  *
  * `options.parsedBody` lets a caller hand over a body it already read (e.g. the
  * paid-tool gate, which peeks the JSON-RPC message to price the call) so the
- * transport doesn't re-read a consumed stream.
+ * transport doesn't re-read a consumed stream. It is trusted as already
+ * screened, so read it with {@link readScreenedBody} — anything else hands this
+ * surface an unbounded body.
  *
  * Teardown runs in a `finally`: a rejection from `connect` or `handleRequest`
  * would otherwise skip it and leak a server + transport per failed request,
@@ -163,4 +190,4 @@ const serveStateless = async (server: Server, request: Request, options?: ServeS
 };
 
 export type { McpFetchHandler, ServeStatelessOptions };
-export { DEFAULT_MAX_REQUEST_BYTES, serveStateless };
+export { DEFAULT_MAX_REQUEST_BYTES, readScreenedBody, serveStateless };
