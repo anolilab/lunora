@@ -39,7 +39,16 @@ export type { McpFetchHandler, ServeStatelessOptions } from "./http";
 export { createMcpFetchHandler, serveStateless } from "./http";
 export type { LocalDeployment, LocalDeploymentSource, LocalMcpServerOptions } from "./local";
 export { connectLocalStdio, createLocalMcpServer, LOCAL_SERVER_NAME, localTools, NO_DEPLOYMENT_MESSAGE } from "./local";
-export type { PaidMcpChargeConfig, PaidMcpServer, PaidMcpServerConfig, RegisterPaidToolOptions, RegisterToolOptions, ToolHandler } from "./paid";
+export type {
+    PaidMcpChargeConfig,
+    PaidMcpExecutionContext,
+    PaidMcpFetchHandler,
+    PaidMcpServer,
+    PaidMcpServerConfig,
+    RegisterPaidToolOptions,
+    RegisterToolOptions,
+    ToolHandler,
+} from "./paid";
 export { createPaidMcpServer } from "./paid";
 export type { LunoraMcpServerOptions } from "./server";
 export { connectStdio, createLunoraMcpServer } from "./server";

@@ -293,6 +293,45 @@ describe("createFlags", () => {
         await expect(flags.boolean("dark-mode", true)).resolves.toBe(true);
     });
 
+    // Failing closed to the default is the OpenFeature contract and stays. Doing
+    // it SILENTLY is the defect: a deployment whose `flagship` binding was never
+    // added — or whose `FLAGSHIP_TOKEN` is unset — boots normally and serves every
+    // kill-switch and rollout at its checked-in default across the whole fleet,
+    // with no thrown error and no log line. `client.setLogger` runs only AFTER a
+    // successful bind, so the user's own logger never saw a failed one.
+    it("reports a failed provider bind through the definition's logger", async () => {
+        expect.assertions(3);
+
+        const error = vi.fn<(...arguments_: unknown[]) => void>();
+        const noop = (): void => {};
+        const logged = defineFlags({
+            logger: { debug: noop, error, info: noop, warn: noop },
+            provider: () => {
+                throw new Error('no binding "FLAGS" found on env');
+            },
+        });
+
+        await expect(createFlags(logged, env).boolean("kill-switch", true)).resolves.toBe(true);
+
+        expect(error).toHaveBeenCalledTimes(1);
+        expect(String(error.mock.calls[0]?.[0])).toContain('no binding "FLAGS" found on env');
+    });
+
+    it("reports a failed provider bind on the console when no logger is configured", async () => {
+        expect.assertions(2);
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+        const unlogged = defineFlags({
+            provider: () => {
+                throw new Error("authToken resolved to an empty or non-string value");
+            },
+        });
+
+        await expect(createFlags(unlogged, env).boolean("kill-switch", true)).resolves.toBe(true);
+
+        expect(consoleError).toHaveBeenCalledTimes(1);
+    });
+
     it("retries the bind on a later request after a failed construction", async () => {
         expect.assertions(3);
 

@@ -60,7 +60,9 @@ export default defineFlags({
 
 The `provider` is either a Flagship config or any factory `(env) => OpenFeatureProvider`. `identify` derives the default `targetingKey` from each request's auth, so per-user targeting works without threading the key through every call.
 
-HTTP mode's `authToken` takes either the literal token or a thunk resolved against the Worker `env` at construction, so the secret never has to be inlined in source. A thunk that resolves to anything but a non-empty string throws at construction rather than sending `Bearer undefined` and letting every evaluation fall silently back to its default.
+HTTP mode's `authToken` takes either the literal token or a thunk resolved against the Worker `env` at construction, so the secret never has to be inlined in source. A thunk that resolves to anything but a non-empty string throws rather than sending `Bearer undefined`.
+
+That throw happens at **bind** time, not at `defineFlags` time — the thunk cannot run before the Worker `env` exists, and the same is true of binding mode's missing-`FLAGS`-binding check. `ctx.flags` never throws, so those refusals still resolve as the caller's `defaultValue`; what they do not do is pass unnoticed. A failed bind is logged once — through `defineFlags({ logger })` if you configured one, on `console.error` otherwise — because a deployment silently serving every kill-switch and rollout at its checked-in default is invisible in every other signal. The per-evaluation error is also on `ctx.flags.details.*()` as `errorCode` / `errorMessage`.
 
 Its argument is a `FlagsAuth` — `{ identity, userId }`, both `null` when the request is anonymous — **not** the function `ctx`. Return `undefined` (not `null`) for "no targeting key", which is why the `?? undefined` matters: `auth.userId` alone is `string | null`, and the property is typed `string | undefined`.
 

@@ -20,6 +20,12 @@
  * );
  * export default { fetch: mcp.fetchHandler };
  * ```
+ *
+ * `fetchHandler` takes the Worker's `(request, env, ctx)` triple, so mounting it
+ * as the default export above is all that is needed — it forwards `ctx.waitUntil`
+ * to the charge middleware, which is what keeps an `onReceipt` sink alive past
+ * the response. Call it with a bare `Request` and a settled payment's receipt is
+ * cancelled at isolate teardown while the money has already moved on-chain.
  */
 import { LunoraError } from "@lunora/errors";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -27,7 +33,6 @@ import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 import { memoizePromise } from "../../../shared/promise-memo";
-import type { McpFetchHandler } from "./http";
 import { serveStateless } from "./http";
 import type { ToolInputSchema, ToolResult } from "./tools";
 
@@ -62,9 +67,15 @@ interface X402ChargeSettings {
     readonly recipient: { readonly evm?: string; readonly svm?: string };
 }
 
+/** Mirrors x402's `ChargeHandlerDeps` — the per-request platform seams `handle` uses. */
+interface ChargeHandlerDeps {
+    /** Keeps the `onReceipt` sink alive past the response — the request's `ctx.waitUntil`. */
+    readonly waitUntil: (promise: Promise<unknown>) => void;
+}
+
 /** Mirrors `ChargeMiddleware` — the one method this module calls. */
 interface ChargeMiddleware {
-    handle: (request: Request, runHandler: () => Promise<Response>, deps?: unknown) => Promise<Response>;
+    handle: (request: Request, runHandler: () => Promise<Response>, deps?: ChargeHandlerDeps) => Promise<Response>;
 }
 
 /** The factory `@lunora/x402/charge` exports, as this module uses it. */
@@ -101,10 +112,33 @@ interface PaidMcpServerConfig {
     serverInfo?: { name: string; version: string };
 }
 
+/**
+ * The Worker execution context, as this module reads it: only `waitUntil`, and
+ * structurally, so the package takes no `@cloudflare/workers-types` dependency.
+ */
+interface PaidMcpExecutionContext {
+    waitUntil?: (promise: Promise<unknown>) => void;
+}
+
+/**
+ * The paid server's fetch handler.
+ *
+ * Unlike the free `McpFetchHandler` it takes the Worker's full
+ * `(request, env, ctx)` triple — the shape `export default { fetch }` is called
+ * with — because the x402 receipt sink NEEDS `ctx.waitUntil`: work that is
+ * neither awaited into the response nor registered with it is cancelled when the
+ * request ends, so an async `onReceipt` (inserting the settled payment into a
+ * durable table) frequently never runs while the money has already moved
+ * on-chain. `env` is accepted and ignored so the handler drops straight into the
+ * default export; both are optional, so a non-Workers caller may still invoke it
+ * with a bare `Request` (the middleware then simply sees no `waitUntil`).
+ */
+type PaidMcpFetchHandler = (request: Request, env?: unknown, context?: PaidMcpExecutionContext) => Promise<Response>;
+
 /** A paid MCP server: register free/paid tools, then serve over Streamable HTTP. */
 interface PaidMcpServer {
     /** The Streamable-HTTP fetch handler; gates each paid `tools/call` behind x402. */
-    readonly fetchHandler: McpFetchHandler;
+    readonly fetchHandler: PaidMcpFetchHandler;
     /** Register a **paid** tool: its dispatch runs the x402 charge middleware first. */
     paidTool: (options: RegisterPaidToolOptions, handler: ToolHandler) => void;
     /** Register a **free** tool (coexists with paid tools on the same server). */
@@ -269,7 +303,7 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
             return create({ ...config.charge, price }, { resource: name });
         });
 
-    const fetchHandler: McpFetchHandler = async (request: Request): Promise<Response> => {
+    const fetchHandler: PaidMcpFetchHandler = async (request: Request, _env?: unknown, context?: PaidMcpExecutionContext): Promise<Response> => {
         // Peek the JSON-RPC body from a clone so `request` stays pristine for both
         // the charge middleware (reads headers/URL) and the transport (below).
         let parsedBody: unknown;
@@ -306,7 +340,21 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
 
         const middleware = await gateFor(name, price);
 
-        return middleware.handle(request, dispatch);
+        // Invoked THROUGH the context, never as a detached function.
+        // `ExecutionContext.waitUntil` is receiver-bound and throws
+        // `TypeError: Illegal invocation` when called unbound — and x402's
+        // `reportReceipt` swallows that throw, so the paid response would still
+        // land while the receipt promise was never registered.
+        const deps =
+            typeof context?.waitUntil === "function"
+                ? {
+                      waitUntil: (promise: Promise<unknown>): void => {
+                          context.waitUntil?.(promise);
+                      },
+                  }
+                : undefined;
+
+        return middleware.handle(request, dispatch, deps);
     };
 
     const paidTool = (options: RegisterPaidToolOptions, handler: ToolHandler): void => {
@@ -320,5 +368,14 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
     return { fetchHandler, paidTool, tool };
 };
 
-export type { PaidMcpChargeConfig, PaidMcpServer, PaidMcpServerConfig, RegisterPaidToolOptions, RegisterToolOptions, ToolHandler };
+export type {
+    PaidMcpChargeConfig,
+    PaidMcpExecutionContext,
+    PaidMcpFetchHandler,
+    PaidMcpServer,
+    PaidMcpServerConfig,
+    RegisterPaidToolOptions,
+    RegisterToolOptions,
+    ToolHandler,
+};
 export { createPaidMcpServer };

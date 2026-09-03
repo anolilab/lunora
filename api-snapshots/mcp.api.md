@@ -169,11 +169,25 @@ const OBSERVABILITY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition>;
 type PaidMcpChargeConfig = X402ChargeSettings;
 ```
 
+### `PaidMcpExecutionContext` (interface)
+
+```ts
+interface PaidMcpExecutionContext {
+    waitUntil?: (promise: Promise<unknown>) => void;
+}
+```
+
+### `PaidMcpFetchHandler` (type)
+
+```ts
+type PaidMcpFetchHandler = (request: Request, env?: unknown, context?: PaidMcpExecutionContext) => Promise<Response>;
+```
+
 ### `PaidMcpServer` (interface)
 
 ```ts
 interface PaidMcpServer {
-    readonly fetchHandler: McpFetchHandler;
+    readonly fetchHandler: PaidMcpFetchHandler;
     paidTool: (options: RegisterPaidToolOptions, handler: ToolHandler) => void;
     tool: (options: RegisterToolOptions, handler: ToolHandler) => void;
 }

@@ -514,7 +514,8 @@ export interface IndexInput {
     onChunk?: (info: { chunkIndex: number; id: string; text: string; total: number }) => void;
 
     /**
-     * Index this source even when its content hash is unchanged.
+     * Index this source even when its identity hash (`text` + `metadata` +
+     * `importance`) is unchanged.
      *
      * The hash short-circuit skips chunking, embedding and every write — which
      * is what makes a cron re-sync cheap, and also what makes attaching a
@@ -540,8 +541,11 @@ export interface IndexResult {
     ids: ReadonlyArray<string>;
 
     /**
-     * True when the source's content hash matched the previously indexed hash —
+     * True when the source's identity hash — its `text`, `metadata` and
+     * `importance` together — matched the previously indexed one, so
      * chunking/embedding/upserts were skipped entirely (a no-op re-sync).
+     * Changing `metadata` alone (a tenant move, an ACL correction) therefore
+     * re-indexes: the old values are what `rlsFilter` scopes retrieval on.
      */
     unchanged: boolean;
 }
