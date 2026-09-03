@@ -65,17 +65,31 @@ write) and persist it with `ctx.push.register`:
 // client
 import { subscribeToPush } from "@lunora/notify/web";
 
-const subscription = await subscribeToPush({ serviceWorkerUrl: "/sw.js", vapidPublicKey });
-await client.mutation("registerDevice", { subscription });
+const { replacedEndpoint, subscription } = await subscribeToPush({ serviceWorkerUrl: "/sw.js", vapidPublicKey });
+await client.mutation("registerDevice", { replacedEndpoint, subscription });
 ```
+
+`replacedEndpoint` is set only after a **VAPID key rotation**, when the helper
+drops the stale browser subscription and mints a new one. The new subscription
+has a new endpoint — hence a new store id — so it never upserts over the old
+row, and every send to that row now answers `403 VapidPkHashMismatch`, which is
+(correctly) not a "gone" signal, so nothing prunes it either. Unregister it:
 
 ```ts
 // lunora/registerDevice.ts
+import { webPushId } from "@lunora/notify";
+
 import { mutation, v } from "@/lunora/_generated/server";
 
-export const registerDevice = mutation.input({ subscription: v.any() }).mutation(async ({ ctx, args: { subscription } }) => {
-    await ctx.push.register({ subscription, userId: ctx.auth?.userId });
-});
+export const registerDevice = mutation
+    .input({ replacedEndpoint: v.optional(v.string()), subscription: v.any() })
+    .mutation(async ({ ctx, args: { replacedEndpoint, subscription } }) => {
+        if (replacedEndpoint !== undefined) {
+            await ctx.push.unregister(webPushId(replacedEndpoint));
+        }
+
+        await ctx.push.register({ subscription, userId: ctx.auth?.userId });
+    });
 ```
 
 ## Send from an action
@@ -114,7 +128,7 @@ Move a large broadcast off the request path with
 [`@lunora/queue`](/docs/packages/queue).
 
 Each queue message delivers exactly **one bounded page** (250 subscriptions by
-default), so the consumer has to re-enqueue while `nextCursor` is set —
+default), so the consumer has to re-enqueue while `nextFilter` is set —
 discarding the result silently stops the broadcast after the first page and
 still acks the message as a success:
 
@@ -124,15 +138,13 @@ await enqueuePushBroadcast(ctx.queues.push, { payload: { title: "New drop", body
 
 // consumer (lunora/queues.ts)
 for (const message of batch.messages) {
-    const { failedIds, nextCursor } = await runPushBroadcastPage(ctx.push, message.body);
+    const { failedIds, nextFilter } = await runPushBroadcastPage(ctx.push, message.body);
 
-    if (nextCursor !== undefined) {
+    if (nextFilter !== undefined) {
         // More pages remain — enqueue the continuation. Each message still does
-        // only ONE bounded page of work.
-        await enqueuePushBroadcast(ctx.queues.push, {
-            filter: { ...message.body.filter, after: nextCursor },
-            payload: message.body.payload,
-        });
+        // only ONE bounded page of work. Pass `nextFilter` verbatim: it carries
+        // the cursor AND the remaining `filter.limit` budget.
+        await enqueuePushBroadcast(ctx.queues.push, { filter: nextFilter, payload: message.body.payload });
     }
 
     // Redeliver ONLY the recipients that failed. Retrying the whole page would
@@ -146,8 +158,13 @@ for (const message of batch.messages) {
 ```
 
 A page never throws on a partial failure — it reports `failedIds` alongside
-`nextCursor`, so one permanently-failing device cannot strand the cursor and
+`nextFilter`, so one permanently-failing device cannot strand the cursor and
 halt the broadcast for everyone behind it. Re-enqueue those ids with
-`retryIds`; that job throws while any of them still fail, so only the failing
-device reaches the dead-letter queue. A page that merely pruned gone
-subscriptions is a success.
+`retryIds`; that job throws while **all** of them still fail, so only the
+failing device reaches the dead-letter queue — once any recipient recovers it
+resolves instead, and the narrower retry never re-sends to a device the message
+already reached. A page that merely pruned gone subscriptions is a success.
+
+`filter.limit` is an overall audience cap here too: `nextFilter` carries the
+remaining budget and is `undefined` once it is spent, so the walk stops rather
+than granting each message a fresh `limit`.

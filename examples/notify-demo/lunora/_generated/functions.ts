@@ -82,6 +82,14 @@ return { "body": source["body"], "title": source["title"] };
 installCompiledValidatorMap(lunora_push_0.registerDevice.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+let __has1 = false;
+let __val1;
+if (source["replacedEndpoint"] !== undefined) {
+if (typeof source["replacedEndpoint"] !== "string") return DEFER;
+if (source["replacedEndpoint"].length > 2048) return DEFER;
+__val1 = source["replacedEndpoint"];
+__has1 = true;
+}
 if (typeof source["subscription"] !== "object" || source["subscription"] === null || Array.isArray(source["subscription"])) return DEFER;
 if (Object.getPrototypeOf(source["subscription"]) !== Object.prototype && Object.getPrototypeOf(source["subscription"]) !== null) return DEFER;
 if (typeof source["subscription"]["endpoint"] !== "string") return DEFER;
@@ -92,9 +100,9 @@ if (typeof source["subscription"]["keys"]["auth"] !== "string") return DEFER;
 if (source["subscription"]["keys"]["auth"].length > 256) return DEFER;
 if (typeof source["subscription"]["keys"]["p256dh"] !== "string") return DEFER;
 if (source["subscription"]["keys"]["p256dh"].length > 256) return DEFER;
-const __obj1 = { "auth": source["subscription"]["keys"]["auth"], "p256dh": source["subscription"]["keys"]["p256dh"] };
-const __obj2 = { "endpoint": source["subscription"]["endpoint"], "keys": __obj1 };
-return { "subscription": __obj2 };
+const __obj2 = { "auth": source["subscription"]["keys"]["auth"], "p256dh": source["subscription"]["keys"]["p256dh"] };
+const __obj3 = { "endpoint": source["subscription"]["endpoint"], "keys": __obj2 };
+return { ...(__has1 ? { "replacedEndpoint": __val1 } : {}), "subscription": __obj3 };
 });
 
 /**
@@ -146,7 +154,7 @@ export interface Caller {
         announce: (args: { body: string; title: string }) => Promise<Id<"announcements">>;
         broadcast: (args: { body: string; title: string }) => Promise<{ failed: number; pruned: number; sent: number; total: number; }>;
         listAnnouncements: (args?: {}) => Promise<{ _id: Id<"announcements">; body: string; sentAt: number; title: string }[]>;
-        registerDevice: (args: { subscription: { endpoint: string; keys: { auth: string; p256dh: string } } }) => Promise<void>;
+        registerDevice: (args: { replacedEndpoint?: string; subscription: { endpoint: string; keys: { auth: string; p256dh: string } } }) => Promise<void>;
     };
 }
 

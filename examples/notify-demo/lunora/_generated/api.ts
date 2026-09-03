@@ -11,7 +11,7 @@ export interface ApiTypes {
         announce: FunctionReference<"mutation", { body: string; title: string }, Id<"announcements">>;
         broadcast: FunctionReference<"action", { body: string; title: string }, { failed: number; pruned: number; sent: number; total: number; }>;
         listAnnouncements: FunctionReference<"query", {}, { _id: Id<"announcements">; body: string; sentAt: number; title: string }[]>;
-        registerDevice: FunctionReference<"mutation", { subscription: { endpoint: string; keys: { auth: string; p256dh: string } } }, void>;
+        registerDevice: FunctionReference<"mutation", { replacedEndpoint?: string; subscription: { endpoint: string; keys: { auth: string; p256dh: string } } }, void>;
     };
 }
 

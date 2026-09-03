@@ -421,6 +421,29 @@ describe("session reuse", () => {
         expect(harness.closed).toHaveBeenCalledTimes(1);
     });
 
+    it.each([
+        ["zero", 0],
+        ["negative", -5],
+        ["NaN", Number.NaN],
+        ["Infinity", Number.POSITIVE_INFINITY],
+    ])("still always closes when keepAlive is %s", async (_label, keepAlive) => {
+        expect.assertions(2);
+
+        // `keepAlive: 0` is the natural spelling of "do not keep alive", and what
+        // a `Number(...)` over an unset env var yields, so it must take the
+        // always-close path rather than skipping the `finally`
+        // AND sending `keep_alive: 0`/`NaN` — that leaks a billed session. The
+        // sibling numeric inputs (`timeoutMs`, `viewport`) already reject
+        // non-finite values; this one did not.
+        const harness = makeSessionHarness();
+        const browser = createBrowser({ binding, launch: harness.launch });
+
+        await browser.launch(async () => "done", { keepAlive });
+
+        expect(harness.launchOptions[0]).toBeUndefined();
+        expect(harness.closed).toHaveBeenCalledTimes(1);
+    });
+
     it("connect re-attaches without closing, unless asked", async () => {
         expect.assertions(4);
 

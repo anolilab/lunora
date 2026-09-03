@@ -275,11 +275,15 @@ export interface LunoraPush {
      * List stored subscriptions (optionally filtered), with the delivery
      * **secrets** stripped — the Web Push `keys` (RFC 8291 `auth`/`p256dh`) and the
      * FCM `token`. Those, plus the endpoint, are enough to deliver arbitrary push to
-     * a device, so they never cross the app-facing facade; the raw rows are
+     * a device, so no READ on this facade returns them; the raw rows are otherwise
      * reachable only through the internal `SubscriptionStore`.
+     *
+     * {@link LunoraPush.register} is the one exception, and deliberately so: it
+     * echoes back the record the caller just supplied, so it discloses nothing
+     * the caller did not already hold and never another device's row.
      */
     list: (filter?: SubscriptionFilter) => Promise<PushSubscriptionDevice[]>;
-    /** Register (upsert) a device subscription and return the stored record. */
+    /** Register (upsert) a device subscription and return the stored record (the caller's own row, secrets included). */
     register: (input: RegisterInput) => Promise<StoredSubscription>;
     /** Send a push to a single stored subscription (by id or record); `to` is derived from it. */
     send: (target: StoredSubscription | string, payload: PushContent) => Promise<Receipt>;
