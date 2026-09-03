@@ -1,4 +1,4 @@
-import type { StorageObject } from "@lunora/client";
+import type { StorageListPage, StorageObject } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -25,6 +25,40 @@ const ORPHAN_LIVE_KEY_CAP = 10_000;
 /** Objects requested per page while enumerating the bucket for the orphan check. */
 const ORPHAN_LIST_PAGE_SIZE = 1000;
 
+/**
+ * Walk the bucket for the orphan check's live-key set, stopping at
+ * {@link ORPHAN_LIVE_KEY_CAP}.
+ *
+ * `truncated` is set only when the cap stopped the walk with pages still to come:
+ * a bucket of exactly the cap that enumerated to its end IS complete, and calling
+ * that truncated would suppress a verdict the check could have given.
+ */
+const enumerateLiveKeys = async (storageApi: {
+    list: (options: { cursor?: string; limit?: number }) => Promise<StorageListPage>;
+}): Promise<{
+    liveKeys: string[];
+    truncated: boolean;
+}> => {
+    const liveKeys: string[] = [];
+    let cursor: string | undefined;
+    let hasMore = true;
+
+    while (hasMore && liveKeys.length < ORPHAN_LIVE_KEY_CAP) {
+        // eslint-disable-next-line no-await-in-loop -- bucket enumeration is inherently sequential (each page's cursor drives the next)
+        const page = await storageApi.list({ cursor, limit: ORPHAN_LIST_PAGE_SIZE });
+
+        for (const object of page.objects) {
+            liveKeys.push(object.key);
+        }
+
+        cursor = page.cursor;
+        hasMore = cursor !== undefined;
+    }
+
+    // Pages still pending when the walk stopped ⇒ the cap cut it short.
+    return { liveKeys, truncated: hasMore };
+};
+
 /** How the file list is laid out. */
 type FileView = "grid" | "list";
 
@@ -50,9 +84,9 @@ interface FileBrowserModel {
     readonly copiedKey: string | undefined;
     /** `true` while the orphan check is enumerating the bucket / resolving dangling references. */
     readonly danglingBusy: boolean;
-    /** Record `v.storage()` fields whose value points at an object the bucket no longer has; `undefined` until the check is run. */
+    /** Record `v.storage()` fields whose value points at an object the bucket no longer has; `undefined` whenever there is no verdict — not yet run, truncated, or failed. */
     readonly danglingReferences: ReadonlyArray<DanglingReference> | undefined;
-    /** `true` when the orphan check's scan was clipped by a bound — the dangling list is partial. */
+    /** `true` when the orphan check's scan was clipped by a bound — the dangling list is partial, or absent entirely. */
     readonly danglingTruncated: boolean;
     /** The draft prefix bound to the input — applied to the listing only on List/navigate. */
     readonly draftPrefix: string;
@@ -565,29 +599,16 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
         fireAndForget(
             (async (): Promise<void> => {
                 try {
-                    const liveKeys: string[] = [];
-                    let cursor: string | undefined;
-
-                    do {
-                        // eslint-disable-next-line no-await-in-loop -- bucket enumeration is inherently sequential (each page's cursor drives the next)
-                        const page = await storageApi.list({ cursor, limit: ORPHAN_LIST_PAGE_SIZE });
-
-                        for (const object of page.objects) {
-                            liveKeys.push(object.key);
-                        }
-
-                        cursor = liveKeys.length >= ORPHAN_LIVE_KEY_CAP ? undefined : page.cursor;
-                    } while (cursor !== undefined);
-
-                    const enumTruncated = liveKeys.length >= ORPHAN_LIVE_KEY_CAP;
+                    const { liveKeys, truncated: enumTruncated } = await enumerateLiveKeys(storageApi);
 
                     if (enumTruncated) {
                         // The live-key set is incomplete: running storageOrphans with a
                         // partial key set would flag in-bucket objects as dangling simply
-                        // because they weren't reached during enumeration. Surface the
-                        // truncation without producing unreliable dangling rows.
+                        // because they weren't reached during enumeration. So the check
+                        // produced NO verdict — `undefined`, not an empty list, which the
+                        // panel renders as "every reference resolves".
                         if (seq === orphanSeq.current) {
-                            setDanglingReferences([]);
+                            setDanglingReferences(undefined);
                             setDanglingTruncated(true);
                         }
                     } else {
@@ -602,7 +623,9 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                     }
                 } catch (error_) {
                     if (seq === orphanSeq.current) {
-                        setDanglingReferences([]);
+                        // No verdict either: an empty list here would paint the all-clear
+                        // right beside the error banner that says the check failed.
+                        setDanglingReferences(undefined);
                         setDanglingTruncated(false);
                         setError(errorMessage(error_));
                     }
@@ -696,5 +719,5 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
  * Returns a flat {@link FileBrowserModel} so the panel + toolbar + list/gallery
  * stay presentational.
  */
-export { THUMBNAIL_URL_TTL, useFileBrowser };
+export { enumerateLiveKeys, ORPHAN_LIVE_KEY_CAP, THUMBNAIL_URL_TTL, useFileBrowser };
 export type { FileBrowserModel, FileView };
