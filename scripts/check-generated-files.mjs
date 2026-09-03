@@ -18,12 +18,15 @@
  * working tree's dirty set BEFORE running the generators and compares it AFTER.
  * Only paths the generators actually touched are reported, so the check is
  * runnable mid-change and stays correct without a hand-maintained list of output
- * paths (a generator added later is covered automatically).
+ * paths (a generator added later is covered automatically). The snapshot pairs each
+ * dirty path with a digest of its CONTENT — the status code alone cannot tell an
+ * already-modified output that a generator then rewrote from one it left alone.
  *
  * Run: node scripts/check-generated-files.mjs
  */
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -316,7 +319,20 @@ if (stale.length > 0) {
 /** A generator as you would re-run it by hand, `cd`-prefixed when it runs inside a workspace. */
 const describe = (command, args, cwd) => `${cwd === undefined ? "" : `cd ${cwd} && `}${command} ${args.join(" ")}`;
 
-/** `path -> status` for every file git considers dirty (modified, added, untracked, …). */
+/**
+ * `path -> status + content digest` for every file git considers dirty (modified,
+ * added, untracked, …).
+ *
+ * The digest, not just the status code: a file already modified before the sweep
+ * still reports the same two-character code after a generator rewrites it, so keying
+ * on the code alone reported NO drift for exactly the outputs most likely to have
+ * some — the ones you are mid-edit on. CI's tree is clean, so this only ever went
+ * wrong locally, which is worse rather than better: local is where this check is
+ * meant to be runnable mid-change.
+ *
+ * Digest rather than the bytes: some generated trees run to megabytes and the two
+ * snapshots are held simultaneously.
+ */
 const dirtySet = () => {
     const raw = execFileSync("git", ["status", "--porcelain=v1"], { cwd: rootDir, encoding: "utf8" });
     const entries = new Map();
@@ -327,7 +343,20 @@ const dirtySet = () => {
         }
 
         // `XY <path>` — the status code is the first two columns.
-        entries.set(line.slice(3).trim(), line.slice(0, 2));
+        const path = line.slice(3).trim();
+        let digest = "";
+
+        try {
+            digest = createHash("sha256")
+                .update(readFileSync(join(rootDir, path)))
+                .digest("hex");
+        } catch {
+            // A deletion or a rename's old half has no file to read; the status
+            // code alone carries the change for those.
+            digest = "";
+        }
+
+        entries.set(path, `${line.slice(0, 2)}:${digest}`);
     }
 
     return entries;
