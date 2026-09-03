@@ -77,7 +77,13 @@ const isProcedureRow = (value: unknown): boolean => {
 
     const row = value as Record<string, unknown>;
 
-    return typeof row.id === "string" && isScore(row.score) && typeof row.coverage === "string" && COVERAGE_VALUES.has(row.coverage);
+    // `checks` is validated for the same reason as the other three:
+    // `compareToBaseline` hands it to `checksWorsened`, which calls `.map` on it.
+    // `?? []` only covers `null`/`undefined`, so a `checks: {}` left by a
+    // truncated or merge-conflicted artifact would throw inside the CI gate.
+    return (
+        typeof row.id === "string" && isScore(row.score) && typeof row.coverage === "string" && COVERAGE_VALUES.has(row.coverage) && Array.isArray(row.checks)
+    );
 };
 
 /** Structural check for the project bucket of a baseline read off disk. */
@@ -156,10 +162,10 @@ const compareToBaseline = (current: AdvisorMap, baseline: AdvisorMap): BaselineC
  *
  * Validates *shape* — the header and every procedure row — because
  * `compareToBaseline` dereferences `entry.id` / `entry.score` /
- * `entry.coverage`: a truncated or merge-conflicted baseline with a `null` row
- * would otherwise crash the gate, and a row of `{}` would compare as a silent
- * no-op. Non-finite scores are rejected for the same reason — `NaN < 0` is
- * `false`, which reads as "no regression".
+ * `entry.coverage` / `entry.checks`: a truncated or merge-conflicted baseline
+ * with a `null` row would otherwise crash the gate, and a row of `{}` would
+ * compare as a silent no-op. Non-finite scores are rejected for the same
+ * reason — `NaN < 0` is `false`, which reads as "no regression".
  *
  * Version *policy* deliberately lives in {@link compareToBaseline}, not here.
  * Rejecting a mismatch in both places made that function's `comparable: false`

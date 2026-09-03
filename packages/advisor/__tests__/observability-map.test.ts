@@ -383,6 +383,9 @@ describe("parseAdvisorMap", () => {
         ["an unknown coverage verdict", { ...valid(), procedures: [{ coverage: "dark", id: "f#a", score: 10 }] }],
         ["a NaN global score", { ...valid(), score: Number.NaN }],
         ["a missing project bucket", { ...valid(), project: undefined }],
+        // `compareToBaseline` calls `.map` on every row's `checks`, and `?? []`
+        // only guards null/undefined — an object there throws inside the gate.
+        ["a procedure row whose checks is not an array", { ...valid(), procedures: [{ checks: {}, coverage: "clean", id: "f#a", score: 100 }] }],
     ])("rejects %s", (_label, candidate) => {
         expect.assertions(1);
 

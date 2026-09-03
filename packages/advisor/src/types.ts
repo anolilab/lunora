@@ -549,11 +549,11 @@ export interface LintContext {
 
     /**
      * `ctx.db.<table>.findMany({ with: { <rel> } })` relation-hydrating list reads
-     * — the `masked_relation_leak_via_with` input. Column masking is applied to a
-     * read's top-level rows but does not descend into `with`-hydrated relations,
-     * so a masked table surfaced only through a `with` on an unprotected public
-     * read is returned in the clear. Supplied by the codegen feeder; absent for
-     * runtime callers, where the lint finds nothing.
+     * — the `masked_relation_leak_via_with` input. Column masking is
+     * per-procedure and the relation loader applies the READING procedure's
+     * policy to every `with` hop, so what leaks is a public read whose own
+     * procedure declares no policy for the related table. Supplied by the codegen
+     * feeder; absent for runtime callers, where the lint finds nothing.
      */
     relationLoads?: ReadonlyArray<AdvisorRelationLoad>;
 

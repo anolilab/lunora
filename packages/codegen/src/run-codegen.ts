@@ -706,7 +706,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   identityClaimReads: discoverIdentityClaimReads(project, lunoraDirectory),
                   imageDeliveryUrlAccesses: discoverImageDeliveryUrlAccesses(project, lunoraDirectory),
                   inserts: discoverInserts(project, lunoraDirectory),
-                  kvKeyAccesses: discoverKvKeyAccesses(project, lunoraDirectory),
+                  kvKeyAccesses: discoverKvKeyAccesses(project, lunoraDirectory, functions),
                   mailRecipientAccesses: discoverMailRecipientAccesses(project, lunoraDirectory),
                   maskProcedures: discoverMaskProcedures(project, lunoraDirectory),
                   maskStrategies: discoverMaskStrategies(project, lunoraDirectory),
