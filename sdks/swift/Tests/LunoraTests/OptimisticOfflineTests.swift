@@ -879,6 +879,18 @@ extension ConformanceTests {
         XCTAssertEqual(slotted.retryAfterMs, 30000, "and the slot's own hint is what the next flush waits out")
     }
 
+    /// The entry cap is not a port's to choose: the worker and the shard DO both
+    /// refuse a larger batch with a coded 400, which `protocol/README.md` 4.3
+    /// makes a TERMINAL verdict — so a client chunking at a stale value discards
+    /// durable writes instead of retrying them. It was a bare 500 in ten
+    /// independent places with nothing reconciling them.
+    func caseBatchEntryCapMatchesProtocol() throws {
+        let testCase = try scenario("offlineQueue", "batchReplay")
+        let expected = try XCTUnwrap((testCase["maxEntries"] as? NSNumber)?.intValue)
+
+        XCTAssertEqual(lunoraMaxBatchEntries, expected)
+    }
+
     func caseOfflineFlushBatchesMultipleWrites() throws {
         let testCase = try scenario("offlineQueue", "batchReplay")
         let slots = testCase["slots"] as? [[String: Any]] ?? []

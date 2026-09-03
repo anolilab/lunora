@@ -56,6 +56,7 @@ final class OptimisticOfflineTest {
         offlineQueueIdentityGateRejectsReplay();
         offlineFlushReplaysAndConfirmsOptimistic();
         offlineFlushBatchesMultipleWrites();
+        batchEntryCapMatchesProtocol();
         offlineFlushUnencodableWriteSettlesTerminal();
         clientIdIsPerInstanceAndPersisted();
         consumerCallbacksRunOutsideTheLock();
@@ -1366,6 +1367,23 @@ final class OptimisticOfflineTest {
         check(
                 store.removed.equals(strings(overflow.get("evicted"))),
                 "the evicted write is un-persisted");
+    }
+
+    /**
+     * The entry cap is not a port's to choose: the worker and the shard DO both refuse a larger
+     * batch with a coded 400, which {@code protocol/README.md} 4.3 makes a TERMINAL verdict - so a
+     * client chunking at a stale value discards durable writes instead of retrying them. It was a
+     * bare 500 in ten independent places with nothing reconciling them.
+     */
+    private static void batchEntryCapMatchesProtocol() throws IOException {
+        covers("batch_entry_cap_matches_protocol");
+
+        Map<String, Object> testCase = scenario("offlineQueue", "batchReplay");
+        int expected = ((Number) testCase.get("maxEntries")).intValue();
+
+        check(
+                Offline.MAX_BATCH_ENTRIES == expected,
+                "batch entry cap: " + Offline.MAX_BATCH_ENTRIES + ", want " + expected);
     }
 
     /**

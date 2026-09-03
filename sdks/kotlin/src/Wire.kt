@@ -127,7 +127,7 @@ object Wire {
         "inf" -> WireValue.Infinity
         "-inf" -> WireValue.NegInfinity
         "bigint" -> decodeBigInt(items)
-        "date" -> WireValue.Date(decode(items.getOrNull(2), depth + 1))
+        "date" -> decodeDate(items, depth)
         "url" -> WireValue.Url(items.getOrNull(2) as? String ?: throw WireFormatException("wire-codec: malformed url tag"))
         "map" -> decodeMap(items, depth)
         "set" -> WireValue.WireSet(payloadList(items, "set").map { decode(it, depth + 1) })
@@ -207,6 +207,20 @@ object Wire {
         is WireValue.Text -> "str:${key.value}"
         is WireValue.BigInt -> "big:${key.value}"
         else -> null
+    }
+
+    private fun decodeDate(items: List<*>, depth: Int): WireValue {
+        // Epoch milliseconds, and nothing else. The payload is DECODED first (a
+        // nested `[TAG, "nan"]` is how an invalid date travels), then checked:
+        // `null` or a string would otherwise become a Date carrying a value no
+        // epoch arithmetic can use, re-encoded as a legitimate-looking date tag.
+        val epoch = decode(items.getOrNull(2), depth + 1)
+
+        if (epoch !is WireValue.Num && epoch !is WireValue.NaN && epoch !is WireValue.Infinity && epoch !is WireValue.NegInfinity) {
+            throw WireFormatException("wire-codec: malformed date tag")
+        }
+
+        return WireValue.Date(epoch)
     }
 
     private fun decodeBigInt(items: List<*>): WireValue {

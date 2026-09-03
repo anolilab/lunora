@@ -54,6 +54,29 @@ describe("isSecretKeyName (shared/secret-key)", () => {
         expect(isPublicKeyName("STRIPE_SECRET_KEY")).toBe(false);
     });
 
+    it("classifies a plural exactly as its singular, and a run-together compound key too", () => {
+        expect.assertions(10);
+
+        // The list is written in the singular and matched against the singular of
+        // each word. It used to carry a hand-added `CREDENTIALS` and no other
+        // plural, so these six all read as ordinary config — including in the env
+        // error redactor, which scrubs a value only for a secret-named key.
+        expect(isSecretKeyName("SECRETS")).toBe(true);
+        expect(isSecretKeyName("AUTH_TOKENS")).toBe(true);
+        expect(isSecretKeyName("DB_PASSWORDS")).toBe(true);
+        expect(isSecretKeyName("API_KEYS")).toBe(true);
+        expect(isSecretKeyName("PRIVATE_KEYS")).toBe(true);
+        expect(isSecretKeyName("SIGNING_KEYS")).toBe(true);
+        // The run-together tail is derived from the same two lists, so every
+        // compound `*_KEY` has one — not just `apikey`, which was the only one
+        // spelled out by hand.
+        expect(isSecretKeyName("MY_PRIVATEKEY")).toBe(true);
+        // …and pluralising an ordinary config name still does not make it secret.
+        expect(isSecretKeyName("IDEMPOTENCY_KEYS")).toBe(false);
+        expect(isSecretKeyName("SORT_KEYS")).toBe(false);
+        expect(isSecretKeyName("PROGRESS")).toBe(false);
+    });
+
     it("stays anchored on whole words, so an ordinary word that merely contains one is config", () => {
         expect.assertions(3);
 

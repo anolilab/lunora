@@ -94,9 +94,14 @@ const detectHostResource = (read: ResourceEnvReader, pid?: number): OtlpResource
         detected["host.name"] = hostName;
     }
 
-    const podName = read("KUBERNETES_POD_NAME") ?? read("HOSTNAME");
+    // The `KUBERNETES_SERVICE_HOST` gate belongs to the `HOSTNAME` FALLBACK only.
+    // Wrapping the explicit branch in it too dropped `k8s.pod.name` for anyone who
+    // set `KUBERNETES_POD_NAME` directly — the very variable that says "this is a
+    // pod name" — on any host that does not also inject the in-cluster service
+    // env (a `downwardAPI` value on a non-cluster runner, a sidecar-less agent).
+    const podName = read("KUBERNETES_POD_NAME") ?? (read("KUBERNETES_SERVICE_HOST") === undefined ? undefined : read("HOSTNAME"));
 
-    if (podName !== undefined && read("KUBERNETES_SERVICE_HOST") !== undefined) {
+    if (podName !== undefined) {
         detected["k8s.pod.name"] = podName;
     }
 
