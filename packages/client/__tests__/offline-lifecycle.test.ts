@@ -514,8 +514,8 @@ describe("offline lifecycle (e2e)", () => {
         client.close();
     });
 
-    it("5. drops cached reads and queued writes from a different identity across sessions", async () => {
-        expect.assertions(3);
+    it("5. HOLDS a queued write across a reload whose session has not resolved yet, then replays it once the token lands", async () => {
+        expect.assertions(6);
 
         const indexedDB = new IDBFactory();
         const storage = createFakeAsyncStorage();
@@ -524,7 +524,7 @@ describe("offline lifecycle (e2e)", () => {
         // A prior, signed-in session left both a cached read and a queued write
         // stamped with its identity fingerprint.
         await createIndexedDbQueryCache({ indexedDB }).put(queryCacheKey("messages:list", "{}"), {
-            identity: "12:userastamp",
+            identity: "subj:user-a",
             serverCursor: 9,
             ts: 1,
             value: [{ _id: "secret" }],
@@ -533,10 +533,13 @@ describe("offline lifecycle (e2e)", () => {
             args: { title: "user-a" },
             functionPath: "posts:create",
             id: "m1",
-            identity: "12:userastamp",
+            identity: "subj:user-a",
         });
 
-        // --- Reload as a different (here: signed-out) identity ---------------
+        // --- Reload: the socket opens BEFORE the app resolves its session ----
+        // The durable replay starts in the constructor; `setAuthToken` lands a
+        // tick later, once the app's own token read resolves. Signed-out is the
+        // normal state of EVERY reload up to that point — not a different user.
         const client = new LunoraClient({
             fetch: fetchMock,
             persistence: createAsyncStoragePersistence({ storage }),
@@ -551,17 +554,109 @@ describe("offline lifecycle (e2e)", () => {
 
         client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
 
-        // The cached read is not replayed under the new identity.
+        // The cached read is not surfaced to a session with no resolved identity.
         expect(received).toEqual([]);
 
-        // Let any hydrated-write flush attempt settle.
         latestSocket().open();
+        await settleIndexedDb();
+
+        // The write is HELD, not replayed and not purged: there is no other
+        // identity to replay it as, so dropping here would destroy the queuing
+        // user's own offline write, irreversibly.
+        expect(fetchMock).not.toHaveBeenCalled();
+        await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toHaveLength(1);
+
+        // --- The app's session resolves — as the SAME user -------------------
+        client.setAuthToken("token-a", "user-a");
+        await settleIndexedDb();
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(JSON.parse((fetchMock.mock.calls[0]?.[1] as { body?: string } | undefined)?.body ?? "{}")).toMatchObject({ args: { title: "user-a" } });
+        await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toEqual([]);
+
+        client.close();
+    });
+
+    it("5b. drops (and purges) a queued write stamped by a DIFFERENT signed-in identity", async () => {
+        expect.assertions(3);
+
+        const storage = createFakeAsyncStorage();
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+
+        await createAsyncStoragePersistence({ storage }).append({
+            args: { title: "user-a" },
+            functionPath: "posts:create",
+            id: "m1",
+            identity: "subj:user-a",
+        });
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            persistence: createAsyncStoragePersistence({ storage }),
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        const settled: string[] = [];
+
+        client.onMutationSettled((event) => settled.push(event.status));
+
+        // Let the durable queue hydrate, then sign in as a genuinely different
+        // user and open the socket so the replay runs.
         await flushMicrotasks();
 
-        // The queued write is dropped, not replayed under the new identity, and
-        // is purged from durable storage.
+        client.setAuthToken("token-b", "user-b");
+
+        latestSocket().open();
+        await settleIndexedDb();
+
+        // Replaying would attribute user-a's write to user-b — terminal, and
+        // purged so a later hydrate can't resurrect it.
         expect(fetchMock).not.toHaveBeenCalled();
+        expect(settled).toEqual(["rejected"]);
         await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toEqual([]);
+
+        client.close();
+    });
+
+    it("5c. opens a socket for a hydrated write's shard after a crossTabSync tab self-promotes, with no subscription on it", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const storage = createFakeAsyncStorage();
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+
+        await createAsyncStoragePersistence({ storage }).append({
+            args: { title: "write-only" },
+            functionPath: "posts:create",
+            id: "m1",
+            identity: "subj:user-a",
+            shardKey: "s1",
+        });
+
+        // No `subscribe()` anywhere: this shard is write-only, which is exactly
+        // the case `onBecomeLeader`'s subscription replay does not cover.
+        const client = new LunoraClient({
+            crossTabSync: true,
+            fetch: fetchMock,
+            persistence: createAsyncStoragePersistence({ storage }),
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.setAuthToken("token-a", "user-a");
+
+        // Hydration runs inside the coordinator's startup claim window, where
+        // `ensureSocket` is a no-op because this tab is not (yet) the leader.
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(sockets).toHaveLength(0);
+
+        // Self-promotion after a full `leaderTimeout` with no other tab answering.
+        await vi.advanceTimersByTimeAsync(3000);
+
+        expect(sockets.map((socket) => new URL(socket.url).searchParams.get("shard"))).toEqual(["s1"]);
 
         client.close();
     });
