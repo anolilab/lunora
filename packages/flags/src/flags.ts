@@ -71,6 +71,17 @@ const EMPTY_ENV: Record<string, never> = {};
 const envKeyFor = (env: object): object => (Object.keys(env).length === 0 ? EMPTY_ENV : env);
 
 /**
+ * Whether a value is thenable, so a rejection can be attached to it.
+ *
+ * Used on the return of a `void`-declared callback an app may nonetheless have
+ * written `async`: the value is `unknown` at this point, and reading `.then` off
+ * `null` would throw inside the very reporter that exists not to.
+ * @param value The returned value.
+ * @returns `true` when the value can be caught.
+ */
+const isThenable = (value: unknown): value is Promise<unknown> => typeof (value as { then?: unknown } | null)?.then === "function";
+
+/**
  * Report a provider bind that failed — the ONE place this package is allowed to
  * be loud.
  *
@@ -108,7 +119,17 @@ const reportBindFailure = (logger: Logger | undefined, error: unknown): void => 
 
     if (logger) {
         try {
-            logger.error(message);
+            // `Logger.error` is typed `void`, but nothing stops an implementation
+            // being `async` — and an ignored rejected promise is an unhandled
+            // rejection, which is the failure mode this whole function exists to
+            // avoid. Swallow both halves: the synchronous throw via `catch`, and a
+            // returned thenable via its own handler.
+            // eslint-disable-next-line @typescript-eslint/no-confusing-void-expression -- `Logger` is `@openfeature/server-sdk`'s and declares `error` as `void`, which under-describes what an implementation may return; reading it is the whole defence
+            const reported: unknown = logger.error(message);
+
+            if (isThenable(reported)) {
+                reported.catch(() => undefined);
+            }
 
             return;
         } catch {

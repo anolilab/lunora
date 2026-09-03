@@ -398,6 +398,50 @@ describe("createFlags", () => {
         }
     });
 
+    // `Logger.error` is typed `void`, which does not stop an app shipping an
+    // `async` one. Its rejected promise is then dropped on the floor — the same
+    // unhandled rejection the synchronous case above fixed, through the other
+    // half of the door.
+    it("survives a logger whose error method rejects asynchronously", async () => {
+        expect.assertions(3);
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+        const unhandled = vi.fn<(reason: unknown) => void>();
+
+        process.on("unhandledRejection", unhandled);
+
+        const noop = (): void => {};
+        const hostile = defineFlags({
+            logger: {
+                debug: noop,
+                // eslint-disable-next-line @typescript-eslint/no-misused-promises -- the misuse IS the case under test: `Logger.error` is declared `void` and an app can still ship an async one
+                error: async (): Promise<void> => {
+                    await Promise.reject(new Error("logger exploded later"));
+                },
+                info: noop,
+                warn: noop,
+            },
+            provider: () => {
+                throw new Error('no binding "FLAGS" found on env');
+            },
+        });
+
+        try {
+            await expect(createFlags(hostile, env).boolean("kill-switch", true)).resolves.toBe(true);
+
+            await new Promise((resolve) => {
+                setTimeout(resolve, 0);
+            });
+
+            expect(unhandled).not.toHaveBeenCalled();
+            // The async logger accepted the message, so the console fallback is
+            // NOT used — unlike the synchronous throw, which never delivered it.
+            expect(consoleError).not.toHaveBeenCalled();
+        } finally {
+            process.off("unhandledRejection", unhandled);
+        }
+    });
+
     // The generated `evaluateFlags` reads flags one `await` at a time. Because a
     // failed bind is dropped from the per-isolate memo so the NEXT request can
     // retry, each sequential read used to start its own bind — one provider

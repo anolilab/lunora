@@ -62,15 +62,54 @@ const tokenize = (key: string): string[] =>
         .filter((token) => token.length > 0);
 
 /**
+ * How many {@link NEGATION_TOKENS} negate the WHOLE key, counted as a run inward
+ * from each end.
+ *
+ * A negation only inverts the flag when it applies to the name entire —
+ * `disableRls`, `rlsDisabled`, `skipEnforcement`. In the middle it qualifies the
+ * noun beside it instead: `allowWithoutAuth` still GRANTS something (access
+ * without auth), so its safe default is a permission's `false`, not `true`.
+ * Counting every position flipped that key and had the rule suppress a genuinely
+ * unsafe `true` default while recommending the wrong value — the failure this
+ * rule exists to catch, produced by the rule itself.
+ *
+ * Runs rather than just the two end slots, so the double negation the parity
+ * count exists for still lands back on the un-negated polarity: `disableSkipRls`
+ * has a leading run of two.
+ * @param tokens The key's tokens, in order.
+ * @returns The number of negations that apply to the whole key.
+ */
+const negationsAtEdges = (tokens: ReadonlyArray<string>): number => {
+    let leading = 0;
+
+    while (leading < tokens.length && NEGATION_TOKENS.has(tokens[leading] as string)) {
+        leading += 1;
+    }
+
+    if (leading === tokens.length) {
+        return leading;
+    }
+
+    let trailing = 0;
+
+    while (trailing < tokens.length - leading && NEGATION_TOKENS.has(tokens[tokens.length - 1 - trailing] as string)) {
+        trailing += 1;
+    }
+
+    return leading + trailing;
+};
+
+/**
  * What a security-shaped key guards, and the boolean default that fails CLOSED
  * for it — or `undefined` when the key's polarity is indeterminate.
  *
  * A key with a *protection* token (`enforce`/`rls`/`gate`/`lockdown`/`disallow`)
  * must default `true`; one with a *permission* token (`allow`/`permit`/`bypass`)
- * must default `false`. Each {@link NEGATION_TOKENS} token in the key flips that,
- * so `disableRls`/`rlsDisabled`/`skipEnforcement` must default `false` — counted
- * by parity, so a double negation (`disableSkipRls`) lands back on the
- * un-negated polarity.
+ * must default `false`. A {@link NEGATION_TOKENS} token flips that when it negates
+ * the whole key — see {@link negationsAtEdges} — so
+ * `disableRls`/`rlsDisabled`/`skipEnforcement` must default `false`, counted by
+ * parity so a double negation (`disableSkipRls`) lands back on the un-negated
+ * polarity, while a mid-name qualifier (`allowWithoutAuth`) flips nothing.
  *
  * `protects` is reported ALONGSIDE `safeDefault` rather than derived from it,
  * because negation decouples the two: `enforceRls` and `disableRls` both guard a
@@ -90,9 +129,7 @@ const polarityOf = (key: string): { protects: boolean; safeDefault: boolean } | 
         return undefined;
     }
 
-    const negated = tokens.filter((token) => NEGATION_TOKENS.has(token)).length % 2 === 1;
-
-    return { protects: isProtect, safeDefault: negated ? !isProtect : isProtect };
+    return { protects: isProtect, safeDefault: negationsAtEdges(tokens) % 2 === 1 ? !isProtect : isProtect };
 };
 
 /**

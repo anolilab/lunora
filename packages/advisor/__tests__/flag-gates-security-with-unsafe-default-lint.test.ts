@@ -83,6 +83,32 @@ describe("flag_gates_security_with_unsafe_default", () => {
         },
     );
 
+    // A negation only inverts when it negates the WHOLE key. Mid-name it qualifies
+    // the noun beside it: `allowWithoutAuth` still GRANTS access (without auth),
+    // so it is a permission key and `true` is the unsafe default. Counting every
+    // position made these compute a safe default of `true` — suppressing the real
+    // finding AND telling the user to write the value that opens the hole.
+    it.each([["allowWithoutAuth"], ["allowNoAuth"], ["permitWithoutReview"], ["bypassNoLimit"]] as const)(
+        "flags the permission key %s defaulting true, despite a mid-name qualifier",
+        (key) => {
+            expect.assertions(2);
+
+            const findings = flagGatesSecurityWithUnsafeDefault.run({ flagSecurityDefaults: [row(key, true, 1)], schema: schema() });
+
+            expect(findings).toHaveLength(1);
+            expect(findings[0]?.detail).toContain("default it to `false`");
+        },
+    );
+
+    it.each([["allowWithoutAuth"], ["allowNoAuth"], ["permitWithoutReview"], ["bypassNoLimit"]] as const)(
+        "does not flag the permission key %s defaulting false",
+        (key) => {
+            expect.assertions(1);
+
+            expect(flagGatesSecurityWithUnsafeDefault.run({ flagSecurityDefaults: [row(key, false, 1)], schema: schema() })).toHaveLength(0);
+        },
+    );
+
     // A double negation lands back on the un-negated polarity.
     it("scores a doubly-negated key as un-negated", () => {
         expect.assertions(2);
