@@ -1,3 +1,14 @@
+## @lunora/replica [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.79...@lunora/replica@1.0.0-alpha.80) (2026-09-03)
+
+### Bug Fixes
+
+* audit rounds 14-16 ([#586](https://github.com/anolilab/lunora/issues/586)) ([6a09b74](https://github.com/anolilab/lunora/commit/6a09b746cfc9fb36f451c208b7a1c3eac16e56f4))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.101
+
 ## @lunora/replica [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.78...@lunora/replica@1.0.0-alpha.79) (2026-09-03)
 
 ### ⚠ BREAKING CHANGES
