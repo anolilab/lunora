@@ -338,6 +338,7 @@ type SubscriptionStatus = "expired" | "failed" | "ok";
 ```ts
 interface SubscriptionStore {
     delete: (id: string) => Promise<void>;
+    deleteOwned: (id: string, userId: string | null) => Promise<boolean>;
     get: (id: string) => Promise<StoredSubscription | undefined>;
     list: (filter?: SubscriptionFilter) => Promise<StoredSubscription[]>;
     markStatus: (id: string, status: SubscriptionStatus, error?: string) => Promise<void>;

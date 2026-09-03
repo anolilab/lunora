@@ -135,6 +135,31 @@ export interface SubscriptionFilter {
 export interface SubscriptionStore {
     /** Remove a subscription by id (idempotent). */
     delete: (id: string) => Promise<void>;
+
+    /**
+     * Remove a subscription by id ONLY if it is owned by `userId`, and report
+     * whether it was.
+     *
+     * Separate from {@link SubscriptionStore.delete} because the caller-facing
+     * `unregister` must not be a read followed by a write: between a `get` that
+     * checks the owner and a `delete` that acts on it, a re-registration can
+     * replace the row, so the check passes for one owner and the removal lands on
+     * another's subscription.
+     *
+     * **The predicate and the removal must be ONE operation.** A store that
+     * cannot do that atomically should say so in its own documentation rather
+     * than implement this as a get-then-delete, which reintroduces the race this
+     * method exists to remove. Both shipped stores manage it: the in-memory one
+     * because a `Map` check-and-delete has no await between the two, and the D1
+     * one with a single `DELETE … WHERE id = ? AND user_id = ? RETURNING id`.
+     *
+     * `userId` is `null` for an anonymous subscription, and matches only a row
+     * that is itself unowned.
+     * @param id The subscription id.
+     * @param userId The owner the row must carry, or `null` for unowned.
+     * @returns `true` when a row was removed.
+     */
+    deleteOwned: (id: string, userId: string | null) => Promise<boolean>;
     /** Read a subscription by id, or `undefined`. */
     get: (id: string) => Promise<StoredSubscription | undefined>;
 

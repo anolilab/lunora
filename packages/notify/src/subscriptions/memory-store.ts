@@ -41,6 +41,19 @@ const memorySubscriptionStore = (): SubscriptionStore => {
 
             return Promise.resolve();
         },
+        // Atomic by construction: there is no `await` between the read and the
+        // removal, so nothing can replace the row in between.
+        deleteOwned: (id: string, userId: string | null): Promise<boolean> => {
+            const stored = map.get(id);
+
+            if (stored === undefined || (stored.userId ?? null) !== userId) {
+                return Promise.resolve(false);
+            }
+
+            map.delete(id);
+
+            return Promise.resolve(true);
+        },
         get: (id: string): Promise<StoredSubscription | undefined> => Promise.resolve(map.get(id)),
         list: (filter?: SubscriptionFilter): Promise<StoredSubscription[]> => {
             const result: StoredSubscription[] = [];

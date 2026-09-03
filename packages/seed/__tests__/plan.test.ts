@@ -636,30 +636,54 @@ describe("seedPlan — unique foreign keys", () => {
         expect(new Set(values).size).toBe(8);
     });
 
-    it("keeps a .unique() self-reference distinct when the table already holds rows", () => {
-        expect.hasAssertions();
+    it("refuses a .unique() self-reference into a table that already holds rows", () => {
+        expect.assertions(2);
 
-        // `fkPool` appends `existingIds` AFTER the freshly-generated ones, so
-        // taking the pool's last entry handed every row the same pre-existing id
-        // — 12 rows, one value, and a UNIQUE violation on the second insert. The
-        // batch has to be bigger than the pre-existing set for the collision to
-        // show at all: with one new row there is nothing for it to collide with.
-        const existing = ["n-old-1", "n-old-2"];
-        const { rows } = seedPlan(defineSchema({ nodes: defineTable({ previousId: v.optional(v.id("nodes").unique()) }) }), {
-            counts: { nodes: 12 },
-            existingIds: { nodes: existing },
-            now: 1_700_000_000_000,
-            seed: 1,
-        }).find((entry) => entry.table === "nodes")!;
-        const links = rows.map((row) => row.previousId as string);
-        const reachable = new Set([...existing, ...rows.map((row) => row._id as string)]);
+        // This case used to be seeded, asserting the NEW rows' links were
+        // distinct from each other. That never established the constraint:
+        // `existingIds` carries the table's row IDS, not the values those rows
+        // already store in this very column, so a new row could be dealt a
+        // parent an existing row had already taken and the insert would violate
+        // the UNIQUE the deal exists to satisfy. `indexOffset` keeps `_id` from
+        // repeating and says nothing about this column.
+        //
+        // Nothing available at plan time can rule that out, so it is refused with
+        // the column named — the same answer the pool-capacity check gives, and
+        // the one the docs promise instead of a silent violation.
+        const plan = () =>
+            seedPlan(defineSchema({ nodes: defineTable({ previousId: v.optional(v.id("nodes").unique()) }) }), {
+                counts: { nodes: 12 },
+                existingIds: { nodes: ["n-old-1", "n-old-2"] },
+                now: 1_700_000_000_000,
+                seed: 1,
+            });
 
-        expect(new Set(links).size).toBe(links.length);
-        expect(links.filter((id) => !reachable.has(id))).toStrictEqual([]);
+        expect(plan).toThrow(/unique self-referencing column "previousId"/u);
+        // Seeding the same table from empty still works, so the first run — the
+        // common case — is untouched.
+        expect(() =>
+            seedPlan(defineSchema({ nodes: defineTable({ previousId: v.optional(v.id("nodes").unique()) }) }), {
+                counts: { nodes: 12 },
+                now: 1_700_000_000_000,
+                seed: 1,
+            }),
+        ).not.toThrow();
+    });
 
-        // Still no forward reference: a row may only point at a pre-existing row
-        // or at one this batch emitted before it.
-        expect(links.filter((id, index) => !existing.includes(id) && !rows.slice(0, index).some((row) => row._id === id))).toStrictEqual([]);
+    it("lets a caller supplying the self-reference column decide its uniqueness", () => {
+        expect.assertions(1);
+
+        // The escape hatch the refusal names: an override means the caller owns
+        // the values, so the planner does not need to know what is stored.
+        expect(() =>
+            seedPlan(defineSchema({ nodes: defineTable({ previousId: v.optional(v.id("nodes").unique()) }) }), {
+                counts: { nodes: 3 },
+                existingIds: { nodes: ["n-old-1"] },
+                now: 1_700_000_000_000,
+                overrides: { nodes: { previousId: null } },
+                seed: 1,
+            }),
+        ).not.toThrow();
     });
 
     it("leaves an ordinary foreign key drawing with replacement", () => {

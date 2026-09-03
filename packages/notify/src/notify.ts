@@ -584,13 +584,11 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             // implementation is free to ignore is not a check. The internal
             // gone-pruning path (`deliver`) keeps calling `store.delete`
             // directly — it acts on a delivery receipt, not on a caller's key.
-            const stored = await subscriptionStore.get(id);
-
-            if (stored === undefined || (stored.userId ?? null) !== (owner.userId ?? null)) {
-                return;
-            }
-
-            await subscriptionStore.delete(id);
+            // One conditional delete, not a read then a write: between a `get`
+            // that checks the owner and a `delete` that acts on it, a
+            // re-registration can replace the row, so the check would pass for
+            // one owner and the removal land on another's subscription.
+            await subscriptionStore.deleteOwned(id, owner.userId ?? null);
         },
     };
 

@@ -233,6 +233,42 @@ const generateField = (field: FieldSpec, context: RowContext): unknown => {
 };
 
 /**
+ * Refuse a `.unique()` SELF-referencing foreign key into a table that already
+ * holds rows.
+ *
+ * A self-reference is dealt the preceding row rather than from a pool, which is
+ * distinct within one batch and says nothing across calls: `existingIds` carries
+ * the table's row IDS, never the values those rows already store IN this column,
+ * so nothing here can tell which parents are taken — and `indexOffset` only keeps
+ * `_id` from repeating. Inserting anyway violates the constraint the deal exists
+ * to satisfy, so it is refused with the column named, as the pool-capacity check
+ * already does.
+ *
+ * An override is the escape hatch: the caller then owns the values, and the
+ * planner does not need to know what is stored.
+ * @param field The self-referencing field.
+ * @param table The table being seeded.
+ * @param poolOf The parent pool resolver — for a self-reference this is the
+ * table's pre-existing ids, since its own batch has generated none yet.
+ * @param tableOverrides Caller-supplied column values for this table.
+ */
+const assertSelfReferenceDealable = (
+    field: FieldSpec,
+    table: string,
+    poolOf: (field: FieldSpec) => ReadonlyArray<string>,
+    tableOverrides: Record<string, unknown>,
+): void => {
+    if (poolOf(field).length === 0 || Object.hasOwn(tableOverrides, field.name)) {
+        return;
+    }
+
+    throw new LunoraError(
+        "BAD_REQUEST",
+        `cannot seed into the non-empty table "${table}": unique self-referencing column "${field.name}" cannot be dealt across calls, because the values already stored in it are not knowable from the row ids. Seed the table in one call, or supply "${field.name}" yourself.`,
+    );
+};
+
+/**
  * Decide how every `.unique()` column of one table deals its values, and fail
  * fast when a column cannot produce as many distinct values as the batch asks
  * for — otherwise the collision only surfaces later as a raw UNIQUE-constraint
@@ -247,9 +283,11 @@ const generateField = (field: FieldSpec, context: RowContext): unknown => {
  * Server-defaulted columns are skipped (their values never reach the generator)
  * — but a FOREIGN KEY does reach it, default or not, since `generateField`
  * resolves the FK before it consults the default. A foreign key is dealt from
- * its parent pool, whose size is the capacity; a SELF-referencing one is
- * skipped because its pool is the rows this very batch has yet to generate, and
- * `generateField` deals it the preceding row instead.
+ * its parent pool, whose size is the capacity; a SELF-referencing one is dealt
+ * the preceding row by `generateField` instead, because its pool is the rows this
+ * very batch has yet to generate — and is REFUSED once the table
+ * already holds rows, since the values they store in that column cannot be read
+ * back from the row ids and a repeat would violate the constraint.
  *
  * An overridden column still gets a deal — an override may resolve to
  * `undefined` and defer back to the generator — but its capacity is not
@@ -267,7 +305,13 @@ const planUniqueDeals = (
     const deals = new Map<string, UniqueDeal>();
 
     for (const field of fields) {
-        if (!field.unique || (field.hasServerDefault && field.fkTable === undefined) || field.fkTable === table) {
+        if (!field.unique || (field.hasServerDefault && field.fkTable === undefined)) {
+            continue;
+        }
+
+        if (field.fkTable === table) {
+            assertSelfReferenceDealable(field, table, poolOf, tableOverrides);
+
             continue;
         }
 
