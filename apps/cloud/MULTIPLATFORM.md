@@ -463,6 +463,57 @@ tested by a second implementation instead of by inspection.
 | 5   | Where converge runs               | control-plane Worker vs build container vs separate service | **Build container.** Forced by Alchemy's Node deps, and correct on blast radius anyway.                                                                             |
 | 6   | Openship code reuse               | patterns only vs port Apache-2.0 modules                    | **Port `core/src/metadata/` (config import) with attribution; patterns only elsewhere.** The rest is machine-shaped. Record it in `LICENSE.md` third-party notices. |
 | 7   | Relationship to PR #190           | wait for it vs build in parallel                            | **Parallel, but take its vocabulary.** `TargetCapabilities` must compose with `PlatformCapabilities`, not compete. Phases 0–2 do not depend on #190 merging.        |
+| 8   | Own the runtime or rent it        | rent Cloudflare vs fork a runtime vs build one              | **Rent, and keep the seam.** The runtime is a cost centre; the control plane and the DX are the product. celld ships unforked as the self-host tier — see below.    |
+
+### 7.8 Own the runtime or rent it — the long form
+
+Row 8 is the only decision here that changes what Lunora Cloud _is_, so it does
+not fit in a cell.
+
+**The question.** Cloud today is a Workers-for-Platforms control plane (§0), so
+Cloudflare is both the substrate and the COGS floor. Owning a runtime instead —
+forking [celld](https://github.com/denoland/celld) (Apache-2.0, executes Wrangler
+bundles, self-hosted distributed Durable Objects; see `@lunora/platform-celld`)
+or building one — would recover that margin and unlock deployments Cloudflare
+structurally cannot sell.
+
+**The answer is rent, for three reasons that are not "it is hard".**
+
+1. **It contradicts a published promise.** `ROADMAP.md` says "there is no
+   proprietary runtime to get stuck in" and sells no-lock-in as the reason to
+   trust Cloud. A fork _is_ a proprietary runtime. Reversing that is a
+   positioning change to make deliberately, not to arrive at by way of a
+   dependency.
+2. **Stateful blast radius.** Lunora apps keep customer rows in the shard. On
+   Cloudflare, a Durable Object losing data is Cloudflare's incident; on a fleet
+   we operate, a split-brain cell eating a tenant's rows is an existential
+   incident for us, at a headcount with nobody on call for object-store
+   consistency. That risk is not proportional to the margin recovered until the
+   customer count makes it obviously so.
+3. **The seam is the asset, not the runtime.** `PlatformCapabilities` plus the
+   `TargetDriver` extraction (Phase 1) is what makes "we can move" true. It pays
+   for itself inside the Cloudflare-only product, and every option below stays
+   open behind it — including eventually owning a fleet.
+
+**Where celld fits anyway**, and it does fit — unforked, which is _better_ for
+the no-lock-in promise than a fork would be:
+
+- **Self-hosted / sovereign / air-gapped.** The tier Cloudflare cannot sell.
+  Already costs ~55 lines (`@lunora/platform-celld` recomposes the Cloudflare
+  adapters under a celld capability matrix), and it is a real enterprise line
+  item against every Workers-shaped competitor.
+- **Fully-managed "Later" (`ROADMAP.md` phase 2).** Operating a celld fleet
+  needs no fork either — Apache-2.0, `celld deploy` works today.
+
+**When to revisit.** Two triggers, both concrete: a patch upstream refuses (they
+take `git format-patch` by email under a CLA assigning rights, so friction is
+real), or an SLA that cannot sit on an upstream alpha with no LTS. The answer to
+the second is a **pinned vendored build carrying patches we upstream**, not a
+fork we let diverge. Fork the day we are already carrying a rejected patch.
+
+**Risk to keep in view.** celld is Deno Land's, and hosted celld is a plausible
+product for them — the same platform risk Cloudflare already represents. That is
+an argument for the abstraction, not for owning a second runtime.
 
 ---
 
@@ -475,6 +526,8 @@ Stated so they don't creep back in:
   **Lunora apps**. Gaps 9, 12 in §2 are permanent rejections, not backlog.
 - **We are not running an MTA.** `@lunora/mail` → Resend, full stop.
 - **We are not promising target parity.** Capability-gated, per §7.4.
+- **We are not building or forking a runtime.** Per §7.8: we rent the substrate
+  and own the control plane. celld ships unforked as the self-host tier.
 - **We are not rewriting the observability stack per target.** OTel is the
   substrate-neutral floor (alpha owns it, PR #189); a target that cannot emit
   OTLP gets degraded observability and says so.
