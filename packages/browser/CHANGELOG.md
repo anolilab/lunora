@@ -1,3 +1,19 @@
+## @lunora/browser [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.38...@lunora/browser@1.0.0-alpha.39) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* `SubscriptionStore` requires `deleteOwned(id, userId)`. Both
+shipped stores implement it; an external store must make the predicate and the
+removal atomic rather than reintroduce the read-then-write race. Seeding a
+`.unique()` self-referencing column into a non-empty table is now refused.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* close twelve review findings, three fail-open ([#587](https://github.com/anolilab/lunora/issues/587)) ([74c2ac0](https://github.com/anolilab/lunora/commit/74c2ac0028a77c357870ca120e0b76d65627581e))
+
 ## @lunora/browser [1.0.0-alpha.38](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.37...@lunora/browser@1.0.0-alpha.38) (2026-09-03)
 
 ### Bug Fixes

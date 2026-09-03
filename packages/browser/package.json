@@ -1,6 +1,6 @@
 {
     "name": "@lunora/browser",
-    "version": "1.0.0-alpha.38",
+    "version": "1.0.0-alpha.39",
     "description": "Cloudflare Browser Rendering for Lunora: ctx.browser screenshots, PDF, and scraping in actions",
     "keywords": [
         "browser-rendering",
