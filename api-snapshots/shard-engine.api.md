@@ -2622,6 +2622,7 @@ interface ShardSocketLike {
 ```ts
 interface SocketAttachment {
     admin?: boolean;
+    adminBinding?: string;
     clientId?: string;
     connected?: boolean;
     connectionId?: string;
