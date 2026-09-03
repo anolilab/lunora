@@ -563,6 +563,62 @@ describe(defineRag, () => {
         expect(vi.mocked(embed)).toHaveBeenCalledTimes(embedCallsAfterFirst);
     });
 
+    // A tenant move (or an ACL/status correction) changes only `metadata`, and
+    // `metadata` is exactly what `rlsFilter`/`metadataFilter` scope a retrieval
+    // on. Hashing the body alone made that a reported-success no-op: every
+    // vector kept the OLD `orgId`, so the old tenant retrieved the document
+    // forever and the new one never saw it.
+    it("re-indexes when only the metadata changed", async () => {
+        expect.assertions(3);
+
+        const { store, vectors } = memoryVectors();
+        const ctx = fakeCtx(vectors);
+        const rag = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs" })(ctx);
+
+        await rag.index({ id: "doc-1", metadata: { orgId: "org-a" }, text: "alpha | beta" });
+
+        const moved = await rag.index({ id: "doc-1", metadata: { orgId: "org-b" }, text: "alpha | beta" });
+
+        expect(moved.unchanged).toBe(false);
+        expect(store.get("doc-1#0")?.metadata).toMatchObject({ orgId: "org-b" });
+        expect(store.get("doc-1#1")?.metadata).toMatchObject({ orgId: "org-b" });
+    });
+
+    // `importance` is written onto every chunk and multiplied into the match
+    // score, so demoting a source over an unchanged body must not short-circuit.
+    it("re-indexes when only the importance changed", async () => {
+        expect.assertions(2);
+
+        const { store, vectors } = memoryVectors();
+        const ctx = fakeCtx(vectors);
+        const rag = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs" })(ctx);
+
+        await rag.index({ id: "doc-1", importance: 1, text: "alpha | beta" });
+
+        const demoted = await rag.index({ id: "doc-1", importance: 0, text: "alpha | beta" });
+
+        expect(demoted.unchanged).toBe(false);
+        expect(store.get("doc-1#0")?.metadata).toMatchObject({ __ragImportance: 0 });
+    });
+
+    // The identity encoding sorts object keys at every depth, so a re-sync that
+    // merely reorders the same metadata stays the cheap no-op it was.
+    it("still short-circuits when the same metadata is written in a different key order", async () => {
+        expect.assertions(2);
+
+        const { vectors } = memoryVectors();
+        const ctx = fakeCtx(vectors);
+        const rag = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs" })(ctx);
+
+        await rag.index({ id: "doc-1", metadata: { orgId: "org-a", title: "t" }, text: "alpha | beta" });
+
+        const embedCallsAfterFirst = vi.mocked(embed).mock.calls.length;
+        const second = await rag.index({ id: "doc-1", metadata: { title: "t", orgId: "org-a" }, text: "alpha | beta" });
+
+        expect(second.unchanged).toBe(true);
+        expect(vi.mocked(embed)).toHaveBeenCalledTimes(embedCallsAfterFirst);
+    });
+
     it("re-runs the whole index path under `reindex`, mirroring into a newly attached store", async () => {
         expect.assertions(3);
 

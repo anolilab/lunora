@@ -140,19 +140,29 @@ const mcp = createPaidMcpServer({ charge: { network: "base", recipient: { evm: e
 mcp.paidTool({ name: "premium_report", description: "the paid report", inputSchema: { properties: {}, type: "object" }, price: "$0.05" }, async () =>
     text(await buildReport()),
 );
+
+export default { fetch: mcp.fetchHandler };
 ```
+
+`fetchHandler` takes the Worker's `(request, env, ctx)` triple, so mounting it as
+the default export is what wires `ctx.waitUntil` through to the charge
+middleware — see Receipts below.
 
 ### Receipts
 
 `onReceipt` is an opt-in, one-way telemetry sink fired once per settled
 payment: best-effort, never blocking the paid response. Use it (with
 `toPaymentEventRow`) to mirror x402 revenue into a durable table or
-`@lunora/payment`'s `events` table so it surfaces in Studio. On Workers, wire
-the request's `ctx.waitUntil` to the gate's `deps.waitUntil` (where the caller
-has one to give, e.g. `@lunora/runtime`'s `x402Charge` seam) so the sink is
-registered with `waitUntil` and survives past the response; otherwise
-workerd cancels the in-flight sink promise at isolate teardown once the
-response returns, before an async sink (e.g. a database insert) resolves.
+`@lunora/payment`'s `events` table so it surfaces in Studio. On Workers, the
+request's `ctx.waitUntil` has to reach the gate's `deps.waitUntil` so the sink is
+registered with it and survives past the response; otherwise workerd cancels the
+in-flight sink promise at isolate teardown once the response returns, before an
+async sink (e.g. a database insert) resolves. Every rail wires this for you as
+long as it can see the execution context — `withX402` reads it off the action
+`ctx`, `@lunora/runtime`'s `x402Charge` seam forwards the request's, and
+`createPaidMcpServer`'s `fetchHandler` takes it as its third argument, so mount
+it as `export default { fetch: mcp.fetchHandler }` rather than calling it with a
+bare `Request`.
 
 ## The pay rail: buy a resource
 

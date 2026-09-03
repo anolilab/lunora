@@ -2,6 +2,10 @@ import { isLunoraError, LunoraError } from "@lunora/errors";
 import type { EmbeddingModel } from "ai";
 import { embed as aiEmbed, embedMany as aiEmbedMany, jsonSchema, tool } from "ai";
 
+// Repo-root inlined helper (see shared/stable-key.ts) — the canonical
+// code-point-stable, recursively-sorted encoder, used here to give a source's
+// `metadata` one canonical form to hash (see `sourceIdentity`).
+import { stableStringify } from "../../../../shared/stable-key";
 import { estimateModelCost } from "../pricing";
 import fixedWindowChunks from "./chunk";
 import { concurrentMap, INDEX_CONCURRENCY } from "./concurrent";
@@ -175,6 +179,37 @@ const parseChunkVectorId = (id: string, namespace: string | undefined): { chunkI
 };
 
 const sha256Hex = async (text: string): Promise<string> => contentHash(new TextEncoder().encode(text));
+
+/**
+ * The canonical encoding of everything an `index()` call writes onto a source's
+ * vectors — its body, its `metadata`, and its `importance`.
+ *
+ * The re-index short-circuit compares a hash of this, not of `text` alone.
+ * `metadata` is what scopes a document: `rlsFilter` and `metadataFilter` both
+ * evaluate against it, so hashing the body only made a tenant move over an
+ * unchanged body (`{ orgId: "org-a" }` → `{ orgId: "org-b" }`) report
+ * `{ unchanged: true }` while every vector kept the OLD `orgId` — the previous
+ * tenant kept retrieving the document forever and the new one never saw it.
+ * `importance` is written onto every chunk and multiplied into its score, so it
+ * belongs here for the same reason.
+ *
+ * `stableStringify` sorts object keys at every depth, so re-syncing the same
+ * metadata written in a different key order is still the cheap no-op it was. It
+ * throws on a value it cannot faithfully encode (a `Date`, a `bigint`, a cycle);
+ * that is not a reason to refuse the index, so it returns `undefined` and the
+ * caller skips the short-circuit — the source re-indexes, exactly as it would
+ * under `reindex: true`.
+ */
+const sourceIdentity = (input: IndexInput): string | undefined => {
+    try {
+        // An array, not an object: `stableStringify` skips `undefined` object
+        // fields (so an absent `metadata` would collide with a present one) but
+        // encodes it positionally inside an array.
+        return stableStringify([input.text, input.metadata, input.importance]);
+    } catch {
+        return undefined;
+    }
+};
 
 /** Keep only chunks scoring at or above `minScore`. */
 const aboveScore = (chunks: ReadonlyArray<RetrievedChunk>, minScore: number): RetrievedChunk[] => chunks.filter((chunk) => chunk.score >= minScore);
@@ -730,14 +765,19 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             }
 
             const effectiveNamespace = withModelTag(input.namespace);
-            const hash = await sha256Hex(input.text);
+            // Hashes the whole stored identity (body + metadata + importance),
+            // not just the body — see {@link sourceIdentity}. An identity that
+            // cannot be encoded still needs a stored hash, so it falls back to
+            // the body and forfeits only the short-circuit below.
+            const identity = sourceIdentity(input);
+            const hash = await sha256Hex(identity ?? input.text);
             const previous = await readHead(input.id, effectiveNamespace);
 
             // Unchanged content is a no-op re-sync: skip chunking, embedding,
             // and every write. (Vectorize applies mutations asynchronously, so
             // a hash written moments ago may not be visible yet — the worst
             // case is a redundant, idempotent re-index.)
-            if (input.reindex !== true && previous.hash === hash && previous.chunks !== undefined) {
+            if (input.reindex !== true && identity !== undefined && previous.hash === hash && previous.chunks !== undefined) {
                 return {
                     chunks: previous.chunks,
                     ids: Array.from({ length: previous.chunks }, (_, chunkIndex) => chunkVectorId(effectiveNamespace, input.id, chunkIndex)),
