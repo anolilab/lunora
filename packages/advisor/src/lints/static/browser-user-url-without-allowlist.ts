@@ -43,6 +43,14 @@ const browserUserUrlWithoutAllowlist: Lint = makeArgumentDerivedSinkLint<Advisor
     // `resolveDns` contains the SSRF surface — suppress every finding when one is
     // visible. Only an analyzable (non-spread, static object-literal) config call
     // counts; an opaque config could set the key elsewhere but can't be relied on.
+    //
+    // App-global on purpose, and sound because `ctx.browser` resolves from ONE
+    // `browser: (env) => createBrowser(...)` config thunk: every navigation this
+    // lint sees goes through that instance, so "a hardened createBrowser exists"
+    // and "the instance behind ctx.browser is hardened" are the same statement.
+    // A second `createBrowser` built for something else is not reachable as
+    // `ctx.browser`, and requiring EVERY call to be hardened would flag
+    // navigations that the allowlist does in fact contain.
     suppressWhen: (context) =>
         (context.configCalls ?? []).some(
             (call) =>

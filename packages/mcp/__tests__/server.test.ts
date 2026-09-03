@@ -183,7 +183,7 @@ describe("createLunoraMcpServer request handlers", () => {
         })) as CallToolResult;
 
         expect(mock.query).toHaveBeenCalledTimes(1);
-        expect(result.structuredContent).toStrictEqual({ entries: [{ level: "info", message: "hello", timestamp: 1 }], total: 1 });
+        expect(result.structuredContent).toStrictEqual({ dropped: 0, entries: [{ level: "info", message: "hello", timestamp: 1 }], total: 1 });
         expect(JSON.parse((result.content[0] as { text: string }).text)).toStrictEqual(result.structuredContent);
     });
 

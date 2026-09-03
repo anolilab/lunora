@@ -46,6 +46,40 @@ describe("ratelimit_middleware_fail_open", () => {
         expect(findings).toHaveLength(1);
     });
 
+    it("does not flag a benign procedure that merely spells a sensitive token inside a word", () => {
+        expect.assertions(1);
+
+        // `updatePresets` contains "reset"; `snapshotPrune` and
+        // `listSlotProfiles` contain "otp". None is an auth/payment flow, and a
+        // lint documenting itself as high-precision must not claim they are.
+        const findings = ratelimitMiddlewareFailOpen.run({
+            failOpenGuards: [
+                { callee: "rateLimit", exportName: "updatePresets", failOpen: true, file: "presets", limitName: "presets", line: 1 },
+                { callee: "rateLimit", exportName: "snapshotPrune", failOpen: true, file: "snapshots", limitName: "snapshots", line: 2 },
+                { callee: "rateLimit", exportName: "listSlotProfiles", failOpen: true, file: "slots", limitName: "slots", line: 3 },
+            ],
+            schema: schema(),
+        });
+
+        expect(findings).toHaveLength(0);
+    });
+
+    it("still flags a sensitive word inside a longer camelCase or one-word name", () => {
+        expect.assertions(1);
+
+        const findings = ratelimitMiddlewareFailOpen.run({
+            failOpenGuards: [
+                { callee: "rateLimit", exportName: "signInWithEmail", failOpen: true, file: "auth", limitName: "", line: 1 },
+                { callee: "rateLimit", exportName: "loginHandler", failOpen: true, file: "auth", limitName: "", line: 2 },
+                { callee: "rateLimit", exportName: "createCheckoutSession", failOpen: true, file: "billing", limitName: "", line: 3 },
+                { callee: "rateLimit", exportName: "start", failOpen: true, file: "auth", limitName: "otp-start", line: 4 },
+            ],
+            schema: schema(),
+        });
+
+        expect(findings).toHaveLength(4);
+    });
+
     it("returns [] when failOpenGuards is undefined", () => {
         expect.assertions(1);
 

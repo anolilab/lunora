@@ -124,7 +124,10 @@ const readFunctionPath = (input: Record<string, unknown>): string => {
     const { functionPath } = input;
 
     if (typeof functionPath !== "string" || functionPath.length === 0) {
-        throw new LunoraError("INTERNAL", '"functionPath" is required and must be a non-empty string');
+        // BAD_REQUEST, not INTERNAL: the value comes from the model's own
+        // `arguments` bag, so it is the caller's mistake — same as the
+        // `readArgumentsBag` refusals below, and what the docs document.
+        throw new LunoraError("BAD_REQUEST", '"functionPath" is required and must be a non-empty string');
     }
 
     return functionPath;

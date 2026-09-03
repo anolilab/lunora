@@ -128,10 +128,18 @@ const MIGRATION_STATUS_INPUT_SCHEMA: ToolInputSchema = {
  */
 const LOGS_OUTPUT_SCHEMA: ToolInputSchema = {
     properties: {
+        dropped: {
+            description:
+                "Entries the shard's in-memory ring EVICTED before this read — they are gone and cannot be fetched. Non-zero means `entries` + `total` describe only the newest slice of what the deployment logged.",
+            type: "number",
+        },
         entries: { description: "Recent log entries, NEWEST FIRST: { level, message, timestamp, functionPath?, fields? }.", type: "array" },
-        total: { description: "Entries available before `limit`/`level` narrowed them.", type: "number" },
+        total: {
+            description: "Entries still in the ring matching `level`, before `limit` narrowed them. NOT the number of lines logged — see `dropped`.",
+            type: "number",
+        },
     },
-    required: ["entries", "total"],
+    required: ["dropped", "entries", "total"],
     type: "object",
 };
 
@@ -287,8 +295,13 @@ const callObservabilityTool = async (client: LunoraClient, name: string, input: 
             // newest-first, so slicing keeps the most recent.
             const result = await adminRead(client, ADMIN_FUNCTIONS.getLogs, {}, shardKey);
             const entries = rowsOf(result, "entries").filter((entry) => level === undefined || (entry as LogRow).level === level);
+            // The RPC's eviction counter, forwarded: a saturated ring is
+            // otherwise indistinguishable from a shard that logged exactly as
+            // many lines as it still holds, so a model asked "is this the whole
+            // picture?" answers yes on a deployment that dropped 50,000 lines.
+            const { dropped } = (result ?? {}) as { dropped?: unknown };
 
-            return okStructured({ entries: entries.slice(0, limit), total: entries.length });
+            return okStructured({ dropped: typeof dropped === "number" ? dropped : 0, entries: entries.slice(0, limit), total: entries.length });
         }
         case "lunora_get_migration_status": {
             const result = await adminRead(client, ADMIN_FUNCTIONS.migrationStatus, {}, shardKey);

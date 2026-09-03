@@ -144,7 +144,14 @@ await server.connect(myTransport);
 
 A deployment's durable [`@lunora/agent`](https://www.npmjs.com/package/@lunora/agent) agents can be fronted as MCP tools. This is **opt-in and fail-closed**, mirroring `allowWrites`: starting an agent run is a side effect, so the agent tools are omitted from the advertised list _and_ refused at dispatch unless you explicitly enable them. `@lunora/mcp` takes no dependency on `@lunora/agent` — it reaches the agent's public `agents:agentRun` mutation over RPC like any other function.
 
-Enable it with two env vars (or the matching `createLunoraMcpServer` options):
+Two opt-ins are needed, on **both** sides:
+
+1. **On the agent**, `defineAgent({ publicRun: true })`. `agents:agentRun` refuses
+   any agent without it (`FORBIDDEN`), because starting a durable run from
+   outside the deployment is a side effect the agent's author has to allow. The
+   env vars below do not grant it — an agent exposed here but not marked
+   `publicRun` is advertised and fails on its first call.
+2. **On this server**, the env vars (or the matching `createLunoraMcpServer` options):
 
 - `LUNORA_MCP_ALLOW_AGENTS` — set to `1`/`true`/`yes`/`on` to expose the agent tools. Default: agents disabled.
 - `LUNORA_MCP_AGENTS` — a `;`-separated list of `name:description` pairs selecting which agents to expose, e.g. `"support:Support questions;billing:Billing help"`.
