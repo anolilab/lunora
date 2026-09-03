@@ -395,6 +395,8 @@ describe("relay-shape registry reclamation per socket", () => {
             getWebSockets: () => [socket],
             readAttachment: () => attachment,
             shardBinding: () => "SHARD",
+            // A release also drops this socket's durable cohort memos.
+            sql: () => database.sql,
         } as unknown as RelayHost);
 
         // eslint-disable-next-line vitest/no-conditional-in-test -- fixture narrowing, not an assertion: `createRelayLink` is typed `RelayLink | undefined` and the rest of the test needs the link
@@ -412,11 +414,32 @@ describe("relay-shape registry reclamation per socket", () => {
 });
 
 describe("relay-side delivery gate", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+
+    beforeEach(() => {
+        database = createSqliteExec();
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
     /** A relay DO's collaborator, with one socket holding one shape subscription. */
     const relayFor = (seedCursor: number) => {
         const frames: string[] = [];
+        const fanout: { delivered: number }[] = [];
         const attachment: SocketAttachment = { connectionId: "c-alice", shapes: { s1: OPEN_SHAPE }, subs: {} };
-        const socket = { send: (frame: string) => frames.push(frame) } as unknown as ShardSocketLike;
+        /** Flipped by a test to model a socket whose outbound buffer is gone — `send` throws, which is the only delivery-failure signal the runtime exposes. */
+        const sending = { broken: false };
+        const socket = {
+            send: (frame: string) => {
+                if (sending.broken) {
+                    throw new Error("socket closed");
+                }
+
+                return frames.push(frame);
+            },
+        } as unknown as ShardSocketLike;
 
         const ownerStub = {
             fetch: () => Promise.resolve(Response.json({ cursor: seedCursor, epoch: "e1", frames: ["seed"] })),
@@ -432,17 +455,22 @@ describe("relay-side delivery gate", () => {
             getWebSockets: () => [socket],
             nextPokeId: () => "poke-1",
             readAttachment: () => attachment,
-            recordShapePokeFanout: () => {},
+            recordShapePokeFanout: (_iterated: number, delivered: number) => fanout.push({ delivered }),
             shardBinding: () => "SHARD",
+            sql: () => database.sql,
         } as unknown as RelayHost;
 
-        const relay = createRelayLink(host);
+        const linkFor = (): NonNullable<ReturnType<typeof createRelayLink>> => {
+            const link = createRelayLink(host);
 
-        if (relay === undefined) {
-            throw new Error("expected a relay link for a `::relay::` DO name");
-        }
+            if (link === undefined) {
+                throw new Error("expected a relay link for a `::relay::` DO name");
+            }
 
-        return { frames, relay, socket };
+            return link;
+        };
+
+        return { fanout, frames, linkFor, relay: linkFor(), sending, socket };
     };
 
     const poke = (relay: NonNullable<ReturnType<typeof createRelayLink>>, fromCursor: number, checkpoint: number): Promise<Response> =>
@@ -504,6 +532,64 @@ describe("relay-side delivery gate", () => {
         // Applying `(5, 20]` to a socket at 3 would silently swallow everything
         // that changed in `(3, 5]`.
         expect(frames).toStrictEqual(["seed"]);
+    });
+
+    it("leaves the memo where it was when the send failed, so the next poke re-emits the range", async () => {
+        expect.assertions(3);
+
+        const { fanout, frames, relay, sending, socket } = relayFor(10);
+
+        await relay.seedRelayShape(socket, "s1", OPEN_SHAPE, {});
+
+        // The socket closed between the owner's write and this delivery.
+        sending.broken = true;
+        await poke(relay, 10, 20);
+
+        expect(frames).toStrictEqual(["seed"]);
+
+        // `trySendFrame` returns false and the loop used to swallow it, jumping
+        // the memo to 20 anyway — so when the socket came back the relay's own
+        // admission rule refused every later poke and those row ops were lost
+        // for good. `delivered` was over-counted into the fan-out metric too.
+        expect(fanout.at(-1)?.delivered).toBe(0);
+
+        sending.broken = false;
+        await poke(relay, 10, 20);
+
+        expect(frames.length).toBeGreaterThan(1);
+    });
+
+    it("still delivers after the relay is evicted and re-created, with the memo it seeded at", async () => {
+        expect.assertions(4);
+
+        const { fanout, frames, linkFor, relay, socket } = relayFor(10);
+
+        await relay.seedRelayShape(socket, "s1", OPEN_SHAPE, {});
+
+        expect(frames).toStrictEqual(["seed"]);
+
+        // A brand-new collaborator over the SAME host and storage: a relay whose
+        // sockets are all idle is evicted freely (the keepalive answers pings
+        // from the hibernation auto-response without waking the DO), and
+        // `ShardDO` builds a fresh `RelayMember` on every wake while the sockets
+        // and their attachments survive. An in-memory-only memo is gone by then,
+        // and the owner still gets its 204 — so it advances the cohort frontier
+        // and no later poke can ever reopen this range.
+        const woken = linkFor();
+
+        await poke(woken, 10, 20);
+
+        expect(frames.length).toBeGreaterThan(1);
+        expect(fanout.at(-1)?.delivered).toBe(1);
+
+        // Restored at the seed's frontier, not at the poke's range opening — a
+        // base the client is not at fails its divergence check and re-seeds it.
+        const part = frames
+            .filter((frame) => frame !== "seed")
+            .map((frame) => JSON.parse(frame) as Record<string, unknown>)
+            .find((frame) => frame["type"] === "pokePart");
+
+        expect(part?.["baseCheckpoint"]).toBe(10);
     });
 });
 
@@ -573,6 +659,16 @@ describe("owner seed reply", () => {
  * that subscription, with nothing logged on either side.
  */
 describe("relay shape control frames vs. a resubscribe on the same subId", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+
+    beforeEach(() => {
+        database = createSqliteExec();
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
     /** A relay member whose owner-bound posts are recorded, with `relay_shape_unsubscribe` held back by a tick. */
     const memberWithSlowUnsubscribe = (): { member: NonNullable<ReturnType<typeof createRelayLink>>; posts: string[] } => {
         const posts: string[] = [];
@@ -613,6 +709,8 @@ describe("relay shape control frames vs. a resubscribe on the same subId", () =>
                 return { connectionId: "c-alice" };
             },
             shardBinding: () => "SHARD",
+            // A seed memos its cohort baseline durably.
+            sql: () => database.sql,
         } as unknown as RelayHost;
 
         const member = createRelayLink(host);
@@ -659,6 +757,16 @@ describe("relay shape control frames vs. a resubscribe on the same subId", () =>
  * subsequent subscribe and every socket close on that relay.
  */
 describe("relay shape control queue scope", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+
+    beforeEach(() => {
+        database = createSqliteExec();
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
     /** A relay member whose owner-bound posts are recorded as `type:connectionId`, with `stall` deciding which frames are held and for how long. */
     const memberWithOwner = (
         stall: (frame: { connectionId?: string; type: string }) => Promise<void> | undefined,
@@ -695,6 +803,8 @@ describe("relay shape control queue scope", () => {
             getWebSockets: () => [],
             readAttachment: (ws: ShardSocketLike) => ({ connectionId: connections.get(ws) }) as unknown as SocketAttachment,
             shardBinding: () => "SHARD",
+            // A seed memos its cohort baseline durably.
+            sql: () => database.sql,
         } as unknown as RelayHost;
 
         const member = createRelayLink(host);

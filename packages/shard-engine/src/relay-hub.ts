@@ -34,6 +34,7 @@ import {
     writeRelayShape,
     writeRelayShapeCursor,
 } from "./ctx-db-relay-shapes";
+import { WORKERD_SQLITE_LIMITS } from "./drizzle";
 import { envPositiveInt } from "./env-int";
 import type { MaskPoliciesResult, RlsPoliciesResult } from "./introspect";
 import { stableWireKey } from "./reactive-cache";
@@ -138,7 +139,7 @@ interface RelayHost {
     rlsMetadata: () => RlsPoliciesResult;
     /** The namespace binding name this DO was reached through (learned from `x-lunora-shard-binding`), or `undefined` until known. */
     shardBinding: () => string | undefined;
-    /** This DO's SQLite executor (for the owner's `__lunora_relays` set table). */
+    /** This DO's SQLite executor — the owner's `__lunora_relays` set table, and a relay's `__lunora_relay_memos` cohort baselines. */
     sql: () => SqlExec;
 }
 
@@ -170,6 +171,21 @@ const pokeAppliesToMemo = (memo: undefined | { cursor: number; epoch?: string },
 
     return memo.cursor >= poke.fromCursor && memo.cursor < poke.checkpoint;
 };
+
+/**
+ * A relay's durable per-socket cohort baselines, keyed `(connection_id, sub_id)`.
+ * See {@link RelayMember.shapeRelayMemos} for why they cannot live in memory.
+ */
+const RELAY_MEMO_TABLE = "__lunora_relay_memos";
+
+/**
+ * Memo rows per upsert statement. One cohort poke advances every matching socket
+ * on the relay, and a relay exists by construction only past 8 000 of them, so a
+ * statement each is the shape the owner's `writeShapePokeCursors` was batched to
+ * get rid of. Chunked by the shared workerd bound-parameter cap rather than a
+ * hand-picked number, because exceeding it fails at runtime.
+ */
+const RELAY_MEMOS_PER_STATEMENT = Math.floor(WORKERD_SQLITE_LIMITS.boundParams / 4);
 
 /** Build a JSON `Response` (the owner's seed reply on the control channel). */
 const jsonRelayResponse = (body: unknown): Response => Response.json(body, { headers: { "content-type": "application/json" } });
@@ -1237,8 +1253,31 @@ class RelayMember extends RelayLink {
     /** `true` once this relay has announced itself to its owner this wake, so a hot socket churn doesn't re-attach on every subscribe. */
     private relayAnnounced = false;
 
-    /** Per-socket cohort memo `ws → subId → { cursor, epoch }`: the relay delivers a poke to a socket only while its memo matches the poke's `fromCursor`+`epoch`. */
+    /**
+     * Per-socket cohort memo `ws → subId → { cursor, epoch }`: the relay delivers
+     * a poke to a socket only while its memo matches the poke's `fromCursor` +
+     * `epoch`.
+     *
+     * An in-memory CACHE over `__lunora_relay_memos`, not the record itself.
+     * `ShardDO` builds a fresh `RelayMember` on every wake while the hibernatable
+     * sockets and their attachments survive, and a relay is evicted freely —
+     * `armWebSocketKeepalive` answers client pings from the hibernation
+     * auto-response without waking the DO, and a relay receives no other inbound
+     * traffic between owner pokes, so idle-and-evicted is the steady state rather
+     * than an edge case. A memo that lived only here was therefore empty on the
+     * next poke, `deliverShapePoke` skipped every socket, and the relay still
+     * answered 204 — so the owner advanced the cohort frontier and no later poke
+     * could ever reopen the range. Every relayed subscriber froze on stale rows
+     * for the life of its socket, silently, in both directions.
+     *
+     * This is the relay half of what `__shape_poke_cursor` does for the owner's
+     * local shape memos and `__lunora_relay_shapes` / `__lunora_relay_binding` do
+     * for the rest of the owner's relay state.
+     */
     private readonly shapeRelayMemos = new WeakMap<ShardSocketLike, Map<string, { cursor: number; epoch?: string }>>();
+
+    /** `true` once `__lunora_relay_memos` has been provisioned this wake — the DDL is idempotent but sits on the per-socket fan-out path. */
+    private memoTableReady = false;
 
     /**
      * Serialises a CONNECTION's shape control frames to the owner, so the owner
@@ -1419,6 +1458,18 @@ class RelayMember extends RelayLink {
     public override async releaseRelayShapes(ws: ShardSocketLike, subId?: string): Promise<void> {
         const { connectionId } = this.host.readAttachment(ws);
 
+        // This relay's OWN durable memos go first, before either bail-out: they
+        // are local storage rather than a sibling post, and a row left behind
+        // outlives every reader of it. A whole-connection release (socket
+        // closed) also drops the in-memory cache entry.
+        if (subId === undefined) {
+            this.shapeRelayMemos.delete(ws);
+        }
+
+        if (connectionId !== undefined) {
+            this.forgetRelayShapeMemos(connectionId, subId);
+        }
+
         // No connection id means nothing was ever registered: the owner refuses
         // to seed a per-socket shape without one (`RELAY_SHAPE_UNROUTABLE`).
         if (connectionId === undefined || !this.canAddressSiblings()) {
@@ -1519,16 +1570,112 @@ class RelayMember extends RelayLink {
         return next;
     }
 
-    /** Record a relay socket's cohort cursor + epoch for `subId` (creating the per-socket map lazily). */
-    private recordRelayShapeMemo(ws: ShardSocketLike, subId: string, cursor: number, epoch: string | undefined): void {
-        let memos = this.shapeRelayMemos.get(ws);
-
-        if (memos === undefined) {
-            memos = new Map<string, { cursor: number; epoch?: string }>();
-            this.shapeRelayMemos.set(ws, memos);
+    /** Create the relay's durable cohort-memo table. Lazy + `IF NOT EXISTS`, the same way the owner provisions its relay set. */
+    private ensureMemoTable(): void {
+        if (this.memoTableReady) {
+            return;
         }
 
-        memos.set(subId, { cursor, epoch });
+        this.host
+            .sql()
+            .exec(
+                `CREATE TABLE IF NOT EXISTS ${RELAY_MEMO_TABLE} (connection_id TEXT NOT NULL, sub_id TEXT NOT NULL, cursor INTEGER NOT NULL, epoch TEXT, PRIMARY KEY (connection_id, sub_id))`,
+            );
+
+        this.memoTableReady = true;
+    }
+
+    /**
+     * This socket's memo map, hydrated from `__lunora_relay_memos` on the first
+     * miss of a fresh instance (the post-eviction wake).
+     *
+     * A socket with no `connectionId` on its attachment has no durable key, so it
+     * keeps an in-memory-only map — the pre-existing behaviour, and the same
+     * socket the owner already refuses to register a per-socket proxy for.
+     */
+    private relayShapeMemos(ws: ShardSocketLike, connectionId: string | undefined): Map<string, { cursor: number; epoch?: string }> {
+        const cached = this.shapeRelayMemos.get(ws);
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const memos = new Map<string, { cursor: number; epoch?: string }>();
+
+        if (connectionId !== undefined) {
+            this.ensureMemoTable();
+
+            const rows = this.host
+                .sql()
+                .exec<{
+                    cursor: bigint | number;
+                    epoch: null | string;
+                    sub_id: string;
+                }>(`SELECT sub_id, cursor, epoch FROM ${RELAY_MEMO_TABLE} WHERE connection_id = ?`, connectionId)
+                .toArray();
+
+            for (const row of rows) {
+                memos.set(row.sub_id, { cursor: Number(row.cursor), epoch: row.epoch ?? undefined });
+            }
+        }
+
+        this.shapeRelayMemos.set(ws, memos);
+
+        return memos;
+    }
+
+    /** Record a relay socket's cohort cursor + epoch for `subId`, in the cache and durably. */
+    private recordRelayShapeMemo(ws: ShardSocketLike, subId: string, cursor: number, epoch: string | undefined): void {
+        const { connectionId } = this.host.readAttachment(ws);
+
+        this.relayShapeMemos(ws, connectionId).set(subId, { cursor, epoch });
+
+        if (connectionId === undefined) {
+            return;
+        }
+
+        this.writeRelayShapeMemos([{ connectionId, cursor, epoch, subId }]);
+    }
+
+    /** Upsert memo rows in as few statements as the bound-parameter budget allows — see {@link RELAY_MEMOS_PER_STATEMENT}. */
+    private writeRelayShapeMemos(rows: ReadonlyArray<{ connectionId: string; cursor: number; epoch: string | undefined; subId: string }>): void {
+        if (rows.length === 0) {
+            return;
+        }
+
+        this.ensureMemoTable();
+
+        for (let start = 0; start < rows.length; start += RELAY_MEMOS_PER_STATEMENT) {
+            const chunk = rows.slice(start, start + RELAY_MEMOS_PER_STATEMENT);
+            const values = chunk.map(() => "(?, ?, ?, ?)").join(", ");
+            const parameters = chunk.flatMap((row) => [
+                row.connectionId,
+                row.subId,
+                row.cursor,
+                // eslint-disable-next-line unicorn/no-null -- SQL NULL is the value being written for a memo with no epoch; `undefined` is not bindable
+                row.epoch ?? null,
+            ]);
+
+            this.host
+                .sql()
+                .exec(
+                    `INSERT INTO ${RELAY_MEMO_TABLE} (connection_id, sub_id, cursor, epoch) VALUES ${values} ON CONFLICT(connection_id, sub_id) DO UPDATE SET cursor = excluded.cursor, epoch = excluded.epoch`,
+                    ...parameters,
+                );
+        }
+    }
+
+    /** Drop stored memos for a connection — one subscription, or all of them when `subId` is absent. */
+    private forgetRelayShapeMemos(connectionId: string, subId: string | undefined): void {
+        this.ensureMemoTable();
+
+        if (subId === undefined) {
+            this.host.sql().exec(`DELETE FROM ${RELAY_MEMO_TABLE} WHERE connection_id = ?`, connectionId);
+
+            return;
+        }
+
+        this.host.sql().exec(`DELETE FROM ${RELAY_MEMO_TABLE} WHERE connection_id = ? AND sub_id = ?`, connectionId, subId);
     }
 
     /**
@@ -1544,61 +1691,101 @@ class RelayMember extends RelayLink {
      */
     private deliverShapePoke(poke: RelayShapePoke): number {
         const routingKey = shapeRoutingKey(poke.name, poke.args);
+        const advanced: { connectionId: string; cursor: number; epoch: string | undefined; subId: string }[] = [];
         let delivered = 0;
 
         for (const ws of this.host.getWebSockets()) {
             const attachment = this.host.readAttachment(ws);
             const { shapes } = attachment;
-            const memos = this.shapeRelayMemos.get(ws);
 
-            if (shapes === undefined || memos === undefined) {
+            if (shapes === undefined) {
                 continue;
             }
+
+            const memos = this.relayShapeMemos(ws, attachment.connectionId);
 
             if (poke.targetConnectionId !== undefined && attachment.connectionId !== poke.targetConnectionId) {
                 continue;
             }
 
-            for (const [subId, sub] of Object.entries(shapes)) {
-                const memo = memos.get(subId);
+            const advancedSubs = this.pokeSocketShapes(ws, shapes, memos, poke, routingKey);
 
-                if (shapeRoutingKey(sub.name, sub.args) !== routingKey || !pokeAppliesToMemo(memo, poke)) {
-                    continue;
+            delivered += advancedSubs.length;
+
+            const { connectionId } = attachment;
+
+            if (connectionId !== undefined) {
+                for (const subId of advancedSubs) {
+                    advanced.push({ connectionId, cursor: poke.checkpoint, epoch: poke.epoch, subId });
                 }
-
-                const frames = buildPokeFrames(
-                    // The socket's OWN memo is the base, not `poke.fromCursor`:
-                    // the memo is what this socket was last told its checkpoint
-                    // was (the seed's `cohortCursor`, or the previous poke's
-                    // checkpoint), and the admission rule is a RANGE — a memo
-                    // ahead of `fromCursor` is admitted and would then be handed
-                    // a base it is not at, failing the client's divergence check
-                    // and forcing a re-seed. Left unstamped, the client's gap
-                    // check stays disarmed on the one path where a cross-DO POST
-                    // can actually drop a poke.
-                    [{ baseCheckpoint: memo?.cursor, rowsPatch: poke.rowsPatch, shapeId: subId }],
-                    {
-                        baseCheckpoint: undefined,
-                        checkpoint: poke.checkpoint,
-                        epoch: poke.epoch,
-                        lastMutationId: undefined,
-                        pokeId: this.host.nextPokeId(),
-                    },
-                    // `poke.rowsPatch` was wire-encoded by the owner before it crossed
-                    // the hub — don't double-encode it here.
-                    { preEncoded: true },
-                );
-
-                for (const frame of frames) {
-                    trySendFrame(ws, frame);
-                }
-
-                memos.set(subId, { cursor: poke.checkpoint, epoch: poke.epoch });
-                delivered += 1;
             }
         }
 
+        this.writeRelayShapeMemos(advanced);
+
         return delivered;
+    }
+
+    /**
+     * Send one poke to whichever of a single socket's shapes it applies to, and
+     * advance their in-memory memos.
+     * @returns the sub ids that advanced, so the caller can persist them in one batch
+     */
+    private pokeSocketShapes(
+        ws: ShardSocketLike,
+        shapes: NonNullable<SocketAttachment["shapes"]>,
+        memos: Map<string, { cursor: number; epoch?: string }>,
+        poke: RelayShapePoke,
+        routingKey: string,
+    ): string[] {
+        const advanced: string[] = [];
+
+        for (const [subId, sub] of Object.entries(shapes)) {
+            const memo = memos.get(subId);
+
+            if (shapeRoutingKey(sub.name, sub.args) !== routingKey || !pokeAppliesToMemo(memo, poke)) {
+                continue;
+            }
+
+            const frames = buildPokeFrames(
+                // The socket's OWN memo is the base, not `poke.fromCursor`:
+                // the memo is what this socket was last told its checkpoint
+                // was (the seed's `cohortCursor`, or the previous poke's
+                // checkpoint), and the admission rule is a RANGE — a memo
+                // ahead of `fromCursor` is admitted and would then be handed
+                // a base it is not at, failing the client's divergence check
+                // and forcing a re-seed. Left unstamped, the client's gap
+                // check stays disarmed on the one path where a cross-DO POST
+                // can actually drop a poke.
+                [{ baseCheckpoint: memo?.cursor, rowsPatch: poke.rowsPatch, shapeId: subId }],
+                {
+                    baseCheckpoint: undefined,
+                    checkpoint: poke.checkpoint,
+                    epoch: poke.epoch,
+                    lastMutationId: undefined,
+                    pokeId: this.host.nextPokeId(),
+                },
+                // `poke.rowsPatch` was wire-encoded by the owner before it crossed
+                // the hub — don't double-encode it here.
+                { preEncoded: true },
+            );
+
+            // Gate the advance on the send, the way the owner's local poke path
+            // does: `trySendFrame`'s boolean is the only delivery-failure signal
+            // the runtime exposes, and there is no next-flush retry on this path.
+            // Advancing a memo whose frames never left jumps it to `checkpoint`,
+            // and the relay's own admission rule then refuses every later poke as
+            // "already applied" — so those row ops are lost for the life of the
+            // socket, the same freeze as a lost memo, through a different door.
+            if (!frames.every((frame) => trySendFrame(ws, frame))) {
+                continue;
+            }
+
+            memos.set(subId, { cursor: poke.checkpoint, epoch: poke.epoch });
+            advanced.push(subId);
+        }
+
+        return advanced;
     }
 }
 

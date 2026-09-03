@@ -128,6 +128,16 @@ const claimStreamRun = (sql: SqlExec, runKey: string, startedAt: number, ttlMs: 
         return false;
     }
 
+    // A fresh claim is a fresh transcript, so the key must start empty. It is not
+    // necessarily: a producer whose row a TTL sweep removed mid-run keeps
+    // appending under that key, and if its instance dies before the terminal
+    // below can clean up, those chunks are still there. `appendStreamChunk` is
+    // `INSERT OR IGNORE`, so this run's own chunks at the colliding seqs would be
+    // silently dropped and a reconnect would replay the dead run's tail under
+    // this run's generation stamp — exactly the splice `decideDurableAttach`'s
+    // generation check exists to prevent, arriving through the storage layer.
+    runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(STREAM_CHUNKS_TABLE)} WHERE run_key = ${runKey}`);
+
     runDrizzle(
         sql,
         dsql`INSERT INTO ${dsql.identifier(STREAM_RUNS_TABLE)} (run_key, status, last_seq, started_at, ttl_ms)
@@ -180,8 +190,27 @@ const readStreamChunks = (sql: SqlExec, runKey: string, sinceSeq: number): Durab
             return { dataJson: row.data_json, seq: row.seq };
         });
 
-/** Mark a run finished. `errorCode`/`error` are written only for the `error` status. */
+/**
+ * Mark a run finished. `errorCode`/`error` are written only for the `error`
+ * status.
+ *
+ * A run whose row is already gone gets its chunks dropped instead.
+ * {@link trimStreamRuns} deletes on `startedAt + ttlMs` regardless of status, so
+ * a generator that outlives its procedure's `ttlMs` reaches this terminal under
+ * a key the sweep has already emptied — and everything it appended afterwards is
+ * unreachable by every FUTURE sweep too, because the sweep's chunk delete is
+ * scoped by `run_key IN (SELECT … FROM __stream_runs …)`. Recording the terminal
+ * would resurrect a run past its own retention; reclaiming the chunks is the
+ * honest half, and it is what keeps the next claim under that key from
+ * inheriting them through `appendStreamChunk`'s `INSERT OR IGNORE`.
+ */
 const finishStreamRun = (sql: SqlExec, runKey: string, status: "complete" | "error", lastSeq: number, failure?: { code: string; message: string }): void => {
+    if (readStreamRun(sql, runKey) === undefined) {
+        runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(STREAM_CHUNKS_TABLE)} WHERE run_key = ${runKey}`);
+
+        return;
+    }
+
     /* eslint-disable unicorn/no-null -- SQL NULL is the value being written: a run that completes must clear its error columns, and `undefined` is not bindable */
     const errorCode = failure?.code ?? null;
     const errorMessage = failure?.message ?? null;
