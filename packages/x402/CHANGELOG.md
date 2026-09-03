@@ -1,3 +1,9 @@
+## @lunora/x402 [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.49...@lunora/x402@1.0.0-alpha.50) (2026-09-03)
+
+### Bug Fixes
+
+* audit rounds 14-16 ([#586](https://github.com/anolilab/lunora/issues/586)) ([6a09b74](https://github.com/anolilab/lunora/commit/6a09b746cfc9fb36f451c208b7a1c3eac16e56f4))
+
 ## @lunora/x402 [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.48...@lunora/x402@1.0.0-alpha.49) (2026-09-03)
 
 ### ⚠ BREAKING CHANGES
