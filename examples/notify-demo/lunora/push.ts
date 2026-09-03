@@ -1,3 +1,4 @@
+import { webPushId } from "@lunora/notify";
 import { rateLimit } from "lunorash/ratelimit";
 
 import { makeRateLimiter } from "./ratelimit/schema.js";
@@ -30,6 +31,10 @@ interface AnnouncementDoc {
  */
 export const registerDevice = mutation
     .input({
+        // Set only after a VAPID rotation — the endpoint of the subscription the
+        // browser just replaced. Its server row is keyed on that endpoint, so
+        // nothing else will ever overwrite or prune it.
+        replacedEndpoint: v.optional(v.string().max(2048)),
         // The exact Web Push subscription shape, declared rather than `v.any()`:
         // this is a trust boundary (the endpoint is a URL the server will later
         // POST to), so the validator rejects anything else before it reaches the
@@ -43,7 +48,11 @@ export const registerDevice = mutation
         }),
     })
     .use(rateLimit(mutationLimiter, "write", byCaller))
-    .mutation(async ({ args: { subscription }, ctx }): Promise<void> => {
+    .mutation(async ({ args: { replacedEndpoint, subscription }, ctx }): Promise<void> => {
+        if (replacedEndpoint !== undefined) {
+            await ctx.push.unregister(webPushId(replacedEndpoint));
+        }
+
         await ctx.push.register({ subscription });
     });
 

@@ -205,6 +205,15 @@ export const routingPushProvider = (options: RoutingPushOptions): Provider<unkno
             // them. Guarding only `to[0]` would let every later entry walk past
             // the rebinding check — the one place it is enforced.
             const targets = Array.isArray(payload.to) ? payload.to : [payload.to];
+
+            if (targets.length === 0) {
+                // Say what is actually wrong. Routing is per target, so with none
+                // both branches below fall through to `pick(undefined)` and a
+                // webPush-only app was told it "received an FCM token target but
+                // no `fcm` channel is configured" for a send naming no recipient.
+                throw new LunoraError("BAD_REQUEST", "@lunora/notify: push send has no recipients — `to` is an empty array");
+            }
+
             const endpoints = targets.map((entry) => webPushEndpoint(entry));
 
             for (const endpoint of endpoints) {

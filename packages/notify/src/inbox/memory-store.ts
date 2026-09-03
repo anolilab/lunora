@@ -85,8 +85,11 @@ const memoryInboxStore = (): InboxStore => {
         return Promise.resolve(count);
     };
 
-    const markRead = (id: string): Promise<void> => {
-        const item = items.find((candidate) => candidate.id === id);
+    const markRead = (userId: string, id: string): Promise<void> => {
+        // Scoped to `userId` like every sibling operation: an item id is not an
+        // authorisation, so an unscoped lookup would let any caller holding one
+        // clear another user's notification.
+        const item = items.find((candidate) => candidate.id === id && candidate.userId === userId);
 
         if (item !== undefined && item.readAt === undefined) {
             item.readAt = Date.now();

@@ -119,12 +119,12 @@ const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via `__lunora_admin__:getAdvisories`. */
 const LUNORA_ADVISORIES: AdvisoryFinding[] = [
     {
-        "cacheKey": "nondeterministic_query_mutation:push:54:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:push:63:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay.",
-        "detail": "`Date.now(…)` in announce (push:54) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `announce` is invoked from a workflow step or queue consumer that can itself replay.",
+        "detail": "`Date.now(…)` in announce (push:63) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `announce` is invoked from a workflow step or queue consumer that can itself replay.",
         "facing": "INTERNAL",
         "level": "INFO",
         "metadata": {
@@ -132,7 +132,7 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "announce",
             "file": "push",
             "kind": "mutation",
-            "line": 54
+            "line": 63
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",

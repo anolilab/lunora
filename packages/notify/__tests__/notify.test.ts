@@ -825,6 +825,19 @@ describe("web-push send-time DNS-rebinding guard", () => {
         expect(inner.sends).toHaveLength(0);
     });
 
+    it("refuses an empty `to` by name instead of blaming an unconfigured channel", async () => {
+        expect.hasAssertions();
+
+        // With no targets both routing branches fall through to the FCM one, so a
+        // webPush-only app was told it "received an FCM token target but no `fcm`
+        // channel is configured" — for a send that named no recipient at all.
+        const inner = mockPushProvider();
+        const router = routingPushProvider({ webPush: inner.provider });
+
+        await expect(router.send({ body: "b", to: [] })).rejects.toThrow(/no recipients/u);
+        expect(inner.sends).toHaveLength(0);
+    });
+
     it("delivers when the host resolves public, and skips the check entirely under allowedPushOrigins", async () => {
         expect.hasAssertions();
 

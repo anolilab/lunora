@@ -43,12 +43,12 @@ const receiptError = (receipt: Receipt): string | undefined => (receipt.successf
  * `accepted` on success, `gone` when the endpoint is unregistered (404/410, FCM
  * `UNREGISTERED` — the subscription is pruned), else `failed`.
  */
-const pushDeliveryStatus = (receipt: Receipt, error: string | undefined): NotifyDeliveryStatus => {
+const pushDeliveryStatus = (receipt: Receipt, error: string | undefined, kind: StoredSubscription["kind"]): NotifyDeliveryStatus => {
     if (receipt.successful) {
         return "accepted";
     }
 
-    return isGoneError(error) ? "gone" : "failed";
+    return isGoneError(error, kind) ? "gone" : "failed";
 };
 
 /** Run `task` over `items` with a bounded number in flight (order-independent). */
@@ -336,7 +336,7 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         try {
             receipt = await engine.sendToChannel("push", { ...payload, to: targetOf(subscription) });
             error = receiptError(receipt);
-            status = pushDeliveryStatus(receipt, error);
+            status = pushDeliveryStatus(receipt, error, subscription.kind);
         } catch (error_) {
             // A THROW from the send path — a transient provider/store error, or the
             // push router's raw throw for a target whose channel (`webPush`/`fcm`)
