@@ -149,6 +149,13 @@ const temporalDeal = (now: number): UniqueDeal => {
 const countingDeal: UniqueDeal = { capacity: Number.POSITIVE_INFINITY, valueAt: (index) => index };
 
 /**
+ * The deal for a column whose value is built from the per-cell hash (a uuid, or
+ * a composite of them): already distinct per row, so the generator's own value
+ * stands and there is no capacity to refuse past.
+ */
+const anonymousDeal: UniqueDeal = { capacity: Number.POSITIVE_INFINITY, valueAt: (_index, generate) => generate() };
+
+/**
  * Pick the numeric deal for a column: the declared range when it has one (the
  * range is then a hard capacity the planner must refuse past), otherwise an
  * ascending count. A partially-declared range is completed with the generator's
@@ -212,6 +219,21 @@ const stringDeal = (constraints: Constraints, table: string, column: string): Un
         valueAt: (index, generate) => uniquifyString(String(generate()), index, constraints),
     };
 };
+
+/**
+ * The deal a `.unique()` FOREIGN KEY takes: the parent pool drawn without
+ * replacement, in a fixed shuffled order.
+ *
+ * A foreign key's value comes from the plan layer rather than the generator,
+ * but it comes from a finite domain like any other — so it is dealt like one.
+ * The uniform draw the ordinary path uses (`copycat.oneOf`) picks WITH
+ * replacement, which is exactly the collision `.unique()` promises not to make:
+ * `v.id("users").unique()`, the natural way to spell a 1:1 relation, produced 7
+ * distinct parents across 10 rows. The pool's size is a real capacity, so a
+ * batch larger than the parent table is refused at plan time with the column
+ * named, the same as a boolean or a three-value enum.
+ */
+const planUniqueFkDeal = (pool: ReadonlyArray<string>, table: string, column: string): UniqueDeal => domainDeal(pool, table, column);
 
 /**
  * Decide how one `.unique()` column deals its values.
@@ -285,14 +307,30 @@ const planUniqueDeal = (field: FieldSpec, options: UniqueDealOptions): UniqueDea
             return boundedNumeric(constraints, NUMBER_RANGE);
         }
 
+        case "union": {
+            // A union of literals is a closed domain — the same shape as an
+            // enum, and the very case `docs/index.mdx` names ("a three-literal
+            // `v.union()` … is refused at plan time"). The generator picks a
+            // member per row WITH replacement, so without a deal here eight rows
+            // over a two-literal union simply repeat and nothing refuses.
+            const members = metaOf(field.validator).members ?? [];
+            const literals = members.filter((member) => member.kind === "literal").map((member) => metaOf(member).value);
+
+            if (literals.length > 0 && literals.length === members.length) {
+                return domainDeal(literals, table, field.name);
+            }
+
+            return anonymousDeal;
+        }
+
         default: {
-            // `id`, `storage`, `array`, `object`, `record`, `union` — every one
-            // of these derives from the per-cell hash (a uuid, or a composite
-            // built from uuids), so it is already distinct per row.
-            return { capacity: Number.POSITIVE_INFINITY, valueAt: (_index, generate) => generate() };
+            // `id`, `storage`, `array`, `object`, `record` — every one of these
+            // derives from the per-cell hash (a uuid, or a composite built from
+            // uuids), so it is already distinct per row.
+            return anonymousDeal;
         }
     }
 };
 
-export { planUniqueDeal };
+export { planUniqueDeal, planUniqueFkDeal };
 export type { UniqueDeal };

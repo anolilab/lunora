@@ -124,11 +124,66 @@ const isTimestampField = (fieldName: string): boolean => {
  */
 const generateTimestamp = (input: unknown, now: number): number => now - copycat.int(input, { max: TIMESTAMP_WINDOW_MS, min: 0 });
 
-/** Heuristic string generation by column name (mirrors the studio data generator). */
-const generateString = (fieldName: string, input: unknown, constraints: Constraints): string => {
+/**
+ * Refuse a column the seeder cannot invent a conforming value for, naming it.
+ *
+ * Falling through to the generic `copycat.word` would produce a value the very
+ * next `ctx.db.insert` rejects, reported as a validation failure on a row
+ * nobody wrote by hand. The `.unique()` twin (`planUniqueDeal`) refuses the
+ * same shapes for the same reason, so the two paths agree on which columns are
+ * seedable at all.
+ */
+const refuseColumn = (fieldName: string, why: string): never => {
+    throw new LunoraError(
+        "INTERNAL",
+        `@lunora/seed: column "${fieldName}" ${why}. ` +
+            `Supply a value via \`overrides\` (\`{ <table>: { ${fieldName}: … } }\`) or restrict the run with \`only\` so the table is skipped.`,
+    );
+};
+
+/**
+ * Generators for the JSON Schema `format` keywords a string column can declare
+ * (`v.string().email()` → `email`, `v.string().url()` → `uri`). A declared
+ * format is authoritative over the field-name heuristics below — the column's
+ * own validator re-checks it on insert, and it is the same rule the `number`
+ * arm applies to declared bounds ("a schema that says `minimum: 0, maximum: 5`
+ * means a rating, whatever the column is called").
+ */
+const FORMAT_GENERATORS: Readonly<Record<string, (input: unknown) => string>> = {
+    email: (input) => copycat.email(input),
+    uri: (input) => copycat.url(input),
+};
+
+/**
+ * Generate the base string for a column, honouring a declared shape over the
+ * field-name heuristics and refusing outright when the shape is one the seeder
+ * cannot satisfy.
+ */
+const generateStringBody = (fieldName: string, input: unknown, constraints: Constraints): string => {
+    const { format, pattern } = constraints;
+
+    if (pattern !== undefined) {
+        return refuseColumn(
+            fieldName,
+            `is constrained to the pattern /${pattern}/, and the seeder cannot invent a value matching an arbitrary regular expression`,
+        );
+    }
+
+    if (format !== undefined) {
+        const generate = FORMAT_GENERATORS[format];
+
+        return generate === undefined ? refuseColumn(fieldName, `declares format "${format}", which the seeder has no generator for`) : generate(input);
+    }
+
     const lower = fieldName.toLowerCase();
     const rule = STRING_HEURISTICS.find((entry) => entry.keywords.some((keyword) => lower.includes(keyword)));
-    const value = rule === undefined ? copycat.word(input) : rule.generate(input);
+
+    return rule === undefined ? copycat.word(input) : rule.generate(input);
+};
+
+/** Heuristic string generation by column name (mirrors the studio data generator). */
+const generateString = (fieldName: string, input: unknown, constraints: Constraints): string => {
+    const value = generateStringBody(fieldName, input, constraints);
 
     const { maxLength, minLength } = constraints;
 
@@ -176,10 +231,12 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
         case "bigint": {
             // Emit a plain number so the value survives JSON serialisation on every
             // adapter path (CLI NDJSON, studio JSON response, testing harness). The
-            // range [0, 1_000_000] is well within Number.MAX_SAFE_INTEGER, so no
-            // integer precision is lost. Adapters that write to the DO's SQLite
-            // layer must coerce this back to BigInt before insert (see testing.ts).
-            return copycat.int(input, { max: BIGINT_RANGE.max, min: BIGINT_RANGE.min });
+            // default range [0, 1_000_000] is well within Number.MAX_SAFE_INTEGER,
+            // so no integer precision is lost. Adapters that write to the DO's
+            // SQLite layer must coerce this back to BigInt before insert (see
+            // testing.ts). Declared bounds win over the default, the same as the
+            // `number` arm and the `.unique()` twin's `boundedNumeric`.
+            return copycat.int(input, { max: constraints.maximum ?? BIGINT_RANGE.max, min: constraints.minimum ?? BIGINT_RANGE.min });
         }
 
         case "boolean": {
@@ -198,21 +255,23 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
 
         case "date":
         case "timestamp": {
-            // Lunora stores dates as epoch-ms numbers.
-            return new Date(copycat.dateString(input)).getTime();
+            // Lunora stores dates as epoch-ms numbers, anchored on the caller's
+            // `now` like every other time-valued column — the `number` arm's
+            // `isTimestampField` branch below, and the `.unique()` twin's
+            // `temporalDeal`. A generator-local window would put two spellings
+            // of the same column (`v.timestamp()` and `v.timestamp().unique()`)
+            // decades apart, and would ignore the one input `SeedOptions.now`
+            // exists to pin.
+            return generateTimestamp(input, now);
         }
 
         case "from": {
             // `v.from(externalSchema)` delegates to a Standard Schema library, and
             // there is nothing here to introspect — the seeder cannot know whether
-            // it wants a UUID, an ISO date, or a 20-field object. Falling through
-            // to the generic `copycat.word` would produce a value the very next
-            // `ctx.db.insert` rejects, reported as a validation failure on a row
-            // nobody wrote by hand. Refuse by name instead.
-            throw new LunoraError(
-                "INTERNAL",
-                `@lunora/seed: column "${fieldName}" is a v.from() validator, whose external Standard Schema the seeder cannot introspect to invent a conforming value. ` +
-                    `Supply one via \`overrides\` (\`{ <table>: { ${fieldName}: … } }\`), restrict the run with \`only\` so the table is skipped, or give the column a concrete v.* type.`,
+            // it wants a UUID, an ISO date, or a 20-field object.
+            return refuseColumn(
+                fieldName,
+                "is a v.from() validator, whose external Standard Schema the seeder cannot introspect to invent a conforming value (give the column a concrete v.* type instead)",
             );
         }
 
