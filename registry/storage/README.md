@@ -160,8 +160,10 @@ const { key, url } = await client.action("storage/generateUploadUrl", {
 });
 
 // 2. upload it — the URL points at your Worker's `/storage/*` route, which
-//    verifies the signature and writes to R2. The `content-type` must match
-//    the one pinned into the signature or verification fails.
+//    verifies the signature and writes to R2. The route stores the
+//    `content-type` pinned into the signature and ignores the request header
+//    (`verifySignedUrl(url, secret)` never sees it), so sending one is optional
+//    and sending a different one changes nothing about what is stored.
 await fetch(url, { method: "PUT", headers: { "content-type": file.type }, body: file });
 
 // 3. later, get a signed GET URL to display it

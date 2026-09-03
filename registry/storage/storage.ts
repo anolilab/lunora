@@ -41,6 +41,7 @@
  */
 import { env } from "cloudflare:workers";
 
+import { LunoraError } from "@lunora/errors";
 import { RateLimiter, rateLimit, createMemoryStore } from "@lunora/ratelimit";
 import { createStorage, scopeKey } from "@lunora/storage";
 import type { Storage } from "@lunora/storage";
@@ -151,7 +152,10 @@ const makeStorage = (): Storage => {
  */
 const requireOwner = (userId: string | null): string => {
     if (userId === null || userId === undefined) {
-        throw new Error(
+        // Coded, not a bare `Error`: an uncoded throw is redacted to a generic
+        // 500, so the caller sees a server fault instead of "sign in first".
+        throw new LunoraError(
+            "UNAUTHORIZED",
             "@lunora/storage registry item: this endpoint requires an authenticated user. Pass `resolveIdentity` to `createWorker` (see the auth registry item), or add a deliberate public path.",
         );
     }
@@ -188,7 +192,10 @@ export const generateUploadUrl = action
     .use(rateLimit(limiter, "storage", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .action(async ({ args: { contentType, expiresInSeconds, key }, ctx }): Promise<{ key: string; url: string }> => {
         if (!ALLOWED_UPLOAD_CONTENT_TYPES.has(contentType)) {
-            throw new Error(
+            // The value is caller-supplied, so this is a 400 the client can act
+            // on — an uncoded throw would redact it to a generic 500.
+            throw new LunoraError(
+                "BAD_REQUEST",
                 `@lunora/storage registry item: content type \`${contentType}\` is not allowed — permitted: ${[...ALLOWED_UPLOAD_CONTENT_TYPES].join(", ")}. Edit ALLOWED_UPLOAD_CONTENT_TYPES to widen.`,
             );
         }

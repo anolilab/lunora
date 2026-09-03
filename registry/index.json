@@ -67,7 +67,7 @@
             "title": "Auth UI — Vue"
         },
         {
-            "description": "Managed point-in-time recovery — a cron-driven `snapshot` internalAction exports a configured set of tables to timestamped NDJSON in a dedicated R2 bucket, and a cron-driven `prune` internalAction ages snapshots out by retention window. Pairs with `lunora backup restore` (nearest snapshot + `--to` CDC replay).",
+            "description": "Off-platform scheduled snapshots with retention — a cron-driven `snapshot` internalAction exports a configured set of tables to timestamped NDJSON in a dedicated R2 bucket, and a cron-driven `prune` internalAction ages snapshots out by retention window. Restore with `lunora backup restore <id|file>`, which imports a snapshot boundary; for in-place time-travel to an arbitrary moment use native PITR (`lunora backup pitr`). Reads through a shard-local `ctx.db`, so on a `.shardBy()` deployment it covers the default shard only.",
             "name": "backup",
             "title": "Backup"
         },
@@ -77,7 +77,7 @@
             "title": "Browser rendering"
         },
         {
-            "description": "Cloudflare Zero Trust identity for Lunora — verify the Cf-Access-Jwt-Assertion JWT against your team JWKS and feed the verified identity into ctx.auth via a resolveIdentity adapter. Gating the Studio on an Access group is a separate opt-in wiring (accessAdminGate), not scaffolded here.",
+            "description": "Cloudflare Zero Trust identity for Lunora — feed the Access identity into ctx.auth via a resolveIdentity adapter, in either shape Access comes in: a policy attached to the Worker (identity arrives on the execution context; the form the scaffolded file ships in) or a hostname-scoped Access application (verify the Cf-Access-Jwt-Assertion JWT against your team JWKS; uncomment it and the CF_ACCESS_* env vars apply). Gating the Studio on an Access group is a separate opt-in wiring (accessAdminGate), not scaffolded here.",
             "name": "cloudflare-access",
             "title": "Cloudflare Access"
         },

@@ -2,7 +2,7 @@
     "$schema": "../schema/registry-item.schema.json",
     "name": "cloudflare-access",
     "title": "Cloudflare Access",
-    "description": "Cloudflare Zero Trust identity for Lunora — verify the Cf-Access-Jwt-Assertion JWT against your team JWKS and feed the verified identity into ctx.auth via a resolveIdentity adapter. Gating the Studio on an Access group is a separate opt-in wiring (accessAdminGate), not scaffolded here.",
+    "description": "Cloudflare Zero Trust identity for Lunora — feed the Access identity into ctx.auth via a resolveIdentity adapter, in either shape Access comes in: a policy attached to the Worker (identity arrives on the execution context; the form the scaffolded file ships in) or a hostname-scoped Access application (verify the Cf-Access-Jwt-Assertion JWT against your team JWKS; uncomment it and the CF_ACCESS_* env vars apply). Gating the Studio on an Access group is a separate opt-in wiring (accessAdminGate), not scaffolded here.",
     "requires": [],
     "deps": {
         "@lunora/cloudflare-access": "workspace:*",
@@ -11,13 +11,13 @@
     "envVars": [
         {
             "name": "CF_ACCESS_TEAM_DOMAIN",
-            "description": "Your Cloudflare Access team domain (e.g. 'acme' or 'acme.cloudflareaccess.com')",
+            "description": "Hostname-scoped Access application only: your Cloudflare Access team domain (e.g. 'acme' or 'acme.cloudflareaccess.com'). Unread by the worker-policy form the file ships in.",
             "secret": false,
             "value": "your-team"
         },
         {
             "name": "CF_ACCESS_AUD",
-            "description": "The Access application AUD tag from the Cloudflare Zero Trust dashboard",
+            "description": "Hostname-scoped Access application only: the AUD tag from the Cloudflare Zero Trust dashboard. Unread by the worker-policy form the file ships in.",
             "secret": true
         }
     ],
