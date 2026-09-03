@@ -715,9 +715,10 @@ for tname in "${TEMPLATES[@]}"; do
     # the matrix runs at all: an empty result leaves AUTHUI_ADDED="no", which skips
     # `lunora add auth-ui`, every file-landed assertion, the dep-injection check,
     # the per-template typechecker, the typecheck:never-ran guard, the FILE_RE
-    # vacuity guard and the planted-error canary — and the template still records
-    # PASS on `pnpm run build` alone. Swallowing the exit status made a resolution
-    # failure indistinguishable from "this template has no framework".
+    # vacuity guard and the planted-error canary. Swallowing the exit status made a
+    # resolution failure indistinguishable from "this template has no framework".
+    # A template that legitimately has no framework is caught downstream instead:
+    # see the `typecheck:skipped` guard on the build path.
     if [[ ${authui_detect_status:-0} -ne 0 ]]; then
         echo "  FAIL: could not resolve the expected auth-ui view for $tname (node exited ${authui_detect_status})"
         echo "        Everything from \`lunora add auth-ui\` onwards would have been skipped, and $tname would have recorded PASS on its build alone."
@@ -1045,6 +1046,33 @@ for tname in "${TEMPLATES[@]}"; do
         fi
 
         echo "  ==> typecheck OK"
+    else
+        # Fail closed. Reaching here means the detector resolved no view (every
+        # other path out of that block `continue`s), so this template got NO
+        # compiler over its source at all: the block above is the run's only
+        # `tsc`, and `pnpm run build` compiles only what a build entry reaches —
+        # every file under `lunora/` is tree-shaken away before a compiler sees
+        # it. The build-LESS path above typechecks such a template; this one used
+        # to record PASS on the bundler alone.
+        #
+        # Failing here rather than widening the AUTHUI_RESOLVED floor to "all
+        # templates": that floor is a whole-run tripwire, so widening it makes
+        # every verdict depend on the full matrix, while this fires per template
+        # exactly where the coverage is lost. It is unreachable for the templates
+        # on disk — `standalone` is the only one in this matrix that resolves no
+        # view, and it ships no `build` script, so it takes the codegen +
+        # typecheck path above (`expo` also resolves none, and is skipped before
+        # it ever gets here). That is what makes this a guard and not a behaviour
+        # change.
+        echo "  FAIL: $tname resolved no auth-ui view, so nothing typechecked its source"
+        echo "        \`pnpm run build\` bundles only what a build entry reaches, and this run's only"
+        echo "        typechecker is gated on that view — so $tname would have recorded PASS with no"
+        echo "        compiler having read lunora/ at all."
+        echo "        Either teach the detector this template's framework (mirror detectAuthUiItem in"
+        echo "        packages/cli/src/commands/add/features.ts) or drop its \`build\` script, which routes"
+        echo "        it through the codegen + typecheck path instead."
+        FAIL+=("$tname(typecheck:skipped)")
+        continue
     fi
 
     if [[ $build_exit -eq 0 ]]; then
