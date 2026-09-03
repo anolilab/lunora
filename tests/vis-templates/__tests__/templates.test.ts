@@ -203,8 +203,35 @@ const stripLineComments = (source: string): string => source.replaceAll(/^[\t ]*
  */
 const SENDS_SHARD_KEY = /\bshardKey:\s*(?!(?:null|string|undefined)\b)/;
 
+/**
+ * A SCHEMA that opts the demo backend into sharding. This is the wider trigger:
+ * a template can ship `.shardBy(...)` while none of its own call sites pass a
+ * `shardKey` yet (a static welcome page, an SSR loader added later). The 403 is
+ * the same either way — the first line of app code the user writes against the
+ * sharded table hits it — so the gate is required from the schema onward, not
+ * from the first call site.
+ */
+const DECLARES_SHARD_BY = /\.shardBy\(/;
+
 /** The worker-side gate that makes a non-default `shardKey` reachable at all. */
 const DECLARES_SHARD_GATE = /\ballowUnauthenticatedShardAccess\b|\bauthorizeShard\b/;
+
+/**
+ * The embedded Studio is served at `/__lunora` (`packages/vite/src/studio-plugin.ts`).
+ * `/_lunora` is the reserved RPC/WebSocket/admin plane — a link to it is not a
+ * near-miss that redirects, it falls through to the app's SSR handler and 404s.
+ */
+const SINGLE_UNDERSCORE_STUDIO_HREF = /href=["']\/_lunora["']/;
+
+/**
+ * Local-secret files every template must keep out of version control.
+ *
+ * `.dev.vars` is where `lunora dev` and `lunora env generate --set` write real
+ * generated secrets (including `LUNORA_ADMIN_TOKEN`); `.env` is what a Vite user
+ * creates for `VITE_LUNORA_URL` and friends. An ignore file listing only
+ * `.env*.local` does NOT match a plain `.env`.
+ */
+const IGNORED_SECRET_FILES = [".dev.vars", ".env"];
 
 describe("templates/* package.json validation", () => {
     test("there is at least one template", () => {
@@ -255,23 +282,57 @@ describe("templates/* package.json validation", () => {
         });
 
         /**
-         * A template that routes a call to a non-default shard must also open or
-         * gate shard access on its worker. Without `allowUnauthenticatedShardAccess`
-         * or an `authorizeShard`, `createWorker` default-denies every
+         * A template that shards its demo backend — by declaring `.shardBy(...)` or
+         * by routing a call to a non-default shard — must also open or gate shard
+         * access on its worker. Without `allowUnauthenticatedShardAccess` or an
+         * `authorizeShard`, `createWorker` default-denies every
          * `shardKey !== "__root__"` with a 403 `FORBIDDEN_SHARD` — so the scaffold's
          * own first page load throws before a user has written a line of code.
          */
-        test("a template that sends a shardKey declares a shard gate", () => {
+        test("a template that shards its backend declares a shard gate", () => {
             const sources = listSourceFiles(join(TEMPLATES_DIR, templateName)).map((file) => stripLineComments(readFileSync(file, "utf8")));
 
-            if (!sources.some((source) => SENDS_SHARD_KEY.test(source))) {
+            if (!sources.some((source) => SENDS_SHARD_KEY.test(source) || DECLARES_SHARD_BY.test(source))) {
                 return;
             }
 
             expect(
                 sources.some((source) => DECLARES_SHARD_GATE.test(source)),
-                `${templateName} routes to a non-default shard but declares neither allowUnauthenticatedShardAccess nor authorizeShard`,
+                `${templateName} shards its backend but declares neither allowUnauthenticatedShardAccess nor authorizeShard`,
             ).toBe(true);
+        });
+
+        /**
+         * The welcome page's Studio card must point at the Studio, not at the
+         * reserved RPC plane. A one-underscore `/_lunora` href is a dead link on a
+         * freshly scaffolded project's very first screen.
+         */
+        test("links to the Studio at /__lunora, never the reserved /_lunora plane", () => {
+            const offenders = listSourceFiles(join(TEMPLATES_DIR, templateName)).filter((file) =>
+                SINGLE_UNDERSCORE_STUDIO_HREF.test(stripLineComments(readFileSync(file, "utf8"))),
+            );
+
+            expect(offenders, `${templateName} links href="/_lunora" (the RPC plane); the Studio is at /__lunora`).toStrictEqual([]);
+        });
+
+        /**
+         * A scaffold that does not ignore the files the CLI writes secrets into
+         * hands the user a `git add .` away from committing them.
+         */
+        test("ignores the local secret files the CLI writes", () => {
+            const ignorePath = join(TEMPLATES_DIR, templateName, ".gitignore");
+
+            expect(existsSync(ignorePath), `${templateName} ships no .gitignore`).toBe(true);
+
+            const patterns = new Set(
+                readFileSync(ignorePath, "utf8")
+                    .split("\n")
+                    .map((line) => line.trim()),
+            );
+
+            for (const secretFile of IGNORED_SECRET_FILES) {
+                expect(patterns, `${templateName}/.gitignore does not ignore ${secretFile}`).toContain(secretFile);
+            }
         });
 
         test("external framework deps are on the latest supported major", () => {
