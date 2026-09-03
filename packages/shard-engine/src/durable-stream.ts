@@ -114,6 +114,18 @@ const readStreamRun = (sql: SqlExec, runKey: string): DurableStreamRun | undefin
 };
 
 /**
+ * Drop every chunk under a run key.
+ *
+ * All three reclamation paths — a fresh claim, an explicit delete, and a
+ * terminal whose run row a sweep already took — need exactly this, and each
+ * carried its own copy. The sweep's own delete is deliberately NOT one of them:
+ * it is scoped by a subselect over `__stream_runs` and takes many keys at once.
+ */
+const deleteStreamChunks = (sql: SqlExec, runKey: string): void => {
+    runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(STREAM_CHUNKS_TABLE)} WHERE run_key = ${runKey}`);
+};
+
+/**
  * Claim a run for production. Returns `true` when this caller created the row
  * and therefore owns the producer; `false` when a run already exists, in which
  * case the caller attaches to it instead of starting a second handler.
@@ -128,15 +140,10 @@ const claimStreamRun = (sql: SqlExec, runKey: string, startedAt: number, ttlMs: 
         return false;
     }
 
-    // A fresh claim is a fresh transcript, so the key must start empty. It is not
-    // necessarily: a producer whose row a TTL sweep removed mid-run keeps
-    // appending under that key, and if its instance dies before the terminal
-    // below can clean up, those chunks are still there. `appendStreamChunk` is
-    // `INSERT OR IGNORE`, so this run's own chunks at the colliding seqs would be
-    // silently dropped and a reconnect would replay the dead run's tail under
-    // this run's generation stamp — exactly the splice `decideDurableAttach`'s
-    // generation check exists to prevent, arriving through the storage layer.
-    runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(STREAM_CHUNKS_TABLE)} WHERE run_key = ${runKey}`);
+    // A fresh claim is a fresh transcript, so the key must start empty: chunks a
+    // sweep orphaned under it are `INSERT OR IGNORE`d over, silently dropping
+    // this run's own chunks at the colliding seqs.
+    deleteStreamChunks(sql, runKey);
 
     runDrizzle(
         sql,
@@ -156,7 +163,7 @@ const claimStreamRun = (sql: SqlExec, runKey: string, startedAt: number, ttlMs: 
  * to go, or its key stays wedged until the TTL expires.
  */
 const deleteStreamRun = (sql: SqlExec, runKey: string): void => {
-    runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(STREAM_CHUNKS_TABLE)} WHERE run_key = ${runKey}`);
+    deleteStreamChunks(sql, runKey);
     runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(STREAM_RUNS_TABLE)} WHERE run_key = ${runKey}`);
 };
 
@@ -206,7 +213,7 @@ const readStreamChunks = (sql: SqlExec, runKey: string, sinceSeq: number): Durab
  */
 const finishStreamRun = (sql: SqlExec, runKey: string, status: "complete" | "error", lastSeq: number, failure?: { code: string; message: string }): void => {
     if (readStreamRun(sql, runKey) === undefined) {
-        runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(STREAM_CHUNKS_TABLE)} WHERE run_key = ${runKey}`);
+        deleteStreamChunks(sql, runKey);
 
         return;
     }
