@@ -58,11 +58,32 @@ const waitForTerminator = async (ws: FakeWebSocket, deadlineMs = 200): Promise<v
 };
 
 /**
+ * Park a stream generator until its `AbortSignal` fires, so the stream stays
+ * in-flight (and so occupies a canceller slot) for as long as the test needs.
+ */
+const parkUntilAborted = async (signal: AbortSignal): Promise<void> => {
+    if (signal.aborted) {
+        return;
+    }
+
+    await new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => {
+            resolve();
+        });
+    });
+};
+
+/**
  * Test ShardDO that wires `executeStream` to user-supplied async generators
  * keyed by functionPath. Lets the suite swap the iterator per case without
  * recompiling the class.
  */
 class StreamShard extends ShardDO {
+    /** Exposes the protected per-socket stream cap so the suite pins the real constant, not a copy of it. */
+    public static cap(): number {
+        return StreamShard.MAX_STREAMS_PER_SOCKET;
+    }
+
     public registered = new Map<string, (args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>>();
 
     /** Function paths this shard reports as `.x402`-paid; stands in for the codegen registry lookup. */
@@ -517,5 +538,113 @@ describe("shardDO streaming queries", () => {
         ]);
         expect(shard.streamIdentities).toHaveLength(0);
         expect(ws.sent).toHaveLength(1);
+    });
+
+    it("tears a long-running stream down when the socket's credential lapses mid-run", async () => {
+        expect.assertions(3);
+
+        const shard = new StreamShard(state, {});
+        let yielded = 0;
+
+        shard.registered.set("metrics:tick", async function* tickGen(_args, signal) {
+            for (let index = 0; index < 200 && !signal.aborted; index += 1) {
+                yielded += 1;
+                yield index;
+                // eslint-disable-next-line no-await-in-loop -- intentional per-yield event-loop turn
+                await new Promise<void>((resolve) => {
+                    setTimeout(resolve, 1);
+                });
+            }
+        });
+
+        const ws = createFakeWebSocket();
+
+        // Live at the inbound check that started the stream, lapsed a few chunks
+        // in — the window the one-shot inbound check structurally cannot see.
+        shard.registerSocket(ws, { expiresAt: Date.now() + 25, subs: {} });
+        await shard.driveMessage(ws, { id: "tick", query: { functionPath: "metrics:tick" }, type: "stream" });
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 150);
+        });
+
+        const frames = parseFrames(ws);
+
+        expect(frames.some((f) => f.code === "TOKEN_EXPIRED")).toBe(true);
+        expect(frames.map((f) => f.type)).not.toContain("complete");
+        expect(yielded).toBeLessThan(200);
+    });
+
+    it("caps concurrent streams per socket at MAX_STREAMS_PER_SOCKET", async () => {
+        expect.assertions(3);
+
+        const cap = StreamShard.cap();
+        const shard = new StreamShard(state, {});
+        let started = 0;
+
+        shard.registered.set("metrics:hold", async function* holdGen(_args, signal) {
+            started += 1;
+            yield { open: true };
+            await parkUntilAborted(signal);
+        });
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { subs: {} });
+
+        for (let index = 0; index < cap + 1; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- each frame must register its canceller before the next is sent
+            await shard.driveMessage(ws, { id: `hold_${String(index)}`, query: { functionPath: "metrics:hold" }, type: "stream" });
+        }
+
+        const errors = parseFrames(ws).filter((f) => f.type === "error");
+
+        expect(started).toBe(cap);
+        expect(errors).toHaveLength(1);
+        expect(errors[0]?.error).toStrictEqual({ code: "TOO_MANY_STREAMS", message: `stream cap of ${String(cap)} reached on this socket` });
+
+        await shard.driveClose(ws);
+    });
+
+    it("refuses a duplicate stream id instead of running a second pump under one cap slot", async () => {
+        expect.assertions(4);
+
+        const cap = StreamShard.cap();
+        const shard = new StreamShard(state, {});
+        let started = 0;
+        let aborted = 0;
+
+        shard.registered.set("metrics:hold", async function* holdGen(_args, signal) {
+            started += 1;
+            yield { open: true };
+            await parkUntilAborted(signal);
+            aborted += 1;
+        });
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { subs: {} });
+
+        // The cap reads `cancellers.size` and the id is client-chosen, so without a
+        // dedup every one of these frames lands in the SAME map entry: all of them
+        // pass the cap and each runs its own pump.
+        for (let index = 0; index < cap + 4; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- each frame must register its canceller before the next is sent
+            await shard.driveMessage(ws, { id: "same", query: { functionPath: "metrics:hold" }, type: "stream" });
+        }
+
+        const errors = parseFrames(ws).filter((f) => f.type === "error");
+
+        expect(started).toBe(1);
+        expect(errors).toHaveLength(cap + 3);
+        expect(errors[0]?.error).toStrictEqual({ code: "STREAM_ID_IN_USE", message: `stream id "same" is already live on this socket` });
+
+        // The other half of the same bug: a second `set` under one id orphaned the
+        // incumbent controller, so `unsubscribe` reached only the newest pump.
+        await shard.driveMessage(ws, { id: "same", type: "unsubscribe" });
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 10);
+        });
+
+        expect(aborted).toBe(1);
     });
 });

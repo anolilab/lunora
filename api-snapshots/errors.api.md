@@ -580,6 +580,10 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "SQL storage unavailable";
     };
+    readonly STREAM_ID_IN_USE: {
+        readonly status: 409;
+        readonly title: "Stream id already in use";
+    };
     readonly STREAM_INTERRUPTED: {
         readonly status: 503;
         readonly title: "Durable stream interrupted";

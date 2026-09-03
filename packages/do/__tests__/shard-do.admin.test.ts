@@ -37,6 +37,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BRANCH_MARKER_REJECTION } from "../../../shared/branch-marker";
 import { drainBulkOp } from "../../../shared/bulk-drain";
+import { adminSocketBinding } from "../../../shared/ws-admin-token";
 import type {
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
@@ -3617,9 +3618,17 @@ describe("shardDO admin bulk delete", () => {
             // frames the flush pushes; the state below has no `waitUntil`, so the
             // fan-out is awaited synchronously and is observable once `fetch` resolves.
             const sent: string[] = [];
+            // An admin socket's authorization is re-derived from the CURRENT
+            // `LUNORA_ADMIN_TOKEN` on every flush, so the attachment has to carry
+            // the binding the upgrade would have stamped.
+            const adminBinding = await adminSocketBinding(ADMIN_TOKEN);
             const socket = {
                 deserializeAttachment: () => {
-                    return { admin: true, subs: { "s-1": { args: { table: "todos" }, functionPath: ADMIN_FUNCTIONS.readTablePage, table: "todos" } } };
+                    return {
+                        admin: true,
+                        adminBinding,
+                        subs: { "s-1": { args: { table: "todos" }, functionPath: ADMIN_FUNCTIONS.readTablePage, table: "todos" } },
+                    };
                 },
                 send: (data: string) => {
                     sent.push(data);
