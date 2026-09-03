@@ -102,16 +102,31 @@ const bindingsMissingRequiredFields = (): string[] => {
  */
 const CONSUMER_PROVIDED = new Set(["@angular/core", "react", "solid-js", "svelte", "vue"]);
 
-/** Bare package specifiers an item imports without naming them in its `deps`. */
-const undeclaredImports = (): string[] => {
+/**
+ * Source dialects an item can carry an import in. `.vue`/`.svelte` are here
+ * because the Vue and Svelte ports author their view layer as single-file
+ * components: 41 of the registry's bare specifiers live in an SFC, and a sweep
+ * that reads only `.ts`/`.tsx` never opens the 114 files where a Vue- or
+ * Svelte-only dependency would be the one to go undeclared.
+ */
+const SCANNED_DIALECTS = /\.(?:tsx?|vue|svelte)$/u;
+
+/**
+ * Every bare package specifier the items import, and the subset of those an item
+ * does not name in its `deps`.
+ */
+const itemImports = (): { scanned: string[]; undeclared: string[] } => {
+    const scanned: string[] = [];
     const undeclared: string[] = [];
     const declaredBy = new Map(manifests.map(({ manifest, name }) => [name, new Set(Object.keys(manifest.deps ?? {}))]));
 
-    for (const { from, name, source } of itemSources.filter((entry) => /\.tsx?$/u.test(entry.from))) {
+    for (const { from, name, source } of itemSources.filter((entry) => SCANNED_DIALECTS.test(entry.from))) {
         // Bare specifiers only — a relative import or a `#lunora/…` subpath
         // resolves inside the user's own project.
         for (const match of source.matchAll(/from "((?:@[a-z\d-]+\/)?[a-z\d][a-z\d._-]*)(?:\/[^"]*)?"/gu)) {
             const packageName = match[1] as string;
+
+            scanned.push(`${name} → ${packageName} (${from})`);
 
             if (!declaredBy.get(name)?.has(packageName) && !CONSUMER_PROVIDED.has(packageName)) {
                 undeclared.push(`${name} → ${packageName} (${from})`);
@@ -119,7 +134,7 @@ const undeclaredImports = (): string[] => {
         }
     }
 
-    return undeclared;
+    return { scanned, undeclared };
 };
 
 /** Every `createMailerFromEnv(` call site in the registry, split by whether it guards `cloudflareSend`. */
@@ -279,7 +294,7 @@ describe("shipped registry items", () => {
     });
 
     it("every package an item imports is declared in its `deps`", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         // `deps` is written verbatim into a USER's package.json by `lunora add`,
         // so a package an item imports but does not declare is simply absent from
@@ -288,7 +303,14 @@ describe("shipped registry items", () => {
         // siblings did, and the Solid 2 port used `@solidjs/web` — its JSX import
         // source, a package that exists only on the 2.x line — in 15 files without
         // naming it anywhere.
-        expect(undeclaredImports()).toStrictEqual([]);
+        const { scanned, undeclared } = itemImports();
+
+        expect(undeclared).toStrictEqual([]);
+        // Guard the guard. This sweep passes by finding nothing, so a filter that
+        // stops matching a dialect — the way it silently skipped every `.vue` and
+        // `.svelte` file — turns it green rather than red. Require positive
+        // evidence that the SFC ports were read.
+        expect(scanned.filter((entry) => /\((?:vue|svelte)\/[^)]+\.(?:vue|svelte)\)$/u.test(entry))).not.toHaveLength(0);
     });
 
     it("no item hands `createMailerFromEnv` an unguarded `cloudflareSend`", () => {
