@@ -1,3 +1,18 @@
+## @lunora/studio [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.147...@lunora/studio@1.0.0-alpha.148) (2026-09-03)
+
+### Bug Fixes
+
+* audit rounds 14-16 ([#586](https://github.com/anolilab/lunora/issues/586)) ([6a09b74](https://github.com/anolilab/lunora/commit/6a09b746cfc9fb36f451c208b7a1c3eac16e56f4))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.107
+* **@lunora/client:** upgraded to 1.0.0-alpha.73
+* **@lunora/react:** upgraded to 1.0.0-alpha.78
+* **@lunora/notify:** upgraded to 1.0.0-alpha.35
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.90
+
 ## @lunora/studio [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.146...@lunora/studio@1.0.0-alpha.147) (2026-09-03)
 
 ### ⚠ BREAKING CHANGES
