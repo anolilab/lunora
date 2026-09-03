@@ -553,19 +553,19 @@
             - "name": "Git checkout"
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
-            # A third hardcoded copy of the language list — `sdks/lint-all.sh` and
-            # `sdks/generated-check.sh` hold the other two — and the only one no
-            # script can see. A ninth SDK missed here is never conformance-tested at
-            # all, with every leg green. `strategy.job-total` is this matrix's size,
-            # so compare it against what is on disk; the two scripts reconcile
-            # themselves against the same directories.
+            # A fourth hardcoded copy of the language list — `sdks/lint-all.sh`,
+            # `sdks/generated-check.sh` and `sdks/run-all.sh` hold the other three —
+            # and the only one no script can see. A ninth SDK missed here is never
+            # conformance-tested at all, with every leg green. `strategy.job-total` is
+            # this matrix's size, so compare it against what is on disk; the three
+            # scripts reconcile themselves against the same directories.
             - "name": "Assert the matrix covers every SDK on disk"
               "run": |
                   on_disk="$(find sdks -mindepth 1 -maxdepth 1 -type d ! -name smoke | wc -l | tr -d ' ')"
                   if [ "$on_disk" != "${{ strategy.job-total }}" ]; then
                     echo "sdks/ holds $on_disk ports but the sdk-conformance matrix has ${{ strategy.job-total }} legs." >&2
                     echo "Add the missing language to the matrix in .github/workflows/test.yml, and to ALL in" >&2
-                    echo "sdks/lint-all.sh and sdks/generated-check.sh." >&2
+                    echo "sdks/lint-all.sh, sdks/generated-check.sh and sdks/run-all.sh." >&2
                     exit 1
                   fi
                   echo "matrix covers all $on_disk SDKs"
