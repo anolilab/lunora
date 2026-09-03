@@ -27,6 +27,14 @@
         "fixtures/offline-optimistic.json, which carries the values and orderings",
         "all eight ports must agree on.",
         "",
+        "`batch_entry_cap_matches_protocol` is the odd one out: it exercises no",
+        "behaviour, it pins a CONSTANT. The batch entry cap is normative and was",
+        "written out as a bare 500 in ten places with nothing reconciling them, so",
+        "each port now reads `offlineQueue.batchReplay.maxEntries` out of the",
+        "fixture and compares its own. Lower the server's cap without that and",
+        "every client keeps chunking at the old one, taking the coded 400 that",
+        "README 4.3 defines as terminal — durable writes discarded, not retried.",
+        "",
         "A name here is required of EVERY port, so it may only assert behaviour",
         "every port has. Where one legitimately differs the difference belongs in",
         "the capability matrix, not here."
@@ -70,6 +78,7 @@
         "offline_flush_batch_splits_on_payload_too_large",
         "optimistic_cursorless_frame_preserves_cursor",
         "offline_queue_hydrate_overflow_settles_discarded",
-        "offline_flush_unencodable_write_settles_terminal"
+        "offline_flush_unencodable_write_settles_terminal",
+        "batch_entry_cap_matches_protocol"
     ]
 }

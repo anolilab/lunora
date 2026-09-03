@@ -129,6 +129,120 @@ describe("generateValue — bytes wire representation", () => {
     });
 });
 
+describe("generateValue — v.date() / v.timestamp()", () => {
+    const SIX_MONTHS_MS = 180 * 24 * 60 * 60 * 1000;
+
+    it.each([
+        ["date", v.date()],
+        ["timestamp", v.timestamp()],
+    ])("anchors a v.%s() column on the caller's `now` rather than a generator-local window", (kind, validator) => {
+        expect.assertions(2);
+
+        // Regression: this arm drew from faker's hard-coded 1980–2020 window and
+        // ignored `now` entirely, so `expiresAt: v.timestamp()` seeded 2012 while
+        // `expiresAt: v.timestamp().unique()` (which uses `now`) seeded 2026.
+        const value = generateValue(validator, "expiresAt", `${kind}-input`, NOW) as number;
+
+        expect(value).toBeLessThanOrEqual(NOW);
+        expect(value).toBeGreaterThanOrEqual(NOW - SIX_MONTHS_MS);
+    });
+
+    it("shifts with `now` instead of staying pinned to a fixed calendar window", () => {
+        expect.assertions(1);
+
+        const later = NOW + 10 * 365 * 24 * 60 * 60 * 1000;
+
+        expect(generateValue(v.timestamp(), "expiresAt", "same-input", later)).toBe(
+            (generateValue(v.timestamp(), "expiresAt", "same-input", NOW) as number) + (later - NOW),
+        );
+    });
+});
+
+describe("generateValue — refined string columns", () => {
+    it("refuses a pattern-constrained column by name instead of seeding a value its own validator rejects", () => {
+        expect.assertions(2);
+
+        // The `.unique()` twin (`stringDeal`) and the `v.from()` arm both refuse
+        // loudly for this reason; the ordinary path used to emit a bare lorem
+        // word — `sku` → "audeo", `safeParse().ok === false`.
+        const sku = v.string().pattern(/^SKU-\d{4}$/u);
+
+        expect(() => generateValue(sku, "sku", "input", NOW)).toThrow(/sku/u);
+        expect(() => generateValue(sku, "sku", "input", NOW)).toThrow(/pattern/u);
+    });
+
+    it("refuses a column declaring a format it has no generator for", () => {
+        expect.assertions(1);
+
+        expect(() => generateValue(withConstraints(v.string(), { format: "ipv6" }), "peer", "input", NOW)).toThrow(/format "ipv6"/u);
+    });
+
+    it.each([
+        ["homepage", v.string().url(), (value: string) => new URL(value).protocol],
+        ["contact", v.string().email(), (value: string) => (/^[^@\s]+@[^@\s]+$/u.test(value) ? "https:" : "")],
+    ])("generates a conforming value for a declared format on %s, whose name no heuristic matches", (field, validator, probe) => {
+        expect.assertions(1);
+
+        // A declared format outranks the field-name heuristics: neither
+        // `homepage` nor `contact` matches a keyword, so both used to fall
+        // through to `copycat.word` — "tremo", "audeo".
+        expect(probe(generateValue(validator, field, `${field}-input`, NOW) as string)).toBe("https:");
+    });
+});
+
+describe("generateValue — a declared format under declared length bounds", () => {
+    /** Enough rows that the generator's own length variance is guaranteed to cross every bound under test. */
+    const ROWS = 60;
+
+    /** Every value the column would be seeded, so an assertion sees the whole spread rather than one lucky draw. */
+    const seedColumn = (validator: Validator, field: string): ReadonlyArray<string> =>
+        Array.from({ length: ROWS }, (_unused, index) => generateValue(validator, field, [field, index], NOW) as string);
+
+    it.each([
+        ["an address cut to fit", "contact", v.string().email().max(20), 0, 20],
+        ["an address padded to fit", "contact", v.string().email().min(40), 40, Number.POSITIVE_INFINITY],
+        ["an address pinned to one width", "contact", v.string().email().length(24), 24, 24],
+        ["an address in the narrowest column that admits one", "contact", v.string().email().max(13), 0, 13],
+        ["a URL cut to fit", "homepage", v.string().url().max(20), 0, 20],
+        ["a URL padded to fit", "homepage", v.string().url().min(60), 60, Number.POSITIVE_INFINITY],
+        ["a URL in the narrowest column that admits one", "homepage", v.string().url().max(9), 0, 9],
+    ])("seeds %s that the column's own validator accepts", (_label, field, validator, min, max) => {
+        expect.assertions(2);
+
+        // The length axis used to be a blind `slice`/`padEnd` applied AFTER the
+        // format generator ran, so an address in a `max(20)` column arrived with
+        // its domain cut off mid-word and a URL in a `max(8)` one arrived as the
+        // bare scheme — values the column rejects on the very next insert.
+        const values = seedColumn(validator, field);
+
+        expect(values.filter((value) => !validator.safeParse(value).ok)).toStrictEqual([]);
+        expect(values.filter((value) => value.length < min || value.length > max)).toStrictEqual([]);
+    });
+
+    it.each([
+        ["email", "contact", v.string().email().max(12), 13],
+        ["uri", "homepage", v.string().url().max(8), 9],
+    ])("refuses a %s column too narrow for any conforming value, naming it", (format, field, validator, minimum) => {
+        expect.assertions(1);
+
+        // Refusing on the BOUND rather than on the generated value keeps the
+        // outcome deterministic: a per-value check would refuse some rows of the
+        // same column and seed others.
+        expect(() => generateValue(validator, field, [field, 0], NOW)).toThrow(
+            new RegExp(`column "${field}" declares format "${format}".*shortest ${format} value the seeder can build is ${String(minimum)}`, "u"),
+        );
+    });
+
+    it("stretches a shapeless value to its bounds without a format to preserve", () => {
+        expect.assertions(2);
+
+        const values = seedColumn(withConstraints(v.string(), { maxLength: 12, minLength: 9 }), "note");
+
+        expect(values.filter((value) => value.length < 9 || value.length > 12)).toStrictEqual([]);
+        expect(new Set(values).size).toBeGreaterThan(1);
+    });
+});
+
 describe("generateValue — time-named number columns", () => {
     const SIX_MONTHS_MS = 180 * 24 * 60 * 60 * 1000;
 

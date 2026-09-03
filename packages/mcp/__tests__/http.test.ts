@@ -103,6 +103,47 @@ describe("createMcpFetchHandler", () => {
         await expect(response.text()).resolves.toContain("batched requests are not supported");
     });
 
+    /**
+     * The public-function registry memo in `./tools` is keyed by client identity,
+     * so a handler that builds a `LunoraClient` per request never hits it and
+     * every tool call pays the admin round trip again.
+     */
+    it("shares one client across requests, so the function registry is fetched once", async () => {
+        expect.assertions(2);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ functions: [{ kind: "query", path: "messages:list" }] }));
+        const handle = createMcpFetchHandler({ fetch: fetchMock, token: "admin-token", url: "https://app.example" });
+        const listCall = (id: number): unknown => {
+            return { id, jsonrpc: "2.0", method: "tools/call", params: { arguments: {}, name: "lunora_list_functions" } };
+        };
+
+        await handle(mcpRequest(initializeBody));
+
+        const first = await handle(mcpRequest(listCall(2)));
+
+        await handle(mcpRequest(listCall(3)));
+
+        expect(first.status).toBe(200);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports a misconfiguration when the handler is built, not on the first request", () => {
+        expect.assertions(1);
+
+        // The client is resolved once, up front — so `url` with no admin bearer
+        // fails where `createLunoraMcpServer` documents reporting it.
+        expect(() => createMcpFetchHandler({ url: "https://app.example" })).toThrow(/token/u);
+    });
+
+    it("honours a custom maxRequestBytes", async () => {
+        expect.assertions(1);
+
+        const handle = createMcpFetchHandler({ client: mockClient(), maxRequestBytes: 16 });
+        const response = await handle(mcpRequest(initializeBody));
+
+        expect(response.status).toBe(413);
+    });
+
     it("refuses a body over the size limit", async () => {
         expect.assertions(2);
 

@@ -11,9 +11,11 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { stableWireKey } from "../../../shared/wire-key";
 import { LunoraClient } from "../src/lunora-client";
+import { OfflineQueue } from "../src/offline-queue";
 import type { FunctionReference } from "../src/types";
 
 const readFixture = (name: string): unknown => {
@@ -83,6 +85,113 @@ describe("stable-wire-key fixtures", () => {
     it.each(data.typed.map((testCase) => [testCase.name, testCase.wireArgs, testCase.key] as const))("keys typed %s", (_name, wireArgs, key) => {
         expect.hasAssertions();
         expect(stableWireKey(decodeWire(wireArgs))).toBe(key);
+    });
+});
+
+// --- Offline queue (the reference the eight ports are held to) --------------
+
+interface QueueFixtures {
+    offlineQueue: {
+        batchReplay: { maxEntries: number };
+        fifo: { drained: string[]; enqueue: string[]; sizeAfterDrain: number; sizeAfterEnqueue: number };
+        overflow: { code: string; enqueue: string[]; evicted: string[]; maxItems: number; remaining: string[] };
+        shardDrain: {
+            drained: string[];
+            drainShardKey: null | string;
+            entries: { id: string; shardKey: null | string }[];
+            remaining: string[];
+        };
+    };
+}
+
+describe("offline-queue fixtures", () => {
+    // `offline-optimistic.json` says `@lunora/client` is the reference every port
+    // is held to — and no test here read a byte of it, so the reference could move
+    // and leave eight suites pinned to numbers it no longer produces, with nothing
+    // red. These drive the real `OfflineQueue` against the same scenarios the
+    // ports run.
+    const { offlineQueue } = readFixture("offline-optimistic.json") as QueueFixtures;
+
+    /** A queue entry whose `functionPath` carries the fixture's id, so a drain is identifiable. */
+    const entry = (id: string, shardKey?: null | string, reject: (error: unknown) => void = () => undefined) => {
+        return {
+            args: {},
+            functionPath: id,
+            reject,
+            resolve: () => undefined,
+            ...(shardKey === null ? {} : { shardKey }),
+        };
+    };
+
+    it("replays in FIFO order", () => {
+        expect.hasAssertions();
+
+        const { drained, enqueue, sizeAfterDrain, sizeAfterEnqueue } = offlineQueue.fifo;
+        const queue = new OfflineQueue();
+
+        for (const id of enqueue) {
+            queue.enqueue(entry(id));
+        }
+
+        expect(queue.size).toBe(sizeAfterEnqueue);
+        expect(queue.drain().map((item) => item.functionPath)).toStrictEqual(drained);
+        expect(queue.size).toBe(sizeAfterDrain);
+    });
+
+    it("drains one shard and leaves the rest queued, treating an absent and an empty shard key as one shard", () => {
+        expect.hasAssertions();
+
+        const { drainShardKey, drained, entries, remaining } = offlineQueue.shardDrain;
+        const queue = new OfflineQueue();
+
+        for (const item of entries) {
+            queue.enqueue(entry(item.id, item.shardKey));
+        }
+
+        // The client's own predicate: `shardKey ?? ""`. A port comparing the two
+        // strictly leaves the `""` entry queued forever, because nothing ever
+        // flushes the shard named `""` — which is why the fixture carries it.
+        const key = drainShardKey ?? "";
+        const taken = queue.drain((item) => (item.shardKey ?? "") === key);
+
+        expect(taken.map((item) => item.functionPath)).toStrictEqual(drained);
+        expect(queue.drain().map((item) => item.functionPath)).toStrictEqual(remaining);
+    });
+
+    it("evicts the oldest entry past capacity, with a coded reason", () => {
+        expect.hasAssertions();
+
+        const { code, enqueue, evicted, maxItems, remaining } = offlineQueue.overflow;
+        const rejected: { code: string; id: string }[] = [];
+        const queue = new OfflineQueue({ maxItems });
+
+        for (const id of enqueue) {
+            queue.enqueue(entry(id, null, (error: unknown) => rejected.push({ code: (error as { code: string }).code, id })));
+        }
+
+        expect(rejected.map((item) => item.id)).toStrictEqual(evicted);
+        expect(rejected.map((item) => item.code)).toStrictEqual(evicted.map(() => code));
+        expect(queue.drain().map((item) => item.functionPath)).toStrictEqual(remaining);
+    });
+});
+
+// --- Batch entry cap --------------------------------------------------------
+
+describe("batch entry cap", () => {
+    it("matches the value every port reads from the fixture", () => {
+        expect.hasAssertions();
+
+        // The cap is normative and duplicated by hand in ten places — this file's
+        // constant, the worker and shard-DO enforcement that import it, and the
+        // eight ports, which each hard-code the number. Nothing reconciled them,
+        // and the failure is silent in the worst direction: lower the server's cap
+        // and a client still chunking at the old one takes a coded 400, which
+        // protocol/README.md §4.3 makes a TERMINAL verdict — the durable writes are
+        // discarded rather than retried. Every SDK now reads it from here too, via
+        // `batch_entry_cap_matches_protocol` in protocol/conformance-cases.json.
+        const offline = readFixture("offline-optimistic.json") as { offlineQueue: { batchReplay: { maxEntries: number } } };
+
+        expect(MAX_BATCH_ENTRIES).toBe(offline.offlineQueue.batchReplay.maxEntries);
     });
 });
 
@@ -259,6 +368,8 @@ interface WsFixtures {
         pokeSequence: Record<string, unknown>[];
         "shape-subscribe-cold": unknown;
     };
+    /** A live query consumed as the language's own pull type; see the fixture's `$comment`. */
+    stream: { frames: Record<string, unknown>[]; subscriptionId: string; yielded: unknown[] };
 }
 
 describe("ws-frames fixtures", () => {
@@ -351,6 +462,36 @@ describe("ws-frames fixtures", () => {
         expect(errors).toHaveLength(1);
         expect(errors[0]?.code).toBe(testCase.expect.code);
         expect(errors[0]?.message).toBe(testCase.expect.message);
+    });
+
+    it("delivers a subscription's frame values in order", () => {
+        expect.hasAssertions();
+
+        // The `stream` section: every port consumes a live query as its own PULL
+        // type (an async generator, a channel, an Enumerator) and must yield
+        // exactly what the callback form delivers, decoded. This reference has no
+        // pull type — a callback IS the JS idiom — so it asserts the other half of
+        // that equality, which is the half the ports are held to. All eight suites
+        // read this section and the reference read none of it.
+        const client = makeWsClient();
+        const values: unknown[] = [];
+
+        client.subscribe(fnRef("messages:list"), { channel: "general" }, (value) => values.push(value));
+        latestSocket().open();
+
+        for (const frame of ws.stream.frames) {
+            latestSocket().receive(frame);
+        }
+
+        expect(values).toStrictEqual(ws.stream.yielded);
+
+        const subscribeFrame = latestSocket()
+            .sent.map((raw) => JSON.parse(raw))
+            .find((frame) => frame.type === "subscribe");
+
+        // `sub_1` is the id every port mints for a first subscription, and the
+        // frames above are addressed to it.
+        expect(subscribeFrame.id).toBe(ws.stream.subscriptionId);
     });
 
     it("materialises rows from a poke sequence", () => {

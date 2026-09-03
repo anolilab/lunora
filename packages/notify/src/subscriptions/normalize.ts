@@ -21,6 +21,33 @@ interface LooseSubscription {
 const MAX_METADATA_BYTES = 4096;
 
 /**
+ * Cap on each client-controlled DELIVERY field written to the same row
+ * (NOTIFY-02, second half): the Web Push `endpoint`, the FCM `token` and the
+ * RFC 8291 `keys`. These are as client-controlled as `metadata` and land in the
+ * same D1 row, so capping only `metadata` bounded nothing — a 4 KB `metadata`
+ * was refused while a 1 MB `endpoint` and a 2 MB `token` went straight in.
+ *
+ * The caps are generous against reality so no live device is refused: a real
+ * push endpoint is ~200 bytes and an FCM registration token ~160, while the
+ * RFC 8291 keys are fixed-width base64url (`p256dh` 87 chars, `auth` 22).
+ */
+const MAX_ENDPOINT_BYTES = 2048;
+const MAX_TOKEN_BYTES = 2048;
+const MAX_KEY_BYTES = 512;
+
+/** Refuse a client-supplied string field that exceeds its byte cap (see {@link MAX_ENDPOINT_BYTES}). */
+const assertFieldSize = (value: string, max: number, field: string): void => {
+    const byteLength = new TextEncoder().encode(value).length;
+
+    if (byteLength > max) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `@lunora/notify: register() \`${field}\` is ${byteLength.toString()} bytes, exceeding the ${max.toString()}-byte cap`,
+        );
+    }
+};
+
+/**
  * Validate a `register()` input's `metadata` (NOTIFY-02) before it is
  * STORED: must be a plain object (not an array, class instance, or
  * primitive — those are legal `typeof "object"` values a client could send
@@ -233,12 +260,21 @@ const assertPushEndpoint = (endpoint: string, allowedPushOrigins?: string[]): vo
  * {@link validateMetadata}), and stamps `createdAt`/`lastSeenAt`.
  */
 const normalizeRegisterInput = (input: RegisterInput, now: number = Date.now(), options: NormalizeOptions = {}): StoredSubscription => {
-    if ("token" in input) {
-        const { token } = input;
+    // `kind` is the DECLARED discriminator (see `RegisterInput`), so branch on it
+    // and fall back to the token's presence only when it is absent. Branching on
+    // `"token" in input` alone routed `{ ...spread, token: undefined }` — a
+    // web-push registration whose source object merely declares an optional token
+    // field — into the FCM path, where it was rejected as a missing token.
+    const isFcm = input.kind === undefined ? (input as { token?: unknown }).token !== undefined : input.kind === "fcm";
+
+    if (isFcm) {
+        const { token } = input as { token?: unknown };
 
         if (typeof token !== "string" || token === "") {
             throw new LunoraError("BAD_REQUEST", "@lunora/notify: register() fcm input requires a non-empty `token`");
         }
+
+        assertFieldSize(token, MAX_TOKEN_BYTES, "token");
 
         return {
             createdAt: now,
@@ -251,7 +287,7 @@ const normalizeRegisterInput = (input: RegisterInput, now: number = Date.now(), 
         };
     }
 
-    const subscription = parseSubscription(input.subscription);
+    const subscription = parseSubscription((input as { subscription?: unknown }).subscription);
     const { endpoint } = subscription;
     const p256dh = subscription.keys?.p256dh;
     const auth = subscription.keys?.auth;
@@ -260,6 +296,9 @@ const normalizeRegisterInput = (input: RegisterInput, now: number = Date.now(), 
         throw new LunoraError("BAD_REQUEST", "@lunora/notify: register() web-push subscription requires `endpoint` and `keys.{p256dh, auth}`");
     }
 
+    assertFieldSize(endpoint, MAX_ENDPOINT_BYTES, "endpoint");
+    assertFieldSize(auth, MAX_KEY_BYTES, "keys.auth");
+    assertFieldSize(p256dh, MAX_KEY_BYTES, "keys.p256dh");
     assertPushEndpoint(endpoint, options.allowedPushOrigins);
 
     return {
@@ -318,18 +357,30 @@ const GONE_TEXT_FALLBACK = /\bsubscription (?:is )?(?:gone|expired|no longer val
  * (the browser/device unsubscribed) and should be pruned — as opposed to a
  * transient failure worth retrying.
  *
- * Gates on STRUCTURED signals first: a Web Push `HTTP 404/410` status or an FCM
- * `UNREGISTERED`/`NOT_REGISTERED` code, both of which the providers surface in
- * their failure receipts. The free-text {@link GONE_TEXT_FALLBACK} is a tightened
- * last resort only, so a transient error that happens to contain `expired`
- * (a cert/session expiry) can never permanently drop a valid subscription.
+ * Gates on STRUCTURED signals first: an `HTTP 404/410` status (both providers
+ * answer one for a dead endpoint/token) or, for FCM only, an
+ * `UNREGISTERED`/`NOT_REGISTERED` code. The free-text
+ * {@link GONE_TEXT_FALLBACK} is a tightened last resort only, so a transient
+ * error that happens to contain `expired` (a cert/session expiry) can never
+ * permanently drop a valid subscription.
+ *
+ * `kind` scopes the PROVIDER-SPECIFIC patterns to the provider that emits them.
+ * The web-push provider echoes the push service's response body into
+ * `HTTP ${status}: ${body}`, so a 4xx whose prose merely contains "not
+ * registered" matched the FCM-only codes and permanently deleted a live
+ * subscription. Omit `kind` (the third-party/unknown-provider case) to test
+ * every pattern, as before.
  */
-const isGoneError = (message: string | undefined): boolean => {
+const isGoneError = (message: string | undefined, kind?: StoredSubscription["kind"]): boolean => {
     if (message === undefined) {
         return false;
     }
 
-    return WEB_PUSH_GONE_PATTERN.test(message) || FCM_GONE_PATTERN.test(message) || GONE_TEXT_FALLBACK.test(message);
+    if (WEB_PUSH_GONE_PATTERN.test(message) || GONE_TEXT_FALLBACK.test(message)) {
+        return true;
+    }
+
+    return kind !== "web-push" && FCM_GONE_PATTERN.test(message);
 };
 
 export { fcmId, isGoneError, legacyFcmId, legacyIdFor, legacyWebPushId, normalizeRegisterInput, targetOf, webPushId };

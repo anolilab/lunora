@@ -397,6 +397,17 @@ Future<void> caseGoldenOfflineQueueHydrateOverflow() async {
   }
 }
 
+/// The entry cap is not a port's to choose: the worker and the shard DO both
+/// refuse a larger batch with a coded 400, which `protocol/README.md` 4.3 makes a
+/// TERMINAL verdict — so a client chunking at a stale value discards durable
+/// writes instead of retrying them. It was a bare 500 in ten independent places
+/// with nothing reconciling them.
+Future<void> caseGoldenBatchEntryCapMatchesProtocol() async {
+  covers('batch_entry_cap_matches_protocol');
+
+  equals(lunoraMaxBatchEntries, _scenario('batchReplay')['maxEntries'], 'the entry cap is the protocol\'s, not this port\'s');
+}
+
 /// Two or more queued writes coalesce into ONE `/_lunora/rpc-batch` round trip,
 /// and each slot is classified exactly as a whole single-call response is.
 Future<void> caseGoldenOfflineFlushBatchesMultipleWrites() async {

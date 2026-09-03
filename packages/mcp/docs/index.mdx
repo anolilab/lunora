@@ -411,7 +411,22 @@ list _and_ refused at dispatch unless you enable them. `@lunora/mcp` takes no
 dependency on `@lunora/agent`; it calls the agent's public `agents:agentRun`
 mutation over HTTP RPC like any other function.
 
-Enable it with two env vars (or the matching `createLunoraMcpServer` options):
+Two opt-ins are needed, and they sit on opposite sides of the RPC:
+
+**On the agent**, mark it runnable from outside the deployment:
+
+```ts
+export const support = defineAgent({ name: "support", publicRun: true /* … */ });
+```
+
+`agents:agentRun` throws `FORBIDDEN` for any agent whose handle is not
+`publicRun: true` — starting a durable run is a side effect, so the agent's
+author allows it, not the MCP server. The env vars below cannot grant it: an
+agent exposed here without the flag is advertised in `tools/list` and fails on
+its first call.
+
+**On this server**, the env vars (or the matching `createLunoraMcpServer`
+options):
 
 - `LUNORA_MCP_ALLOW_AGENTS`: `1`/`true`/`yes`/`on` to expose the agent tools.
 - `LUNORA_MCP_AGENTS`: a `;`-separated list of `name:description` pairs

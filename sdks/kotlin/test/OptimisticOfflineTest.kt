@@ -952,6 +952,21 @@ private fun checkedExceptionRequeuesInOrder() {
 }
 
 /**
+ * The entry cap is not a port's to choose: the worker and the shard DO both refuse
+ * a larger batch with a coded 400, which `protocol/README.md` 4.3 makes a TERMINAL
+ * verdict — so a client chunking at a stale value discards durable writes instead
+ * of retrying them. It was a bare 500 in ten independent places with nothing
+ * reconciling them.
+ */
+private fun batchEntryCapMatchesProtocol() {
+    covers("batch_entry_cap_matches_protocol")
+
+    val expected = (scenario("offlineQueue", "batchReplay")["maxEntries"] as Number).toInt()
+
+    check(MAX_BATCH_ENTRIES == expected, "batch entry cap: $MAX_BATCH_ENTRIES, want $expected")
+}
+
+/**
  * Two or more queued writes coalesce into ONE `/_lunora/rpc-batch` round trip, and
  * each slot is classified exactly as a whole single-call response is.
  */
@@ -1304,6 +1319,7 @@ internal fun runOptimisticOfflineCases() {
     offlineQueueIdentityGateRejectsReplay()
     offlineFlushReplaysAndConfirmsOptimistic()
     offlineFlushBatchesMultipleWrites()
+    batchEntryCapMatchesProtocol()
     batchSplitsOnPayloadTooLarge()
     loneQueuedWriteSurvivesAnEnvelopeLess502()
     rateLimitedReplayDefersTheNextFlush()

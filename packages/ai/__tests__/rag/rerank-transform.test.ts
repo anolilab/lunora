@@ -412,6 +412,62 @@ describe("embedding batching and cache", () => {
         expect(counters.embedMany).toBe(1);
     });
 
+    it("keeps each concurrent index() call's batch to itself", async () => {
+        expect.assertions(3);
+
+        // `defineRagSource` drives up to `concurrency` (default 4) index() calls
+        // through ONE bound Rag, so a batch map shared across calls is wiped by
+        // whichever sibling finishes first — every still-pending chunk then falls
+        // back to a single embed and the batch is pure cost.
+        let calls = 0;
+        let reachedA = (): void => {};
+        const aStarted = new Promise<void>((resolve) => {
+            reachedA = resolve;
+        });
+        let releaseA = (): void => {};
+        const aHeld = new Promise<void>((resolve) => {
+            releaseA = resolve;
+        });
+
+        const vectors: RagVectors = {
+            deleteByIds: () => Promise.resolve(undefined),
+            getByIds: () => Promise.resolve([]),
+            query: () => Promise.resolve({ count: 0, matches: [] }),
+            upsert: async (_index, input) => {
+                if (input.id.startsWith("a#")) {
+                    reachedA();
+                    await aHeld;
+                }
+
+                if (input.embed) {
+                    calls += 1;
+                    await input.embed(input.input);
+                }
+
+                return undefined;
+            },
+        };
+
+        const docs = defineRag({ allowSharedNamespace: true, chunkOverlap: 0, chunkSize: 10, embeddingModel: model, index: "docs" });
+        const rag = docs({ vectors });
+
+        const first = rag.index({ id: "a", text: ["alpha00000", "bravo11111"].join("") });
+
+        await aStarted;
+        // The sibling runs to completion — including its `finally` — while `a`'s
+        // upserts are still pending.
+        await rag.index({ id: "b", text: ["charl22222", "delta33333"].join("") });
+
+        releaseA();
+        await first;
+
+        expect(counters.embedMany).toBe(2);
+        expect(calls).toBe(4);
+        // Every chunk resolved from its OWN call's batch; a single `embed` here
+        // means the sibling's `clear()` wiped this document's entries mid-flight.
+        expect(counters.embed).toBe(0);
+    });
+
     it("does not batch a single-chunk document", async () => {
         expect.assertions(1);
 

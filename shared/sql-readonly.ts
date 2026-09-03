@@ -132,12 +132,18 @@ const classifyStatement = (query: string): SqlRejection | undefined => {
     }
 
     // Allow a single trailing semicolon; any other `;` means a multi-statement batch.
-    // Located on a comment/quote-MASKED copy (same length, so the offset still
-    // indexes `query`), because a `;` inside a literal or a comment is content
-    // rather than a boundary. Anything unclosed masks to `undefined` and falls
-    // back to the raw scan — see {@link maskSqlNonCode}.
-    const single = trimmed.replace(TRAILING_SEMICOLON, "");
-    const batchAt = (maskSqlNonCode(single) ?? single).indexOf(";");
+    // Both the strip and the search run on a comment/quote-MASKED copy (same
+    // length, so the offset still indexes `query`), because a `;` inside a literal
+    // or a comment is content rather than a boundary — and because a COMMENT after
+    // the trailing `;` is a trailing comment, not a second statement. Comments mask
+    // to whitespace, so `SELECT 1; -- note` still reads as one trailing semicolon;
+    // stripping it off the raw text instead refused that draft as a batch.
+    // Anything unclosed masks to `undefined` and falls back to the raw scan — see
+    // {@link maskSqlNonCode}.
+    const masked = maskSqlNonCode(trimmed) ?? trimmed;
+    const maskedSingle = masked.replace(TRAILING_SEMICOLON, "");
+    const single = trimmed.slice(0, maskedSingle.length);
+    const batchAt = maskedSingle.indexOf(";");
 
     if (batchAt !== -1) {
         return {

@@ -200,6 +200,13 @@ const restMethodForKind = (kind: RestFunctionKind): "GET" | "POST" => (kind === 
  * opted in via `.expose({ rest: true })`. The single source of truth both the
  * runtime router and the OpenAPI emitter derive from — a `stream` procedure or a
  * malformed path is skipped. Ordered by path for stable enumeration.
+ *
+ * Ordered by UTF-16 code unit, NOT `localeCompare` — for the reason
+ * `shared/schema-snapshot.ts`'s `sortKeys` spells out: `localeCompare` resolves
+ * against the runtime's default locale and ICU version, so it is not stable
+ * across machines. That is not cosmetic here. The published OpenAPI document is
+ * generated on one machine and the router enumerates the same surface on
+ * another, and a contract test asserts the two match.
  */
 const describeRestSurface = (
     procedures: ReadonlyArray<{ exposure?: RestExposure; functionPath: string; kind: "action" | "mutation" | "query" | "stream" }>,
@@ -228,7 +235,7 @@ const describeRestSurface = (
         });
     }
 
-    entries.sort((a, b) => a.path.localeCompare(b.path));
+    entries.sort((a, b) => (a.path < b.path ? -1 : Number(a.path > b.path)));
 
     return entries;
 };

@@ -389,6 +389,37 @@ describe("seedPlan — unique columns", () => {
         expect(rows[0]).toStrictEqual({ _id: "d84cf143-978e-4b60-9832-481cdfa76ce2", age: 460, email: "bryan79@hotmail.com", name: "Ada Fritsch DVM" });
         expect(rows[1]).toStrictEqual({ _id: "730f300b-1bf5-4730-9340-429bb785ee9b", age: 509, email: "courtney51@hotmail.com", name: "Griffin Towne" });
     });
+
+    // The tag budget for an email column is the whole fallback domain, not the
+    // one-character suffix separator: counting the cheap form let a narrow
+    // column claim a billion possible values and then seed one its own
+    // validator rejects.
+    it("refuses a unique email column too narrow to hold a tagged address", () => {
+        expect.hasAssertions();
+
+        const narrow = defineSchema({ people: defineTable({ contact: v.string().email().max(10).unique() }) });
+        const run = (): unknown => seedPlan(narrow, { counts: { people: 3 }, now: 1_700_000_000_000, seed: 3 });
+
+        expect(run).toThrow('unique column "contact"');
+        expect(run).toThrow(/only 0 possible values/);
+    });
+
+    // The narrowest column that can still hold `<tag>@example.com` deals exactly
+    // ten values — one per single-digit tag — and no more.
+    it("budgets a unique email column's capacity by the domain the tag has to fit around", () => {
+        expect.hasAssertions();
+
+        const boundary = defineSchema({ people: defineTable({ contact: v.string().email().max(13).unique() }) });
+        const seedRows = (count: number): ReadonlyArray<Record<string, unknown>> =>
+            seedPlan(boundary, { counts: { people: count }, now: 1_700_000_000_000, seed: 3 }).find((entry) => entry.table === "people")!.rows;
+
+        const rows = seedRows(10);
+
+        expect(new Set(rows.map((row) => row.contact)).size).toBe(10);
+        expect(rows.every((row) => String(row.contact).length <= 13)).toBe(true);
+        expect(() => seedRows(11)).toThrow(/cannot seed 11 rows into "people"/);
+        expect(() => seedRows(11)).toThrow(/only 10 possible values/);
+    });
 });
 
 describe("seedPlan — unique columns beyond enums and strings", () => {
@@ -450,6 +481,62 @@ describe("seedPlan — unique columns beyond enums and strings", () => {
         expect(distinct(rows, "contact")).toBe(50);
     });
 
+    it("keeps a unique format-email column valid once maxLength also bites", () => {
+        expect.hasAssertions();
+
+        // The two narrowing steps compose: the generator refits the address into
+        // `maxLength`, then the deal reserves room for the index tag inside the
+        // same bound. Either step applied blindly emits an address the column's
+        // own validator rejects.
+        const column = v.string().email().max(24).unique();
+        const rows = rowsOf({ contact: column }, 50);
+
+        expect(rows.filter((row) => !column.safeParse(row.contact).ok)).toStrictEqual([]);
+        expect(distinct(rows, "contact")).toBe(50);
+    });
+
+    it("deals a unique literal union without replacement and refuses past its domain", () => {
+        expect.hasAssertions();
+
+        // The same split the `.unique()` FK had: a union of literals is a closed
+        // domain, but the generator picked a member per row WITH replacement, so
+        // eight rows over two literals simply repeated — the exact case the docs
+        // name as refused at plan time.
+        const shape = { u: v.union(v.literal("a"), v.literal("b")).unique() };
+
+        expect(new Set(rowsOf(shape, 2).map((row) => row.u))).toStrictEqual(new Set(["a", "b"]));
+        expect(() => rowsOf(shape, 8)).toThrow(/unique column "u" has only 2 possible values/);
+    });
+
+    it("honours declared bigint bounds on the plain path, not just the unique one", () => {
+        expect.hasAssertions();
+
+        // `v.bigint()` drew from its default [0, 1_000_000] whatever the column
+        // declared, while the `.unique()` twin walked the declared range — so the
+        // plain spelling seeded values the column's own validator rejects.
+        const bounded = v.bigint().check(() => true, { schema: { maximum: 5, minimum: 1 } });
+
+        expect(rowsOf({ b: bounded }, 20).every((row) => (row.b as number) >= 1 && (row.b as number) <= 5)).toBe(true);
+    });
+
+    it("seeds v.timestamp() and its .unique() twin into the same era", () => {
+        expect.hasAssertions();
+
+        // Regression: the plain arm drew from a hard-coded 1980–2020 window while
+        // the `.unique()` arm stepped back from `now`, so the two spellings of one
+        // column landed four decades apart and the plain one read as long past.
+        const now = Date.parse("2026-09-03T00:00:00.000Z");
+        const { rows } = seedPlan(defineSchema({ events: defineTable({ expiresAt: v.timestamp(), uniqueAt: v.timestamp().unique() }) }), {
+            counts: { events: 20 },
+            now,
+            seed: 5,
+        }).find((entry) => entry.table === "events")!;
+        const SIX_MONTHS_MS = 180 * 24 * 60 * 60 * 1000;
+
+        expect(rows.every((row) => (row.expiresAt as number) <= now && (row.expiresAt as number) >= now - SIX_MONTHS_MS)).toBe(true);
+        expect(rows.every((row) => (row.uniqueAt as number) <= now && (row.uniqueAt as number) >= now - SIX_MONTHS_MS)).toBe(true);
+    });
+
     it("refuses unique columns whose declared shape an index tag would violate", () => {
         expect.hasAssertions();
 
@@ -465,5 +552,79 @@ describe("seedPlan — unique columns beyond enums and strings", () => {
             ),
         ).toThrow(/pattern-constrained/);
         expect(() => rowsOf({ s: v.string().url().unique() }, 5)).toThrow(/format "uri"/);
+    });
+});
+
+describe("seedPlan — unique foreign keys", () => {
+    const relationSchema = defineSchema({
+        profiles: defineTable({ userId: v.id("users").unique() }),
+        users: defineTable({ name: v.string() }),
+    });
+
+    it("deals parent ids without replacement for a .unique() foreign key", () => {
+        expect.hasAssertions();
+
+        // Regression: `planUniqueDeals` skipped every FK column, so a `.unique()`
+        // `v.id("users")` — the natural way to spell a 1:1 — fell through to
+        // `copycat.oneOf`, a uniform draw WITH replacement: 7 distinct parents
+        // across 10 rows, then a raw UNIQUE-constraint error on insert.
+        const plan = seedPlan(relationSchema, { counts: { profiles: 50, users: 50 }, now: 1_700_000_000_000, seed: 1 });
+        const userIds = new Set(plan.find((entry) => entry.table === "users")!.rows.map((row) => row._id));
+        const linked = plan.find((entry) => entry.table === "profiles")!.rows.map((row) => row.userId);
+
+        expect(new Set(linked).size).toBe(50);
+        expect(linked.every((id) => userIds.has(id))).toBe(true);
+    });
+
+    it("refuses a batch larger than the parent pool, naming the column", () => {
+        expect.hasAssertions();
+
+        const run = (): unknown => seedPlan(relationSchema, { counts: { profiles: 10, users: 4 }, now: 1_700_000_000_000, seed: 1 });
+
+        expect(run).toThrow('unique column "userId"');
+        expect(run).toThrow(/only 4 possible values/);
+    });
+
+    it("counts pre-existing parent ids toward the pool", () => {
+        expect.hasAssertions();
+
+        // The studio's generate-rows dialog seeds one table and passes the live
+        // parent ids as `existingIds`, so those have to be part of the domain.
+        const { rows } = seedPlan(relationSchema, {
+            counts: { profiles: 3 },
+            existingIds: { users: ["u1", "u2", "u3"] },
+            now: 1_700_000_000_000,
+            only: ["profiles"],
+            seed: 1,
+        }).find((entry) => entry.table === "profiles")!;
+
+        expect(new Set(rows.map((row) => row.userId))).toStrictEqual(new Set(["u1", "u2", "u3"]));
+    });
+
+    it("keeps a .unique() self-reference distinct by pointing each row at its predecessor", () => {
+        expect.hasAssertions();
+
+        // A self-reference's pool is the rows generated before it, so there is
+        // nothing to deal from at plan time; the preceding row is the one choice
+        // distinct for every row.
+        const { rows } = seedPlan(defineSchema({ nodes: defineTable({ previousId: v.optional(v.id("nodes").unique()) }) }), {
+            counts: { nodes: 30 },
+            now: 1_700_000_000_000,
+            seed: 1,
+        }).find((entry) => entry.table === "nodes")!;
+        const links = rows.slice(1).map((row) => row.previousId);
+
+        expect(rows[0]!.previousId).toBeUndefined();
+        expect(links).toStrictEqual(rows.slice(0, -1).map((row) => row._id));
+    });
+
+    it("leaves an ordinary foreign key drawing with replacement", () => {
+        expect.hasAssertions();
+
+        // Only `.unique()` changes: a plain `v.id("users")` is a many-to-one and
+        // must stay free to repeat a parent.
+        const plan = seedPlan(schema, { counts: { posts: 40, users: 3 }, now: 1_700_000_000_000, seed: 1 });
+
+        expect(new Set(plan.find((entry) => entry.table === "posts")!.rows.map((row) => row.authorId)).size).toBeLessThanOrEqual(3);
     });
 });

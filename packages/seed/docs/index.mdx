@@ -135,6 +135,11 @@ Without codegen, pass the type yourself: `createSeedClient<InsertModel>(schema)`
     type={{
         defaultCount: { type: "number", default: "10", description: "Row count when a table call passes no spec." },
         seed: { type: "number", default: "0", description: "Deterministic mapping selector." },
+        now: {
+            type: "number",
+            default: "Date.now()",
+            description: "Epoch-ms reference for time-valued columns. Pin it alongside `seed` for a byte-identical run.",
+        },
         persist: {
             type: "(table, rows) => Promise<void> | void",
             description: "Called with each generated batch (parents first). The client is pure when omitted.",
@@ -162,7 +167,8 @@ Other flags: `--batch-size` (rows per HTTP request, default 500), `--url` (worke
 
 ## Limitations
 
-- **`.unique()` columns are dealt distinct values by construction.** Each value is a function of the row's absolute index, not a hash of the row, so two rows in the same run never collide — including across the several calls `indexOffset` exists to support. A column whose domain is too small to cover the requested count (a boolean, a three-literal `v.union()`) is refused at plan time, with the column named, before anything is inserted.
+- **`.unique()` columns are dealt distinct values by construction.** Each value is a function of the row's absolute index, not a hash of the row, so two rows in the same run never collide — including across the several calls `indexOffset` exists to support. A `.unique()` foreign key (`v.id("users").unique()`, the way to spell a 1:1) is dealt from its parent pool without replacement, so the pool's size is its domain. A column whose domain is too small to cover the requested count (a boolean, a three-literal `v.union()`, a parent table with fewer rows than the child) is refused at plan time, with the column named, before anything is inserted.
+- **A column the generator cannot satisfy is refused, not guessed at.** `v.from(externalSchema)`, a `.pattern()` column, and any `format` with no generator behind it (only `email` and `uri` have one) fail at plan time with the column named, rather than seeding a value the column's own validator rejects on insert. Supply those through `overrides`, or skip the table with `only`.
 - Seeding is deterministic by design. Re-running with the same `seed` regenerates identical `_id`s, which the import path skips as conflicts. Use a different `seed` for fresh rows, or `--reset` to wipe local state first.
 
 ## Related

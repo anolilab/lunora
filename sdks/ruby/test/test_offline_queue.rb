@@ -892,4 +892,15 @@ class TestFlushIntegration < Minitest::Test
     assert_raises(Lunora::ApiError) { client.submit("messages:list", {}, optimistic: ->(current) { (current || []) + ["c"] }) }
     assert_equal %w[a], seen.last
   end
+
+  # The entry cap is not a port's to choose: the worker and the shard DO both
+  # refuse a larger batch with a coded 400, which protocol/README.md 4.3 makes a
+  # TERMINAL verdict — so a client chunking at a stale value discards durable
+  # writes instead of retrying them. It was a bare 500 in ten independent places
+  # with nothing reconciling them.
+  def test_batch_entry_cap_matches_protocol
+    ConformanceManifest.covers("batch_entry_cap_matches_protocol")
+
+    assert_equal queue_case("batchReplay")["maxEntries"], Lunora::MAX_BATCH_ENTRIES
+  end
 end

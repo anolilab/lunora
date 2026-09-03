@@ -191,6 +191,23 @@ describe("createWorker — opt-in public REST surface", () => {
         ).toEqual(["/_lunora/rest/messages/list", "/_lunora/rest/messages/send"]);
     });
 
+    it("orders the surface by UTF-16 code unit, not by the machine's locale", () => {
+        expect.assertions(1);
+
+        // `localeCompare` resolves against the runtime's default locale and ICU
+        // version: under en-US it orders these case-INSENSITIVELY (`admin` before
+        // `Zeta`), the opposite of the code-unit order. The published OpenAPI
+        // document is generated on one machine and this enumeration runs on
+        // another, and a contract test asserts the two agree — so the ordering may
+        // not depend on which machine ran it.
+        const mixedCase = {
+            "Zeta:list": { expose: { rest: true }, kind: "query" },
+            "admin:list": { expose: { rest: true }, kind: "query" },
+        } as Record<string, { expose?: { rest?: boolean }; kind: "action" | "mutation" | "query" | "stream" }>;
+
+        expect(restSurfaceFromRegistry(mixedCase).map((entry) => entry.path)).toEqual(["/_lunora/rest/Zeta/list", "/_lunora/rest/admin/list"]);
+    });
+
     // Same gap as `serverQuery`: gzipped OTLP error spans are exported after the
     // response, so the public REST surface has to keep them alive too.
     it("threads the request's waitUntil into REST dispatch telemetry", async () => {

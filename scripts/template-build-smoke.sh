@@ -140,8 +140,17 @@ XFAIL_BUILD=()
 # The Expo template is a React Native (Metro) app, not a Vite/workerd project:
 # its `pnpm install` pulls a different, largely-native toolchain (react-native,
 # expo) that isn't represented by the allowBuilds list below, and it has no
-# `pnpm run build` step. It's validated separately by the CLI init smoke test
-# (scaffold → `lunora codegen` → `tsc`), mirroring how examples/expo is checked.
+# `pnpm run build` step.
+#
+# NOTHING ELSE COVERS IT. This comment used to claim a CLI init smoke test
+# validated it separately; there is no such test — `packages/cli/__tests__`
+# never mentions expo, `scripts/clean-machine-smoke.sh` scaffolds only
+# tanstack-start-react, and that script is in no workflow either. The template
+# declares `lint:types` (`lunora codegen && tsc --noEmit`) and nothing invokes
+# it, so a breaking `@lunora/*` change reaches templates/expo with every gate
+# green. Closing this means either an expo leg here (its `lint:types` is exactly
+# the no-build path below, once the native toolchain is affordable in CI) or a
+# workflow that runs `test:clean-machine` against it.
 # ---------------------------------------------------------------------------
 SKIP_TEMPLATES=("expo")
 
@@ -364,10 +373,12 @@ authui_file_re() {
 # Discover templates (dynamic, so adding a new dir is automatically included).
 # ---------------------------------------------------------------------------
 TEMPLATES=()
+SKIPPED=()
 for t_dir in "$REPO_ROOT/templates"/*/; do
     tname="$(basename "$t_dir")"
     if is_skipped "$tname"; then
         echo "==> Skipping $tname (not part of the worker-toolchain smoke matrix)"
+        SKIPPED+=("$tname")
         continue
     fi
     TEMPLATES+=("$tname")
@@ -679,7 +690,10 @@ for tname in "${TEMPLATES[@]}"; do
         const { minVersion, validRange } = require(require.resolve('semver', { paths: ['$REPO_ROOT/packages/cli', '$REPO_ROOT'] }));
         const major = (r) => (r && validRange(r) !== null ? (minVersion(r)?.major ?? 0) : 0);
         // React Native is not a DOM target: the react payload would not work there.
-        if (has('react-native') || has('@lunora/react-native')) process.stdout.write('');
+        // \`expo\` is in the list because \`isReactNativeProject\` has it — an Expo app
+        // depends on \`react\` but not always on \`react-native\` directly, so without it
+        // this mirror resolves react/auth-cards.tsx where the CLI resolves nothing.
+        if (has('react-native') || has('@lunora/react-native') || has('expo')) process.stdout.write('');
         // Solid 2 gets its own payload. Checked before the framework matches,
         // exactly as detectAuthUiItem does, because a Solid 2 project also has
         // solid-js and @lunora/solid and would otherwise take the 1.x views.
@@ -701,9 +715,10 @@ for tname in "${TEMPLATES[@]}"; do
     # the matrix runs at all: an empty result leaves AUTHUI_ADDED="no", which skips
     # `lunora add auth-ui`, every file-landed assertion, the dep-injection check,
     # the per-template typechecker, the typecheck:never-ran guard, the FILE_RE
-    # vacuity guard and the planted-error canary — and the template still records
-    # PASS on `pnpm run build` alone. Swallowing the exit status made a resolution
-    # failure indistinguishable from "this template has no framework".
+    # vacuity guard and the planted-error canary. Swallowing the exit status made a
+    # resolution failure indistinguishable from "this template has no framework".
+    # A template that legitimately has no framework is caught downstream instead:
+    # see the `typecheck:skipped` guard on the build path.
     if [[ ${authui_detect_status:-0} -ne 0 ]]; then
         echo "  FAIL: could not resolve the expected auth-ui view for $tname (node exited ${authui_detect_status})"
         echo "        Everything from \`lunora add auth-ui\` onwards would have been skipped, and $tname would have recorded PASS on its build alone."
@@ -808,6 +823,21 @@ for tname in "${TEMPLATES[@]}"; do
         fi
 
         ts_errors="$(grep -cE "$ERROR_RE" "$typecheck_log" || true)"
+
+        # Same vacuous-pass guard the build path applies further down, for the same
+        # reason: a checker that reported diagnostics naming no FILE aborted during
+        # CONFIG resolution and compiled zero files, which the error count cannot
+        # tell apart from real type errors. This path had the count and not the
+        # guard, and it is the ONLY compilation a build-less template gets.
+        if [[ "$ts_errors" -gt 0 ]] && ! grep -qE "$FILE_RE" "$typecheck_log"; then
+            echo "  FAIL: typecheck in $tname aborted before reading any file — $ts_errors diagnostic(s), none naming a file (see $typecheck_log)"
+            echo "        A file-less diagnostic means the CHECKER is broken (bad tsconfig 'types'/'include',"
+            echo "        missing prep step), so this run proves nothing about what it was meant to compile."
+            grep -E "$ERROR_RE" "$typecheck_log" | head -10 | sed 's/^/    /'
+            FAIL+=("$tname(typecheck:vacuous)")
+            continue
+        fi
+
         if [[ "$ts_errors" -gt 0 ]]; then
             echo "  FAIL: $ts_errors type error(s) in $tname (see $typecheck_log)"
             grep -E "$ERROR_RE" "$typecheck_log" | head -25 | sed 's/^/    /'
@@ -1016,6 +1046,33 @@ for tname in "${TEMPLATES[@]}"; do
         fi
 
         echo "  ==> typecheck OK"
+    else
+        # Fail closed. Reaching here means the detector resolved no view (every
+        # other path out of that block `continue`s), so this template got NO
+        # compiler over its source at all: the block above is the run's only
+        # `tsc`, and `pnpm run build` compiles only what a build entry reaches —
+        # every file under `lunora/` is tree-shaken away before a compiler sees
+        # it. The build-LESS path above typechecks such a template; this one used
+        # to record PASS on the bundler alone.
+        #
+        # Failing here rather than widening the AUTHUI_RESOLVED floor to "all
+        # templates": that floor is a whole-run tripwire, so widening it makes
+        # every verdict depend on the full matrix, while this fires per template
+        # exactly where the coverage is lost. It is unreachable for the templates
+        # on disk — `standalone` is the only one in this matrix that resolves no
+        # view, and it ships no `build` script, so it takes the codegen +
+        # typecheck path above (`expo` also resolves none, and is skipped before
+        # it ever gets here). That is what makes this a guard and not a behaviour
+        # change.
+        echo "  FAIL: $tname resolved no auth-ui view, so nothing typechecked its source"
+        echo "        \`pnpm run build\` bundles only what a build entry reaches, and this run's only"
+        echo "        typechecker is gated on that view — so $tname would have recorded PASS with no"
+        echo "        compiler having read lunora/ at all."
+        echo "        Either teach the detector this template's framework (mirror detectAuthUiItem in"
+        echo "        packages/cli/src/commands/add/features.ts) or drop its \`build\` script, which routes"
+        echo "        it through the codegen + typecheck path instead."
+        FAIL+=("$tname(typecheck:skipped)")
+        continue
     fi
 
     if [[ $build_exit -eq 0 ]]; then
@@ -1067,7 +1124,17 @@ for t in "${TEMPLATES[@]}"; do
     printf "%-20s  %s\n" "$t" "$result"
 done
 echo ""
+# A skipped template is not scaffolded, installed, built or typechecked by this
+# run — and, for `expo`, by nothing else either (see SKIP_TEMPLATES). It never
+# enters the table above, so without this line a green summary reads as coverage
+# of every template in `templates/`, which it is not.
+echo "  NOT COVERED: ${#SKIPPED[@]}   (${SKIPPED[*]+${SKIPPED[*]}}) — excluded from this matrix and gated by nothing else"
 echo "  PASS     : ${#PASS[@]}   (${PASS[*]+${PASS[*]}})"
+# A codegen+typecheck-only template is a weaker result than a built one — no
+# bundler ever ran — and the table above renders both as plain PASS. Printed
+# rather than failed: having no `build` script is legitimate for some frameworks,
+# but a green summary must say which templates got the lighter treatment.
+echo "  NO BUILD : ${#SKIP_BUILD[@]}   (${SKIP_BUILD[*]+${SKIP_BUILD[*]}})"
 echo "  XFAIL    : ${#XFAIL[@]}  (${XFAIL[*]+${XFAIL[*]}})"
 echo "  FAIL     : ${#FAIL[@]}   (${FAIL[*]+${FAIL[*]}})"
 echo "  XPASS    : ${#XPASS[@]}  (${XPASS[*]+${XPASS[*]}})"

@@ -86,6 +86,7 @@ Future<void> main() async {
   await run(caseGoldenOfflineQueueFifo);
   await run(caseGoldenOfflineQueueShardDrain);
   await run(caseGoldenOfflineFlushBatchesMultipleWrites);
+  await run(caseGoldenBatchEntryCapMatchesProtocol);
   await run(caseGoldenOfflineQueueRequeue);
   await run(caseGoldenOfflineQueueClear);
   await run(caseGoldenOfflineQueueOverflow);

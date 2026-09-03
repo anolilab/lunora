@@ -16,7 +16,7 @@ use lunora::client::{Client, ClientError};
 use lunora::offline::{
     identity_allows_replay, is_stale_version, random_id, same_shard, Identity, OfflineQueue, PersistenceAdapter, QueuedMutation, CODE_CLIENT_CLOSED,
     CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW, CODE_OFFLINE_WRITE_UNDECODABLE,
-    CODE_OFFLINE_WRITE_UNENCODABLE, MAX_RETRY_AFTER_MS,
+    CODE_OFFLINE_WRITE_UNENCODABLE, MAX_BATCH_ENTRIES, MAX_RETRY_AFTER_MS,
 };
 use lunora::submit::{MutationStatus, SubmitOptions};
 use lunora::wire::{decode_wire, encode_wire, WireValue, MAX_DEPTH};
@@ -844,6 +844,17 @@ pub fn offline_flush_replays_and_confirms_optimistic() {
     submit_queues_while_offline(case["confirmedCommitCursor"].as_i64().expect("cursor"));
     submit_before_first_connect_fails_fast();
     overflow_during_submit_settles();
+}
+
+/// The entry cap is not a port's to choose: the worker and the shard DO both
+/// refuse a larger batch with a coded 400, which `protocol/README.md` 4.3 makes a
+/// TERMINAL verdict — so a client chunking at a stale value discards durable
+/// writes instead of retrying them. It was a bare 500 in ten independent places
+/// with nothing reconciling them.
+pub fn batch_entry_cap_matches_protocol() {
+    let expected = queue_case("batchReplay")["maxEntries"].as_u64().expect("maxEntries");
+
+    assert_eq!(MAX_BATCH_ENTRIES as u64, expected);
 }
 
 /// Two or more queued writes coalesce into ONE `/_lunora/rpc-batch` round trip,

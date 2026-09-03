@@ -129,7 +129,7 @@ wrangler deploy              # single worker: Analog SSR + Lunora + ShardDO
 
 - `@analogjs/platform` / `@analogjs/router` — the Vite-first Angular
   meta-framework (Nitro SSR, file-based routing, `cloudflare-module` preset)
-- `@angular/*` 19 (standalone components, signals)
+- `@angular/*` 22 (standalone components, signals)
 - `lunorash` — the Lunora umbrella (vanilla `lunorash/client` + `lunorash/server`)
 - `@lunora/vite` — codegen for `lunora/_generated/`
 - Cloudflare Workers + Durable Objects (`ShardDO`)
@@ -139,23 +139,20 @@ wrangler deploy              # single worker: Analog SSR + Lunora + ShardDO
 This template was authored without an Angular/Analog/workerd toolchain available,
 so confirm the following once on a real machine:
 
-1. **Analog version + API surface.** Pinned `@analogjs/*` `^1.21.1` /
-   `@angular/*` `^19.2.0`. Bump to the current Analog/Angular release and confirm
+1. **Analog version + API surface.** Pinned `@analogjs/*` `^2.6.4` /
+   `@angular/*` `^22.1.1`. Bump to the current Analog/Angular release and confirm
    `provideFileRouter`, `provideClientHydration`, and `main.server.ts`'s default
    `bootstrapApplication` export still match.
-2. **TypeScript version.** Pinned `typescript ^5.8.3` because Angular 19's
-   `@angular/compiler-cli` does not yet accept TS 6 (other Lunora templates use
-   `^6.0.3`). Raise it only when Angular supports it.
-3. **Nitro `exports.cloudflare.ts` hook.** Confirm Analog's Nitro
+2. **Nitro `exports.cloudflare.ts` hook.** Confirm Analog's Nitro
    `cloudflare-module` build actually appends `exports.cloudflare.ts`'s exports
    to `dist/analog/server/index.mjs`. If your Nitro version uses a different hook
    (e.g. `nitro.cloudflare.additionalModules`, a `rollupConfig` output export, or
    a wrapper entry), wire `ShardDO` through that instead.
-4. **Build output path.** `wrangler.jsonc` `main` assumes
+3. **Build output path.** `wrangler.jsonc` `main` assumes
    `dist/analog/server/index.mjs`. Verify against your Analog version (some emit
    under `.output/server/index.mjs`); adjust `main` to match.
-5. **WebSocket upgrade through the Nitro route.** Confirm the `101 Switching
+4. **WebSocket upgrade through the Nitro route.** Confirm the `101 Switching
 Protocols` upgrade (with its `webSocket`) survives Nitro's
    `toWebRequest`/response streaming on the Cloudflare runtime.
-6. **Dev-time bindings.** Decide whether to recommend `wrangler dev` on the built
+5. **Dev-time bindings.** Decide whether to recommend `wrangler dev` on the built
    output, or a Nitro Cloudflare dev runtime, for local `/_lunora/**` traffic.

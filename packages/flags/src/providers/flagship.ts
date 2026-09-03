@@ -37,8 +37,9 @@ interface FlagshipHttpOptions {
      * Either the literal token, or a thunk resolved against the Worker `env` at
      * construction (`(env) => env.FLAGSHIP_TOKEN`) so the secret never has to be
      * inlined in source. A thunk resolving to anything but a non-empty string
-     * throws: `Bearer undefined` would otherwise make every evaluation fall
-     * silently back to its default.
+     * throws from the bind (`createFlags` logs it and evaluations fall back to
+     * their caller-supplied defaults): `Bearer undefined` would otherwise make
+     * every evaluation fall back with nothing said.
      */
     authToken?: ((env: Record<string, unknown>) => unknown) | string;
     /** Base URL override (only used with `appId`). */
@@ -94,11 +95,12 @@ const flagshipProvider = (options: FlagshipProviderOptions): FlagsProviderFactor
         };
     }
 
-    // HTTP mode carries no env-resolved binding, so — unlike binding mode — the
-    // full config is known here. Validate it up front: a misconfiguration must
-    // surface as a directed error at `defineFlags` time, not get swallowed into
-    // silent fail-closed defaults by `createFlags` (which buries any provider
-    // construction/initialize failure in `EvaluationDetails.errorMessage`).
+    // `appId`/`endpoint` need no env, so — unlike the binding and `authToken`
+    // checks below — they are known here and refused at `defineFlags` time,
+    // where the throw reaches the developer directly. The env-dependent
+    // refusals cannot run this early; they throw from inside the factory, which
+    // `createFlags` catches, logs (see `reportBindFailure`), and falls back to
+    // the caller's default for.
     const { appId, endpoint } = options;
 
     if (appId === undefined && endpoint === undefined) {
@@ -126,7 +128,9 @@ const flagshipProvider = (options: FlagshipProviderOptions): FlagsProviderFactor
         // A thunk was written to supply a token, so resolving to nothing is a
         // misconfigured deployment, not "no auth": the unset secret would go out
         // as `Bearer undefined` and every evaluation would fail closed to its
-        // default with no signal. Only an OMITTED `authToken` means "no token".
+        // default. Throwing here makes `createFlags` log the bind failure rather
+        // than let the fleet drift onto checked-in defaults unremarked. Only an
+        // OMITTED `authToken` means "no token".
         const resolved = authToken(env);
 
         if (typeof resolved !== "string" || resolved.length === 0) {

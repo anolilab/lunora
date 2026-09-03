@@ -1,5 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import type { Client, EvaluationContext, EvaluationDetails, FlagValue, Provider } from "@openfeature/server-sdk";
+import type { Client, EvaluationContext, EvaluationDetails, FlagValue, Logger, Provider } from "@openfeature/server-sdk";
 import { ErrorCode, OpenFeature } from "@openfeature/server-sdk";
 
 // Repo-root inlined helper (see shared/stable-key.ts) — the canonical
@@ -71,6 +71,44 @@ const EMPTY_ENV: Record<string, never> = {};
 const envKeyFor = (env: object): object => (Object.keys(env).length === 0 ? EMPTY_ENV : env);
 
 /**
+ * Report a provider bind that failed — the ONE place this package is allowed to
+ * be loud.
+ *
+ * Every evaluation is contractually silent: `ctx.flags.*` never throws, and a
+ * provider error resolves with the caller's `defaultValue`. That is right for an
+ * evaluation and wrong for a bind, because a bind fails for exactly one reason —
+ * the deployment is misconfigured (`flagshipProvider`'s missing `FLAGS` binding,
+ * its `authToken` thunk resolving to nothing, a provider `initialize` that
+ * throws) — and the resulting fleet-wide fallback to checked-in defaults is
+ * invisible in every other signal. The error is reachable per-evaluation via
+ * `ctx.flags.details.*().errorMessage`, but nothing reads that on the path a
+ * kill-switch is written on.
+ *
+ * The definition's own `logger` is preferred (it is where the app already sends
+ * OpenFeature diagnostics); `console.error` is the fallback, since a Worker with
+ * no logger configured still has a tail. `client.setLogger` cannot serve here —
+ * it runs only after a bind SUCCEEDS.
+ *
+ * Fires once per failed bind attempt, and bind attempts are coalesced per
+ * (definition, env) pair while one is in flight, so a broken deployment logs on
+ * the order of once per request rather than once per flag read.
+ */
+const reportBindFailure = (logger: Logger | undefined, error: unknown): void => {
+    const message = `@lunora/flags: could not bind the OpenFeature provider — every flag read falls back to its caller-supplied default until this is fixed: ${
+        error instanceof Error ? error.message : String(error)
+    }`;
+
+    if (logger) {
+        logger.error(message);
+
+        return;
+    }
+
+    // eslint-disable-next-line no-console -- a misconfigured flag provider silently serving checked-in defaults fleet-wide is worth a Worker tail line
+    console.error(message);
+};
+
+/**
  * Bind (or reuse) the OpenFeature client for one (definition, env) pair.
  * `provider` resolves the provider to bind — the definition's own factory,
  * unless a caller overrode it.
@@ -79,6 +117,13 @@ const envKeyFor = (env: object): object => (Object.keys(env).length === 0 ? EMPT
  * provider whose `initialize` throws retries on the same domain instead of
  * renaming it (which would strand an external reader on a dead domain). Only
  * the client promise is dropped on rejection, so the next request re-attempts.
+ *
+ * A rejected bind is REPORTED (see {@link reportBindFailure}). Evaluations
+ * still fail closed to the caller's default — that is the OpenFeature contract
+ * `ctx.flags` documents — but they must not do it silently: a deployment missing
+ * its `flagship` binding, or whose `FLAGSHIP_TOKEN` is unset, otherwise boots
+ * clean and serves every kill-switch and rollout at its checked-in default
+ * across the whole fleet with nothing to notice.
  */
 const bindClient = (definition: FlagsDefinition, rawEnv: object, provider: () => Provider): Promise<Client> => {
     const env = envKeyFor(rawEnv);
@@ -126,10 +171,12 @@ const bindClient = (definition: FlagsDefinition, rawEnv: object, provider: () =>
 
     // Don't memoize a failed bind — let the next request re-attempt. Guarded on
     // identity so a reset-then-rebind is never clobbered by a stale rejection.
-    pending.catch(() => {
+    pending.catch((error: unknown) => {
         if (entry.client === pending) {
             entry.client = undefined;
         }
+
+        reportBindFailure(logger, error);
     });
 
     return pending;

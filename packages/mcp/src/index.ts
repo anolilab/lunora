@@ -35,11 +35,20 @@ export type { AuthedMcpFetchHandlerOptions, AuthedMcpServerOptions, McpAccessTok
 export { createAuthedMcpFetchHandler, mcpTokenScopes } from "./authed-http";
 export type { McpServerInfo, McpTool } from "./compose";
 export { createToolServer } from "./compose";
-export type { McpFetchHandler, ServeStatelessOptions } from "./http";
-export { createMcpFetchHandler, serveStateless } from "./http";
+export type { McpFetchHandler, McpFetchHandlerOptions, ServeStatelessOptions } from "./http";
+export { createMcpFetchHandler, DEFAULT_MAX_REQUEST_BYTES, serveStateless } from "./http";
 export type { LocalDeployment, LocalDeploymentSource, LocalMcpServerOptions } from "./local";
 export { connectLocalStdio, createLocalMcpServer, LOCAL_SERVER_NAME, localTools, NO_DEPLOYMENT_MESSAGE } from "./local";
-export type { PaidMcpChargeConfig, PaidMcpServer, PaidMcpServerConfig, RegisterPaidToolOptions, RegisterToolOptions, ToolHandler } from "./paid";
+export type {
+    PaidMcpChargeConfig,
+    PaidMcpExecutionContext,
+    PaidMcpFetchHandler,
+    PaidMcpServer,
+    PaidMcpServerConfig,
+    RegisterPaidToolOptions,
+    RegisterToolOptions,
+    ToolHandler,
+} from "./paid";
 export { createPaidMcpServer } from "./paid";
 export type { LunoraMcpServerOptions } from "./server";
 export { connectStdio, createLunoraMcpServer } from "./server";

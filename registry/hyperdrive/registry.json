@@ -15,7 +15,8 @@
             "path": ["hyperdrive"],
             "value": [
                 {
-                    "binding": "HYPERDRIVE"
+                    "binding": "HYPERDRIVE",
+                    "id": "<replace-with-hyperdrive-create-id>"
                 }
             ]
         }

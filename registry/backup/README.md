@@ -8,7 +8,7 @@ The complete PITR loop is three pieces:
 
 1. **`snapshot`** (internal action, cron-driven) — writes a timestamped full-table NDJSON snapshot to R2.
 2. **`prune`** (internal action, cron-driven) — deletes snapshots older than your retention window so the bucket doesn't grow unbounded.
-3. **`lunora backup restore`** (CLI) — imports the nearest snapshot, then optionally replays the CDC changelog forward to an arbitrary `--to <ISO>` time for fine-grained recovery.
+3. **`lunora backup restore`** (CLI) — imports a snapshot back through the admin `/apply` endpoint. It restores to a snapshot boundary; there is no `--to` and no changelog replay on this path. For in-place time-travel to an arbitrary moment in the last 30 days use native PITR (`lunora backup pitr --at <ISO>`) instead — see [Two recovery tiers](#two-recovery-tiers).
 
 ## Install
 
@@ -44,6 +44,20 @@ The object is **NDJSON in the import format** — one `{"table":…,"doc":…}` 
 ```
 
 `snapshot` returns `{ key, bytes, rows, tables }` (per-table row counts) and `prune` returns `{ deleted, kept }` (the snapshot keys it removed and retained) so a wrapping job can log or alert on the result.
+
+### Values JSON can't carry
+
+`ctx.db` hands documents back **decoded**: a `v.bigint()` column is a real `bigint`, a `v.bytes()` column a real `ArrayBuffer`. `JSON.stringify` throws on the first and silently flattens the second to `{}`, so `snapshot` encodes every document into the same tagged wire form the admin export endpoint uses before writing the line. `lunora backup restore` decodes it on the way back in, which is what makes a snapshot from this item and one from `lunora backup create` interchangeable. The encoding is the identity on pure-JSON documents, so a schema with none of these columns produces exactly the JSON it always did.
+
+A value with no supported encoding — a `RegExp`, a class instance — throws instead of being written as `{}`. A loud failure beats a snapshot that restores empty columns.
+
+### Shard coverage — read this before scheduling
+
+`ctx.db` is **shard-local**, and a cron dispatches to the default shard. `.global()` tables are complete (they are read from the replicated plane), but a shard-local table contributes only the default shard's rows.
+
+**On a `.shardBy(...)` deployment this snapshot is partial, and nothing in its result says so** — `rows` and `tables` count what the default shard holds, which looks perfectly healthy. `snapshot` therefore logs a warning on every run. Delete that line from `lunora/backup/index.ts` once you have confirmed your schema declares no `.shardBy()` table.
+
+Fanning out is not something this item can do: shard discovery lives behind the query coordinator, and neither `ctx.db` nor `ctx.scheduler` accepts a shard key. If your deployment is sharded, take whole-deployment snapshots with `lunora backup create --bucket` or the platform's built-in `backupCron` — both fan out over every shard — and use this item's `prune` for retention.
 
 ### You MUST list your tables
 

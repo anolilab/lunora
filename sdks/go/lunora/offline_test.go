@@ -1604,3 +1604,26 @@ func TestCloseRacingSubmitStrandsNoWrite(t *testing.T) {
 		}
 	}
 }
+
+// TestBatchEntryCapMatchesProtocol pins this port's entry cap to the normative
+// one in protocol/fixtures/offline-optimistic.json.
+//
+// The cap is not an SDK's to choose: the worker and the shard DO both refuse a
+// larger batch with a coded 400, which protocol/README.md 4.3 makes a TERMINAL
+// verdict — so a client chunking at a stale value discards durable writes
+// instead of retrying them. It was a bare 500 in ten independent places with
+// nothing reconciling them.
+func TestBatchEntryCapMatchesProtocol(t *testing.T) {
+	covers("batch_entry_cap_matches_protocol")
+
+	scenario := fixtureScenario(t, "offlineQueue", "batchReplay")
+
+	want, ok := scenario["maxEntries"].(float64)
+	if !ok {
+		t.Fatal("batchReplay.maxEntries missing from the fixture")
+	}
+
+	if MaxBatchEntries != int(want) {
+		t.Fatalf("MaxBatchEntries = %d, want %d", MaxBatchEntries, int(want))
+	}
+}

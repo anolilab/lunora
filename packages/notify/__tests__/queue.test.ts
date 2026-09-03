@@ -50,7 +50,7 @@ describe("queue-backed fan-out", () => {
         expect(broadcastPage).toHaveBeenCalledWith(job.payload, undefined);
     });
 
-    it("returns the page (cursor included) instead of throwing when some recipients failed", async () => {
+    it("returns the page (continuation included) instead of throwing when some recipients failed", async () => {
         expect.hasAssertions();
 
         // Regression: throwing discarded `nextCursor`, so one permanently-failing
@@ -75,7 +75,7 @@ describe("queue-backed fan-out", () => {
 
         const outcome = await runPushBroadcastPage(push, job);
 
-        expect(outcome.nextCursor).toBe("wp2_page2");
+        expect(outcome.nextFilter).toStrictEqual({ after: "wp2_page2" });
         expect(outcome.failedIds).toStrictEqual(["b"]);
     });
 
@@ -105,6 +105,58 @@ describe("queue-backed fan-out", () => {
         expect(send).toHaveBeenCalledTimes(1);
     });
 
+    it("a retryIds job that partly recovered does NOT throw, so the recovered ids are never re-sent", async () => {
+        expect.hasAssertions();
+
+        // Throwing on ANY failure re-runs the WHOLE message, and the message
+        // carries every id — so `a` and `b`, which just succeeded, get a second
+        // (and third, and fourth) push on every queue redelivery. Progress must
+        // be kept: return the still-failing ids so the caller enqueues a
+        // narrower retry, exactly as a partially-failed PAGE already does.
+        const send = vi.fn(async (id: string) => {
+            if (id === "c") {
+                throw new Error("403 VapidPkHashMismatch");
+            }
+
+            return { errorMessages: [], successful: true };
+        });
+        const push = { broadcastPage: vi.fn(), send } as unknown as LunoraPush;
+        const job: PushBroadcastJob = { payload: { body: "hi" }, retryIds: ["a", "b", "c"], type: "lunora.push.broadcast" };
+
+        const outcome = await runPushBroadcastPage(push, job);
+
+        expect(outcome.failedIds).toStrictEqual(["c"]);
+        expect(outcome.result).toMatchObject({ failed: 1, sent: 2, total: 3 });
+    });
+
+    it("spends `filter.limit` as an OVERALL cap across messages, not once per message", async () => {
+        expect.hasAssertions();
+
+        // `limit` documents itself as a cap on the total audience reached. On the
+        // queue path the caller re-enqueues the continuation, so the REMAINING
+        // budget has to travel with it — forwarding `filter` verbatim let every
+        // message reach up to `limit` more devices and walk the whole audience.
+        const broadcastPage = vi.fn().mockResolvedValue({ nextCursor: "wp2_page2", result: { failed: 0, outcomes: [], pruned: 0, sent: 4, total: 4 } });
+        const push = { broadcastPage } as unknown as LunoraPush;
+        const job: PushBroadcastJob = { filter: { limit: 10, userId: "u1" }, payload: { body: "hi" }, type: "lunora.push.broadcast" };
+
+        const outcome = await runPushBroadcastPage(push, job);
+
+        expect(outcome.nextFilter).toStrictEqual({ after: "wp2_page2", limit: 6, userId: "u1" });
+    });
+
+    it("stops the walk once `filter.limit` is spent, even with pages remaining", async () => {
+        expect.hasAssertions();
+
+        const broadcastPage = vi.fn().mockResolvedValue({ nextCursor: "wp2_page2", result: { failed: 0, outcomes: [], pruned: 0, sent: 4, total: 4 } });
+        const push = { broadcastPage } as unknown as LunoraPush;
+        const job: PushBroadcastJob = { filter: { limit: 4 }, payload: { body: "hi" }, type: "lunora.push.broadcast" };
+
+        const outcome = await runPushBroadcastPage(push, job);
+
+        expect(outcome.nextFilter).toBeUndefined();
+    });
+
     it("does NOT throw when the whole page was pruned (a successful prune, not a failure)", async () => {
         expect.hasAssertions();
 
@@ -128,7 +180,7 @@ describe("queue-backed fan-out", () => {
         await expect(runPushBroadcastPage(push, job)).resolves.toMatchObject({ result: { total: 0 } });
     });
 
-    it("surfaces nextCursor so the caller can enqueue the continuation page", async () => {
+    it("surfaces the continuation filter so the caller can enqueue the next page", async () => {
         expect.hasAssertions();
 
         const broadcastPage = vi
@@ -139,7 +191,7 @@ describe("queue-backed fan-out", () => {
 
         const outcome = await runPushBroadcastPage(push, job);
 
-        expect(outcome.nextCursor).toBe("wp2_deadbeefdeadbeef");
+        expect(outcome.nextFilter).toStrictEqual({ after: "wp2_deadbeefdeadbeef" });
     });
 
     it("a job carrying a cursor resumes broadcastPage with that cursor as `filter.after`", async () => {

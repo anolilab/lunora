@@ -70,6 +70,15 @@ const hex4 = (limb: number): string => limb.toString(16).padStart(4, "0");
 /**
  * FNV-1a (64-bit) digest of `input`, as 16 lowercase hex digits.
  *
+ * Iterates UTF-16 code UNITS (`charCodeAt`), like {@link fnv1aHex}. It used to
+ * walk `codePointAt` PER INDEX, which is neither units nor points: an astral
+ * character was folded twice — its whole code point at the first index, then its
+ * trailing low surrogate at the second — the exact defect the 32-bit digest
+ * above records having fixed. Two digests in one file may not disagree about
+ * what they iterate, and there is no cross-language port of this one to hold to
+ * the old answer. Digests of BMP-only input (every ASCII, Latin or CJK key) are
+ * unchanged; one containing an emoji is not.
+ *
  * The hash state is held as four 16-bit limbs in plain `number`s rather than a
  * `BigInt`. BigInt allocates a heap object per operation, and this runs once per
  * character of the hash input — the limb form measures ~5x faster in isolation
@@ -102,11 +111,8 @@ const fnv1a64Hex = (input: string): string => {
     let h3 = 0xcb_f2;
 
     for (let index = 0; index < input.length; index += 1) {
-        const point = input.codePointAt(index) ?? 0;
-
-        // A code point above the BMP occupies limbs 0 and 1.
-        h0 ^= point & 0xff_ff;
-        h1 ^= (point >>> 16) & 0xff_ff;
+        // eslint-disable-next-line unicorn/prefer-code-point -- code UNITS, exactly as `fnv1aHex` above: `codePointAt` per INDEX folds an astral character twice
+        h0 ^= input.charCodeAt(index);
 
         const p0 = h0 * 0x01_b3;
         const p1 = h1 * 0x01_b3;
