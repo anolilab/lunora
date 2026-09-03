@@ -52,10 +52,10 @@ done
 
 ALL=(python go ruby rust swift java kotlin dart)
 
-# ALL is hardcoded here, again in `generated-check.sh`, and a third time as the
-# CI matrix in `.github/workflows/test.yml` — so a ninth SDK missed in any one of
-# them is silently never checked by that gate. Reconcile against what is actually
-# on disk, which is the only copy that cannot be forgotten.
+# ALL is hardcoded here, again in `generated-check.sh`, again in `run-all.sh`, and
+# a fourth time as the CI matrix in `.github/workflows/test.yml` — so a ninth SDK
+# missed in any one of them is silently never checked by that gate. Reconcile
+# against what is actually on disk, which is the only copy that cannot be forgotten.
 # Everything under sdks/ is a port unless it is listed here. An explicit ignore
 # list rather than a marker-file heuristic: a marker SKIPS what it does not
 # match, so a new port that forgot the marker is absent from both this list and
@@ -77,7 +77,7 @@ done
 sdk_drift="$(comm -3 <(printf '%s\n' "${ALL[@]}" | sort) <(printf '%s\n' "${DISCOVERED[@]}" | sort))"
 if [ -n "$sdk_drift" ]; then
     printf 'sdks/lint-all.sh ALL and sdks/ disagree (left column: listed but absent; right: present but unlisted):\n%s\n' "$sdk_drift" >&2
-    printf 'Update ALL here, ALL in sdks/generated-check.sh, and the sdk-conformance matrix in .github/workflows/test.yml.\n' >&2
+    printf 'Update ALL here, ALL in sdks/generated-check.sh and sdks/run-all.sh, and the sdk-conformance matrix in .github/workflows/test.yml.\n' >&2
     exit 2
 fi
 
