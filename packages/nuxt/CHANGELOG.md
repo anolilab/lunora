@@ -1,3 +1,20 @@
+## @lunora/nuxt [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.102...@lunora/nuxt@1.0.0-alpha.103) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* 34 public API changes across mail, storage, payment, replica,
+studio, workflow, agent, codegen, cli and the shard runtime. The full list is in
+
+### Bug Fixes
+
+* audit rounds 7-11 ([#579](https://github.com/anolilab/lunora/issues/579)) ([224a42a](https://github.com/anolilab/lunora/commit/224a42a741f524e0110da55917c79fd08c90a885))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.72
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.89
+
 ## @lunora/nuxt [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.101...@lunora/nuxt@1.0.0-alpha.102) (2026-09-02)
 
 
