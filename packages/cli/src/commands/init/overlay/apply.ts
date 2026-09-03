@@ -18,13 +18,31 @@ import { patchViteConfig } from "../../../util/patch-vite-config";
 import { resolveTagVersions } from "../../../util/source-ref";
 import type { FrameworkAdapter } from "./adapters";
 
-/** Ratelimit schema extension — defines the `ratelimit_buckets` table for durable rate limiting. */
-const RATELIMIT_SCHEMA = `import type { Middleware } from "lunorash/server";
+/**
+ * Canonical `lunora/ratelimit/schema.ts` — byte-identical to the bespoke
+ * templates' scaffold (`templates/standalone/lunora/ratelimit/schema.ts`),
+ * asserted by `__tests__/commands/overlay.test.ts`. Defines the
+ * `ratelimit_buckets` table used by `createDbStore` for durable rate limiting,
+ * and the named `limits` that `lunora/messages.ts` references by name.
+ */
+const RATELIMIT_SCHEMA = `/**
+ * Rate-limit schema extension + plugin.
+ *
+ * Defines the \`ratelimit_buckets\` table used by \`createDbStore\` for durable,
+ * DO-backed rate limiting. Included automatically in every Lunora project.
+ */
+import type { Middleware } from "lunorash/server";
 import { defineSchemaExtension, defineTable, definePlugin, v } from "lunorash/server";
 import { createDbStore, RateLimiter } from "lunorash/ratelimit";
 import type { RateLimitConfigMap } from "lunorash/ratelimit";
 
+/**
+ * Named limits this app enforces. This is the one place they live — add your own
+ * and reference them by name from \`rateLimit(limiter, "<name>", …)\` (see
+ * \`lunora/messages.ts\`).
+ */
 export const limits = {
+    /** Chat writes: 30 per caller per minute, refilling continuously over 60s. */
     send: { kind: "token bucket", period: 60_000, rate: 30 },
 } as const satisfies RateLimitConfigMap;
 
@@ -61,7 +79,11 @@ export const ratelimit = definePlugin("ratelimit", {
 });
 `;
 
-/** Canonical `lunora/schema.ts` — byte-identical to the bespoke templates' scaffold. */
+/**
+ * Canonical `lunora/schema.ts` — byte-identical to the bespoke templates'
+ * scaffold (`templates/standalone/lunora/schema.ts`), asserted by
+ * `__tests__/commands/overlay.test.ts`.
+ */
 const LUNORA_SCHEMA = `import { ratelimit } from "./ratelimit/schema.js";
 import { defineSchema, defineTable, v } from "lunorash/server";
 
@@ -77,20 +99,37 @@ export default defineSchema({
 
 /**
  * Canonical `lunora/messages.ts` — byte-identical to the bespoke templates'
- * scaffold: one live `list` query + a rate-limited `send` mutation that inserts.
- * Written to pass the advisor cleanly out of the box (bounded string args, a
- * real `ctx.db.insert`, and a rate limit on the public mutation).
+ * scaffold (`templates/standalone/lunora/messages.ts`), asserted by
+ * `__tests__/commands/overlay.test.ts`: one live `list` query + a rate-limited
+ * `send` mutation that inserts. Written to pass the advisor cleanly out of the
+ * box (`.max()`-bounded string args — `.meta({ schema: { maxLength } })` is
+ * documentation, not a bound — a real `ctx.db.insert`, and a rate limit on the
+ * public mutation keyed per caller rather than into one shared `"anon"` bucket).
  */
-const LUNORA_MESSAGES = `import { RateLimiter, rateLimit, createDbStore } from "lunorash/ratelimit";
+const LUNORA_MESSAGES = `import { rateLimit } from "lunorash/ratelimit";
 
+import { makeRateLimiter } from "./ratelimit/schema.js";
+import type { MutationCtx } from "#lunora/_generated/server.js";
 import { mutation, query, v } from "#lunora/_generated/server.js";
 
-const limiter = (ctx: { db: unknown }) => new RateLimiter({
-    config: {
-        send: { kind: "token bucket", period: 60_000, rate: 30 },
-    },
-    store: createDbStore({ db: ctx.db as never, table: "ratelimit_buckets" }),
-});
+/**
+ * The limiter comes from \`lunora/ratelimit/schema.ts\` — that file owns the named
+ * limits and the durable store, so tuning \`send\` there is what changes this
+ * procedure's budget. Build it from the generated \`MutationCtx\` so
+ * \`rateLimit(limiter, …)\` infers the full procedure context: \`ctx.auth\`/\`ctx.ip\`
+ * in the key callback and a typed \`ctx.db\` in the handler both depend on it.
+ */
+const limiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
+
+/**
+ * One bucket per caller, not one bucket for the whole app.
+ *
+ * \`ctx.auth.userId\` is \`null\` until you wire auth (\`lunora registry add auth\`),
+ * so the \`ctx.ip\` fallback is what actually keys the limit in a fresh project —
+ * Cloudflare's server-side \`CF-Connecting-IP\`, never a client header. Keying on
+ * \`"anon"\` alone would let one script exhaust the budget for every user.
+ */
+const byCaller = { key: (ctx: { auth: { userId?: null | string }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon" };
 
 export const list = query.input({ channelId: v.string().max(256), limit: v.optional(v.number()) }).query(async ({ args, ctx }) => {
     const messages = await ctx.db
@@ -103,7 +142,7 @@ export const list = query.input({ channelId: v.string().max(256), limit: v.optio
 
 export const send = mutation
     .input({ channelId: v.string().max(256), text: v.string().max(4096) })
-    .use(rateLimit(limiter, "send", { key: (ctx) => ctx.auth.userId ?? "anon" }))
+    .use(rateLimit(limiter, "send", byCaller))
     .mutation(async ({ args, ctx }) => {
         const id = await ctx.db.insert("messages", { channelId: args.channelId, text: args.text });
 

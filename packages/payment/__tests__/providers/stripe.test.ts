@@ -496,7 +496,7 @@ describe("stripe adapter", () => {
     });
 
     it("refunds the full captured amount (no amount given) as state=refunded", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const calls: RecordedCall[] = [];
         const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
@@ -509,6 +509,8 @@ describe("stripe adapter", () => {
         expect(session.state).toBe("refunded");
         // capturedAmount comes from the retrieve stub (amount_received: 1000).
         expect(session.refundedAmount.minorUnits).toBe(1000n);
+        // Stripe's `Refund.id` — the per-refund identity the facade keys its local marker on.
+        expect(session.refundId).toBe("re_1");
     });
 
     it("refunds a strictly smaller amount as state=partially_refunded", async () => {

@@ -16,10 +16,18 @@ import { createR2Sql } from "@lunora/bindings/r2sql";
 import type { PipelineLogCursor, PipelineLogQuery, PipelineLogRow } from "@lunora/runtime";
 import { createPipelineLogReader } from "@lunora/runtime";
 
+import { LOG_LEVEL_ORDER } from "../../../../../shared/log-event";
 import type { Logger } from "../../util/logger";
 
-/** The severities the reader accepts, for `--level` / `--min-level` validation. */
-const LOG_LEVELS = new Set(["debug", "error", "fatal", "info", "log", "trace", "warn"]);
+/**
+ * The severities the reader accepts, for `--level` / `--min-level` validation.
+ *
+ * Derived from `LOG_LEVEL_ORDER` rather than re-listed: the reader ranks
+ * `--min-level` by that array's index, so a hand-kept copy here would let a
+ * level pass validation and then rank `-1` (silently meaning "no floor").
+ * Membership only — the ordering is the reader's concern.
+ */
+const LOG_LEVELS: ReadonlySet<string> = new Set<string>(LOG_LEVEL_ORDER);
 
 /** A bare epoch-millis value: all digits (anything else is parsed as a date string). */
 const EPOCH_MILLIS_RE = /^\d+$/;

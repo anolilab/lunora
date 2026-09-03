@@ -92,6 +92,7 @@ interface LunoraMcpServerOptions {
     agentPollIntervalMs?: number;
     agents?: ReadonlyArray<McpAgentExposure>;
     allowAgents?: boolean;
+    allowObservability?: boolean;
     allowWrites?: boolean;
     client?: LunoraClient;
     fetch?: typeof fetch;
@@ -215,6 +216,14 @@ interface RegisterToolOptions {
 }
 ```
 
+### `ServeStatelessOptions` (interface)
+
+```ts
+interface ServeStatelessOptions extends HandleRequestOptions {
+    maxRequestBytes?: number;
+}
+```
+
 ### `ToolDefinition` (interface)
 
 ```ts
@@ -277,7 +286,7 @@ const callAgentTool: (client: LunoraClient, name: string, input: Record<string, 
 ### `callTool` (const)
 
 ```ts
-const callTool: (client: LunoraClient, name: string, input: Record<string, unknown>, allowWrites?: boolean, hasAdminToken?: boolean) => Promise<ToolResult>;
+const callTool: (client: LunoraClient, name: string, input: Record<string, unknown>, allowWrites?: boolean, allowObservability?: boolean) => Promise<ToolResult>;
 ```
 
 ### `connectLocalStdio` (const)
@@ -349,13 +358,13 @@ const parseAgentsEnv: (raw: string | undefined) => McpAgentExposure[];
 ### `serveStateless` (const)
 
 ```ts
-const serveStateless: (server: Server, request: Request, options?: HandleRequestOptions) => Promise<Response>;
+const serveStateless: (server: Server, request: Request, options?: ServeStatelessOptions) => Promise<Response>;
 ```
 
 ### `toolDefinitions` (const)
 
 ```ts
-const toolDefinitions: (allowWrites: boolean, hasAdminToken?: boolean) => ReadonlyArray<ToolDefinition>;
+const toolDefinitions: (allowWrites: boolean, allowObservability?: boolean) => ReadonlyArray<ToolDefinition>;
 ```
 
 ## `@lunora/mcp/docs`

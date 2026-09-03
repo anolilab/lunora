@@ -10,12 +10,20 @@
  * literals ({@link secretKindOf}), so the two secret lints never diverge. The raw
  * value never leaves this module — only a {@link redact}ed preview crosses into the
  * IR.
+ *
+ * The key-NAME half of the heuristic is `shared/secret-key.ts`, not a local copy.
+ * This module used to carry its own richer `isSecretKeyName` under the same name
+ * as the shared one, and the two disagreed on exactly the keys that matter:
+ * `SENTRY_DSN` / `SMTP_PASSWD` were secrets here and plain config to
+ * `lunora deploy`'s required-secrets pre-flight, while `STRIPE_PUBLISHABLE_KEY`
+ * was exempt here and a blocking missing "secret" there.
  */
 import { relative } from "node:path";
 
 import type { WranglerVariableIR } from "@lunora/codegen";
 import { redact, secretKindOf } from "@lunora/codegen";
 
+import { isPublicKeyName, isSecretKeyName } from "../../../../shared/secret-key";
 import { isPlaceholderValue } from "../scaffold-dev-variables";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
@@ -31,47 +39,6 @@ interface WranglerVariablesShape {
  * is not gated by this.
  */
 const MIN_SECRET_NAMED_VALUE_LENGTH = 8;
-
-/**
- * Whole-word tokens that, standing alone in a key, denote a secret payload. Split
- * a key on `_`/`-` and match a token exactly, so `TOKEN` hits `AUTH_TOKEN` but not
- * `TOKENIZER`, and `SECRET` hits `WEBHOOK_SECRET` but not `SECRETARY`. Bare `KEY`
- * is intentionally absent — it's too broad (`PARTITION_KEY`, `IDEMPOTENCY_KEY`).
- */
-const SECRET_WORD_TOKENS = new Set(["CREDENTIAL", "CREDENTIALS", "DSN", "PASSPHRASE", "PASSWD", "PASSWORD", "SECRET", "TOKEN"]);
-
-/**
- * Compound `*_KEY` names that ARE secret-bearing (unlike a bare `KEY`). Matched as
- * a whole key or a trailing `_`-delimited suffix, so `OPENAI_API_KEY` hits `API_KEY`.
- */
-const SECRET_KEY_SUFFIXES = ["ACCESS_KEY", "API_KEY", "ENCRYPTION_KEY", "PRIVATE_KEY", "SIGNING_KEY"];
-
-/**
- * Whole-word tokens marking a key as public/publishable — meant to ship in
- * cleartext (Stripe `pk_…`, Supabase anon keys, `NEXT_PUBLIC_*`), so exempt even
- * when the value is high-entropy, otherwise the rule would nag on every public key.
- */
-const PUBLIC_KEY_TOKENS = new Set(["PUBLIC", "PUBLISHABLE"]);
-
-/** Splits a key on its `_`/`-` word separators. */
-const KEY_SEPARATOR_RE = /[_-]/u;
-
-/** Uppercase a key and split it into its `_`/`-`-delimited tokens. */
-const keyTokens = (key: string): string[] => key.toUpperCase().split(KEY_SEPARATOR_RE);
-
-/** True when the key name strongly implies a secret payload (and isn't a public key). */
-const isSecretKeyName = (key: string): boolean => {
-    const normalized = key.toUpperCase().replaceAll("-", "_");
-
-    if (keyTokens(key).some((token) => SECRET_WORD_TOKENS.has(token))) {
-        return true;
-    }
-
-    return SECRET_KEY_SUFFIXES.some((suffix) => normalized === suffix || normalized.endsWith(`_${suffix}`));
-};
-
-/** True when the key advertises itself as a public/publishable value (exempt from the rule). */
-const isPublicKeyName = (key: string): boolean => keyTokens(key).some((token) => PUBLIC_KEY_TOKENS.has(token));
 
 /**
  * Pure scan of a `vars` map for plaintext secrets — the FS-free core, exported for

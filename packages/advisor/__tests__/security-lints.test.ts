@@ -226,6 +226,15 @@ describe("public_arg_uses_any", () => {
 });
 
 describe("unbounded_string_arg", () => {
+    it("recommends an enforced bound, never metadata", () => {
+        expect.assertions(2);
+
+        // `.meta({ maxLength })` publishes a cap the parser never enforces; the
+        // remediation once recommended exactly that, and ~90 call sites followed it.
+        expect(unboundedStringArgument.remediation).toMatch(/^Add an enforced max-length bound with `\.max\(n\)`/u);
+        expect(unboundedStringArgument.remediation).toContain("`.meta({ maxLength })` only documents a cap — the parser does not enforce it");
+    });
+
     it("flags one INFO finding per unbounded string arg", () => {
         expect.assertions(2);
 

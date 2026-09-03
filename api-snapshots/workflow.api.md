@@ -643,6 +643,12 @@ const defineWorkflow: <Params = Record<string, unknown>, Output = unknown>(confi
 const defineWorkflowEvent: <Payload>(type: string, payload: Validator<Payload>) => WorkflowEventDefinition<Payload>;
 ```
 
+### `isDuplicateInstanceError` (const)
+
+```ts
+const isDuplicateInstanceError: (error: unknown) => boolean;
+```
+
 ### `isNonRetryableError` (const)
 
 ```ts

@@ -114,6 +114,7 @@ interface DeployCommandOptions {
     cwd?: string;
     dockerAvailable?: DockerProbe;
     dryRun?: boolean;
+    emitBindings?: string;
     env?: string;
     fetchImpl?: FetchLike;
     format?: string;

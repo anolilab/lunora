@@ -1,4 +1,5 @@
-import { MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS } from "@lunora/scheduler";
+import { LunoraError } from "@lunora/errors";
+import { assertScheduleDelay, MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS } from "@lunora/scheduler";
 import type { ScheduledJob, Scheduler } from "@lunora/server";
 
 /** A pending job entry in the fake scheduler queue. */
@@ -160,8 +161,18 @@ const createFakeScheduler = (
     /** Every captured TERMINAL job failure (retry budget exhausted), in execution order, across all sweeps. */
     const recordedFailures: ScheduledJobFailure[] = [];
 
-    const enqueue = (scheduledFor: number, functionPath: string, args: Record<string, unknown> = {}): string => {
-        const id = `fake-job-${String(nextId)}`;
+    const enqueue = (scheduledFor: number, functionPath: string, args: Record<string, unknown> = {}, requestedId?: string): string => {
+        // Production posts the job to the SchedulerDO as a JSON body
+        // (`@lunora/scheduler`'s `callDO` → `JSON.stringify`), so an arg it cannot
+        // serialize — a `bigint`, a cycle — throws at SCHEDULE time. Do the same
+        // work here rather than accepting the job and failing only in production.
+        JSON.stringify(args);
+
+        // A caller-supplied id is honoured exactly as the SchedulerDO honours
+        // `RunOptions.id`: `@lunora/server`'s deferred-schedule facade decides the
+        // id up front so a mutation handler gets it synchronously, then replays the
+        // call after the transaction commits.
+        const id = requestedId ?? `fake-job-${String(nextId)}`;
 
         nextId += 1;
 
@@ -176,11 +187,23 @@ const createFakeScheduler = (
         return id;
     };
 
-    // A schedule target is a function-path string or a generated workflow/agent
-    // ref (`workflows.<name>` / `agents.<name>`); reduce it to the string key the
-    // fake registry dispatches on. A string passes through unchanged, so existing
-    // function-scheduling tests are untouched.
-    const targetPath = (target: Parameters<Scheduler["runAfter"]>[1]): string => (typeof target === "string" ? target : (target.name ?? target.binding ?? ""));
+    // A schedule target is a function-path string, a generated `internal.<file>.<fn>`
+    // / `api.<file>.<fn>` reference (which carries its `<file>:<fn>` id in
+    // `__lunoraRef`, exactly as `@lunora/scheduler` reads it), or a generated
+    // workflow/agent ref (`workflows.<name>` / `agents.<name>`); reduce it to the
+    // string key the fake registry dispatches on. A string passes through
+    // unchanged, so existing function-scheduling tests are untouched.
+    const targetPath = (target: Parameters<Scheduler["runAfter"]>[1]): string => {
+        if (typeof target === "string") {
+            return target;
+        }
+
+        if ("__lunoraRef" in target) {
+            return target.__lunoraRef;
+        }
+
+        return target.name ?? target.binding ?? "";
+    };
 
     const scheduler: Scheduler = {
         cancel: (id: string) => {
@@ -196,14 +219,24 @@ const createFakeScheduler = (
 
         list: () => Promise.resolve([...pending.values()]),
 
-        runAfter: (delayMs: number, target: Parameters<Scheduler["runAfter"]>[1], args?: Record<string, unknown>) => {
-            const id = enqueue(nowMs + delayMs, targetPath(target), args);
+        // The fourth parameter is `@lunora/scheduler`'s `RunOptions`; only `id` is
+        // meaningful to this fake. It is not on the public `Scheduler` ctx type and
+        // deliberately stays off it — the only caller is `@lunora/server`'s
+        // deferred-schedule facade, which needs the id decided before the call is
+        // made so a mutation handler can be handed it synchronously.
+        runAfter: (delayMs: number, target: Parameters<Scheduler["runAfter"]>[1], args?: Record<string, unknown>, options?: { id?: string }) => {
+            // The same guard `@lunora/scheduler`'s `createScheduler().runAfter`
+            // runs before the call reaches the DO — imported, not restated, so a
+            // test cannot pass on a delay production refuses.
+            assertScheduleDelay(delayMs, "ctx.scheduler.runAfter");
+
+            const id = enqueue(nowMs + delayMs, targetPath(target), args, options?.id);
 
             return Promise.resolve(id);
         },
 
-        runAt: (timestampMs: number, target: Parameters<Scheduler["runAt"]>[1], args?: Record<string, unknown>) => {
-            const id = enqueue(timestampMs, targetPath(target), args);
+        runAt: (timestampMs: number, target: Parameters<Scheduler["runAt"]>[1], args?: Record<string, unknown>, options?: { id?: string }) => {
+            const id = enqueue(timestampMs, targetPath(target), args, options?.id);
 
             return Promise.resolve(id);
         },
@@ -224,26 +257,31 @@ const createFakeScheduler = (
         // `undefined`.
         const entry = job.functionPath === undefined ? undefined : registry.get(job.functionPath);
 
+        // A path the app does not export is a job FAILURE in production: the DO
+        // fires it back at the Worker, which answers `FUNCTION_NOT_FOUND`, and the
+        // job then walks its retry budget into the dead-letter queue. Throwing
+        // routes it through this fake's mirror of that path (`executeDue` below)
+        // instead of dropping it with a `console.warn` no assertion can see.
         if (entry === undefined) {
-            // Unknown function path — match prod behaviour (silently no-op rather
-            // than crashing the test), but surface a warning so devs notice typos.
-            // eslint-disable-next-line no-console -- deliberate test-time warning; no logger on this surface
-            console.warn(`[fake-scheduler] unknown functionPath "${job.functionPath ?? "(workflow-targeted)"}" — job ${job.id} dropped`);
-
-            return;
+            throw new LunoraError("FUNCTION_NOT_FOUND", `unknown functionPath "${job.functionPath ?? "(workflow-targeted)"}"`, { status: 404 });
         }
 
-        if (entry.kind === "mutation" || entry.kind === "action") {
-            const dispatch = getDispatch();
-            const context = entry.kind === "action" ? getActionContext() : getMutationContext();
-
-            await dispatch(entry.kind, entry, context, job.args);
-        } else {
-            // eslint-disable-next-line no-console -- deliberate test-time warning
-            console.warn(
-                `[fake-scheduler] functionPath "${job.functionPath ?? "(workflow-targeted)"}" is a ${entry.kind} — only mutations and actions can be scheduled; job ${job.id} dropped`,
+        if (entry.kind !== "mutation" && entry.kind !== "action") {
+            throw new LunoraError(
+                "FUNCTION_NOT_FOUND",
+                `functionPath "${job.functionPath ?? "(workflow-targeted)"}" is a ${entry.kind} — only mutations and actions can be scheduled`,
+                { status: 404 },
             );
         }
+
+        const dispatch = getDispatch();
+        const context = entry.kind === "action" ? getActionContext() : getMutationContext();
+
+        // `ctx.now` is the VIRTUAL clock at fire time, not the harness's construction
+        // instant: production dispatches the job as its own RPC and captures `Date.now()`
+        // then, so a TTL handler that woke after `advance(3_600_000)` must see an hour
+        // of elapsed time rather than zero.
+        await dispatch(entry.kind, entry, { ...(context as Record<string, unknown>), now: nowMs }, job.args);
     };
 
     /**

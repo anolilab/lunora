@@ -32,7 +32,10 @@ export function MessageFeed({ preloaded }: { preloaded: Preloaded<ReturnOf<typeo
                         return;
                     }
 
-                    void mutate({ channelId, text: draft });
+                    // Same shard key the RSC preload reads from — the schema declares
+                    // `.shardBy("channelId")`, so an unrouted write would land on the
+                    // default shard and never appear in this feed.
+                    void mutate({ channelId, text: draft }, { shardKey: channelId });
                     setDraft("");
                 }}
             >

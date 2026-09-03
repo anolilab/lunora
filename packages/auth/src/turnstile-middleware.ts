@@ -131,7 +131,11 @@ export const verifyTurnstileMiddleware =
             throw new LunoraError("FORBIDDEN", options.message ?? "turnstile verification unavailable", { cause: error });
         }
 
-        if (!result.success || (options.validate !== undefined && !options.validate(result))) {
+        // `validate` is narrowed to an exact `true` — it is app code asserting the
+        // hostname/action the token was minted for, and a version returning the
+        // matched hostname string (or any other truthy artifact of the comparison)
+        // would otherwise pass every token, including one replayed from another site.
+        if (!result.success || (options.validate !== undefined && (options.validate(result) as unknown) !== true)) {
             throw new LunoraError("FORBIDDEN", options.message ?? "turnstile verification failed", {
                 data: result.errorCodes.length > 0 ? { errorCodes: result.errorCodes } : undefined,
             });

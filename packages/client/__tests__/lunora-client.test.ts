@@ -4066,6 +4066,84 @@ describe("lunoraClient", () => {
             expect(sub.query.sinceSeq).toBe(7);
         });
 
+        it("seeds the subscription that already exists when the cache load lands", async () => {
+            expect.assertions(3);
+
+            const cache = createInMemoryQueryCache();
+
+            await cache.put(queryCacheKey("messages:list", "{}"), { identity: null, serverCursor: 7, ts: 1, value: { count: 42 } });
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                queryCache: cache,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            // Every framework adapter subscribes SYNCHRONOUSLY at mount — before
+            // the constructor's hydration microtask + async adapter resolve.
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
+
+            expect(received).toEqual([]);
+
+            await flushMicrotasks();
+
+            // The load reaches the subscription that is already open.
+            expect(received).toEqual([{ count: 42 }]);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            // …and its cursor still rides the subscribe frame, which only goes
+            // out once the socket opens.
+            expect(firstSub(socket).query.sinceSeq).toBe(7);
+        });
+
+        it("never replays a cached value over a newer live value on a remount", async () => {
+            expect.assertions(2);
+
+            const cache = createInMemoryQueryCache();
+
+            await cache.put(queryCacheKey("messages:list", "{}"), { identity: null, serverCursor: 7, ts: 1, value: { count: 42 } });
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                queryCache: cache,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const unsubscribe = client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            await flushMicrotasks();
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const sub = firstSub(socket);
+
+            socket.receive({ id: sub.id, type: "ack" });
+            socket.receive({ cursor: 9, data: { count: 99 }, id: sub.id, type: "data" });
+
+            // The component unmounts (React drops the client state at refCount 0)
+            // and remounts — navigate away and back.
+            unsubscribe();
+
+            const remounted: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => remounted.push(d));
+
+            expect(remounted).toEqual([]);
+
+            const resubscribe = wireFrames(latestSocket()).at(-1);
+
+            expect(resubscribe?.query.sinceSeq).toBeUndefined();
+        });
+
         it("drops a cached read whose identity does not match the current session", async () => {
             expect.assertions(1);
 

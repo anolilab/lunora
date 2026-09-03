@@ -35,14 +35,44 @@ const schedulerStub = (options: LunoraSchedulerOptions): ReturnType<DurableObjec
     return namespace.get(namespace.idFromName(options.instanceName ?? "default"));
 };
 
+/**
+ * Re-raise a non-2xx SchedulerDO response as the error the DO actually answered.
+ *
+ * The DO refuses with a coded envelope — `{ error: { code, message } }`, the
+ * shape `SchedulerDO.error` writes — and every one of those codes is a sentence
+ * the caller can act on: `DUPLICATE_SCHEDULE_ID` says cancel the existing job
+ * first, `ORIGIN_NOT_CONFIGURED` names a missing binding. Re-wrapping the lot as
+ * `INTERNAL` destroyed exactly that: `toErrorBody` replaces an internal-coded
+ * message with "Internal error", so a developer who named a job id twice was
+ * told nothing at all.
+ *
+ * A response that is not that envelope — a transport failure, an HTML error page
+ * from something in front of the DO, a truncated body — has no code to carry, so
+ * it stays `INTERNAL` with the status and body text attached.
+ */
+const raiseDOFailure = (path: string, status: number, text: string): never => {
+    let code: unknown;
+    let message: unknown;
+
+    try {
+        ({ code, message } = (JSON.parse(text) as { error?: { code?: unknown; message?: unknown } }).error ?? {});
+    } catch {
+        // Not JSON: falls through to the INTERNAL wrap below.
+    }
+
+    if (typeof code === "string" && code.length > 0) {
+        throw new LunoraError(code, typeof message === "string" && message.length > 0 ? message : `@lunora/scheduler: SchedulerDO ${path} failed`, { status });
+    }
+
+    throw new LunoraError("INTERNAL", `@lunora/scheduler: SchedulerDO ${path} failed (${String(status)}): ${text}`);
+};
+
 const requestDO = async <T>(options: LunoraSchedulerOptions, path: string, init: RequestInit): Promise<T> => {
     const stub = schedulerStub(options);
     const response = await stub.fetch(`https://scheduler.internal${path}`, init);
 
     if (!response.ok) {
-        const text = await response.text();
-
-        throw new LunoraError("INTERNAL", `@lunora/scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${text}`);
+        raiseDOFailure(path, response.status, await response.text());
     }
 
     return await response.json();

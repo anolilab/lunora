@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { mailInboundDispatchWithoutVerify } from "@lunora/advisor";
+import { allowUnauthenticatedShardAccessEnabled, mailInboundDispatchWithoutVerify } from "@lunora/advisor";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -192,6 +192,58 @@ describe("discoverConfigCalls", () => {
         expect(findings).toHaveLength(1);
         // eslint-disable-next-line no-secrets/no-secrets -- an advisor rule id, not a secret
         expect(findings[0]).toMatchObject({ level: "ERROR", name: "mail_inbound_dispatch_without_verify" });
+    });
+
+    // The class-A (default Vite) path has NO worker entry to call `.extend()`
+    // from, so `vite.config.*` is the only place this setting can be written —
+    // and a `lunora/`-plus-entry walk saw none of it.
+    it.each(["vite.config.ts", "vite.config.mts", "vite.config.js", "vite.config.mjs"])("reads the lunora() plugin options from %s", (name) => {
+        expect.assertions(2);
+
+        writeAt(
+            name,
+            `import { lunora } from "@lunora/vite";
+
+            export default { plugins: [lunora({ allowUnauthenticatedShardAccess: true })] };`,
+        );
+
+        const found = discoverConfigCalls(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({
+            analyzable: true,
+            callee: "lunora",
+            file: name,
+            presentKeys: ["allowUnauthenticatedShardAccess"],
+            trueKeys: ["allowUnauthenticatedShardAccess"],
+        });
+    });
+
+    it("fires allow_unauthenticated_shard_access_enabled from vite.config.ts alone, with no .extend() anywhere", () => {
+        expect.assertions(2);
+
+        writeAt("vite.config.ts", `export default { plugins: [lunora({ allowUnauthenticatedShardAccess: true })] };`);
+
+        const findings = allowUnauthenticatedShardAccessEnabled.run({
+            configCalls: discoverConfigCalls(project, join(workdir, "lunora")),
+            schema: { tables: [] },
+        });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({ metadata: { callee: "lunora", file: "vite.config.ts" }, name: "allow_unauthenticated_shard_access_enabled" });
+    });
+
+    it("does not flag a vite config that leaves the opt-out off", () => {
+        expect.assertions(1);
+
+        writeAt("vite.config.ts", `export default { plugins: [lunora({ studio: false })] };`);
+
+        const findings = allowUnauthenticatedShardAccessEnabled.run({
+            configCalls: discoverConfigCalls(project, join(workdir, "lunora")),
+            schema: { tables: [] },
+        });
+
+        expect(findings).toHaveLength(0);
     });
 
     it("does not scan client-side src/ trees outside the worker entry", () => {

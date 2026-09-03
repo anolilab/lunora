@@ -3,10 +3,10 @@ title: Offline-first
 description: Persist reads and writes to disk so the app boots, renders, and accepts edits with no network.
 ---
 
-Lunora's transport is online-first by default: reads hydrate from a live
-WebSocket and writes go straight to your Worker. Two opt-in client options turn
-that into an **offline-first** experience, where the app boots from disk, renders
-cached reads before a socket opens, and accepts writes while disconnected:
+Lunora's transport is online-first over the wire — reads hydrate from a live
+WebSocket and writes go straight to your Worker — with two durable client stores
+underneath, so the app boots from disk, renders cached reads before a socket
+opens, and accepts writes while disconnected:
 
 - **`queryCache`**: a durable read cache. Query results are persisted as their
   subscriptions advance and replayed on construction, so a reload renders the
@@ -16,12 +16,30 @@ cached reads before a socket opens, and accepts writes while disconnected:
   issued while disconnected survive a reload and flush, exactly once, on
   reconnect.
 
-Both are off by default; current behaviour is unchanged until you pass an
-adapter.
+<Callout type="warn">
+    **Both are ON by default in a browser.** Leaving either option unset auto-probes IndexedDB and, where it exists, uses it — so a bare `new LunoraClient({
+    url })` already writes query results and a mutation outbox to disk on the viewer's machine. Outside a browser (SSR, Workers, Node without `indexedDB`) the
+    probe finds nothing and both stay in memory. Nothing is ever sent anywhere new; the concern is **local at-rest data** on a shared or unmanaged machine.
 
-## Enable persistent reads and writes
+    Pass `false` to opt out — that is the documented off switch, and it is per-store:
 
-Pass IndexedDB adapters for both stores when you construct the client:
+    ```ts
+    // no query results and no outbox on disk, in any environment
+    const client = new LunoraClient({ url, persistence: false, queryCache: false });
+    ```
+
+    An explicit adapter is always used as-is. The `persistence` auto-default is also suppressed when an `outbox` (the `@lunora/db` path) already owns the
+    durable write path, so the queue is never persisted twice.
+
+</Callout>
+
+The rest of this page is about getting more out of those stores — an explicit
+adapter, hydration-gated rendering, and the identity rules below.
+
+## Passing the adapters explicitly
+
+The auto-probe picks the same IndexedDB adapters this does. Name them when you
+want the dependency to be visible at the call site, or to configure one:
 
 ```ts
 import { LunoraClient, createIndexedDbPersistence, createIndexedDbQueryCache } from "lunorash/client";

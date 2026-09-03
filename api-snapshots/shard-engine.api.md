@@ -285,18 +285,6 @@ interface AuditLogResult {
 const BIGINT_KEY_DIGITS = 39;
 ```
 
-### `BIGINT_KEY_NEGATIVE` (const)
-
-```ts
-const NEGATIVE = "0";
-```
-
-### `BIGINT_KEY_NON_NEGATIVE` (const)
-
-```ts
-const NON_NEGATIVE = "1";
-```
-
 ### `BroadcastDelta` (type)
 
 ```ts
@@ -3637,6 +3625,12 @@ const decideDurableAttach: (run: DurableStreamRun | undefined, context: {
     };
     resuming: boolean;
 }) => DurableAttachDecision;
+```
+
+### `decodeBigintSqlKey` (const)
+
+```ts
+const decodeBigintSqlKey: (raw: string) => bigint | undefined;
 ```
 
 ### `decodeCursor` (const)

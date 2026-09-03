@@ -81,7 +81,7 @@ const { mutate, pending } = useMutation(api.messages.send);
 | `useQuery`            | `useQuery`            | Live query `ShallowRef` — re-subscribes when reactive args change.                |
 | `useMutation`         | `useMutation`         | Optimistic mutation handle (`data`, `error`, `pending`, `mutate`, `reset`).       |
 | `useSubscription`     | `useSubscription`     | Raw subscription `ShallowRef` — unbounded live stream.                            |
-| `usePaginatedQuery`   | `usePaginatedQuery`   | Cursor-paginated query with `loadMore`, `status`, and `results`.                  |
+| `usePaginatedQuery`   | `usePaginatedQuery`   | Cursor-paginated query with `loadMore`, `status`, `results`, and `error`.         |
 | `useInfiniteQuery`    | `useInfiniteQuery`    | Infinite-scroll variant of `usePaginatedQuery`.                                   |
 | `useAuth`             | `useAuth`             | Reactive auth: readonly `token`/`user` refs plus `setToken`.                      |
 | `usePresence`         | `usePresence`         | Collaborative-awareness — heartbeat + live present-members `ShallowRef`.          |

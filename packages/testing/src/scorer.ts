@@ -83,9 +83,11 @@ interface EvalResult {
  * The verdict number at the START of an LLM judge's reply — the instructed
  * format (`"0.8 - reason"`). Anchored so a number elsewhere in prose (e.g. the
  * `0` in "on a 0-1 scale", or an "order #42" reference) is NOT mistaken for the
- * score; a non-compliant reply with no leading number scores 0 (fail-closed).
+ * score, and followed by a lookahead for end-of-reply / whitespace / a dash so
+ * the number has to BE the verdict: `"1. The answer is wrong"` is a numbered
+ * list, not a score of 1, and `"7/10"` is not a 7.
  */
-const LEADING_SCORE = /^\s*(-?\d+(?:\.\d+)?)/u;
+const LEADING_SCORE = /^\s*(-?\d+(?:\.\d+)?)(?=$|[\s\-–—])/u;
 
 /** Clamp a number into `[0, 1]` (a non-finite value scores 0). */
 const clamp01 = (value: number): number => (Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0);
@@ -104,6 +106,13 @@ const mean = (values: ReadonlyArray<number>): number => (values.length === 0 ? 0
 
 /** Score 1 if the output contains `needle` (case-insensitive unless `caseSensitive`). */
 const containsScorer = (needle: string, options: { caseSensitive?: boolean } = {}): Scorer => {
+    // Every string contains the empty string, so an empty needle scores every
+    // output a silent 1 — the opposite of a meaningful eval. Reject it at
+    // construction, like `keywordScorer`'s empty rubric.
+    if (needle.length === 0) {
+        throw new LunoraError("BAD_REQUEST", "@lunora/testing: containsScorer requires a non-empty needle");
+    }
+
     return {
         name: `contains:${needle}`,
         score: ({ output }): number => {
@@ -117,7 +126,12 @@ const containsScorer = (needle: string, options: { caseSensitive?: boolean } = {
 
 /** Score 1 when `pattern` matches the output. */
 const regexScorer = (pattern: RegExp, name = "regex"): Scorer => {
-    return { name, score: ({ output }): number => (pattern.test(output) ? 1 : 0) };
+    // `.test()` on a `/g` or `/y` regex advances its `lastIndex`, so one scorer
+    // reused across a dataset alternates between matching and not — every second
+    // sample scores 0 for no reason. Score against a stateless clone instead.
+    const stateless = new RegExp(pattern.source, pattern.flags.replaceAll(/[gy]/gu, ""));
+
+    return { name, score: ({ output }): number => (stateless.test(output) ? 1 : 0) };
 };
 
 /** Score 1 when the trimmed output exactly equals the trimmed `expected`. */
@@ -158,11 +172,29 @@ const buildJudgePrompt = (criteria: string, sample: ScorerSample): string =>
         `Assistant output: ${sample.output}`,
     ].join("\n");
 
-/** Parse an LLM judge's reply (`"0.8 - mostly correct"`) into a clamped {@link ScoreResult}. */
+/**
+ * Parse an LLM judge's reply (`"0.8 - mostly correct"`) into a {@link ScoreResult}.
+ *
+ * **Throws** when the reply does not open with a number in `[0, 1]`. A judge that
+ * answered `"7/10"`, `"1. The answer is wrong"` or `"no idea"` has not graded the
+ * sample, and both alternatives invent a verdict it never gave: clamping used to
+ * turn `"7/10"` into a perfect 1, and scoring 0 would report a failure the judge
+ * never asserted. No caller catches a scorer error (`scoreSample` and `evaluate`
+ * both run scorers under `Promise.all`), so throwing fails the eval — which is
+ * the honest outcome when the grader is unreadable.
+ */
 const parseJudgeScore = (raw: string): ScoreResult => {
     const match = LEADING_SCORE.exec(raw);
+    const value = match === null ? Number.NaN : Number(match[1]);
 
-    return { reason: raw.trim(), score: match ? clamp01(Number(match[1])) : 0 };
+    if (!Number.isFinite(value) || value < 0 || value > 1) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `@lunora/testing: the LLM judge did not answer with a score in [0, 1] — got ${JSON.stringify(raw.trim().slice(0, 200))}`,
+        );
+    }
+
+    return { reason: raw.trim(), score: value };
 };
 
 /**

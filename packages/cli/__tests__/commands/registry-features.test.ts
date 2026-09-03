@@ -241,6 +241,29 @@ describe("lunora add — shadcn-parity features", () => {
         expect(lines.join("\n")).not.toMatch(/^ {2}bind {2}vars\.ADMIN/mu);
     });
 
+    it("registry list sanitizes a fallback catalog's directory names before printing them", async () => {
+        expect.assertions(3);
+
+        // With no `index.json` the catalog falls back to the item DIRECTORIES. A
+        // remote registry is unpacked into that root, so a tarball entry can
+        // carry escape or BIDI bytes in its path, and `list` renders the name
+        // straight to the terminal — as untrusted as the manifest beside it.
+        const hostile = "foo\u001B[2J\u202Ebar";
+
+        mkdirSync(join(registryRoot, hostile), { recursive: true });
+        writeFileSync(join(registryRoot, hostile, "registry.json"), JSON.stringify({ description: "hostile", files: [], name: hostile }), "utf8");
+
+        const { lines, logger } = capturingLogger();
+
+        await runAddCommand({ cwd: workdir, from: registryRoot, list: true, logger, names: [] });
+
+        const printed = lines.join("\n");
+
+        expect(printed).not.toContain("\u001B");
+        expect(printed).not.toContain("\u202E");
+        expect(printed).toContain("foo[2Jbar");
+    });
+
     it("registry build generates index.json and --check detects drift", async () => {
         expect.assertions(3);
 

@@ -64,4 +64,60 @@ describe("masked_relation_leak_via_with", () => {
 
         expect(maskedRelationLeakViaWith.run({ maskProcedures, schema: schema() })).toHaveLength(0);
     });
+
+    /**
+     * The relation loader calls the READING procedure's `relationMask` for the
+     * target table of every hop, so a parent read whose own policy names `users`
+     * gets masked authors back. Flagging it is a false positive.
+     */
+    it("does not flag a read whose own mask policy covers the related table", () => {
+        expect.assertions(1);
+
+        const selfMasking: AdvisorMaskProcedure[] = [
+            ...maskProcedures,
+            {
+                exportName: "listPosts",
+                file: "list",
+                maskColumns: [{ column: "email", table: "users" }],
+                tablesRead: ["posts"],
+                tablesWritten: [],
+                usesMask: true,
+                visibility: "public",
+            },
+        ];
+
+        expect(maskedRelationLeakViaWith.run({ maskProcedures: selfMasking, relationLoads, schema: schema() })).toHaveLength(0);
+    });
+
+    it("still flags a read whose own mask policy names only the parent table", () => {
+        expect.assertions(1);
+
+        const parentOnly: AdvisorMaskProcedure[] = [
+            ...maskProcedures,
+            {
+                exportName: "listPosts",
+                file: "list",
+                maskColumns: [{ column: "title", table: "posts" }],
+                tablesRead: ["posts"],
+                tablesWritten: [],
+                usesMask: true,
+                visibility: "public",
+            },
+        ];
+
+        expect(maskedRelationLeakViaWith.run({ maskProcedures: parentOnly, relationLoads, schema: schema() })).toHaveLength(1);
+    });
+
+    // `usesMask` with no readable `maskColumns` means the policy argument was
+    // opaque — it could name `users`, so this must not flag.
+    it("does not flag a read whose mask policy could not be read statically", () => {
+        expect.assertions(1);
+
+        const opaque: AdvisorMaskProcedure[] = [
+            ...maskProcedures,
+            { exportName: "listPosts", file: "list", maskColumns: [], tablesRead: ["posts"], tablesWritten: [], usesMask: true, visibility: "public" },
+        ];
+
+        expect(maskedRelationLeakViaWith.run({ maskProcedures: opaque, relationLoads, schema: schema() })).toHaveLength(0);
+    });
 });

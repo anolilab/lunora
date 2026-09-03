@@ -19,7 +19,10 @@ const COLUMN_TYPES: ReadonlyArray<{ label: string; validator: string }> = [
     { label: "string", validator: "v.string()" },
     { label: "number", validator: "v.number()" },
     { label: "boolean", validator: "v.boolean()" },
-    { label: "bigint", validator: "v.int64()" },
+    // `v.bigint()`, not `v.int64()`: `int64` is neither exported by
+    // `@lunora/values` nor on the server's validator allow-list, so every
+    // "bigint" column the palette offered answered `400 invalid-validator`.
+    { label: "bigint", validator: "v.bigint()" },
     { label: "bytes", validator: "v.bytes()" },
     { label: "any", validator: "v.any()" },
 ];

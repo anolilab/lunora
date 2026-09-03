@@ -130,9 +130,12 @@ them:
 - **Cookie attributes**: `httpOnly: true`, `sameSite: "lax"`, `path: "/"` are
   filled in when you don't supply `advanced.defaultCookieAttributes`.
 - **Secure cookies**: `useSecureCookies` is forced on for an HTTPS `baseURL`.
-- **Auth secret strength**: `AUTH_SECRET` shorter than 32 characters logs a
-  warning (not a throw, so dev isn't blocked) pointing at `openssl rand -hex 32`.
-  A missing secret still throws.
+- **Auth secret strength**: `AUTH_SECRET` shorter than 32 characters **throws**
+  at construction, pointing at `openssl rand -hex 32`. The one exception is an
+  explicitly `http://` `baseURL` — a local dev origin — where it logs a warning
+  instead so a prototype isn't blocked. An unset `baseURL` and any `https://`
+  one both count as production and throw, so a weak secret 500s every request
+  rather than shipping. A missing secret throws everywhere.
 
 ## Protecting public procedures
 

@@ -28,6 +28,8 @@ import { DOC_COLUMN, renderSql, sqliteInList } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
+import { jsonPathSegment } from "../../../shared/json-path-segment";
+
 /** One reverse edge to count: `table.column` points back at the browsed table. */
 interface BackRelationRequest {
     /** The foreign-key column on `table` holding the parent id. */
@@ -74,7 +76,10 @@ const columnExpression = (column: string, physical: string[]): SQL | undefined =
         return undefined;
     }
 
-    return dsql`json_extract(${dsql.identifier(DOC_COLUMN)}, ${`$."${column.replaceAll('"', '""')}"`})`;
+    // `jsonPathSegment`, never a hand-rolled quoter: a JSON path is not a SQL
+    // identifier, so doubling `"` (the identifier rule) emits `$."a""b"`, which
+    // SQLite reads as NULL instead of the column's value.
+    return dsql`json_extract(${dsql.identifier(DOC_COLUMN)}, ${`$.${jsonPathSegment(column)}`})`;
 };
 
 /**

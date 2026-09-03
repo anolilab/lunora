@@ -2,6 +2,7 @@ import type { LunoraClient } from "@lunora/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createMcpFetchHandler } from "../src/http";
+import { DEFAULT_MAX_REQUEST_BYTES } from "../src/serve-stateless";
 
 /** Minimal mock exposing only the methods the tools touch. */
 const mockClient = (): LunoraClient => {
@@ -83,5 +84,38 @@ describe("createMcpFetchHandler", () => {
 
         // Stateless mode must not hand back a session id for the client to pin.
         expect(response.headers.get("mcp-session-id")).toBeNull();
+    });
+
+    /**
+     * This handler carries the deployment's ADMIN bearer on every tool call, so
+     * one POST of a JSON-RPC array is one authorized request amplified into as
+     * many privileged upstream calls as the array has entries. It is refused
+     * before a server is ever built for it.
+     */
+    it("refuses a batched request without dispatching any of it", async () => {
+        expect.assertions(2);
+
+        const client = mockClient();
+        const handle = createMcpFetchHandler({ client });
+        const response = await handle(mcpRequest([initializeBody, initializeBody, initializeBody]));
+
+        expect(response.status).toBe(400);
+        await expect(response.text()).resolves.toContain("batched requests are not supported");
+    });
+
+    it("refuses a body over the size limit", async () => {
+        expect.assertions(2);
+
+        const handle = createMcpFetchHandler({ client: mockClient() });
+        const oversized = {
+            id: 1,
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: { arguments: { path: "z".repeat(DEFAULT_MAX_REQUEST_BYTES) }, name: "lunora_run_query" },
+        };
+        const response = await handle(mcpRequest(oversized));
+
+        expect(response.status).toBe(413);
+        await expect(response.text()).resolves.toContain("exceeds");
     });
 });

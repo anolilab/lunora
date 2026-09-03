@@ -56,6 +56,54 @@ describe("unique index re-shape", () => {
         }
     });
 
+    it("re-shapes a unique index over an optional column that many rows leave unset", () => {
+        expect.assertions(3);
+
+        const harness = createSqliteExec();
+
+        try {
+            runShardMigrations(harness.sql, withUnique("slug"));
+
+            // `status` is optional, and most of these rows never set it, so
+            // `json_extract(__doc__, '$.status')` is NULL for them. `GROUP BY`
+            // folds those NULLs into ONE group of five; a SQLite UNIQUE index
+            // counts them as five distinct keys and accepts the lot. Probing with
+            // a bare `GROUP BY` reads the fold as a duplicate and refuses a
+            // create that would have succeeded — on every wake, since the
+            // migration re-runs, so the shard never opens again.
+            for (const [position, status] of ["published", undefined, undefined, undefined, "archived", undefined, undefined].entries()) {
+                const index = String(position);
+
+                harness.raw(
+                    `INSERT INTO "posts" (id, _creationTime, __doc__) VALUES (?, ?, ?)`,
+                    `p${index}`,
+                    position,
+                    JSON.stringify(status === undefined ? { slug: `s${index}` } : { slug: `s${index}`, status }),
+                );
+            }
+
+            runShardMigrations(harness.sql, withUnique("status"));
+
+            const rows = harness.raw(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`, "posts_by_key");
+
+            expect(typeof rows[0]?.["sql"] === "string" ? rows[0]["sql"] : "").toContain("status");
+
+            // The rebuilt constraint is real: the unset rows coexist, and a
+            // second `published` is still rejected.
+            expect(harness.raw(`SELECT COUNT(*) AS n FROM "posts"`)[0]?.["n"]).toBe(7);
+            expect(() => {
+                harness.raw(
+                    `INSERT INTO "posts" (id, _creationTime, __doc__) VALUES (?, ?, ?)`,
+                    "dupe",
+                    99,
+                    JSON.stringify({ slug: "sx", status: "published" }),
+                );
+            }).toThrow(/UNIQUE/u);
+        } finally {
+            harness.close();
+        }
+    });
+
     it("re-shapes a unique index normally when nothing violates the new columns", () => {
         expect.assertions(1);
 

@@ -198,6 +198,26 @@ describe("tokenChunker", () => {
         expect(chunks.length).toBeGreaterThan(1);
     });
 
+    // The character window is scaled by the atom's AVERAGE token density, so an
+    // atom whose density is uneven — one very long token followed by many short
+    // ones — used to emit pieces far over `maxTokens`, which is exactly the
+    // silent truncation at the embedding model this chunker exists to prevent.
+    it("keeps every piece of an unevenly dense oversized atom within maxTokens", () => {
+        expect.hasAssertions();
+
+        const chunk = tokenChunker({ countTokens: countWords, maxTokens: 26 });
+        // 51 whitespace tokens, no sentence terminator: one 100-character word
+        // followed by 50 one-character words.
+        const atom = ["w".repeat(100), ...Array.from({ length: 50 }).fill("x")].join(" ");
+        const chunks = chunk(atom);
+
+        expect(chunks.length).toBeGreaterThan(1);
+
+        for (const piece of chunks) {
+            expect(countWords(piece)).toBeLessThanOrEqual(26);
+        }
+    });
+
     it("requires a token counter rather than guessing one", () => {
         expect.hasAssertions();
 

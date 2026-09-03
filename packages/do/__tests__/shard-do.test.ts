@@ -1,3 +1,5 @@
+import { serialize } from "node:v8";
+
 import type { IndexKeyEntry, KeyRange, MutationDelta, SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -23,6 +25,13 @@ interface FakeWebSocket {
     serializeAttachment: (value: unknown) => void;
 }
 
+/**
+ * workerd's real `serializeAttachment` ceiling, measured rather than read off a
+ * doc page — 16385 bytes throws, 8192 does not. Pinned against the live runtime
+ * in `__tests__/workerd/shard-do.workerd.test.ts`.
+ */
+const ATTACHMENT_LIMIT_BYTES = 16_384;
+
 const createFakeWebSocket = (): FakeWebSocket => {
     const ws: FakeWebSocket = {
         attachment: undefined,
@@ -38,6 +47,15 @@ const createFakeWebSocket = (): FakeWebSocket => {
         },
         sent: [],
         serializeAttachment(value: unknown) {
+            // The runtime structured-clones the attachment and refuses anything
+            // over its ceiling. Enforced here because the per-socket
+            // subscription cap is only honest if the attachment it produces
+            // actually fits — a fake that accepts any size lets the cap drift
+            // above the budget with every test still green.
+            if (serialize(value).byteLength > ATTACHMENT_LIMIT_BYTES) {
+                throw new RangeError(`A WebSocket 'attachment' cannot be larger than ${String(ATTACHMENT_LIMIT_BYTES)} bytes.`);
+            }
+
             this.attachment = value as SocketAttachment | undefined;
         },
     };
@@ -117,6 +135,9 @@ class TestShard extends ShardDO {
  * having `handleRpc` record a changed table, which `fetch` flushes.
  */
 class ReexecShard extends ShardDO {
+    /** The protected per-socket cap, surfaced so the suite asserts against the real number. */
+    public static readonly cap = ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET;
+
     /** functionPath -> the outcome `executeSubscription` should return next. */
     public readonly outcomes = new Map<string, SubscriptionOutcome>();
 
@@ -192,6 +213,8 @@ class ReexecShard extends ShardDO {
         );
     }
 }
+
+const SUBSCRIPTION_CAP = ReexecShard.cap;
 
 describe("shardDO", () => {
     let state: ReturnType<typeof createFakeState>;
@@ -933,6 +956,205 @@ describe("shardDO subscription re-execution", () => {
         await shard.writeRpc();
 
         expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ data: [{ sessionId: "a", x: 50, y: 80 }], id: "sub-1", type: "data" });
+    });
+
+    it("refuses to subscribe a paid (.x402) query instead of seeding it free", async () => {
+        expect.assertions(4);
+
+        // Stands in for the codegen override that consults `LUNORA_FUNCTIONS[path].x402`.
+        class PaidShard extends ReexecShard {
+            // eslint-disable-next-line class-methods-use-this -- override hook; the registry lookup needs no instance state
+            protected override isPaidFunction(functionPath: string): boolean {
+                return functionPath === "cursors:listCursors";
+            }
+        }
+
+        const shard = new PaidShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+
+        await subscribe(shard, ws);
+
+        // The paywall lives at the origin worker, which a WebSocket never
+        // crosses: the shard must answer with the batch gate's refusal, seed
+        // nothing, and register nothing — so no later poke can leak it either.
+        expect(JSON.parse(ws.sent[0]!)).toEqual({
+            code: "BAD_REQUEST",
+            error: {
+                code: "BAD_REQUEST",
+                message: 'paid (`.x402`) function "cursors:listCursors" cannot be subscribed; call it individually over /_lunora/rpc',
+            },
+            id: "sub-1",
+            type: "error",
+        });
+        expect(ws.sent).toHaveLength(1);
+        expect(shard.execCount).toBe(0);
+        expect(ws.attachment).toEqual({ subs: {} });
+    });
+
+    it("drops a subscription registered before the paywall on the next refresh", async () => {
+        expect.assertions(4);
+
+        // A socket that subscribed while the query was free, then the query was
+        // paywalled by a later deploy. The registration gate in `subscribe` has
+        // already run; only the refresh sweep can still see this one.
+        class LatePaywallShard extends ReexecShard {
+            public paywalled = false;
+
+            protected override isPaidFunction(functionPath: string): boolean {
+                return this.paywalled && functionPath === "cursors:listCursors";
+            }
+        }
+
+        const shard = new LatePaywallShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+        await subscribe(shard, ws);
+
+        expect(Object.keys(ws.attachment?.subs ?? {})).toEqual(["sub-1"]);
+
+        shard.paywalled = true;
+        shard.changedTableOnRpc = "cursors";
+
+        const execBefore = shard.execCount;
+
+        await shard.writeRpc();
+
+        // Never re-run, so no paid result is pushed...
+        expect(shard.execCount).toBe(execBefore);
+        // ...the client is told why...
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({
+            code: "BAD_REQUEST",
+            error: {
+                code: "BAD_REQUEST",
+                message: 'paid (`.x402`) function "cursors:listCursors" cannot be subscribed; call it individually over /_lunora/rpc',
+            },
+            id: "sub-1",
+            type: "error",
+        });
+        // ...and the registration is gone, so the next flush skips it too.
+        expect(ws.attachment?.subs).toEqual({});
+    });
+
+    it("shares the per-socket cap between subscriptions and shapes", async () => {
+        expect.assertions(1);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        // The cap bounds what ONE attachment holds, and both registries live in
+        // it — a socket that registered its shapes first must not then get a
+        // second full allowance of subscriptions.
+        shard.registerSocket(ws, {
+            shapes: Object.fromEntries(Array.from({ length: SUBSCRIPTION_CAP }, (_, index) => [`shape-${String(index)}`, { args: {}, name: "board" }])),
+            subs: {},
+        });
+
+        await subscribe(shard, ws);
+
+        expect(JSON.parse(ws.sent[0]!)).toEqual({
+            code: "TOO_MANY_SUBSCRIPTIONS",
+            error: {
+                code: "TOO_MANY_SUBSCRIPTIONS",
+                message: `subscription cap of ${String(SUBSCRIPTION_CAP)} reached on this socket (live queries and shapes share it); unsubscribe an idle one, or open a second socket`,
+            },
+            id: "sub-1",
+            type: "error",
+        });
+    });
+
+    it("keeps a socket filled to the cap inside the runtime's attachment budget", async () => {
+        expect.assertions(3);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        // A realistic signed-in socket: every fixed field the upgrade stamps.
+        shard.registerSocket(ws, {
+            clientId: "9f8c0e1a-3b7d-4f52-9a11-6c2d8e4b0f37",
+            connectionId: "1b3d5f70-2a4c-4e68-8d90-ab12cd34ef56",
+            expiresAt: 1_900_000_000_000,
+            identity: { roles: ["member"] },
+            subs: {},
+            userId: "user".padEnd(32, "0"),
+        });
+
+        // ...and realistic subscriptions: a namespaced path, one id argument, a
+        // page size, and the resume cursor + epoch the client sends back.
+        const register = (index: number): Promise<void> =>
+            shard.driveMessage(ws, {
+                id: `sub-${String(index)}`,
+                query: {
+                    args: { channelId: "channel".padEnd(32, "0"), limit: 50 },
+                    functionPath: "messages:listByChannel",
+                    sinceEpoch: "6f1c2d38-9b40-4a7e-8c15-2d3e4f506172",
+                    sinceSeq: 12_345 + index,
+                    table: "messages",
+                },
+                type: "subscribe",
+            });
+
+        for (let index = 0; index < SUBSCRIPTION_CAP; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- registrations must land one at a time; each re-serializes the attachment
+            await register(index);
+        }
+
+        // Every registration up to the cap persisted — none of them was refused
+        // by the fake's serialize gate.
+        expect(Object.keys(ws.attachment?.subs ?? {})).toHaveLength(SUBSCRIPTION_CAP);
+        expect(serialize(ws.attachment).byteLength).toBeLessThanOrEqual(ATTACHMENT_LIMIT_BYTES);
+
+        // Past the cap the answer is the CAP, not a persist failure — which is
+        // what a ceiling above the byte budget produced instead.
+        await register(SUBSCRIPTION_CAP);
+
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({
+            code: "TOO_MANY_SUBSCRIPTIONS",
+            error: {
+                code: "TOO_MANY_SUBSCRIPTIONS",
+                message: `subscription cap of ${String(SUBSCRIPTION_CAP)} reached on this socket (live queries and shapes share it); unsubscribe an idle one, or open a second socket`,
+            },
+            id: `sub-${String(SUBSCRIPTION_CAP)}`,
+            type: "error",
+        });
+    });
+
+    it("refuses an attachment over the byte budget with the limit and a way out", async () => {
+        expect.assertions(2);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { subs: {} });
+
+        // One registration, well under the count cap, whose args alone blow the
+        // attachment budget. The count cap cannot see this — args are the
+        // client's to choose — so the byte budget is the only thing between it
+        // and a socket that can never be persisted again.
+        await shard.driveMessage(ws, {
+            id: "sub-huge",
+            query: { args: { blob: "x".repeat(ATTACHMENT_LIMIT_BYTES * 2) }, functionPath: "messages:listByChannel", table: "messages" },
+            type: "subscribe",
+        });
+
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({
+            code: "SUBSCRIPTION_PERSIST_FAILED",
+            error: {
+                code: "SUBSCRIPTION_PERSIST_FAILED",
+                message:
+                    `failed to persist the socket attachment, which must stay under the ${String(ATTACHMENT_LIMIT_BYTES)}-byte hibernation limit ` +
+                    `(live queries and shapes share it); shrink the subscription's arguments, unsubscribe an idle one, or open a second socket`,
+            },
+            id: "sub-huge",
+            type: "error",
+        });
+
+        // Rolled back, not half-registered: the socket is still usable.
+        expect(ws.attachment?.subs).toEqual({});
     });
 
     it("re-executes but does not re-send when the result is byte-identical", async () => {

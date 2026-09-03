@@ -49,7 +49,7 @@
 export type { SearchAnalyzer } from "./analyzer";
 export { createSearchAnalyzer, MAX_TOKEN_LENGTH } from "./analyzer";
 export type { SearchBackfillPass, SearchBackfillState } from "./backfill";
-export { planSearchBackfillPass, searchIndexProfile } from "./backfill";
+export { planSearchBackfillPass, searchCoverageSurvives, searchIndexProfile } from "./backfill";
 export type { SearchLanguage, SearchStrategy } from "./languages";
 export { isSearchLanguage, isSearchStrategy, SEARCH_LANGUAGES, SEARCH_STRATEGIES } from "./languages";
 export type { SearchBuilderLike, SearchPage, SearchPagePlan, SearchStageLike } from "./query";

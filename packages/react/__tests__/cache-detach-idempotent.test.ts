@@ -23,14 +23,34 @@ const buildClient = (): { client: LunoraClient; subscribe: ReturnType<typeof vi.
     return { client, subscribe, unsubscribes };
 };
 
+describe("lunoraSubscriptionRegistry attach failures", () => {
+    it("rethrows a subscribe failure and leaves no half-registered entry behind", () => {
+        expect.assertions(3);
+
+        const subscribe = vi.fn<() => Unsubscribe>(() => {
+            throw new Error("client is closed");
+        });
+        const registry = new LunoraSubscriptionRegistry({ subscribe } as unknown as LunoraClient);
+        const queryClient = {} as QueryClient;
+
+        // A closed client (or unencodable args) is a programming error. Swallowing
+        // it behind a 5s `invalidateQueries` loop only hid the stack.
+        expect(() => registry.attach(queryClient, KEY, FN, {}, undefined)).toThrow("client is closed");
+
+        // The failed attach registered nothing, so the next one really retries.
+        expect(() => registry.attach(queryClient, KEY, FN, {}, undefined)).toThrow("client is closed");
+        expect(subscribe).toHaveBeenCalledTimes(2);
+    });
+});
+
 describe("lunoraSubscriptionRegistry detach idempotency", () => {
     it("a second call of the same detach is a no-op and never closes a re-attached consumer's subscription", () => {
         expect.assertions(5);
 
         const { client, subscribe, unsubscribes } = buildClient();
         const registry = new LunoraSubscriptionRegistry(client);
-        // Only the subscribe callback / poll fallback touch the QueryClient, and
-        // neither runs here — a bare stub is enough.
+        // Only the subscribe callback touches the QueryClient, and it never runs
+        // here — a bare stub is enough.
         const queryClient = {} as QueryClient;
 
         // Consumer A attaches, then fully detaches (entry deleted, sub A closed).

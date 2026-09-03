@@ -64,7 +64,15 @@ export interface StorageRule<Context = unknown> {
      */
     readonly bucket: string;
     readonly on: StorageOperation;
-    /** Optional key-prefix scope; the rule only governs keys under it. Absent ⇒ the whole bucket. */
+
+    /**
+     * Optional key-prefix scope; the rule only governs keys under it. Absent (or
+     * empty) ⇒ the whole bucket.
+     *
+     * Matched on a **path-segment boundary**: `users/1` governs `users/1` and
+     * `users/1/avatar.png`, but NOT `users/10/avatar.png`. A trailing slash is
+     * cosmetic — `users/1` and `users/1/` scope the same subtree.
+     */
     readonly prefix?: string;
     readonly when: (context: StorageRuleContext<Context>) => StorageRuleDecision;
 }

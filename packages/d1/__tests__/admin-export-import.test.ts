@@ -101,6 +101,7 @@ describe("d1 admin export/import globals", () => {
             `CREATE TABLE "settings" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
+            "_version" INTEGER,
             "name" TEXT,
             "nickname" TEXT,
             "note" TEXT,
@@ -365,6 +366,7 @@ describe("d1 admin export/import globals", () => {
                 `CREATE TABLE "ledger" (
                 "id" TEXT PRIMARY KEY,
                 "_creationTime" INTEGER NOT NULL,
+                "_version" INTEGER,
                 "blob" BLOB,
                 "cents" TEXT
             )`,
@@ -397,6 +399,7 @@ describe("d1 admin export/import globals", () => {
                 `CREATE TABLE "ledger" (
                 "id" TEXT PRIMARY KEY,
                 "_creationTime" INTEGER NOT NULL,
+                "_version" INTEGER,
                 "blob" BLOB,
                 "cents" TEXT
             )`,
@@ -437,6 +440,7 @@ describe("d1 admin export/import globals", () => {
                 `CREATE TABLE "settings" (
                 "id" TEXT PRIMARY KEY,
                 "_creationTime" INTEGER NOT NULL,
+                "_version" INTEGER,
                 "name" TEXT,
                 "nickname" TEXT,
                 "note" TEXT,
@@ -488,6 +492,7 @@ describe("d1 admin export/import globals", () => {
                 `CREATE TABLE "settings" (
                 "id" TEXT PRIMARY KEY,
                 "_creationTime" INTEGER NOT NULL,
+                "_version" INTEGER,
                 "name" TEXT,
                 "nickname" TEXT,
                 "note" TEXT,
@@ -539,6 +544,7 @@ describe("d1 admin export/import globals", () => {
                 `CREATE TABLE "settings" (
                 "id" TEXT PRIMARY KEY,
                 "_creationTime" INTEGER NOT NULL,
+                "_version" INTEGER,
                 "name" TEXT,
                 "nickname" TEXT,
                 "note" TEXT,

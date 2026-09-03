@@ -32,10 +32,15 @@ override them.
 
 ## Structural matching
 
-`isLunoraError(error)` recognizes any error carrying the transport shape (a
-string `code` + numeric `status`), including errors rebuilt from the wire, where
-`instanceof` can't be trusted. The runtime and Durable Object mappers use it to
-choose the response status.
+`isLunoraError(error)` recognizes an error carrying the Lunora transport shape —
+a string `code`, a numeric `status`, **and** the `type: "VisulimaError"` brand —
+including errors rebuilt from the wire, where `instanceof` can't be trusted. The
+runtime and Durable Object mappers use it to choose the response status.
+
+The brand is deliberate: a foreign error that merely happens to carry
+`code`/`status` (a third-party client, a hand-built object) is **not** matched,
+so it is redacted to `INTERNAL`/500 rather than having its status echoed. Throw a
+`LunoraError` when you want a status honoured.
 
 ## Invariants
 

@@ -283,7 +283,7 @@ describe("search layouts", () => {
             // Spelled out rather than derived: the profile is a stored format,
             // so a change here should be a visible edit that says "every index
             // built under the old rules now rebuilds", not a silent pass.
-            expect([fts5, inverted]).toStrictEqual(["none-v2:body/fts5", "none-v2:body/inverted"]);
+            expect([fts5, inverted]).toStrictEqual(["none-v3:body/fts5", "none-v3:body/inverted"]);
         });
 
         it("separates two indexes that differ only in the field they index", () => {

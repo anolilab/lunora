@@ -1,4 +1,4 @@
-import type { FunctionReference, LunoraClient, Preloaded } from "@lunora/client";
+import type { FunctionReference, LunoraClient, Preloaded, SubscriptionErrorCallback } from "@lunora/client";
 import type { Readable } from "svelte/store";
 import { readable } from "svelte/store";
 
@@ -17,7 +17,9 @@ import { getLunoraClient } from "./context";
  * `usePreloadedQuery`.
  *
  * Pass `client` explicitly, or omit it to resolve the ambient client published
- * by `setLunoraClient`.
+ * by `setLunoraClient`. Pass `onError` to surface a subscription-scoped error the
+ * server pushes (a session expiry, an RLS denial); without it such an error is
+ * dropped and the store keeps rendering the SSR snapshot as if it were live.
  *
  * Note on SSR: `readable`'s start callback only runs when the store is actually
  * subscribed (the browser), so on the server the store simply holds the seeded
@@ -25,7 +27,7 @@ import { getLunoraClient } from "./context";
  * for the first paint either way.
  */
 // eslint-disable-next-line import/prefer-default-export -- the package barrel re-exports every store by name; a default here would break the `import { hydratePreloaded } from "@lunora/svelte"` surface.
-export const hydratePreloaded = <T>(preloaded: Preloaded<T>, client?: LunoraClient): Readable<T> => {
+export const hydratePreloaded = <T>(preloaded: Preloaded<T>, client?: LunoraClient, options: { onError?: SubscriptionErrorCallback } = {}): Readable<T> => {
     const resolvedClient = client ?? getLunoraClient();
     const { args, functionPath, shardKey, value } = preloaded;
     const functionRef: FunctionReference = { __lunoraRef: functionPath };
@@ -40,7 +42,7 @@ export const hydratePreloaded = <T>(preloaded: Preloaded<T>, client?: LunoraClie
             (next: unknown) => {
                 set(next as T);
             },
-            { shardKey },
+            { onError: options.onError, shardKey },
         ),
     );
 };

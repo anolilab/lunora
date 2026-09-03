@@ -17,6 +17,7 @@
  * `Headers`/`URL`, so it unit-tests under plain Node without workerd.
  */
 
+import { isEnvDisabled, isEnvEnabled } from "../../../shared/env-flag";
 import { LunoraError } from "./errors";
 
 /** Per-header overrides for {@link SecurityHeadersOptions}. `false` omits the header. */
@@ -273,8 +274,16 @@ const resolveCors = (input: CorsOptions | false | undefined): ResolvedCors => {
     if (typeof origins === "function") {
         // A custom predicate is an explicit developer decision, so it counts for CSRF
         // trust in both directions.
-        isAllowed = origins;
-        isExplicitlyAllowed = origins;
+        //
+        // Wrapped ONCE here rather than at the three consumers (preflight, header
+        // reflection, and the CSRF trusted-origin decision), all of which test it
+        // truthily. It is app code: a predicate written as `origins.indexOf(o)` or
+        // `TRUSTED.find(...)` returns a number or an object, and every non-`true`
+        // truthy value would allow the origin.
+        const allowsOrigin = (origin: string): boolean => (origins(origin) as unknown) === true;
+
+        isAllowed = allowsOrigin;
+        isExplicitlyAllowed = allowsOrigin;
 
         // A predicate bypasses the array path's wildcard+credentials guard, and it
         // is also assigned to `isExplicitlyAllowed` above — meaning the CSRF and
@@ -326,18 +335,6 @@ const resolveCsrf = (input: boolean | CsrfOptions | undefined): ResolvedCsrf => 
     return { allowLoopback: options.allowLoopback ?? true, enabled: true, trustedOrigins: options.trustedOrigins ?? [] };
 };
 
-/** Env values that read as "disable this layer" for the `LUNORA_SECURITY_*` opt-out vars. */
-const DISABLED_ENV_VALUES = new Set(["0", "disabled", "false", "no", "off"]);
-
-/** Env values that read as "on" for a boolean-ish flag like `LUNORA_CORS_ALLOW_CREDENTIALS`. */
-const ENABLED_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
-
-/** True when an env var is explicitly set to a disable value (`off`, `false`, `0`, …). */
-const isEnvDisabled = (value: unknown): boolean => typeof value === "string" && DISABLED_ENV_VALUES.has(value.trim().toLowerCase());
-
-/** True when an env var is explicitly set to an enable value (`on`, `true`, `1`, …). */
-const isEnvEnabled = (value: unknown): boolean => typeof value === "string" && ENABLED_ENV_VALUES.has(value.trim().toLowerCase());
-
 /**
  * Build a {@link CorsOptions} from the deployment env when CORS isn't configured
  * in code. `LUNORA_ALLOWED_ORIGINS` is a comma-separated allowlist (a single `*`
@@ -386,8 +383,16 @@ const parseEnvCors = (env: Record<string, unknown> | undefined): CorsOptions | u
  * and `LUNORA_ALLOWED_ORIGINS` / `LUNORA_CORS_ALLOW_CREDENTIALS` configure CORS
  * when it isn't set in code. **Code config wins** — an explicit `security.*` in
  * {@link SecurityOptions} overrides the matching env knob — so the env var only
- * relaxes or fills the secure default, and the DO security audit (which reads the
- * same vars) and the running worker stay in agreement.
+ * relaxes or fills the secure default.
+ *
+ * That precedence is exactly why the two can disagree, so pick one place per
+ * layer. The Durable Object's security audit (`buildSecurityAudit`) sees only
+ * `env` — the DO has no view of what was passed to `createWorker` — so
+ * `security: { headers: true }` in code plus an `off` value for
+ * `LUNORA_SECURITY_HEADERS` in env leaves the worker applying the headers while the audit reports
+ * `security-headers-disabled`, and the same holds for `csrf`. The audit is
+ * reporting the deployment var honestly; it is not a claim about the resolved
+ * worker. Setting a layer in code means leaving its env var unset.
  */
 const resolveSecurity = (security: SecurityOptions | undefined, env?: Record<string, unknown>): ResolvedSecurity => {
     const headers = security?.headers ?? (isEnvDisabled(env?.["LUNORA_SECURITY_HEADERS"]) ? false : undefined);

@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, test } from "vitest";
@@ -180,6 +180,32 @@ const REQUIRED_ADAPTER: Record<string, string | null> = {
     "vinext-pages": "@lunora/react",
 };
 
+/** Source files a template ships, minus generated output and installed deps. */
+const SOURCE_EXTENSIONS = new Set([".astro", ".svelte", ".ts", ".tsx", ".vue"]);
+const SKIPPED_DIRECTORIES = new Set(["_generated", ".next", ".nuxt", ".output", ".svelte-kit", "dist", "node_modules"]);
+
+const listSourceFiles = (directory: string): string[] =>
+    readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+        if (entry.isDirectory()) {
+            return SKIPPED_DIRECTORIES.has(entry.name) ? [] : listSourceFiles(join(directory, entry.name));
+        }
+
+        return SOURCE_EXTENSIONS.has(extname(entry.name)) ? [join(directory, entry.name)] : [];
+    });
+
+/** Drop `//` line comments so a commented-out example never reads as real code. */
+const stripLineComments = (source: string): string => source.replaceAll(/^[\t ]*\/\/.*$/gm, "");
+
+/**
+ * A call site that ROUTES to a non-default shard — `{ shardKey: channelId }` —
+ * as opposed to a type position (`shardKey?: string`) or a destructured
+ * parameter. The negative lookahead keeps `shardKey: string` out.
+ */
+const SENDS_SHARD_KEY = /\bshardKey:\s*(?!(?:null|string|undefined)\b)/;
+
+/** The worker-side gate that makes a non-default `shardKey` reachable at all. */
+const DECLARES_SHARD_GATE = /\ballowUnauthenticatedShardAccess\b|\bauthorizeShard\b/;
+
 describe("templates/* package.json validation", () => {
     test("there is at least one template", () => {
         expect(templateNames.length).toBeGreaterThan(0);
@@ -226,6 +252,26 @@ describe("templates/* package.json validation", () => {
             if (adapter !== null) {
                 expect(Object.keys(deps)).toContain(adapter);
             }
+        });
+
+        /**
+         * A template that routes a call to a non-default shard must also open or
+         * gate shard access on its worker. Without `allowUnauthenticatedShardAccess`
+         * or an `authorizeShard`, `createWorker` default-denies every
+         * `shardKey !== "__root__"` with a 403 `FORBIDDEN_SHARD` — so the scaffold's
+         * own first page load throws before a user has written a line of code.
+         */
+        test("a template that sends a shardKey declares a shard gate", () => {
+            const sources = listSourceFiles(join(TEMPLATES_DIR, templateName)).map((file) => stripLineComments(readFileSync(file, "utf8")));
+
+            if (!sources.some((source) => SENDS_SHARD_KEY.test(source))) {
+                return;
+            }
+
+            expect(
+                sources.some((source) => DECLARES_SHARD_GATE.test(source)),
+                `${templateName} routes to a non-default shard but declares neither allowUnauthenticatedShardAccess nor authorizeShard`,
+            ).toBe(true);
         });
 
         test("external framework deps are on the latest supported major", () => {

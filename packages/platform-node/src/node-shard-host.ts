@@ -12,6 +12,9 @@
  * gets to Cloudflare's Durable Object recycle-and-rehydrate cycle.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
+import { LunoraError } from "@lunora/errors";
 import type { ShardAlarms, ShardHost, ShardSqlCursor, ShardSqlExec, SqlRow } from "@lunora/platform";
 import Database from "better-sqlite3";
 
@@ -21,6 +24,17 @@ import Database from "better-sqlite3";
  * which would fire an alarm or job far ahead of its target timestamp.
  */
 const MAX_TIMEOUT_MS = 2_147_483_647;
+
+/**
+ * How many times a throwing alarm handler is re-delivered before the wakeup is
+ * abandoned, and the first backoff step. workerd retries a Durable Object's
+ * `alarm()` with exponential backoff and gives up after a bounded number of
+ * attempts; this host mirrors the shape, not the constants — its backoff starts
+ * an order of magnitude shorter because a redelivery here is a `setTimeout` in
+ * a process that is already warm, not a cold object wake.
+ */
+const ALARM_RETRY_LIMIT = 6;
+const ALARM_RETRY_BASE_MS = 100;
 
 /**
  * A `better-sqlite3` binding value. `null` (not `undefined`) is the native
@@ -51,7 +65,7 @@ const normalizeBinding = (value: unknown): SqliteBindable =>
  * host — a text-sniffing heuristic was good enough to unblock a TCK run, not
  * to ship.
  */
-const createSql = (database: Database.Database): ShardSqlExec => {
+const createSql = (database: Database.Database, assertOwnTurn: (action: string) => void): ShardSqlExec => {
     return {
         // A live getter: recomputed per read from PRAGMA, matching Cloudflare's
         // "recomputed on each read, do not cache" contract note.
@@ -62,6 +76,8 @@ const createSql = (database: Database.Database): ShardSqlExec => {
             return pageCount * pageSize;
         },
         exec: <Row = SqlRow>(query: string, ...bindings: ReadonlyArray<unknown>): ShardSqlCursor<Row> => {
+            assertOwnTurn("run SQL");
+
             const statement = database.prepare(query);
             const normalized = bindings.map((value) => normalizeBinding(value));
 
@@ -111,10 +127,33 @@ const createSql = (database: Database.Database): ShardSqlExec => {
  * A caller that supplies no `onAlarm` still gets the durable timestamp and the
  * `get()`-clears-on-fire transition; it simply has nowhere for the wakeup to
  * land.
+ *
+ * Two things follow from owning delivery that a host leaning on a runtime gets
+ * for free, and this one used to get wrong: a handler that throws is
+ * re-delivered with backoff rather than dropped, and an alarm mutation made
+ * inside a `transaction` lands with that transaction rather than ahead of it.
  */
-const createAlarms = (database: Database.Database, onAlarm?: () => Promise<void> | void): { alarms: ShardAlarms; dispose: () => void } => {
+const createAlarms = (
+    database: Database.Database,
+    transaction: { assertOwnTurn: (action: string) => void; inside: () => boolean },
+    onAlarm?: () => Promise<void> | void,
+): { alarms: ShardAlarms; commit: () => void; dispose: () => void; rollback: () => void } => {
     let alarmAt: number | undefined;
     let alarmTimeout: ReturnType<typeof setTimeout> | undefined;
+    let attempts = 0;
+
+    /**
+     * An alarm mutation made inside a `transaction`, held until it commits.
+     *
+     * The durable row is written through the caller's open transaction and
+     * rolls back with it, but the in-memory timestamp and the `setTimeout` are
+     * process state with no rollback of their own — arming them eagerly left a
+     * shard that fired an alarm this process still believed in and no restart
+     * would ever re-deliver. Deferring the arm to commit makes the two halves
+     * agree; `get()` still reads the pending value, because a transaction must
+     * observe its own writes.
+     */
+    let pending: undefined | { at: number | undefined };
 
     database.exec("CREATE TABLE IF NOT EXISTS _lunora_alarm (id INTEGER PRIMARY KEY CHECK (id = 0), scheduled_for INTEGER NOT NULL)");
 
@@ -185,11 +224,34 @@ const createAlarms = (database: Database.Database, onAlarm?: () => Promise<void>
 
             (async (): Promise<void> => {
                 await onAlarm?.();
+                attempts = 0;
             })().catch(() => {
-                // Delivery is the caller's business. A throwing handler must
-                // not become an unhandled rejection that takes the process
-                // down — Cloudflare likewise isolates an `alarm()` that
-                // throws to that invocation.
+                // A throwing handler must not become an unhandled rejection
+                // that takes the process down — but it must not lose the wakeup
+                // either. workerd isolates a throwing `alarm()` AND re-delivers
+                // it with backoff; a host that only isolated it deleted the row
+                // before delivery and then swallowed the rejection, so nothing
+                // re-armed and the loop that alarm drives (a TTL sweep, a
+                // global-shape poll, a scheduler GC) stopped for good.
+                if (!database.open || alarmAt !== undefined) {
+                    // Nothing to retry against, or the handler rescheduled
+                    // before it failed — that alarm owns the next wakeup.
+                    return;
+                }
+
+                attempts += 1;
+
+                if (attempts > ALARM_RETRY_LIMIT) {
+                    attempts = 0;
+
+                    return;
+                }
+
+                const retryAt = Date.now() + ALARM_RETRY_BASE_MS * 2 ** (attempts - 1);
+
+                alarmAt = retryAt;
+                persist(retryAt);
+                arm(retryAt);
             });
         }, delay);
     };
@@ -204,26 +266,76 @@ const createAlarms = (database: Database.Database, onAlarm?: () => Promise<void>
                 throw new Error("platform closed: cannot delete an alarm");
             }
 
+            transaction.assertOwnTurn("delete an alarm");
+
+            attempts = 0;
+            persist(undefined);
+
+            if (transaction.inside()) {
+                pending = { at: undefined };
+
+                return;
+            }
+
             alarmAt = undefined;
             clearAlarmTimeout();
-            persist(undefined);
         },
         // The contract's `get` returns `number | null`, not `number | undefined`
         // — the one place this file's internal `undefined` convention has to
         // cross back over the contract boundary.
         // eslint-disable-next-line unicorn/no-null -- platform contract uses null
-        get: () => alarmAt ?? null,
+        get: () => (pending === undefined ? alarmAt : pending.at) ?? null,
         set: (timestamp: number | Date) => {
             if (!database.open) {
                 throw new Error("platform closed: cannot set an alarm");
             }
 
+            transaction.assertOwnTurn("set an alarm");
+
             const ms = typeof timestamp === "number" ? timestamp : timestamp.getTime();
 
-            alarmAt = ms;
+            attempts = 0;
             persist(ms);
+
+            if (transaction.inside()) {
+                pending = { at: ms };
+
+                return;
+            }
+
+            alarmAt = ms;
             arm(ms);
         },
+    };
+
+    /** Apply an alarm mutation the enclosing transaction just committed. */
+    const commit = (): void => {
+        if (pending === undefined) {
+            return;
+        }
+
+        const { at } = pending;
+
+        pending = undefined;
+
+        if (at === undefined) {
+            alarmAt = undefined;
+            clearAlarmTimeout();
+
+            return;
+        }
+
+        alarmAt = at;
+        arm(at);
+    };
+
+    /**
+     * Discard an alarm mutation whose transaction rolled back. The durable row
+     * rolled back with it and the in-memory state was never touched, so
+     * dropping the pending value is the whole undo.
+     */
+    const rollback = (): void => {
+        pending = undefined;
     };
 
     // Re-arm whatever the last process left behind. `Math.max(0, …)` inside
@@ -236,7 +348,7 @@ const createAlarms = (database: Database.Database, onAlarm?: () => Promise<void>
         arm(restored.scheduled_for);
     }
 
-    return { alarms, dispose: clearAlarmTimeout };
+    return { alarms, commit, dispose: clearAlarmTimeout, rollback };
 };
 
 /** Options for {@link createNodeShardHost}. */
@@ -248,9 +360,12 @@ interface NodeShardHostOptions {
      * `_lunora_alarm` when the host is constructed over an existing database,
      * including an alarm whose time elapsed while nothing was running.
      *
-     * A handler that throws is isolated to its own delivery; it never reaches
+     * A handler that throws is isolated to its own delivery — it never reaches
      * the caller that set the alarm, because by then that call has long
-     * returned.
+     * returned — and the wakeup is then re-delivered with backoff up to
+     * {@link ALARM_RETRY_LIMIT} times, the way workerd retries a throwing
+     * `alarm()`. Delivery is at-least-once, so the handler must tolerate
+     * running twice for one scheduled timestamp.
      */
     onAlarm?: () => Promise<void> | void;
 
@@ -307,8 +422,45 @@ const createNodeShardHost = (
 
     database.pragma("journal_mode = WAL");
 
-    const sql = createSql(database);
-    const { alarms, dispose: disposeAlarms } = createAlarms(database, options.onAlarm);
+    /**
+     * Whether the caller is running inside this host's own `transaction`.
+     *
+     * Cloudflare's isolation here is the input gate: while a mutation holds
+     * `blockConcurrencyWhile`, no other event is delivered to the object, so
+     * nothing else can read the transaction's uncommitted rows. A Node process
+     * has no such gate — dispatch never enters this host — and every caller
+     * shares one `better-sqlite3` connection, on which an open `BEGIN`'s writes
+     * are visible to any read issued from another task while the mutation
+     * awaits real I/O. `ShardSqlExec.exec` is synchronous and so cannot be
+     * queued behind the closure the way Cloudflare queues the whole dispatch;
+     * what it CAN do is refuse, which keeps `ShardHost`'s "no partial writes are
+     * observable" true instead of answering with rows that are about to roll
+     * back.
+     *
+     * The refusal is `SHARD_UNAVAILABLE`/503 — catalogued and retryable —
+     * rather than a bare `Error`. A query dispatch is deliberately NOT inside
+     * the transaction's scope, so on this host every read that lands while a
+     * mutation is mid-await is refused; an uncatalogued throw is redacted to an
+     * `INTERNAL` 500 by `toErrorBody`, which no client retries, turning an
+     * ordinary "not this instant" into a hard failure. `SHARD_UNAVAILABLE` is
+     * already in the runtime's and the client's transient set.
+     */
+    const transactionScope = new AsyncLocalStorage<true>();
+    let transactionOpen = false;
+
+    const assertOwnTurn = (action: string): void => {
+        if (transactionOpen && transactionScope.getStore() !== true) {
+            throw new LunoraError("SHARD_UNAVAILABLE", `shard busy: cannot ${action} while another task holds this shard's transaction`);
+        }
+    };
+
+    const sql = createSql(database, assertOwnTurn);
+    const {
+        alarms,
+        commit: commitAlarms,
+        dispose: disposeAlarms,
+        rollback: rollbackAlarms,
+    } = createAlarms(database, { assertOwnTurn, inside: () => transactionScope.getStore() === true }, options.onAlarm);
 
     /**
      * Background work handed to `waitUntil`, held until it settles.
@@ -356,14 +508,20 @@ const createNodeShardHost = (
 
     const runTransaction = async <T>(function_: () => Promise<T>): Promise<T> => {
         database.exec("BEGIN");
+        transactionOpen = true;
 
         try {
-            const result = await function_();
+            const result = await transactionScope.run(true, function_);
 
             database.exec("COMMIT");
+            transactionOpen = false;
+            commitAlarms();
 
             return result;
         } catch (error) {
+            transactionOpen = false;
+            rollbackAlarms();
+
             try {
                 database.exec("ROLLBACK");
             } catch {

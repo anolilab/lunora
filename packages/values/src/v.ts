@@ -1092,6 +1092,12 @@ const failUnion = (memberInternals: ReadonlyArray<InternalValidator<unknown>>, v
     const { path } = context;
     // Keep the deepest (longest-path) branch failure — the most specific detail.
     let deepestError: ValidationError | undefined;
+    // A member that redacted the value (a `.check()` miss on a secret-bearing
+    // field) described it by its bare type tag. The union's own diagnostic wraps
+    // that miss and must withhold the same literal, whichever member it was —
+    // otherwise `v.union(password, …)` echoed what `password` alone did not.
+    const bareTag = describeValue(value, { literal: false });
+    let redactValue = false;
 
     for (const member of memberInternals) {
         try {
@@ -1102,6 +1108,7 @@ const failUnion = (memberInternals: ReadonlyArray<InternalValidator<unknown>>, v
             }
 
             path.length = baseDepth;
+            redactValue ||= error.received === bareTag;
 
             if (deepestError === undefined || error.path.length > deepestError.path.length) {
                 deepestError = error;
@@ -1117,7 +1124,7 @@ const failUnion = (memberInternals: ReadonlyArray<InternalValidator<unknown>>, v
 
     const detail = deepestError === undefined ? "" : ` (closest: expected ${deepestError.expected} at ${formatPath(deepestError.path)})`;
 
-    return fail(context, `union of ${String(memberInternals.length)} member(s)${detail}`, value);
+    return fail(context, `union of ${String(memberInternals.length)} member(s)${detail}`, value, { redactValue });
 };
 
 const union = <Vs extends ReadonlyArray<Validator>>(...members: Vs): ColumnValidator<Infer<Vs[number]>, Infer<Vs[number]>> => {

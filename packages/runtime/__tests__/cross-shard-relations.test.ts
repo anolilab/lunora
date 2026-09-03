@@ -201,6 +201,26 @@ describe("createCrossShardRelationCapabilities", () => {
         await expect(capabilities.crossShardReader("local", { where: {} })).rejects.toThrow(/worker returned 403/u);
     });
 
+    it("denies the fan-out when `authorizeFanOut` returns a truthy non-boolean", async () => {
+        expect.assertions(1);
+
+        // This gate stands in front of the RLS-blind `__lunora_relation__:*`
+        // cross-shard raw-row reads, so a truthy-but-not-`true` verdict from an
+        // untyped app gate would expose every shard's rows.
+        const cluster = createShardCluster({ s1: [{ _id: "l1" }] }, {});
+        const worker = createWorker({
+            authorizeFanOut: () => ({ valid: false }) as unknown as boolean,
+            queryCoordinator: createQueryCoordinator({ registry: createStaticShardRegistry({ local: ["s1", "s2"] }) }),
+            shardDO: cluster.namespace,
+        });
+        const capabilities = createCrossShardRelationCapabilities({
+            fetch: ((request: Request) => worker.fetch(request, {}, fakeContext)) as typeof globalThis.fetch,
+            origin: "https://worker.test",
+        });
+
+        await expect(capabilities.crossShardReader("local", { where: {} })).rejects.toThrow(/worker returned 403/u);
+    });
+
     it("default-denies the reserved fan-out under the open posture (no authorize* configured)", async () => {
         expect.assertions(2);
 

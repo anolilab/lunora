@@ -2,8 +2,10 @@
  * Convert a {@link SchemaIR} from `@lunora/codegen` into a {@link SchemaSnapshot}
  * suitable for diffing against the persisted `.snapshot.json`.
  *
- * Only **global** (`.global()`-marked) tables are persisted — shard-local and
- * root-DO tables live in per-DO SQLite and do not need D1 migrations.
+ * Only **D1-backed global** (`.global()`-marked) tables are persisted —
+ * shard-local and root-DO tables live in per-DO SQLite, and
+ * `.global({ backend: "hyperdrive" })` tables live in a Postgres/MySQL database
+ * that provisions itself; neither needs a D1 migration.
  */
 import type { SchemaIR, ValidatorIR } from "@lunora/codegen";
 import { buildSchemaSnapshot } from "@lunora/codegen";
@@ -25,7 +27,20 @@ const validatorToColumn = (validator: ValidatorIR): ColumnSnapshot => {
     };
 };
 
-const isGlobal = (mode: SchemaIR["tables"][number]["shardMode"]): boolean => mode === "global";
+/**
+ * Is this table one the D1 migration generator owns?
+ *
+ * `.global()` alone is not the answer: `.global({ backend: "hyperdrive" })`
+ * stores the table in a Postgres/MySQL database reached through Hyperdrive, and
+ * that database provisions itself from the schema at runtime
+ * (`runSqlGlobalTableMigrations`). Including it here emitted SQLite DDL —
+ * double-quoted identifiers, `REAL` affinity — into a file the docs label "D1
+ * SQL", which creates a phantom table if it is ever applied to D1 and is invalid
+ * on MySQL. There is no dialect seam in the emitter (it renders through
+ * `@lunora/d1/dialect` directly), so the honest answer is to leave those tables
+ * out of the snapshot entirely.
+ */
+const isGlobal = (table: SchemaIR["tables"][number]): boolean => table.shardMode === "global" && table.globalBackend !== "hyperdrive";
 
 const schemaIrToSnapshot = (ir: SchemaIR): SchemaSnapshot => {
     const tables: Record<string, TableSnapshot> = {};
@@ -36,7 +51,7 @@ const schemaIrToSnapshot = (ir: SchemaIR): SchemaSnapshot => {
     const structural = buildSchemaSnapshot(ir, []);
 
     for (const table of ir.tables) {
-        if (!isGlobal(table.shardMode)) {
+        if (!isGlobal(table)) {
             continue;
         }
 

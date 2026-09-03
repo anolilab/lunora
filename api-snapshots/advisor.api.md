@@ -735,7 +735,6 @@ interface AdvisorTable {
     indexes: ReadonlyArray<AdvisorIndex>;
     isPublic?: boolean;
     name: string;
-    optionalFields?: ReadonlySet<string>;
     relations: ReadonlyArray<AdvisorRelation>;
     shardKind?: "global" | "root" | "shardBy";
     softDelete?: {
@@ -745,18 +744,6 @@ interface AdvisorTable {
         after?: number;
         field: string;
     };
-}
-```
-
-### `AdvisorTableSample` (interface)
-
-```ts
-interface AdvisorTableSample {
-    readonly cap: number;
-    readonly existingIds: ReadonlySet<string>;
-    readonly rows: ReadonlyArray<Record<string, unknown>>;
-    readonly table: string;
-    readonly truncated: boolean;
 }
 ```
 
@@ -992,7 +979,6 @@ interface LintContext {
     staleMigrationImports?: ReadonlyArray<AdvisorStaleMigrationImport>;
     storageKeyAccesses?: ReadonlyArray<AdvisorStorageKeyAccess>;
     storageUploads?: ReadonlyArray<AdvisorStorageUpload>;
-    tableSamples?: ReadonlyArray<AdvisorTableSample>;
     tableScans?: ReadonlyArray<AdvisorTableScan>;
     unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
     vectorNamespaceAccesses?: ReadonlyArray<AdvisorVectorNamespaceAccess>;
@@ -1239,12 +1225,6 @@ const commitOrderedHardDelete: Lint;
 
 ```ts
 const compareToBaseline: (current: AdvisorMap, baseline: AdvisorMap) => BaselineComparison;
-```
-
-### `constraintValidator` (const)
-
-```ts
-const constraintValidator: Lint;
 ```
 
 ### `containerInstanceKeyFromUserInput` (const)

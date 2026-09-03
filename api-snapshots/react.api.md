@@ -394,6 +394,7 @@ interface UseAgentChatOptions {
     api: UseAgentChatApi;
     cancel?: FunctionReference<"mutation">;
     limit?: number;
+    onError?: SubscriptionErrorCallback;
     send: FunctionReference<"mutation">;
     sendArgs?: Record<string, unknown>;
     stream?: AgentTokenStreamReference;
@@ -407,6 +408,7 @@ interface UseAgentChatOptions {
 interface UseAgentChatResult {
     approve: (toolCallId: string, note?: string) => Promise<void>;
     cancel: () => Promise<void>;
+    error: Error | undefined;
     messages: ReadonlyArray<AgentChatMessage>;
     reject: (toolCallId: string, note?: string) => Promise<void>;
     send: (input: string, args?: Record<string, unknown>) => Promise<void>;
@@ -421,6 +423,7 @@ interface UseAgentChatResult {
 interface UseAgentOptions {
     api: UseAgentApi;
     cancel?: FunctionReference<"mutation">;
+    onError?: SubscriptionErrorCallback;
     run: FunctionReference<"mutation">;
     runArgs?: Record<string, unknown>;
     threadKey: string;
@@ -432,6 +435,7 @@ interface UseAgentOptions {
 ```ts
 interface UseAgentResult {
     cancel: () => Promise<void>;
+    error: Error | undefined;
     pending: boolean;
     run: (input: string, args?: Record<string, unknown>) => Promise<void>;
     status: AgentThreadStatus | undefined;
@@ -570,6 +574,7 @@ interface UseImpersonateResult {
 ```ts
 interface UseInfiniteQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -578,6 +583,7 @@ interface UseInfiniteQueryOptions {
 
 ```ts
 interface UseInfiniteQueryResult<T> {
+    error: SubscriptionError | undefined;
     fetchNextPage: (numberItems?: number) => void;
     hasNextPage: boolean;
     isFetchingNextPage: boolean;
@@ -616,6 +622,7 @@ type UseOrganizationsOptions = AdminAuthQueryOptions;
 ```ts
 interface UsePaginatedQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -624,6 +631,7 @@ interface UsePaginatedQueryOptions {
 
 ```ts
 interface UsePaginatedQueryResult<T> {
+    error: SubscriptionError | undefined;
     isLoading: boolean;
     loadMore: (numberItems: number) => void;
     results: T[];
@@ -647,6 +655,7 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
     heartbeat: H;
     intervalMs?: number;
     listPresent: L;
+    onError?: SubscriptionErrorCallback;
     sessionId?: string;
     shardKey?: string;
 }
@@ -656,6 +665,7 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
 
 ```ts
 interface UsePresenceResult<L extends ListPresentReference> {
+    error: SubscriptionError | undefined;
     present: ReturnOf<L> | undefined;
     sessionId: string;
     setData: (data: Record<string, unknown> | undefined) => void;
@@ -818,7 +828,9 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 ### `hydratePreloaded` (const)
 
 ```ts
-const hydratePreloaded: <T>(preloaded: Preloaded<T>) => T;
+const hydratePreloaded: <T>(preloaded: Preloaded<T>, options?: {
+    onError?: SubscriptionErrorCallback;
+}) => T;
 ```
 
 ### `isConflictError` (const)
@@ -991,7 +1003,9 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 ### `usePreloadedQuery` (const)
 
 ```ts
-const usePreloadedQuery: <T>(preloaded: Preloaded<T>) => T;
+const usePreloadedQuery: <T>(preloaded: Preloaded<T>, options?: {
+    onError?: SubscriptionErrorCallback;
+}) => T;
 ```
 
 ### `usePresence` (const)

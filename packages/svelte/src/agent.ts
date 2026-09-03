@@ -1,4 +1,4 @@
-import type { FunctionReference, LunoraClient } from "@lunora/client";
+import type { FunctionReference, LunoraClient, SubscriptionErrorCallback } from "@lunora/client";
 import type { Readable } from "svelte/store";
 import { writable } from "svelte/store";
 
@@ -59,6 +59,13 @@ interface AgentOptions {
     cancel?: FunctionReference<"mutation">;
 
     /**
+     * Called when the live thread subscription reports an error (a session
+     * expiry, an RLS denial). Without it such an error is dropped and `thread` /
+     * `status` freeze at their last value.
+     */
+    onError?: SubscriptionErrorCallback;
+
+    /**
      * The app mutation that starts (or continues) a run — a thin wrapper over
      * `ctx.agents[name].run(...)`. Called with `{ threadKey, input }` merged with
      * {@link AgentOptions.runArgs} and the per-call args.
@@ -105,7 +112,7 @@ const isClient = (value: unknown): value is LunoraClient =>
     typeof value === "object" && value !== null && typeof (value as { subscribe?: unknown }).subscribe === "function";
 
 const createAgentHandle = (client: LunoraClient, options: AgentOptions): AgentHandle => {
-    const { api, cancel: cancelReference, run: runReference, runArgs, threadKey } = options;
+    const { api, cancel: cancelReference, onError, run: runReference, runArgs, threadKey } = options;
 
     const runMutation = mutation(client, runReference);
     const cancelMutation = mutation(client, cancelReference ?? NO_MUTATION_REF);
@@ -123,11 +130,16 @@ const createAgentHandle = (client: LunoraClient, options: AgentOptions): AgentHa
     // `presence.ts`/`agent-chat.ts` guard). Skip it server-side; `thread`/
     // `status` stay at their inert initial values until the component hydrates.
     const unsubscribe = isBrowser()
-        ? client.subscribe(api.agents.agentThread, { key: threadKey }, (value) => {
-              latestThread = value as AgentThreadRecord | undefined;
-              threadStore.set(latestThread);
-              statusStore.set(latestThread?.status);
-          })
+        ? client.subscribe(
+              api.agents.agentThread,
+              { key: threadKey },
+              (value) => {
+                  latestThread = value as AgentThreadRecord | undefined;
+                  threadStore.set(latestThread);
+                  statusStore.set(latestThread?.status);
+              },
+              { onError },
+          )
         : (): void => undefined;
 
     const run = async (input: string, arguments_?: Record<string, unknown>): Promise<void> => {

@@ -3,11 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { AdvisorShardTraffic, LintContext } from "../src";
 import { ALL_LINTS, fanOutBreadth, hotShard, indexUtilization, runAdvisor, RUNTIME_LINTS } from "../src";
 
-/**
- * A minimal context with an empty schema. `constraint_validator` also reads
- * `schema` and `tableSamples`; this base supplies neither, so it is covered by
- * `constraint-validator.test.ts` rather than here.
- */
+/** A minimal context with an empty schema — no observed signal, so every runtime lint is a no-op against it. */
 const baseContext = (overrides: Partial<LintContext> = {}): LintContext => {
     return { schema: { tables: [] }, ...overrides };
 };
@@ -260,7 +256,7 @@ describe("runtime lint registration", () => {
     it("includes all runtime lints, sourced runtime", () => {
         expect.assertions(3);
 
-        expect(RUNTIME_LINTS.map((lint) => lint.name)).toStrictEqual(["hot_shard", "index_utilization", "constraint_validator", "fan_out_breadth"]);
+        expect(RUNTIME_LINTS.map((lint) => lint.name)).toStrictEqual(["hot_shard", "index_utilization", "fan_out_breadth"]);
         expect(RUNTIME_LINTS.every((lint) => lint.source === "runtime")).toBe(true);
         expect(ALL_LINTS).toContain(hotShard);
     });

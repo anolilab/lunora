@@ -425,6 +425,20 @@ describe(LocalMirror, () => {
         expect(result).toHaveLength(1);
         expect(result[0]!.name).toBe("alice");
     });
+
+    it("caps the event log by default, dropping the oldest entries", () => {
+        expect.assertions(2);
+
+        const mirror = new LocalMirror({ db: createTestAdapter(), tables: { users: { primaryKey: "id" } } });
+
+        for (let index = 0; index < 1005; index += 1) {
+            mirror.applyDiff(createTableDiff("users", [{ type: "insert", data: { id: String(index) } }]));
+        }
+
+        expect(mirror.eventLog.size).toBe(1000);
+        // Oldest-first eviction: seqs 0..4 are gone, 5 is the new floor.
+        expect(mirror.eventLog.getSince(0)[0]?.seq).toBe(5);
+    });
 });
 
 // ─── subscribeToMirror ─────────────────────────────────────────────────
@@ -477,6 +491,65 @@ describe(subscribeToMirror, () => {
 
         expect(rows).toHaveLength(1);
         expect(rows[0]!.text).toBe("hello");
+    });
+
+    it("repeating a frame writes nothing; a changed/removed row writes only that change", () => {
+        expect.assertions(8);
+
+        const adapter = createTestAdapter();
+        const statements: string[] = [];
+        const counting: SqliteAdapter = {
+            ...adapter,
+            exec(sql: string, params?: ReadonlyArray<unknown>): void {
+                statements.push(sql.replaceAll("`", "").trim().toUpperCase());
+                adapter.exec(sql, params);
+            },
+        };
+
+        const mirror = new LocalMirror({ db: counting });
+
+        let push: ((data: unknown) => void) | undefined;
+        const client: SubscriptionClient = {
+            subscribe(_fn: { __lunoraRef: string }, _args: Record<string, unknown>, cb: (data: unknown) => void) {
+                push = cb;
+                return vi.fn<() => void>();
+            },
+        };
+
+        subscribeToMirror(client, mirror, { __lunoraRef: "todos/list" }, {});
+
+        const rows = Array.from({ length: 50 }, (_, index) => {
+            return { id: String(index), text: "same" };
+        });
+
+        // 200 identical frames. Only the first carries any change: the rest are
+        // byte-identical snapshots, so nothing is applied, logged or bumped.
+        for (let frame = 0; frame < 200; frame += 1) {
+            push!(rows);
+        }
+
+        // The mirror's own meta table is written with the same statement kind,
+        // so count only the ones aimed at the mirrored table.
+        const upserts = () => statements.filter((sql) => sql.startsWith("INSERT OR REPLACE") && sql.includes("FN_TODOS_LIST")).length;
+
+        expect(mirror.eventLog.size).toBe(1);
+        expect(mirror.version).toBe(1);
+        expect(upserts()).toBe(50);
+
+        // One row edited, one row gone.
+        push!([{ id: "0", text: "edited" }, ...rows.slice(1, 49)]);
+
+        expect(mirror.eventLog.size).toBe(2);
+        expect(mirror.eventLog.getSince(1)[0]?.tableDiffs?.[0]?.changes).toStrictEqual([
+            { data: { id: "0", text: "edited" }, type: "insert" },
+            { id: "49", type: "delete" },
+        ]);
+        expect(upserts()).toBe(51);
+
+        const remaining = adapter.query<{ id: string; text: string }>("SELECT * FROM fn_todos_list");
+
+        expect(remaining).toHaveLength(49);
+        expect(remaining.filter((row) => row.text === "edited")).toHaveLength(1);
     });
 
     it("cleanup unsubs the client subscription", () => {

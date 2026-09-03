@@ -907,6 +907,31 @@ const IDEMPOTENCY_RETENTION_MS = 86_400_000;
 const IDEMPOTENCY_GC_INTERVAL_MS = 3_600_000;
 
 /**
+ * The refusal a paid (`.x402`) procedure gets on a socket. The paywall lives at
+ * the origin worker (`/_lunora/rpc`, REST, `serverQuery`), which a WebSocket
+ * never crosses — and neither a live subscription (seed plus every poke) nor a
+ * stream (one ack plus N chunks) is the one call one payment buys. Shared by the
+ * `subscribe` gate, the `stream` gate and the refresh sweep so the three cannot
+ * drift apart.
+ */
+const paidSocketRefusal = (functionPath: string, verb: "streamed" | "subscribed"): string =>
+    `paid (\`.x402\`) function "${functionPath}" cannot be ${verb}; call it individually over /_lunora/rpc`;
+
+/**
+ * What the client is told when a socket cannot take another registration.
+ *
+ * Both refusals name the limit AND a way around it. An app only ever meets one
+ * of them at runtime, in production, on the connection it was relying on — so
+ * "cap reached" without a number to design against and a remedy to reach for is
+ * a wall, not a diagnostic. The queries and shapes share one budget, which is
+ * the part nobody guesses.
+ */
+const subscriptionRefusal = (kind: "count" | "size", cap: number, bytes: number): string =>
+    kind === "count"
+        ? `subscription cap of ${String(cap)} reached on this socket (live queries and shapes share it); unsubscribe an idle one, or open a second socket`
+        : `failed to persist the socket attachment, which must stay under the ${String(bytes)}-byte hibernation limit (live queries and shapes share it); shrink the subscription's arguments, unsubscribe an idle one, or open a second socket`;
+
+/**
  * The run-key component for a caller with no verified identity.
  *
  * Anonymous callers must not share a transcript with each other — collapsing
@@ -973,6 +998,24 @@ const ROOT_SHARD_NAME = "__root__";
  * a memo carrying it as "re-run on every write-flush".
  */
 const ADMIN_WILDCARD = "*";
+
+/**
+ * Whether a subscription's memo proves this write cannot have changed its
+ * result — the skip `refreshSubscriptions` applies before re-running a query.
+ *
+ * A MISSING memo means "unknown deps" and never skips. A memo carrying the
+ * admin wildcard always re-runs: its value is not bound to any single table.
+ * Otherwise the write is irrelevant either because none of the tables the memo
+ * recorded changed at all, or because they did but every one of them was read
+ * through a narrowed index slice and no written position falls inside one — any
+ * table the memo did not narrow, or any write whose position was unknown, makes
+ * `writeTouchesMemo` answer true and the re-run proceeds.
+ */
+const memoProvesUnchanged = (
+    memo: SubscriptionMemo | undefined,
+    changed: Set<string>,
+    changedKeys: Map<string, IndexKeyEntry[] | undefined> | undefined,
+): boolean => memo !== undefined && !memo.tables.has(ADMIN_WILDCARD) && (!setsIntersect(memo.tables, changed) || !writeTouchesMemo(memo, changed, changedKeys));
 
 /**
  * Hard server-side ceiling on rows written per bulk admin call — `deleteRows`,
@@ -1057,13 +1100,53 @@ abstract class ShardDO {
     protected static readonly MAX_STREAMS_PER_SOCKET = 8;
 
     /**
-     * Per-socket subscription cap. Each subscription is stored in the
-     * hibernation attachment (which is serialized JSON), and runaway
-     * subscribe loops would let a single client wedge the attachment past
-     * the runtime's size budget — keep the per-socket ceiling well below
-     * that. 32 is enough for any reasonable client (one per visible
-     * panel/query) and small enough that an attachment serialization
-     * failure stays unlikely.
+     * The runtime's hard ceiling on one hibernation attachment.
+     *
+     * MEASURED against workerd rather than taken from a doc page: a
+     * `serializeAttachment` of 16385 bytes throws
+     * `A WebSocket 'attachment' cannot be larger than 16384 bytes.`, and 8192
+     * succeeds. The measurement lives in
+     * `__tests__/shard-do.subscription-cap.test.ts`; the workerd half is
+     * `__tests__/workerd/shard-do.workerd.test.ts`.
+     *
+     * This is the bound that actually binds, and the runtime is the only thing
+     * that enforces it — deliberately. A pre-flight size check here would need a
+     * second size model, and `JSON.stringify` is not it: an attachment
+     * legitimately holds the decoded wire types (`bigint`, `Date`, bytes), and
+     * stringifying a `bigint` throws. So `subscribe`/`shapeSubscribe` let the
+     * runtime refuse, roll the registry back, and spend this constant on saying
+     * WHY — the hibernation API makes them swallow the throw itself, and
+     * "failed to persist subscription attachment" is not something an app can
+     * act on.
+     */
+    protected static readonly MAX_ATTACHMENT_BYTES = 16_384;
+
+    /**
+     * Per-socket cap on `subs` + `shapes` together — a coarse backstop on
+     * per-poke fan-out work, NOT the storage bound.
+     *
+     * The storage bound is {@link ShardDO.MAX_ATTACHMENT_BYTES}, and it is the
+     * one that can actually stop a legitimate app: every registration is
+     * persisted in the hibernation attachment as `{functionPath, table, args,
+     * sinceSeq, sinceEpoch}` beside `connectionId`/`userId`/`identity`/
+     * `clientId`/`context`/`whispers`, and `args` is the client's to choose, so
+     * no fixed count can bound it.
+     *
+     * 32 against the measured numbers: a realistic registration (a function
+     * path, one id argument, a limit, a cursor and an epoch uuid) costs ~218
+     * bytes, and a fully decorated socket's fixed fields — identity claims, app
+     * `context`, whisper topics — about 550. 32 of them is ~7.5 KB, under half
+     * the 16384-byte ceiling, so the count cap never fires before the byte
+     * budget for a record of that shape. It fires only for registrations small
+     * enough that 32 of them are cheap, which is where a fan-out backstop
+     * belongs.
+     *
+     * This was briefly 8, derived from a 2048-byte attachment budget that the
+     * runtime does not impose — 8× too small, and low enough to break an app
+     * holding a dozen live queries on one socket at runtime, which is the
+     * failure this number exists to avoid.
+     *
+     * Both numbers are asserted in `__tests__/shard-do.subscription-cap.test.ts`.
      */
     protected static readonly MAX_SUBSCRIPTIONS_PER_SOCKET = 32;
 
@@ -1797,15 +1880,6 @@ abstract class ShardDO {
     private currentIndexHits: Set<string> | undefined;
 
     /**
-     * Resource meter for the in-flight dispatch. Created per request alongside
-     * the scanned-table capture and handed to `createShardCtxDb` by the codegen
-     * subclass, so one runaway mutation fails with a
-     * `TRANSACTION_LIMIT_EXCEEDED` instead of taking the whole shard's isolate
-     * down with it.
-     */
-    private currentTransactionHeadroom: TransactionHeadroomTracker | undefined;
-
-    /**
      * Per-DISTINCT-statement SQL samples collected during the current `/rpc`
      * dispatch by the instrumented `sql` getter, keyed by the raw query text.
      * Drained into the durable `__lunora_metrics_queries` table after the
@@ -2165,14 +2239,13 @@ abstract class ShardDO {
      * `headroom` is an optional BY-VALUE override, mirroring
      * {@link ShardDO.runShardWrite}'s pattern: the main `/rpc` dispatch
      * (`handleFetchCloudflare`) captures its freshly-minted tracker in a LOCAL and
-     * passes it here explicitly, so the ctx this dispatch builds never depends on
-     * `this.currentTransactionHeadroom` still holding the right value by the time
-     * the (possibly `await`-interleaved) handler runs — a concurrent dispatch's
-     * `finally` clearing that shared field could otherwise leave this one
-     * unmetered mid-flight. Callers that dispatch through here without minting
-     * their own tracker (`dispatchLifecycle`, `handleRunAs`) omit it and the
-     * codegen subclass falls back to `this.transactionHeadroom()`, unchanged from
-     * before this parameter existed.
+     * passes it here explicitly, so the ctx this dispatch builds is metered
+     * against ITS OWN tracker however the (possibly `await`-interleaved) handler
+     * interleaves with a concurrent one. Callers that dispatch
+     * through here without minting their own tracker (`dispatchLifecycle`,
+     * `handleRunAs`) omit it and the codegen subclass falls back to
+     * `this.transactionHeadroom()`, which mints a FRESH per-ctx budget — never
+     * the in-flight dispatch's.
      *
      * `scope` is the same shape of BY-VALUE thread for the reactive cache: the
      * `/rpc` query path routes through {@link ShardDO.runCachedQuery}, which
@@ -3049,9 +3122,10 @@ abstract class ShardDO {
      *
      * The single seam every writer-routed single-row write goes through — a studio
      * row edit, a bulk row op, a TTL expiry. `headroom` is an optional BY-VALUE
-     * meter: a normal `/rpc` dispatch omits it and the override falls back to
-     * `this.transactionHeadroom()`, while {@link ShardDO.pollTtlSweeps} (an alarm
-     * work item, no dispatch in flight) passes its own tracker explicitly.
+     * meter: an admin caller omits it and the override falls back to
+     * `this.transactionHeadroom()`, which mints a fresh per-call budget, while
+     * {@link ShardDO.pollTtlSweeps} (an alarm work item draining many rows under
+     * ONE ceiling) passes its own tracker explicitly.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected runShardWrite(args: RunShardWriteArgs, _headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult> {
@@ -3863,18 +3937,42 @@ abstract class ShardDO {
     }
 
     /**
+     * Whether `functionPath` is a paid (`.x402({ price })`) procedure. The paywall
+     * lives at the origin worker (`/_lunora/rpc`, REST, `serverQuery`), which a
+     * WebSocket subscription never crosses — so the shard must refuse to seed or
+     * poke a paid query itself, or it is served free. The base class has no
+     * function registry, so the default is `false`; the codegen-generated
+     * subclass overrides it with the real `LUNORA_FUNCTIONS` lookup.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to consult `LUNORA_FUNCTIONS`
+    protected isPaidFunction(_functionPath: string): boolean {
+        return false;
+    }
+
+    /**
      * Register a subscription on the given socket. Stored via
      * `ws.serializeAttachment` so it survives hibernation.
      *
      * Returns a status so the caller can surface a structured error frame
-     * when the cap is hit or the attachment fails to serialize. We never
-     * throw out of this path — the WS hibernation API treats a thrown
-     * `webSocketMessage` as a fatal-channel error.
+     * when the query is paid, the cap is hit or the attachment fails to
+     * serialize. We never throw out of this path — the WS hibernation API
+     * treats a thrown `webSocketMessage` as a fatal-channel error.
+     *
+     * The `paid` refusal sits here rather than at the envelope so every
+     * registration path — not only the `subscribe` frame — goes through it.
      */
-    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "serialize_failed" | "too_many" {
+    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "paid" | "serialize_failed" | "too_many" {
+        if (query.functionPath !== undefined && this.isPaidFunction(query.functionPath)) {
+            return "paid";
+        }
+
         const attachment = this.readAttachment(ws);
 
-        if (Object.keys(attachment.subs).length >= ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET) {
+        // Counts BOTH registries, exactly as `shapeSubscribe` does: the cap
+        // bounds what one socket's attachment holds, and subs and shapes share
+        // that attachment. Counting only `subs` here let a socket that
+        // registered shapes first hold up to twice the ceiling.
+        if (Object.keys(attachment.subs).length + Object.keys(attachment.shapes ?? {}).length >= ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET) {
             return "too_many";
         }
 
@@ -4423,11 +4521,20 @@ abstract class ShardDO {
      * The deferred-iterator shape (`(signal) => AsyncIterable<unknown>`) keeps
      * the cancel signal pluggable per-call without coupling this signature to
      * the wire-frame loop in `handleStream`.
+     *
+     * `identity` is the socket's verified identity, threaded BY VALUE exactly as
+     * {@link ShardDO.executeSubscription} threads it and for the same reason: a
+     * `stream` frame is dispatched fire-and-forget and its iterator is pulled
+     * long after, interleaved with unrelated `/rpc` dispatches, so reading the
+     * shared per-request identity fields instead would run an `rls()` /
+     * `ctx.auth`-scoped stream as nobody while the shard is idle — and as
+     * whoever else is mid-flight while it is not.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to dispatch via the generated function map
     protected executeStream(
         _functionPath: string,
         _args: Record<string, unknown>,
+        _identity?: SubscriptionIdentity,
     ): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
         // eslint-disable-next-line unicorn/no-null -- base default: `null` = "no such streaming function"; the codegen subclass overrides and also returns null
         return null;
@@ -4732,12 +4839,25 @@ abstract class ShardDO {
     }
 
     /**
-     * The in-flight dispatch's resource meter, passed to `createShardCtxDb` by
-     * the generated subclass. Returns `undefined` outside a dispatch, which
-     * leaves `ctx.db` unmetered — the legacy behaviour.
+     * A fresh budget for a dispatch that brought none of its own.
+     *
+     * This used to hand back an INSTANCE FIELD stamped by `beginDispatch` — "the
+     * meter of whichever `/rpc` is in flight". Nothing that reaches it is that
+     * dispatch: the `/rpc` path value-threads its own tracker into `handleRpc`
+     * and never consults this. What reached it were the out-of-band callers —
+     * `dispatchLifecycle`'s `onConnect`/`onDisconnect` hooks, `handleRunAs`, the
+     * admin `runShardWrite` behind the studio's row editor — which either
+     * charged their writes to an unrelated in-flight mutation's budget (failing
+     * one of the two with a ceiling neither caused) or, with no dispatch in
+     * flight, ran completely unmetered.
+     *
+     * So: mint one, the same by-value answer {@link ShardDO.subscriptionHeadroom}
+     * and {@link ShardDO.alarmHeadroom} give their own out-of-band callers, and
+     * for the same reason — an ambient field says "a dispatch is in flight", not
+     * "this caller is that dispatch".
      */
-    protected transactionHeadroom(): TransactionHeadroomTracker | undefined {
-        return this.currentTransactionHeadroom;
+    protected transactionHeadroom(): TransactionHeadroomTracker {
+        return new TransactionHeadroomTracker(this.transactionLimits());
     }
 
     /**
@@ -5382,11 +5502,20 @@ abstract class ShardDO {
             const status = this.subscribe(ws, envelope.id, query);
 
             if (status !== "ok") {
-                const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
-                const errorMessage =
-                    status === "too_many"
-                        ? `subscription cap of ${String(ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET)} reached on this socket`
-                        : "failed to persist subscription attachment";
+                // The `paid` refusal mirrors the origin's batch gate (`BAD_REQUEST`):
+                // a paid query is one payment for one call, which a live
+                // subscription (seed + every poke) cannot be.
+                const { code, message: errorMessage } = {
+                    paid: { code: "BAD_REQUEST", message: paidSocketRefusal(String(functionPath), "subscribed") },
+                    serialize_failed: {
+                        code: "SUBSCRIPTION_PERSIST_FAILED",
+                        message: subscriptionRefusal("size", ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET, ShardDO.MAX_ATTACHMENT_BYTES),
+                    },
+                    too_many: {
+                        code: "TOO_MANY_SUBSCRIPTIONS",
+                        message: subscriptionRefusal("count", ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET, ShardDO.MAX_ATTACHMENT_BYTES),
+                    },
+                }[status];
 
                 trySendFrame(ws, JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }));
 
@@ -5400,7 +5529,7 @@ abstract class ShardDO {
             // subclass doesn't support re-execution (base default), this is a
             // no-op and the subscriber relies on its initial HTTP query.
             if (functionPath) {
-                await this.seedSubscription(ws, envelope.id, query, functionPath, isAdmin);
+                await this.seedSubscriptionGuarded(ws, envelope.id, query, functionPath, isAdmin);
             }
 
             return;
@@ -5414,7 +5543,7 @@ abstract class ShardDO {
             try {
                 shapeArgs = envelope.shape.args === undefined ? undefined : (decodeWire(envelope.shape.args) as Record<string, unknown>);
             } catch {
-                this.sendShapeSubscribeError(ws, envelope.id, "BAD_SUBSCRIPTION_ARGS", "shape args failed wire decoding");
+                this.sendSubscriptionError(ws, envelope.id, "BAD_SUBSCRIPTION_ARGS", "shape args failed wire decoding");
 
                 return;
             }
@@ -5442,6 +5571,17 @@ abstract class ShardDO {
             // than allowed to slip through executeStream().
             if (envelope.query.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
                 trySendFrame(ws, JSON.stringify({ id: envelope.id, message: "streams must be public", type: "error" }));
+
+                return;
+            }
+
+            // `.x402({ price }).stream(...)` carries the price tag into
+            // `LUNORA_FUNCTIONS` like any other paid procedure, but this frame
+            // never crosses the origin's paywall — so a paid stream served here
+            // is served free. Refuse it the same way `subscribe` refuses a paid
+            // live query.
+            if (this.isPaidFunction(envelope.query.functionPath)) {
+                this.sendSubscriptionError(ws, envelope.id, "BAD_REQUEST", paidSocketRefusal(envelope.query.functionPath, "streamed"));
 
                 return;
             }
@@ -5959,7 +6099,7 @@ abstract class ShardDO {
             // spans already streamed live).
             this.flushSampledOutTrace(dispatchTrace, dispatchError !== undefined);
             this.traceSampling.delete(dispatchTrace.traceId);
-            this.endDispatch(dispatchHeadroom);
+            this.endDispatch();
         }
     }
 
@@ -6954,6 +7094,19 @@ abstract class ShardDO {
     private async handleBulkRowOp(functionPath: string, args: Record<string, unknown>): Promise<Response> {
         let applied = 0;
 
+        // ONE meter for the whole batch, threaded by value into every per-row
+        // `runShardWrite` — the same shape {@link ShardDO.pollTtlSweeps} uses for
+        // its own many-rows-under-one-ceiling pass, and for the same reason.
+        //
+        // Letting each row fall through to the override's
+        // `headroom ?? this.transactionHeadroom()` fallback minted a FRESH
+        // tracker per row: up to {@link SHARD_BULK_ROW_CAP} allocations and, more
+        // to the point, a ceiling that resets every row and therefore bounds
+        // nothing. A bulk op is precisely the unbounded-work case the meter
+        // exists for — 500 rows is where a clear-table can actually exhaust the
+        // isolate — so it gets one budget, charged across the batch.
+        const headroom = this.transactionHeadroom();
+
         try {
             // `clearTable` is `deleteRows` with no predicate — the same
             // writer-routed bounded loop, matching every row — so the two share an
@@ -6964,7 +7117,7 @@ abstract class ShardDO {
             if (isClear || functionPath === ADMIN_FUNCTIONS.deleteRows) {
                 const parsed = isClear ? parseClearTableArgs(args) : parseBulkDeleteArgs(args);
                 const result = await this.runShardBulkRowOp(parsed, async (id) => {
-                    await this.runShardWrite({ id, op: "delete", table: parsed.table });
+                    await this.runShardWrite({ id, op: "delete", table: parsed.table }, headroom);
                     applied += 1;
                 });
 
@@ -6989,7 +7142,7 @@ abstract class ShardDO {
                 parsed,
                 async (id) => {
                     try {
-                        await this.runShardWrite({ doc: parsed.doc, id, op: "patch", table: parsed.table });
+                        await this.runShardWrite({ doc: parsed.doc, id, op: "patch", table: parsed.table }, headroom);
                         applied += 1;
                     } catch (error) {
                         if (!(error instanceof LunoraError) || error.code !== "NOT_FOUND") {
@@ -8813,7 +8966,11 @@ abstract class ShardDO {
         sinceSeq = 0,
         generation?: number,
     ): Promise<void> {
-        const iterable = this.executeStream(functionPath, args);
+        // Read once, up front: the identity the handler runs under must be
+        // captured BEFORE the first await and passed by value, because the
+        // iterator is pulled long after this frame was dispatched.
+        const attachment = this.readAttachment(ws);
+        const iterable = this.executeStream(functionPath, args, { identity: attachment.identity, userId: attachment.userId });
 
         if (!iterable) {
             trySendFrame(ws, JSON.stringify({ error: { code: "NOT_FOUND", message: `stream not registered: ${functionPath}` }, id, type: "error" }));
@@ -9287,24 +9444,22 @@ abstract class ShardDO {
 
                 const { functionPath } = query;
 
-                const isAdmin = functionPath.startsWith(ADMIN_FUNCTION_PREFIX);
-                const memo = this.subMemos.get(ws)?.get(subId);
+                // A subscription registered BEFORE the procedure was paywalled
+                // is still sitting in this socket's hibernated attachment, and
+                // the registration-time gate in `subscribe` can no longer see
+                // it. Without this it keeps being re-run and pushed on every
+                // write for the life of the socket — the paid result, free.
+                if (this.isPaidFunction(functionPath)) {
+                    this.unsubscribe(ws, subId);
+                    this.sendSubscriptionError(ws, subId, "BAD_REQUEST", paidSocketRefusal(functionPath, "subscribed"));
 
-                // Skip when we already know this subscription's tables and none
-                // of them changed. A missing memo means "unknown deps" — re-run
-                // to be safe. A memo carrying the admin wildcard always re-runs
-                // (its value isn't bound to any single table).
-                if (memo && !memo.tables.has(ADMIN_WILDCARD) && !setsIntersect(memo.tables, changed)) {
                     continue;
                 }
 
-                // Range-precise second gate: the table matched, but if every
-                // table this subscription reads was read through index slices,
-                // and none of the positions written in this batch fall inside
-                // them, the result cannot have changed. Any table the memo did
-                // not narrow — or any write whose position was unknown — makes
-                // `writeTouchesMemo` return true and the re-run proceeds.
-                if (memo && !memo.tables.has(ADMIN_WILDCARD) && !writeTouchesMemo(memo, changed, changedKeys)) {
+                const isAdmin = functionPath.startsWith(ADMIN_FUNCTION_PREFIX);
+                const memo = this.subMemos.get(ws)?.get(subId);
+
+                if (memoProvesUnchanged(memo, changed, changedKeys)) {
                     continue;
                 }
 
@@ -9361,6 +9516,45 @@ abstract class ShardDO {
     }
 
     /**
+     * Run {@link ShardDO.seedSubscription} and fail the ONE subscription — never
+     * the socket — when its handler throws.
+     *
+     * The seed dispatches the user's query: it re-validates the args and runs
+     * the procedure's auth/RLS middleware, so an anonymous socket subscribing to
+     * an `authQuery`, a bad argument, or a handler `NOT_FOUND` rejects here.
+     * Under the WS hibernation API a throw out of `webSocketMessage` is a
+     * FATAL-CHANNEL error (see the analysis on `webSocketError`): the runtime
+     * tears the socket down, taking every OTHER live subscription on it with
+     * it — and the client already saw this subscribe's `ack`, which resets its
+     * reconnect backoff, so it reconnects, resubscribes, throws again, and
+     * spins at the initial delay for the life of the page.
+     *
+     * So: drop the just-registered subscription from the attachment and answer
+     * with a structured `error` frame carrying the thrown error's code. Mirrors
+     * `refreshSubscriptions`' per-`(socket, sub)` catch on the write-flush half
+     * of the same path, and `handleShapeSubscribe`'s rollback-then-error on a
+     * failed shape seed.
+     */
+    private async seedSubscriptionGuarded(ws: ShardSocketLike, subId: string, query: SubscriptionQuery, functionPath: string, isAdmin: boolean): Promise<void> {
+        try {
+            await this.seedSubscription(ws, subId, query, functionPath, isAdmin);
+        } catch (error: unknown) {
+            // Deregister first: a subscription that never seeded must not be
+            // refreshed by the next write flush either.
+            this.unsubscribe(ws, subId);
+            this.recordSubscriptionRefreshError(functionPath, error, { subId });
+
+            // Same redaction envelope as every other error-crossing boundary in
+            // this file: a deliberate `LunoraError` keeps its code and message
+            // (`UNAUTHORIZED`, `NOT_FOUND`, a validator's `BAD_REQUEST`), an
+            // internal or bare throw is redacted.
+            const { body } = toErrorBody(error, { fallbackCode: "SUBSCRIPTION_SEED_FAILED", redactedMessage: "subscription seed failed" });
+
+            this.sendSubscriptionError(ws, subId, body.code, body.message);
+        }
+    }
+
+    /**
      * Seed a freshly-registered subscription with its first value. Runs the
      * query once, then takes one of two paths.
      *
@@ -9374,6 +9568,10 @@ abstract class ShardDO {
      *
      * Either way the fresh result memoises this socket's diff baseline so later
      * write-flushes ({@link refreshSubscriptions}) can emit incremental deltas.
+     *
+     * MAY THROW: it runs the real handler (arg re-validation plus the whole
+     * auth/RLS middleware chain). Every caller goes through
+     * {@link ShardDO.seedSubscriptionGuarded}, which owns that failure.
      */
     private async seedSubscription(ws: ShardSocketLike, subId: string, query: SubscriptionQuery, functionPath: string, isAdmin: boolean): Promise<void> {
         const seedArgs = query.args ?? {};
@@ -9455,12 +9653,9 @@ abstract class ShardDO {
 
         if (status !== "ok") {
             const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
-            const message =
-                status === "too_many"
-                    ? `subscription cap of ${String(ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET)} reached on this socket`
-                    : "failed to persist shape subscription attachment";
+            const message = subscriptionRefusal(status === "too_many" ? "count" : "size", ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET, ShardDO.MAX_ATTACHMENT_BYTES);
 
-            this.sendShapeSubscribeError(ws, subId, code, message);
+            this.sendSubscriptionError(ws, subId, code, message);
 
             return;
         }
@@ -9472,7 +9667,7 @@ abstract class ShardDO {
 
         if (seed !== "ok") {
             this.shapeUnsubscribe(ws, subId);
-            this.sendShapeSubscribeError(ws, subId, seed.code, seed.message);
+            this.sendSubscriptionError(ws, subId, seed.code, seed.message);
 
             return;
         }
@@ -9486,9 +9681,9 @@ abstract class ShardDO {
         }
     }
 
-    /** Send a structured `error` frame for a failed `shape_subscribe`, swallowing a send on an already-closed socket. */
-    // eslint-disable-next-line class-methods-use-this -- groups with the shape-subscribe flow; uses only its args + the socket
-    private sendShapeSubscribeError(ws: ShardSocketLike, subId: string, code: string, message: string): void {
+    /** Send a structured `error` frame for a failed `subscribe`/`shape_subscribe`, swallowing a send on an already-closed socket. */
+    // eslint-disable-next-line class-methods-use-this -- groups with the subscribe flows; uses only its args + the socket
+    private sendSubscriptionError(ws: ShardSocketLike, subId: string, code: string, message: string): void {
         try {
             trySendFrame(ws, JSON.stringify({ code, error: { code, message }, id: subId, type: "error" }));
         } catch {
@@ -10266,8 +10461,8 @@ abstract class ShardDO {
 
     /**
      * Delete one expired row through {@link ShardDO.runShardWrite}, passing this
-     * sweep's own by-value meter (an alarm has no dispatch in flight, so the
-     * override's `this.transactionHeadroom()` fallback would be `undefined`),
+     * sweep's own by-value meter (the override's `this.transactionHeadroom()`
+     * fallback would mint a fresh budget per row, bounding nothing),
      * absorbing a `TRANSACTION_LIMIT_EXCEEDED` as "batch full" rather than
      * letting it propagate — split out of {@link ShardDO.pollTtlSweeps} to keep
      * that method's own complexity down. Returns `true` when the limit was hit
@@ -10444,17 +10639,11 @@ abstract class ShardDO {
         // attribution. Fresh per request; drained below.
         this.currentScannedTables = new Set<string>();
 
-        // Captured in a LOCAL, not just the instance field: `handleRpc` below
-        // receives it BY VALUE (see its docstring), so this dispatch's ctx-build
-        // never depends on `this.currentTransactionHeadroom` still pointing at
-        // THIS tracker by the time an `await`-interleaved concurrent dispatch's
-        // `finally` clears it. Still assigned to the field too — the fallback
-        // `dispatchLifecycle`/`handleRunAs` (which mint no tracker of their own)
-        // and any other reader of `transactionHeadroom()` keep working exactly as
-        // before this parameter existed.
+        // A LOCAL, never an instance field: `handleRpc` below receives it BY
+        // VALUE (see its docstring), so this dispatch's ctx-build never depends
+        // on a shared field still pointing at THIS tracker by the time an
+        // `await`-interleaved concurrent dispatch's `finally` runs.
         const dispatchHeadroom = new TransactionHeadroomTracker(this.transactionLimits());
-
-        this.currentTransactionHeadroom = dispatchHeadroom;
 
         // Collect the declared indexes this dispatch exercises (stamped by
         // the ctx-db index-use hook) so `recordFunctionCall` can persist the
@@ -10478,14 +10667,8 @@ abstract class ShardDO {
         return { dispatchAttribution: {}, dispatchHeadroom, dispatchStartedAt, dispatchTrace };
     }
 
-    /**
-     * Clear every per-request field {@link ShardDO.beginDispatch} stamped.
-     *
-     * `dispatchHeadroom` is passed rather than read off `this` so the headroom
-     * clear stays identity-guarded — see the comment on it.
-     */
-
-    private endDispatch(dispatchHeadroom: TransactionHeadroomTracker): void {
+    /** Clear every per-request field {@link ShardDO.beginDispatch} stamped. */
+    private endDispatch(): void {
         this.currentRequestTrace = undefined;
         this.currentRequestBookmark = undefined;
         this.currentResponseBookmark = undefined;
@@ -10500,17 +10683,6 @@ abstract class ShardDO {
         this.currentRequestSystem = false;
         this.currentRequestTraceparent = undefined;
         this.currentScannedTables = undefined;
-        // Identity-guarded, not an unconditional clear: `handleRpc` above is
-        // already value-threaded with `dispatchHeadroom` for the ctx-build
-        // itself, but the field is still the fallback `dispatchLifecycle` /
-        // `handleRunAs` (and `transactionHeadroom()` readers generally) use.
-        // An unconditional clear here would let THIS dispatch's `finally` wipe
-        // a DIFFERENT, still-in-flight dispatch's tracker out from under it —
-        // the exact shared-field race this whole mechanism exists to avoid.
-        // Only clear it if it still points at the tracker THIS dispatch set.
-        if (this.currentTransactionHeadroom === dispatchHeadroom) {
-            this.currentTransactionHeadroom = undefined;
-        }
         this.currentIndexHits = undefined;
         this.currentStmtSamples = undefined;
         this.currentStmtSamplesTruncated = undefined;

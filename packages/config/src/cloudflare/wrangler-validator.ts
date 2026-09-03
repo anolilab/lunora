@@ -14,6 +14,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
+import { isEnvEnabled } from "../../../../shared/env-flag";
 import { WORKER_ENTRY_FALLBACKS } from "../infer-bindings";
 import join from "../path";
 import type { SchemaInfo } from "../schema-info";
@@ -415,9 +416,9 @@ const validateInstanceType = (entry: WranglerContainerEntry, label: string, erro
 /** Shared lookups + sinks for one `containers[]` entry validation pass. */
 interface ContainerEntryChecks {
     boundClasses: ReadonlySet<string | undefined>;
+    /** Storage kind per class, folded from the migration history. */
+    classKinds: ReadonlyMap<string, MigrationClassKind>;
     errors: string[];
-    nonSqliteClasses: ReadonlySet<string>;
-    sqliteClasses: ReadonlySet<string>;
     warnings: string[];
 }
 
@@ -429,7 +430,7 @@ interface ContainerEntryChecks {
  * {@link validateContainers} to keep its cognitive complexity bounded.
  */
 const validateContainerEntry = (entry: WranglerContainerEntry | null | undefined, label: string, checks: ContainerEntryChecks): void => {
-    const { boundClasses, errors, nonSqliteClasses, sqliteClasses, warnings } = checks;
+    const { boundClasses, classKinds, errors, warnings } = checks;
 
     if (!entry || typeof entry !== "object" || typeof entry.class_name !== "string" || entry.class_name.length === 0) {
         errors.push(`${label} must have a non-empty "class_name" naming its container-enabled Durable Object class`);
@@ -443,13 +444,15 @@ const validateContainerEntry = (entry: WranglerContainerEntry | null | undefined
 
     if (!boundClasses.has(entry.class_name)) {
         errors.push(
-            `${label} class "${entry.class_name}" has no matching durable_objects binding — run \`lunora dev\` to auto-reconcile wrangler.jsonc, or add { "name": "...", "class_name": "${entry.class_name}" }`,
+            `${label} class "${entry.class_name}" has no matching durable_objects binding — your dev server auto-reconciles this on startup; add { "name": "...", "class_name": "${entry.class_name}" } to fix it by hand`,
         );
     }
 
-    if (!sqliteClasses.has(entry.class_name)) {
+    const classKind = classKinds.get(entry.class_name);
+
+    if (classKind !== "sqlite") {
         errors.push(
-            nonSqliteClasses.has(entry.class_name)
+            classKind === "classic"
                 ? `${label} class "${entry.class_name}" is registered via "new_classes" but containers require SQLite-backed DOs — move it to "new_sqlite_classes"`
                 : `${label} class "${entry.class_name}" is missing from migrations — add a migration entry with "new_sqlite_classes": ["${entry.class_name}"]`,
         );
@@ -484,8 +487,14 @@ const objectBindingEntries = <T>(value: ReadonlyArray<T | null | undefined> | un
 const stringEntries = (value: unknown): string[] => (Array.isArray(value) ? (value as unknown[]).filter((entry) => isNonEmptyString(entry)) : []);
 
 /**
- * Fold `wrangler.migrations[]` IN ORDER into the set of Durable Object classes
- * that currently exist, applying each entry's `new_classes` +
+ * How a Durable Object class is stored — `sqlite` (`new_sqlite_classes`) or the
+ * legacy key-value `classic` (`new_classes`). Containers require `sqlite`.
+ */
+type MigrationClassKind = "classic" | "sqlite";
+
+/**
+ * Fold `wrangler.migrations[]` IN ORDER into the Durable Object classes that
+ * currently exist and how each is stored, applying each entry's `new_classes` +
  * `new_sqlite_classes` (add), then its `renamed_classes` (from → to), then its
  * `deleted_classes` (remove) — in that order, one entry at a time.
  *
@@ -495,22 +504,28 @@ const stringEntries = (value: unknown): string[] => (Array.isArray(value) ? (val
  * "does this class appear anywhere in migrations" check gets both cases
  * wrong. See plan 353.
  */
-const foldMigrationClasses = (migrations: WranglerConfig["migrations"]): ReadonlySet<string> => {
-    const classes = new Set<string>();
+const foldMigrationClassKinds = (migrations: WranglerConfig["migrations"]): ReadonlyMap<string, MigrationClassKind> => {
+    const classes = new Map<string, MigrationClassKind>();
 
     for (const migration of objectBindingEntries(migrations)) {
         for (const name of stringEntries(migration.new_classes)) {
-            classes.add(name);
+            classes.set(name, "classic");
         }
 
         for (const name of stringEntries(migration.new_sqlite_classes)) {
-            classes.add(name);
+            classes.set(name, "sqlite");
         }
 
         for (const rename of objectBindingEntries(migration.renamed_classes)) {
             if (isNonEmptyString(rename.from) && isNonEmptyString(rename.to)) {
+                // A rename carries the storage kind across. Renaming a class no
+                // entry ever registered is not something wrangler accepts, so the
+                // kind is unknowable — assume `sqlite` rather than invent a
+                // "move it to new_sqlite_classes" error for it.
+                const kind = classes.get(rename.from) ?? "sqlite";
+
                 classes.delete(rename.from);
-                classes.add(rename.to);
+                classes.set(rename.to, kind);
             }
         }
 
@@ -521,6 +536,9 @@ const foldMigrationClasses = (migrations: WranglerConfig["migrations"]): Readonl
 
     return classes;
 };
+
+/** The class names {@link foldMigrationClassKinds} says currently exist, without their storage kind. */
+const foldMigrationClasses = (migrations: WranglerConfig["migrations"]): ReadonlySet<string> => new Set(foldMigrationClassKinds(migrations).keys());
 
 /**
  * Every `durable_objects.bindings[]` entry whose class lives in THIS script
@@ -539,7 +557,7 @@ const validateDurableObjectMigrations = (wrangler: WranglerConfig, errors: strin
             errors.push(
                 `durable_objects.bindings declares class "${binding.class_name}" but it is missing from migrations — ` +
                     `add a migration entry with "new_sqlite_classes": ["${binding.class_name}"] (or "new_classes" for a non-SQLite-backed class), ` +
-                    "or run `lunora dev` to auto-reconcile wrangler.jsonc",
+                    "or let the dev server auto-reconcile it on the next start",
             );
         }
     }
@@ -570,12 +588,14 @@ const validateContainers = (wrangler: WranglerConfig, errors: string[], warnings
     }
 
     const boundClasses = new Set(objectBindingEntries(wrangler.durable_objects?.bindings).map((binding) => binding.class_name));
-    const migrations = wrangler.migrations ?? [];
-    const sqliteClasses = new Set(migrations.flatMap((migration) => [...(migration?.new_sqlite_classes ?? [])]));
-    const nonSqliteClasses = new Set(migrations.flatMap((migration) => [...(migration?.new_classes ?? [])]));
+    // The SAME fold the Durable Object check uses — a flat scan of
+    // `new_sqlite_classes` would report a renamed container class as missing and
+    // would still count one a later entry deleted, and it throws a raw
+    // `TypeError` on a hand-written `"new_sqlite_classes": {}`.
+    const classKinds = foldMigrationClassKinds(wrangler.migrations);
 
     for (const [index, entry] of entries.entries()) {
-        validateContainerEntry(entry, `containers[${String(index)}]`, { boundClasses, errors, nonSqliteClasses, sqliteClasses, warnings });
+        validateContainerEntry(entry, `containers[${String(index)}]`, { boundClasses, classKinds, errors, warnings });
     }
 
     if (wrangler.observability?.enabled !== true) {
@@ -1173,9 +1193,6 @@ const withTailConsumer = (wrangler: WranglerConfig, consumer: TailConsumer): Wra
     return { ...wrangler, tail_consumers: [...existing, consumer] };
 };
 
-/** Env values that read as "on" for a boolean-ish `LUNORA_*` flag — mirrors the DO security audit. */
-const TRUTHY_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
-
 /**
  * Reject the one CORS combination the worker cannot enforce: a `*` wildcard
  * origin paired with credentials. The runtime's `resolveSecurity` throws on the
@@ -1195,7 +1212,7 @@ const validateCorsVariables = (wrangler: WranglerConfig, errors: string[]): void
     const allowCredentials = vars["LUNORA_CORS_ALLOW_CREDENTIALS"];
 
     const hasWildcard = typeof allowedOrigins === "string" && allowedOrigins.split(",").some((entry) => entry.trim() === "*");
-    const credentialsOn = typeof allowCredentials === "string" && TRUTHY_ENV_VALUES.has(allowCredentials.trim().toLowerCase());
+    const credentialsOn = isEnvEnabled(allowCredentials);
 
     if (hasWildcard && credentialsOn) {
         errors.push(
@@ -1264,7 +1281,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
 
     if (!shardBinding) {
         errors.push(
-            'durable_objects.bindings must include { "name": "SHARD", "class_name": "ShardDO" } — run `lunora dev` to auto-reconcile wrangler.jsonc, or add the binding manually',
+            'durable_objects.bindings must include { "name": "SHARD", "class_name": "ShardDO" } — your dev server auto-reconciles this on startup, or add the binding manually',
         );
     }
 
@@ -1303,7 +1320,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
 
         if (!databaseBinding) {
             errors.push(
-                'schema declares .global() tables; d1_databases must include a binding named "DB" — run `lunora dev` to auto-reconcile wrangler.jsonc, or add the binding manually',
+                'schema declares .global() tables; d1_databases must include a binding named "DB" — your dev server auto-reconciles this on startup, or add the binding manually',
             );
         }
     }

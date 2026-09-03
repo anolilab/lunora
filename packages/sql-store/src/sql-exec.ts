@@ -12,7 +12,7 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "sql-exec" sits beside "ctx-db", the established module naming in this package. */
 /* eslint-disable no-restricted-syntax -- `sql\`…\` here is the drizzle tagged-template SQL builder, not a string conversion; the rule misfires on the inner TemplateLiteral. */
 
-import type { TableDefinitionLike } from "@lunora/shard-engine";
+import type { ColumnMetaLike, TableDefinitionLike } from "@lunora/shard-engine";
 import { renderSql } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
@@ -25,6 +25,21 @@ const physicalColumn = (field: string): string => (field === "_id" || field === 
 
 /** Logical-field → physical column reference as a drizzle {@link SQL}; the engine's dialect quotes it at render time (`_id`/`id` → `id`). */
 const columnRefSql = (field: string): SQL => sql`${sql.identifier(physicalColumn(field))}`;
+
+/** A table's fields paired with their column meta, skipping fields that declare none. */
+const tableColumns = (definition: TableDefinitionLike): [string, ColumnMetaLike][] => {
+    const columns: [string, ColumnMetaLike][] = [];
+
+    for (const [field, validator] of Object.entries(definition.shape)) {
+        const column = validator._meta?.column;
+
+        if (column) {
+            columns.push([field, column]);
+        }
+    }
+
+    return columns;
+};
 
 /**
  * Run a composable drizzle {@link SQL} read through the (string-based) exec:
@@ -325,4 +340,7 @@ export {
     queryBatch,
     queryRun,
     serializeColumnValue,
+    tableColumns,
 };
+
+export { OCC_VERSION_COLUMN } from "../../../shared/occ-version-column";

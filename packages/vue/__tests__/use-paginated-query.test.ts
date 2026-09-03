@@ -1,3 +1,4 @@
+import type { SubscriptionError } from "@lunora/client";
 import type { PaginationResult } from "@lunora/client/pagination";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { effectScope, nextTick, ref } from "vue";
@@ -88,6 +89,18 @@ describe("usePaginatedQuery (Vue)", () => {
         result.loadMore(NUM_ITEMS);
         await flushAsync();
 
+        // `loadMore` pins the open-ended page into a bounded `(null, cur-1]`
+        // range: the open-ended subscription closes and a fresh bounded one
+        // opens alongside the new tail. An open-ended subscription kept alive
+        // under the pinned key would keep serving `LIMIT n` rows across the
+        // boundary (duplicating/dropping rows on insert/delete) and never SPLIT.
+        expect(fake.subscribeCalls.map((call) => call.args["paginationOpts"])).toStrictEqual([
+            { cursor: null, endCursor: null, numItems: NUM_ITEMS },
+            { cursor: null, endCursor: "cur-1", numItems: NUM_ITEMS },
+            { cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS },
+        ]);
+        expect(fake.unsubscribeSpy).toHaveBeenCalledTimes(1);
+
         // The second page subscription should have been opened.
         const secondPageArgs = { paginationOpts: { cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS } };
         const secondPage: PaginationResult<{ id: string }> = {
@@ -101,6 +114,104 @@ describe("usePaginatedQuery (Vue)", () => {
 
         expect(result.results.value).toStrictEqual([...firstPageItems, ...secondPageItems]);
         expect(result.status.value).toBe("Exhausted");
+
+        scope.stop();
+    });
+
+    it("loadMore works again after a JOIN reproduces the cursor of the previous loadMore", async () => {
+        // JOIN fires below 0.5 × numItems: with 4 a bounded page of 1 item merges
+        // into its open-ended neighbour, and the merged page carries the pinned
+        // page's result — whose `continueCursor` is the very cursor the previous
+        // `loadMore` applied. The re-entrancy guard must not treat that as a
+        // repeat and turn `loadMore` into a permanent no-op.
+        const NUM = 4;
+        const fake = createFakeClient();
+        const scope = effectScope();
+        const result = scope.run(() => fake.provide(() => usePaginatedQuery(fn, {}, { initialNumItems: NUM })))!;
+
+        fake.push(
+            "messages:list",
+            { paginationOpts: { cursor: null, endCursor: null, numItems: NUM } },
+            { continueCursor: "c1", isDone: false, page: [{ id: "1" }, { id: "2" }, { id: "3" }, { id: "4" }] },
+        );
+        await flushAsync();
+
+        result.loadMore(NUM);
+        await flushAsync();
+
+        fake.push(
+            "messages:list",
+            { paginationOpts: { cursor: "c1", endCursor: null, numItems: NUM } },
+            { continueCursor: null, isDone: true, page: [{ id: "5" }, { id: "6" }] },
+        );
+        await flushAsync();
+
+        // The pinned page shrinks below the JOIN threshold → merged back into one
+        // open-ended page whose carried result still reports `continueCursor: c1`.
+        fake.push(
+            "messages:list",
+            { paginationOpts: { cursor: null, endCursor: "c1", numItems: NUM } },
+            { continueCursor: "c1", isDone: false, page: [{ id: "x" }] },
+        );
+        await flushAsync();
+
+        expect(result.status.value).toBe("CanLoadMore");
+
+        const before = fake.subscribeCalls.length;
+
+        result.loadMore(NUM);
+        await flushAsync();
+
+        expect(fake.subscribeCalls.slice(before).map((call) => call.args["paginationOpts"])).toStrictEqual([
+            { cursor: null, endCursor: "c1", numItems: NUM },
+            { cursor: "c1", endCursor: null, numItems: NUM },
+        ]);
+        expect(result.status.value).toBe("LoadingMore");
+
+        scope.stop();
+    });
+
+    it("a page error surfaces on `error`, returns status to CanLoadMore, and lets loadMore retry", async () => {
+        const fake = createFakeClient();
+        const errors: SubscriptionError[] = [];
+        const scope = effectScope();
+        const result = scope.run(() => fake.provide(() => usePaginatedQuery(fn, {}, { initialNumItems: NUM_ITEMS, onError: (error) => errors.push(error) })))!;
+
+        fake.push(
+            "messages:list",
+            { paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS } },
+            { continueCursor: "cur-1", isDone: false, page: firstPageItems },
+        );
+        await flushAsync();
+
+        result.loadMore(NUM_ITEMS);
+        await flushAsync();
+
+        expect(result.status.value).toBe("LoadingMore");
+
+        const tailArgs = { cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS };
+        const tail = fake.subscribeCalls.find((call) => JSON.stringify(call.args["paginationOpts"]) === JSON.stringify(tailArgs));
+
+        // An RLS denial on the new page: without an error channel the feed sat
+        // in `LoadingMore` forever with `isLoading` true and nothing surfaced.
+        tail?.options.onError?.({ code: "FORBIDDEN", message: "denied" });
+        await flushAsync();
+
+        expect(errors).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
+        expect(result.error.value).toStrictEqual({ code: "FORBIDDEN", message: "denied" });
+        expect(result.status.value).toBe("CanLoadMore");
+        expect(result.isLoading.value).toBe(false);
+        expect(result.results.value).toStrictEqual(firstPageItems);
+
+        // The failed tail was dropped, so `loadMore` re-opens exactly that range.
+        const before = fake.subscribeCalls.length;
+
+        result.loadMore(NUM_ITEMS);
+        await flushAsync();
+
+        expect(result.error.value).toBeUndefined();
+        expect(result.status.value).toBe("LoadingMore");
+        expect(fake.subscribeCalls.slice(before).map((call) => call.args["paginationOpts"])).toStrictEqual([tailArgs]);
 
         scope.stop();
     });

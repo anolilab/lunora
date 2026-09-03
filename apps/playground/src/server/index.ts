@@ -3,7 +3,7 @@ import { admin, organization, passkey, twoFactor } from "@lunora/auth/plugins";
 import type { D1DatabaseLike } from "@lunora/d1";
 import { createMailerFromEnv } from "@lunora/mail";
 import type { ForwardableEmailMessageLike, ShardNamespaceLike as InboundShardNamespaceLike } from "@lunora/mail/inbound";
-import { createInboundEmailHandler, dispatchToLunoraFunction, parseInboundEmail } from "@lunora/mail/inbound";
+import { authenticatesFrom, createInboundEmailHandler, dispatchToLunoraFunction, parseInboundEmail } from "@lunora/mail/inbound";
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
 import { createScheduler } from "@lunora/scheduler";
 import type { R2BucketLike } from "@lunora/storage";
@@ -151,15 +151,13 @@ const app = defineApp<Env>()
             // this gate anyone who can send mail to the routed address reaches
             // that, choosing `from` freely.
             //
-            // Fails closed on purpose: a `null` verdict means the receiving MX
-            // stamped no `Authentication-Results` header, which is "unknown",
-            // not "fine". DMARC passing is sufficient (it subsumes an aligned
-            // SPF or DKIM); otherwise both SPF and DKIM must pass on their own.
-            verify: (email) => {
-                const { dkim, dmarc, spf } = email.authentication;
-
-                return dmarc === "pass" || (spf === "pass" && dkim === "pass");
-            },
+            // `authenticatesFrom` is `@lunora/mail`'s one implementation of the
+            // rule: accept only when some reported DMARC/SPF/DKIM clause both
+            // passes AND names the `From` address's own domain. Do not hand-roll
+            // it — the copy that used to live here asked only "did any clause
+            // pass?", which an attacker satisfies with a genuine `spf=pass` +
+            // `dkim=pass` for the domain THEY control while forging `From`.
+            verify: authenticatesFrom,
         });
 
         await handler(message as ForwardableEmailMessageLike, env, context);

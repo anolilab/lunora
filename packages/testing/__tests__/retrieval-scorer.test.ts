@@ -174,6 +174,17 @@ describe("groundednessScorer", () => {
         expect(judge.mock.calls[0]?.[0]).toContain("Keys rotate every 90 days.");
     });
 
+    it("refuses an out-of-range judge verdict instead of clamping it to 1", async () => {
+        expect.assertions(1);
+
+        // Shares `parseJudgeScore` with `llmScorer`, so "7/10" used to score a perfect 1.
+        const judge = vi.fn<(prompt: string) => Promise<string>>(async () => "7/10 - mostly supported");
+
+        await expect(
+            groundednessScorer({ judge }).score({ metadata: { context: "[source:a#0]\nKeys rotate every 90 days." }, output: "Keys rotate every 90 days." }),
+        ).rejects.toThrow("did not answer with a score in [0, 1]");
+    });
+
     it("fails closed with no retrieved context", async () => {
         expect.assertions(2);
 

@@ -27,6 +27,14 @@ interface PrepareCommandOptions {
     spawner?: Spawner;
 
     /**
+     * Fail on ERROR-level codegen advisories. `undefined` falls back to CI
+     * detection, the same as `lunora deploy` — the two run one pipeline, so the
+     * opt-out has to exist on both or a CI job that `prepare` blocks has no way
+     * past it short of dropping the pre-check the deploy repeats anyway.
+     */
+    strictAdvisories?: boolean;
+
+    /**
      * Deploy target, matching `deploy` and `logs`. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`.
      * Resolved through the same registry they use so a second driver does not
      * have to be found here separately.
@@ -70,6 +78,7 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
             cwd,
             logger: options.logger,
             spawner: options.spawner,
+            strictAdvisories: options.strictAdvisories,
             target: options.target,
             updateSchemaBaseline: options.updateSchemaBaseline,
         },
@@ -103,6 +112,7 @@ const execute: CommandHandler<PrepareOptions> = defineHandler<PrepareOptions>(({
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         logger,
+        strictAdvisories: options.strictAdvisories,
         target: options.target,
         updateSchemaBaseline: options.updateSchemaBaseline === true,
     }),

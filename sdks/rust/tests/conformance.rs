@@ -9,9 +9,10 @@ use std::thread;
 
 use lunora::client::{
     build_connect_frame, build_rpc_body, build_shape_subscribe_frame, build_subscribe_frame, build_unsubscribe_frame, parse_rpc_response, Client, ClientError,
-    StreamEvent, MAX_PENDING_POKES,
+    StreamEvent, CODE_INVALID_FRAME, MAX_PENDING_POKES,
 };
 use lunora::key::{stable_stringify, stable_wire_key};
+use lunora::submit::is_transient;
 use lunora::wire::{decode_wire, encode_wire, from_json, from_model_json, WireValue, MAX_BIGINT_DIGITS, MAX_DEPTH, MAX_EXACT_INTEGER, TAG};
 use serde_json::{json, Value};
 
@@ -22,11 +23,12 @@ use serde_json::{json, Value};
 mod offline_cases;
 
 use offline_cases::{
-    offline_flush_batches_multiple_writes, offline_flush_replays_and_confirms_optimistic, offline_flush_unencodable_write_settles_terminal,
-    offline_queue_drains_only_the_named_shard, offline_queue_fifo_replay_order, offline_queue_hydrate_overflow_settles_discarded,
-    offline_queue_hydrates_persisted_writes, offline_queue_identity_gate_rejects_replay, offline_queue_overflow_evicts_oldest,
-    offline_queue_precondition_drops_stale_write, optimistic_cursorless_frame_preserves_cursor, optimistic_layer_drops_on_commit_cursor,
-    optimistic_layer_drops_on_settled_frame, optimistic_layer_rebases_onto_server_frame, optimistic_layer_rolls_back_on_failure,
+    offline_flush_batch_splits_on_payload_too_large, offline_flush_batches_multiple_writes, offline_flush_replays_and_confirms_optimistic,
+    offline_flush_unencodable_write_settles_terminal, offline_queue_drains_only_the_named_shard, offline_queue_fifo_replay_order,
+    offline_queue_hydrate_overflow_settles_discarded, offline_queue_hydrates_persisted_writes, offline_queue_identity_gate_rejects_replay,
+    offline_queue_overflow_evicts_oldest, offline_queue_precondition_drops_stale_write, optimistic_cursorless_frame_preserves_cursor,
+    optimistic_layer_drops_on_commit_cursor, optimistic_layer_drops_on_settled_frame, optimistic_layer_rebases_onto_server_frame,
+    optimistic_layer_rolls_back_on_failure,
 };
 
 /// Walks up from the crate directory to the repo's `protocol/fixtures`.
@@ -102,6 +104,7 @@ fn conformance_manifest_is_covered() {
             "server_frame_consumer" => server_frame_consumer(),
             "subscription_stream_yields_frame_values_in_order" => subscription_stream_yields_frame_values_in_order(),
             "shape_subscribe_frame" => shape_subscribe_frame(),
+            "shape_subscriptions_resend_after_reconnect" => shape_subscriptions_resend_after_reconnect(),
             "poke_sequence_materialises_rows" => poke_sequence_materialises_rows(),
             "poke_parts_do_not_apply_before_poke_end" => poke_parts_do_not_apply_before_poke_end(),
             "shape_reset_poke_replaces_membership" => reset_poke_replaces_the_view(),
@@ -118,6 +121,7 @@ fn conformance_manifest_is_covered() {
             "offline_queue_identity_gate_rejects_replay" => offline_queue_identity_gate_rejects_replay(),
             "offline_flush_replays_and_confirms_optimistic" => offline_flush_replays_and_confirms_optimistic(),
             "offline_flush_batches_multiple_writes" => offline_flush_batches_multiple_writes(),
+            "offline_flush_batch_splits_on_payload_too_large" => offline_flush_batch_splits_on_payload_too_large(),
             "optimistic_cursorless_frame_preserves_cursor" => optimistic_cursorless_frame_preserves_cursor(),
             "offline_queue_hydrate_overflow_settles_discarded" => offline_queue_hydrate_overflow_settles_discarded(),
             "offline_flush_unencodable_write_settles_terminal" => offline_flush_unencodable_write_settles_terminal(),
@@ -381,7 +385,26 @@ fn rpc_responses() {
 fn non_2xx_without_error_envelope_fails() {
     // protocol/README.md §4.2. Without the status check this returned a null
     // result and no error — the caller believes its mutation committed.
-    assert!(parse_rpc_response(&json!({ "message": "bad gateway" }), 502).is_err());
+    let Err(ClientError::Api(error)) = parse_rpc_response(&json!({ "message": "bad gateway" }), 502) else {
+        panic!("a non-2xx with no error envelope must fail");
+    };
+
+    // The CODE is unchanged, per §4.2. What is new is the flag beside it: this
+    // body never came from a Lunora function, so nothing reached the shard and a
+    // lone queued write must not be dropped for being alone.
+    assert_eq!(error.code, "INTERNAL");
+    assert!(error.transient, "an envelope-less non-2xx reached no verdict");
+    assert!(is_transient(&ClientError::Api(error)));
+
+    // A coded 5xx is likewise the shard failing UNDER the call, while the same
+    // envelope at 4xx is the function's own answer and terminal.
+    let coded = |status| match parse_rpc_response(&json!({ "error": { "code": "BAD_REQUEST", "message": "no" } }), status) {
+        Err(ClientError::Api(error)) => error.transient,
+        other => panic!("expected an ApiError, got {other:?}"),
+    };
+
+    assert!(coded(503));
+    assert!(!coded(400));
 }
 
 fn client_frame_builders() {
@@ -448,6 +471,56 @@ fn server_frame_consumer() {
             assert_eq!(errors[0].code.as_deref(), expect["code"].as_str(), "{name}");
         }
     }
+
+    a_refused_payload_stays_on_its_own_subscription();
+}
+
+/// A `data` payload the codec refuses reaches THAT subscription's error callback
+/// and nothing else.
+///
+/// Returning it out of `handle_frame` ended the caller's socket read loop — and
+/// with it every OTHER subscription on the client — over one bad frame.
+fn a_refused_payload_stays_on_its_own_subscription() {
+    let mut client = Client::new("https://app.example", None);
+
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let errors: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&errors);
+    let seen: Arc<Mutex<Vec<WireValue>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::clone(&seen);
+
+    let first = client.subscribe(
+        "messages:list",
+        WireValue::Object(Vec::new()),
+        None,
+        Some(Box::new(move |error| recorder.lock().expect("errors").push(error.code.clone()))),
+    );
+    let second = client.subscribe(
+        "messages:count",
+        WireValue::Object(Vec::new()),
+        Some(Box::new(move |value| observer.lock().expect("seen").push(value.clone()))),
+        None,
+    );
+
+    // A bigint tag whose payload is not a number: inside the codec's vocabulary,
+    // outside its grammar.
+    let refused = format!(r#"{{"cursor":1,"data":["{TAG}","bigint","not-a-number"],"id":"{first}","type":"data"}}"#);
+    let kind = client.handle_frame(&refused).expect("a refused payload must not fail handle_frame");
+
+    assert_eq!(kind.as_deref(), Some("error"), "it is reported as an error frame");
+    assert_eq!(
+        *errors.lock().expect("errors"),
+        vec![Some(CODE_INVALID_FRAME.to_string())],
+        "on the addressed subscription's own error callback"
+    );
+
+    // The read loop survived, so every other subscription still delivers.
+    client
+        .handle_frame(&format!(r#"{{"cursor":2,"data":7,"id":"{second}","type":"data"}}"#))
+        .expect("the next good frame still lands");
+
+    assert_eq!(*seen.lock().expect("seen"), vec![WireValue::Number(7.0)]);
 }
 
 /// The channel form of a live query: same subscription, same decode, same order
@@ -489,6 +562,61 @@ fn shape_subscribe_frame() {
     let frame = build_shape_subscribe_frame("shape_1", "roomMessages", Some(&args), None, None).expect("build");
 
     assert_eq!(canonical(&frame), canonical(&document["shape"]["shape-subscribe-cold"]));
+}
+
+/// A reconnect re-subscribes BOTH registries.
+///
+/// A resend that walked only the queries left every `subscribe_shape` view
+/// subscribed to a socket that no longer exists — silently, and for the rest of
+/// the process's life.
+fn shape_subscriptions_resend_after_reconnect() {
+    let mut client = Client::new("https://app.example", None);
+
+    client.attach_socket(Box::new(|_frame| {}));
+    client.subscribe(
+        "messages:list",
+        WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
+        None,
+        None,
+    );
+    client.subscribe_shape(
+        "roomMessages",
+        Some(WireValue::Object(vec![("room".into(), WireValue::String("general".into()))])),
+        None,
+        None,
+    );
+
+    // The cursors a resume carries are written by the frame handler, so they have
+    // to exist before the resend is built.
+    client
+        .handle_frame(r#"{"cursor":9,"data":[],"epoch":"e1","id":"sub_1","type":"data"}"#)
+        .expect("data frame");
+    client
+        .handle_frame(r#"{"epoch":"e1","pokeId":"poke-1","type":"pokeStart"}"#)
+        .expect("poke start");
+    client
+        .handle_frame(r#"{"pokeId":"poke-1","reset":true,"rowsPatch":[],"shapeId":"shape_1","type":"pokePart"}"#)
+        .expect("poke part");
+    client
+        .handle_frame(r#"{"checkpoint":5,"epoch":"e1","pokeId":"poke-1","type":"pokeEnd"}"#)
+        .expect("poke end");
+
+    let resent: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&resent);
+
+    client.attach_socket(Box::new(move |frame| recorder.lock().expect("resent").push(frame.clone())));
+    client.resend_subscriptions().expect("resend");
+
+    let frames = resent.lock().expect("resent");
+    let kinds: Vec<&str> = frames.iter().map(|frame| frame["type"].as_str().unwrap_or_default()).collect();
+
+    assert_eq!(kinds, vec!["subscribe", "shape_subscribe"], "both registries, queries first");
+    assert_eq!(frames[0]["query"]["sinceSeq"], json!(9), "the query resumes from its tracked cursor");
+    assert_eq!(frames[1]["id"], json!("shape_1"));
+    assert_eq!(frames[1]["shape"]["name"], json!("roomMessages"));
+    assert_eq!(frames[1]["shape"]["args"], json!({ "room": "general" }));
+    assert_eq!(frames[1]["sinceCheckpoint"], json!(5), "and the shape from its tracked checkpoint");
+    assert_eq!(frames[1]["sinceEpoch"], json!("e1"));
 }
 
 fn poke_sequence_materialises_rows() {

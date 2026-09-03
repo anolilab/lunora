@@ -252,6 +252,21 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
             expect(allowed.headers.get("location")).toContain("/upload/");
         });
 
+        it("denies a truthy non-boolean verdict — only an exact `true` allows the write", async () => {
+            expect.hasAssertions();
+
+            // The exact mistake the gate exists to survive: an untyped JS caller
+            // writing `authorize: async ({ request }) => verifySignedUrl(new
+            // URL(request.url), secret)` and forgetting `.valid`. That hands back
+            // `{ valid: false }` — a DENIAL that is TRUTHY — and this is the write
+            // path, so passing it through lets an attacker put bytes in the bucket.
+            const gated = authzHandler(() => ({ valid: false }) as unknown as boolean);
+
+            const response = await gated.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10" }, method: "POST" }));
+
+            expect(response.status).toBe(403);
+        });
+
         it("fails closed when the authorize callback throws", async () => {
             expect.hasAssertions();
 

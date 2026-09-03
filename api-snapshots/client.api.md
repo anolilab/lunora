@@ -980,6 +980,7 @@ interface PersistenceAdapter {
     clear: () => Promise<void>;
     load: () => Promise<PersistedMutation[]>;
     remove: (id: string) => Promise<void>;
+    replace: (mutation: PersistedMutation) => Promise<void>;
 }
 ```
 
@@ -1306,7 +1307,7 @@ type SubscriptionCallback = (data: unknown) => void;
 
 ```ts
 interface SubscriptionError {
-    code?: string;
+    code?: LunoraErrorCodeInput;
     message: string;
 }
 ```
@@ -1393,6 +1394,14 @@ class TabCoordinator {
     broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null): void;
     broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null): void;
     broadcastConnectionStatus(status: ConnectionStatus, identity?: string | null): void;
+}
+```
+
+### `TransportError` (class)
+
+```ts
+class TransportError extends LunoraError {
+    constructor(message: string, data?: unknown);
 }
 ```
 

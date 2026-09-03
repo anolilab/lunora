@@ -26,6 +26,7 @@ from lunora.offline import (
     random_id,
 )
 from lunora.submit import SubmitOptions
+from lunora.wire import WireBigInt, WireBytes, WireDate
 from tests._fixtures import load
 from tests._manifest import covers
 
@@ -33,20 +34,28 @@ FIXTURES = load("offline-optimistic.json")["offlineQueue"]
 
 
 class _Store:
-    """An in-memory persistence adapter that records every call."""
+    """An in-memory persistence adapter that records every call.
+
+    It JSON round-trips every record, which an adapter holding the objects by
+    reference does not — and that is the whole point: a file, a SQLite text
+    column or a preferences store all serialise, so a record carrying the codec's
+    native wrappers either raises here or is written as something that does not
+    read back. Holding references made this suite blind to both.
+    """
 
     def __init__(self, records=None):
-        self.records = list(records or [])
+        self.records = [json.loads(json.dumps(record)) for record in (records or [])]
         self.appended = []
         self.removed = []
         self.cleared = 0
 
     def append(self, record):
-        self.appended.append(record)
-        self.records.append(record)
+        serialised = json.loads(json.dumps(record))
+        self.appended.append(serialised)
+        self.records.append(serialised)
 
     def load(self):
-        return list(self.records)
+        return [json.loads(json.dumps(record)) for record in self.records]
 
     def remove(self, mutation_id):
         self.removed.append(mutation_id)
@@ -616,6 +625,168 @@ class TestFlushIntegration(unittest.TestCase):
         self.assertEqual([event.status for event in settled], ["rejected"])
         self.assertEqual(getattr(settled[0].error, "code", None), case["code"])
         self.assertEqual(client.pending_mutation_count, case["maxItems"])
+
+    def test_a_queued_write_with_typed_args_survives_a_serialising_store(self):
+        covers("offline_queue_hydrates_persisted_writes")
+
+        # Every one of these is a native wrapper the codec understands and
+        # `json.dumps` does not. Persisting the native form reported the write
+        # "queued" while the adapter raised and nothing durable was written.
+        args = {"amount": WireBigInt(7), "blob": WireBytes(b"\x01\x02\x03\x04", "Int32Array"), "when": WireDate(1700000000000)}
+        store = _Store()
+        queue = OfflineQueue(persistence=store)
+        errors = []
+        queue.on_persistence_error = lambda operation, _error, mutation_id: errors.append((operation, mutation_id))
+
+        queue.enqueue(QueuedMutation(args=args, function_path="ledger:add", mutation_id="m-typed"))
+
+        self.assertEqual(errors, [], "the record must serialise, so nothing is reported as a failed append")
+        self.assertEqual(store.appended[0]["args"]["amount"], ["$lunora.wire$", "bigint", "7"])
+
+        restored = OfflineQueue(persistence=store)
+        restored.hydrate()
+
+        self.assertEqual(_ids(restored.items()), ["m-typed"])
+        # Decoded back to the SAME native values, so the replay sends the write
+        # that was made rather than whatever the adapter's stringification left.
+        self.assertEqual(restored.items()[0].args, args)
+
+    def test_a_persisted_record_that_cannot_be_decoded_settles_rejected(self):
+        covers("offline_queue_hydrates_persisted_writes")
+
+        # A wire tag with no payload: the store was corrupted, or written by an
+        # incompatible build. Replaying it with substitute args would commit a
+        # DIFFERENT write than the caller made, which is corruption rather than
+        # failure.
+        store = _Store([{"args": {"amount": ["$lunora.wire$", "bigint", "not-a-number"]}, "functionPath": "ledger:add", "id": "m-bad"}])
+        settled = []
+        client = LunoraClient("https://app.example")
+        client.offline_queue = OfflineQueue(persistence=store)
+        client.on_mutation_settled(settled.append)
+
+        client.hydrate_offline_queue()
+
+        self.assertEqual(_ids(client.offline_queue.items()), [])
+        self.assertEqual([(event.mutation_id, event.status, event.error.code) for event in settled], [("m-bad", "rejected", "OFFLINE_WRITE_UNDECODABLE")])
+        self.assertEqual(store.removed, ["m-bad"], "the unreadable record is purged, not left to fail every restart")
+
+    def test_a_batch_the_worker_refuses_for_size_is_split_and_retried(self):
+        covers("offline_flush_batch_splits_on_payload_too_large")
+
+        # The worker reads a batch body under a 1 MiB budget
+        # (packages/runtime/src/body-readers.ts) and answers 413
+        # PAYLOAD_TOO_LARGE past it. A whole-batch coded envelope is a verdict on
+        # every entry, so a count-only chunker settled the lot `rejected`.
+        budget = 400
+        bodies = []
+
+        def post(_url, _headers, body):
+            bodies.append(len(body))
+
+            if len(body) > budget:
+                return 413, {"error": {"code": "PAYLOAD_TOO_LARGE", "message": "Body too large"}}
+
+            calls = json.loads(body)["calls"]
+
+            return 200, {"results": [{"body": {"commitCursor": 1, "result": None}, "id": call["id"]} for call in calls]}
+
+        store = _Store()
+        client = LunoraClient("https://app.example", client_id="c-1", http_post=post)
+        client.offline_queue = OfflineQueue(persistence=store)
+
+        queued = [f"m-{index}" for index in range(4)]
+        for mutation_id in queued:
+            client.offline_queue.enqueue(QueuedMutation(args={"text": "x" * 120}, function_path="messages:send", mutation_id=mutation_id))
+
+        report = asyncio.run(client.flush_offline_queue())
+
+        self.assertEqual(report.committed, queued, "every write commits; none is dropped for the size of the batch it shared")
+        self.assertEqual(report.rejected, [])
+        self.assertEqual(_ids(client.offline_queue.items()), [])
+        self.assertGreater(max(bodies), budget, "the first attempt has to be the over-budget one, or nothing was split")
+
+    def test_a_lone_queued_write_survives_an_envelope_less_502(self):
+        covers("non_2xx_without_error_envelope_fails")
+
+        # The same response on the batch path (two or more writes) was already
+        # classified transient, so whether a gateway blip LOST a durable write
+        # depended on the queue's depth.
+        def post(_url, _headers, _body):
+            return 502, {"message": "bad gateway"}
+
+        store = _Store()
+        settled = []
+        client = LunoraClient("https://app.example", http_post=post)
+        client.offline_queue = OfflineQueue(persistence=store)
+        client.on_mutation_settled(settled.append)
+        client.offline_queue.enqueue(QueuedMutation(args={}, function_path="messages:send", mutation_id="m-502"))
+
+        report = asyncio.run(client.flush_offline_queue())
+
+        self.assertEqual(report.rejected, [])
+        self.assertEqual(report.requeued, ["m-502"])
+        self.assertEqual(_ids(client.offline_queue.items()), ["m-502"])
+        self.assertEqual(settled, [], "nothing settled: no verdict was ever reached")
+        self.assertEqual(store.removed, [], "the durable record stays, because the write is still good")
+
+    def test_a_rate_limited_replay_requeues_and_defers_the_next_flush(self):
+        covers("offline_flush_replays_and_confirms_optimistic")
+
+        posts = []
+
+        def post(_url, _headers, _body):
+            posts.append(1)
+
+            return 429, {"error": {"code": "TOO_MANY_REQUESTS", "data": {"retryAfterMs": 60000}, "message": "slow down"}}
+
+        client = LunoraClient("https://app.example", http_post=post)
+        client.offline_queue = OfflineQueue(persistence=_Store())
+        client.offline_queue.enqueue(QueuedMutation(args={}, function_path="messages:send", mutation_id="m-429"))
+
+        report = asyncio.run(client.flush_offline_queue())
+
+        # "Not now", not "no": the write is valid and the server asked for it
+        # later, so dropping it loses data for being punctual.
+        self.assertEqual(report.rejected, [])
+        self.assertEqual(report.requeued, ["m-429"])
+        self.assertEqual(report.retry_after_ms, 60000)
+
+        again = asyncio.run(client.flush_offline_queue())
+
+        self.assertEqual(len(posts), 1, "the second flush must wait out the delay rather than earn the same 429")
+        self.assertGreater(again.retry_after_ms, 0)
+        self.assertEqual(_ids(client.offline_queue.items()), ["m-429"])
+
+    def test_a_rate_limited_batch_slot_requeues_and_clamps_the_delay(self):
+        covers("offline_flush_batches_multiple_writes")
+
+        def post(_url, _headers, body):
+            calls = json.loads(body)["calls"]
+
+            return 200, {
+                "results": [
+                    {"body": {"error": {"code": "TOO_MANY_REQUESTS", "data": {"retryAfterMs": 900000}, "message": "slow down"}}, "id": calls[0]["id"]},
+                    {"body": {"commitCursor": 3, "result": None}, "id": calls[1]["id"]},
+                ]
+            }
+
+        store = _Store()
+        client = LunoraClient("https://app.example", client_id="c-1", http_post=post)
+        client.offline_queue = OfflineQueue(persistence=store)
+
+        for mutation_id in ("m-a", "m-b"):
+            client.offline_queue.enqueue(QueuedMutation(args={}, function_path="messages:send", mutation_id=mutation_id))
+
+        report = asyncio.run(client.flush_offline_queue())
+
+        # A slot the limiter refused to look at is not a verdict on that write —
+        # the per-slot rule is the same predicate the single-call path uses.
+        self.assertEqual(report.rejected, [])
+        self.assertEqual(report.committed, ["m-b"])
+        self.assertEqual(report.requeued, ["m-a"])
+        # Clamped: a server (or a proxy) can name minutes, and a durable queue
+        # that sleeps that long has stopped being a queue.
+        self.assertEqual(report.retry_after_ms, 60000)
 
     def test_a_failed_online_write_rolls_its_overlay_back(self):
         covers("offline_flush_replays_and_confirms_optimistic")

@@ -113,6 +113,30 @@ describe(agentToolDefinitions, () => {
         expect(tools[0]?.inputSchema.required).toStrictEqual(["prompt"]);
     });
 
+    // A client that badges (or confirms) from `annotations` saw nothing here, so
+    // the one tool that starts a durable, billed run was the one it never
+    // prompted for.
+    it("annotates agent_<name> as a non-read-only side effect and the status tool as read-only", () => {
+        expect.assertions(2);
+
+        const tools = agentToolDefinitions(exposures, true);
+
+        expect(tools[0]?.annotations).toStrictEqual({
+            destructiveHint: true,
+            idempotentHint: false,
+            openWorldHint: true,
+            readOnlyHint: false,
+            title: "Run the support agent (starts a durable run)",
+        });
+        expect(tools[2]?.annotations).toStrictEqual({
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: true,
+            readOnlyHint: true,
+            title: "Check a durable agent run",
+        });
+    });
+
     it("honours a toolName override", () => {
         expect.assertions(1);
 

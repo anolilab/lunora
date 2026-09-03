@@ -287,8 +287,13 @@ describe("isDeterministicDispatchFailure", () => {
     it("is true for the deterministic allowlist and false for 408/429/5xx and non-LunoraErrors", async () => {
         expect.assertions(8);
 
+        // A real dispatch failure: the endpoint's `{ error: { code, … } }` envelope.
         const errorWithStatus = async (status: number): Promise<unknown> =>
-            createDispatchRunner({ env: ENV, fetchImpl: async () => new Response("boom", { status }), label: "@lunora/queue" })(REF).then(
+            createDispatchRunner({
+                env: ENV,
+                fetchImpl: async () => Response.json({ error: { code: "BAD_REQUEST", message: "boom" } }, { status }),
+                label: "@lunora/queue",
+            })(REF).then(
                 () => undefined,
                 (error: unknown) => error,
             );
@@ -301,6 +306,30 @@ describe("isDeterministicDispatchFailure", () => {
         expect(isDeterministicDispatchFailure(await errorWithStatus(429))).toBe(false);
         expect(isDeterministicDispatchFailure(await errorWithStatus(500))).toBe(false);
         expect(isDeterministicDispatchFailure(new Error("plain"))).toBe(false);
+    });
+
+    it("is false for an allowlisted status whose body carries no dispatch envelope (edge challenge / WAF block)", async () => {
+        expect.assertions(3);
+
+        // Cloudflare answers a blocked request with an HTML challenge page, not
+        // the dispatch endpoint's JSON envelope — the 403 says nothing about the
+        // function call, and clears once the rule or the route is fixed. Treating
+        // it as deterministic dead-letters the whole queue batch / burns the
+        // workflow step permanently, so it must stay retryable.
+        const htmlBody = async (status: number): Promise<unknown> =>
+            createDispatchRunner({
+                env: ENV,
+                fetchImpl: async () => new Response("<!DOCTYPE html><html><body>Attention Required! | Cloudflare</body></html>", { status }),
+                label: "@lunora/queue",
+            })(REF).then(
+                () => undefined,
+                (error: unknown) => error,
+            );
+
+        expect(isDeterministicDispatchFailure(await htmlBody(403))).toBe(false);
+        expect(isDeterministicDispatchFailure(await htmlBody(404))).toBe(false);
+        // The status still rides along for diagnostics — only the classification changes.
+        expect((await htmlBody(403)) as { status?: unknown }).toMatchObject({ status: 403 });
     });
 
     it("is false for a LunoraError that merely shares an allowlisted status but did not come from a dispatch response", () => {

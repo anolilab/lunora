@@ -86,4 +86,5 @@ export const columnRef = (field: string): string => {
 /** Physical index identifier — `<table>_<name>`, so two tables' like-named indexes don't collide in SQLite's flat index namespace. */
 export const physicalIndexName = (tableName: string, indexName: string): string => quoteIdentifier(`${tableName}_${indexName}`);
 
+export { OCC_VERSION_COLUMN } from "../../../shared/occ-version-column";
 export { quoteIdentifier } from "../../../shared/quote-identifier";

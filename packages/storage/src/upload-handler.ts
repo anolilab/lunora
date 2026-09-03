@@ -247,9 +247,17 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
 
         if (authorize !== undefined) {
             try {
-                const allowed = await authorize({ method: request.method, protocol, request, url: new URL(request.url) });
+                // Read back as `unknown` and compared to `true`, never tested for
+                // truthiness. The gate is DECLARED to answer a boolean, but it is
+                // app code and untyped JavaScript reaches it: an
+                // `async ({ request }) => verifySignedUrl(new URL(request.url), secret)`
+                // that forgot its `.valid` hands back `{ valid: false }`, which is
+                // TRUTHY. This is the WRITE path, so passing that through is an
+                // attacker putting bytes in the bucket. Mirrors
+                // `@lunora/server`'s `isServeAuthorized` on the read path.
+                const allowed: unknown = await authorize({ method: request.method, protocol, request, url: new URL(request.url) });
 
-                if (!allowed) {
+                if (allowed !== true) {
                     return denyResponse(protocol);
                 }
             } catch {

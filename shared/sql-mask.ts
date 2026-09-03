@@ -1,7 +1,7 @@
 /**
  * The canonical "where is this character actually code?" scanner for SQL, shared
  * by the read-only gate (`shared/sql-readonly.ts`) and the Studio's statement
- * splitter (`@lunora/studio`'s `split-statements.ts`).
+ * splitter (`shared/sql-split-statements.ts`).
  *
  * Its one job is BOUNDARY DETECTION: deciding whether a given `;` starts a new
  * statement or is content inside a literal, a quoted identifier, or a comment.
@@ -31,7 +31,7 @@ const MASK_CHAR = "x";
 const QUOTE_CLOSERS: Readonly<Record<string, string>> = { '"': '"', "'": "'", "[": "]", "`": "`" };
 
 /** Index just past a `-- …` line comment at `from` (the newline itself is left alone). */
-const skipLineComment = (sql: string, from: number): number => {
+export const skipLineComment = (sql: string, from: number): number => {
     let index = from + 2;
 
     while (index < sql.length && sql[index] !== "\n") {
@@ -42,7 +42,7 @@ const skipLineComment = (sql: string, from: number): number => {
 };
 
 /** Index just past a block comment at `from`, or `-1` when it never closes. */
-const skipBlockComment = (sql: string, from: number): number => {
+export const skipBlockComment = (sql: string, from: number): number => {
     const close = sql.indexOf("*/", from + 2);
 
     return close === -1 ? -1 : close + 2;

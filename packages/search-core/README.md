@@ -32,6 +32,13 @@ As a package it gets ESLint, its own tests and its own coverage gate. As `privat
 
 **Analysis is stored.** The same analysis must run over a document when it is indexed and over the query when it is searched, forever, or the two stop meeting. That is why `createSearchAnalyzer` carries a `profile` string: it is recorded alongside each companion's backfill progress, so changing a language — or bumping `ANALYZER_VERSION` — is _detected_ and rebuilds the index instead of leaving half of it analyzed the old way.
 
+The recorded profile is `<analyzer>:<field>`, not the analyzer alone — re-pointing an index at another column leaves every stored row holding the text of the column you abandoned, and a profile that only tracked analysis reported such an index complete while searches over the new column returned nothing. Any change to the recorded profile string rebuilds every deployed index once, in place, on the first migration after the change: nothing is ever emptied, the re-walk restarts at the top of the table and rewrites each row where it stands, so it costs one backfill walk per index, not a refill from nothing.
+
+What that rebuild costs a reader depends on which half of the profile moved:
+
+- **The analyzer moved** (a language change, or an `ANALYZER_VERSION` bump). Coverage is latched through the rebuild and **reads keep being served** — under the previous analysis rules, row by row, until each row's turn comes. The stored rows still answer about the column that was asked for.
+- **The field moved.** Coverage is dropped (`searchCoverageSurvives` compares the recorded field, not the analyzer), so **reads refuse with `SEARCH_INDEX_BUILDING` until the re-walk completes** — the stored rows hold another column's text, and serving them would answer confidently with matches from the column the index was pointed away from. The window is bounded by one walk, and `backfillSearch` closes it in a single admin call.
+
 If you change folding, stopwords, the token-length cap, or (one day) stemming, bump `ANALYZER_VERSION`. Not doing so leaves every existing index half-matching, silently, for the rest of its life.
 
 ## License

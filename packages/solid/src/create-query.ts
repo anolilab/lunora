@@ -28,7 +28,8 @@ export interface CreateQueryOptions {
  *
  * `args` may be a plain value or an accessor; passing an accessor makes the
  * subscription reactive — when the args change the old subscription is torn down
- * (via `onCleanup`) and a fresh one opens for the new args. Pass `"skip"` (or an
+ * (via `onCleanup`), the accessor resets to `undefined`, and a fresh one opens for
+ * the new args. Pass `"skip"` (or an
  * accessor returning `"skip"`) to short-circuit: no network call, no socket.
  *
  * ```tsx
@@ -60,6 +61,10 @@ export const createQuery = <F extends FunctionReference>(
     // a Solid signal. The `() => …` setter forms keep Solid from mistaking a
     // function-valued server result for an updater.
     trackedEffect(resolveArgs, (current) => {
+        // The previous args' value must not render under the new args until the
+        // new subscription's first frame lands.
+        setValue(() => undefined as ReturnOf<F> | undefined);
+
         const unsubscribe = createQuerySubscription<F>(
             client,
             function_,

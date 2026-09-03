@@ -65,6 +65,9 @@ const BIGINT_KEY_DIGITS = 39;
 const NEGATIVE = "0";
 const NON_NEGATIVE = "1";
 
+/** Nines' complement of a digit string — its own inverse, which is what makes the decode a re-application of the encode. */
+const ninesComplement = (digits: string): string => Array.from(digits, (digit) => String(9 - Number(digit))).join("");
+
 /**
  * An order-preserving, exactly-reversible text key for `value`.
  *
@@ -88,11 +91,56 @@ const bigintSqlKey = (value: bigint): string => {
 
     const padded = magnitude.padStart(BIGINT_KEY_DIGITS, "0");
 
-    if (!negative) {
-        return NON_NEGATIVE + padded;
+    return negative ? NEGATIVE + ninesComplement(padded) : NON_NEGATIVE + padded;
+};
+
+/** A key's magnitude half: digits only, so a stored value that merely happens to be 40 characters cannot be mistaken for one. */
+const BIGINT_KEY_DIGITS_RE = /^\d+$/u;
+
+/**
+ * Inverse of {@link bigintSqlKey}, or `undefined` when `raw` is not a key.
+ *
+ * Lives beside the encoder rather than beside its caller (`@lunora/sql-store`'s
+ * `value-codec.ts`, which reverses a stored `.global()` column): the two halves
+ * share the width, the sign characters and the complement, and a decoder a file
+ * away from them is how a padding change ships as a silent mis-read.
+ *
+ * The shape test is exact rather than heuristic: a key is 40 characters, a sign
+ * character in `{"0","1"}` followed by 39 digits. That is *nearly* disjoint from
+ * the plain decimal text an earlier build stored, but not entirely — the two
+ * cases where they overlap are both past what {@link bigintSqlKey} will now
+ * write, so no value this encoder produces can be misread:
+ *
+ * A legacy **positive** of exactly 40 digits starts with a digit, and a leading
+ * `"1"` reads as the non-negative sign — so a stored value in `[1e39, 2e39)`
+ * decodes as `value − 1e39`. The encoder refuses a magnitude that wide outright
+ * (39 digits is the ceiling), so only a row written before the key encoding can
+ * be one.
+ *
+ * A legacy **negative** is `"-"` plus its digits, which no sign character
+ * matches, so it falls through to the plain `BigInt(raw)` path and decodes
+ * correctly. The one at 40 characters (a 38-digit magnitude) is instead missed by
+ * the provisioning rewrite in `@lunora/sql-store`, whose "already a key" test is
+ * the 40-character width — it stays legacy, and an `eq` binding a key never
+ * matches it.
+ */
+const decodeBigintSqlKey = (raw: string): bigint | undefined => {
+    if (raw.length !== BIGINT_KEY_DIGITS + 1) {
+        return undefined;
     }
 
-    return NEGATIVE + Array.from(padded, (digit) => String(9 - Number(digit))).join("");
+    const sign = raw.slice(0, 1);
+    const digits = raw.slice(1);
+
+    if (!BIGINT_KEY_DIGITS_RE.test(digits)) {
+        return undefined;
+    }
+
+    if (sign === NON_NEGATIVE) {
+        return BigInt(digits);
+    }
+
+    return sign === NEGATIVE ? -BigInt(ninesComplement(digits)) : undefined;
 };
 
 /**
@@ -146,18 +194,9 @@ const mayHoldProjectedValue = (validator: KindedValidator): boolean => {
     return isProjectedKind(validator) || kind === "any" || kind === "union" || kind === "from";
 };
 
-// `bigintSqlKey` and the two sign characters are exported for `@lunora/sql-store`,
-// which must produce a BYTE-IDENTICAL key on the `.global()` plane — the two
-// planes are compared directly by a parity test, and a second copy of an
-// order-preserving encoding is precisely the thing that drifts. Its decoder
-// stays there: a shard never reverses the key, because it keeps the value in the
-// document alongside it.
-export {
-    BIGINT_KEY_DIGITS,
-    NEGATIVE as BIGINT_KEY_NEGATIVE,
-    NON_NEGATIVE as BIGINT_KEY_NON_NEGATIVE,
-    bigintSqlKey,
-    isProjectedKind,
-    mayHoldProjectedValue,
-    sqlComparableProjection,
-};
+// The codec pair is exported for `@lunora/sql-store`, which must produce a
+// BYTE-IDENTICAL key on the `.global()` plane — the two planes are compared
+// directly by a parity test, and a second copy of an order-preserving encoding
+// is precisely the thing that drifts. The sign characters and the width stay
+// module-local: nothing outside needs them now that both halves live here.
+export { BIGINT_KEY_DIGITS, bigintSqlKey, decodeBigintSqlKey, isProjectedKind, mayHoldProjectedValue, sqlComparableProjection };

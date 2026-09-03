@@ -81,17 +81,6 @@ export interface AdvisorTable {
     /** Table name. */
     name: string;
 
-    /**
-     * Column names that are optional or nullable and therefore may legally hold
-     * `null` / `undefined` in stored rows. Populated by {@link fromServerSchema}
-     * from the runtime validator graph (`v.optional(...)` → kind `"optional"`;
-     * `.nullable()` → `column.notNull === false`). When absent (e.g. from the
-     * codegen feeder, which does not supply this field), constraint lints that
-     * check NOT NULL should skip the check entirely or treat every field as
-     * required (the codegen feeder never runs runtime lints anyway).
-     */
-    optionalFields?: ReadonlySet<string>;
-
     /** Declared relations (`.relations((r) => …)`). */
     relations: ReadonlyArray<AdvisorRelation>;
 
@@ -203,32 +192,20 @@ export const fromServerSchema = (schema: Schema): AdvisorSchema => {
                 }),
             ];
 
-            // One pass over the shape collects both: the effective validator kind
-            // per column (a `v.optional(...)` is unwrapped to its inner kind) so
-            // the schema-type lints can check a referenced column, and the
-            // optional/nullable field names so the constraint-validator can skip
-            // them when checking NOT NULL. A field is optional when its validator
-            // kind is "optional" (v.optional(inner)) or nullable when its
-            // column.notNull flag is false (inner.nullable()). The `_meta` casts
+            // One pass over the shape collects the effective validator kind per
+            // column (a `v.optional(...)` is unwrapped to its inner kind) so the
+            // schema-type lints can check a referenced column. The `_meta` casts
             // reach into @lunora/values internals — intentional, the same pattern
             // as isOrWrapsFromValidator.
             const columnKinds: Record<string, string> = {};
-            const optionalFields = new Set<string>();
 
             for (const [fieldName, validator] of Object.entries(table.shape)) {
                 if (validator.kind === "optional") {
                     const inner = (validator as { _meta?: { inner?: { kind?: string } } })._meta?.inner;
 
                     columnKinds[fieldName] = inner?.kind ?? validator.kind;
-                    optionalFields.add(fieldName);
                 } else {
                     columnKinds[fieldName] = validator.kind;
-
-                    const column = (validator as { _meta?: { column?: { notNull?: boolean } } })._meta?.column;
-
-                    if (column?.notNull === false) {
-                        optionalFields.add(fieldName);
-                    }
                 }
             }
 
@@ -248,7 +225,6 @@ export const fromServerSchema = (schema: Schema): AdvisorSchema => {
                 indexes,
                 isPublic: table.isPublic ?? false,
                 name,
-                optionalFields,
                 shardKind: table.shardMode.kind,
                 softDelete: table.softDeleteMode,
                 ttl: table.ttlPolicy,

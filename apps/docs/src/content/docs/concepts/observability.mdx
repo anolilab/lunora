@@ -27,7 +27,7 @@ several; combine them with `combineSinks`.
 | `consoleSink()`                 | `console` (local dev)                                           |
 | `otlpSink({ endpoint })`        | any OTLP-over-HTTP collector                                    |
 | `webhookSink({ url })`          | an arbitrary HTTP endpoint (your own JSON shape)                |
-| `sentrySink({ dsn })`           | Sentry                                                          |
+| `sentrySink({ capture })`       | Sentry, through a callback you wire                             |
 | `analyticsEngineSink({ … })`    | a Cloudflare Analytics Engine dataset                           |
 | `pipelineLogSink({ pipeline })` | a Cloudflare Pipeline → R2 (durable log store, read via R2 SQL) |
 
@@ -43,12 +43,23 @@ export default createWorker({
 });
 ```
 
-Sinks that carry RPC events accept `onlyErrors: true` to drop successful RPCs and
-export only failures (`pipelineLogSink` is log-only, so it has no such option;
-log events always pass through regardless). All four network/log sinks
-(`otlpSink`, `webhookSink`, `pipelineLogSink`, plus `sentrySink` when you wire
-its `captureLog`) forward `ctx.log` lines; `webhookSink` takes a `transformLog`
-redactor mirroring its RPC `transform`.
+`sentrySink` bundles no Sentry client and takes no `dsn`. It forwards to a
+`capture` callback you wire to your own client, so the runtime keeps no
+dependency on `@sentry/*`; constructing it without one throws:
+
+```ts
+sentrySink({ capture: (event) => Sentry.captureMessage(event.name) });
+```
+
+Sinks that carry RPC events accept `onlyErrors` to drop successful RPCs and
+export only failures. It defaults to `false` everywhere except `sentrySink`,
+which defaults to `true` — capturing every successful RPC would flood a Sentry
+project — so pass `onlyErrors: false` there to get all events.
+`pipelineLogSink` is log-only, so it has no such option; log events always pass
+through regardless. All four network/log sinks (`otlpSink`, `webhookSink`,
+`pipelineLogSink`, plus `sentrySink` when you wire its `captureLog`) forward
+`ctx.log` lines; `webhookSink` takes a `transformLog` redactor mirroring its RPC
+`transform`.
 
 :::caution[Upgrading a `webhookSink`]
 `webhookSink` now ships `ctx.log` lines (message **and** structured `fields`,
@@ -79,8 +90,15 @@ otlpSink({
 ```
 
 Read `endpoint`/`token` from the environment so the platform can inject them at
-deploy time with no code change. Each event is one fire-and-forget POST; on a
-Worker it is registered with `waitUntil` so it outlives the response.
+deploy time with no code change. Exports are fire-and-forget; on a Worker each is
+registered with `waitUntil` so it outlives the response.
+
+**Batching is on by default.** Events are buffered and shipped as **one POST per
+signal per flush** — whichever of 512 buffered events, a 200 ms window, or the
+invocation boundary comes first. A Worker is capped at 50 (free) / 1000 (paid)
+subrequests per invocation, so a per-event POST is a correctness problem, not
+just an efficiency one. Pass `batch: false` to restore one POST per event, or
+`batch: { maxItems, maxDelayMs }` to retune the window.
 
 #### Resource attributes
 
@@ -207,12 +225,16 @@ lunora logs --durable --table logs --namespace default --min-level warn --limit 
 # one JSON object per line, filtered to a function-path prefix (pipeable to jq)
 lunora logs --durable --table logs --function-prefix "messages:" --ndjson
 
-# resume the next page with the ts the previous run printed
-lunora logs --durable --table logs --cursor 1737460000000
+# resume the next page with the opaque cursor token the previous run printed
+lunora logs --durable --table logs --cursor eyJ0cyI6MTczNzQ2MDAwMDAwMH0
 ```
 
-The reader paginates by keyset on `ts DESC` (`WHERE ts < cursor`), not `OFFSET`,
-so deep pages stay cheap over Iceberg. Filters (`sinceTs`/`untilTs`, `level`,
+The reader paginates by keyset on `ts DESC`, not `OFFSET`, so deep pages stay
+cheap over Iceberg. The predicate is **inclusive** (`WHERE ts <= cursor`) and the
+cursor carries a `seen` set of the boundary millisecond's already-returned rows,
+so ties are neither dropped nor duplicated — pass `page.nextCursor` (or the CLI's
+printed token) back whole. A bare `ts` is accepted for convenience, but without
+`seen` it re-emits every row sharing that millisecond. Filters (`sinceTs`/`untilTs`, `level`,
 `minLevel`, `functionPathPrefix`, `traceId`, `shardKey`, `userId`) are all
 inlined as escaped SQL literals, so user values can never inject.
 
@@ -510,7 +532,9 @@ re-deciding.
 `alwaysSampleErrors` (default `true`) is the **tail bias**: a trace that produced
 an error is exported whole even when the head decision dropped it. The shard
 holds a sampled-out trace's spans until the dispatch settles, then flushes them
-if anything failed and discards them otherwise.
+if anything failed and discards them otherwise. The hold is capped at **500
+`ctx.trace` spans per trace**, oldest dropped — a loop that traces per item past
+that exports only its tail.
 
 So `headRate: 0.01` does not mean "1% of your errors". It means 1% of your
 _successful_ traffic, plus every failure. That is usually the shape you want:
@@ -518,8 +542,11 @@ aggressive sampling on the boring path, complete traces on the interesting one.
 
 :::note[`headRate` and the trace id]
 `headRate >= 1` keeps everything and `<= 0` drops every non-error trace; in
-between, the first 8 hex characters of the trace id are mapped onto `[0, 1)` and
-compared against the rate.
+between, the **last** 8 hex characters of the trace id (its low 32 bits) are
+mapped onto `[0, 1)` and compared against the rate — the same rightmost portion
+OpenTelemetry's `TraceIdRatioBased` sampler uses, because an inbound id is not
+necessarily uniform across all 128 bits (a 64-bit id left-pads with zeros; X-Ray
+puts epoch seconds in the leading digits).
 
 Because the trace id decides, **which** id is used matters. When the inbound
 trace context is untrusted ([the default](#joining-a-trace-from-upstream)),
@@ -567,8 +594,9 @@ on a log line or a span, which is what those are for.
 
 Nothing is pre-aggregated: one call is one exported measurement, with counter and
 histogram values carrying **delta** temporality for the collector to aggregate.
-That keeps the sink model identical to logs and spans, at the cost of one export
-per call, so in a hot loop, sum locally and record once at the end rather than
+That keeps the sink model identical to logs and spans. Batching means a hot loop
+costs buffered events rather than one POST each, but the measurements themselves
+are still one per call — sum locally and record once at the end rather than
 calling per iteration.
 
 :::caution[Durable per-minute history is opt-in]
@@ -644,10 +672,11 @@ Each POST is bounded by `timeoutMs` (default 10s), so a hung collector aborts
 instead of pinning a send in flight and stalling `flush()`; failures are handed to
 the optional `onError` callback and never break the container.
 
-It takes the same [resource attributes](#resource-attributes) as `otlpSink`
-(`serviceVersion`, `serviceNamespace`, `deploymentEnvironment`,
-`resourceAttributes`, and an opt-in `detectResources`), so container and worker
-telemetry can be grouped by the same service and version:
+It takes most of the same [resource attributes](#resource-attributes) as
+`otlpSink` (`serviceVersion`, `deploymentEnvironment`, `resourceAttributes`, and
+an opt-in `detectResources`), so container and worker telemetry can be grouped by
+the same service and version. There is no `serviceNamespace` option here — pass
+`resourceAttributes: { "service.namespace": "…" }` to set it:
 
 ```ts
 createContainerTelemetry({
@@ -693,10 +722,13 @@ base `endpoint` (trailing slashes are tolerated):
 | Metrics | `POST {endpoint}/v1/metrics` | each `ctx.metrics.*` call                                      |
 
 :::note[The Lunora cloud ingest accepts more]
-Lunora's own sinks emit **JSON**, but the cloud ingest also accepts standard OTLP
-**protobuf** (`Content-Type: application/x-protobuf`, what most Collectors default
-to) and **gzip** (`Content-Encoding: gzip`) on all three endpoints, so any
-OpenTelemetry SDK or Collector can ship to it unchanged. A capped batch comes back
+Lunora's own sinks emit **JSON**, gzipped once the body clears 1 KiB (which a
+batched flush essentially always does). The cloud ingest accepts that, and also
+standard OTLP **protobuf** (`Content-Type: application/x-protobuf`, what most
+Collectors default to) on all three endpoints, so any OpenTelemetry SDK or
+Collector can ship to it unchanged. A third-party collector or proxy behind the
+sink has to decode `content-encoding: gzip`, or set `batch: false` and keep
+bodies under the threshold. A capped batch comes back
 as OTLP `partialSuccess`. Its `authorization` bearer is a **scoped ingest key**,
 telemetry-only so a leaked token can't deploy, which the platform mints per org
 and injects into each tenant as `LUNORA_OTLP_TOKEN` at deploy time (alongside
@@ -708,6 +740,7 @@ and injects into each tenant as `LUNORA_OTLP_TOKEN` at deploy time (alongside
 | Header                             | Value                                                     |
 | ---------------------------------- | --------------------------------------------------------- |
 | `content-type`                     | `application/json`                                        |
+| `content-encoding`                 | `gzip`, on any body of 1 KiB or more                      |
 | `authorization`                    | `Bearer <token>`, when a `token` is configured            |
 | `x-lunora-deployment` (convention) | the deployment id, for the ingest to attribute the sender |
 | `x-lunora-org` (convention)        | the organization id                                       |

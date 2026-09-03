@@ -37,6 +37,20 @@ describe(stream, () => {
         stop();
     });
 
+    it("forwards `durable` to the client so a reconnect resumes the run", () => {
+        const fake = createFakeClient();
+        const handle: StreamHandle<unknown> = stream(fake.client, makeStreamRef(TICK_REF), { since: 0 }, { durable: true });
+        const stop = handle.chunks.subscribe(() => {});
+
+        // `{ durable: true }` is what makes a dropped socket resume the same run
+        // instead of failing with `STREAM_DISCONNECTED`. The client reads it off the
+        // stream options, so a primitive that does not forward it silently gives the
+        // caller a non-durable stream — which only shows up on a reconnect.
+        expect(fake.streamCalls[0]?.options.durable).toBe(true);
+
+        stop();
+    });
+
     it("'skip' keeps the stores connected without opening a stream", () => {
         const fake = createFakeClient();
         const handle = stream(fake.client, makeStreamRef(TICK_REF), "skip");

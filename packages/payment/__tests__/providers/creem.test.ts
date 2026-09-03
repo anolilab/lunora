@@ -214,7 +214,7 @@ describe("creem adapter", () => {
     });
 
     it("normalizes a refund.created webhook from Creem's flat refund fields (regression)", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
         const payload = JSON.stringify({
@@ -236,6 +236,9 @@ describe("creem adapter", () => {
         expect(action.amount?.minorUnits).toBe(1500n);
         expect(action.amount?.currency).toBe("EUR");
         expect(action.sessionId).toBe("tx_1");
+        // The refund's own id still travels, on `refundId` — a same-amount dashboard refund must not
+        // consume a marker meant for another refund.
+        expect(action.refundId).toBe("rf_1");
     });
 
     it("rounds a fractional webhook amount instead of throwing on the BigInt conversion (regression)", async () => {

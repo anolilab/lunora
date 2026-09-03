@@ -78,8 +78,28 @@ interface StorageContextIn {
     storage?: unknown;
 }
 
-/** A rule governs a key when its prefix is absent (whole bucket) or the key sits under it. */
-const prefixMatches = (prefix: string | undefined, key: string): boolean => prefix === undefined || key.startsWith(prefix);
+/**
+ * A rule governs a key when its prefix is absent (whole bucket) or the key sits
+ * under it — matched on a PATH-SEGMENT boundary, never a raw `startsWith`.
+ *
+ * A bare `startsWith` makes `users/1` govern `users/10/avatar.png`: one user's
+ * rule silently reaches every user whose id it happens to prefix. Which way that
+ * misfires depends on the rule — an `allow` leaks a neighbour's objects, a
+ * `deny` locks out a stranger — so both directions are wrong.
+ *
+ * A trailing slash on the prefix is cosmetic (`users/1` and `users/1/` scope the
+ * same subtree), and an empty prefix is treated as absent so a whole-bucket rule
+ * written `prefix: ""` keeps governing every key.
+ */
+const prefixMatches = (prefix: string | undefined, key: string): boolean => {
+    if (prefix === undefined) {
+        return true;
+    }
+
+    const scope = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
+
+    return scope === "" || key === scope || key.startsWith(`${scope}/`);
+};
 
 /**
  * Resolve the operation a guarded call must satisfy. A static {@link StorageOperation}

@@ -52,7 +52,7 @@ const baseOptions = {
 /** What better-auth's `getSession` answers with, as the emitted resolver consumes it. */
 interface SessionDouble {
     session: { expiresAt: Date };
-    user: { id: string; role?: string };
+    user: { email?: string; id: string; name?: string; role?: string };
 }
 
 type EmittedResolver = (request: Request) => Promise<Record<string, unknown> | null>;
@@ -115,6 +115,30 @@ describe("emitApp — the emitted `.auth({ d1 })` identity resolver", () => {
         // permanently false and a signed-out / banned user keeps streaming rows.
         expect(identity).toMatchObject({ userId: "u1" });
         expect(identity?.["expiresAtMs"]).toBe(expiresAt.getTime());
+    });
+
+    it("forwards the session's email and name, the claims `getIdentity()` is documented to carry", async () => {
+        expect.assertions(1);
+
+        const resolve = await emittedD1Resolver({
+            session: { expiresAt: new Date(Date.now() + 1000) },
+            user: { email: "ada@acme.test", id: "u1", name: "Ada" },
+        });
+
+        // The documented `me` query is `identity?.email`. Forwarding only
+        // `{ expiresAtMs, role, userId }` shipped a null email on every app that
+        // used the built-in `.auth({ d1 })` wiring.
+        await expect(resolve(request())).resolves.toMatchObject({ email: "ada@acme.test", name: "Ada" });
+    });
+
+    it("omits email and name a session does not carry, rather than forwarding empty claims", async () => {
+        expect.assertions(2);
+
+        const resolve = await emittedD1Resolver({ session: { expiresAt: new Date(Date.now() + 1000) }, user: { email: "", id: "u1" } });
+        const identity = await resolve(request());
+
+        expect(identity).not.toHaveProperty("email");
+        expect(identity).not.toHaveProperty("name");
     });
 
     it("forwards the admin-plugin role, so RLS role grants apply", async () => {

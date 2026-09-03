@@ -149,12 +149,12 @@ const guardShardSweep = (
 type WriterGating =
     /** By-id write/read: the owning table is resolved from the id, then gated (`guardById`). */
     | "id-gated"
-    /** Table-first, but overridden inline rather than by the uniform loop — its key must exist (as `undefined`) even when the base has no implementation. */
+    /** Table-name-first too, but overridden inline rather than by the uniform loop — its key must exist (as `undefined`) even when the base has no implementation. */
     | "inline-table-gated"
+    /** First argument is the table name AND the one uniform loop below gates it. Says how the method is gated, not what its arguments look like — `inline-table-gated` methods also take the table first. */
+    | "loop-gated"
     /** Whole-shard sweep: every table in range is gated (`guardShardSweep`). */
     | "sweep-gated"
-    /** First argument is the table name: gated by the one uniform table-level check below. */
-    | "table-first"
     /** Deliberately NOT gated — see the reason on each entry. */
     | "ungated";
 
@@ -173,35 +173,35 @@ type WriterGating =
  * omission: each one either touches no rows or is a pure string helper.
  */
 const WRITER_METHOD_GATING: Readonly<Record<keyof DatabaseWriterLike, WriterGating>> = {
-    aggregate: "table-first",
+    aggregate: "loop-gated",
     /** Pure id formatter — composes a string from `(tableName, id)`, reads and writes nothing. */
     asId: "ungated",
     /** Metadata-only changelog probe: returns table NAMES and a cursor, never a document. */
     cdcChangedTables: "ungated",
-    count: "table-first",
+    count: "loop-gated",
     delete: "id-gated",
-    deleteAll: "table-first",
+    deleteAll: "loop-gated",
     deleteMany: "id-gated",
     deleteWhere: "inline-table-gated",
-    findFirst: "table-first",
-    findFirstOrThrow: "table-first",
-    findMany: "table-first",
+    findFirst: "loop-gated",
+    findFirstOrThrow: "loop-gated",
+    findMany: "loop-gated",
     get: "id-gated",
-    groupBy: "table-first",
-    insert: "table-first",
-    insertMany: "table-first",
-    insertManyUnsafe: "table-first",
+    groupBy: "loop-gated",
+    insert: "loop-gated",
+    insertMany: "loop-gated",
+    insertManyUnsafe: "loop-gated",
     lookupById: "id-gated",
     /** Pure id validator/parser — returns the id or `null`, reads no row. */
     normalizeId: "ungated",
     patch: "id-gated",
     patchMany: "id-gated",
     patchWhere: "inline-table-gated",
-    query: "table-first",
-    rank: "table-first",
-    rankBefore: "table-first",
-    rankPage: "table-first",
-    rankPageRows: "table-first",
+    query: "loop-gated",
+    rank: "loop-gated",
+    rankBefore: "loop-gated",
+    rankPage: "loop-gated",
+    rankPageRows: "loop-gated",
     replace: "id-gated",
     restore: "id-gated",
     /** The system-table reader: reserved tables, not user tables, so the per-table policy model does not apply. */
@@ -210,14 +210,21 @@ const WRITER_METHOD_GATING: Readonly<Record<keyof DatabaseWriterLike, WriterGati
 };
 
 /**
- * Every method whose FIRST argument is the table name, gated by one uniform
- * table-level check — DERIVED from {@link WRITER_METHOD_GATING} so the two can
- * never drift. Includes the optional members (`deleteAll`, `rankBefore`,
- * `rankPageRows`) — a base without them simply isn't overridden, so they stay
- * absent on the guarded writer exactly as the `...raw` spread left them.
+ * Every method the uniform table-level loop below gates — DERIVED from
+ * {@link WRITER_METHOD_GATING} so the two can never drift. Includes the optional
+ * members (`deleteAll`, `rankBefore`, `rankPageRows`) — a base without them
+ * simply isn't overridden, so they stay absent on the guarded writer exactly as
+ * the `...raw` spread left them.
+ *
+ * Named for the GATING, not for the argument shape. `deleteWhere`/`patchWhere`
+ * also take the table name first and are gated too, just inline rather than in
+ * the loop — so a set called "table-first methods" that excluded them reads as
+ * an arity fact and gets reused as one. (`@lunora/observability`'s
+ * `database-telemetry.ts` keeps its own, genuinely arity-based set for span
+ * naming; the two answer different questions and must not be shared.)
  */
-const TABLE_FIRST_METHODS: ReadonlyArray<keyof DatabaseWriterLike> = Object.entries(WRITER_METHOD_GATING)
-    .filter(([, gating]) => gating === "table-first")
+const LOOP_GATED_METHODS: ReadonlyArray<keyof DatabaseWriterLike> = Object.entries(WRITER_METHOD_GATING)
+    .filter(([, gating]) => gating === "loop-gated")
     .map(([name]) => name as keyof DatabaseWriterLike);
 
 /**
@@ -397,7 +404,7 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, t
         },
     };
 
-    // One uniform gate for every table-name-first method, `insertManyUnsafe`
+    // One uniform gate for every loop-gated method, `insertManyUnsafe`
     // and `deleteAll` included — "unsafe" skips validators/triggers, NOT the
     // guard, and the `...raw` spread must never expose a destructive raw
     // method unguarded. A batch (`insertMany`) needs only this one table-level
@@ -405,7 +412,7 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, t
     // by the delegated writer.
     const methods = base as unknown as Record<string, ((...args: unknown[]) => unknown) | undefined>;
 
-    for (const name of TABLE_FIRST_METHODS) {
+    for (const name of LOOP_GATED_METHODS) {
         const method = methods[name];
 
         if (typeof method === "function") {
@@ -437,5 +444,5 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, t
     return guarded as unknown as W;
 };
 
-export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError, TABLE_FIRST_METHODS, WRITER_METHOD_GATING };
+export { guardWriter, LOOP_GATED_METHODS, RLS_UNWRAP_SYMBOL, RlsRequiredError, WRITER_METHOD_GATING };
 export type { WriterGating };

@@ -57,6 +57,14 @@ class FlushReport {
 
     /** The ids dropped because their precondition no longer held. */
     val conflicted = mutableListOf<String>()
+
+    /**
+     * Milliseconds the server asked the caller to wait before flushing again, when
+     * a replay came back rate-limited; null otherwise. The client enforces it too
+     * — a flush inside the window is a no-op — so this is for a caller that
+     * schedules its own retry.
+     */
+    var retryAfterMs: Long? = null
 }
 
 /** One offline-capable write. */
@@ -165,8 +173,9 @@ fun Client.submit(options: SubmitOptions): MutationOutcome {
  * committed is de-duplicated rather than applied twice. Per write: success
  * confirms its optimistic overlay against the ECHOED commit cursor; a coded
  * verdict is terminal; a transient failure — a raw transport error, or one of
- * [TRANSIENT_ERROR_CODES] — stops the flush and re-queues that write and every
- * unreplayed one, in order, for the next attempt.
+ * [TRANSIENT_ERROR_CODES], a rate limit, or a status that reached no verdict —
+ * stops the flush and re-queues that write and every unreplayed one, in order,
+ * for the next attempt.
  *
  * Every mutation of the queue below runs under the client's monitor, and every
  * piece of consumer-visible work between them — the precondition predicate, a
@@ -183,6 +192,17 @@ fun Client.flushOfflineQueue(shardKey: String? = null): FlushReport {
     val current: String?
 
     synchronized(lock) {
+        // A server that answered "not now" gets waited out. Without this the
+        // caller's own reconnect loop replays the identical burst immediately and
+        // earns the same 429, indefinitely.
+        val remaining = flushNotBefore - System.nanoTime()
+
+        if (remaining > 0) {
+            report.retryAfterMs = remaining / 1_000_000 + 1
+
+            return report
+        }
+
         queue = offlineQueue
         current = identity
     }
@@ -290,12 +310,12 @@ private fun Client.replay(queue: OfflineQueue, sendable: List<QueuedMutation>, r
     }
 
     val toRequeue = mutableListOf<QueuedMutation>()
+    val chunks = chunkBatches(sendable)
 
-    for (start in sendable.indices step MAX_BATCH_ENTRIES) {
-        val end = minOf(start + MAX_BATCH_ENTRIES, sendable.size)
+    for ((index, chunk) in chunks.withIndex()) {
         // Chunks replay sequentially, which is what preserves FIFO across a flush
         // longer than one batch.
-        val (requeue, stop) = replayBatched(queue, sendable.subList(start, end), report)
+        val (requeue, stop) = replayBatched(queue, chunk, report)
 
         toRequeue.addAll(requeue)
 
@@ -303,7 +323,7 @@ private fun Client.replay(queue: OfflineQueue, sendable: List<QueuedMutation>, r
             // A whole-chunk transport failure. Leave every write not yet sent
             // queued, in order, rather than sending on into a connection that
             // just failed.
-            toRequeue.addAll(sendable.subList(end, sendable.size))
+            for (later in chunks.subList(index + 1, chunks.size)) toRequeue.addAll(later)
 
             break
         }
@@ -313,6 +333,76 @@ private fun Client.replay(queue: OfflineQueue, sendable: List<QueuedMutation>, r
 
     synchronized(lock) { queue.requeue(toRequeue) }
     toRequeue.mapTo(report.requeued) { it.id }
+}
+
+/**
+ * A batch entry's contribution to the request body, in bytes.
+ *
+ * The args dominate and are the only part that can be large; the constant covers
+ * the entry's fixed keys and the comma joining it to the next one. Encoding twice
+ * — here and in [replayBatched] — is deliberate: the flush is the slow path, and
+ * carrying the encoded form through the chunker would put a second representation
+ * of every queued write in memory.
+ */
+private fun entryBytes(item: QueuedMutation): Int =
+    Json.write(Wire.encode(item.args)).toByteArray(Charsets.UTF_8).size + item.functionPath.length + item.id.length + 160
+
+/**
+ * Splits a flush into batch bodies the worker will accept.
+ *
+ * By BYTES as well as by count: the worker reads a batch body under a 1 MiB budget
+ * and answers `413 PAYLOAD_TOO_LARGE` past it, so 500 writes carrying bytes or
+ * long text are one request the server refuses whole. A single write over the
+ * budget still forms its own chunk — splitting cannot help it, and [replayBatched]
+ * settles it on the answer.
+ */
+private fun chunkBatches(items: List<QueuedMutation>): List<List<QueuedMutation>> {
+    val chunks = mutableListOf<List<QueuedMutation>>()
+    var current = mutableListOf<QueuedMutation>()
+    var size = 0
+
+    for (item in items) {
+        val cost = entryBytes(item)
+
+        if (current.isNotEmpty() && (current.size >= MAX_BATCH_ENTRIES || size + cost > MAX_BATCH_BYTES)) {
+            chunks.add(current)
+            current = mutableListOf()
+            size = 0
+        }
+
+        current.add(item)
+        size += cost
+    }
+
+    if (current.isNotEmpty()) chunks.add(current)
+
+    return chunks
+}
+
+/**
+ * How long a rate-limited replay asks to wait, if the envelope said.
+ *
+ * Null when the server named no delay — the caller then decides its own backoff
+ * rather than hammering, which is what [FlushReport.retryAfterMs] reports.
+ */
+private fun retryAfterMs(error: Exception): Long? {
+    if (error !is ApiException || error.code !in RATE_LIMIT_ERROR_CODES) return null
+
+    val fields = (error.data as? WireValue.Obj)?.fields ?: return null
+    val delay = fields.firstOrNull { it.first == "retryAfterMs" }?.second as? WireValue.Num ?: return null
+
+    // Clamped: a server naming an hour would otherwise park a durable queue for
+    // an hour.
+    return delay.value.toLong().takeIf { it > 0 }?.let { minOf(it, MAX_RETRY_AFTER_MS) }
+}
+
+/** Records a rate limit's delay, and holds the next flush off until it passes. */
+private fun Client.noteRetryAfter(report: FlushReport, error: Exception) {
+    val delay = retryAfterMs(error) ?: return
+
+    report.retryAfterMs = delay
+
+    synchronized(lock) { flushNotBefore = maxOf(flushNotBefore, System.nanoTime() + delay * 1_000_000) }
 }
 
 /** Replays writes one at a time. FIFO is preserved by the loop itself. */
@@ -328,6 +418,8 @@ private fun Client.replaySequential(queue: OfflineQueue, sendable: List<QueuedMu
 
                 continue
             }
+
+            noteRetryAfter(report, error)
 
             // Nothing after this write may go out ahead of it: replaying out of
             // order is how a durable queue corrupts the data it was protecting.
@@ -393,6 +485,29 @@ private fun Client.replayBatched(queue: OfflineQueue, items: List<QueuedMutation
     val envelope = body["error"] as? Map<*, *> ?: return items to true
     val error = batchSlotError(envelope, "batch rejected")
 
+    // The body was too big, not wrong — every entry in it would have committed
+    // alone. Halve and retry: the estimate the chunker used cannot see the framing
+    // the worker actually measured, and only the answer can.
+    if (error.code == PAYLOAD_TOO_LARGE && items.size > 1) {
+        val middle = items.size / 2
+        val (left, leftStop) = replayBatched(queue, items.subList(0, middle), report)
+
+        if (leftStop) return left + items.subList(middle, items.size) to true
+
+        val (right, stop) = replayBatched(queue, items.subList(middle, items.size), report)
+
+        return left + right to stop
+    }
+
+    // A shard blip or a rate limit is not a verdict on the batch's contents.
+    // Requeue it whole and stop the flush, exactly as the single-call path does
+    // for the same codes.
+    if (Client.isTransient(error)) {
+        noteRetryAfter(report, error)
+
+        return items to true
+    }
+
     for (item in items) {
         synchronized(lock) { queue.unpersist(item.id) }
         report.rejected.add(item.id)
@@ -432,13 +547,16 @@ private fun Client.settleBatchSlots(queue: OfflineQueue, items: List<QueuedMutat
         val envelope = slot["error"] as? Map<*, *>
 
         if (envelope != null) {
-            val code = envelope["code"] as? String ?: "INTERNAL"
+            val error = batchSlotError(envelope, "request failed")
 
-            // A transient shard failure is the batch's counterpart of an uncoded
-            // throw on the single-call path: the server never reached a verdict,
-            // so the write goes back on the queue rather than being reported as
-            // failed.
-            if (code in TRANSIENT_ERROR_CODES) {
+            // Classified by the SAME predicate as a whole batch and a single call,
+            // never a second code set beside it: a slot's body is exactly a §4.2
+            // envelope, so a durable write's fate must not depend on how many
+            // siblings were queued alongside it. A shard blip or a limiter means
+            // the server reached no verdict on this entry, so it goes back on the
+            // queue rather than being reported as failed.
+            if (Client.isTransient(error)) {
+                noteRetryAfter(report, error)
                 requeue.add(item)
 
                 continue
@@ -446,7 +564,7 @@ private fun Client.settleBatchSlots(queue: OfflineQueue, items: List<QueuedMutat
 
             synchronized(lock) { queue.unpersist(item.id) }
             report.rejected.add(item.id)
-            settleWrite(item, MutationStatus.REJECTED, null, batchSlotError(envelope, "request failed"))
+            settleWrite(item, MutationStatus.REJECTED, null, error)
 
             continue
         }

@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
+import { LunoraError } from "@lunora/errors";
 import { MAX_SEARCH_SCAN } from "@lunora/search-core";
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { CURSOR_PREFIX } from "@lunora/shard-engine";
@@ -110,6 +111,37 @@ const createSqliteHarness = (): { close: () => void; exec: SqlCtxExec } => {
     };
 };
 
+/**
+ * Wrap an exec so a bound value over `limitBytes` fails the way the real engine
+ * does. `node:sqlite` is built with SQLite's default `SQLITE_MAX_LENGTH` (~1 GB),
+ * so it stores a 2 MB row happily — the ceiling this asserts against is D1's, and
+ * workerd raises it as a bare `SQLITE_TOOBIG` whose message is "string or blob
+ * too big". Both seams are capped because an insert funnels through `run` while
+ * a `RETURNING`-guarded patch funnels through `all`.
+ */
+const cappedExec = (exec: SqlCtxExec, limitBytes: number): SqlCtxExec => {
+    const check = (parameters: ReadonlyArray<unknown>): void => {
+        for (const parameter of parameters) {
+            if (typeof parameter === "string" && Buffer.byteLength(parameter, "utf8") > limitBytes) {
+                throw new Error("string or blob too big");
+            }
+        }
+    };
+
+    return {
+        all: (query, parameters) => {
+            check(parameters);
+
+            return exec.all(query, parameters);
+        },
+        run: (query, parameters) => {
+            check(parameters);
+
+            return exec.run(query, parameters);
+        },
+    };
+};
+
 const col = (kind: string, extra: Record<string, unknown> = {}): ValidatorLike => {
     return { _meta: { column: { notNull: true, ...extra } }, kind };
 };
@@ -158,6 +190,31 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
 
         expect(doc).toMatchObject({ archived: false, body: "hello", priority: 3, slug: "a" });
         expect(doc?._id).toBe(id);
+    });
+
+    it("names the row-size limit instead of redacting an oversized row to INTERNAL", async () => {
+        expect.assertions(4);
+
+        // D1's per-row ceiling is 2 MB; a row over it raises a bare
+        // `SQLITE_TOOBIG`, which is not a LunoraError — so `toErrorBody` used to
+        // redact it to `{ code: "INTERNAL", message: "Internal error" }`, status
+        // 500, telling the caller nothing about a document they can simply move
+        // to R2.
+        const twoMegabytes = 2 * 1024 * 1024;
+        const writer = createSqlCtxDb({
+            clock: () => 1_700_000_000_000,
+            dialect: makeSqliteDialect(),
+            exec: cappedExec(harness.exec, twoMegabytes),
+            schema,
+        });
+
+        const oversized = "x".repeat(twoMegabytes + 1);
+        const error = await writer.insert("notes", { archived: false, body: oversized, priority: 1, slug: "big" }).catch((error_: unknown) => error_);
+
+        expect(error).toBeInstanceOf(LunoraError);
+        expect((error as LunoraError).code).toBe("PAYLOAD_TOO_LARGE");
+        expect((error as LunoraError).message).toContain('too large to store in "notes"');
+        expect((error as LunoraError).message).toContain("2 MB on D1");
     });
 
     it("decodes booleans and numbers back to their JS forms", async () => {
@@ -304,21 +361,127 @@ describe("createSqlCtxDb — the column ceiling", () => {
     it("provisions a table that exactly fills the budget", async () => {
         expect.assertions(1);
 
-        // 98 declared fields + the id/_creationTime framework columns = 100.
+        // 97 declared fields + the id/_creationTime/_version framework columns = 100.
         const atLimit: SchemaLike = {
             tables: {
                 atLimit: {
                     indexes: [],
-                    shape: Object.fromEntries(Array.from({ length: 98 }, (_unused, index) => [`f${String(index)}`, col("string")])),
+                    shape: Object.fromEntries(Array.from({ length: 97 }, (_unused, index) => [`f${String(index)}`, col("string")])),
                     shardMode: { kind: "global" },
                 },
             },
         } as never;
 
         const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: atLimit });
-        const row = Object.fromEntries(Array.from({ length: 98 }, (_unused, index) => [`f${String(index)}`, "x"]));
+        const row = Object.fromEntries(Array.from({ length: 97 }, (_unused, index) => [`f${String(index)}`, "x"]));
 
         expect(typeof (await writer.insert("atLimit", row))).toBe("string");
+    });
+
+    /**
+     * `_version` joined the framework column set after tables were already in
+     * production, dropping the declared-field ceiling from 98 to 97. A table
+     * standing at the old ceiling is one column over the new one on its very
+     * next request, and the engine's limit is hard — there is no `ALTER` that
+     * widens a table already at 100 columns. The rejection is therefore correct
+     * and unavoidable; what it must not do is read as "your schema is too wide"
+     * when the schema never changed.
+     */
+    it("names the migration path for a table already provisioned at the pre-_version ceiling", async () => {
+        expect.assertions(3);
+
+        const fields = Array.from({ length: 98 }, (_unused, index) => `f${String(index)}`);
+
+        // The DDL the framework itself emitted before `_version` existed:
+        // id + _creationTime + 98 declared fields = exactly the 100-column limit.
+        await harness.exec.run(
+            `CREATE TABLE existing (id TEXT PRIMARY KEY, _creationTime REAL NOT NULL, ${fields.map((field) => `${field} TEXT`).join(", ")})`,
+            [],
+        );
+        await harness.exec.run(`INSERT INTO existing (id, _creationTime, f0) VALUES ('row-1', 1, 'already here')`, []);
+
+        const existing: SchemaLike = {
+            tables: {
+                existing: {
+                    indexes: [],
+                    shape: Object.fromEntries(fields.map((field) => [field, col("string")])),
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as never;
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: existing });
+        const thrown = (await writer.insert("existing", { f0: "x" }).catch((error: unknown) => error)) as LunoraError;
+
+        // Still a caller-safe VALIDATION_ERROR, so the message survives the wire.
+        expect(thrown.code).toBe("VALIDATION_ERROR");
+        // It says which column displaced the table and what the new ceiling is…
+        expect(thrown.message).toMatch(/"_version".+caps declared fields at 97/u);
+        // …and names a migration for the rows that are already in there.
+        expect(thrown.message).toMatch(/defineMigration/u);
+    });
+
+    /**
+     * D1 runs Workerd's SQLite build, which caps a statement at 100 BOUND
+     * PARAMETERS as well as at 100 columns. The optimistic-concurrency guard used
+     * to bind one parameter per physical column of the snapshot on top of one per
+     * `SET` field, so an `UPDATE` bound `2N+2` — over the ceiling from 50 declared
+     * fields up. `INSERT` at the same width binds `N+2` and succeeded, so the
+     * table provisioned, rows went in, and only the first `patch`/`replace`/soft-
+     * `delete` failed, with a raw `too many SQL variables` that redacts to
+     * "Internal error" on the way out.
+     *
+     * `node:sqlite` allows 32,766 parameters, so nothing here throws on either
+     * side of the fix — the assertion has to be on the parameter COUNT the store
+     * binds, which is why this counts through a recording exec rather than
+     * waiting for an engine to complain.
+     */
+    it("keeps every guarded write on a maximum-width table inside D1's 100-bound-parameter budget", async () => {
+        expect.assertions(2);
+
+        const FIELDS = 96;
+        const shape: Record<string, unknown> = { deletedAt: optionalCol("number") };
+
+        for (let index = 0; index < FIELDS; index += 1) {
+            shape[`f${String(index)}`] = col("string");
+        }
+
+        const wide: SchemaLike = {
+            tables: { wide: { indexes: [], shape, shardMode: { kind: "global" }, softDeleteMode: { field: "deletedAt" } } },
+        } as never;
+
+        const bound: number[] = [];
+        const recording: SqlCtxExec = {
+            all: (query, parameters) => {
+                bound.push(parameters.length);
+
+                return harness.exec.all(query, parameters);
+            },
+            run: (query, parameters) => {
+                bound.push(parameters.length);
+
+                return harness.exec.run(query, parameters);
+            },
+        };
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: recording, schema: wide });
+        const row = Object.fromEntries(Array.from({ length: FIELDS }, (_unused, index) => [`f${String(index)}`, "x"]));
+
+        const softId = await writer.insert("wide", row);
+        const hardId = await writer.insert("wide", row);
+
+        bound.length = 0;
+
+        await writer.patch(softId, { f0: "changed" });
+        await writer.replace(softId, row);
+        // Soft delete (the marker field is declared) and a forced hard delete —
+        // both route through the same guard.
+        await writer.delete(softId);
+        await writer.delete(hardId, undefined, { hard: true });
+
+        expect(Math.max(...bound)).toBeLessThanOrEqual(100);
+        // …and the writes actually landed rather than being silently skipped.
+        await expect(writer.get(hardId)).resolves.toBeNull();
     });
 });
 
@@ -740,6 +903,30 @@ describe("createSqlCtxDb — cross-dialect SQL rendering", () => {
     // The NULL-safe-equality operator each engine must emit (never a bare `col IS ?`, which is SQLite-only).
     const NULL_SAFE_OPERATOR = { mysql: /<=>/u, postgres: /IS NOT DISTINCT FROM/u } as const;
 
+    it.each([
+        ["mysql", Object.assign(new Error("Row size too large (8126)"), { errno: 1118 }), "InnoDB's per-row ceiling"],
+        ["postgres", new Error("row is too big: size 8168, maximum size 8160"), "8 KB heap page"],
+    ] as const)("maps the %s row-size error to PAYLOAD_TOO_LARGE rather than a redacted INTERNAL", async (engine, raised, limitText) => {
+        expect.assertions(3);
+
+        // Neither engine phrases the overflow the way SQLite does, so the
+        // recogniser has to key on each one's own shape — MySQL's
+        // `ER_TOO_BIG_ROWSIZE` errno, Postgres' "row is too big" message. Without
+        // it the raw driver error is not a LunoraError and `toErrorBody` redacts
+        // it to INTERNAL / 500.
+        const exec: SqlCtxExec = {
+            all: () => Promise.resolve([]),
+            run: (query) => (/^\s*insert into/iu.test(query) ? Promise.reject(raised) : Promise.resolve()),
+        };
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(engine), exec, schema });
+
+        const error = await writer.insert("notes", { archived: false, body: "x", priority: 1, slug: "s" }).catch((error_: unknown) => error_);
+
+        expect(error).toBeInstanceOf(LunoraError);
+        expect((error as LunoraError).code).toBe("PAYLOAD_TOO_LARGE");
+        expect((error as LunoraError).message).toContain(limitText);
+    });
+
     it.each(["postgres", "mysql"] as const)("renders the %s OCC guard with engine-correct NULL-safe equality", async (engine) => {
         expect.assertions(2);
 
@@ -820,6 +1007,34 @@ describe("createSqlCtxDb — cross-dialect SQL rendering", () => {
         // in agreement. MySQL has no `NULLS` clause in its grammar at all, and
         // SQLite already agrees, so neither may be given one.
         expect(listed).toMatch(engine === "postgres" ? /desc nulls last/iu : /desc(?! nulls)/iu);
+    });
+
+    /**
+     * `KEY` is a reserved word in MySQL 8 and cannot be an unquoted alias, so the
+     * enumerate statement the indexed `groupBy` fast path emits died with
+     * `ER_PARSE_ERROR` on every `groupBy` whose `by` matches an `aggregateIndex`
+     * and carries no `where` — the most common grouped-count shape there is. The
+     * companion tables are always provisioned, so the SQL `GROUP BY` fallback
+     * never ran and the whole call was a 500.
+     *
+     * `sql.identifier` was applied to the source column but not to the alias;
+     * routing the alias through it too lets drizzle quote it the way each engine
+     * expects (backticks on MySQL, double quotes elsewhere).
+     */
+    it.each(["postgres", "mysql", "sqlite"] as const)("quotes the indexed groupBy enumerate aliases on %s", async (engine) => {
+        expect.assertions(2);
+
+        // One companion row, which also answers the `tableExists` probe so the
+        // indexed path is taken rather than the SQL `GROUP BY` fallback.
+        const { exec, statements } = recordingExec([{ count: 1, key: JSON.stringify(["a", "active"]), value: null }]);
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(engine), exec, schema: groupSchema });
+
+        await writer.groupBy("events", { agg: { op: "count" }, by: ["tenant", "status"] });
+
+        const enumerated = statements.find((statement) => /^select .*__agg_bytenantstatus/iu.test(statement));
+
+        expect(enumerated).toBeDefined();
+        expect(enumerated).toMatch(engine === "mysql" ? /as `key`/iu : /as "key"/iu);
     });
 
     it("leaves a notNull ordered column's ORDER BY bare on Postgres", async () => {
@@ -1243,5 +1458,113 @@ describe("global table index sort keys", () => {
 
         expect(String(before[0]?.["sql"])).not.toMatch(/_creationTime/u);
         await expect(provisionedIndex("posts_by_status")).resolves.toMatch(/_creationTime/u);
+    });
+});
+
+describe("global table companion provisioning", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    /** A table whose sole UNIQUE index is over `field`; both columns are optional, so either can hold NULL. */
+    const uniqueOver = (field: string): SchemaLike =>
+        ({
+            tables: {
+                drafts: {
+                    indexes: [{ fields: [field], name: "by_uniq", unique: true }],
+                    shape: { note: optionalCol("string"), slug: optionalCol("string") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        }) as never;
+
+    it("re-creates a UNIQUE index over a column whose unset rows SQLite would accept", async () => {
+        expect.assertions(3);
+
+        // Provision `drafts_by_uniq` over `note`.
+        const seeder = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: uniqueOver("note") });
+
+        await seeder.findMany("drafts", { limit: 1 });
+
+        // Two rows that leave the OPTIONAL `slug` unset. SQLite's UNIQUE index
+        // treats NULLs as distinct and accepts both, but `GROUP BY` treats them
+        // as equal — so an unfiltered duplicate probe reads them as one group of
+        // two and refuses a `CREATE UNIQUE INDEX` that would have succeeded, on
+        // every wake, for the life of the deployment.
+        await harness.exec.run(`INSERT INTO "drafts" ("id", "_creationTime", "note") VALUES (?, ?, ?)`, ["d1", 1, "a"]);
+        await harness.exec.run(`INSERT INTO "drafts" ("id", "_creationTime", "note") VALUES (?, ?, ?)`, ["d2", 2, "b"]);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: uniqueOver("slug") });
+
+        await expect(writer.findMany("drafts", { limit: 1 })).resolves.toBeDefined();
+
+        const rows = await harness.exec.all(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`, ["drafts_by_uniq"]);
+
+        expect(String(rows[0]?.["sql"])).toContain(`"slug"`);
+
+        // And the re-created constraint actually enforces on non-NULL values.
+        await writer.insert("drafts", { slug: "x" });
+
+        await expect(writer.insert("drafts", { slug: "x" })).rejects.toThrow(/unique constraint violation/iu);
+    });
+
+    it("still refuses a UNIQUE index whose non-NULL rows really are duplicates", async () => {
+        expect.assertions(1);
+
+        const seeder = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: uniqueOver("note") });
+
+        await seeder.findMany("drafts", { limit: 1 });
+        await harness.exec.run(`INSERT INTO "drafts" ("id", "_creationTime", "note", "slug") VALUES (?, ?, ?, ?)`, ["d1", 1, "a", "same"]);
+        await harness.exec.run(`INSERT INTO "drafts" ("id", "_creationTime", "note", "slug") VALUES (?, ?, ?, ?)`, ["d2", 2, "b", "same"]);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: uniqueOver("slug") });
+
+        await expect(writer.findMany("drafts", { limit: 1 })).rejects.toThrow(/cannot be re-created/u);
+    });
+
+    it("creates no aggregate or rank companion for an explicitly non-global table", async () => {
+        expect.assertions(4);
+
+        const mixed: SchemaLike = {
+            tables: {
+                metrics: {
+                    aggregateIndexes: [{ by: ["archived"], name: "byArchived", on: "metrics", op: "count" }],
+                    indexes: [],
+                    rankIndexes: [{ name: "byPriority", on: "metrics", partitionBy: ["archived"], sortBy: [{ direction: "desc", field: "priority" }] }],
+                    shape: { archived: col("boolean"), priority: col("number") },
+                    shardMode: { kind: "global" },
+                },
+                // Its rows live in the Durable Objects, so a companion here is an
+                // orphan: nothing on this plane ever writes to it or reads it.
+                sessions: {
+                    aggregateIndexes: [{ by: ["archived"], name: "byArchived", on: "sessions", op: "count" }],
+                    indexes: [],
+                    rankIndexes: [{ name: "byPriority", on: "sessions", partitionBy: ["archived"], sortBy: [{ direction: "desc", field: "priority" }] }],
+                    shape: { archived: col("boolean"), priority: col("number") },
+                    shardMode: { key: "archived", kind: "shardBy" },
+                },
+            },
+        } as never;
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: mixed });
+
+        await writer.findMany("metrics", { limit: 1 });
+
+        const named = async (name: string): Promise<boolean> => {
+            const rows = await harness.exec.all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, [name]);
+
+            return rows.length > 0;
+        };
+
+        await expect(named("metrics__agg_byArchived")).resolves.toBe(true);
+        await expect(named("metrics__rank_byPriority")).resolves.toBe(true);
+        await expect(named("sessions__agg_byArchived")).resolves.toBe(false);
+        await expect(named("sessions__rank_byPriority")).resolves.toBe(false);
     });
 });

@@ -1,4 +1,4 @@
-import type { ArgsOf, FunctionReference, ReturnOf, Unsubscribe } from "@lunora/client";
+import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
 import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
 import type { Accessor } from "solid-js";
@@ -17,10 +17,19 @@ type PageItemOf<F extends FunctionReference> = ReturnOf<F> extends { page: (infe
 interface CreatePaginatedQueryOptions {
     /** Page size for the first page (and the default for `loadMore`). */
     initialNumItems: number;
+    /** Called when a page subscription reports an error (also surfaced on the `error` accessor). */
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 
 interface CreatePaginatedQueryResult<T> {
+    /**
+     * The last page subscription error, or `undefined`. A tail page that fails
+     * before its first frame is dropped so `status` returns to `"CanLoadMore"`
+     * and `loadMore` can retry it; cleared by the next successful frame,
+     * `loadMore`, or an args change.
+     */
+    error: Accessor<SubscriptionError | undefined>;
     /** `true` while the first page or a `loadMore` page is in flight. */
     isLoading: Accessor<boolean>;
     /** Request the next page. A no-op unless `status === "CanLoadMore"`. */
@@ -33,10 +42,14 @@ interface CreatePaginatedQueryResult<T> {
 interface CreateInfiniteQueryOptions {
     /** Page size for the first page (and the default for `fetchNextPage`). */
     initialNumItems: number;
+    /** Called when a page subscription reports an error (also surfaced on the `error` accessor). */
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 
 interface CreateInfiniteQueryResult<T> {
+    /** The last page subscription error, or `undefined` — see `CreatePaginatedQueryResult.error`. */
+    error: Accessor<SubscriptionError | undefined>;
     /** Request the next page. A no-op unless `status === "CanLoadMore"`. */
     fetchNextPage: (numberItems?: number) => void;
     /** `true` when the loaded tail reports it can load another page. */
@@ -75,10 +88,15 @@ const buildPageKey = (functionPath: string, pageArgs: Record<string, unknown>): 
 const createPaginatedCore = <T>(
     function_: FunctionReference,
     args: "skip" | Accessor<"skip" | Record<string, unknown>> | Record<string, unknown>,
-    options: { initialNumItems: number; shardKey?: string },
-): { loadMore: (n: number) => void; pageResults: Accessor<(PaginationResult<T> | undefined)[]>; status: Accessor<PaginationStatus> } => {
+    options: { initialNumItems: number; onError?: SubscriptionErrorCallback; shardKey?: string },
+): {
+    error: Accessor<SubscriptionError | undefined>;
+    loadMore: (n: number) => void;
+    pageResults: Accessor<(PaginationResult<T> | undefined)[]>;
+    status: Accessor<PaginationStatus>;
+} => {
     const client = useLunora();
-    const { initialNumItems, shardKey } = options;
+    const { initialNumItems, onError, shardKey } = options;
 
     const resolveArgs = (): "skip" | Record<string, unknown> => (typeof args === "function" ? args() : args);
 
@@ -88,6 +106,7 @@ const createPaginatedCore = <T>(
     const resultsByKey = new Map<string, PaginationResult<T>>();
 
     const [pageResults, setPageResults] = createSignal<(PaginationResult<T> | undefined)[]>([]);
+    const [error, setError] = createSignal<SubscriptionError | undefined>(undefined);
 
     // Active subscriptions keyed by pageKey.
     const activeSubs = new Map<string, Unsubscribe>();
@@ -182,6 +201,7 @@ const createPaginatedCore = <T>(
 
                     // This page has resolved; remove from the pending set.
                     pendingPageKeys.delete(key);
+                    setError(undefined);
 
                     const currentArgs = resolveArgs();
 
@@ -209,7 +229,31 @@ const createPaginatedCore = <T>(
                         }
                     }
                 },
-                { shardKey },
+                {
+                    onError: (subscriptionError) => {
+                        pendingPageKeys.delete(key);
+                        setError(subscriptionError);
+
+                        // A tail that fails before its first frame is dropped so
+                        // the feed leaves `LoadingMore` (status falls back to the
+                        // previous page's cursor) and `loadMore` can retry it. The
+                        // first page has nothing to fall back to and stays.
+                        const current = pages();
+                        const tail = current.at(-1);
+
+                        if (
+                            current.length > 1 &&
+                            tail &&
+                            !resultsByKey.has(key) &&
+                            buildPageKey(function_["__lunoraRef"], buildPageArgs(tail, baseArgs)) === key
+                        ) {
+                            setPages(current.slice(0, -1));
+                        }
+
+                        onError?.(subscriptionError);
+                    },
+                    shardKey,
+                },
             );
 
             activeSubs.set(key, unsub);
@@ -280,6 +324,7 @@ const createPaginatedCore = <T>(
         teardownAll();
         setPages(initialPages(initialNumItems));
         setPageResults([]);
+        setError(undefined);
 
         if (current !== "skip") {
             syncSubscriptions(pages(), current);
@@ -350,10 +395,11 @@ const createPaginatedCore = <T>(
             }
         }
 
+        setError(undefined);
         setPages(next);
     };
 
-    return { loadMore, pageResults, status };
+    return { error, loadMore, pageResults, status };
 };
 
 /**
@@ -371,13 +417,13 @@ const createPaginatedQuery = <F extends FunctionReference>(
     args: "skip" | Accessor<"skip" | PaginatedArgs<F>> | PaginatedArgs<F>,
     options: CreatePaginatedQueryOptions,
 ): CreatePaginatedQueryResult<PageItemOf<F>> => {
-    const { loadMore, pageResults, status } = createPaginatedCore<PageItemOf<F>>(function_, args, options);
+    const { error, loadMore, pageResults, status } = createPaginatedCore<PageItemOf<F>>(function_, args, options);
 
     const results = createMemo<PageItemOf<F>[]>(() => pageResults().flatMap((page) => page?.page ?? []));
 
     const isLoading = createMemo<boolean>(() => status() === "LoadingFirstPage" || status() === "LoadingMore");
 
-    return { isLoading, loadMore, results, status };
+    return { error, isLoading, loadMore, results, status };
 };
 
 /**
@@ -394,7 +440,7 @@ const createInfiniteQuery = <F extends FunctionReference>(
     options: CreateInfiniteQueryOptions,
 ): CreateInfiniteQueryResult<PageItemOf<F>> => {
     const { initialNumItems } = options;
-    const { loadMore, pageResults, status } = createPaginatedCore<PageItemOf<F>>(function_, args, options);
+    const { error, loadMore, pageResults, status } = createPaginatedCore<PageItemOf<F>>(function_, args, options);
 
     const pages = createMemo<PageItemOf<F>[][]>(() => pageResults().flatMap((page) => (page ? [page.page] : [])));
 
@@ -406,7 +452,7 @@ const createInfiniteQuery = <F extends FunctionReference>(
         loadMore(numberItems ?? initialNumItems);
     };
 
-    return { fetchNextPage, hasNextPage, isFetchingNextPage, isLoading, pages, status };
+    return { error, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading, pages, status };
 };
 
 export type { CreateInfiniteQueryOptions, CreateInfiniteQueryResult, CreatePaginatedQueryOptions, CreatePaginatedQueryResult, PageItemOf, PaginatedArgs };

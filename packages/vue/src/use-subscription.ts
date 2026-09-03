@@ -35,9 +35,12 @@ const useSubscription = <F extends FunctionReference>(
     watch(
         () => toValue(args),
         (currentArgs, _previous, onCleanup) => {
+            // Each args generation starts clean: the previous args' value must not
+            // render under the new args until the new subscription's first frame.
+            data.value = undefined;
+            error.value = undefined;
+
             if (currentArgs === "skip") {
-                data.value = undefined;
-                error.value = undefined;
                 return;
             }
 

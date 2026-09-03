@@ -36,29 +36,26 @@ describe("eventLogDOClient wire contract", () => {
         await expect(requests[0]?.json()).resolves.toStrictEqual({ events: [{ payload: { n: 1 }, type: "a" }] });
     });
 
-    it("getSince and getRange encode their cursor in the query string", async () => {
-        expect.assertions(3);
+    it("getSince encodes its cursor and limit in the query string", async () => {
+        expect.assertions(2);
 
-        const { client, requests } = clientWith(() => Response.json({ entries: [], hasMore: false }));
+        const { client, requests } = clientWith(() => Response.json({ entries: [], truncated: false }));
 
         await client.getSince(7);
-        await client.getRange(3, 25);
-        await client.getRange(0);
+        await client.getSince(3, 25);
 
+        // No `limit` → the DO's own default page size applies.
         expect(new URL(requests[0]?.url as string).search).toBe("?seq=7");
-        expect(new URL(requests[1]?.url as string).search).toBe("?from=3&limit=25");
-        // The default page size is 50.
-        expect(new URL(requests[2]?.url as string).search).toBe("?from=0&limit=50");
+        expect(new URL(requests[1]?.url as string).search).toBe("?seq=3&limit=25");
     });
 
     it("surfaces the DO's structured error message on a non-OK response", async () => {
-        expect.assertions(5);
+        expect.assertions(4);
 
         const { client } = clientWith(() => Response.json({ error: { code: "BAD_REQUEST", message: "events[] required" } }, { status: 400 }));
 
         await expect(client.append([])).rejects.toThrow("EventLogDO.append failed (400): events[] required");
         await expect(client.getSince(0)).rejects.toThrow("EventLogDO.getSince failed (400): events[] required");
-        await expect(client.getRange(0)).rejects.toThrow("EventLogDO.getRange failed (400): events[] required");
         await expect(client.getSize()).rejects.toThrow("EventLogDO.getSize failed (400): events[] required");
         await expect(client.getState()).rejects.toThrow("EventLogDO.getState failed (400): events[] required");
     });
@@ -312,7 +309,7 @@ interface MirrorDouble {
     registered: string[];
 }
 
-const mirrorDouble = (): MirrorDouble => {
+const mirrorDouble = (primaryKey: string = "id"): MirrorDouble => {
     const applied: TableDiff[] = [];
     const registered: string[] = [];
 
@@ -320,6 +317,7 @@ const mirrorDouble = (): MirrorDouble => {
         applyDiff: (diff: TableDiff) => {
             applied.push(diff);
         },
+        primaryKeyOf: () => primaryKey,
         registerTable: (name: string) => {
             registered.push(name);
         },
@@ -331,8 +329,8 @@ const mirrorDouble = (): MirrorDouble => {
 describe(subscribeToMirror, () => {
     const functionRef = { __lunoraRef: "todos/list" };
 
-    const wire = (): { double: MirrorDouble; push: (data: unknown) => void; unsubscribe: () => void; unsubscribed: () => boolean } => {
-        const double = mirrorDouble();
+    const wire = (primaryKey?: string): { double: MirrorDouble; push: (data: unknown) => void; unsubscribe: () => void; unsubscribed: () => boolean } => {
+        const double = mirrorDouble(primaryKey);
         let callback: ((data: unknown) => void) | undefined;
         let torn = false;
 
@@ -364,7 +362,7 @@ describe(subscribeToMirror, () => {
         expect(double.registered).toStrictEqual(["fn_todos_list"]);
     });
 
-    it("upserts every row of a frame and deletes rows that dropped out of the next frame", () => {
+    it("upserts every row of the first frame and only the changes of the next", () => {
         expect.assertions(4);
 
         const { double, push } = wire();
@@ -381,12 +379,125 @@ describe(subscribeToMirror, () => {
             { data: { id: "2", title: "b" }, type: "insert" },
         ]);
 
-        // Row "1" vanished from the server result — the snapshot pass deletes it.
+        // Row "1" vanished from the server result — the snapshot pass deletes
+        // it. Row "2" is byte-identical to the previous frame, so it is NOT
+        // re-upserted.
         push([{ id: "2", title: "b" }]);
 
-        expect(double.applied[1]?.changes).toStrictEqual([
-            { data: { id: "2", title: "b" }, type: "insert" },
-            { id: "1", type: "delete" },
+        expect(double.applied[1]?.changes).toStrictEqual([{ id: "1", type: "delete" }]);
+    });
+
+    it("emits nothing for a frame identical to the last one", () => {
+        expect.assertions(2);
+
+        const { double, push } = wire();
+
+        const rows = [
+            { id: "1", title: "a" },
+            { id: "2", title: "b" },
+        ];
+
+        push(rows);
+        // Same rows, fresh objects, keys in a different order — same content.
+        push([
+            { title: "b", id: "2" },
+            { title: "a", id: "1" },
+        ]);
+        push(rows);
+
+        expect(double.applied).toHaveLength(1);
+
+        // …and a real edit still lands.
+        push([
+            { id: "1", title: "a" },
+            { id: "2", title: "B!" },
+        ]);
+
+        expect(double.applied[1]?.changes).toStrictEqual([{ data: { id: "2", title: "B!" }, type: "insert" }]);
+    });
+
+    it("diffs on the table's registered primary key, not a hard-coded `id`", () => {
+        expect.assertions(2);
+
+        // `registerTable(name, {})` must not erase a caller-supplied
+        // `primaryKey`; the mirror keeps answering `todoId` and the snapshot
+        // pass keys rows by it.
+        const { double, push } = wire("todoId");
+
+        push([{ title: "a", todoId: "t1" }]);
+        push([{ title: "a", todoId: "t1" }]);
+
+        expect(double.applied).toHaveLength(1);
+
+        push([]);
+
+        expect(double.applied[1]?.changes).toStrictEqual([{ id: "t1", type: "delete" }]);
+    });
+
+    it("tracks a bigint primary key like any other id", () => {
+        expect.assertions(3);
+
+        // An int64 column decodes off the wire as a `bigint`. Classified as
+        // un-keyed it was inserted every frame and never deleted.
+        const { double, push } = wire();
+
+        push([{ id: 1n, title: "a" }]);
+
+        expect(double.applied[0]?.changes).toStrictEqual([{ data: { id: 1n, title: "a" }, type: "insert" }]);
+
+        // Identical frame: no re-upsert.
+        push([{ id: 1n, title: "a" }]);
+
+        expect(double.applied).toHaveLength(1);
+
+        // …and the row is deletable once the server drops it.
+        push([]);
+
+        expect(double.applied[1]?.changes).toStrictEqual([{ id: "1", type: "delete" }]);
+    });
+
+    it("reconciles a frame that repeats a primary key against its LAST row", () => {
+        expect.assertions(3);
+
+        const { double, push } = wire();
+
+        push([{ id: "1", title: "b" }]);
+
+        expect(double.applied[0]?.changes).toStrictEqual([{ data: { id: "1", title: "b" }, type: "insert" }]);
+
+        // The server repeats key "1", and the LAST of the two matches what the
+        // mirror already holds. Diffing row by row queued the first ("a" differs
+        // from the held "b") and then skipped the second ("b" matches), leaving
+        // the mirror on "a" while the recorded frame said "b" — a divergence no
+        // later frame could correct, because every subsequent frame of "b" looks
+        // unchanged.
+        push([
+            { id: "1", title: "a" },
+            { id: "1", title: "b" },
+        ]);
+
+        expect(double.applied).toHaveLength(1);
+
+        // The recorded frame really is the last row, so a genuine edit still lands.
+        push([{ id: "1", title: "c" }]);
+
+        expect(double.applied[1]?.changes).toStrictEqual([{ data: { id: "1", title: "c" }, type: "insert" }]);
+    });
+
+    it("upserts a repeated primary key once, from its last row", () => {
+        expect.assertions(1);
+
+        const { double, push } = wire();
+
+        push([
+            { id: "1", title: "first" },
+            { id: "2", title: "other" },
+            { id: "1", title: "last" },
+        ]);
+
+        expect(double.applied[0]?.changes).toStrictEqual([
+            { data: { id: "1", title: "last" }, type: "insert" },
+            { data: { id: "2", title: "other" }, type: "insert" },
         ]);
     });
 
@@ -436,6 +547,7 @@ describe(subscribeToMirror, () => {
 
                 applied.push(diff);
             },
+            primaryKeyOf: () => "id",
             registerTable: () => undefined,
         } as unknown as LocalMirror;
 

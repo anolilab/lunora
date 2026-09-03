@@ -539,7 +539,9 @@ The object source is **injected**, so this runs over an R2 bucket, S3, a
 filesystem, or a database table without `@lunora/ai` depending on any of them.
 `list` may be an async generator, so the caller decides how to page a large
 bucket. One pass collects the keys it yields — it needs the full current set to
-work out what disappeared — but never more than one object's body at a time.
+work out what disappeared — while object bodies are fetched `concurrency` at a
+time (`concurrency`, default **4**), so peak memory is that many bodies, not one.
+Lower it when the objects are large.
 
 **Re-syncing is free.** `rag.index` short-circuits on a content hash, so an
 unchanged object costs one `get` and no embedding — which makes running this on

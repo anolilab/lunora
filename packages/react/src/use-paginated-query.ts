@@ -14,6 +14,10 @@ type PageItemOf<F> = ReturnOf<F> extends { page: (infer T)[] } ? T : unknown;
 /**
  * Subscribe to a reactively-paginated query and grow the feed page by page.
  *
+ * Pass `onError` (and read `error`) to see a page failure: without it the hook
+ * only reports `status`, and a first page that fails reads as an eternal
+ * `isLoading`.
+ *
  * The query function must accept a `paginationOpts: { numItems, cursor,
  * endCursor }` arg and return a `PaginationResult` (the shape
  * `ctx.db.query(...).paginate` yields). Pages are tracked as an ordered list of
@@ -38,7 +42,7 @@ const usePaginatedQuery = <F extends FunctionReference>(
     args: "skip" | PaginatedArgs<F>,
     options: UsePaginatedQueryOptions,
 ): UsePaginatedQueryResult<PageItemOf<F>> => {
-    const { loadMore, pageResults, status } = usePaginatedCore<PageItemOf<F>>(function_, args === "skip" ? "skip" : args, options);
+    const { error, loadMore, pageResults, status } = usePaginatedCore<PageItemOf<F>>(function_, args === "skip" ? "skip" : args, options);
 
     const results: PageItemOf<F>[] = [];
 
@@ -51,6 +55,7 @@ const usePaginatedQuery = <F extends FunctionReference>(
     const skipped = args === "skip";
 
     return {
+        error,
         isLoading: !skipped && (status === "LoadingFirstPage" || status === "LoadingMore"),
         loadMore,
         results,

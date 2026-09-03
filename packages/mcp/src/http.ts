@@ -30,4 +30,4 @@ export const createMcpFetchHandler =
     (request: Request): Promise<Response> =>
         serveStateless(createLunoraMcpServer(options), request);
 
-export { type McpFetchHandler, serveStateless } from "./serve-stateless";
+export { type McpFetchHandler, serveStateless, type ServeStatelessOptions } from "./serve-stateless";

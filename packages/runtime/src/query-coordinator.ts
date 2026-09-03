@@ -19,6 +19,7 @@
  * (`createStaticShardRegistry`) here and leave the DO/KV-backed registry
  * for a follow-up once codegen opts schemas into cross-shard call sites.
  */
+import { toErrorBody } from "@lunora/errors";
 import type { RankDirection as RankPageDirection, RankPageRow, RankPageRowKey as RankPageKey, ShardRankPageResult } from "@lunora/shard-engine";
 
 import { fromBase64, toBase64 } from "../../../shared/base64";
@@ -95,7 +96,22 @@ interface FanOutSpec {
  * UI.
  */
 interface ShardError {
-    /** Human-readable; tests assert on `.includes("timeout")` and similar. */
+    /**
+     * Machine-readable failure code, from the same `toErrorBody` shaping every
+     * other error leaving this runtime goes through: a shard's own
+     * `LunoraError` code when it had one, `SHARD_TIMEOUT` / `SHARD_HTTP_ERROR`
+     * for the transport failures this coordinator detects itself, and `INTERNAL`
+     * for anything else. Callers branch on this rather than on `message`.
+     */
+    code: string;
+
+    /**
+     * Human-readable; tests assert on `.includes("timeout")` and similar. Shaped
+     * by `toErrorBody`, so an internal-coded or non-`LunoraError` throw is
+     * redacted here exactly as it would be on the single-shard path — the
+     * fan-out envelope is `Response.json`-ed straight to the caller, and a raw
+     * `error.message` from a shard is platform detail that must not ride out.
+     */
     message: string;
     shardKey: string;
     /** Set when the per-shard timeout fired. */
@@ -1090,6 +1106,8 @@ interface ShardRpcOk {
 }
 
 interface ShardRpcError {
+    /** See {@link ShardError.code}. */
+    code: string;
     kind: "err";
     message: string;
     shardKey: string;
@@ -1145,7 +1163,7 @@ const callOneShard = async (namespace: ShardNamespaceInput, shardKey: string, pr
                 // needs to propagate.
             }
 
-            resolve({ kind: "err", message: `shard "${shardKey}" timed out after ${String(timeoutMs)}ms`, shardKey, timedOut: true });
+            resolve({ code: "SHARD_TIMEOUT", kind: "err", message: `shard "${shardKey}" timed out after ${String(timeoutMs)}ms`, shardKey, timedOut: true });
         }, timeoutMs);
     });
 
@@ -1154,16 +1172,21 @@ const callOneShard = async (namespace: ShardNamespaceInput, shardKey: string, pr
             const response = await stub.fetch(forwarded);
 
             if (!response.ok) {
-                return { kind: "err", message: `shard "${shardKey}" returned ${String(response.status)}`, shardKey, timedOut: false };
+                return { code: "SHARD_HTTP_ERROR", kind: "err", message: `shard "${shardKey}" returned ${String(response.status)}`, shardKey, timedOut: false };
             }
 
             const value = await response.json();
 
             return { kind: "ok", shardKey, value };
         } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : String(error);
+            // Shape it the way every other error leaving this runtime is shaped.
+            // `fanOut` reports failures as DATA — the envelope is `Response.json`-ed
+            // to the caller — so a raw `error.message` here would echo whatever the
+            // shard (or the platform beneath it) put in a throw. `toErrorBody`
+            // echoes a catalogued `LunoraError` and redacts everything else.
+            const { body } = toErrorBody(error, { fallbackCode: "INTERNAL", redactedMessage: "shard call failed" });
 
-            return { kind: "err", message: `shard "${shardKey}" threw: ${message}`, shardKey, timedOut: false };
+            return { code: body.code, kind: "err", message: `shard "${shardKey}" failed: ${body.message}`, shardKey, timedOut: false };
         }
     })();
 
@@ -1524,7 +1547,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                 if (result.kind === "ok") {
                     okValues.push(result.value);
                 } else {
-                    errors.push({ message: result.message, shardKey: result.shardKey, timedOut: result.timedOut });
+                    errors.push({ code: result.code, message: result.message, shardKey: result.shardKey, timedOut: result.timedOut });
                 }
             }
 
