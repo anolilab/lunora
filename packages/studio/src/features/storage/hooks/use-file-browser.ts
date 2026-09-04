@@ -29,9 +29,10 @@ const ORPHAN_LIST_PAGE_SIZE = 1000;
  * Walk the bucket for the orphan check's live-key set, stopping at
  * {@link ORPHAN_LIVE_KEY_CAP}.
  *
- * `truncated` is set only when the cap stopped the walk with pages still to come:
- * a bucket of exactly the cap that enumerated to its end IS complete, and calling
- * that truncated would suppress a verdict the check could have given.
+ * `truncated` is set only when the cap actually clipped the walk — pages still to
+ * come, or a page whose keys did not all fit. A bucket of exactly the cap that
+ * enumerated to its end IS complete, and calling that truncated would suppress a
+ * verdict the check could have given.
  */
 const enumerateLiveKeys = async (storageApi: {
     list: (options: { cursor?: string; limit?: number }) => Promise<StorageListPage>;
@@ -42,21 +43,32 @@ const enumerateLiveKeys = async (storageApi: {
     const liveKeys: string[] = [];
     let cursor: string | undefined;
     let hasMore = true;
+    let clipped = false;
 
     while (hasMore && liveKeys.length < ORPHAN_LIVE_KEY_CAP) {
         // eslint-disable-next-line no-await-in-loop -- bucket enumeration is inherently sequential (each page's cursor drives the next)
         const page = await storageApi.list({ cursor, limit: ORPHAN_LIST_PAGE_SIZE });
 
-        for (const object of page.objects) {
+        // `limit` is a request, not a contract: `StorageListFunction` is a
+        // caller-supplied seam and the admin route hands its result straight back,
+        // so a page can carry more than the cap has room for. Take only what fits
+        // and record the overflow — otherwise the walk overruns its own bound, and
+        // a cursorless over-sized page reports a complete verdict for keys it never
+        // held.
+        const room = ORPHAN_LIVE_KEY_CAP - liveKeys.length;
+
+        for (const object of page.objects.slice(0, room)) {
             liveKeys.push(object.key);
         }
+
+        clipped ||= page.objects.length > room;
 
         cursor = page.cursor;
         hasMore = cursor !== undefined;
     }
 
-    // Pages still pending when the walk stopped ⇒ the cap cut it short.
-    return { liveKeys, truncated: hasMore };
+    // Pages still pending, or keys dropped mid-page ⇒ the cap cut the walk short.
+    return { liveKeys, truncated: clipped || hasMore };
 };
 
 /** How the file list is laid out. */

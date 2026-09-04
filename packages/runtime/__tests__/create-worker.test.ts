@@ -1410,32 +1410,23 @@ describe("createWorker — x402 paid procedures", () => {
         expect(shard.calls).toHaveLength(0);
     });
 
-    it("warns once when an x402Charge gate is configured with no `functions` registry", async () => {
+    it("refuses to construct when an x402Charge gate is configured with no `functions` registry", () => {
         expect.assertions(3);
 
         // The third fail-closed condition, and the one that was silent: with no
         // registry there is nothing to read `.x402` off, so every paid procedure
-        // dispatches FREE under a "fail-closed by construction" docblock. A
-        // hand-rolled `createWorker({ shardDO, x402Charge })` is a real, committed
-        // shape (`examples/payment-demo/src/server/index.ts`). Same treatment the
-        // identical missing-registry condition gets for `replicaReads`.
-        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        // dispatched FREE under a "fail-closed by construction" docblock. A paywall
+        // that cannot see its paid functions is a misconfiguration, and the honest
+        // time to say so is when the worker is built — not once per isolate in a log
+        // line while paid dispatches sail through.
+        const x402Charge = vi.fn<ChargeGateStub>(() => Promise.resolve(new Response(null, { status: 402 })));
 
-        try {
-            const x402Charge = vi.fn<ChargeGateStub>(() => Promise.resolve(new Response(null, { status: 402 })));
-            const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace, x402Charge });
-
-            await worker.fetch(paidRpc("reports:latest"), {}, fakeContext);
-            await worker.fetch(paidRpc("reports:latest"), {}, fakeContext);
-
-            expect(warn).toHaveBeenCalledTimes(1);
-            expect(warn.mock.calls[0]?.[0]).toMatch(/`x402Charge` has no effect without `functions`/);
-            // Warn-once, not refuse: taking a free app down over a paid-function
-            // config would be the worse trade. The dispatch still happened.
-            expect(shard.calls).toHaveLength(2);
-        } finally {
-            warn.mockRestore();
-        }
+        expect(() => createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace, x402Charge })).toThrow(
+            /`x402Charge` requires `functions`/,
+        );
+        // Nothing was built, so nothing can dispatch free.
+        expect(shard.calls).toHaveLength(0);
+        expect(x402Charge).not.toHaveBeenCalled();
     });
 
     it("does not warn when no x402Charge gate is configured either", async () => {
