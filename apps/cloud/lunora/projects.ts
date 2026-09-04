@@ -7,6 +7,7 @@ import { internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { assertWithinQuota } from "./entitlements";
 import { rateLimit } from "./guards";
+import { purgeScopedRows } from "./purge";
 import { boundedString, LIMITS } from "./validators";
 
 /** Shortest preview password accepted — a gate this weak is theatre below it. */
@@ -189,20 +190,7 @@ export const remove = mutation
 
         const { now } = context;
 
-        for (const table of PROJECT_SCOPED_TABLES) {
-            // The per-table facades don't unify, so the generic sweep goes through a
-            // minimal structural cast — same shape `organizations.purgeDeleted` uses.
-            const facade = context.db[table] as unknown as {
-                findMany: (q: { where: Record<string, unknown> }) => Promise<{ page: { _id: string }[] }>;
-            };
-            // eslint-disable-next-line no-await-in-loop -- sequential per-table purge keeps the writer simple
-            const { page: rows } = await facade.findMany({ where: { projectId: id } });
-
-            for (const row of rows) {
-                // eslint-disable-next-line no-await-in-loop -- sequential deletes; a project's volumes are small
-                await context.db.delete(row._id as never);
-            }
-        }
+        await purgeScopedRows(context, PROJECT_SCOPED_TABLES, { projectId: id });
 
         // Deployments transition rather than vanish, so the teardown sweep still
         // has something to tear down.

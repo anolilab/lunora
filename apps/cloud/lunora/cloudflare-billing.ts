@@ -6,6 +6,25 @@ import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
+/**
+ * Per-org BYO Cloudflare billing (Billable Usage API). An org connects its *own*
+ * Cloudflare account — an account id + an API token scoped to **Billing Read** —
+ * so the console can show that account's authoritative Cloudflare spend by
+ * product, distinct from the control plane's *estimate* (`src/billing/spend.ts`).
+ *
+ * The token is a credential, so it follows the tenant-secret path exactly: it is
+ * AES-256-GCM encrypted at the edge (`POST /v1/cloudflare-billing` →
+ * `src/secrets/crypto.ts`) before it ever reaches {@link store}, so these
+ * functions and the D1 row only hold ciphertext + IV. {@link status} (any member)
+ * reports whether a connection exists and its account id — never the token.
+ * {@link summary} (an **action**, because the read is a `fetch` and the decrypt
+ * key + `ctx.fetch` are action-only) decrypts the token at the edge, reads the
+ * account's billable usage, and returns a normalized cost view — failing **open**
+ * to a status view (never throwing, never leaking the token) so the tab degrades
+ * gracefully when the connection is missing, the master key is absent, or the
+ * token lacks the Billing Read scope.
+ */
+
 /** The env keys {@link summary} reads off `ctx.env` (the validated `lunora/env.ts` contract). */
 interface CloudflareBillingEnv {
     SECRET_ENCRYPTION_KEY?: string;

@@ -188,13 +188,11 @@ interface LogRow extends EvidenceLogRow {
  * fetched logs) to produce the bundle the runner reasons over.
  */
 const gatherEvidence = async (context: ActionContext, organizationId: Id<"organizations">, incident: InvestigationIncident) => {
-    const { page: spanPage } = await context.db.observations.findMany({
+    const { page: spans } = await context.db.observations.findMany({
         limit: EVIDENCE_SPAN_SCAN,
         orderBy: [{ startedAt: "desc" }],
         where: { organizationId },
     });
-
-    const spans = spanPage;
 
     // First pass: correlate spans → related trace ids (no logs yet).
     const preliminary = buildEvidenceBundle({ incident, logs: [], spans });

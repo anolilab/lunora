@@ -17,24 +17,22 @@ import type { QueryCtx as QueryContext } from "./_generated/server.js";
  */
 
 /**
- * Adapt a stored subscription row to `@lunora/payment`'s `Subscription`.
- *
- * The row is keyed by Lunora's `_id`; the payment contract requires `id`. Nothing
- * in `resolveEntitlements` reads it today, which is why the two shapes could sit
- * behind a cast without anyone noticing — but the cast asserted a property that
- * was never there, so the first reader of `id` would have found `undefined`.
+ * Adapt a stored subscription row to `@lunora/payment`'s `Subscription`: the row
+ * is keyed by Lunora's `_id`, the payment contract requires `id`.
  */
-export const toSubscription = (row: StoredRow<"subscriptions">): Subscription => {return {
-    ...row,
-    id: row._id,
-    // `subscriptions` is `.externallyManaged()` — the payment webhook sync owns
-    // these two columns, so the schema keeps them `v.string()` instead of
-    // restating the provider layer's unions. Narrowed here rather than filtered:
-    // a value this build does not recognize must not silently drop a paying
-    // org's subscription out of entitlement resolution.
-    provider: row.provider as ProviderId,
-    state: row.state as SubscriptionState,
-}};
+const toSubscription = (row: StoredRow<"subscriptions">): Subscription => {
+    return {
+        ...row,
+        id: row._id,
+        // `subscriptions` is `.externallyManaged()` — the payment webhook sync
+        // owns these two columns, so the schema keeps them `v.string()` instead
+        // of restating the provider layer's unions. Narrowed here rather than
+        // filtered: a value this build does not recognize must not silently drop
+        // a paying org's subscription out of entitlement resolution.
+        provider: row.provider as ProviderId,
+        state: row.state as SubscriptionState,
+    };
+};
 
 /** Resolve an org's entitlements from its synced subscription state. */
 export const orgEntitlements = async (context: QueryContext, organizationId: Id<"organizations">): Promise<Entitlements> => {

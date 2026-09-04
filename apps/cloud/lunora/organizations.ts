@@ -4,6 +4,7 @@ import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
+import { purgeScopedRows } from "./purge";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -234,12 +235,11 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
     // never matches NULL, so organizations that were never scheduled for deletion are
     // excluded by the query rather than crowding out the ones that were. Oldest-first
     // within the due set, bounded per tick.
-    const { page } = await context.db.organizations.findMany({
+    const { page: due } = await context.db.organizations.findMany({
         limit: PURGE_BATCH,
         orderBy: [{ deletionRequestedAt: "asc" }],
         where: { deletionRequestedAt: { lt: cutoff } },
     });
-    const due = page;
 
     // EVERY table carrying an `organizationId`, not a hand-kept subset. The list
     // had drifted to 12 of 25 while the docblock above claimed erasure "across
@@ -290,20 +290,8 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
     for (const organization of due) {
         const organizationId = organization._id;
 
-        for (const table of orgScopedTables) {
-            // The per-table facade types don't unify, so the generic sweep goes
-            // through a minimal structural cast.
-            const facade = context.db[table] as unknown as {
-                findMany: (q: { where: Record<string, unknown> }) => Promise<{ page: { _id: string }[] }>;
-            };
-            // eslint-disable-next-line no-await-in-loop -- sequential per-table purge keeps the writer simple
-            const { page: rows } = await facade.findMany({ where: { organizationId } });
-
-            for (const row of rows) {
-                // eslint-disable-next-line no-await-in-loop -- sequential deletes; volumes are small
-                await context.db.delete(row._id as never);
-            }
-        }
+        // eslint-disable-next-line no-await-in-loop -- one org purged at a time keeps the writer simple
+        await purgeScopedRows(context, orgScopedTables, { organizationId });
 
         // Deployments transition to destroyed (not hard-deleted) so the 🌐
         // teardown path still sees what to tear down; a later sweep removes rows.

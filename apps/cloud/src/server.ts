@@ -189,6 +189,9 @@ export const ShardDO = createShardDO({
     payment: (env) => paymentConfig(env),
 });
 
+// Must stay a `type`: an `interface` gets no implicit index signature, so it will
+// not satisfy `Record<string, unknown>` at the mailer and alert-delivery call
+// sites (`createMailerFromEnv`, `deliverAlert`).
 type Env = {
     /** Secret backing the studio's better-auth sessions. */
     AUTH_SECRET?: string;
@@ -447,11 +450,9 @@ const deliverFiredAlerts = async (env: Env, database: ControlPlaneDatabase, deli
         return;
     }
 
-    const environmentRecord = env;
-
     await Promise.all(
         deliveries.map(async (delivery) => {
-            const delivered = await deliverAlert(environmentRecord, delivery).then(
+            const delivered = await deliverAlert(env, delivery).then(
                 () => true,
                 () => false,
             );

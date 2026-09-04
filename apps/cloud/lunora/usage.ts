@@ -181,12 +181,11 @@ export const rollup = internalMutation.mutation(async ({ ctx: context }): Promis
     // tick collapses whatever survivors it sees into one row and the next tick
     // collapses those. The invariant that must hold within a tick — delete the extras
     // before patching the survivor — is unaffected by where the page boundary falls.
-    const { page } = await context.db.platformUsage.findMany({
+    const { page: closed } = await context.db.platformUsage.findMany({
         limit: ROLLUP_BATCH,
         orderBy: [{ periodStart: "asc" }],
         where: { periodStart: { lt: cutoff } },
     });
-    const closed = page;
 
     const groups = new Map<string, PlatformUsageRow[]>();
 

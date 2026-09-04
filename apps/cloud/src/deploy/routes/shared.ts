@@ -22,6 +22,8 @@ export interface LunoraActionContext {
     runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
 }
 
+// Must stay a `type`: an `interface` gets no implicit index signature, so it will
+// not satisfy `Record<string, unknown>` at `sendInvitationEmail`/`deliverAlert`.
 export type RouterEnv = {
     __lunoraCtx?: LunoraActionContext;
     CLOUDFLARE_ACCOUNT_ID?: string;

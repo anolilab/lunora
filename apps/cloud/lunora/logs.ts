@@ -320,8 +320,7 @@ export const prune = internalMutation.mutation(async ({ ctx: context }): Promise
     // rows it does not want. Oldest-first keeps a backlog draining in cutoff order,
     // and PRUNE_BATCH bounds the work one cron tick does — a table far past retention
     // converges over several ticks instead of timing out on one.
-    const { page } = await context.db.tenantLogs.findMany({ limit: PRUNE_BATCH, orderBy: [{ createdAt: "asc" }], where: { createdAt: { lt: cutoff } } });
-    const stale = page;
+    const { page: stale } = await context.db.tenantLogs.findMany({ limit: PRUNE_BATCH, orderBy: [{ createdAt: "asc" }], where: { createdAt: { lt: cutoff } } });
 
     for (const row of stale) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple

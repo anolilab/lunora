@@ -74,6 +74,7 @@ const telemetryEvent = v.object({
     // Event time in epoch ms (decoded from the span's end time).
     ts: v.number(),
 });
+
 /** Count-crossing rule targets the ingest evaluates via `fireCrossedRules`. */
 const COUNT_TARGETS = new Set(["incident", "issue"]);
 
@@ -389,12 +390,11 @@ export const ingest = mutation
             // (shared with the periodic sweep in `src/telemetry/sweep.ts`) makes a
             // sustained breach alert once and lets a quiet window still clear + re-arm.
             if (metricRules.length > 0) {
-                const { page: observationPage } = await context.db.observations.findMany({
+                const { page: windowObservations } = await context.db.observations.findMany({
                     limit: METRIC_SCAN_LIMIT,
                     orderBy: [{ startedAt: "desc" }],
                     where: { organizationId: args.organizationId },
                 });
-                const windowObservations = observationPage;
                 const { page: statePage } = await context.db.alertRuleState.findMany({ where: { organizationId: args.organizationId } });
                 const stateByRule = new Map(statePage.map((row) => [row.ruleId as string, row]));
 
@@ -443,6 +443,7 @@ export const OBSERVATION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Rows one prune tick deletes. Bounds a single mutation; a backlog drains over ticks. */
 const PRUNE_BATCH = 1000;
+
 /** Delete span observations past retention (Traces). SYSTEM only (cron dispatch). */
 export const pruneObservations = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
     const cutoff = context.now - OBSERVATION_RETENTION_MS;
@@ -451,8 +452,11 @@ export const pruneObservations = internalMutation.mutation(async ({ ctx: context
     // rows it does not want. Oldest-first keeps a backlog draining in cutoff order,
     // and PRUNE_BATCH bounds the work one cron tick does — a table far past retention
     // converges over several ticks instead of timing out on one.
-    const { page } = await context.db.observations.findMany({ limit: PRUNE_BATCH, orderBy: [{ startedAt: "asc" }], where: { startedAt: { lt: cutoff } } });
-    const stale = page;
+    const { page: stale } = await context.db.observations.findMany({
+        limit: PRUNE_BATCH,
+        orderBy: [{ startedAt: "asc" }],
+        where: { startedAt: { lt: cutoff } },
+    });
 
     for (const row of stale) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple

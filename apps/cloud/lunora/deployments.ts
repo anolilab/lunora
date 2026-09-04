@@ -463,8 +463,7 @@ export const rollback = mutation
 export const routeForAlias = query
     .input({ alias: boundedString(LIMITS.name) })
     .query(async ({ ctx: context, args: { alias } }): Promise<null | { candidateScriptName?: string; percent?: number; scriptName: string }> => {
-        const { page } = await context.db.deployments.findMany({ where: { alias } });
-        const rows = page;
+        const { page: rows } = await context.db.deployments.findMany({ where: { alias } });
         const first = rows[0];
 
         if (!first) {
@@ -503,8 +502,7 @@ export const pruneSuperseded = internalMutation.mutation(async ({ ctx: context }
     // Filter in the QUERY, not after it. `findMany({})` returns one 1000-row page, so
     // filtering afterwards meant live/failed/destroyed rows could fill the page and
     // starve the superseded ones this prune exists to collect.
-    const { page } = await context.db.deployments.findMany({ where: { status: "superseded" } });
-    const superseded = page;
+    const { page: superseded } = await context.db.deployments.findMany({ where: { status: "superseded" } });
 
     const byProjectKind = new Map<string, DeploymentRow[]>();
 

@@ -187,6 +187,7 @@ export const METRIC_POINT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Rows one prune tick deletes. Bounds a single mutation; a backlog drains over ticks. */
 const PRUNE_BATCH = 1000;
+
 /** Delete exact metric points past retention. SYSTEM only (cron dispatch). */
 export const prune = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
     const cutoff = context.now - METRIC_POINT_RETENTION_MS;
@@ -195,8 +196,7 @@ export const prune = internalMutation.mutation(async ({ ctx: context }): Promise
     // rows it does not want. Oldest-first keeps a backlog draining in cutoff order,
     // and PRUNE_BATCH bounds the work one cron tick does — a table far past retention
     // converges over several ticks instead of timing out on one.
-    const { page } = await context.db.metricPoints.findMany({ limit: PRUNE_BATCH, orderBy: [{ at: "asc" }], where: { at: { lt: cutoff } } });
-    const stale = page;
+    const { page: stale } = await context.db.metricPoints.findMany({ limit: PRUNE_BATCH, orderBy: [{ at: "asc" }], where: { at: { lt: cutoff } } });
 
     for (const row of stale) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple

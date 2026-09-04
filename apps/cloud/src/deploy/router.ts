@@ -512,9 +512,7 @@ const handleTelemetryRoute = async (request: Request, environment: RouterEnv): P
 
         // Deliver any alerts the ingest fired (best-effort), then stamp them delivered.
         if (result.alerts.length > 0) {
-            const environmentRecord = environment;
-
-            await Promise.all(result.alerts.map((alert) => deliverAlert(environmentRecord, alert).catch(() => undefined)));
+            await Promise.all(result.alerts.map((alert) => deliverAlert(environment, alert).catch(() => undefined)));
             // Alerts have already gone out, so a failure here must not fail the
             // ingest — but it must not be invisible either: unmarked alerts are
             // re-delivered on the next sweep, and `markDelivered` is now rate-limited

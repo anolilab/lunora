@@ -55,8 +55,7 @@ export const summary = query
     .query(async ({ ctx: context, args: { organizationId } }): Promise<UptimeSummaryRow[]> => {
         await assertMember(context, organizationId);
 
-        const { page } = await context.db.uptimeState.findMany({ where: { organizationId } });
-        const states = page;
+        const { page: states } = await context.db.uptimeState.findMany({ where: { organizationId } });
 
         const rows = await Promise.all(
             states.map(async (state): Promise<UptimeSummaryRow> => {
@@ -105,12 +104,11 @@ export const prune = internalMutation.mutation(async ({ ctx: context }): Promise
     const cutoff = context.now - CHECK_RETENTION_MS;
     // Oldest-first and bounded, with the cutoff as a `where` predicate so the page
     // holds only rows to delete rather than whatever sorts first.
-    const { page } = await context.db.uptimeChecks.findMany({
+    const { page: stale } = await context.db.uptimeChecks.findMany({
         limit: PRUNE_SCAN_LIMIT,
         orderBy: [{ createdAt: "asc" }],
         where: { createdAt: { lt: cutoff } },
     });
-    const stale = page;
 
     for (const row of stale) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
