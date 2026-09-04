@@ -253,6 +253,33 @@ describe("remoteBindingsPlugin", () => {
         expect(calls).toBe(2);
     });
 
+    it("re-points configPath at the new temp config when `config` runs twice", () => {
+        expect.assertions(2);
+
+        // A second `config` pass unlinks temp A and materializes temp B. The
+        // injected path from the first pass is still sitting on the shared
+        // options object, and `withRemoteBindings` reads any `configPath` there as
+        // the user's explicit choice — so it left the cloudflare plugin pointed at
+        // a file that had just been deleted. A materializer answering the same
+        // path twice cannot see this; a real one mints a fresh temp file per call.
+        const paths = ["/work/wrangler.remote.a.jsonc", "/work/wrangler.remote.b.jsonc"];
+        const options: { configPath?: string } = {};
+        const plugin = remoteBindingsPlugin(
+            options,
+            remoteOnOptions(() => {
+                return { cleanup: (): void => {}, configPath: paths.shift(), enabled: true, remoteBindings: [] };
+            }),
+        );
+
+        callConfig(plugin, "serve");
+
+        expect(options.configPath).toBe("/work/wrangler.remote.a.jsonc");
+
+        callConfig(plugin, "serve");
+
+        expect(options.configPath).toBe("/work/wrangler.remote.b.jsonc");
+    });
+
     it("disposes the previous temp config when `config` runs twice", () => {
         expect.assertions(1);
 

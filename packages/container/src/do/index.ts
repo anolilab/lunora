@@ -82,6 +82,13 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     /** Memoised Secrets Store resolution: run once, then merged into `envVars` before the first start. */
     private lunoraSecretsStoreResolved?: Promise<void>;
 
+    /**
+     * Count of runs observed to have ENDED, bumped by the `onStop` hook. Read
+     * across a start: a bump means the run that start snapshotted is over,
+     * whatever the `running` flag said at snapshot time. See `beginStart`.
+     */
+    private lunoraStops = 0;
+
     public constructor(
         context: DurableObjectContext,
         env: Env,
@@ -159,13 +166,17 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
      * {@link afterContainerStart} has to run. See its docblock.
      */
     public override async startAndWaitForPorts(...args: Parameters<Container<Env>["startAndWaitForPorts"]>): Promise<void> {
-        const wasRunning = this.beginStart();
-
+        // Resolve BEFORE the snapshot: this is a real Secrets Store RPC on its
+        // first call, and a container that exits inside it used to leave the
+        // snapshot claiming the run was still up. See {@link beginStart}.
         await this.resolveSecretsStoreEnv();
+
+        const stops = this.lunoraStops;
+        const wasRunning = this.beginStart();
 
         await super.startAndWaitForPorts(...args);
 
-        await this.afterContainerStart(wasRunning);
+        await this.afterContainerStart(wasRunning && this.lunoraStops === stops);
     }
 
     /**
@@ -180,15 +191,17 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
      */
     public override async start(...args: Parameters<Container<Env>["start"]>): Promise<void> {
         const [options] = args;
-        const wasRunning = this.beginStart();
 
         if (options?.envVars === undefined) {
             await this.resolveSecretsStoreEnv();
         }
 
+        const stops = this.lunoraStops;
+        const wasRunning = this.beginStart();
+
         await super.start(...args);
 
-        await this.afterContainerStart(wasRunning);
+        await this.afterContainerStart(wasRunning && this.lunoraStops === stops);
     }
 
     public override async onActivityExpired(): Promise<void> {
@@ -227,8 +240,11 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
      *
      * `stop()` sends SIGTERM and returns; nothing escalates to `destroy()`. The
      * cap is therefore a signal, not a bound — a container that traps or ignores
-     * SIGTERM keeps running. Override this hook and follow the stop with a
-     * `destroy()` after a grace period if your workload needs a real ceiling.
+     * SIGTERM keeps running, and the schedule is ONE-SHOT (the base deletes the
+     * row once it fires), so nothing signals it a second time either: an ignored
+     * SIGTERM means the cap is spent, not retried. Override this hook and follow
+     * the stop with a `destroy()` after a grace period if your workload needs a
+     * real ceiling.
      */
     public async onHardTimeoutExpired(payload?: { generation?: number }): Promise<void> {
         const current = await this.ctx.storage.get<number>(HARD_TIMEOUT_GENERATION_KEY);
@@ -263,6 +279,10 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         // {@link beginStart} makes the same decision from the container's own
         // `running` flag on every start path. See its docblock.
         this.lunoraReadiness = undefined;
+        // An in-flight start snapshotted the run identity before this; the count
+        // is how it learns, on the far side of the base call, that the run it
+        // snapshotted has ended.
+        this.lunoraStops += 1;
 
         await super.onStop(parameters);
     }
@@ -362,9 +382,19 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
      * the container already up begins no run, and re-arming there moves the cap
      * (see {@link afterContainerStart}).
      *
-     * Read before any `await`, so two concurrent starts of a stopped container
-     * both observe `false` and the second joins the first's gate instead of
-     * arming a second schedule.
+     * Read with no `await` between it and `super`, so two concurrent starts of a
+     * stopped container both observe `false` and the second joins the first's
+     * gate instead of arming a second schedule — and so the flag is as fresh as
+     * it can be. It is a snapshot either way, and the run can end after it: the
+     * base's own pre-start work (`getPortsToCheck`, `syncPendingStoppedEvents`)
+     * still runs on the far side of it, and a start that came in on a live
+     * container would then arm nothing for the run the base goes on to start.
+     * Hence the second half of the answer, in the callers: an `onStop` observed
+     * ACROSS the base call ({@link lunoraStops}) demotes the snapshot, because
+     * the run it described is over. What that does not cover is an exit inside
+     * `start()`'s own base call — that path never syncs pending stop events, so
+     * nothing reports the exit until the next alarm or `startAndWaitForPorts`,
+     * and the cap for such a run is armed only when one of those arrives.
      */
     private beginStart(): boolean {
         const wasRunning = this.ctx.container?.running === true;

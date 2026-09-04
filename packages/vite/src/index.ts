@@ -6,6 +6,7 @@ import errorOverlayPlugin from "@visulima/vite-overlay";
 import type { Plugin } from "vite";
 
 import agentRulesHintPlugin from "./agent-rules-hint-plugin";
+import bindingsProvisionPlugin from "./bindings-provision-plugin";
 import { codegenPlugin } from "./codegen-plugin";
 import containerLogsPlugin from "./container-logs-plugin";
 import devStatePlugin from "./dev-state-plugin";
@@ -149,6 +150,12 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         // Cloudflare plugin says nothing about who composes the worker.
         frameworkComposePlugin(resolved, context),
         devVariablesPlugin(resolved),
+        // Writes the bindings the code implies into `wrangler.jsonc` from its
+        // `config` hook — before `@cloudflare/vite-plugin` parses that file and
+        // before `remoteBindingsPlugin` copies it. Unconditional: provisioning is
+        // not validation, and gating it on `validateWrangler` took the write back
+        // out of `config` for anyone who turned the CHECKS off.
+        bindingsProvisionPlugin(resolved),
         codegenPlugin(resolved),
         logStreamPlugin(),
         // Registers the running dev server in `.lunora/dev.json` so
@@ -189,11 +196,12 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     // config with `"remote": true` on each eligible binding (DO shards stay local)
     // and inject it as the cloudflare plugin's `configPath`.
     //
-    // Registered AFTER `wranglerValidatorPlugin` on purpose: both are
+    // Registered AFTER `bindingsProvisionPlugin` on purpose: both are
     // `enforce: "pre"`, so this plugin's `config` hook runs after that one has
     // provisioned the inferred bindings into `wrangler.jsonc` — and the temp
     // config is a copy of that file. Materializing any earlier copies it a
-    // binding short.
+    // binding short. That is also why the provisioning plugin cannot be gated on
+    // `validateWrangler`: this copy would go a binding short whenever it was off.
     plugins.push(remoteBindingsPlugin(cloudflareOptions, { projectRoot: resolved.projectRoot }));
 
     if (cloudflareOptions !== undefined) {

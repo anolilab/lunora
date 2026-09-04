@@ -373,6 +373,10 @@ describe("createParallel", () => {
         // `-compensate`" but "nothing this package hands to `create` can be
         // rejected by the engine's id check". A future suffix carrying a `:`, a
         // `.`, or a leading `-` fails here rather than in production.
+        //
+        // The parent here is a SHORT synthetic id, so this case only exercises the
+        // character class. The engine checks length first and the ids are
+        // caller-controlled up to that ceiling — see the near-ceiling case below.
         const step = makeStep([okOutcome({ a: 1 }), okOutcome({ b: 2 }), errorOutcome(new Error("boom"))]);
         const { create, deps } = makeDeps(step);
 
@@ -386,6 +390,37 @@ describe("createParallel", () => {
 
         expect(ids).toHaveLength(5);
         expect(ids.filter((id) => engineRejectsInstanceId(id))).toStrictEqual([]);
+    });
+
+    it("compensates a branch whose own id sits just under the engine's 100-character ceiling", async () => {
+        expect.assertions(3);
+
+        // The character class is only half of the engine's check, and it is the
+        // half that runs SECOND: the create-time id check rejects on
+        // `id.length > 100` before it ever tests the pattern. A branch id is
+        // caller-controlled right up to that ceiling — an explicit
+        // `branch(…, { id })`, or a derived `<parentId>-c<n>` under a long
+        // host-issued parent — so a 90-character branch id plus `-compensate` is
+        // 101: the create is rejected, `compensateCompleted` logs and continues,
+        // and the completed branch is never rolled back. On a saga that took
+        // payment, that unrun rollback is the refund.
+        const longId = `b${"0".repeat(89)}`;
+        const step = makeStep([okOutcome({ paid: true }), errorOutcome(new Error("boom"))]);
+        const { create, deps } = makeDeps(step);
+        const log = makeLog();
+
+        await createParallel({ ...deps, log: log as unknown as FanOutDeps["log"] })([
+            branch("charge", undefined, { compensateWith: "refund", id: longId }),
+            branch("second"),
+        ]).catch(() => undefined);
+
+        const compensations = create.mock.calls.map((call) => call[0]?.id).filter((id) => id !== longId && id !== "parent-1-c0");
+
+        expect(compensations).toHaveLength(1);
+        expect(compensations.filter((id) => engineRejectsInstanceId(id))).toStrictEqual([]);
+        // The rollback actually landed: a swallowed create rejection leaves the
+        // group failing exactly as it does here, with only this log to show for it.
+        expect(log.error).not.toHaveBeenCalled();
     });
 
     it("takes an already-finished attached child's status as its outcome instead of waiting for an event that will never come", async () => {
@@ -406,6 +441,33 @@ describe("createParallel", () => {
         expect(get).toHaveBeenCalledTimes(2);
         // The join never hibernated: the terminal status was already the answer.
         expect(step.waitForEvent).not.toHaveBeenCalled();
+    });
+
+    it("bounds an attached child's oversized output instead of returning it into the durable step cache", async () => {
+        expect.assertions(2);
+
+        // The attach path returns the child's outcome as the SPAWN STEP's value, so
+        // it is persisted by the workflow host exactly like an event payload is
+        // sent: miniflare's engine answers a step output over 1 MiB with
+        // `Step … output is too large`, and production Workflows caps it the same
+        // way. Only the event path was bounded, so a large-output child taken over
+        // by the attach path failed the step (and burned its retries) instead of
+        // failing the branch with a message that names the byte count.
+        const step = makeNeverJoiningStep();
+        const { create, deps, get } = makeDeps(step);
+
+        create.mockRejectedValue(new Error("instance already exists"));
+        get.mockImplementation(async (id: string) => finishedInstance(id, { output: { blob: "x".repeat(1_048_576) }, status: "complete" }));
+
+        const settled = await createParallel(deps)([branch("first")]).then(
+            () => "resolved with the blob",
+            (error: unknown) => (error as Error).message,
+        );
+        const spawned: unknown = await (step.do as ReturnType<typeof vi.fn>).mock.results[0]?.value;
+
+        expect(settled).toContain("1048576-byte");
+        // What the step returns is what the host persists — bounded, not the blob.
+        expect(JSON.stringify(spawned).length).toBeLessThan(1024);
     });
 
     it("fails the group from an attached child that already errored, without waiting on its consumed event", async () => {

@@ -27,6 +27,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { BRANCH_MARKER_KEY, BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
+import { fnv1a64Hex } from "../../../shared/fnv1a";
 import { RESERVED_EVENT_TYPE_PREFIX } from "./define-event";
 import { isDuplicateInstanceError, NonRetryableError } from "./errors";
 import type {
@@ -41,6 +42,9 @@ import type {
 
 /** Hard cap on branches per `ctx.parallel` call — auto-scale, never silently spawn unbounded DOs. */
 const MAX_BRANCHES = 100;
+
+/** The engine's own instance-id ceiling: `create` rejects anything longer, before it looks at the characters. */
+const MAX_INSTANCE_ID_LENGTH = 100;
 
 /** Durable-step name prefix for a branch/spawn create. */
 const SPAWN_STEP_PREFIX = "lunora:spawn:";
@@ -69,11 +73,33 @@ const COMPENSATE_STEP_PREFIX = "lunora:compensate:";
  * accepts no override. Validating a derived id against Cloudflare's grammar here
  * would refuse ids the running host had just issued.
  *
+ * The LENGTH half of that check is ours to keep too, and it is the half the engine
+ * tests FIRST (`id.length > 100` short-circuits before the pattern). The parent id
+ * is not ours to shorten, but the derived one is: a branch id may legitimately run
+ * right up to the engine's own 100-character ceiling — an explicit
+ * `branch(…, { id })`, or `<parentId>-c<n>` under a long host-issued parent — and
+ * `+ "-compensate"` then puts the ROLLBACK over it. That create is rejected,
+ * {@link compensateCompleted} logs it and moves on, and the completed branch is
+ * never rolled back; on a saga that took payment, the unrun rollback is the refund.
+ * So an over-long id is folded back under the ceiling, keeping a hash of the WHOLE
+ * child id (siblings stay distinct) and the `-compensate` suffix (it stays readable
+ * in a dashboard). Deterministic, so a parent replay re-attaches to the same
+ * rollback instance.
+ *
  * Step names are a different, far laxer validator (`isValidStepName`: only control
  * characters and >256 characters are rejected), so the `lunora:*` step prefixes
  * above are fine as they are.
  */
-const compensationInstanceId = (childId: string): string => `${childId}-compensate`;
+const compensationInstanceId = (childId: string): string => {
+    const id = `${childId}-compensate`;
+
+    if (id.length <= MAX_INSTANCE_ID_LENGTH) {
+        return id;
+    }
+
+    // `-<16 hex>-compensate` is 28 characters, so the head keeps the first 72.
+    return `${childId.slice(0, MAX_INSTANCE_ID_LENGTH - 28)}-${fnv1a64Hex(childId)}-compensate`;
+};
 
 /**
  * Event-type prefix the parent waits on and the child sends. Derived from the
@@ -160,6 +186,91 @@ const errorOutcome = (error: unknown): BranchOutcome => {
  * https://developers.cloudflare.com/workflows/reference/limits/
  */
 const MAX_EVENT_PAYLOAD_BYTES = 1_048_576;
+
+/**
+ * A bounded, never-throwing description of whatever `JSON.stringify` threw.
+ *
+ * The obvious `error instanceof Error ? error.message : String(error)` is not
+ * total on this path: `message` is a plain writable property, so an `Error` can
+ * carry a non-string one (`.slice` is then not a function), and a thrown
+ * non-`Error` can have a `toString` that throws or no prototype at all
+ * (`String()` then throws "Cannot convert object to primitive value"). Both come
+ * from a `toJSON` the branch handler wrote, so both are reachable — and a throw
+ * here escapes the very guard that exists to keep the parent off its 24-hour
+ * join timeout, leaving it hibernating on a branch that finished.
+ *
+ * Sliced because V8's cyclic-structure message names a path through the
+ * offending object and is itself unbounded, which would reintroduce the
+ * oversized-payload failure the guard below prevents.
+ */
+const describeSerializationFailure = (error: unknown): string => {
+    try {
+        return String(error instanceof Error ? error.message : error).slice(0, 200);
+    } catch {
+        return "the failure itself could not be described";
+    }
+};
+
+/**
+ * Swap an outcome the event channel cannot carry for a bounded failure that it
+ * can.
+ *
+ * Cloudflare caps an event payload at {@link MAX_EVENT_PAYLOAD_BYTES}. A branch
+ * whose output is over it had `sendEvent` reject on every retry of the signal
+ * step; the failure was swallowed as best-effort, the child completed, and the
+ * parent then hibernated on its join until the branch `timeout` (Cloudflare's
+ * default is 24 hours) before compensating a branch that had actually
+ * succeeded. Reporting the size failure instead fails the group in seconds with
+ * a message that names the branch and the byte count.
+ *
+ * Measured on the serialised form, because that is what the host puts on the
+ * wire, and applied to the error path too — an oversized error message is just
+ * as undeliverable as an oversized value.
+ *
+ * The same bound covers the ATTACH path, where the outcome is not sent as an
+ * event but returned as the spawn step's value: the host's per-step state cap is
+ * the same 1 MiB, and a step return it cannot serialise aborts the instance
+ * outright rather than failing one branch.
+ *
+ * An outcome that cannot be serialised AT ALL (a cyclic object, a `BigInt`, a
+ * throwing `toJSON`) is the same failure one step earlier: the measurement
+ * itself throws, `signalBranchParentSafe` swallows it as best-effort, and the
+ * parent again hibernates to its join timeout on a branch that finished. So it
+ * gets the same treatment — a bounded error outcome the event channel can carry.
+ */
+
+const boundOutcome = (outcome: BranchOutcome): BranchOutcome => {
+    let bytes: number;
+
+    try {
+        bytes = new TextEncoder().encode(JSON.stringify(outcome)).length;
+    } catch (encodeError: unknown) {
+        return {
+            error: {
+                message:
+                    `branch outcome cannot be serialised to JSON (${describeSerializationFailure(encodeError)}) — ` +
+                    "the parent can never receive it. Return a plain JSON value (no cycles, no BigInt, no class instance that fails to serialise) " +
+                    "or a reference the parent can dereference (an R2 key, a row id)",
+                name: "BranchOutputUnserializable",
+            },
+            status: "error",
+        };
+    }
+
+    if (bytes <= MAX_EVENT_PAYLOAD_BYTES) {
+        return outcome;
+    }
+
+    return {
+        error: {
+            message:
+                `branch outcome serialises to ${String(bytes)} bytes, over Cloudflare's ${String(MAX_EVENT_PAYLOAD_BYTES)}-byte event payload limit — ` +
+                "the parent can never receive it. Return a reference the parent can dereference (an R2 key, a row id) instead of the payload itself",
+            name: "BranchOutputTooLarge",
+        },
+        status: "error",
+    };
+};
 
 /**
  * Start a child instance, or attach to the one a previous attempt already
@@ -393,7 +504,20 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
                         params: { ...plan.item.params, [BRANCH_MARKER_KEY]: marker },
                     });
 
-                    return attached ? await attachedOutcome(instance) : undefined;
+                    if (!attached) {
+                        return undefined;
+                    }
+
+                    // Bounded for the same reason the event path is: this value is
+                    // the SPAWN STEP's return, which the host persists (miniflare's
+                    // engine answers a step output over 1 MiB with `Step … output
+                    // is too large`, and it aborts the whole instance for one it
+                    // cannot serialise). Left raw, a large-output child taken over
+                    // by the attach path burned the step's retries instead of
+                    // failing its branch with the byte count.
+                    const outcome = await attachedOutcome(instance);
+
+                    return outcome === undefined ? undefined : boundOutcome(outcome);
                 }),
             ),
         );
@@ -547,86 +671,6 @@ const stripBranchMarker = (payload: unknown): unknown => {
     Reflect.deleteProperty(rest, BRANCH_MARKER_KEY);
 
     return rest;
-};
-
-/**
- * A bounded, never-throwing description of whatever `JSON.stringify` threw.
- *
- * The obvious `error instanceof Error ? error.message : String(error)` is not
- * total on this path: `message` is a plain writable property, so an `Error` can
- * carry a non-string one (`.slice` is then not a function), and a thrown
- * non-`Error` can have a `toString` that throws or no prototype at all
- * (`String()` then throws "Cannot convert object to primitive value"). Both come
- * from a `toJSON` the branch handler wrote, so both are reachable — and a throw
- * here escapes the very guard that exists to keep the parent off its 24-hour
- * join timeout, leaving it hibernating on a branch that finished.
- *
- * Sliced because V8's cyclic-structure message names a path through the
- * offending object and is itself unbounded, which would reintroduce the
- * oversized-payload failure the guard below prevents.
- */
-const describeSerializationFailure = (error: unknown): string => {
-    try {
-        return String(error instanceof Error ? error.message : error).slice(0, 200);
-    } catch {
-        return "the failure itself could not be described";
-    }
-};
-
-/**
- * Swap an outcome the event channel cannot carry for a bounded failure that it
- * can.
- *
- * Cloudflare caps an event payload at {@link MAX_EVENT_PAYLOAD_BYTES}. A branch
- * whose output is over it had `sendEvent` reject on every retry of the signal
- * step; the failure was swallowed as best-effort, the child completed, and the
- * parent then hibernated on its join until the branch `timeout` (Cloudflare's
- * default is 24 hours) before compensating a branch that had actually
- * succeeded. Reporting the size failure instead fails the group in seconds with
- * a message that names the branch and the byte count.
- *
- * Measured on the serialised form, because that is what the host puts on the
- * wire, and applied to the error path too — an oversized error message is just
- * as undeliverable as an oversized value.
- *
- * An outcome that cannot be serialised AT ALL (a cyclic object, a `BigInt`, a
- * throwing `toJSON`) is the same failure one step earlier: the measurement
- * itself throws, `signalBranchParentSafe` swallows it as best-effort, and the
- * parent again hibernates to its join timeout on a branch that finished. So it
- * gets the same treatment — a bounded error outcome the event channel can carry.
- */
-
-const boundOutcome = (outcome: BranchOutcome): BranchOutcome => {
-    let bytes: number;
-
-    try {
-        bytes = new TextEncoder().encode(JSON.stringify(outcome)).length;
-    } catch (encodeError: unknown) {
-        return {
-            error: {
-                message:
-                    `branch outcome cannot be serialised to JSON (${describeSerializationFailure(encodeError)}) — ` +
-                    "the parent can never receive it. Return a plain JSON value (no cycles, no BigInt, no class instance that fails to serialise) " +
-                    "or a reference the parent can dereference (an R2 key, a row id)",
-                name: "BranchOutputUnserializable",
-            },
-            status: "error",
-        };
-    }
-
-    if (bytes <= MAX_EVENT_PAYLOAD_BYTES) {
-        return outcome;
-    }
-
-    return {
-        error: {
-            message:
-                `branch outcome serialises to ${String(bytes)} bytes, over Cloudflare's ${String(MAX_EVENT_PAYLOAD_BYTES)}-byte event payload limit — ` +
-                "the parent can never receive it. Return a reference the parent can dereference (an R2 key, a row id) instead of the payload itself",
-            name: "BranchOutputTooLarge",
-        },
-        status: "error",
-    };
 };
 
 /**

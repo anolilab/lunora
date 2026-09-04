@@ -161,6 +161,8 @@ const withRemoteBindings = (options: CloudflarePluginOptions, plan: ViteRemotePl
  */
 const remoteBindingsPlugin = (options: CloudflarePluginOptions | undefined, planOptions: PlanViteRemoteOptions): Plugin => {
     let plan: ViteRemotePlan = { cleanup: noopCleanup, enabled: false };
+    /** The path THIS plugin injected, so a re-entrant `config` can tell it from a user-supplied one. */
+    let injected: string | undefined;
 
     const dispose = (): void => {
         plan.cleanup();
@@ -193,11 +195,22 @@ const remoteBindingsPlugin = (options: CloudflarePluginOptions | undefined, plan
                 return;
             }
 
-            const merged = withRemoteBindings(options, plan) as RemoteCloudflareOptions;
             const target = options as RemoteCloudflareOptions;
+
+            // Forget our OWN injection from a previous `config` pass before
+            // deciding. `withRemoteBindings` treats any `configPath` already on the
+            // options as the user's explicit choice and leaves it alone — but on a
+            // re-entrant pass the one it finds is the temp file `plan.cleanup()`
+            // just unlinked, so the cloudflare plugin was pointed at a deleted path.
+            if (injected !== undefined && target.configPath === injected) {
+                delete target.configPath;
+            }
+
+            const merged = withRemoteBindings(options, plan) as RemoteCloudflareOptions;
 
             if (merged.configPath !== undefined && target.configPath === undefined) {
                 target.configPath = merged.configPath;
+                injected = merged.configPath;
             } else if (plan.enabled && plan.configPath === undefined && plan.reason !== undefined) {
                 // eslint-disable-next-line no-console -- surface the silent degradation; the dev server's logger isn't available in the `config` hook.
                 console.info(lunoraLine(`remote bindings requested but not applied: ${plan.reason}`));

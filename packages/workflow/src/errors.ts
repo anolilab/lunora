@@ -110,8 +110,11 @@ const raiseNonRetryable = (message: string, cause: unknown, NativeNonRetryableEr
  * production text — miniflare's `WorkflowBinding.create` never rejects a
  * duplicate id at all (it calls `stub.init(...)` unconditionally and
  * `Engine.init` returns early for an instance that already has metadata), so
- * the attach branch below is unreachable under workerd as well as in Node. That
- * makes the *shape* of the message the only thing we can defend, and a
+ * the attach branch below is unreachable LOCALLY: in Node and under
+ * `wrangler dev`/workerd alike. Production Workflows does reject it, which is
+ * the whole reason `createOrAttach` exists — so this is a gap in what the
+ * harness can prove, never evidence that the branch is dead code. That makes
+ * the *shape* of the message the only thing we can defend, and a
  * `already_exists` / `already-exists` spelling must not read as a transient
  * failure and cost the caller its whole retry budget.
  */

@@ -82,6 +82,35 @@ your choosing) takes their device dark just as effectively, and hands you
 device signed in), and a device that legitimately changes hands unregisters as
 its current owner first.
 
+**Unregister on sign-out, or the next account on that browser cannot register.**
+`subscribeToPush` REUSES the browser's existing subscription while the VAPID key
+is unchanged, so the endpoint — and the store id derived from it — is the same
+for every account that signs in on that browser. Without the sign-out call, user
+B's `register` hits user A's row and throws `FORBIDDEN`; since `register` is
+usually fire-and-forget on sign-in, that surfaces as a failed mutation and B
+silently never receives a push. Release the row where you clear the session:
+
+```ts
+// lunora/registerDevice.ts — the same file as above
+export const unregisterDevice = mutation.input({ endpoint: v.string() }).mutation(async ({ args: { endpoint }, ctx }) => {
+    await ctx.push.unregister(webPushId(endpoint), { userId: ctx.auth?.userId });
+});
+```
+
+```ts
+// wherever you sign out. `subscription.endpoint` is on the object subscribeToPush returned.
+await client.mutation("unregisterDevice", { endpoint: subscription.endpoint });
+await auth.signOut();
+```
+
+Keep the browser subscription itself (don't call `unsubscribeFromPush`) unless
+the user is turning notifications off: dropping it re-prompts for permission on
+the next sign-in. Note that only the owner can release a row — B cannot
+`unregister` A's — so a sign-out that never runs (the tab was closed, the session
+expired) leaves the next account refused until A signs in again on that browser
+or the row is removed server-side. On a browser several people sign in on, treat
+the sign-out unregister as required, not as cleanup.
+
 ## Send (from an action)
 
 Notification sends are external I/O, so they belong in **actions** (the `notify_send_outside_action` advisor lint enforces this):
