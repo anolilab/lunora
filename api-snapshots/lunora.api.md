@@ -3341,6 +3341,10 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
+### `CELLD_CAPABILITIES` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
 ### `CLOUDFLARE_CAPABILITIES` (const)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.

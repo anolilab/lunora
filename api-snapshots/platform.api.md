@@ -37,6 +37,12 @@ interface AnalyticsEngineDatasetLike {
 }
 ```
 
+### `CELLD_CAPABILITIES` (const)
+
+```ts
+const CELLD_CAPABILITIES: PlatformCapabilities;
+```
+
 ### `CLOUDFLARE_CAPABILITIES` (const)
 
 ```ts
