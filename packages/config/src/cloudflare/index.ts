@@ -43,6 +43,7 @@ export type {
     TailConsumer,
     WranglerConfig,
     WranglerContainerEntry,
+    WranglerEnvironmentMerge,
     WranglerProjectValidationOptions,
     WranglerProjectValidationResult,
     WranglerValidationReport,

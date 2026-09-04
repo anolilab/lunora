@@ -4,6 +4,7 @@ import type { CodegenResult } from "@lunora/codegen";
 import { discoverMigrations, runCodegen } from "@lunora/codegen";
 import type { ToolchainCommand } from "@lunora/config";
 import {
+    COMPOSED_WORKER_ENTRY,
     DEV_VARS_FILE,
     discoverContainerInfo,
     discoverSchemaInfo,
@@ -404,14 +405,18 @@ const checkContainerDockerPreflight = (
  * (SvelteKit, Astro) ship a CF adapter that owns the wrangler `main` field and
  * overwrites it with its own generated worker at build time — so `main` cannot
  * itself point at Lunora's composition. The template instead ships a
- * `src/worker.ts` that imports that generated handler, wraps it with
+ * composed entry that imports that generated handler, wraps it with
  * `withLunora` (mounting `/_lunora/*`), and re-exports `ShardDO`. When that file
  * exists we pass it as the positional deploy entry so the ONE deployed worker is
  * the composed one — the positional argument overrides `main`. Class-A/C
- * templates have no `src/worker.ts` (their `main` already points at the real
+ * templates have no composed entry (their `main` already points at the real
  * entry), so this returns `undefined` and `wrangler` uses `main` as usual.
+ *
+ * The path is {@link COMPOSED_WORKER_ENTRY}, imported rather than repeated:
+ * `inferLunoraBindings` probes the same file to decide which classes are
+ * provisioned, and a literal in each place is a divergence waiting to happen.
  */
-const resolveComposedWorkerEntry = (cwd: string): string | undefined => (existsSync(join(cwd, "src", "worker.ts")) ? "src/worker.ts" : undefined);
+const resolveComposedWorkerEntry = (cwd: string): string | undefined => (existsSync(join(cwd, COMPOSED_WORKER_ENTRY)) ? COMPOSED_WORKER_ENTRY : undefined);
 
 /**
  * Verify every container's local build source exists before wrangler/railpack
@@ -747,6 +752,9 @@ const SAFE_ENV_NAME = /^[\w-]+$/u;
  * can write. `.dev.vars` alone is an exact-name pattern and does not match the
  * `.dev.vars.<env>` sibling; the negation keeps a checked-in
  * `.dev.vars.example` visible. Same set the `lunora init` overlay writes.
+ *
+ * ORDER IS LOAD-BEARING: git is last-match-wins, so the negation only works
+ * while it sits below every pattern that would otherwise catch the example file.
  */
 const DEV_VARS_IGNORE_PATTERNS = [".dev.vars", ".dev.vars.*", "!.dev.vars.example"];
 
@@ -781,9 +789,19 @@ const ensureDevVariablesIgnored = (cwd: string, logger: Logger): void => {
             return;
         }
 
+        // An appended pattern lands BELOW whatever the file already had, and git
+        // takes the last match — so appending `.dev.vars.*` under a `.gitignore`
+        // that already carried `!.dev.vars.example` silently re-ignored the
+        // example file the templates ship. Re-state the negations after the
+        // additions instead of reasoning about where the existing ones sit; a
+        // repeated negation line is inert, a stranded one is not.
+        const additions = missing.some((pattern) => !pattern.startsWith("!"))
+            ? [...missing.filter((pattern) => !pattern.startsWith("!")), ...DEV_VARS_IGNORE_PATTERNS.filter((pattern) => pattern.startsWith("!"))]
+            : missing;
+
         const prefix = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
 
-        writeFileSync(gitignorePath, `${existing}${prefix}\n# Lunora — never commit a minted secret\n${missing.join("\n")}\n`, "utf8");
+        writeFileSync(gitignorePath, `${existing}${prefix}\n# Lunora — never commit a minted secret\n${additions.join("\n")}\n`, "utf8");
         logger.info(`.gitignore: added ${missing.join(", ")} so the recorded secret cannot be committed`);
     } catch (error) {
         logger.warn(

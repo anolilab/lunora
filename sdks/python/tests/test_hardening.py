@@ -253,8 +253,57 @@ class TestTransportErrors(unittest.TestCase):
         self.assertEqual(received, [], "the redirect target must never be contacted")
         self.assertEqual(status, 302, "a refused redirect surfaces as the non-2xx it is")
 
-        with self.assertRaises(LunoraError):
+        with self.assertRaises(LunoraError) as caught:
             parse_rpc_response(parsed, status)
+
+        # Nothing reached the shard, so this is transport, not a verdict. A
+        # synthesized ``INTERNAL`` envelope here settles the offline queue
+        # TERMINALLY (``INTERNAL`` is in neither ``TRANSIENT_ERROR_CODES`` nor
+        # ``RATE_LIMIT_ERROR_CODES``), so a load balancer or captive portal
+        # would DROP a queued durable write.
+        self.assertTrue(caught.exception.transient, "a refused redirect must re-queue, not drop, a durable write")
+
+    def test_undecodable_error_body_stays_transport_not_a_verdict(self):
+        """A WAF/proxy HTML error page is not the shard's answer to the call.
+
+        Synthesizing an envelope for it makes it a coded verdict, and
+        ``INTERNAL`` is in neither of ``submit``'s replayable sets — so a queued
+        write is settled terminally against a body no Lunora function wrote.
+        """
+
+        class Blocker(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # BaseHTTPRequestHandler's own naming
+                body = b"<html><body>403 Forbidden</body></html>"
+
+                self.send_response(403)
+                self.send_header("content-type", "text/html")
+                self.send_header("content-length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                pass
+
+        origin = http.server.HTTPServer(("127.0.0.1", 0), Blocker)
+        thread = threading.Thread(target=origin.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(origin.server_close)
+        self.addCleanup(origin.shutdown)
+
+        status, parsed = _urllib_post(
+            f"http://127.0.0.1:{origin.server_address[1]}/lunora/rpc",
+            {"content-type": "application/json"},
+            b"{}",
+        )
+
+        self.assertEqual(status, 403)
+        self.assertEqual(parsed, {}, "an unreadable body carries no envelope — say so rather than inventing one")
+
+        with self.assertRaises(LunoraError) as caught:
+            parse_rpc_response(parsed, status)
+
+        self.assertEqual(caught.exception.code, "INTERNAL")
+        self.assertTrue(caught.exception.transient, "a body that never came from a Lunora function must re-queue the write")
 
 
 class TestPokeAtomicity(unittest.TestCase):

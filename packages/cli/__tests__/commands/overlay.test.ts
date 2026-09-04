@@ -258,6 +258,23 @@ describe("applyLunoraOverlay", () => {
         expect(secondPass).toBe(firstPass);
     });
 
+    it("keeps a base's existing negations below the globs it appends", async () => {
+        expect.assertions(2);
+
+        writeReactBase(base);
+        // A base that already un-ignores its example env file but has never seen
+        // `.env.*`. git is last-match-wins, so appending the glob below the
+        // negation re-ignores a file the project deliberately tracks.
+        write(base, ".gitignore", "node_modules\ndist\n.env\n!.env.example\n");
+
+        await applyLunoraOverlay({ adapter: ADAPTERS.react, distTag: "alpha", logger: silentLogger(), name: "my-app", target: base });
+
+        const lines = readFileSync(join(base, ".gitignore"), "utf8").split(/\r?\n/);
+
+        expect(lines).toContain(".env.*");
+        expect(lines.lastIndexOf("!.env.example")).toBeGreaterThan(lines.lastIndexOf(".env.*"));
+    });
+
     it("wires every framework adapter's entry to its Lunora client API", async () => {
         expect.assertions(4);
 

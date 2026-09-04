@@ -182,7 +182,11 @@ const WRANGLER = `{
 }
 `;
 
-/** Lines the overlay ensures are present in `.gitignore` (keeps `.env.example` tracked). */
+/**
+ * Lines the overlay ensures are present in `.gitignore` (keeps `.env.example`
+ * tracked). ORDER IS LOAD-BEARING: git is last-match-wins, so each negation only
+ * works while it sits below every pattern that would otherwise catch its file.
+ */
 const GITIGNORE_ADDITIONS = [
     ".wrangler",
     ".env",
@@ -238,9 +242,17 @@ const ensureGitignore = (target: string): void => {
         return;
     }
 
+    // Appending `.env.*` under a base `.gitignore` that already carried
+    // `!.env.example` re-ignores it — git takes the LAST match. Re-state the
+    // negations after the additions rather than reasoning about where the
+    // existing ones sit; a repeated negation line is inert, a stranded one is not.
+    const additions = missing.some((entry) => !entry.startsWith("!"))
+        ? [...missing.filter((entry) => !entry.startsWith("!")), ...GITIGNORE_ADDITIONS.filter((entry) => entry.startsWith("!"))]
+        : missing;
+
     const prefix = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
 
-    writeFileSync(path, `${existing}${prefix}\n# Lunora\n${missing.join("\n")}\n`, "utf8");
+    writeFileSync(path, `${existing}${prefix}\n# Lunora\n${additions.join("\n")}\n`, "utf8");
 };
 
 /** True for the unscoped umbrella or any `@lunora/*` package. */

@@ -518,7 +518,9 @@ const COMPOSED_ENTRY_DURABLE_OBJECTS: DurableObjectClass[] = ["ShardDO"];
  * instead read every declared class as unexported: nothing provisioned, plus a
  * "add `export * from …`" warning the user cannot silence.
  *
- * Kept in sync with `resolveComposedWorkerEntry` in the CLI's deploy handler.
+ * Exported, not documented-as-duplicated: the CLI's `resolveComposedWorkerEntry`
+ * imports this constant, so the deploy's positional entry and the file this
+ * module lexes for exported classes cannot drift apart.
  */
 const COMPOSED_WORKER_ENTRY = "src/worker.ts";
 

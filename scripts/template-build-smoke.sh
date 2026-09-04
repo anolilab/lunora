@@ -444,6 +444,19 @@ run_deploy_dryrun() {
     #    adapter redirect does) and something overrides `main` with a source path —
     #    exit 0, binding table printed, and a worker that is a syntax error in
     #    workerd. Nothing else here can tell that apart from a real deploy.
+    #    The directory check is not defensive dressing: `find` on a missing path
+    #    exits 1, `pipefail` carries that through `head`, and the bare assignment
+    #    below then trips `set -e`. Both call sites run this function as
+    #    `if ! run_deploy_dryrun …`, which SUPPRESSES errexit — so the script
+    #    survived with `ts_in_bundle` empty and this gate passing VACUOUSLY, on
+    #    the one run where the dry run emitted no bundle at all.
+    if [[ ! -d "$out" ]]; then
+        echo "  FAIL: $tname's deploy dry run emitted no bundle directory ($out)"
+        echo "        Every command exited 0 but nothing was written, so the checks below have nothing to"
+        echo "        inspect. Check that the dry-run argv still passes an --outdir/--out-dir."
+        return 1
+    fi
+
     local ts_in_bundle
     ts_in_bundle="$(find "$out" -type f \( -name '*.ts' -o -name '*.tsx' \) 2> /dev/null | head -5)"
 

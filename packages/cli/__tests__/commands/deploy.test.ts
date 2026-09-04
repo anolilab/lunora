@@ -1681,6 +1681,39 @@ export const backfillNames = defineMigration({
                 expect(readFileSync(join(workdir, ".gitignore"), "utf8")).toContain(".dev.vars.*");
             });
 
+            it("keeps the .dev.vars.example negation LAST when it appends a wider ignore above it", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("production"), "utf8");
+                // A project that already un-ignores the committed example file but
+                // has never seen the `.dev.vars.*` pattern. git is last-match-wins,
+                // so appending the wildcard BELOW the negation re-ignores a file the
+                // templates ship — the scaffold's own example vanishes from `git status`.
+                writeFileSync(join(workdir, ".gitignore"), "node_modules\n.dev.vars\n!.dev.vars.example\n", "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    env: "production",
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(0);
+
+                const patterns = readFileSync(join(workdir, ".gitignore"), "utf8")
+                    .split("\n")
+                    .map((line) => line.trim());
+
+                expect(patterns).toContain(".dev.vars.*");
+                expect(patterns.lastIndexOf("!.dev.vars.example")).toBeGreaterThan(patterns.lastIndexOf(".dev.vars.*"));
+            });
+
             it("interactively generates + pushes a missing mintable secret before deploying", async () => {
                 expect.assertions(3);
 

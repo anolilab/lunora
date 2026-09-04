@@ -141,6 +141,24 @@ const NON_NEWLINE_RE = /[^\n]/gu;
  */
 const codeOnly = (source: string): string => source.replaceAll(SKIPPABLE_RE, (span) => span.replaceAll(NON_NEWLINE_RE, " "));
 
+/**
+ * Where the composition lives when the caller names nothing.
+ *
+ * Deliberately NOT `src/worker.ts`: `lunora deploy` treats that exact path as a
+ * SvelteKit-shaped composed entry and passes it to wrangler positionally, which
+ * combined with the `@astrojs/cloudflare` redirect's `no_bundle: true` uploads the
+ * raw TypeScript source as the worker.
+ */
+const DEFAULT_SERVER_ENTRY = "src/server.ts";
+
+/**
+ * The default this integration used to carry. Probed only to tell a project that
+ * predates the rename WHY its entry is suddenly "not found" — never silently
+ * accepted as the entry, because composing at that path is the deploy bug
+ * {@link DEFAULT_SERVER_ENTRY} exists to avoid.
+ */
+const PREVIOUS_SERVER_ENTRY = "src/worker.ts";
+
 /** Options for the `lunora` integration. */
 interface LunoraIntegrationOptions {
     /**
@@ -190,7 +208,7 @@ interface LunoraIntegrationOptions {
  * middleware) without changing the public surface.
  */
 const lunora = (options: LunoraIntegrationOptions = {}): AstroIntegrationLike => {
-    const serverEntry = (options.serverEntry ?? "src/server.ts").trim();
+    const serverEntry = (options.serverEntry ?? DEFAULT_SERVER_ENTRY).trim();
 
     return {
         hooks: {
@@ -225,8 +243,17 @@ const lunora = (options: LunoraIntegrationOptions = {}): AstroIntegrationLike =>
                 const entryPath = fileURLToPath(new URL(serverEntry, root));
 
                 if (!existsSync(entryPath)) {
+                    // The default moved off `src/worker.ts`, so a project that
+                    // predates the move and never set `serverEntry` reaches here
+                    // on EVERY build. "Not found" would be both wrong about the
+                    // cause and unactionable, and the rename is not cosmetic —
+                    // see {@link PREVIOUS_SERVER_ENTRY}.
+                    const renamed = options.serverEntry === undefined && existsSync(fileURLToPath(new URL(PREVIOUS_SERVER_ENTRY, root)));
+
                     warn(
-                        `@lunora/astro: server entry "${serverEntry}" not found — add it (or point \`lunora({ serverEntry })\` at the right path) and wrap the Astro worker with \`withLunora\`, or \`/_lunora/*\` (Lunora realtime) will be unrouted:\n\n${WITH_LUNORA_SNIPPET}`,
+                        renamed
+                            ? `@lunora/astro: the default server entry is now "${DEFAULT_SERVER_ENTRY}", and this project still composes in "${PREVIOUS_SERVER_ENTRY}". Rename it — \`lunora deploy\` passes a file at that exact path to wrangler positionally, and @astrojs/cloudflare's \`no_bundle\` redirect then uploads it untranspiled — or keep the old name with \`lunora({ serverEntry: "${PREVIOUS_SERVER_ENTRY}" })\`.`
+                            : `@lunora/astro: server entry "${serverEntry}" not found — add it (or point \`lunora({ serverEntry })\` at the right path) and wrap the Astro worker with \`withLunora\`, or \`/_lunora/*\` (Lunora realtime) will be unrouted:\n\n${WITH_LUNORA_SNIPPET}`,
                     );
 
                     return;

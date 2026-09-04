@@ -916,12 +916,16 @@ def _urllib_post(url: str, headers: dict, body: bytes, timeout: float = DEFAULT_
             exc.close()
 
         try:
-            return exc.code, json.loads(raw) if raw else {"error": {"code": "INTERNAL", "message": str(exc)}}
+            return exc.code, json.loads(raw) if raw else {}
         except json.JSONDecodeError:
-            # An HTML error page from a proxy: report the status with an envelope
-            # rather than a decode error the caller cannot tell apart from a
-            # codec failure.
-            return exc.code, {"error": {"code": "INTERNAL", "message": str(exc)}}
+            # An HTML error page from a proxy, or a refused redirect's empty
+            # body. Reported as the status with NO envelope, never a synthesized
+            # one: `parse_rpc_response` raises an envelope-less non-2xx as
+            # `transient=True` precisely because nothing reached the shard, and
+            # a manufactured `INTERNAL` verdict is in neither of `submit`'s
+            # replayable code sets — it settles a queued durable write
+            # terminally against a body no Lunora function wrote.
+            return exc.code, {}
     # A timeout raises `socket.timeout` (`TimeoutError` from 3.10+), which is not
     # an `HTTPError` and so is left to propagate — it is not a server response
     # and must not be dressed up as one.

@@ -63,6 +63,43 @@ describe("lunora() Astro integration", () => {
             expect(warn.mock.calls[0]?.[0]).toMatch(/server entry "src\/worker\.ts" not found/u);
         });
 
+        it("names the rename when the default entry is missing but the OLD default is there", () => {
+            expect.assertions(3);
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-astro-"));
+            mkdirSync(join(directory, "src"));
+            writeFileSync(join(directory, "src", "worker.ts"), 'import { withLunora } from "@lunora/astro";\nexport default withLunora(astroWorker, {});\n');
+
+            const warn = vi.fn<(message: string) => void>();
+            // No `serverEntry`: the project predates the default's move off
+            // `src/worker.ts` and composes correctly at the old path. A bare
+            // "not found" here is both wrong about the cause and unactionable,
+            // and it fires on EVERY build.
+            const integration = lunora();
+            const hook = integration.hooks["astro:config:done"] as (context: ConfigDoneHookArgument) => void;
+
+            hook(contextFor(directory, warn));
+
+            expect(warn).toHaveBeenCalledTimes(1);
+            expect(warn.mock.calls[0]?.[0]).toMatch(/default server entry is now "src\/server\.ts"/u);
+            expect(warn.mock.calls[0]?.[0]).toMatch(/src\/worker\.ts/u);
+        });
+
+        it("still reports a plain not-found when neither the new nor the old default exists", () => {
+            expect.assertions(2);
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-astro-"));
+
+            const warn = vi.fn<(message: string) => void>();
+            const integration = lunora();
+            const hook = integration.hooks["astro:config:done"] as (context: ConfigDoneHookArgument) => void;
+
+            hook(contextFor(directory, warn));
+
+            expect(warn).toHaveBeenCalledTimes(1);
+            expect(warn.mock.calls[0]?.[0]).toMatch(/server entry "src\/server\.ts" not found/u);
+        });
+
         it("falls back to console.warn when the caller supplies no logger at all", () => {
             expect.assertions(2);
 

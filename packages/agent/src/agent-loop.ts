@@ -381,6 +381,39 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Pro
     return decision;
 };
 
+/**
+ * Wrapper key under which a tool step memoizes its outcome.
+ *
+ * `step.do` memoizes BY NAME, and the tool step's name (`tool:<name>:<id>`) is
+ * stable across deploys — so a run PARKED across a deploy (approval
+ * hibernation, a long multi-turn) resumes and is handed back whatever shape the
+ * previous build wrote. The outcome envelope arrived after the raw tool output
+ * did, which is why old memos have to stay readable: without this key the
+ * replayed raw output was read as an envelope, persisting the tool row as
+ * `"undefined"` (poisoning every later turn on the thread) or, for a
+ * string/number/null memo, throwing `Cannot use 'in' operator`.
+ *
+ * A distinct wrapper rather than probing for `ok`/`failed` on the value itself:
+ * `{ ok: true }` is an ordinary tool result, and a bare probe would unwrap it to
+ * `true`. A tool result cannot be mistaken for an envelope it does not carry.
+ */
+const TOOL_OUTCOME_KEY = "lunoraToolOutcome";
+
+/** The tool step's outcome: the raw output, or a deterministic failure not worth retrying. */
+type ToolOutcome = { failed: string } | { ok: unknown };
+
+/** What the tool step memoizes — {@link ToolOutcome} behind {@link TOOL_OUTCOME_KEY}. */
+type ToolOutcomeMemo = { [TOOL_OUTCOME_KEY]: ToolOutcome };
+
+/** Read a tool step's memoized value, treating anything without the wrapper as a pre-envelope raw output. */
+const readToolOutcome = (memo: unknown): ToolOutcome => {
+    if (typeof memo === "object" && memo !== null && TOOL_OUTCOME_KEY in memo) {
+        return (memo as ToolOutcomeMemo)[TOOL_OUTCOME_KEY];
+    }
+
+    return { ok: memo };
+};
+
 const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promise<void> => {
     const { depth, env, getState, instanceId, onTokenDelta, owner, persist, run, setState, step, threadKey, tools } = turnContext;
     const stepName = `tool:${call.name}:${call.id}`;
@@ -480,21 +513,26 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
     // Caught INSIDE `step.do` so the outcome is what the host memoizes: caught
     // outside, the step would have already exhausted its retries before the
     // throw reached us.
-    const outcome = await step.do(stepName, async (): Promise<{ failed: string } | { ok: unknown }> => {
-        try {
-            return { ok: await tool.execute(call.input, toolContext) };
-        } catch (error: unknown) {
-            if (isDeterministicDispatchFailure(error)) {
-                return { failed: error.message };
-            }
+    const outcome = readToolOutcome(
+        await step.do(stepName, async (): Promise<ToolOutcomeMemo> => {
+            try {
+                return { [TOOL_OUTCOME_KEY]: { ok: await tool.execute(call.input, toolContext) } };
+            } catch (error: unknown) {
+                if (isDeterministicDispatchFailure(error)) {
+                    return { [TOOL_OUTCOME_KEY]: { failed: error.message } };
+                }
 
-            throw error;
-        }
-    });
+                throw error;
+            }
+        }),
+    );
 
     if ("failed" in outcome) {
         await persist({
-            content: `Error: tool "${call.name}" failed and will not be retried. ${outcome.failed}`,
+            // Capped for the same reason the success path is (see below): the
+            // message is server-supplied and unbounded, and this row is
+            // re-rendered into every later turn on the thread.
+            content: capToolOutputText(`Error: tool "${call.name}" failed and will not be retried. ${outcome.failed}`),
             messageKey,
             role: "tool",
             stepName,

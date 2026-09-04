@@ -171,6 +171,12 @@ interface BadgeSpec {
 const CODEGEN_ENV = "LUNORA_CODEGEN";
 ```
 
+### `COMPOSED_WORKER_ENTRY` (const)
+
+```ts
+const COMPOSED_WORKER_ENTRY = "src/worker.ts";
+```
+
 ### `ClaimDevServerStateResult` (interface)
 
 ```ts
@@ -2062,6 +2068,16 @@ interface WranglerContainerEntry {
         vcpu?: number;
     };
     max_instances?: number;
+}
+```
+
+### `WranglerEnvironmentMerge` (interface)
+
+```ts
+interface WranglerEnvironmentMerge {
+    error?: string;
+    merged: WranglerConfig;
+    unverifiedKeys: string[];
 }
 ```
 
