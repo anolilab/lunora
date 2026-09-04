@@ -11,7 +11,7 @@
 import type { Logger } from "../../util/logger";
 import { promptDatabaseName, withAuthDatabaseName } from "../add/auth-database";
 import type { FeatureItem } from "../add/features";
-import { EMAIL_ITEM, promptAuthProvider } from "../add/features";
+import { AUTH_UI_REACT_NATIVE_REFUSAL, EMAIL_ITEM, promptAuthProvider } from "../add/features";
 import { MAIL_DESTINATION_PROMPT, resolveTypedDestination, withMailDestination } from "../add/mail";
 import { promptBucketName, withStorageBucketName } from "../add/storage";
 import type { RegistryManifest } from "../registry/types";
@@ -131,8 +131,13 @@ interface OfferDeps {
      * Resolve which per-framework auth-UI item (`auth-ui-react|vue|…`) fits the
      * scaffolded project. Injected by the CLI (detected from the template's deps);
      * defaults to `auth-ui-react` when absent so this module stays pure/testable.
+     *
+     * `undefined` is a REFUSAL, not "unknown": no auth-UI item fits this project
+     * (React Native). `lunora add auth-ui` already refuses there, and this offer
+     * used to `?? "auth-ui-react"` its way past that — copying ~85 DOM files into
+     * an Expo app and exiting 0.
      */
-    resolveAuthUiItem?: () => string;
+    resolveAuthUiItem?: () => string | undefined;
     /** Single-select among the auth providers (TTY-backed in production). */
     select: (
         message: string,
@@ -142,6 +147,16 @@ interface OfferDeps {
     /** Single-line text input (TTY-backed in production) — used for the storage bucket-name prompt. */
     text: (message: string, settings?: { default?: string; placeholder?: string }) => Promise<string>;
 }
+
+/**
+ * The auth-UI item for the scaffolded project, or `undefined` when none fits.
+ *
+ * `resolveAuthUiItem` being ABSENT (tests, a caller with no project to read) is
+ * not the same as it ANSWERING `undefined` — the first means "nobody looked",
+ * the second is the React Native refusal. Collapsing the two with `?.()` is what
+ * let the refusal read as a missing injection and fall through to the default.
+ */
+const authUiItem = (deps: OfferDeps): string | undefined => (deps.resolveAuthUiItem === undefined ? "auth-ui-react" : deps.resolveAuthUiItem());
 
 /**
  * Auth: pick a provider, then prompt for the D1 database name. Every provider
@@ -183,8 +198,14 @@ const collectEmailFeature = async (deps: OfferDeps): Promise<FeatureApply> => {
  * asking the same question twice invites two different answers for one `auth`
  * item.
  */
-const collectAuthUiFeature = async (deps: OfferDeps, authAlsoPicked: boolean): Promise<FeatureApply> => {
-    const item = deps.resolveAuthUiItem?.() ?? "auth-ui-react";
+const collectAuthUiFeature = async (deps: OfferDeps, authAlsoPicked: boolean): Promise<FeatureApply | undefined> => {
+    const item = authUiItem(deps);
+
+    if (item === undefined) {
+        deps.logger.error(`init: ${AUTH_UI_REACT_NATIVE_REFUSAL}`);
+
+        return undefined;
+    }
 
     if (authAlsoPicked) {
         return { label: "auth-ui", names: [item] };
@@ -206,8 +227,43 @@ const collectStorageFeature = async (deps: OfferDeps): Promise<FeatureApply> => 
     return { label: "storage", names: ["storage"], transformManifest: (manifest) => withStorageBucketName(manifest, bucketName) };
 };
 
+/**
+ * Map the `--add` list onto plans with each feature's shipped defaults — no
+ * multi-select, no sub-prompts (scriptable / repeatable). `refused` reports
+ * whether a feature was dropped because nothing fits this project, which the
+ * caller folds into the exit code.
+ */
+const preselectedPlans = (deps: OfferDeps, preselected: ReadonlyArray<StackFeature>): { plans: FeatureApply[]; refused: boolean } => {
+    const plans: FeatureApply[] = [];
+    let refused = false;
+
+    for (const feature of preselected) {
+        // `auth-ui` resolves to a per-framework item; everything else maps 1:1
+        // (with `email` → the mail item). The base `auth` item keeps its
+        // placeholder D1 name here, since no sub-prompt runs.
+        if (feature !== "auth-ui") {
+            plans.push({ label: feature, names: [featureItem(feature)] });
+
+            continue;
+        }
+
+        const item = authUiItem(deps);
+
+        if (item === undefined) {
+            deps.logger.error(`init: ${AUTH_UI_REACT_NATIVE_REFUSAL}`);
+            refused = true;
+
+            continue;
+        }
+
+        plans.push({ label: feature, names: [item] });
+    }
+
+    return { plans, refused };
+};
+
 /** Per-feature collectors that need a sub-prompt; everything else applies as its bare item name. */
-const FEATURE_COLLECTORS: Partial<Record<StackFeature, (deps: OfferDeps, picked: ReadonlyArray<StackFeature>) => Promise<FeatureApply>>> = {
+const FEATURE_COLLECTORS: Partial<Record<StackFeature, (deps: OfferDeps, picked: ReadonlyArray<StackFeature>) => Promise<FeatureApply | undefined>>> = {
     auth: collectAuthFeature,
     "auth-ui": async (deps, picked) => collectAuthUiFeature(deps, picked.includes("auth")),
     email: collectEmailFeature,
@@ -231,20 +287,16 @@ const offerRegistryExtras = async (deps: OfferDeps): Promise<boolean> => {
     // `--add`: apply the named features with their shipped defaults — no
     // multi-select, no sub-prompts (scriptable / repeatable).
     if (deps.preselected !== undefined && deps.preselected.length > 0) {
-        // Returned, not discarded: `--add` is the scriptable form, so a feature
-        // that could not be added has to reach the exit code. The INTERACTIVE
-        // offer below stays best-effort — declining or failing an optional extra
-        // must not fail a scaffold the user already saw succeed.
-        return deps.applyAll(
-            deps.preselected.map((feature) => {
-                // `auth-ui` resolves to a per-framework item; everything else maps 1:1
-                // (with `email` → the mail item). `--add` uses shipped defaults, so no
-                // sub-prompt runs here (the base `auth` item keeps its placeholder D1 name).
-                const item = feature === "auth-ui" ? (deps.resolveAuthUiItem?.() ?? "auth-ui-react") : featureItem(feature);
+        const { plans, refused } = preselectedPlans(deps, deps.preselected);
 
-                return { label: feature, names: [item] };
-            }),
-        );
+        // Both halves reach the exit code: `--add` is the scriptable form, so a
+        // feature that could not be added must fail the run — a refused one no
+        // less than one whose apply errored. The INTERACTIVE offer below stays
+        // best-effort — declining or failing an optional extra must not fail a
+        // scaffold the user already saw succeed.
+        const applied = await deps.applyAll(plans);
+
+        return applied && !refused;
     }
 
     if (!deps.interactive) {
@@ -268,9 +320,14 @@ const offerRegistryExtras = async (deps: OfferDeps): Promise<boolean> => {
 
     for (const feature of picked) {
         const collect = FEATURE_COLLECTORS[feature];
-
         // eslint-disable-next-line no-await-in-loop -- serial by design (one prompt at a time).
-        plans.push(collect ? await collect(deps, picked) : { label: feature, names: [feature] });
+        const plan = collect ? await collect(deps, picked) : { label: feature, names: [feature] };
+
+        // A collector answering `undefined` refused this feature (and said why);
+        // drop it rather than applying a payload that does not fit the project.
+        if (plan !== undefined) {
+            plans.push(plan);
+        }
     }
 
     // Then apply them all in one batch — one progress line for the whole stack.

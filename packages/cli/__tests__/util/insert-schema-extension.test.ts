@@ -32,7 +32,33 @@ export default defineSchema({
 });
 `;
 
+// What `templates/standalone` actually ships: the extension is already imported
+// and chained, by hand, with no managed markers — because the template was
+// authored with it rather than patched by `lunora add`.
+const HAND_WIRED_SCHEMA = `import { ratelimit } from "./ratelimit/schema.js";
+import { defineSchema, defineTable, v } from "lunorash/server";
+
+export default defineSchema({
+    messages: defineTable({
+        channelId: v.string(),
+        text: v.string(),
+    })
+        .shardBy("channelId")
+        .index("by_channel", ["channelId"]),
+}).extend(ratelimit.extension);
+`;
+
 describe("insertSchemaExtension", () => {
+    it("refuses a key already bound by an unmarked import", () => {
+        expect.assertions(1);
+
+        // The idempotency gate read only the managed marker, which no template
+        // carries — so `lunora add ratelimit` in a standalone project emitted a
+        // SECOND `import { ratelimit }` and wrote a hard `SyntaxError: Identifier
+        // 'ratelimit' has already been declared`, while reporting success.
+        expect(insertSchemaExtension(HAND_WIRED_SCHEMA, "ratelimit")).toStrictEqual({ ok: false, reason: "already-applied" });
+    });
+
     it("appends a .extend(<key>.extension) chain and a managed import", () => {
         expect.assertions(4);
 

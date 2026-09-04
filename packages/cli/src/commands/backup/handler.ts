@@ -399,7 +399,24 @@ const runBackupPitr = async (options: BackupCommandOptions): Promise<BackupComma
  */
 const resolveDestination = (options: BackupCommandOptions, cwd: string): BackupDestination | undefined => {
     if (options.bucket === undefined) {
+        // `--prefix` selects a key prefix INSIDE an R2 bucket; a local directory
+        // has no such thing. Refused rather than ignored, exactly as `retention`
+        // and `prune` refuse a destination flag that does not apply to them:
+        // `backup list --prefix archive/` silently listed the local directory and
+        // reported "no backups found" for an archive that was there all along.
+        if (options.prefix !== undefined) {
+            options.logger.error("--prefix applies only to an R2 destination — pass --bucket alongside it, or use --dir to point at a local directory.");
+
+            return undefined;
+        }
+
         return createDirectoryDestination(join(cwd, options.dir ?? DEFAULT_BACKUP_DIR));
+    }
+
+    if (options.dir !== undefined) {
+        options.logger.error("--dir applies only to a local destination and does not apply alongside --bucket — drop one.");
+
+        return undefined;
     }
 
     if (options.prod === true && options.url === undefined) {

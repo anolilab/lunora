@@ -793,6 +793,74 @@ describe("lunora import --with-storage", () => {
         });
     });
 
+    describe("the storage-remap report", () => {
+        /**
+         * An unmapped import — no `import-convex.json` — leaves every plain-string
+         * storage id unrewritten, so a wholly-unmigrated run reports one entry PER
+         * OCCURRENCE. The display list dedups and caps at 20 while the count and the
+         * printed JSON body used the raw array, so the summary said "N ambiguous",
+         * listed a handful, and then buried itself under the full array — the exact
+         * outcome the cap exists to prevent.
+         */
+        const unmappedRun = async () => {
+            // 30 rows, all pointing at the same id in the same column: one distinct
+            // (table, column, storageId) triple, thirty occurrences.
+            const rows = Array.from({ length: 30 }, (_, index) => {
+                return { _id: `u${String(index)}`, avatarId: "kg_a" };
+            });
+            const root = writeConvexExport({ kg_a: "bytes" }, { users: rows });
+            const { logger, logs } = capturingLogger();
+
+            const result = await runImportCommand({
+                cwd: workDir,
+                fetchImpl: fakeWorker().fetchImpl,
+                file: root,
+                logger,
+                token: "t",
+                url: "http://localhost:8787",
+                withStorage: true,
+            });
+
+            return { logs, result };
+        };
+
+        it("counts distinct references, matching the list it prints", async () => {
+            expect.assertions(1);
+
+            const { result } = await unmappedRun();
+
+            expect(result.body?.storage?.ambiguousTotal).toBe(1);
+        });
+
+        it("caps the references carried in the printed body", async () => {
+            expect.assertions(2);
+
+            // Rewritten as 25 DISTINCT columns so the dedup cannot do the capping.
+            const row: Record<string, unknown> = { _id: "u0" };
+
+            for (let index = 0; index < 25; index += 1) {
+                row[`avatar${String(index)}`] = "kg_a";
+            }
+
+            const root = writeConvexExport({ kg_a: "bytes" }, { users: [row] });
+
+            const result = await runImportCommand({
+                cwd: workDir,
+                fetchImpl: fakeWorker().fetchImpl,
+                file: root,
+                logger: capturingLogger().logger,
+                token: "t",
+                url: "http://localhost:8787",
+                withStorage: true,
+            });
+
+            expect(result.body?.storage?.ambiguousTotal).toBe(25);
+            // The body carries a sample, not the whole array — a 200k-row import
+            // otherwise emitted a ~20 MB blob through one `logger.info`.
+            expect(result.body?.storage?.ambiguous).toHaveLength(20);
+        });
+    });
+
     describe("--scan", () => {
         it("writes the candidate mapping and imports nothing", async () => {
             expect.assertions(3);

@@ -106,6 +106,32 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: "http://localhost:8787",
         },
     ],
+    // Keyed by the SUBPATH, because that is what `CAPABILITY_SOURCES` emits for
+    // `ctx.r2sql` (the surface is codegen-wired onto ActionCtx; nothing imports
+    // the package). Without these three the emitted ctx-builder fell through to
+    // `r2sqlStub` and every `ctx.r2sql` call threw on the deployed worker, with
+    // nothing in `.dev.vars.example` or the pre-flight to say why.
+    "@lunora/bindings/r2sql": [
+        {
+            description:
+                "Cloudflare API token with R2 SQL read access, for `ctx.r2sql`. Create at https://dash.cloudflare.com/profile/api-tokens with the R2 SQL permission.",
+            docsUrl: "https://lunora.sh/docs/packages/bindings#r2-sql",
+            key: "R2_SQL_TOKEN",
+            placeholderValue: "<your-r2-sql-api-token>",
+        },
+        {
+            description: "Cloudflare account id the R2 SQL queries run against. Falls back to CLOUDFLARE_ACCOUNT_ID when unset.",
+            docsUrl: "https://lunora.sh/docs/packages/bindings#r2-sql",
+            key: "R2_SQL_ACCOUNT_ID",
+            placeholderValue: "<your-cloudflare-account-id>",
+        },
+        {
+            description: "Name of the R2 bucket holding the Iceberg tables `ctx.r2sql` queries.",
+            docsUrl: "https://lunora.sh/docs/packages/bindings#r2-sql",
+            key: "R2_SQL_BUCKET",
+            placeholderValue: "<your-r2-sql-bucket>",
+        },
+    ],
     "@lunora/mail": [
         {
             description: "Resend API key for sending transactional email via @lunora/mail. Obtain at https://resend.com/api-keys",
