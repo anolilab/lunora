@@ -26,13 +26,14 @@ interface TableDiff {
     /**
      * Optional stable identity for this diff, distinct from `timestamp`
      * (multiple diffs can legitimately share a millisecond, so `timestamp`
-     * alone is not a unique diff identity). Used by `deriveInsertId` in
-     * `apply-diff.ts` to derive deterministic row ids for id-less inserts:
-     * replaying the SAME diff (same `id`) must always mint the SAME id,
-     * while two DIFFERENT diffs emitted in the same millisecond must not
-     * alias onto the same one. `createTableDiff` auto-generates one when
-     * omitted; diffs built as plain object literals (bypassing the helper)
-     * simply fall back to `timestamp` for that derivation.
+     * alone is not a unique diff identity). `createTableDiff` auto-generates
+     * one when omitted.
+     *
+     * **Nothing in the apply path reads it.** `deriveInsertId` (`apply-diff.ts`)
+     * keys an id-less insert off the ROW'S OWN content — hashing the diff id
+     * into it is what made `subscribeToMirror`'s per-frame re-emission mint a
+     * fresh row every second, so that derivation is gone. This field is
+     * carried for consumers that want to recognise a diff they have seen.
      */
     readonly id?: string;
     /** Logical table name (matches the schema table name). */
@@ -113,17 +114,16 @@ const mergeDiffs = (diffs: ReadonlyArray<TableDiff>): TableDiff | null => {
     const last = diffs[diffs.length - 1] as TableDiff;
 
     // Derive the merged diff's identity deterministically from its ordered
-    // children's identities (each child's `id`, or its `timestamp` as the same
-    // fallback `deriveInsertId` uses) — replaying the SAME sequence of diffs
-    // must mint the SAME merged id so id-less inserts stay stable across
-    // retries, while a different child sequence yields a different id.
+    // children's identities (each child's `id`, or its `timestamp` as a
+    // fallback): merging the SAME sequence of diffs mints the SAME merged id, a
+    // different sequence a different one. Nothing in this repo reads it — the
+    // apply path keys id-less inserts off row content — so this is a property of
+    // the public `id` field for consumers that dedupe on it, not an input to
+    // anything downstream.
     //
     // The joined child identities are hashed to a constant-size 16-hex digest
-    // rather than embedded verbatim: a verbatim join is O(N) in the child count
-    // AND, because each id-less insert re-hashes the diff id char-by-char in
-    // `deriveInsertId`, O(N×M) overall — compounding multiplicatively when
-    // merging already-merged diffs (`merge:merge:…`). The hash keeps the same
-    // determinism (same child sequence → same digest) at a fixed width.
+    // rather than embedded verbatim, so merging an already-merged diff cannot
+    // compound the prefix (`merge:merge:…`) into an O(N) string.
     const mergedId = `merge:${fnv1a64Hex(diffs.map((d) => d.id ?? String(d.timestamp)).join("|"))}`;
 
     return createTableDiff(
