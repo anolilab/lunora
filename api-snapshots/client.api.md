@@ -1342,10 +1342,7 @@ interface SubscriptionState {
     readonly args: Record<string, unknown>;
     readonly argsKey: string;
     readonly callbacks: Set<SubscriptionCallback>;
-    readonly checkpointCallbacks: Set<(watermark: {
-        checkpoint?: number;
-        mutationId?: number;
-    }) => void>;
+    readonly checkpointCallbacks: Set<(watermark: SyncWatermark) => void>;
     readonly errorCallbacks: Set<SubscriptionErrorCallback>;
     readonly fn: FunctionReference;
     readonly id: string;
@@ -1376,6 +1373,7 @@ interface SwToClientMessage {
 interface SyncWatermark {
     checkpoint?: number;
     mutationId?: number;
+    rowsFollow?: boolean;
 }
 ```
 

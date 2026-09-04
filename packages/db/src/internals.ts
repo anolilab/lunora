@@ -235,11 +235,18 @@ export const toMap = <T extends object>(rows: ReadonlyArray<T>, getKey: (row: T)
  * is kept. Each incoming value is serialized exactly once per tick (for both
  * comparison and cache update), so the previous value is never re-serialized.
  *
- * Lifecycle: `syncedJson` must be owned by the caller at the same scope as any
- * other per-collection state (e.g. outside the `sync.sync` callback), so the
- * cache persists correctly across sync restarts. A new `makeDiffEmit` closure
- * created on restart receives the same map reference and starts from the
- * committed synced state — no spurious diffs on reconnect.
+ * Lifecycle: `syncedJson` is owned by the caller at the same scope as any other
+ * per-collection state (outside the `sync.sync` callback), so one map serves
+ * every `makeDiffEmit` closure the collection creates and a *within-session*
+ * re-delivery of an unchanged snapshot writes nothing.
+ *
+ * It does NOT survive a sync **restart**, and must not: TanStack drops its
+ * synced store on gc cleanup, so the sole caller
+ * ({@link file://./collection-options.ts}'s `sync.sync` teardown) clears the map
+ * on the way out. A restart that kept the map would diff the server's
+ * re-delivered snapshot against rows the store no longer holds, emit zero
+ * writes, and leave the restarted collection permanently empty. The map's job is
+ * incremental-diff state for one live session, not a durable cache.
  */
 export const makeDiffEmit =
     <T extends object>(syncedJson: Map<string, string>, writer: SyncWriter<T>) =>
