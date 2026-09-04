@@ -1,6 +1,6 @@
 {
     "name": "@lunora/notify",
-    "version": "1.0.0-alpha.37",
+    "version": "1.0.0-alpha.38",
     "description": "Multi-channel notifications for Lunora — ctx.notify / ctx.push over @visulima/notification: edge-safe Web Push + FCM, plus chat, in-app inbox and webhook channels, with subscription storage and queue-backed fan-out",
     "keywords": [
         "cloudflare",
