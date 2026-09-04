@@ -594,6 +594,49 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         expect(result.platformDiagnostics[0]?.message).toContain("secrets");
     });
 
+    it.each([
+        ["plain", `async ({ ctx }) => ctx.secrets.get("STRIPE_KEY")`],
+        ["renamed", `async ({ ctx: context }) => context.secrets.get("STRIPE_KEY")`],
+        ["destructured", `async ({ ctx: { secrets } }) => secrets.get("STRIPE_KEY")`],
+    ])("gates ctx.secrets reached through a %s handler context parameter", (_form, handler) => {
+        expect.assertions(2);
+
+        // A handler receives its context as a property of ONE destructured
+        // argument (`async ({ args, ctx }) => …`), so the local name the context
+        // is bound to is the handler's to choose. Matching the identifier text
+        // `ctx` recognised only the shorthand: renaming the binding or
+        // destructuring it built green on a host that rates `secrets`
+        // unsupported, and `ctx.secrets.get()` then threw `no Secrets Store
+        // binding named "…"` on first use — the exact failure this gate refuses.
+        // `secrets` has no import arm and no capability row, so nothing else
+        // covers it.
+        write("keys.ts", `import { action } from "@lunora/server";\n\nexport const send = action.action(${handler});\n`);
+
+        const result = codegen();
+
+        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(result.platformDiagnostics[0]?.message).toContain("secrets");
+    });
+
+    it.each([
+        ["an inline object literal", `export const feed = procedure.stream(async function* () {}, { durable: true });`],
+        ["a variable", `const streamOptions = { durable: true };\n\nexport const feed = procedure.stream(async function* () {}, streamOptions);`],
+    ])("gates a durable stream declared with %s", (_form, source) => {
+        expect.assertions(2);
+
+        // `durable` is carried in no IR — the emitted registry reads it off the
+        // registration object at runtime — so the signal is syntactic. Requiring
+        // the argument to BE an object literal meant hoisting the options into a
+        // variable slipped the gate, and the stream silently ran as ephemeral on
+        // a host with no durable stream storage.
+        write("feed.ts", `import { procedure } from "@lunora/server";\n\n${source}\n`);
+
+        const result = codegen();
+
+        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(result.platformDiagnostics[0]?.message).toContain("durable");
+    });
+
     it("gates a declared agent on a target that cannot run one", () => {
         expect.assertions(2);
 

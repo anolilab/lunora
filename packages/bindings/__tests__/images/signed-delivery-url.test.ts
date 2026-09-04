@@ -276,12 +276,11 @@ describe("parseSignedTransform", () => {
         expect.assertions(1);
 
         // One key per kind the encoder emits: numbers, enum strings, a free
-        // string, the gravity string-or-object union, and the object-valued
-        // `draw` list. (TransformOptions has no boolean-typed key today; if one
-        // is added, extend this fixture with it.)
+        // string, and the gravity string-or-object union taking its object arm.
+        // (TransformOptions has no boolean-typed key today; if one is added,
+        // extend this fixture with it.)
         const transform: TransformOptions = {
             background: "#00000080",
-            draw: [{ opacity: 0.5, url: "https://assets.acme.test/logo.png" }],
             fit: "cover",
             gravity: { mode: "box-center", x: 10, y: 20 },
             width: 256,
@@ -331,34 +330,16 @@ describe("parseSignedTransform", () => {
         expect(() => parseSignedTransform("wdith=256")).toThrow(/unknown transform key "wdith"/);
     });
 
-    it("keeps a literal '&' inside a value even when a transform key follows it", async () => {
-        expect.assertions(2);
-
-        // `&` is the serializer's separator, so a draw overlay URL with two
-        // query params puts one inside the JSON. The second param is *named*
-        // after a real transform key here on purpose: any read-side attempt to
-        // guess where a value ends splits exactly there, truncating the JSON —
-        // `verifySignedImageUrl` then swallows the parse failure and reports
-        // `valid: true` with no `transformOptions`, so a Worker following the
-        // documented contract serves the untransformed original.
-        const transform: TransformOptions = { draw: [{ url: "https://assets.acme.test/logo.png?v=2&width=64" }], width: 256 };
-
-        const url = await buildSignedImageUrl({ baseUrl: BASE, key: "a.png", secret: SECRET, transform });
-        const result = await verifySignedImageUrl(url, SECRET);
-
-        expect(result.valid).toBe(true);
-        expect(result.transformOptions).toStrictEqual(transform);
-    });
-
     it("does not let a transform value splice extra keys under the signature", async () => {
         expect.assertions(3);
 
         // The signature binds the serialized transform, so whatever the encoder
         // emits is what the verifier authorises. A user-influenced value — a
-        // `background` colour, a `gravity`, a `draw` overlay — carrying the
-        // separators verbatim therefore mints a URL whose decoded transform is
-        // not the one that was signed: here a 10000px render nobody asked for,
-        // under a signature that verifies.
+        // `background` colour, a `gravity` — carrying the separators verbatim
+        // therefore mints a URL whose decoded transform is not the one that was
+        // signed: here a 10000px render nobody asked for, under a signature that
+        // verifies. It is also what keeps a legitimate `&` inside a value from
+        // being read as the start of a new entry.
         const transform: TransformOptions = { background: "blue&width=10000&fit=contain", height: 128 };
 
         const url = await buildSignedImageUrl({ baseUrl: BASE, key: "a.png", secret: SECRET, transform });

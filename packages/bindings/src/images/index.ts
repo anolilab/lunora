@@ -4,7 +4,6 @@ export { buildImageDeliveryUrl } from "./delivery-url";
 export type { SignedImageUrlOptions, VerifyImageResult } from "./signed-delivery-url";
 export { buildSignedImageUrl, parseSignedTransform, verifySignedImageUrl } from "./signed-delivery-url";
 export type {
-    DrawOverlay,
     ImageCompositeMode,
     ImageDrawOptions,
     ImageInfoLike,

@@ -2,9 +2,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { LUNORA_SKILL_NAMES } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { resolveBundledSkillsDirectory, runRulesCheck, runRulesInstall } from "../../src/commands/rules/handler";
+import { listBundledSkills, resolveBundledSkillsDirectory, runRulesCheck, runRulesInstall } from "../../src/commands/rules/handler";
 import type { Logger } from "../../src/util/logger";
 
 const captureLogger = (): { logger: Logger; messages: string[] } => {
@@ -28,6 +29,20 @@ describe("lunora rules", () => {
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
+    });
+
+    it("names every bundled skill in LUNORA_SKILL_NAMES", () => {
+        expect.assertions(1);
+
+        // `install` enumerates the directory while `check` counts this list, so
+        // drift between them makes `check` print "9/9 skills" with an empty
+        // "Missing" line for a project that has 14 — the one surface where the
+        // list is load-bearing, and the one that lies when it falls behind.
+        const skillsDirectory = resolveBundledSkillsDirectory();
+
+        expect(listBundledSkills(skillsDirectory ?? "").toSorted((a, b) => a.localeCompare(b))).toStrictEqual(
+            [...LUNORA_SKILL_NAMES].toSorted((a, b) => a.localeCompare(b)),
+        );
     });
 
     it("install copies the bundled skills into .agents/skills/", () => {

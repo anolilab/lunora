@@ -306,9 +306,7 @@ const DEV_VARS_KEY_PATTERN: RegExp;
 ```ts
 interface DeployDriver {
     readonly id: string;
-    infer: (context: DriverContext) => Promise<ResourceGraph>;
     readonly name: string;
-    provision: (context: DriverContext) => Promise<ProvisionResult>;
     readonly toolchain?: DriverToolchain;
 }
 ```
@@ -457,15 +455,6 @@ interface DockerLike {
     modem: {
         demuxStream: (stream: DockerLogStream, stdout: Writable, stderr: Writable) => void;
     };
-}
-```
-
-### `DriverContext` (interface)
-
-```ts
-interface DriverContext {
-    crons?: ReadonlyArray<string>;
-    projectRoot: string;
 }
 ```
 
@@ -770,15 +759,6 @@ class LunoraReporter {
 type MultiSelectOption<T extends string> = SelectOption<T>;
 ```
 
-### `NamedResource` (interface)
-
-```ts
-interface NamedResource {
-    exported?: boolean;
-    name: string;
-}
-```
-
 ### `PACKAGE_SECRETS_REGISTRY` (const)
 
 ```ts
@@ -830,17 +810,6 @@ interface PostCodegenHookResult {
 }
 ```
 
-### `ProvisionResult` (interface)
-
-```ts
-interface ProvisionResult {
-    added: ReadonlyArray<string>;
-    changed: boolean;
-    configPath?: string;
-    warnings: ReadonlyArray<string>;
-}
-```
-
 ### `ROOT_SKILL_NAME` (const)
 
 ```ts
@@ -851,22 +820,6 @@ const ROOT_SKILL_NAME = "lunora";
 
 ```ts
 type RemotePreference = boolean | undefined;
-```
-
-### `ResourceGraph` (interface)
-
-```ts
-interface ResourceGraph {
-    containers: ReadonlyArray<NamedResource>;
-    crons: ReadonlyArray<string>;
-    globalDatabase: boolean;
-    keyValueStore: boolean;
-    objectStorage: boolean;
-    queues: ReadonlyArray<NamedResource>;
-    shardNamespaces: ReadonlyArray<ShardNamespaceResource>;
-    signals: ReadonlyArray<string>;
-    workflows: ReadonlyArray<NamedResource>;
-}
 ```
 
 ### `STEP_BADGE_NAMES` (const)
@@ -988,16 +941,6 @@ interface SelectOption<T extends string> {
     description?: string;
     label: string;
     value: T;
-}
-```
-
-### `ShardNamespaceResource` (interface)
-
-```ts
-interface ShardNamespaceResource {
-    className: string;
-    exported: boolean;
-    name: string;
 }
 ```
 
@@ -2040,6 +1983,9 @@ interface WranglerConfigShape {
     }>;
     name?: string;
     queues?: {
+        consumers?: ReadonlyArray<{
+            queue?: string;
+        }>;
         producers?: ReadonlyArray<{
             binding?: string;
             queue?: string;
