@@ -85,8 +85,45 @@ const MYSQL_COLLATION = "utf8mb4_0900_bin";
 /** A character column's declaration with {@link MYSQL_COLLATION} pinned onto it. */
 const collated = (type: string): string => `${type} COLLATE ${MYSQL_COLLATION}`;
 
-/** MySQL storage type for a validator `kind`. Shared by `columnType` and the index-prefix decision below. */
-const mysqlColumnType = (kind: string | undefined): string => {
+/**
+ * MySQL storage type for a validator `kind`. Shared by `columnType` and the
+ * index-prefix decision below.
+ *
+ * `unique` bounds a character column so InnoDB can index it in FULL. The
+ * alternative is what shipped: `LONGTEXT` cannot be indexed without a key
+ * prefix, `indexKeyPrefix` supplies 191, and the synthesized `.unique()` index
+ * then enforces uniqueness of the first 191 characters — two distinct
+ * 200-character emails sharing that prefix raised ER_DUP_ENTRY and surfaced as
+ * "unique constraint violation", on MySQL only. 768 × 4 bytes under utf8mb4 is
+ * exactly InnoDB's 3072-byte single-column key limit, so a `.unique()` string
+ * indexes whole; a longer value is a loud write error, not a wrong conflict.
+ *
+ * **Pre-existing tables keep the type they were created with** — same caveat as
+ * {@link MYSQL_COLLATION}: `CREATE TABLE IF NOT EXISTS` does not reshape one, so
+ * a binding provisioned before this needs a one-off
+ * `ALTER TABLE <t> MODIFY <col> VARCHAR(768) COLLATE utf8mb4_0900_bin`.
+ */
+const mysqlColumnType = (kind: string | undefined, options?: { unique?: boolean }): string => {
+    if (options?.unique === true) {
+        switch (kind) {
+            // Already indexable whole: the numeric types, and bigint's
+            // `VARCHAR(64)` key. Only the LONGTEXT arm below needs bounding.
+            case "bigint":
+            case "boolean":
+            case "date":
+            case "number":
+            case "timestamp": {
+                break;
+            }
+            case "bytes": {
+                return "VARBINARY(768)";
+            }
+            default: {
+                return collated("VARCHAR(768)");
+            }
+        }
+    }
+
     switch (kind) {
         case "bigint": {
             // stored as the order-preserving 40-character key `bigintSqlKey`

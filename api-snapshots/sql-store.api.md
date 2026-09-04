@@ -52,7 +52,9 @@ interface SqlCtxExec {
 ```ts
 interface SqlDialect {
     affectedRows?: (result: SqlRunResult) => number;
-    columnType: (kind: string | undefined) => string;
+    columnType: (kind: string | undefined, options?: {
+        unique?: boolean;
+    }) => string;
     companionTypes: {
         autoincrementPrimaryKey: string;
         integer: string;
@@ -209,7 +211,7 @@ const sqliteDecode: (raw: unknown, kind: string | undefined) => unknown;
 ### `sqliteEncode` (const)
 
 ```ts
-const sqliteEncode: (value: unknown) => unknown;
+const sqliteEncode: (value: unknown, kind?: string) => unknown;
 ```
 
 ### `sweepSqlCdcRetention` (const)

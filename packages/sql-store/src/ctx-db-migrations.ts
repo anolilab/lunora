@@ -33,7 +33,8 @@ import { BIGINT_KEY_LENGTH, bigintSqlKey, effectiveColumnKind } from "./value-co
  * (`@lunora/d1/dialect`) — the same mapping the `lunora migrate generate` SQL
  * emitter uses, so auto-provisioned and hand-migrated tables stay identical.
  */
-const globalColumnAffinity = (validator: ValidatorLike, dialect: SqlDialect): string => dialect.columnType(effectiveColumnKind(validator));
+const globalColumnAffinity = (validator: ValidatorLike, dialect: SqlDialect): string =>
+    dialect.columnType(effectiveColumnKind(validator), { unique: validator._meta?.column?.unique === true });
 
 /** Build the column DDL for a global table as a drizzle `SQL`: framework columns plus a typed column per declared field. */
 const globalTableColumnsDdl = (tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): SQL => {
@@ -224,7 +225,14 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
     const indexRef = (field: string): SQL => {
         const reference = columnRefSql(field);
         const validator = definition.shape[field];
-        const prefix = validator && dialect.indexKeyPrefix ? dialect.indexKeyPrefix(effectiveColumnKind(validator)) : undefined;
+        // A `.unique()` column is declared as a type the engine indexes in FULL
+        // (`columnType`'s `unique` option), so it never takes a key prefix. A
+        // prefixed UNIQUE index constrains the PREFIX: two distinct values that
+        // agree on their first 191 characters collided as a duplicate.
+        const prefix =
+            validator && dialect.indexKeyPrefix && validator._meta?.column?.unique !== true
+                ? dialect.indexKeyPrefix(effectiveColumnKind(validator))
+                : undefined;
 
         return prefix === undefined ? reference : sql`${reference}(${sql.raw(String(prefix))})`;
     };
