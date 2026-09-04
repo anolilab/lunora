@@ -128,6 +128,23 @@ const webPushId = (endpoint: string): string => `wp2_${fnv1a64Hex(endpoint)}`;
 const fcmId = (token: string): string => `fcm2_${fnv1a64Hex(token)}`;
 
 /**
+ * The delivery kind a store id encodes, or `undefined` for an id this package did
+ * not mint (a hand-built {@link StoredSubscription}, or a future scheme).
+ *
+ * Lives HERE, next to the minters and the legacy prefixes, so the mapping has one
+ * home. It exists for the one caller that has an id and a receipt but no row: a
+ * `retryIds` job answers per subscription id, and `isGoneError`'s provider-scoping
+ * needs the kind that id was minted for.
+ */
+const kindOfId = (id: string): StoredSubscription["kind"] | undefined => {
+    if (id.startsWith("fcm2_") || id.startsWith("fcm_")) {
+        return "fcm";
+    }
+
+    return id.startsWith("wp2_") || id.startsWith("wp_") ? "web-push" : undefined;
+};
+
+/**
  * The PREVIOUS 32-bit FNV-1a digest (8 hex) — the pre-`_2` id scheme. Kept ONLY so
  * a canonical `put` can evict the stale legacy-prefix row for the same identity (see
  * {@link legacyIdFor}).
@@ -161,6 +178,43 @@ const legacyIdFor = (subscription: StoredSubscription): string | undefined => {
     }
 
     return subscription.endpoint === undefined ? undefined : legacyWebPushId(subscription.endpoint);
+};
+
+/**
+ * The error a `put` that would move a stored subscription to a different owner
+ * must fail with, or `undefined` when the claim is allowed — the shared owner
+ * predicate both stores enforce (see `SubscriptionStore.put`).
+ *
+ * Returned rather than thrown so each store can surface it in its own shape: the
+ * D1 store is inside an `async` function and throws it; the in-memory one is a
+ * synchronous arrow typed as returning a promise, and a bare throw there escapes
+ * a `.catch()` the interface promises.
+ *
+ * `stored` is the row as it exists AFTER the store's own conditional write, so
+ * this doubles as the refusal DETECTOR for a store whose write is silent when the
+ * predicate fails (D1's `ON CONFLICT … DO UPDATE … WHERE`): a stored owner that
+ * still disagrees with the one just written is a write that did not land. In the
+ * memory store it is called before the write instead, on the row as found. Either
+ * way the answer is the same, because the ONLY way the two can disagree is a
+ * refusal.
+ *
+ * A row with no owner is claimable (the device signed in); a row this caller
+ * already owns is theirs to refresh. Everything else throws, loudly rather than
+ * silently, because unlike `unregister` there is nothing safe to return: the
+ * caller's own record is what `register` echoes back, and the stored row is
+ * someone else's delivery keys.
+ */
+const claimRefusal = (stored: StoredSubscription | undefined, incoming: StoredSubscription): LunoraError | undefined => {
+    const owner = stored?.userId ?? null;
+
+    if (stored === undefined || owner === null || owner === (incoming.userId ?? null)) {
+        return undefined;
+    }
+
+    return new LunoraError(
+        "FORBIDDEN",
+        `@lunora/notify: subscription "${incoming.id}" is registered to a different user; a device must be unregistered by its owner before another account can claim it`,
+    );
 };
 
 const parseSubscription = (subscription: unknown): LooseSubscription => {
@@ -337,11 +391,27 @@ const targetOf = (subscription: StoredSubscription): string => {
 const WEB_PUSH_GONE_PATTERN = /\bhttp\s*4(?:04|10)\b/iu;
 
 /**
- * Structured "permanently gone" signal from FCM: the canonical `UNREGISTERED`
- * (HTTP v1) / `NotRegistered` (legacy) error codes — a.k.a.
- * `registration-token-not-registered` — meaning the device token is dead.
+ * "Permanently gone" signal from FCM: the canonical `UNREGISTERED` (HTTP v1) /
+ * `NotRegistered` (legacy) error codes — a.k.a.
+ * `registration-token-not-registered` — plus the HTTP v1 `NOT_FOUND` PROSE,
+ * meaning the device token is dead.
+ *
+ * The prose alternative is not a nicety, it is the only branch that ever fires
+ * against the real transport. `@visulima/notification`'s FCM provider surfaces
+ * `body.error.message` and nothing else, while FCM HTTP v1 answers a dead token
+ * with HTTP 404, `error.status: "NOT_FOUND"`, `error.message: "Requested entity
+ * was not found."` and the `UNREGISTERED` code inside `error.details[].errorCode`
+ * — a field the provider drops. So the codes above can only arrive from a
+ * different/legacy transport, and matching them alone left FCM pruning inert:
+ * every uninstalled device stayed in the store forever, re-POSTed on every
+ * broadcast, while the README, the docs and `LunoraPush.broadcast`'s JSDoc all
+ * promised it was pruned.
+ *
+ * Scoped to FCM by {@link isGoneError}'s `kind`, for the same reason the codes
+ * are: the web-push provider echoes the push service's response body into
+ * `HTTP ${status}: ${body}`, where "not found" is ordinary transient prose.
  */
-const FCM_GONE_PATTERN = /\b(?:unregistered|not[\s-]?registered|registration-token-not-registered)\b/iu;
+const FCM_GONE_PATTERN = /\b(?:unregistered|not[\s-]?registered|registration-token-not-registered|requested entity was not found)\b/iu;
 
 /**
  * Last-resort text fallback for a provider that phrases "gone" in prose without a
@@ -358,11 +428,13 @@ const GONE_TEXT_FALLBACK = /\bsubscription (?:is )?(?:gone|expired|no longer val
  * transient failure worth retrying.
  *
  * Gates on STRUCTURED signals first: an `HTTP 404/410` status (both providers
- * answer one for a dead endpoint/token) or, for FCM only, an
- * `UNREGISTERED`/`NOT_REGISTERED` code. The free-text
- * {@link GONE_TEXT_FALLBACK} is a tightened last resort only, so a transient
- * error that happens to contain `expired` (a cert/session expiry) can never
- * permanently drop a valid subscription.
+ * answer one for a dead endpoint/token, though FCM's is usually replaced by its
+ * error body before it reaches here) or, for FCM only, an
+ * `UNREGISTERED`/`NOT_REGISTERED` code or the `NOT_FOUND` prose that is the one
+ * signal its provider actually forwards (see {@link FCM_GONE_PATTERN}). The
+ * free-text {@link GONE_TEXT_FALLBACK} is a tightened last resort only, so a
+ * transient error that happens to contain `expired` (a cert/session expiry) can
+ * never permanently drop a valid subscription.
  *
  * `kind` scopes the PROVIDER-SPECIFIC patterns to the provider that emits them.
  * The web-push provider echoes the push service's response body into
@@ -383,4 +455,4 @@ const isGoneError = (message: string | undefined, kind?: StoredSubscription["kin
     return kind !== "web-push" && FCM_GONE_PATTERN.test(message);
 };
 
-export { fcmId, isGoneError, legacyFcmId, legacyIdFor, legacyWebPushId, normalizeRegisterInput, targetOf, webPushId };
+export { claimRefusal, fcmId, isGoneError, kindOfId, legacyFcmId, legacyIdFor, legacyWebPushId, normalizeRegisterInput, targetOf, webPushId };

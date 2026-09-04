@@ -196,6 +196,51 @@ describe("createInboundEmailHandler", () => {
         consoleError.mockRestore();
     });
 
+    it("proceeds only on true/undefined — every other answer is a rejection", async () => {
+        expect.assertions(6);
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+        // A hook is typed `boolean | void`, but it runs across an untyped boundary
+        // (a JS project, a hook that forgot a branch and fell out of a `switch`).
+        // A gate that only recognises literal `false` admits every one of these into
+        // the privileged dispatch.
+        for (const answer of [null, 0, ""]) {
+            const dispatch = vi.fn<() => Promise<void>>(async () => undefined);
+            const message = fakeMessage();
+            const handler = createInboundEmailHandler({
+                dispatch,
+                parse: async () => fixture,
+                verify: () => answer as unknown as boolean,
+            });
+
+            // eslint-disable-next-line no-await-in-loop -- one independent handler run per answer
+            await handler(message, {}, undefined);
+
+            expect(dispatch).not.toHaveBeenCalled();
+            expect(message.setReject).toHaveBeenCalledWith("message could not be processed");
+        }
+
+        consoleError.mockRestore();
+    });
+
+    it("still proceeds for a void hook that rejects by throwing", async () => {
+        expect.assertions(1);
+
+        const dispatch = vi.fn<() => Promise<void>>(async () => undefined);
+        const handler = createInboundEmailHandler({
+            dispatch,
+            parse: async () => fixture,
+            verify: () => {
+                // A `(): void` hook that returns nothing is the documented "proceed".
+            },
+        });
+
+        await handler(fakeMessage(), {}, undefined);
+
+        expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+
     it("calls a custom onError for a dispatch failure — for observability — then still rejects", async () => {
         expect.assertions(4);
 

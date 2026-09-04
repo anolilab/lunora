@@ -129,6 +129,64 @@ describe("queue-backed fan-out", () => {
         expect(outcome.result).toMatchObject({ failed: 1, sent: 2, total: 3 });
     });
 
+    it("counts a gone receipt on the retry path as pruned, not as a failure to redeliver", async () => {
+        expect.hasAssertions();
+
+        // `push.send` prunes the row and then RETURNS the failed receipt, so a gone
+        // device landed back in `failedIds`. The caller enqueues a narrower retry,
+        // whose `push.send` now throws `no registered subscription` for an id that
+        // no longer exists — `sent === 0`, so the runner throws, the queue backs off
+        // and eventually dead-letters a device that simply unsubscribed. The
+        // docblock promises the opposite: gone ids never appear in `failedIds`.
+        const send = vi.fn().mockResolvedValue({ errorMessages: ["Subscription gone (HTTP 410) — remove this subscription"], successful: false });
+        const push = { broadcastPage: vi.fn(), send } as unknown as LunoraPush;
+        const job: PushBroadcastJob = { payload: { body: "hi" }, retryIds: ["wp2_dead"], type: "lunora.push.broadcast" };
+
+        const outcome = await runPushBroadcastPage(push, job);
+
+        expect(outcome.failedIds).toStrictEqual([]);
+        expect(outcome.result).toMatchObject({ failed: 0, pruned: 1, sent: 0, total: 1 });
+    });
+
+    it("reads a gone receipt with the kind its id encodes, so FCM prose prunes and web-push prose does not", async () => {
+        expect.hasAssertions();
+
+        // The FCM-only patterns must not be applied to a web-push failure whose
+        // body happens to echo them — the same provider-scoping `isGoneError` takes
+        // a `kind` for. A receipt carries no kind, but the subscription id does.
+        const fcmSend = vi.fn().mockResolvedValue({ errorMessages: ["[@visulima/notification] [fcm] Requested entity was not found."], successful: false });
+        const webPushSend = vi.fn().mockResolvedValue({ errorMessages: ["HTTP 403: sender not registered for this endpoint"], successful: false });
+
+        await expect(
+            runPushBroadcastPage({ broadcastPage: vi.fn(), send: fcmSend } as unknown as LunoraPush, {
+                payload: { body: "hi" },
+                retryIds: ["fcm2_dead"],
+                type: "lunora.push.broadcast",
+            }),
+        ).resolves.toMatchObject({ failedIds: [], result: { pruned: 1 } });
+
+        await expect(
+            runPushBroadcastPage({ broadcastPage: vi.fn(), send: webPushSend } as unknown as LunoraPush, {
+                payload: { body: "hi" },
+                retryIds: ["wp2_live"],
+                type: "lunora.push.broadcast",
+            }),
+        ).rejects.toThrow(/retry failed/u);
+    });
+
+    it("treats an id that no longer exists as already pruned, not as a permanent failure", async () => {
+        expect.hasAssertions();
+
+        // A device unregistered between the page and its retry cannot be
+        // redelivered to, ever. Counting it as a failure meant the message threw on
+        // every redelivery until the queue dead-lettered it.
+        const send = vi.fn().mockRejectedValue(new Error('@lunora/notify: no registered subscription with id "wp2_dead"'));
+        const push = { broadcastPage: vi.fn(), send } as unknown as LunoraPush;
+        const job: PushBroadcastJob = { payload: { body: "hi" }, retryIds: ["wp2_dead"], type: "lunora.push.broadcast" };
+
+        await expect(runPushBroadcastPage(push, job)).resolves.toMatchObject({ failedIds: [], result: { failed: 0, pruned: 1 } });
+    });
+
     it("spends `filter.limit` as an OVERALL cap across messages, not once per message", async () => {
         expect.hasAssertions();
 

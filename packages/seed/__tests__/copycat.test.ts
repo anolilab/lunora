@@ -134,8 +134,26 @@ describe("copycat determinism", () => {
 
         expect(hashInput("alice")).toBe(2_519_185_623);
         expect(hashInput([0, "users", 0, "_id"])).toBe(3_789_945_327);
-        expect(copycat.email("alice")).toBe("jonathan18@yahoo.com");
+        // Regenerated when the generator moved to the RFC 2606 reserved domain:
+        // passing faker an explicit `provider` also shifts its internal draw, so
+        // the local part changed with it. Deterministic as before — just no longer
+        // a real mailbox.
+        expect(copycat.email("alice")).toBe("eusebio18@example.com");
         expect(copycat.uuid([0, "users", 0, "_id"])).toBe("156d21c5-998b-4e72-9653-ec28b5592873");
+    });
+
+    it("never generates a deliverable third-party address", () => {
+        expect.hasAssertions();
+
+        // Seeded rows land in real databases — a staging environment, or a `lunora
+        // seed --prod`. Any user-driven mail flow (a welcome job, a digest, an auth
+        // verification on a seeded account) then sends real mail, from the app's own
+        // verified domain, to whoever actually owns those Gmail/Yahoo/Hotmail
+        // addresses. RFC 2606 reserves `example.com` precisely so generated data
+        // cannot do that.
+        for (const input of ["alice", "bob", 42, ["users", 3, "email"], { id: 7 }]) {
+            expect(copycat.email(input)).toMatch(/@example\.com$/u);
+        }
     });
 
     it("isolates the raw-string domain from the serialized non-string domain (collision regression)", () => {

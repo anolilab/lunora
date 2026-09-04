@@ -82,6 +82,17 @@ describe("flagshipProvider", () => {
             expect(constructed[0]).toEqual({ accountId: "acct", appId: "app-abc", authToken: "from-env" });
         });
 
+        it("refuses a literal empty `authToken`, the same as an empty thunk result", () => {
+            expect.hasAssertions();
+
+            // `authToken: env.FLAGSHIP_TOKEN` in a config read at module scope is an
+            // empty string when the var is unset — the same misconfiguration the
+            // thunk path refuses, arriving through the branch that passed it
+            // straight to the SDK. Eager, like the other shape refusals here: a
+            // literal is known before any env exists.
+            expect(() => flagshipProvider({ appId: "app-abc", authToken: "" })).toThrow(/`authToken` is an empty string/u);
+        });
+
         it("throws when an `authToken` thunk resolves to nothing rather than sending `Bearer undefined`", () => {
             expect.assertions(2);
 

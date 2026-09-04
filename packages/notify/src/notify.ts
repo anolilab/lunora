@@ -41,8 +41,9 @@ const receiptError = (receipt: Receipt): string | undefined => (receipt.successf
 
 /**
  * Map a push send's receipt to the observability {@link NotifyDeliveryStatus}:
- * `accepted` on success, `gone` when the endpoint is unregistered (404/410, FCM
- * `UNREGISTERED` — the subscription is pruned), else `failed`.
+ * `accepted` on success, `gone` when the endpoint is unregistered (Web Push
+ * 404/410, or FCM's `NOT_FOUND` answer for a dead token — the subscription is
+ * pruned), else `failed`.
  */
 const pushDeliveryStatus = (receipt: Receipt, error: string | undefined, kind: StoredSubscription["kind"]): NotifyDeliveryStatus => {
     if (receipt.successful) {

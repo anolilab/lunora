@@ -115,6 +115,19 @@ const flagshipProvider = (options: FlagshipProviderOptions): FlagsProviderFactor
         throw new LunoraError("INTERNAL", "flagshipProvider: `appId` and `endpoint` are mutually exclusive in HTTP mode — pass exactly one.");
     }
 
+    // The literal half of the empty-token refusal the thunk path enforces below. A
+    // config that reads the secret straight off `env` (rather than through a thunk) is an
+    // empty string whenever the secret is unset, and passing that through means
+    // every evaluation fails closed to its checked-in default with the reason
+    // visible only in `details.*`. Eager, like the shape refusals above: a literal
+    // is knowable before any env exists. Only an OMITTED `authToken` means "no token".
+    if (options.authToken === "") {
+        throw new LunoraError(
+            "INTERNAL",
+            "flagshipProvider: `authToken` is an empty string — omit it for an unauthenticated endpoint, or pass a thunk so the secret is read off the Worker env at request time.",
+        );
+    }
+
     // Defer construction to the factory so the isolate-level memo owns its
     // lifetime — and so an `authToken` thunk can read the Worker `env`, which is
     // the only place a deployment's secret exists.

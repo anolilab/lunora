@@ -56,7 +56,8 @@ inside the isolate. `broadcast` deliberately leaves the limit unset: it has to
 reach everyone matched.
 
 Dead subscriptions prune themselves: an endpoint the push service reports as gone
-(HTTP 404/410, or FCM `UNREGISTERED`) is detected by `isGoneError` and dropped
+(Web Push HTTP 404/410, or FCM's `NOT_FOUND` answer for a dead token) is
+detected by `isGoneError` and dropped
 rather than retried forever.
 
 ## What is deliberately not on the edge

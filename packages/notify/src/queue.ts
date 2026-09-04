@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import { isGoneError, kindOfId } from "./subscriptions/normalize";
 import type { BroadcastOutcome, BroadcastResult, LunoraPush, PushContent, SubscriptionFilter } from "./types";
 
 /**
@@ -148,27 +149,63 @@ const continuationFilter = (filter: SubscriptionFilter | undefined, nextCursor: 
     return remaining > 0 ? { ...filter, after: nextCursor, limit: remaining } : undefined;
 };
 
+/**
+ * The message `push.send` throws for an id with no row left. `deliver` DELETES a
+ * gone subscription before `push.send` returns its receipt, so the retry that a
+ * gone-as-failed outcome triggers hits exactly this on its next run.
+ */
+const NO_SUBSCRIPTION_PATTERN = /no registered subscription/u;
+
+/**
+ * Redeliver to ONE id and classify what came back.
+ *
+ * The classification is the whole point: a GONE device settles as `expired`,
+ * exactly as the page path reports it — never `failed`. Reported as failed it went
+ * straight back into `failedIds`, and the narrower retry the caller then enqueues
+ * can only throw `no registered subscription` (the row is already deleted) until
+ * the queue dead-letters a device that merely unsubscribed.
+ *
+ * A receipt carries no `kind`, but the id does — it was minted from the endpoint or
+ * the token under a kind-tagged prefix — so `isGoneError` gets the same
+ * provider-scoping it has on the broadcast path (`kindOfId` answers `undefined` for
+ * an id this package did not mint, which tests every pattern: the documented
+ * unknown-provider behaviour).
+ */
+const retryOne = async (push: LunoraPush, payload: PushContent, id: string): Promise<BroadcastOutcome> => {
+    try {
+        const receipt = await push.send(id, payload);
+
+        if (receipt.successful) {
+            return { id, status: "ok" };
+        }
+
+        const error = receipt.errorMessages.join("; ");
+
+        return { error, id, status: isGoneError(error, kindOfId(id)) ? "expired" : "failed" };
+    } catch (error) {
+        // `push.send` throws for a provider fault AND for an id that no longer
+        // exists (unregistered since the page ran). The second is not a failure to
+        // retry — there is nothing left to deliver to, on this redelivery or any
+        // future one — so it settles as `expired` like any other prune.
+        const message = error instanceof Error ? error.message : String(error);
+
+        return { error: message, id, status: NO_SUBSCRIPTION_PATTERN.test(message) ? "expired" : "failed" };
+    }
+};
+
 /** Redeliver to an explicit set of subscription ids (a previous page's failures). */
 const runRetryIds = async (push: LunoraPush, payload: PushContent, ids: ReadonlyArray<string>): Promise<PushBroadcastPageOutcome> => {
     const outcomes: BroadcastOutcome[] = [];
 
     for (const id of ids) {
-        try {
-            // eslint-disable-next-line no-await-in-loop -- a retry set is a handful of ids; serial keeps the failing provider unpressured
-            const receipt = await push.send(id, payload);
-
-            outcomes.push({ id, status: receipt.successful ? "ok" : "failed" });
-        } catch (error) {
-            // `push.send` throws for a provider fault AND for an id that no longer
-            // exists (unregistered since the page ran) — both are "not delivered",
-            // and the queue's retry budget bounds how long we keep trying.
-            outcomes.push({ error: error instanceof Error ? error.message : String(error), id, status: "failed" });
-        }
+        // eslint-disable-next-line no-await-in-loop -- a retry set is a handful of ids; serial keeps the failing provider unpressured
+        outcomes.push(await retryOne(push, payload, id));
     }
 
     const failedIds = failedIdsOf(outcomes);
-    const sent = outcomes.length - failedIds.length;
-    const result = { failed: failedIds.length, outcomes, pruned: 0, sent, total: outcomes.length };
+    const pruned = outcomes.filter((outcome) => outcome.status === "expired").length;
+    const sent = outcomes.length - failedIds.length - pruned;
+    const result = { failed: failedIds.length, outcomes, pruned, sent, total: outcomes.length };
 
     if (sent === 0 && failedIds.length > 0) {
         // NOTHING in this message got through, so re-running it wholesale re-sends
@@ -226,8 +263,11 @@ const runRetryIds = async (push: LunoraPush, payload: PushContent, ids: Readonly
  * of them still fail, so the queue's backoff/dead-letter bounds a device that
  * never recovers. Once any recipient recovers the run resolves and reports the
  * rest in `failedIds`, so the narrower retry never re-sends to a device this
- * message already reached.
- * - Gone subscriptions (404/410, FCM `UNREGISTERED`) are pruned by the page and
+ * message already reached. A recipient that turns out to be GONE — a 404/410
+ * receipt, or an id whose row no longer exists at all — counts as `pruned` here
+ * too, never as a failure: there is nothing left to redeliver to, so retrying it
+ * could only burn the queue's budget and dead-letter an unsubscribe.
+ * - Gone subscriptions (Web Push 404/410, FCM's `NOT_FOUND` for a dead token) are pruned by the page and
  * never appear in `failedIds` — an all-`pruned` page is a success, not a
  * failure, as is an empty page.
  */
