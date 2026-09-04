@@ -1621,6 +1621,7 @@ interface RateLimiterLike {
         key?: string;
     }) => Promise<{
         ok: boolean;
+        reason?: string;
         retryAfter: number;
     }>;
 }
