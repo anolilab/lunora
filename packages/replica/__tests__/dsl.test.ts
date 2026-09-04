@@ -462,6 +462,47 @@ describe(MaterializerRuntime, () => {
         expect(handled).toBe(1);
     });
 
+    it("does not call an entry unknown when a materializer already past it handled it", async () => {
+        expect.assertions(3);
+
+        // The scenario per-materializer watermarks exist for (REPLICA-04): one
+        // materializer recovered from a snapshot, a sibling has none and catches
+        // up from 0 over events the first already applied. On that replay the
+        // snapshotted materializer is SKIPPED — it is at or past the seq — so the
+        // only reducer that runs is the lagging one, which declines this type.
+        // "Unknown" means no materializer handled the entry; an entry that was
+        // already applied is not unknown, and `"fail"` must not abort the
+        // catch-up over it.
+        const store = new InMemorySnapshotStore();
+
+        await store.save("handles-inc", { appliedSeq: 1, state: 1 });
+
+        const handlesInc = defineMaterializer({
+            name: "handles-inc",
+            initial: () => 0,
+            handle: (s, e) => (e.type === "inc" ? s + 1 : UNHANDLED),
+        });
+
+        const declinesInc = defineMaterializer({
+            name: "declines-inc",
+            initial: () => 0,
+            handle: (s, e) => (e.type === "other" ? s + 1 : UNHANDLED),
+        });
+
+        const runtime = new MaterializerRuntime([handlesInc, declinesInc], { snapshotStore: store, unknownEventHandling: "fail" });
+
+        await runtime.recoverFromSnapshots();
+
+        expect(runtime.appliedSeq).toBe(0);
+
+        const entries = [{ payload: null, seq: 0, timestamp: 1, type: "inc" }];
+
+        expect(() => runtime.applyEntries(entries)).not.toThrow();
+
+        // The lagging materializer still advanced over the entry it declined.
+        expect(runtime.appliedSeq).toBe(1);
+    });
+
     it("ignores a malformed snapshot with a watermark but no state — replays from 0 rather than skipping events", async () => {
         expect.assertions(4);
 
