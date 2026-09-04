@@ -103,40 +103,11 @@ const raiseNonRetryable = (message: string, cause: unknown, NativeNonRetryableEr
     return convertNonRetryableError(nonRetryable, NativeNonRetryableError);
 };
 
-/**
- * Matches Cloudflare Workflows' "instance already exists" rejection (hoisted).
- *
- * Deliberately separator-agnostic. The local harness cannot pin the exact
- * production text — miniflare's `WorkflowBinding.create` never rejects a
- * duplicate id at all (it calls `stub.init(...)` unconditionally and
- * `Engine.init` returns early for an instance that already has metadata), so
- * the attach branch below is unreachable LOCALLY: in Node and under
- * `wrangler dev`/workerd alike. Production Workflows does reject it, which is
- * the whole reason `createOrAttach` exists — so this is a gap in what the
- * harness can prove, never evidence that the branch is dead code. That makes
- * the *shape* of the message the only thing we can defend, and a
- * `already_exists` / `already-exists` spelling must not read as a transient
- * failure and cost the caller its whole retry budget.
- */
-const DUPLICATE_INSTANCE = /already[\s_-]?exists/iu;
-
-/**
- * Whether a `WorkflowBinding.create()` rejection is a duplicate-instance-id
- * error — the idempotency signal that a *previous* attempt's create already
- * applied — as opposed to a transient or config failure (Workflows service
- * error, instance-creation quota, bad params).
- *
- * `step.do` memoizes a step's RESULT, not its side effects: a spawn body that
- * fails after `create` landed is re-run, and only this rejection means the
- * child is already there to attach to. Every other failure MUST surface, so the
- * durable step retries or fails visibly rather than silently attaching to an
- * unrelated instance.
- *
- * Lives here, in the package that owns the Workflows binding contract, so the
- * fan-out spawn and `@lunora/agent`'s sub-agent/channel dispatch cannot drift
- * apart on what counts as "already exists".
- */
-const isDuplicateInstanceError = (error: unknown): boolean => DUPLICATE_INSTANCE.test(error instanceof Error ? error.message : String(error));
-
 export type { NativeNonRetryableErrorConstructor };
-export { convertNonRetryableError, isDuplicateInstanceError, isNonRetryableError, NonRetryableError, raiseNonRetryable, toNativeNonRetryableError };
+export { convertNonRetryableError, isNonRetryableError, NonRetryableError, raiseNonRetryable, toNativeNonRetryableError };
+// `isDuplicateInstanceError` lives in `shared/` rather than here: `@lunora/runtime`'s
+// scheduler dispatcher makes the same idempotency decision about the same rejection,
+// but reaches the Workflows binding structurally and keeps no runtime dependency on
+// this package. This package still OWNS the predicate as public API — the fan-out
+// spawn and `@lunora/agent`'s sub-agent/channel dispatch import it from here.
+export { isDuplicateInstanceError } from "../../../shared/duplicate-instance";

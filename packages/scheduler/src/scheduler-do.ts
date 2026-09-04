@@ -621,7 +621,10 @@ class SchedulerDO {
             // any other 4xx, or a 5xx is NOT treated as done — the caller
             // (alarm()) keeps the record and routes it through recordRetry()
             // rather than deleting it. Idempotent dispatch keyed by record id
-            // makes a re-fire safe.
+            // makes a re-fire safe: the receiver spends `id` as the shard's
+            // replay-dedup `mutationId` for a function target and as the
+            // WORKFLOW INSTANCE id for a `workflow` target, so neither runs
+            // twice.
             return response.ok;
         } catch {
             return false;
@@ -1449,9 +1452,10 @@ class SchedulerDO {
      * `/dead`. The at-least-once contract `drainRecordGuarded` documents covers
      * a thrown storage op, not a lost instance.
      *
-     * Re-firing is safe: the dispatch carries the record id as
-     * `x-lunora-mutation-id`, which the receiver dedups on, so a job that DID
-     * reach the origin before the crash is not run twice.
+     * Re-firing is safe: the dispatch carries the record id, which the receiver
+     * spends as `x-lunora-mutation-id` for a function target and as the workflow
+     * INSTANCE id for a `workflow` target, so a job that DID reach the origin
+     * before the crash is not run twice either way.
      *
      * Two bounded walks (all `t:` values, then all `id:` headers) rather than a
      * per-header `get`, so the cost is one pass over each prefix.
