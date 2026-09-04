@@ -288,6 +288,21 @@ interface WranglerD1Shape {
 }
 
 /**
+ * Normalise a raw binding array read out of hand-written JSONC: `undefined`
+ * when it is not an array at all, otherwise the array with its nullish entries
+ * dropped.
+ *
+ * `"d1_databases": [null]` passes an `Array.isArray` check, and the placeholder
+ * gate below then dereferenced `entry.database_id` and threw a TypeError out of
+ * a preflight — before `validateWrangler` got to report the malformed config
+ * the user can actually act on. A malformed shape is the validator's error to
+ * report, never a stack trace out of a gate, so the entries are dropped once
+ * here rather than guarded at each reader.
+ */
+const bindingEntries = (value: unknown): unknown[] | undefined =>
+    Array.isArray(value) ? (value as unknown[]).filter((entry) => entry !== null && entry !== undefined) : undefined;
+
+/**
  * Find and parse the project's wrangler.jsonc **in the `--env` view wrangler
  * will deploy**; `undefined` when absent or unparseable.
  *
@@ -324,8 +339,8 @@ const readWranglerShape = (cwd: string, environment?: string): WranglerD1Shape |
     const { containers, d1_databases: databases, vars } = view;
 
     return {
-        containers: Array.isArray(containers) ? (containers as WranglerD1Shape["containers"]) : undefined,
-        d1_databases: Array.isArray(databases) ? (databases as WranglerD1Shape["d1_databases"]) : undefined,
+        containers: bindingEntries(containers) as WranglerD1Shape["containers"],
+        d1_databases: bindingEntries(databases) as WranglerD1Shape["d1_databases"],
         vars: typeof vars === "object" && vars !== null && !Array.isArray(vars) ? (vars as Record<string, unknown>) : undefined,
     };
 };

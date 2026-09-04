@@ -1826,10 +1826,17 @@ export type {
 // same `--env` view wrangler will deploy. Reading the top level there let an
 // env-scoped placeholder / loopback origin ship silently, and falsely blocked
 // the reverse layout.
+//
+// `objectBindingEntries` / `stringEntries` are exported for `reconcile-bindings`,
+// which replays the same hand-edited `migrations` list this validator folds and
+// hit the same raw `TypeError` on a `null` entry. Package-internal only — the
+// `./cloudflare` barrel re-exports by name and deliberately does not list them.
 export {
     mergeWranglerEnvironment,
+    objectBindingEntries,
     REQUIRED_COMPATIBILITY_DATE,
     REQUIRED_FLAG,
+    stringEntries,
     validateWrangler,
     validateWranglerConfig,
     validateWranglerProject,

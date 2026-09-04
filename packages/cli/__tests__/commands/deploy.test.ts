@@ -874,6 +874,39 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             expect(errors.some((line) => line.includes("wrangler d1 create"))).toBe(true);
         });
 
+        // A hand-written `"d1_databases": [null]` type-checks as an array, so the
+        // `Array.isArray` normalisation let it through and the placeholder gate
+        // then dereferenced `entry.database_id` — a TypeError out of a preflight
+        // instead of the validator's report on the malformed config.
+        it("reports the malformed config instead of throwing on a null d1_databases entry", async () => {
+            expect.assertions(3);
+
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
+    "name": "lunora-app",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
+    },
+    "d1_databases": [null]
+}`,
+                "utf8",
+            );
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { errors, logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
+
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(0);
+            // The validator's own report, not a stack trace out of the gate.
+            expect(errors.join(" ")).not.toContain("Cannot read properties");
+        });
+
         it("syncs code-first cron schedules into wrangler.jsonc triggers.crons", async () => {
             expect.assertions(2);
 

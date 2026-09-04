@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -779,6 +779,97 @@ describe("lunora init", () => {
             expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
             // {{name}} is substituted into the app manifest.
             expect(appJson).toContain('"slug": "expo-app"');
+        });
+    });
+
+    describe("scaffold cleanup", () => {
+        // A local template root the test fully controls, so a copy can be made
+        // to fail part-way without touching the real templates.
+        const writeLocalTemplate = (): string => {
+            const root = join(workdir, "local-templates", "tanstack-start-react");
+
+            mkdirSync(root, { recursive: true });
+            writeFileSync(join(root, "a.txt"), "first\n", "utf8");
+            writeFileSync(join(root, "z.txt"), "second\n", "utf8");
+
+            return join(workdir, "local-templates");
+        };
+
+        it("removes a partially-written scaffold when the copy throws part-way", async () => {
+            expect.assertions(2);
+
+            // `copyTemplate` writes sequentially and can throw after earlier
+            // writes (a read error on a later template file here; ENOSPC / EMFILE
+            // in the wild). The exception propagated out of `runInitCommand` with
+            // the half-written target still on disk, and the retry — with the
+            // cause fixed — was then refused with "target directory not empty".
+            const from = writeLocalTemplate();
+
+            chmodSync(join(from, "tanstack-start-react", "z.txt"), 0o000);
+
+            const target = join(workdir, "broken-app");
+
+            try {
+                await expect(
+                    runInitCommand({ cwd: workdir, from, logger: silentLogger(), name: "broken-app", templateType: "tanstack-start-react" }),
+                    // The read failure is surfaced, not swallowed — cleanup runs
+                    // on the way out and the original cause still reaches the user.
+                ).rejects.toThrow(/EACCES|permission denied/iu);
+
+                expect(existsSync(target)).toBe(false);
+            } finally {
+                chmodSync(join(from, "tanstack-start-react", "z.txt"), 0o600);
+            }
+        });
+
+        it("keeps a completed scaffold when something after the copy throws", async () => {
+            expect.assertions(2);
+
+            // The other half of the same guard: once the copy is done the project
+            // is real, so a throw from anything AFTER it (the success logging
+            // here) must abort the command WITHOUT deleting the finished
+            // scaffold. Cleanup covers an interrupted copy, not a completed one.
+            const from = writeLocalTemplate();
+            const logger = {
+                ...silentLogger(),
+                success: () => {
+                    throw new Error("logging blew up");
+                },
+            };
+
+            await expect(runInitCommand({ cwd: workdir, from, logger, name: "kept-app", templateType: "tanstack-start-react" })).rejects.toThrow(
+                /logging blew up/u,
+            );
+
+            expect(existsSync(join(workdir, "kept-app", "a.txt"))).toBe(true);
+        });
+
+        it("refuses a target that is a symlink, without following it", async () => {
+            expect.assertions(3);
+
+            // `existsSync` follows symlinks, so `cwd/<name>` pointing at an empty
+            // directory elsewhere passed the emptiness check and became the
+            // scaffold target — writes landed outside `cwd`, and the cleanup
+            // path (which empties a pre-existing target back out) would delete
+            // files there that this run never wrote.
+            const outside = join(workdir, "outside");
+
+            mkdirSync(outside, { recursive: true });
+            symlinkSync(outside, join(workdir, "linked-app"), "dir");
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: writeLocalTemplate(),
+                logger: silentLogger(),
+                name: "linked-app",
+                templateType: "tanstack-start-react",
+            });
+
+            expect(result.code).toBe(1);
+            // Nothing was written through the link…
+            expect(readdirSync(outside)).toHaveLength(0);
+            // …and the link itself is still the user's to deal with.
+            expect(lstatSync(join(workdir, "linked-app")).isSymbolicLink()).toBe(true);
         });
     });
 

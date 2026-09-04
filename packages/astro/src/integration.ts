@@ -83,8 +83,63 @@ const WITH_LUNORA_SNIPPET = [
  * specifier is followed by `}`/whitespace/`from`, never directly by `(`, so a file
  * that imports the helper but forgets to invoke it is correctly reported as
  * missing the wiring instead of passing on the import alone.
+ *
+ * Run against {@link codeOnly}, never the raw file: a name inside a comment or a
+ * string is not a call, and matching one suppressed the warning for an entry
+ * that composed nothing.
  */
 const WITH_LUNORA_CALL_PATTERN = /\b(?:withLunora|withFrameworkWorker|buildFrameworkWorker)\s*\(/u;
+
+/** `/* … *\/`, non-greedy so it ends at the FIRST `*\/`. */
+const BLOCK_COMMENT = String.raw`\/\*[\s\S]*?\*\/`;
+/** `// …` to end of line. */
+const LINE_COMMENT = String.raw`\/\/[^\n]*`;
+/** `"…"`, honouring backslash escapes and never crossing a newline. */
+const DOUBLE_QUOTED = String.raw`"(?:[^"\\\n]|\\.)*"`;
+/** `'…'`, the same rules as {@link DOUBLE_QUOTED}. */
+const SINGLE_QUOTED = String.raw`'(?:[^'\\\n]|\\.)*'`;
+
+/**
+ * A template literal with NO `${…}` in it (that is what the `\$(?!\{)` guard
+ * costs). One that interpolates is deliberately left alone: its interpolations
+ * are real code, and blanking the whole literal would hide a composition call
+ * written inside one.
+ *
+ * The delimiter is written `\x60` rather than an escaped backtick because
+ * `String.raw` would keep that backslash, and `\`` is not a legal escape in a
+ * unicode-mode pattern.
+ */
+const PLAIN_TEMPLATE = String.raw`\x60(?:[^\x60\\$]|\\.|\$(?!\{))*\x60`;
+
+/**
+ * Comments and string literals, matched left to right in ONE alternation so
+ * whichever construct OPENS first wins: a quote inside a comment is part of that
+ * comment, and a `//` inside a string is part of that string. That ordering is
+ * the whole trick — it is what a hand-rolled mode machine buys you, without the
+ * machine. Assembled from the named parts above rather than written as one
+ * literal, because as a literal it is unreadable.
+ */
+const SKIPPABLE_RE = new RegExp([BLOCK_COMMENT, LINE_COMMENT, DOUBLE_QUOTED, SINGLE_QUOTED, PLAIN_TEMPLATE].join("|"), "gu");
+
+/** Every character except a newline — line structure survives when a span is blanked. */
+const NON_NEWLINE_RE = /[^\n]/gu;
+
+/**
+ * The source with its comments and string literals blanked out, so the call
+ * probe above sees code and only code.
+ *
+ * A scan rather than a parser: this package has no parser dependency and would
+ * not add one for a build-time warning, and the check only has to answer "is
+ * this identifier followed by `(` somewhere that executes".
+ *
+ * Spans are replaced with spaces rather than deleted, so nothing that was
+ * separated becomes adjacent.
+ *
+ * Known ceiling: a template literal that BOTH interpolates and mentions one of
+ * the names in its string part still reads as a call. Narrowing that needs real
+ * parsing, and this check only drives a warning.
+ */
+const codeOnly = (source: string): string => source.replaceAll(SKIPPABLE_RE, (span) => span.replaceAll(NON_NEWLINE_RE, " "));
 
 /** Options for the `lunora` integration. */
 interface LunoraIntegrationOptions {
@@ -194,7 +249,7 @@ const lunora = (options: LunoraIntegrationOptions = {}): AstroIntegrationLike =>
                     return;
                 }
 
-                if (!WITH_LUNORA_CALL_PATTERN.test(source)) {
+                if (!WITH_LUNORA_CALL_PATTERN.test(codeOnly(source))) {
                     warn(
                         `@lunora/astro: couldn't find a \`withLunora(...)\` or \`.buildFrameworkWorker(...)\` call in the server entry "${serverEntry}" — \`/_lunora/*\` (Lunora realtime) will be unrouted and subscriptions will silently 404. Compose the Astro worker:\n\n${WITH_LUNORA_SNIPPET}`,
                     );

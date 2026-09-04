@@ -559,6 +559,18 @@ const failEmptyScaffold = (logger: Logger, target: string, source: string): Init
     return { code: 1, files: [], target };
 };
 
+/**
+ * The checklist header shown once every scaffold TASK has finished.
+ *
+ * Deliberately a statement of what the tasks did, not a verdict on the run: the
+ * checklist flips to it the moment the copy task completes, which is BEFORE the
+ * empty-scaffold check below can fail the command. Claiming "Project
+ * initialized!" here printed a success over a run that then reported an error
+ * and exited 1. The one success line is {@link logScaffoldSuccess}, and it runs
+ * only after that check passes.
+ */
+const SCAFFOLD_TASKS_DONE = "Template files copied.";
+
 const logScaffoldSuccess = (logger: Logger, written: ReadonlyArray<string>, target: string): void => {
     // Cosmetic blank line above the success so it isn't glued to the task
     // checklist — TTY only, so piped / JSON output stays clean.
@@ -793,7 +805,14 @@ const maybeOfferInstall = async (options: InitCommandOptions, target: string): P
     return manager;
 };
 
-const scaffoldFromLocal = async (fromRoot: string, templateType: Template, target: string, name: string, logger: Logger): Promise<InitCommandResult> => {
+const scaffoldFromLocal = async (
+    fromRoot: string,
+    templateType: Template,
+    target: string,
+    name: string,
+    logger: Logger,
+    markComplete: () => void,
+): Promise<InitCommandResult> => {
     const templateDirectory = join(fromRoot, templateType);
 
     if (!existsSync(templateDirectory)) {
@@ -808,6 +827,10 @@ const scaffoldFromLocal = async (fromRoot: string, templateType: Template, targe
         return failEmptyScaffold(logger, target, templateDirectory);
     }
 
+    // The files are on disk: the project is real from here, so nothing after
+    // this line may delete it. A throw from the logging below used to reach the
+    // caller's cleanup with the target still tracked.
+    markComplete();
     logScaffoldSuccess(logger, written, target);
 
     return { code: 0, files: written, target };
@@ -822,13 +845,14 @@ const scaffoldFromLocal = async (fromRoot: string, templateType: Template, targe
  */
 const scaffoldFromRemote = async (options: {
     logger: Logger;
+    markComplete: () => void;
     name: string;
     ref: string | undefined;
     source: string | undefined;
     target: string;
     templateType: Template;
 }): Promise<InitCommandResult> => {
-    const { logger, name, ref, source, target, templateType } = options;
+    const { logger, markComplete, name, ref, source, target, templateType } = options;
     const stagingRoot = mkdtempSync(join(tmpdir(), "lunora-init-fetch-"));
     const stagingDirectory = join(stagingRoot, "template");
 
@@ -867,12 +891,16 @@ const scaffoldFromRemote = async (options: {
                     },
                 },
             ],
-            { end: "Project initialized!", start: "Project initializing…" },
+            { end: SCAFFOLD_TASKS_DONE, start: "Project initializing…" },
         );
 
         if (written.length === 0) {
             return failEmptyScaffold(logger, target, downloaded?.source ?? remote);
         }
+
+        // Copy done — see the same call in `scaffoldFromLocal`. Everything below
+        // is reporting, and reporting must not be able to delete the project.
+        markComplete();
 
         const staged = collectFiles(stagingDirectory);
 
@@ -934,11 +962,12 @@ const renameCreateViteDotfiles = (directory: string): void => {
 const scaffoldViteOverlay = async (options: {
     framework: OverlayFramework;
     logger: Logger;
+    markComplete: () => void;
     name: string;
     overlayBaseFrom: string | undefined;
     target: string;
 }): Promise<InitCommandResult> => {
-    const { framework, logger, name, overlayBaseFrom, target } = options;
+    const { framework, logger, markComplete, name, overlayBaseFrom, target } = options;
     const adapter = ADAPTERS[framework];
     const stagingRoot = mkdtempSync(join(tmpdir(), "lunora-vite-base-"));
 
@@ -990,9 +1019,11 @@ const scaffoldViteOverlay = async (options: {
                     },
                 },
             ],
-            { end: "Project initialized!", start: "Project initializing…" },
+            { end: SCAFFOLD_TASKS_DONE, start: "Project initializing…" },
         );
 
+        // Copy done — see the same call in `scaffoldFromLocal`.
+        markComplete();
         logScaffoldSuccess(logger, written, target);
 
         return { code: 0, files: [...collectFiles(target)], target };
@@ -1486,7 +1517,13 @@ const nonInteractiveInitError = (options: InitCommandOptions): string | undefine
  * fetches a stock create-vite base (over the network unless `overlayBaseFrom` is
  * set) and applies the Lunora layer on top.
  */
-const scaffoldOverlayPath = async (options: InitCommandOptions, framework: string, name: string, target: string): Promise<InitCommandResult> => {
+const scaffoldOverlayPath = async (
+    options: InitCommandOptions,
+    framework: string,
+    name: string,
+    target: string,
+    markComplete: () => void,
+): Promise<InitCommandResult> => {
     if (!isOverlayFramework(framework)) {
         options.logger.error(`init: unknown framework "${framework}". Supported overlays: ${Object.keys(ADAPTERS).join(", ")}.`);
 
@@ -1499,7 +1536,7 @@ const scaffoldOverlayPath = async (options: InitCommandOptions, framework: strin
 
     mkdirSync(target, { recursive: true });
 
-    return scaffoldViteOverlay({ framework, logger: options.logger, name, overlayBaseFrom: options.overlayBaseFrom, target });
+    return scaffoldViteOverlay({ framework, logger: options.logger, markComplete, name, overlayBaseFrom: options.overlayBaseFrom, target });
 };
 
 /**
@@ -1507,9 +1544,15 @@ const scaffoldOverlayPath = async (options: InitCommandOptions, framework: strin
  * remote template with giget — verifying connectivity + the ref first so a bad
  * `--ref`/`--source` or being offline fails fast and clean.
  */
-const scaffoldTemplatePath = async (options: InitCommandOptions, templateType: Template, name: string, target: string): Promise<InitCommandResult> => {
+const scaffoldTemplatePath = async (
+    options: InitCommandOptions,
+    templateType: Template,
+    name: string,
+    target: string,
+    markComplete: () => void,
+): Promise<InitCommandResult> => {
     if (options.from !== undefined) {
-        return await scaffoldFromLocal(options.from, templateType, target, name, options.logger);
+        return await scaffoldFromLocal(options.from, templateType, target, name, options.logger, markComplete);
     }
 
     if (options.source !== undefined && options.source.length > 0 && !options.allowUnsafeSource && !isSafeSource(options.source)) {
@@ -1525,14 +1568,10 @@ const scaffoldTemplatePath = async (options: InitCommandOptions, templateType: T
         return { code: 1, files: [], target };
     }
 
-    return scaffoldFromRemote({ logger: options.logger, name, ref: options.ref, source: options.source, target, templateType });
+    return scaffoldFromRemote({ logger: options.logger, markComplete, name, ref: options.ref, source: options.source, target, templateType });
 };
 
-const scaffoldNewProject = async (
-    options: InitCommandOptions,
-    cwd: string,
-    recordTarget: (target: string, preExisted: boolean) => void,
-): Promise<InitCommandResult> => {
+const scaffoldNewProject = async (options: InitCommandOptions, cwd: string, tracker: ScaffoldTracker): Promise<InitCommandResult> => {
     // Moonrise header, then create-astro-style linear questions: each prompt shows
     // its badge + question and collapses to a dimmed transcript line on submit.
     await tuiMoonrise("realtime backend on Cloudflare Workers + Durable Objects");
@@ -1592,7 +1631,22 @@ const scaffoldNewProject = async (
     }
 
     const target = resolve(cwd, name);
-    const targetPreExisted = existsSync(target);
+    // `lstat`, not `existsSync`/`stat`: those FOLLOW a symlink, so a
+    // `cwd/<name>` pointing at an empty directory elsewhere passed the
+    // emptiness check below and became the scaffold target — the writes landed
+    // outside `cwd`, and `resetPartialScaffold` (which empties a pre-existing
+    // target back out) would then delete whatever else lives there, files this
+    // run never wrote. Refuse the link instead of resolving it: the user asked
+    // to scaffold into `<name>`, and only they can say what the link is for.
+    const existing = lstatSync(target, { throwIfNoEntry: false });
+
+    if (existing?.isSymbolicLink() === true) {
+        options.logger.error(`init: refusing to scaffold into "${target}" — it is a symlink. Remove it, or scaffold into a different directory name.`);
+
+        return { code: 1, files: [], target };
+    }
+
+    const targetPreExisted = existing !== undefined;
 
     if (targetPreExisted) {
         const entries = readdirSync(target);
@@ -1618,17 +1672,34 @@ const scaffoldNewProject = async (
     // From here we commit to writing into `target`. Record it so a Ctrl-C abort
     // can reset it (a dir we created is removed; a pre-existing empty dir is
     // emptied back out) — see `resetPartialScaffold`.
-    recordTarget(target, targetPreExisted);
+    tracker.record(target, targetPreExisted);
 
     return choice.kind === "overlay"
-        ? scaffoldOverlayPath(options, choice.framework, name, target)
-        : scaffoldTemplatePath(options, choice.templateType, name, target);
+        ? scaffoldOverlayPath(options, choice.framework, name, target, tracker.complete)
+        : scaffoldTemplatePath(options, choice.templateType, name, target, tracker.complete);
 };
 
 /** Tracks the project directory a `lunora init` run creates, so a Ctrl-C abort can reset it. */
 interface ScaffoldCleanup {
     target?: string;
     targetPreExisted?: boolean;
+}
+
+/**
+ * How a scaffold path reports its progress to the cleanup bookkeeping.
+ *
+ * The two calls bracket the window in which the target is disposable:
+ * `record` opens it (we are about to write), `complete` closes it (the files
+ * are on disk, the project is real). Outside that window
+ * {@link resetPartialScaffold} must do nothing — before it there is nothing of
+ * ours to remove, and after it removal would destroy a finished project over,
+ * say, a logging failure.
+ */
+interface ScaffoldTracker {
+    /** The copy finished — stop tracking the target, it is a real project now. */
+    complete: () => void;
+    /** About to write into `target` — track it so a failure or Ctrl-C can reset it. */
+    record: (target: string, preExisted: boolean) => void;
 }
 
 /**
@@ -1659,13 +1730,9 @@ const resetPartialScaffold = (cleanup: ScaffoldCleanup, logger: Logger): void =>
 };
 
 /** Run the scaffold step itself: in-place config, a `--dry-run` no-op, or a fresh-directory scaffold. */
-const runScaffoldStep = async (
-    options: InitCommandOptions,
-    cwd: string,
-    recordTarget: (target: string, preExisted: boolean) => void,
-): Promise<InitCommandResult> => {
+const runScaffoldStep = async (options: InitCommandOptions, cwd: string, tracker: ScaffoldTracker): Promise<InitCommandResult> => {
     if (options.inPlace !== true) {
-        return scaffoldNewProject(options, cwd, recordTarget);
+        return scaffoldNewProject(options, cwd, tracker);
     }
 
     if (options.dryRun === true) {
@@ -1747,9 +1814,14 @@ const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandR
     let result: InitCommandResult;
 
     try {
-        result = await runScaffoldStep(options, cwd, (target, preExisted) => {
-            cleanup.target = target;
-            cleanup.targetPreExisted = preExisted;
+        result = await runScaffoldStep(options, cwd, {
+            complete: () => {
+                cleanup.target = undefined;
+            },
+            record: (target, preExisted) => {
+                cleanup.target = target;
+                cleanup.targetPreExisted = preExisted;
+            },
         });
 
         if (result.code === 0 && result.target !== "") {
@@ -1787,6 +1859,18 @@ const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandR
 
             return { code: 130, files: [], target: "" };
         }
+
+        // The scaffold threw mid-write — `copyTemplate` writes sequentially, so
+        // an fs failure (ENOSPC, EMFILE, an unreadable template file) lands
+        // after earlier files are already on disk. That partial target used to
+        // survive the rethrow, and the retry — with the cause fixed — was
+        // refused with "target directory not empty".
+        //
+        // Safe to run unconditionally: `complete` clears `cleanup.target` the
+        // moment the copy finishes, so a throw from anything after it (the
+        // provenance line, the success log, the post-scaffold offers) finds
+        // nothing tracked and leaves the finished project alone.
+        resetPartialScaffold(cleanup, options.logger);
 
         throw error;
     }

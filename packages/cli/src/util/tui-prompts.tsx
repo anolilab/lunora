@@ -944,6 +944,13 @@ const TaskRow = ({ label, status }: { label: string; status: TaskStatus }): Reac
 interface TasksViewProps<T> {
     end: string;
     onSettle: (results: T[], failure: unknown) => void;
+
+    /**
+     * Called as the task chain is kicked off, so the caller knows a settlement
+     * is actually coming. Without it a caller cannot tell "still running" from
+     * "never started" — and only the first of those is worth waiting for.
+     */
+    onStart: () => void;
     start: string;
     tasks: ReadonlyArray<TaskSpec<T>>;
 }
@@ -1042,11 +1049,15 @@ const startTasks = <T,>(
     };
 };
 
-const TasksView = <T,>({ end, onSettle, start, tasks }: TasksViewProps<T>): ReactElement => {
+const TasksView = <T,>({ end, onSettle, onStart, start, tasks }: TasksViewProps<T>): ReactElement => {
     const { exit } = useApp();
     const [statuses, setStatuses] = useState<TaskStatus[]>(() => tasks.map(() => "pending"));
 
-    useEffect(() => startTasks(tasks, setStatuses, onSettle, exit), [exit, onSettle, tasks]);
+    useEffect(() => {
+        onStart();
+
+        return startTasks(tasks, setStatuses, onSettle, exit);
+    }, [exit, onSettle, onStart, tasks]);
 
     const allDone = statuses.length > 0 && statuses.every((status) => status === "done");
 
@@ -1094,11 +1105,16 @@ const tuiTasks = async <T,>(tasks: ReadonlyArray<TaskSpec<T>>, labels: { end: st
     let results: T[] = [];
     let failure: unknown;
     let markSettled = (): void => {};
-    // Resolves once the task chain has stopped — including after a Ctrl-C, where
-    // the render throws immediately but the in-flight task is still writing.
-    const settled = new Promise<void>((resolve) => {
-        markSettled = resolve;
-    });
+    // Armed by `onStart`, and only then: resolves once the task chain has
+    // stopped — including after a Ctrl-C, where the render throws immediately
+    // but the in-flight task is still writing.
+    //
+    // Left `undefined` while no chain has started. `@visulima/tui` attaches its
+    // Ctrl-C listener in a LAYOUT effect while `TasksView` starts the chain in a
+    // PASSIVE one, so an interrupt in between ends the app with nothing ever
+    // calling `onSettle` — and the unconditional wait below then never resolved,
+    // hanging the CLI instead of surfacing the interrupt.
+    let settled: Promise<void> | undefined;
 
     try {
         await runInkApp(
@@ -1109,6 +1125,11 @@ const tuiTasks = async <T,>(tasks: ReadonlyArray<TaskSpec<T>>, labels: { end: st
                     failure = settledFailure;
                     markSettled();
                 }}
+                onStart={() => {
+                    settled = new Promise<void>((resolve) => {
+                        markSettled = resolve;
+                    });
+                }}
                 start={labels.start}
                 tasks={tasks}
             />,
@@ -1118,6 +1139,9 @@ const tuiTasks = async <T,>(tasks: ReadonlyArray<TaskSpec<T>>, labels: { end: st
         // running cannot be interrupted — so wait for it before letting the
         // caller undo what it wrote. Without this, `lunora init` removed the
         // partially-created project and the still-running copy re-created it.
+        //
+        // `await undefined` when no chain ever started: nothing is writing, so
+        // there is nothing to wait for.
         await settled;
 
         throw error;
