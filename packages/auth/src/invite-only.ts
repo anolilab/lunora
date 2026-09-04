@@ -27,34 +27,55 @@
  *
  * // …then, from your own admin-authorized code:
  * const invite = await createSignUpInvitation(auth, { email: "ada@example.com" });
- * await sendMail(invite.email, `You can now sign up: https://app.example/sign-up?email=${encodeURIComponent(invite.email)}`);
+ * const link = `https://app.example/sign-up?email=${encodeURIComponent(invite.email)}&invite=${invite.token}`;
+ *
+ * await sendMail(invite.email, `You can now sign up: ${link}`);
  * ```
+ *
+ * `invite.token` is the only time that value exists in the clear — see the
+ * security section below. `@lunora/auth-ui` reads both parameters off the URL and
+ * submits the token with the form.
  *
  * Nothing signs up before that first invitation exists, including you — see
  * {@link InviteOnlyOptions.allowFirstUser}. Leave `emailAndPassword.disableSignUp`
  * **off**: the invitee still uses the ordinary sign-up form, and closing it would
- * leave them nothing to submit. The `?email=` parameter is read by
- * `lunora/auth-ui`'s sign-up prefill.
+ * leave them nothing to submit.
  *
- * # Security — what an invitation is, and what it is not
+ * # Security — two checks, because the paths differ
  *
- * An invitation is keyed by email address and nothing else. There is no secret
- * token, because this gate runs inside `user.create.before`, which is handed the
- * row about to be written and never the request that asked for it.
+ * An invitation carries a **secret token**: 256 CSPRNG bits, handed back in the
+ * clear exactly once when the invitation is issued, stored only as a SHA-256.
+ * The invitee brings it back in the sign-up link (`?invite=…`).
  *
- * So anyone who learns an invited address can spend that seat.
- * `requireEmailVerification` does **not** close this, and it is worth being exact
- * about what it does: better-auth's `/sign-up/email` writes the user row first and
- * mails the verification token afterwards, so an attacker who signs up as the
- * invited address still creates a real account with their own password, still
- * burns the invitation, and still leaves the invitee locked out of an address that
- * is now taken. What verification buys is that the attacker holds no session until
- * someone clicks the link — and the link lands in the invitee's inbox, where she is
- * expecting it. Recovery is `AuthAdmin.removeUser` plus a fresh invitation.
+ * The token is checked on `/sign-up/email` and nowhere else, which is the whole
+ * design rather than an oversight. Every other path that mints an account has
+ * already proved the person controls the address before the row is written: an
+ * OAuth callback carries a provider-verified email, and magic-link and email-OTP
+ * only fire for whoever is holding the mailbox. Password sign-up is the one place
+ * where anyone may claim any address, so it is the one place a shared secret adds
+ * anything. So:
  *
- * Treat an invited address as semi-secret, prefer providers that verify ownership
- * before the account is usable, and do not use this where the seat itself is
- * valuable enough to guess for.
+ * - `databaseHooks.user.create.before` — the universal backstop. An unspent,
+ *   unexpired invitation must exist for the address, whatever created the row.
+ * - `hooks.before` on `/sign-up/email` — additionally requires the token.
+ *
+ * Without the token this would be guessable in bulk, and that is not theoretical:
+ * the common case is inviting a team, where addresses are `first.last@company`.
+ * The rejection is also deliberately uniform — missing token, wrong token,
+ * expired invitation and never-invited address all answer
+ * `SIGN_UP_INVITE_INVALID` with one message, so the form cannot be used to sift
+ * a directory for which addresses are on the list.
+ *
+ * What the token does **not** do is make an invitation single-use against a
+ * simultaneous request, or survive being forwarded: whoever holds the link can
+ * spend the seat, so treat it as a bearer credential and send it to the invitee
+ * rather than to a shared inbox. `requireEmailVerification` remains worth setting
+ * — better-auth writes the user row before it mails the verification token, so
+ * verification is what stops a spent invitation from becoming a usable session.
+ *
+ * A row with no `tokenHash` — one an OAuth-only deployment never needed, or a
+ * leftover from before tokens — cannot satisfy password sign-up at all. There is
+ * nothing to present that matches. Re-invite to mint one.
  *
  * # What it refuses that you may not expect
  *
@@ -75,7 +96,7 @@
 import { defineErrorCodes } from "@better-auth/core/utils/error-codes";
 import { LunoraError } from "@lunora/errors";
 import type { BetterAuthOptions, BetterAuthPlugin } from "better-auth";
-import { APIError } from "better-auth/api";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 
 import type { LunoraAuth } from "./create-auth";
 
@@ -102,11 +123,23 @@ const MAX_LISTED = 500;
  * for the same reason.
  */
 const ERROR_CODES = defineErrorCodes({
+    // Deliberately one code and one message for every way a token can fail —
+    // missing, wrong, expired, or for an address nobody invited. Distinguishing
+    // them would turn the sign-up form back into the oracle the token exists to
+    // close: "wrong token" tells you the address IS invited.
+    SIGN_UP_INVITE_INVALID: "That sign-up invitation is not valid. Ask an administrator for a new invitation link.",
     // Sentence case: `@lunora/auth-ui`'s `mapAuthError` renders a server message
     // verbatim in the sign-up card's banner, beside better-auth's own
     // ("Invalid email or password").
     SIGN_UP_INVITE_REQUIRED: "Sign-up is invite-only — ask an administrator for an invitation.",
 });
+
+/**
+ * Bytes of entropy per invitation token. 256 bits, from the platform CSPRNG — a
+ * token is the only thing standing between a guessable address and its seat, so
+ * this is not a place to be clever about length.
+ */
+const TOKEN_BYTES = 32;
 
 /** One pending or spent sign-up invitation. */
 interface SignUpInvitation {
@@ -119,6 +152,17 @@ interface SignUpInvitation {
     id: string;
     /** Free-form attribution (a user id, an operator name); never read by the gate. */
     invitedBy: null | string;
+}
+
+/**
+ * What {@link createSignUpInvitation} hands back: the stored row plus the one
+ * and only sight of the plaintext `token`. Nothing reads it back afterwards —
+ * the database holds a SHA-256 of it — so an invitation link that is lost is
+ * reissued, not recovered.
+ */
+interface IssuedSignUpInvitation extends SignUpInvitation {
+    /** Put this in the sign-up link as `?invite=…`. Never stored, never logged, never listed. */
+    token: string;
 }
 
 /** Options for {@link inviteOnly}. */
@@ -177,6 +221,52 @@ const toInvitation = (row: Record<string, unknown>): SignUpInvitation => {
         // eslint-disable-next-line unicorn/no-null -- ditto: the column is nullable.
         invitedBy: typeof row["invitedBy"] === "string" ? row["invitedBy"] : null,
     };
+};
+
+/**
+ * A fresh invitation token, URL-safe so it survives an email client, a query
+ * string, and a copy-paste. Base64url of {@link TOKEN_BYTES} CSPRNG bytes; no
+ * dependency, and `crypto.getRandomValues` is present on workerd and Node alike.
+ */
+const mintToken = (): string =>
+    btoa(String.fromCodePoint(...crypto.getRandomValues(new Uint8Array(TOKEN_BYTES))))
+        .replaceAll("+", "-")
+        .replaceAll("/", "_")
+        .replaceAll("=", "");
+
+/**
+ * SHA-256 of a token, hex. **Only the hash is stored.** A leaked database — a
+ * backup, a log of a `SELECT *`, the studio's own table browser — then yields
+ * nothing usable, which is why the plaintext is returned exactly once at issue
+ * time and never again.
+ *
+ * No salt and no KDF on purpose: this is a 256-bit random value, not a password,
+ * so there is nothing to brute-force and nothing for a rainbow table to hold.
+ */
+const hashToken = async (token: string): Promise<string> => {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+};
+
+/**
+ * Compare two hex digests without leaking where they diverge. Length is checked
+ * first and is not secret (every digest is the same length), then every
+ * remaining character is examined whatever the earlier ones said.
+ */
+const digestsMatch = (a: string, b: string): boolean => {
+    if (a.length !== b.length) {
+        return false;
+    }
+
+    let difference = 0;
+
+    for (let index = 0; index < a.length; index += 1) {
+        // eslint-disable-next-line no-bitwise -- accumulating differences without branching is the point.
+        difference |= (a.codePointAt(index) ?? 0) ^ (b.codePointAt(index) ?? 0);
+    }
+
+    return difference === 0;
 };
 
 /** The address an invitation is matched on: trimmed and lowercased, as better-auth stores `user.email`. */
@@ -241,21 +331,100 @@ const warnIfVerificationOff = (options: BetterAuthOptions): void => {
  * declarations and one that fails in the bundler alone.
  */
 const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
-    const allowFirstUser = options.allowFirstUser ?? false;
+    // The bootstrap check is a `COUNT(*)` over `user`, and it runs on every
+    // *uninvited* attempt — an attacker's lever. It can only ever go from true to
+    // false (a database does not lose its users), so once one exists stop asking.
+    //
+    // Shared by both hooks below on purpose: if the route hook demanded a token
+    // while the bootstrap window was open, `allowFirstUser` would be silently
+    // inert for password sign-up — which is the only way most deployments would
+    // ever use it.
+    let mayBootstrap = options.allowFirstUser ?? false;
+
+    /** Whether this request falls inside the one-account bootstrap window. Closes it for good on the first miss. */
+    const inBootstrapWindow = async (adapter: AuthAdapter): Promise<boolean> => {
+        if (!mayBootstrap) {
+            return false;
+        }
+
+        if ((await adapter.count({ model: "user" })) === 0) {
+            return true;
+        }
+
+        mayBootstrap = false;
+
+        return false;
+    };
 
     return {
         $ERROR_CODES: ERROR_CODES,
+
+        /**
+         * The token check, on `/sign-up/email` and nowhere else.
+         *
+         * That is not an arbitrary scope. Every other path that mints an account
+         * has already proved the person controls the address before the row is
+         * written — an OAuth callback carries a provider-verified email, magic
+         * link and email-OTP only fire for someone holding the mailbox. Password
+         * sign-up is the one place where anyone may claim any address, so it is
+         * the one place a shared secret adds something.
+         *
+         * This runs before the route, so a bad token means no user row at all,
+         * and it runs *in addition to* the `user.create.before` gate below —
+         * which stays the universal backstop for the paths that never present a
+         * token.
+         */
+        hooks: {
+            before: [
+                {
+                    handler: createAuthMiddleware(async (context) => {
+                        const body = (context.body ?? {}) as { email?: unknown; inviteToken?: unknown };
+                        const email = typeof body.email === "string" ? normalizeEmail(body.email) : "";
+                        const presented = typeof body.inviteToken === "string" ? body.inviteToken : "";
+
+                        // One rejection for every failure below, so the response
+                        // cannot be read as "this address is on the list".
+                        const refuse = (): never => {
+                            throw new APIError("BAD_REQUEST", ERROR_CODES.SIGN_UP_INVITE_INVALID);
+                        };
+
+                        if (email === "") {
+                            refuse();
+                        }
+
+                        if (await inBootstrapWindow(context.context.adapter)) {
+                            return;
+                        }
+
+                        if (presented === "") {
+                            refuse();
+                        }
+
+                        const row = await context.context.adapter.findOne<Record<string, unknown>>({
+                            model: INVITATION_MODEL,
+                            where: [{ field: "email", value: email }],
+                        });
+
+                        const stored = row === null ? undefined : row["tokenHash"];
+
+                        // Hash the presented token even when there is nothing to
+                        // compare it against, so a missing invitation and a wrong
+                        // token cost the same.
+                        const presentedHash = await hashToken(presented);
+
+                        if (typeof stored !== "string" || !digestsMatch(stored, presentedHash)) {
+                            refuse();
+                        }
+                    }),
+                    matcher: (context) => context.path === "/sign-up/email",
+                },
+            ],
+        },
         id: "lunora-invite-only",
         init: (context) => {
             warnIfVerificationOff(context.options);
 
             const { adapter } = context;
-
-            // The bootstrap check is a `COUNT(*)` over `user`, and it runs on every
-            // *uninvited* attempt — an attacker's lever. It can only ever go from
-            // true to false (a database does not lose its users), so once one exists
-            // stop asking.
-            let mayBootstrap = allowFirstUser;
 
             const before: UserCreateBefore = async (user) => {
                 const email = emailOf(user);
@@ -264,12 +433,8 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
                     return;
                 }
 
-                if (mayBootstrap) {
-                    if ((await adapter.count({ model: "user" })) === 0) {
-                        return;
-                    }
-
-                    mayBootstrap = false;
+                if (await inBootstrapWindow(adapter)) {
+                    return;
                 }
 
                 throw new APIError("BAD_REQUEST", ERROR_CODES.SIGN_UP_INVITE_REQUIRED);
@@ -296,6 +461,12 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
             [INVITATION_MODEL]: {
                 fields: {
                     acceptedAt: { required: false, type: "date" },
+                    // Nullable because a row can outlive the token that made it —
+                    // and because a deployment that only signs up through OAuth
+                    // never needs one. The password path treats "no hash" exactly
+                    // like a wrong hash: there is nothing to present, so nothing
+                    // matches.
+                    tokenHash: { required: false, type: "string" },
                     createdAt: { defaultValue: () => new Date(), required: true, type: "date" },
                     email: { required: true, type: "string", unique: true },
                     expiresAt: { required: true, type: "date" },
@@ -320,8 +491,15 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
  * Nothing prunes the table — a spent or expired row stays until you delete it with
  * {@link revokeSignUpInvitation}, which is also what keeps it a record of who was
  * let in.
+ *
+ * Each call mints a **new token** and returns it in the clear, once. Only its
+ * SHA-256 is stored, so re-inviting an address invalidates the previous link, and
+ * a link that was never delivered is reissued rather than looked up.
  */
-const createSignUpInvitation = async (auth: LunoraAuth, input: { email: string; expiresInSeconds?: number; invitedBy?: string }): Promise<SignUpInvitation> => {
+const createSignUpInvitation = async (
+    auth: LunoraAuth,
+    input: { email: string; expiresInSeconds?: number; invitedBy?: string },
+): Promise<IssuedSignUpInvitation> => {
     const email = normalizeEmail(input.email);
 
     if (!looksLikeEmail(email)) {
@@ -335,6 +513,8 @@ const createSignUpInvitation = async (auth: LunoraAuth, input: { email: string; 
     }
 
     const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
+    const token = mintToken();
+    const tokenHash = await hashToken(token);
     // eslint-disable-next-line unicorn/no-null -- clearing a prior acceptance needs an explicit null; `undefined` would leave the old value.
     const invitedBy = input.invitedBy ?? null;
     const context = await auth.$context;
@@ -343,20 +523,23 @@ const createSignUpInvitation = async (auth: LunoraAuth, input: { email: string; 
     /** Re-open the existing row. Also the recovery path when a concurrent insert won the unique index. */
     const refresh = async (): Promise<null | Record<string, unknown>> =>
         // eslint-disable-next-line unicorn/no-null -- see above.
-        context.adapter.update<Record<string, unknown>>({ model: INVITATION_MODEL, update: { acceptedAt: null, expiresAt, invitedBy }, where });
+        context.adapter.update<Record<string, unknown>>({ model: INVITATION_MODEL, update: { acceptedAt: null, expiresAt, invitedBy, tokenHash }, where });
 
     if (await context.adapter.findOne({ model: INVITATION_MODEL, where })) {
         const updated = await refresh();
 
         if (updated) {
-            return toInvitation(updated);
+            return { ...toInvitation(updated), token };
         }
     }
 
     try {
-        return toInvitation(
-            await context.adapter.create<Record<string, unknown>>({ data: { createdAt: new Date(), email, expiresAt, invitedBy }, model: INVITATION_MODEL }),
-        );
+        const created = await context.adapter.create<Record<string, unknown>>({
+            data: { createdAt: new Date(), email, expiresAt, invitedBy, tokenHash },
+            model: INVITATION_MODEL,
+        });
+
+        return { ...toInvitation(created), token };
     } catch (error) {
         // `email` is unique, so a concurrent invite for the same new address loses
         // this insert with a backend-specific constraint error. Re-open the row the
@@ -368,7 +551,7 @@ const createSignUpInvitation = async (auth: LunoraAuth, input: { email: string; 
             throw error;
         }
 
-        return toInvitation(updated);
+        return { ...toInvitation(updated), token };
     }
 };
 
@@ -451,5 +634,5 @@ const pruneSignUpInvitations = async (auth: LunoraAuth, options: { limit?: numbe
     return dead.length;
 };
 
-export type { InviteOnlyOptions, SignUpInvitation };
+export type { InviteOnlyOptions, IssuedSignUpInvitation, SignUpInvitation };
 export { createSignUpInvitation, inviteOnly, listSignUpInvitations, pruneSignUpInvitations, revokeSignUpInvitation };

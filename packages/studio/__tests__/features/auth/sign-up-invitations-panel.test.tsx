@@ -64,6 +64,27 @@ describe("signUpInvitationsPanel", () => {
         });
     });
 
+    it("shows the one-time link when the server returns a token", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient();
+
+        mock.listAuthSignUpInvitations.mockResolvedValue({ rows: [], total: 0 });
+        mock.createAuthSignUpInvitation.mockResolvedValue({ email: "ada@example.com", id: "1", token: "tok_secret" });
+
+        render(renderPanel(mock));
+
+        fireEvent.change(screen.getByTestId("sign-up-invitation-email"), { target: { value: "ada@example.com" } });
+        fireEvent.click(screen.getByTestId("sign-up-invitation-submit"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId<HTMLInputElement>("sign-up-invitation-link").value).toContain("invite=tok_secret");
+        });
+
+        // The address rides along so the invitee lands on a prefilled form.
+        expect(screen.getByTestId<HTMLInputElement>("sign-up-invitation-link").value).toContain("email=ada%40example.com");
+    });
+
     it("surfaces a rejected invite instead of silently clearing the field", async () => {
         expect.assertions(2);
 

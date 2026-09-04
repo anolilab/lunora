@@ -501,6 +501,7 @@ interface AuthSignUpInvitation {
     expiresAt?: AuthTimestamp;
     id: string;
     invitedBy?: null | string;
+    token?: string;
 }
 ```
 
@@ -678,6 +679,14 @@ interface ImpersonationResult {
 ```ts
 interface InviteOnlyOptions {
     allowFirstUser?: boolean;
+}
+```
+
+### `IssuedSignUpInvitation` (interface)
+
+```ts
+interface IssuedSignUpInvitation extends SignUpInvitation {
+    token: string;
 }
 ```
 
@@ -931,7 +940,7 @@ const createSignUpInvitation: (auth: LunoraAuth, input: {
     email: string;
     expiresInSeconds?: number;
     invitedBy?: string;
-}) => Promise<SignUpInvitation>;
+}) => Promise<IssuedSignUpInvitation>;
 ```
 
 ### `createSqlAuthStore` (const)
@@ -1217,6 +1226,10 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 ## `@lunora/auth/plugins`
 
 ### `InviteOnlyOptions` (interface)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `IssuedSignUpInvitation` (interface)
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
 

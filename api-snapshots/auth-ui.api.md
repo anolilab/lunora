@@ -7930,9 +7930,11 @@ const createSignUpController = (context: ControllerContext): FormController<Sign
     },
     sessionChanging: true,
     submit: async (values, context_) => {
+        const inviteToken = queryParameter("invite");
         assertOk(await context_.authClient.signUp.email({
             callbackURL: context_.redirects.afterSignIn,
             email: values.email.trim(),
+            ...(inviteToken === undefined ? {} : { inviteToken }),
             name: values.name.trim(),
             password: values.password,
         }));

@@ -54,6 +54,10 @@ const SignUpInvitationsPanel = (): ReactElement => {
     const t = useT();
     const [email, setEmail] = useState("");
     const [error, setError] = useState<null | string>(null);
+    // The plaintext token exists for exactly one response. Held in state so the
+    // operator can copy the link, and never re-fetchable — the server keeps only
+    // a hash.
+    const [issuedLink, setIssuedLink] = useState<null | string>(null);
 
     const invitationsQuery = useClientQuery(["lunora-auth-sign-up-invitations", INVITATION_LIMIT], () =>
         client.listAuthSignUpInvitations({ limit: INVITATION_LIMIT }),
@@ -73,7 +77,14 @@ const SignUpInvitationsPanel = (): ReactElement => {
         fireAndForget(
             (async (): Promise<void> => {
                 try {
-                    await client.createAuthSignUpInvitation({ email: address });
+                    const issued = await client.createAuthSignUpInvitation({ email: address });
+                    const token = typeof issued["token"] === "string" ? issued["token"] : undefined;
+
+                    setIssuedLink(
+                        token === undefined
+                            ? null
+                            : `${globalThis.location.origin}/sign-up?email=${encodeURIComponent(address)}&invite=${encodeURIComponent(token)}`,
+                    );
                     setEmail("");
                     invitationsQuery.refetch();
                 } catch (error_) {
@@ -81,6 +92,12 @@ const SignUpInvitationsPanel = (): ReactElement => {
                 }
             })(),
         );
+    };
+
+    const onCopyLink = (): void => {
+        if (issuedLink !== null) {
+            fireAndForget(globalThis.navigator.clipboard.writeText(issuedLink));
+        }
     };
 
     const onRevoke = (address: string): void => {
@@ -97,7 +114,7 @@ const SignUpInvitationsPanel = (): ReactElement => {
             <div>
                 <h2 className="text-base font-medium">{t("Sign-up invitations")}</h2>
                 <p className="text-sm text-muted-foreground">
-                    {t("Only invited addresses can create an account. Nothing is emailed — send the invitee the sign-up link yourself.")}
+                    {t("Only invited addresses can create an account. Nothing is emailed — send the invitee the one-time link yourself.")}
                 </p>
             </div>
 
@@ -116,6 +133,20 @@ const SignUpInvitationsPanel = (): ReactElement => {
                     {t("Invite")}
                 </Button>
             </div>
+
+            {issuedLink !== null && (
+                <Card>
+                    <CardContent className="flex flex-col gap-2 p-4">
+                        <p className="text-sm">{t("Send this link to the invitee. It is shown once and cannot be recovered.")}</p>
+                        <div className="flex gap-2">
+                            <Input data-testid="sign-up-invitation-link" readOnly value={issuedLink} />
+                            <Button data-testid="sign-up-invitation-copy" onClick={onCopyLink} type="button">
+                                {t("Copy")}
+                            </Button>
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
 
             {(error ?? invitationsQuery.error) !== null && (
                 <p className="text-sm text-destructive" data-testid="sign-up-invitations-error" role="alert">

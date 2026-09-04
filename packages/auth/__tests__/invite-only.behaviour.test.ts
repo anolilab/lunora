@@ -42,7 +42,12 @@ describe("inviteOnly", () => {
             secret: SECRET,
         });
 
-    const signUp = async (email: string): Promise<unknown> => auth.api.signUpEmail({ body: { email, name: "Ada", password: STRONG_PASSWORD } });
+    /** Password sign-up now carries the invitation token; `token` is omitted to exercise a missing one. */
+    const signUp = async (email: string, token?: string): Promise<unknown> =>
+        auth.api.signUpEmail({ body: { email, inviteToken: token, name: "Ada", password: STRONG_PASSWORD } });
+
+    /** Invite an address and hand back the one-time token, the way an operator would. */
+    const invite = async (email: string, expiresInSeconds?: number): Promise<string> => (await createSignUpInvitation(auth, { email, expiresInSeconds })).token;
 
     const invitationRow = (email: string): Record<string, unknown> | undefined =>
         database["signUpInvitation"]?.find((row) => (row as { email: string }).email === email) as Record<string, unknown> | undefined;
@@ -65,7 +70,7 @@ describe("inviteOnly", () => {
     it("refuses every sign-up while no invitation exists", async () => {
         expect.assertions(2);
 
-        await expect(signUp("stranger@example.com")).rejects.toThrow(/invite-only/);
+        await expect(signUp("stranger@example.com")).rejects.toThrow(/not valid/);
 
         expect(database["user"]).toHaveLength(0);
     });
@@ -76,7 +81,7 @@ describe("inviteOnly", () => {
         auth = buildAuth({ allowFirstUser: true });
 
         await expect(signUp("owner@example.com")).resolves.toBeDefined();
-        await expect(signUp("stranger@example.com")).rejects.toThrow(/invite-only/);
+        await expect(signUp("stranger@example.com")).rejects.toThrow(/not valid/);
 
         expect(database["user"]).toHaveLength(1);
     });
@@ -84,44 +89,123 @@ describe("inviteOnly", () => {
     it("admits an invited address and marks the invitation spent", async () => {
         expect.assertions(3);
 
-        await createSignUpInvitation(auth, { email: "Ada@Example.com", invitedBy: "owner" });
+        const { token } = await createSignUpInvitation(auth, { email: "Ada@Example.com", invitedBy: "owner" });
 
-        await expect(signUp("ada@example.com")).resolves.toBeDefined();
+        await expect(signUp("ada@example.com", token)).resolves.toBeDefined();
 
         // The address is normalized on both sides, so the mixed-case invite matches.
         expect(invitationRow("ada@example.com")?.["acceptedAt"]).toBeInstanceOf(Date);
         expect(database["user"]).toHaveLength(1);
     });
 
+    describe("the invitation token", () => {
+        it("refuses the right address with the wrong token, and with no token at all", async () => {
+            expect.assertions(3);
+
+            await invite("ada@example.com");
+
+            await expect(signUp("ada@example.com")).rejects.toThrow(/not valid/);
+            await expect(signUp("ada@example.com", "not-the-token")).rejects.toThrow(/not valid/);
+
+            expect(database["user"]).toHaveLength(0);
+        });
+
+        it("refuses a token issued for a different address", async () => {
+            expect.assertions(1);
+
+            const other = await invite("bob@example.com");
+
+            await invite("ada@example.com");
+
+            // Tokens are looked up by the submitted address, so one seat's link
+            // cannot be spent on another.
+            await expect(signUp("ada@example.com", other)).rejects.toThrow(/not valid/);
+        });
+
+        it("invalidates the previous link when an address is re-invited", async () => {
+            expect.assertions(2);
+
+            const first = await invite("ada@example.com");
+            const second = await invite("ada@example.com");
+
+            expect(second).not.toBe(first);
+            await expect(signUp("ada@example.com", first)).rejects.toThrow(/not valid/);
+        });
+
+        it("stores only a hash, and never the token itself", async () => {
+            expect.assertions(3);
+
+            const token = await invite("ada@example.com");
+            const row = invitationRow("ada@example.com");
+            const stored = row?.["tokenHash"];
+
+            expect(typeof stored).toBe("string");
+            // 32 CSPRNG bytes as base64url, hashed to a 64-character hex digest.
+            expect(stored).toMatch(/^[\da-f]{64}$/);
+            expect(JSON.stringify(row)).not.toContain(token);
+        });
+
+        it("answers a wrong token and an uninvited address identically, so the form is not a directory oracle", async () => {
+            expect.assertions(1);
+
+            await invite("ada@example.com");
+
+            const invited = await signUp("ada@example.com", "wrong").catch((error: unknown) => (error as Error).message);
+            const uninvited = await signUp("nobody@example.com", "wrong").catch((error: unknown) => (error as Error).message);
+
+            expect(invited).toBe(uninvited);
+        });
+
+        it("never lets the token or its hash out through the admin plane", async () => {
+            expect.assertions(3);
+
+            const adminApi = createAuthAdmin(auth);
+            const issued = await adminApi.createSignUpInvitation({ email: "ada@example.com" });
+
+            // Issuing is the one moment the plaintext is meant to escape.
+            expect(typeof issued.token).toBe("string");
+
+            const listed = await adminApi.listSignUpInvitations({});
+
+            expect(listed.rows[0]).not.toHaveProperty("tokenHash");
+            expect(listed.rows[0]).not.toHaveProperty("token");
+        });
+    });
+
     it("refuses an expired invitation", async () => {
         expect.assertions(1);
 
-        await createSignUpInvitation(auth, { email: "ada@example.com", expiresInSeconds: 60 });
+        const token = await invite("ada@example.com", 60);
 
         vi.useFakeTimers();
         vi.setSystemTime(Date.now() + 61 * 1000);
 
-        await expect(signUp("ada@example.com")).rejects.toThrow(/invite-only/);
+        // The token still matches — expiry is the database gate's business, so the
+        // holder of a stale link gets the "ask for an invitation" message rather
+        // than the deliberately vague one a wrong token earns.
+        await expect(signUp("ada@example.com", token)).rejects.toThrow(/invite-only/);
     });
 
     it("refuses a revoked invitation", async () => {
         expect.assertions(2);
 
-        await createSignUpInvitation(auth, { email: "ada@example.com" });
+        const token = await invite("ada@example.com");
+
         await revokeSignUpInvitation(auth, { email: "ADA@example.com" });
 
         expect(invitationRow("ada@example.com")).toBeUndefined();
-        await expect(signUp("ada@example.com")).rejects.toThrow(/invite-only/);
+        await expect(signUp("ada@example.com", token)).rejects.toThrow(/not valid/);
     });
 
     it("refuses a spent invitation, so a deleted account does not free the seat", async () => {
         expect.assertions(1);
 
-        await createSignUpInvitation(auth, { email: "ada@example.com" });
-        await signUp("ada@example.com");
+        const token = await invite("ada@example.com");
+
+        await signUp("ada@example.com", token);
         database["user"] = [];
 
-        await expect(signUp("ada@example.com")).rejects.toThrow(/invite-only/);
+        await expect(signUp("ada@example.com", token)).rejects.toThrow(/invite-only/);
     });
 
     /**
@@ -135,7 +219,7 @@ describe("inviteOnly", () => {
 
         auth = buildAuth({}, true);
 
-        await expect(signUp("stranger@example.com")).rejects.toThrow(/invite-only/);
+        await expect(signUp("stranger@example.com")).rejects.toThrow(/not valid/);
 
         expect(database["user"]).toHaveLength(0);
     });
@@ -149,6 +233,8 @@ describe("inviteOnly", () => {
 
         await createSignUpInvitation(auth, { email: "ada@example.com" });
 
+        // The admin plane mints through the internal adapter, so it never meets the
+        // route hook — the database gate alone decides, and no token is needed.
         await expect(adminApi.createUser({ email: "ada@example.com", name: "Ada" })).resolves.toBeDefined();
     });
 
@@ -213,8 +299,8 @@ describe("inviteOnly", () => {
         await signUp("owner@example.com");
         const afterBootstrap = counts;
 
-        await expect(signUp("one@example.com")).rejects.toThrow(/invite-only/);
-        await expect(signUp("two@example.com")).rejects.toThrow(/invite-only/);
+        await expect(signUp("one@example.com")).rejects.toThrow(/not valid/);
+        await expect(signUp("two@example.com")).rejects.toThrow(/not valid/);
 
         // The first rejection observes a non-empty table and latches; the second
         // must not ask again.
@@ -224,8 +310,7 @@ describe("inviteOnly", () => {
     it("prunes the expired and unspent, and leaves the live and the spent alone", async () => {
         expect.assertions(3);
 
-        await createSignUpInvitation(auth, { email: "spent@example.com", expiresInSeconds: 60 });
-        await signUp("spent@example.com");
+        await signUp("spent@example.com", await invite("spent@example.com", 60));
         await createSignUpInvitation(auth, { email: "dead@example.com", expiresInSeconds: 60 });
         await createSignUpInvitation(auth, { email: "live@example.com", expiresInSeconds: 3600 });
 
@@ -254,8 +339,7 @@ describe("inviteOnly", () => {
     it("re-inviting a spent address re-opens the seat", async () => {
         expect.assertions(2);
 
-        await createSignUpInvitation(auth, { email: "ada@example.com" });
-        await signUp("ada@example.com");
+        await signUp("ada@example.com", await invite("ada@example.com"));
 
         const reopened = await createSignUpInvitation(auth, { email: "ada@example.com" });
 
@@ -277,14 +361,14 @@ describe("inviteOnly", () => {
 
         vi.useFakeTimers();
         vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
-        await createSignUpInvitation(auth, { email: "accepted@example.com" });
+        const acceptedToken = await invite("accepted@example.com");
 
         vi.setSystemTime(new Date("2026-01-02T00:00:00Z"));
         await createSignUpInvitation(auth, { email: "expired@example.com", expiresInSeconds: 60 });
 
         vi.setSystemTime(new Date("2026-01-03T00:00:00Z"));
         await createSignUpInvitation(auth, { email: "pending@example.com" });
-        await signUp("accepted@example.com");
+        await signUp("accepted@example.com", acceptedToken);
 
         const all = await listSignUpInvitations(auth);
         const pending = await listSignUpInvitations(auth, { pendingOnly: true });

@@ -51,7 +51,7 @@ export { emailGateDatabaseHooks, withEmailGate } from "./email-gate";
 export type { EmailClass, EmailClassification, EmailGateConfig, EmailGateMiddlewareOptions } from "./email-guard";
 export { assertEmailAllowed, classifyEmail, emailGateMiddleware, loadEmailDomainLists } from "./email-guard";
 export { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "./handler";
-export type { InviteOnlyOptions, SignUpInvitation } from "./invite-only";
+export type { InviteOnlyOptions, IssuedSignUpInvitation, SignUpInvitation } from "./invite-only";
 export { createSignUpInvitation, listSignUpInvitations, pruneSignUpInvitations, revokeSignUpInvitation } from "./invite-only";
 export type { LunoraAuthApiContext, WithAuthPluginsMiddleware, WithAuthPluginsOptions } from "./middleware";
 export { LunoraAuthHeadersError, withAuthPlugins } from "./middleware";

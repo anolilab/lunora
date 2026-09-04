@@ -14,6 +14,8 @@ import type { Messages } from "@lingui/core";
  * register it via `createStudioI18n(locale, { en: enMessages, de: deMessages })`.
  */
 const MESSAGE_IDS = [
+    "Send this link to the invitee. It is shown once and cannot be recovered.",
+    "Only invited addresses can create an account. Nothing is emailed — send the invitee the one-time link yourself.",
     "Sign-up invitations",
     "Only invited addresses can create an account. Nothing is emailed — send the invitee the sign-up link yourself.",
     "Email address to invite",
