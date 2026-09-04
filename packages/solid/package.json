@@ -1,6 +1,6 @@
 {
     "name": "@lunora/solid",
-    "version": "1.0.0-alpha.78",
+    "version": "1.0.0-alpha.79",
     "description": "SolidJS adapter for Lunora — live queries, optimistic mutations, and reactive loaders",
     "keywords": [
         "cloudflare",
