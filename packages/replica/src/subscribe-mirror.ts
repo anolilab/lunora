@@ -61,6 +61,11 @@ export interface SubscriptionClient {
  * into the same mirror: they'd share one table and the snapshot-delete pass of
  * one could remove rows still live in the other.
  *
+ * `mirror.clearData()` resets the remembered frame. Without that reset the next
+ * identical frame diffed clean against a mirror that no longer held the rows —
+ * no changes, no `applyDiff` — and the table stayed empty until some row's
+ * content happened to change or the page reloaded.
+ *
  * Call the returned unsubscribe function to tear down both the client
  * subscription and future mirror writes.
  * @example
@@ -93,7 +98,16 @@ const subscribeToMirror = (
     // carry (bigint, Date, bytes, …), which plain JSON would throw on or alias.
     let known = new Map<string, string>();
 
-    return client.subscribe(
+    // A `clearData()` sweep deletes the rows this frame memory claims are in the
+    // mirror. Forget them so the next frame is diffed against an empty table and
+    // re-inserts everything, instead of matching `known` and applying nothing.
+    const unsubscribeMirror = mirror.onChange((reason) => {
+        if (reason === "clear") {
+            known = new Map();
+        }
+    });
+
+    const unsubscribeClient = client.subscribe(
         functionRef,
         args,
         (data: unknown) => {
@@ -174,6 +188,11 @@ const subscribeToMirror = (
         },
         { shardKey },
     );
+
+    return () => {
+        unsubscribeMirror();
+        unsubscribeClient();
+    };
 };
 
 export { subscribeToMirror };
