@@ -136,6 +136,26 @@ const isInternalTable = (name: string): boolean => INTERNAL_TABLE.test(name);
 /** Column names whose values are redacted in non-schema tables, so auth secrets can't leak through the browser. */
 const SENSITIVE_COLUMN = /password|secret|token|hash|salt|credential/iu;
 
+/**
+ * The schema definition that describes THIS D1 table, or `undefined` when the
+ * table is not one the schema stores here.
+ *
+ * `shardMode?.kind === "global"` is the whole test, and it is not a formality:
+ * only a `.global()` table lives in D1, so a same-named `.shardBy()`/root table
+ * describes a Durable Object's storage, not this one. A schema declaring (say) a
+ * shard-local `user` alongside better-auth's D1 `user` table made every read of
+ * the D1 table take the schema branch — decoding it as a `.global()` row, so
+ * {@link SENSITIVE_COLUMN} redaction never ran, and simultaneously turning off
+ * the two guards that exist because redaction is imperfect
+ * ({@link buildEqPredicate}'s equality oracle and {@link facetGlobalColumn}'s
+ * masked bucket). Same test the admin export/import path applies.
+ */
+const globalTableDefinition = (schema: SchemaLike, table: string): SchemaLike["tables"][string] | undefined => {
+    const definition = schema.tables[table];
+
+    return definition?.shardMode?.kind === "global" ? definition : undefined;
+};
+
 /** List every browsable D1 table name (internal/companion tables excluded), sorted. */
 const listTableNames = async (exec: D1Exec): Promise<string[]> => {
     const rows = await exec.all("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name", []);
@@ -174,7 +194,7 @@ const countRows = async (exec: D1Exec, quotedTable: string, whereSql = "", where
  * resolves the storage name so a quoted identifier never leaks `_id`.
  */
 const physicalColumnName = (schema: SchemaLike, table: string, displayColumn: string): string =>
-    schema.tables[table] !== undefined && displayColumn === "_id" ? "id" : displayColumn;
+    globalTableDefinition(schema, table) !== undefined && displayColumn === "_id" ? "id" : displayColumn;
 
 /**
  * Compile a list of eq constraints into a bound ` WHERE …` fragment for the
@@ -207,7 +227,7 @@ const buildEqPredicate = (
         // value matched, bypassing the '•••' redaction. Reject it, mirroring the
         // facet path's masked-bucket collapse. Declared `.global()` tables (whose
         // values are not redacted) intentionally bypass this guard.
-        if (schema.tables[table] === undefined && SENSITIVE_COLUMN.test(filter.column)) {
+        if (globalTableDefinition(schema, table) === undefined && SENSITIVE_COLUMN.test(filter.column)) {
             throw new LunoraError("FORBIDDEN", `cannot filter on a redacted column: ${filter.column}`, { status: 403 });
         }
 
@@ -231,7 +251,7 @@ const buildEqPredicate = (
  * columns, redacting obviously-sensitive values.
  */
 const decodeRow = (schema: SchemaLike, table: string, row: Record<string, unknown>): Record<string, unknown> => {
-    const definition = schema.tables[table];
+    const definition = globalTableDefinition(schema, table);
 
     if (definition) {
         return decodeGlobalRow(definition, row);
@@ -252,7 +272,7 @@ const decodeRow = (schema: SchemaLike, table: string, row: Record<string, unknow
  * table uses its real physical columns from `PRAGMA table_info`.
  */
 const resolveColumns = async (exec: D1Exec, schema: SchemaLike, table: string): Promise<string[]> => {
-    const definition = schema.tables[table];
+    const definition = globalTableDefinition(schema, table);
 
     if (definition) {
         return ["_id", "_creationTime", ...Object.keys(definition.shape)];
@@ -273,7 +293,7 @@ const resolveColumns = async (exec: D1Exec, schema: SchemaLike, table: string): 
  * are no foreign keys, so callers can omit the field rather than send `{}`.
  */
 const resolveReferences = async (exec: D1Exec, schema: SchemaLike, table: string): Promise<Record<string, string> | undefined> => {
-    if (schema.tables[table]) {
+    if (globalTableDefinition(schema, table)) {
         return undefined;
     }
 
@@ -335,7 +355,14 @@ const readGlobalTablePage = async (exec: D1Exec, schema: SchemaLike, options: Re
     const { params: whereParams, where: whereSql } = buildEqPredicate(schema, table, columns, options.filters);
 
     const total = await countRows(exec, quoted, whereSql, whereParams);
-    const raw = await exec.all(`SELECT * FROM ${quoted}${whereSql} LIMIT ? OFFSET ?`, [...whereParams, limit, offset]);
+    // `LIMIT ? OFFSET ?` with no ORDER BY is not pagination: SQLite may return
+    // the rows in whatever order the plan produces, and two identical requests
+    // are free to disagree — so a row can show up on two pages, or on none. The
+    // shard browser keyset-paginates for the same reason. Every `.global()`
+    // table has a TEXT PRIMARY KEY `id`; an external table without one orders by
+    // `rowid`, which SQLite gives every ordinary table.
+    const orderColumn = columns.includes("_id") || columns.includes("id") ? quoteIdentifier("id") : "rowid";
+    const raw = await exec.all(`SELECT * FROM ${quoted}${whereSql} ORDER BY ${orderColumn} LIMIT ? OFFSET ?`, [...whereParams, limit, offset]);
     // Wire-encode on the way out. `decodeGlobalRow` reverses the storage form,
     // so a `v.bigint()` column is a real `bigint` and a `v.bytes()` column an
     // `ArrayBuffer` — the browser's transport is JSON, where the former throws
@@ -387,7 +414,7 @@ const facetGlobalColumn = async (exec: D1Exec, schema: SchemaLike, options: Face
 
     // Faceting a sensitive column on an external table would expose the very
     // values the page browser redacts — collapse it to one masked bucket instead.
-    if (schema.tables[table] === undefined && SENSITIVE_COLUMN.test(column)) {
+    if (globalTableDefinition(schema, table) === undefined && SENSITIVE_COLUMN.test(column)) {
         const total = await countRows(exec, quoted, whereSql, whereParams);
 
         return { truncated: false, values: total === 0 ? [] : [{ count: total, value: "•••" }] };
@@ -396,11 +423,15 @@ const facetGlobalColumn = async (exec: D1Exec, schema: SchemaLike, options: Face
     const limit = clamp(Math.trunc(options.limit ?? DEFAULT_FACET_LIMIT), 1, MAX_FACET_LIMIT);
     const physical = quoteIdentifier(physicalColumnName(schema, table, column));
 
-    // Over-fetch one row past the cap to detect (and report) truncation.
-    const rows = await exec.all(`SELECT ${physical} AS value, COUNT(*) AS count FROM ${quoted}${whereSql} GROUP BY ${physical} ORDER BY count DESC LIMIT ?`, [
-        ...whereParams,
-        limit + 1,
-    ]);
+    // Over-fetch one row past the cap to detect (and report) truncation. The
+    // `${physical} ASC` tiebreaker is what makes the cut deterministic: on
+    // `count DESC` alone, which of several equally-frequent values land in the
+    // top-N — and therefore whether the result reports `truncated` — is up to
+    // the planner, so two identical requests could answer differently.
+    const rows = await exec.all(
+        `SELECT ${physical} AS value, COUNT(*) AS count FROM ${quoted}${whereSql} GROUP BY ${physical} ORDER BY count DESC, ${physical} ASC LIMIT ?`,
+        [...whereParams, limit + 1],
+    );
 
     const truncated = rows.length > limit;
     const kept = truncated ? rows.slice(0, limit) : rows;
