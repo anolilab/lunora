@@ -177,11 +177,14 @@
                       tests/e2e/playwright-report-examples
                   "retention-days": 7
 
-    # On PRs this matrix is path-gated and the filter excludes `packages/**`, since a
-    # 40-minute job would fire on nearly every PR. But that is exactly where the drift
-    # comes from — the `vue-demi` build script that broke every scaffold's first
-    # install arrived as a transitive dependency of @lunora/client. So the unfiltered
-    # run belongs here, where a failure is a canary rather than a blocker.
+    # On PRs this matrix is path-gated, but the `templates` filter DOES include
+    # `packages/**` (see .github/file-filters.yml) — a package change that breaks every
+    # scaffold, like the `vue-demi` build script that arrived transitively through
+    # @lunora/client, is gated there. What this run adds is the schedule: the PR job
+    # only fires when a PR touches a matching path, so a break introduced by a
+    # dependency bump — or one already sitting on `alpha` — surfaces here first.
+    # A failure is a canary rather than a blocker, which is why `report-failure`
+    # below files an issue: a red run nobody reads is the same as no run at all.
     "templates-full":
         "name": "Template scaffold matrix"
         "runs-on": "ubuntu-latest"
@@ -223,3 +226,65 @@
                   "path": ".template-smoke-logs"
                   "retention-days": 7
                   "if-no-files-found": "ignore"
+
+    # A nightly that goes red silently is indistinguishable from one that never ran.
+    # This opens ONE tracking issue and updates it on each subsequent failure rather
+    # than filing a new one nightly, and closes it when the suite next goes green.
+    "report-failure":
+        "name": "Report nightly failure"
+        "runs-on": "ubuntu-latest"
+        "if": "always() && github.event_name == 'schedule'"
+        "needs": ["test-full", "test-workerd", "e2e", "templates-full"]
+        "permissions":
+            "issues": "write"
+        "steps":
+            - "name": "Open or update the nightly tracking issue"
+              "env":
+                  "GH_TOKEN": "${{ github.token }}"
+                  "REPO": "${{ github.repository }}"
+                  "RUN_URL": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                  "FAILED": "${{ contains(needs.*.result, 'failure') }}"
+              "run": |
+                  set -euo pipefail
+                  title="Nightly suite failing"
+
+                  # Idempotent: the label may not exist yet, and `gh issue create`
+                  # fails outright on an unknown one.
+                  gh label create nightly --repo "$REPO" --color "B60205" \
+                      --description "Opened automatically when the nightly suite fails" \
+                      2>/dev/null || true
+                  existing="$(gh issue list --repo "$REPO" --state open --label nightly \
+                      --search "$title in:title" --json number --jq '.[0].number // empty')"
+
+                  if [[ "$FAILED" != "true" ]]; then
+                      if [[ -n "$existing" ]]; then
+                          gh issue close "$existing" --repo "$REPO" \
+                              --comment "Nightly is green again: $RUN_URL"
+                      fi
+                      exit 0
+                  fi
+
+                  # printf, not an indented heredoc: inside a YAML block scalar every
+                  # continuation line keeps its indentation, and >4 leading spaces makes
+                  # GitHub render the table as a code block.
+                  body="$(printf '%s\n' \
+                      "The nightly suite failed." \
+                      "" \
+                      "Run: $RUN_URL" \
+                      "" \
+                      "| job | result |" \
+                      "| --- | --- |" \
+                      "| Full test suite | ${{ needs.test-full.result }} |" \
+                      "| Workerd integration | ${{ needs.test-workerd.result }} |" \
+                      "| E2E | ${{ needs.e2e.result }} |" \
+                      "| Template scaffold matrix | ${{ needs.templates-full.result }} |" \
+                      "" \
+                      "The nightly is unfiltered, so a failure here is usually either a break" \
+                      "already on \`alpha\` that the path-gated PR jobs did not reach, or drift" \
+                      "from a dependency published since the last run.")"
+
+                  if [[ -n "$existing" ]]; then
+                      gh issue comment "$existing" --repo "$REPO" --body "$body"
+                  else
+                      gh issue create --repo "$REPO" --title "$title" --label nightly --body "$body"
+                  fi

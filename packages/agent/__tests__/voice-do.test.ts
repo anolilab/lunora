@@ -300,6 +300,10 @@ describe("voice session credential expiry", () => {
             expect(JSON.parse(sent[0] as string)).toStrictEqual({
                 code: "TOKEN_EXPIRED",
                 error: { code: "TOKEN_EXPIRED", message: "authentication token expired" },
+                // The voice contract reads the reason off a bare top-level `message`
+                // (`VoiceServerFrame`); `error.code`/`error.message` is the shard
+                // envelope. Both ride the frame so either reader gets the reason.
+                message: "authentication token expired",
                 type: "error",
             });
             expect(closed).toStrictEqual({ code: 4001, reason: "token_expired" });
@@ -395,6 +399,10 @@ describe("voice session credential expiry", () => {
             expect(JSON.parse(sent[0] as string)).toStrictEqual({
                 code: "TOKEN_EXPIRED",
                 error: { code: "TOKEN_EXPIRED", message: "authentication token expired" },
+                // The voice contract reads the reason off a bare top-level `message`
+                // (`VoiceServerFrame`); `error.code`/`error.message` is the shard
+                // envelope. Both ride the frame so either reader gets the reason.
+                message: "authentication token expired",
                 type: "error",
             });
             expect(getClosed()).toStrictEqual({ code: 4001, reason: "token_expired" });
