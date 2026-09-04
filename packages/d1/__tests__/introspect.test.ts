@@ -61,6 +61,9 @@ describe("d1 introspect", () => {
         // Internal/companion tables that must never surface.
         harness.ddl(`CREATE TABLE "_cf_KV" ("k" TEXT, "v" BLOB)`);
         harness.ddl(`CREATE TABLE "organizations__agg_byActive" ("__key__" TEXT, "__value__" REAL)`);
+        // MigrationRunner's own tracking table, created by this same package — it is
+        // Lunora bookkeeping, so the browser must not list it either.
+        harness.ddl(`CREATE TABLE "__drizzle_migrations" ("id" INTEGER PRIMARY KEY AUTOINCREMENT, "hash" TEXT NOT NULL UNIQUE, "created_at" NUMERIC)`);
 
         await harness.exec.run(`INSERT INTO "organizations" VALUES ('o1', 1, 'Acme', 1), ('o2', 2, 'Globex', 0)`, []);
         await harness.exec.run(`INSERT INTO "plans" VALUES ('p1', 1, 'free')`, []);

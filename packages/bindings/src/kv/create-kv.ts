@@ -111,15 +111,27 @@ export const scopeKey = (prefix: string, key: string): string => {
     return composed;
 };
 
+/**
+ * `expiration` (absolute Unix seconds) and `expirationTtl` (relative seconds)
+ * are mutually exclusive. Nothing downstream enforces that: the binding type
+ * declares both as optional siblings, and the KV implementation resolves the
+ * pair by taking `expirationTtl` and dropping `expiration` on the floor
+ * (miniflare's `validatePutOptions` reads `expiration` only in the `else`
+ * branch). A caller that sends both therefore gets a silently different expiry
+ * than it asked for, so reject the pair here — on every path that reaches a
+ * `put`, not just this one.
+ */
+const assertOneExpirationForm = (options: { expiration?: number; expirationTtl?: number }): void => {
+    if (options.expiration !== undefined && options.expirationTtl !== undefined) {
+        throw new LunoraError("BAD_REQUEST", "@lunora/bindings/kv: `expiration` and `expirationTtl` are mutually exclusive");
+    }
+};
+
 /** Build the raw KV put options from the public {@link KvPutOptions}, dropping `undefined`s. */
 const toPutOptions = (options: KvPutOptions): KvNamespacePutOptions | undefined => {
     const out: KvNamespacePutOptions = {};
 
-    // `expiration` and `expirationTtl` are mutually exclusive — forwarding both
-    // makes the binding throw a cryptic error, so fail fast with a clear one.
-    if (options.expiration !== undefined && options.expirationTtl !== undefined) {
-        throw new LunoraError("INTERNAL", "@lunora/bindings/kv: `expiration` and `expirationTtl` are mutually exclusive");
-    }
+    assertOneExpirationForm(options);
 
     if (options.expiration !== undefined) {
         out.expiration = options.expiration;
@@ -279,3 +291,5 @@ export const createKv = (options: LunoraKvOptions): Kv => {
         put,
     };
 };
+
+export { assertOneExpirationForm };

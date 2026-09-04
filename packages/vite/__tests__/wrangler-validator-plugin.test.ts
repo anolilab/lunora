@@ -37,6 +37,17 @@ export const schema = defineSchema({
 });
 `;
 
+const WRANGLER_WITHOUT_D1 = `{
+    "name": "x",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["web_socket_auto_reply_to_close"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }]
+}
+`;
+
 const VALID_WRANGLER = `{
     "name": "lunora-app",
     "main": "src/index.ts",
@@ -74,12 +85,12 @@ const writeSchema = (source: string): void => {
 };
 
 /**
- * Drive the plugin through Vite's hook order: `config` (where `isPreview` lives)
- * and then `configResolved` — the same sequence `resolveConfig` runs, so a test
- * cannot accidentally validate in an order the dev server never uses.
+ * Run only the plugin's `config` hook — the phase `@cloudflare/vite-plugin`
+ * parses `wrangler.jsonc` in, so anything this hook writes must be on disk by
+ * the time it returns.
  */
-const runHooks = async (plugin: ReturnType<typeof wranglerValidatorPlugin>, isPreview = false): Promise<void> => {
-    (plugin.config as (this: unknown, userConfig: unknown, environment: { command: string; isPreview: boolean }) => void).call(
+const runConfigHook = async (plugin: ReturnType<typeof wranglerValidatorPlugin>, isPreview = false): Promise<void> => {
+    await (plugin.config as (this: unknown, userConfig: unknown, environment: { command: string; isPreview: boolean }) => Promise<void>).call(
         undefined,
         {},
         {
@@ -87,8 +98,18 @@ const runHooks = async (plugin: ReturnType<typeof wranglerValidatorPlugin>, isPr
             isPreview,
         },
     );
+};
 
-    await (plugin.configResolved as (this: unknown) => Promise<void>).call(undefined);
+/**
+ * Drive the plugin through Vite's hook order: `config` (where `isPreview` lives
+ * and the binding reconcile runs) and then `configResolved` — the same sequence
+ * `resolveConfig` runs, so a test cannot accidentally validate in an order the
+ * dev server never uses.
+ */
+const runHooks = async (plugin: ReturnType<typeof wranglerValidatorPlugin>, isPreview = false): Promise<void> => {
+    await runConfigHook(plugin, isPreview);
+
+    await (plugin.configResolved as (this: unknown) => void | Promise<void>).call(undefined);
 };
 
 describe("wrangler-validator-plugin", () => {
@@ -163,13 +184,31 @@ describe("wrangler-validator-plugin", () => {
 
             const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-            // The binding this check requires is one Lunora writes itself, and its
-            // reconcile runs in `buildStart` — a hook Vite reaches only once
-            // `configResolved` succeeded. Validating first killed `vite dev` the
-            // first time a project added a `.global()` table, over a binding the
-            // very next hook would have added.
+            // The binding this check requires is one Lunora writes itself, so
+            // validating before provisioning killed `vite dev` the first time a
+            // project added a `.global()` table.
             await expect(runHooks(plugin)).resolves.toBeUndefined();
             expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toMatch(D1_DATABASES);
+        });
+
+        it("writes the inferred binding in `config`, before the Cloudflare plugin parses wrangler.jsonc", async () => {
+            expect.assertions(2);
+
+            writeSchema(SCHEMA_WITH_GLOBAL);
+            writeFileSync(join(workdir, "wrangler.jsonc"), WRANGLER_WITHOUT_D1, "utf8");
+
+            const plugin = wranglerValidatorPlugin(makeOptions(workdir));
+
+            // `@cloudflare/vite-plugin` reads and parses `wrangler.jsonc` inside its
+            // own `config` hook and builds the miniflare worker options from that
+            // parsed object; its restart watcher only exists from `configureServer`.
+            // So a binding written any later than `config` never reaches the worker
+            // that boots — `env.DB` is missing while the file on disk looks right.
+            // `enforce: "pre"` is what puts this hook ahead of the Cloudflare one.
+            await runConfigHook(plugin);
+
+            expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toMatch(D1_DATABASES);
+            expect(plugin.enforce).toBe("pre");
         });
 
         it("does not require D1 when no table is global", async () => {

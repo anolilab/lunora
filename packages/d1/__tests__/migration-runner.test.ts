@@ -1,3 +1,5 @@
+import { DatabaseSync } from "node:sqlite";
+
 import { describe, expect, it } from "vitest";
 
 import type { D1DatabaseLike, D1PreparedStatementLike } from "../src/d1-client";
@@ -13,6 +15,11 @@ const TRACKING_INSERT_HASH_RE = /VALUES \('([0-9a-f]{64})'/u;
 const DUPLICATE_VERSION_RE = /Duplicate migration version/;
 const IDENTICAL_SQL_RE = /identical SQL/u;
 const MULTI_STATEMENT_RE = /more than one SQL statement/u;
+
+const AUDIT_TRIGGER_SQL = `CREATE TRIGGER posts_audit AFTER INSERT ON posts
+BEGIN
+    INSERT INTO audit (post_id, label) VALUES (NEW.id, CASE WHEN NEW.id > 0 THEN 'positive' ELSE 'other' END);
+END;`;
 
 const sha256Hex = async (text: string): Promise<string> => {
     const bytes = new TextEncoder().encode(text);
@@ -89,6 +96,53 @@ const createDatabase = async (initiallyAppliedSql: string[] = []): Promise<FakeD
     };
 
     return database;
+};
+
+/**
+ * A {@link D1DatabaseLike} backed by a real `node:sqlite` connection. D1 is
+ * SQLite, so this is the closest available engine for proving that a statement
+ * the lexer lets through is one statement to the engine too — the fake above
+ * only records the SQL it was handed. `batch` runs sequentially, matching D1's
+ * ordered batch semantics closely enough for a migration.
+ */
+const createSqliteDatabase = (sqlite: DatabaseSync): D1DatabaseLike => {
+    const prepare = (sql: string): D1PreparedStatementLike => {
+        let bound: unknown[] = [];
+        const stmt: D1PreparedStatementLike = {
+            all: async () => {
+                return { results: sqlite.prepare(sql).all(...(bound as never[])) as never[], success: true };
+            },
+            bind: (...values) => {
+                bound = values;
+
+                return stmt;
+            },
+            first: async () => null,
+            raw: async () => [],
+            run: async () => {
+                sqlite.prepare(sql).all(...(bound as never[]));
+
+                return { success: true };
+            },
+        };
+
+        return stmt;
+    };
+
+    return {
+        batch: async (stmts) => {
+            for (const stmt of stmts) {
+                // eslint-disable-next-line no-await-in-loop -- D1's batch applies statements in order; so does this
+                await stmt.run();
+            }
+
+            return [];
+        },
+        prepare,
+        withSession: () => {
+            return { getBookmark: () => null, prepare };
+        },
+    };
 };
 
 describe("migrationRunner", () => {
@@ -303,5 +357,61 @@ describe("migrationRunner", () => {
 
         expect(result.applied.map((m) => m.version)).toEqual([1, 2]);
         expect(database.appliedHashes).toHaveLength(2);
+    });
+
+    // A `CREATE TRIGGER` body carries its own `;`s and cannot be split across
+    // migrations, so the single-statement lexer used to make triggers
+    // unappliable — it read the body's first `;` as a statement boundary and
+    // told the author to do the one thing SQLite makes impossible. The `CASE …
+    // END` in the body is what a naive "ends at END;" rule gets wrong.
+    it("applies a CREATE TRIGGER whose body contains semicolons", async () => {
+        expect.assertions(2);
+
+        const database = await createDatabase();
+        const runner = new MigrationRunner(database, [{ name: "audit_trigger", sql: AUDIT_TRIGGER_SQL, version: 1 }]);
+
+        const result = await runner.run();
+
+        expect(result.applied.map((m) => m.version)).toEqual([1]);
+
+        const body = database.executed.find((e) => !e.sql.includes("__drizzle_migrations"));
+
+        expect(body?.sql).toBe(AUDIT_TRIGGER_SQL.slice(0, -1));
+    });
+
+    // The trigger relaxation must not reopen the multi-statement hole: content
+    // after the trigger's closing `END;` is still a second statement.
+    it("still rejects a second statement after a trigger's closing END", async () => {
+        expect.assertions(1);
+
+        const database = await createDatabase();
+        const runner = new MigrationRunner(database, [{ name: "trigger_plus", sql: `${AUDIT_TRIGGER_SQL} DROP TABLE posts;`, version: 1 }]);
+
+        await expect(runner.run()).rejects.toThrow(MULTI_STATEMENT_RE);
+    });
+
+    // The fake D1 above only records SQL; this runs the same migration through a
+    // real SQLite engine, so "D1 accepts this as one statement" is proven by an
+    // engine rather than by the lexer agreeing with itself.
+    it("applies the trigger against a real SQLite engine and it fires", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+
+        try {
+            sqlite.prepare("CREATE TABLE posts (id INTEGER PRIMARY KEY)").all();
+            sqlite.prepare("CREATE TABLE audit (post_id INTEGER, label TEXT)").all();
+
+            const runner = new MigrationRunner(createSqliteDatabase(sqlite), [{ name: "audit_trigger", sql: AUDIT_TRIGGER_SQL, version: 1 }]);
+            const result = await runner.run();
+
+            expect(result.applied.map((m) => m.version)).toEqual([1]);
+
+            sqlite.prepare("INSERT INTO posts (id) VALUES (7)").all();
+
+            expect(sqlite.prepare("SELECT post_id, label FROM audit").all()).toEqual([{ label: "positive", post_id: 7 }]);
+        } finally {
+            sqlite.close();
+        }
     });
 });
