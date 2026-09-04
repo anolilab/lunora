@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -132,6 +132,48 @@ describe("createNodePlatform", () => {
             using bare = createNodePlatform();
 
             expect(bare.globalTables).toBeUndefined();
+        } finally {
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
+    // Construction is not atomic without help: the shard connection, the registry
+    // and the scheduler are built before queues, object storage and global tables,
+    // and a throw from any of the later steps returns no platform at all — so
+    // there is nothing left to call `close()` on and the sqlite handle stays open
+    // for the life of the process. The `-wal`/`-shm` sidecars are the observable:
+    // the shard host opens its database in WAL mode, and sqlite removes them when
+    // the connection closes.
+    it.each([
+        [
+            "a queue names a dead-letter queue nothing declares",
+            (shardPath: string): (() => unknown) => {
+                const orders = defineQueue({ deadLetterQueue: "undeclared", handler: () => undefined });
+
+                return () => createNodePlatform({ onQueueBatch: () => undefined, path: shardPath, queues: { orders } });
+            },
+            /no declared queue provides/,
+        ],
+        [
+            "the global-table store cannot open its file",
+            // A path *inside* the shard's own database file: nothing can open it.
+            (shardPath: string): (() => unknown) =>
+                () =>
+                    createNodePlatform({ globalTablesPath: join(shardPath, "global.sqlite3"), path: shardPath }),
+            /unable to open database file/,
+        ],
+    ])("closes what it already built when %s", (_label, build, message) => {
+        expect.assertions(3);
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-node-platform-rollback-"));
+
+        try {
+            const shardPath = join(workdir, "shard.sqlite3");
+
+            expect(build(shardPath)).toThrow(message);
+
+            expect(existsSync(`${shardPath}-wal`)).toBe(false);
+            expect(existsSync(`${shardPath}-shm`)).toBe(false);
         } finally {
             rmSync(workdir, { force: true, recursive: true });
         }

@@ -46,13 +46,17 @@ export interface NodePlatform<
     capabilities: PlatformCapabilities;
 
     /**
-     * Tear this platform instance down: clears the shard host's pending alarm
-     * timer and closes its `better-sqlite3` database (and, with it, `kv`'s
-     * table — both live on the same connection), then clears every armed
-     * scheduler job timer. Nothing in this package closes these resources on
-     * its own — a `NodePlatform` a caller stops using without calling `close()`
-     * leaks the open file handle (plus its WAL/SHM sidecar files) and keeps
-     * the process alive on outstanding timers. Safe to call more than once.
+     * Tear this platform instance down: every resource this root built, in
+     * reverse construction order — the global store's own connection, every
+     * armed scheduler job timer, the registry's live shards, and last the shard
+     * host's pending alarm timer and its `better-sqlite3` database (and, with
+     * it, `kv`'s table — both live on the same connection). Nothing in this
+     * package closes these resources on its own — a `NodePlatform` a caller
+     * stops using without calling `close()` leaks the open file handles (plus
+     * their WAL/SHM sidecar files) and keeps the process alive on outstanding
+     * timers. Safe to call more than once. A `createNodePlatform` that throws
+     * unwinds the same list itself, so a failed construction leaks nothing and
+     * leaves nothing to call this on.
      *
      * **`close()` is a terminal state, not merely a cleanup step.** After it
      * runs: `scheduler.schedule()` throws instead of arming a fresh timer
@@ -184,75 +188,116 @@ export const createNodePlatform = <
 >(
     options: NodePlatformOptions<Queues, Workflows> = {},
 ): NodePlatform<Queues, Workflows> => {
+    // Every resource that has to be torn down, in the order it was built, as a
+    // thunk: the three teardowns are not one shape — a bare `dispose()`, a
+    // `close()` method, a `dispose()` method — and holding them here is what lets
+    // both the failure path below and `close()` unwind the same list, so a fifth
+    // resource cannot be added to one and forgotten in the other.
+    const teardown: (() => void)[] = [];
+
     const { database, dispose: disposeShard, drain, host: shard } = createNodeShardHost(options);
-    const kv = createNodeShardKvStore(database);
-    const registry = createNodeShardRegistry(options);
-    const { directory } = registry;
-    const { socket: sockets } = createNodeSocketHost(database);
-    const { dispose: disposeScheduler, scheduler } = createNodeSchedulerHost(database, options);
 
-    // Queues, workflows, object storage and global tables are all composed here
-    // rather than left for a caller to assemble: `NODE_CAPABILITIES` rates all
-    // four `emulated`, and codegen emits the whole `ctx.queues` / `ctx.workflows` /
-    // `ctx.storage` / `.global()` surface for anything not rated `unsupported`. A
-    // host that declares the capability and binds nothing is the one combination
-    // that fails at runtime with no diagnostic anywhere before it — which is
-    // exactly what `.global()` did while this root composed only the other three.
-    // Composing it is half the job: see `NodePlatform.globalTables` for the hop
-    // only a caller can make, because nothing here builds a shard DO to make it.
-    const queues =
-        options.queues === undefined
-            ? undefined
-            : createNodeQueueHost(database, {
-                  onBatch:
-                      options.onQueueBatch ??
-                      (() => {
-                          throw new LunoraError(
-                              "VALIDATION_ERROR",
-                              "@lunora/platform-node: createNodePlatform was given `queues` without `onQueueBatch`, so a delivered batch has nowhere to go — pass dispatchQueueBatch from @lunora/queue",
-                          );
-                      }),
-                  queues: options.queues,
-              });
+    teardown.push(disposeShard);
 
-    const objectStorage = options.objectStorageDirectory === undefined ? undefined : createNodeR2Bucket({ directory: options.objectStorageDirectory });
+    try {
+        const kv = createNodeShardKvStore(database);
+        const registry = createNodeShardRegistry(options);
 
-    // Its own connection and its own file: a `.global()` table is shared by every
-    // shard, so keeping it inside a shard's database would make that shard's
-    // lifecycle (and its single-writer gate) the global store's too.
-    const globalTables = options.globalTablesPath === undefined ? undefined : createNodeGlobalStore({ path: options.globalTablesPath });
+        teardown.push(() => {
+            registry.close();
+        });
 
-    // The shard's own connection carries the run rows, so a caller that wants
-    // durable workflows does not have to configure a second store — and cannot
-    // accidentally get the in-process one, which `createNodeWorkflowHost`
-    // refuses to default to for exactly that reason.
-    const workflows =
-        options.workflows === undefined ? undefined : createNodeWorkflowHost({ store: createNodeWorkflowStore(database), workflows: options.workflows });
+        const { directory } = registry;
+        const { socket: sockets } = createNodeSocketHost(database);
+        const { dispose: disposeScheduler, scheduler } = createNodeSchedulerHost(database, options);
 
-    const close = (): void => {
-        // Scheduler timers first: `disposeShard` closes the connection, and a
-        // job timer that fired in between would find it closed. Both are
-        // guarded, but ordering makes the guard the backstop rather than the
-        // mechanism.
-        disposeScheduler();
-        disposeShard();
-        registry.close();
-        globalTables?.dispose();
-    };
+        teardown.push(disposeScheduler);
 
-    return {
-        capabilities: NODE_CAPABILITIES,
-        close,
-        directory,
-        drain,
-        globalTables,
-        kv,
-        objectStorage,
-        queues,
-        scheduler,
-        shard,
-        sockets,
-        workflows,
-        [Symbol.dispose]: close,
-    };
+        // Queues, workflows, object storage and global tables are all composed here
+        // rather than left for a caller to assemble: `NODE_CAPABILITIES` rates all
+        // four `emulated`, and codegen emits the whole `ctx.queues` / `ctx.workflows` /
+        // `ctx.storage` / `.global()` surface for anything not rated `unsupported`. A
+        // host that declares the capability and binds nothing is the one combination
+        // that fails at runtime with no diagnostic anywhere before it — which is
+        // exactly what `.global()` did while this root composed only the other three.
+        // Composing it is half the job: see `NodePlatform.globalTables` for the hop
+        // only a caller can make, because nothing here builds a shard DO to make it.
+        const queues =
+            options.queues === undefined
+                ? undefined
+                : createNodeQueueHost(database, {
+                      onBatch:
+                          options.onQueueBatch ??
+                          (() => {
+                              throw new LunoraError(
+                                  "VALIDATION_ERROR",
+                                  "@lunora/platform-node: createNodePlatform was given `queues` without `onQueueBatch`, so a delivered batch has nowhere to go — pass dispatchQueueBatch from @lunora/queue",
+                              );
+                          }),
+                      queues: options.queues,
+                  });
+
+        const objectStorage = options.objectStorageDirectory === undefined ? undefined : createNodeR2Bucket({ directory: options.objectStorageDirectory });
+
+        // Its own connection and its own file: a `.global()` table is shared by every
+        // shard, so keeping it inside a shard's database would make that shard's
+        // lifecycle (and its single-writer gate) the global store's too.
+        const globalTables = options.globalTablesPath === undefined ? undefined : createNodeGlobalStore({ path: options.globalTablesPath });
+
+        if (globalTables !== undefined) {
+            teardown.push(() => {
+                globalTables.dispose();
+            });
+        }
+
+        // The shard's own connection carries the run rows, so a caller that wants
+        // durable workflows does not have to configure a second store — and cannot
+        // accidentally get the in-process one, which `createNodeWorkflowHost`
+        // refuses to default to for exactly that reason.
+        const workflows =
+            options.workflows === undefined ? undefined : createNodeWorkflowHost({ store: createNodeWorkflowStore(database), workflows: options.workflows });
+
+        const close = (): void => {
+            // Reverse construction order, which puts the scheduler's timers ahead of
+            // the connection they would fire against: `disposeShard` closes it, and a
+            // job timer that fired in between would find it closed. Every teardown is
+            // guarded on its own, so ordering makes the guard the backstop rather than
+            // the mechanism. The copy keeps `close()` callable more than once.
+            for (const undo of teardown.toReversed()) {
+                undo();
+            }
+        };
+
+        return {
+            capabilities: NODE_CAPABILITIES,
+            close,
+            directory,
+            drain,
+            globalTables,
+            kv,
+            objectStorage,
+            queues,
+            scheduler,
+            shard,
+            sockets,
+            workflows,
+            [Symbol.dispose]: close,
+        };
+    } catch (error) {
+        // Roll back what was already built. Nothing else can reach these — the
+        // throw escapes before any platform object exists to call `close()` on,
+        // so the shard's sqlite handle (and its WAL sidecars), the registry's
+        // live shards and the scheduler's armed timers would leak for the life
+        // of the process. A teardown that throws on the way out is swallowed:
+        // the construction error is the one the caller needs to see.
+        for (const undo of teardown.toReversed()) {
+            try {
+                undo();
+            } catch {
+                // Nothing useful to do with it, and rethrowing would hide `error`.
+            }
+        }
+
+        throw error;
+    }
 };
