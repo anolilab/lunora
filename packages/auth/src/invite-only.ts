@@ -62,7 +62,10 @@
  * synthesize an address — `anonymous` writes `temp-<id>@<domain>`, `siwe` writes
  * `<wallet>@<domain>`, `phoneNumber`'s sign-up-on-verification writes a temp
  * address of its own. None of them can match an invitation, so the gate **rejects**
- * them once the first account exists. Do not combine those plugins with this one.
+ * them — but only once the first account exists. With
+ * {@link InviteOnlyOptions.allowFirstUser} on, the bootstrap runs before the
+ * address is ever compared, so the first anonymous session or wallet sign-in is
+ * what claims it. Do not combine those plugins with this one.
  *
  * `AuthAdmin.createUser` (`./admin.ts`) mints through the same internal adapter, so
  * the studio's create-user action is gated too. Issue an invitation first, or call
@@ -395,6 +398,13 @@ const listSignUpInvitations = async (auth: LunoraAuth, options: { pendingOnly?: 
  * Withdraw the invitation for `email`. Deletes the row, so it also forgets a spent
  * one — the account it created is untouched, and removing that is
  * `AuthAdmin.removeUser`'s job.
+ *
+ * Not retroactive, and not atomic against a sign-up already in flight: better-auth
+ * creates the user without wrapping the `before` hook and the insert in one
+ * transaction, so a revoke landing between the two lets that one account through.
+ * There is no conditional consume in the adapter contract to close it with. Treat
+ * revocation as "no further sign-ups", and `AuthAdmin.removeUser` as the way to
+ * undo one that already happened.
  */
 const revokeSignUpInvitation = async (auth: LunoraAuth, input: { email: string }): Promise<void> => {
     const context = await auth.$context;

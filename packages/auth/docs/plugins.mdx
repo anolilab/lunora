@@ -208,7 +208,7 @@ await sendInviteEmail(invite.email, `https://app.example/sign-up?email=${encodeU
 ```
 
 These are trusted server-side calls with **no authorization of their own** — the
-same trust model as [`createAuthAdmin`](/docs/packages/auth#studio-user-dashboard).
+same trust model as [`createAuthAdmin`](#studio-user-dashboard).
 Who counts as an administrator is your application's question, so call them from
 a mutation you already gate. Delivering the invitation is yours too: nothing here
 sends mail, so the returned row is the whole handoff.
@@ -245,11 +245,20 @@ Plugins that mint an account from something other than a real mailbox still
 synthesize an address — `anonymous` writes `temp-<id>@<domain>`, `siwe` writes
 `<wallet>@<domain>`, and `phoneNumber`'s sign-up-on-verification writes a temp
 address of its own. None of them can match an invitation, so the gate **rejects**
-those flows. Do not combine those plugins with this one.
+those flows — but only once a user exists. Under `allowFirstUser: true` the
+bootstrap runs before the address is ever compared, so the first anonymous session
+or wallet sign-in is what claims it. Do not combine those plugins with this one.
 
 Lunora's `AuthAdmin.createUser` — the studio's create-user action — mints through
 the same internal adapter, so it is gated too. Issue an invitation first, or call
 `createSignUpInvitation` from the same operator flow.
+
+Revoking is not retroactive, and not atomic against a sign-up already in flight:
+better-auth does not wrap the `before` hook and the user insert in one
+transaction, and the adapter contract offers no conditional consume, so a revoke
+landing between the two lets that one account through. Read
+`revokeSignUpInvitation` as "no further sign-ups", and reach for
+`AuthAdmin.removeUser` to undo one that already happened.
 
 ### Bootstrapping
 
