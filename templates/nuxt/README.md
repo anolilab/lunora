@@ -2,24 +2,25 @@
 
 A Lunora app on **Nuxt**, scaffolded by `lunora init`.
 
-Real-time queries flow through Lunora's WebSocket transport via `@lunora/vue`'s
-composables, while Nuxt owns routing and SSR. A server route resolves the data
-on the server and the client hydrates it into a **live subscription** — your
-loader is live.
+The scaffold ships a static welcome page plus the wiring behind it: a sharded
+schema, the typed API, and one Cloudflare Worker that serves Nuxt SSR and the
+Lunora realtime plane together. `plugins/lunora.client.ts` already provides the
+browser `LunoraClient`, so `useQuery` / `useMutation` / `hydratePreloaded` from
+`@lunora/vue` resolve in any component you add.
 
-## How the live loader works
+## Making a loader live
 
-1. `server/api/messages.get.ts` builds a request-scoped client with
-   `createServerClient` and runs `preloadQuery` during SSR (forwarding the
-   request cookie so the load runs as the signed-in user). It returns a
-   serializable `Preloaded` token.
-2. `pages/index.vue` fetches that route with `useFetch`, so the token is
-   resolved server-side and embedded in the SSR payload.
-3. `components/MessageFeed.vue` hands the token to `hydratePreloaded`, which
-   seeds a `ref` **synchronously** (no loading flash) and then attaches a live
-   WebSocket subscription that updates on every server delta.
-4. `plugins/lunora.client.ts` provides the browser `LunoraClient` to the app via
-   `createLunora`, so `useQuery` / `useMutation` / `hydratePreloaded` resolve it.
+The scaffold does not load data yet. To go live:
+
+1. Add a server route (e.g. `server/api/messages.get.ts`) that builds a
+   request-scoped client with `createServerClient` and runs `preloadQuery`
+   during SSR (forward the request cookie so the load runs as the signed-in
+   user). It returns a serializable `Preloaded` token.
+2. Fetch that route from a page with `useFetch`, so the token resolves
+   server-side and is embedded in the SSR payload.
+3. Hand the token to `hydratePreloaded` in a component. It seeds a `ref`
+   **synchronously** (no loading flash) and then attaches a live WebSocket
+   subscription that updates on every server delta.
 
 ## Single-worker architecture
 
@@ -46,10 +47,11 @@ deploys that wrapper. One `wrangler.jsonc`, one deploy, a same-origin client.
   app as `default` and the bound `ShardDO` class. `@lunora/nuxt` mounts this.
 - **`wrangler.jsonc`** — the single worker config: `main` points at the
   `worker.ts` wrapper, with the `SHARD` DO binding + migration.
-- **`server/api/messages.get.ts`** — SSR loader; calls `/_lunora/rpc` at the
-  request's own origin (a same-origin sub-request into the in-worker Lunora app).
 - **`plugins/lunora.client.ts`** — the browser `LunoraClient`, pointed at the
-  page's own origin (it reaches `/_lunora/ws` on the same worker).
+  page's own origin in production (it reaches `/_lunora/ws` on the same worker)
+  and at the `wrangler dev` sidecar in dev.
+- **`pages/index.vue`** — the static welcome page. It loads no data; see
+  "Making a loader live" above.
 
 ## Develop
 
@@ -88,9 +90,11 @@ Nitro's output rather than relying on a Nitro export hook). Two Nitro behaviours
 still vary across versions — check them against the toolchain this template pins:
 
 1. **Nitro output path** — `worker.ts` imports `./.output/server/index.mjs`, and
-   `wrangler.jsonc`'s `main` is `worker.ts`. Some Nitro versions emit
-   `dist/server/index.mjs` instead; if the import can't resolve at deploy, point
-   `worker.ts`'s import at whatever `nuxt build` actually produces.
+   `wrangler.jsonc`'s `main` is `worker.ts`; `assets.directory` is
+   `.output/public`, the preset's `output.publicDir`. Some Nitro versions emit
+   `dist/server/index.mjs` and `dist/public` instead; if the import can't resolve
+   at deploy, or wrangler reads 0 files from the assets directory, point both at
+   whatever `nuxt build` actually produces.
 2. **WebSocket upgrade pass-through** — the live feed needs Nitro to return the
    Lunora app's `101 Switching Protocols` response (carrying its Cloudflare
    `webSocket`) untouched. RPC (plain JSON) works regardless; if live

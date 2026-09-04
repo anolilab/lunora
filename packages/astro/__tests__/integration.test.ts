@@ -99,7 +99,7 @@ describe("lunora() Astro integration", () => {
             hook(contextFor(directory, warn));
 
             expect(warn).toHaveBeenCalledTimes(1);
-            expect(warn.mock.calls[0]?.[0]).toMatch(/couldn't find a `withLunora\(\.\.\.\)` call/u);
+            expect(warn.mock.calls[0]?.[0]).toMatch(/couldn't find a `withLunora\(\.\.\.\)` or `\.buildFrameworkWorker\(\.\.\.\)` call/u);
         });
 
         it("is silent when serverEntry exists and calls withLunora", () => {
@@ -109,6 +109,28 @@ describe("lunora() Astro integration", () => {
             writeFileSync(
                 join(directory, "worker.ts"),
                 'import { withLunora } from "@lunora/astro";\nexport default withLunora(astroWorker, (env) => ({ shardDO: env.SHARD }));\n',
+            );
+
+            const warn = vi.fn<(message: string) => void>();
+            const integration = lunora({ serverEntry: "worker.ts" });
+            const hook = integration.hooks["astro:config:done"] as (context: ConfigDoneHookArgument) => void;
+
+            hook(contextFor(directory, warn));
+
+            expect(warn).not.toHaveBeenCalled();
+        });
+
+        it("is silent when serverEntry composes with the generated builder's .buildFrameworkWorker()", () => {
+            expect.assertions(1);
+
+            // The scaffolded template — and every other class-B template — composes
+            // with `defineApp().…buildFrameworkWorker(host)`, not the standalone
+            // `withLunora` helper. Recognising only `withLunora(` made a correctly
+            // composed worker warn "subscriptions will silently 404" on every build.
+            directory = mkdtempSync(join(tmpdir(), "lunora-astro-"));
+            writeFileSync(
+                join(directory, "worker.ts"),
+                'import { handle } from "@astrojs/cloudflare/handler";\nconst app = defineApp().shard((env) => env.SHARD).buildFrameworkWorker(handle);\nexport default app;\n',
             );
 
             const warn = vi.fn<(message: string) => void>();
@@ -137,7 +159,7 @@ describe("lunora() Astro integration", () => {
             hook(contextFor(directory, warn));
 
             expect(warn).toHaveBeenCalledTimes(1);
-            expect(warn.mock.calls[0]?.[0]).toMatch(/couldn't find a `withLunora\(\.\.\.\)` call/u);
+            expect(warn.mock.calls[0]?.[0]).toMatch(/couldn't find a `withLunora\(\.\.\.\)` or `\.buildFrameworkWorker\(\.\.\.\)` call/u);
         });
 
         it("prints a wiring snippet that actually resolves and runs", () => {

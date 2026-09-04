@@ -8,11 +8,13 @@ interface Env extends Record<string, unknown> {
 }
 
 /**
- * The single Cloudflare Worker for this app — PLAN4 class-B composition,
- * expressed with the generated `defineApp` builder.
+ * The single Cloudflare Worker for this app (`wrangler.jsonc`'s `main`) — PLAN4
+ * class-B composition, expressed with the generated `defineApp` builder.
+ * `@astrojs/cloudflare`'s embedded `@cloudflare/vite-plugin` builds THIS file
+ * into `dist/server/entry.mjs` and writes the `.wrangler/deploy/config.json`
+ * redirect that `wrangler deploy` follows.
  * `.buildFrameworkWorker(host)` folds Astro's adapter SSR handler (`handle`
- * from `@astrojs/cloudflare/handler`, the Astro 6 / @astrojs/cloudflare v13
- * pattern) in as the framework host: `/_lunora/{rpc,ws,admin}` route to Lunora
+ * from `@astrojs/cloudflare/handler`) in as the framework host: `/_lunora/{rpc,ws,admin}` route to Lunora
  * (forwarded to the `ShardDO` on `env.SHARD`) and everything else renders via
  * Astro. Add `.storage()` / `.auth()` / `.global()` as you adopt those packages.
  */

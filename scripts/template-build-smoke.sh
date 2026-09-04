@@ -16,7 +16,11 @@
 #   6. Typechecks the scaffold with the checker that can read its payload,
 #      failing on ANY diagnostic, then proves the checker actually READ that
 #      payload (the coverage floor — see set_typecheck).
-#   7. Records PASS / XFAIL(expected failure) / XPASS(unexpected pass) / FAIL.
+#   7. Runs the template's own deploy path as a credential-free dry run and gates
+#      on its exit code, the binding table it printed and the bundle it emitted
+#      (see run_deploy_dryrun). Building is not shipping: three release-blocking
+#      defects lived in that gap simultaneously.
+#   8. Records PASS / XFAIL(expected failure) / XPASS(unexpected pass) / FAIL.
 #
 # Exit codes:
 #   0  — all results were PASS or XFAIL
@@ -46,6 +50,8 @@
 # What this does NOT cover:
 #   - The remote giget fetch path (needs network + a published template ref).
 #   - Starting the Vite+workerd dev server (long-running, needs a real CF account).
+#   - A real publish. The deploy leg is `--dry-run`, so it proves the worker
+#     bundles, binds and parses — not that Cloudflare accepts it.
 #   - Running codegen on the *buildable* templates' scaffolds — their bundler
 #     runs it via the Vite plugin / astro integration. Only the no-build path
 #     invokes `lunora codegen` directly here; clean-machine-smoke.sh covers it
@@ -271,6 +277,187 @@ set_typecheck() {
             ERROR_RE='error TS'
             ;;
     esac
+}
+
+# ---------------------------------------------------------------------------
+# Per-template credential-free deploy dry run.
+#
+# `pnpm run build` says a scaffold COMPILES. It says nothing about whether the
+# thing it compiled can be deployed, and that gap is where three separate
+# release-blocking defects lived at once, invisible to every gate in this repo:
+#
+#   - templates/analog pointed `main` at Nitro's output, which exports only
+#     `default` — `wrangler deploy` rejected every fresh scaffold with "Durable
+#     Objects … not exported in your entrypoint file: ShardDO".
+#   - templates/astro shipped its composed entry as `src/worker.ts`, which
+#     `lunora deploy` passes to wrangler POSITIONALLY; combined with the
+#     @astrojs/cloudflare redirect's `no_bundle: true` that uploaded the raw,
+#     untranspiled TypeScript source as the worker — a 1.4 KiB "successful"
+#     deploy.
+#   - templates/{nuxt,analog} bound no `assets` directory, so Nitro's Cloudflare
+#     runtime (which serves client assets ONLY via `env.ASSETS`) 404'd every
+#     `/_nuxt/*` request while the SSR HTML rendered fine.
+#
+# Note what those three need: an exit code catches the first, the emitted BUNDLE
+# catches the second, and the UPLOADED ASSET COUNT catches the third. A dry run
+# that only checked its exit status would have passed astro and nuxt. All four
+# assertions below are load-bearing; see run_deploy_dryrun.
+#
+# Everything here is offline and unauthenticated: `wrangler deploy --dry-run`
+# validates, bundles and prints the binding table without contacting the API,
+# and `lunora build` is exactly `wrangler deploy --dry-run --outdir` behind the
+# CLI's own pre-deploy gates (codegen, wrangler validation, schema drift).
+#
+#   DEPLOY_DRYRUN_CMDS — argv arrays to run in the scaffold, `|`-separated per
+#                        command so several can share one variable. The bundle
+#                        output directory is passed in.
+#
+# Each command MIRRORS what that template's own `deploy` script runs — a gate
+# against a deploy path no user takes proves nothing about the one they do.
+# ---------------------------------------------------------------------------
+set_deploy_dryrun() {
+    local out="$2"
+
+    case "$1" in
+        analog | nuxt)
+            # `deploy` is `<build> && wrangler deploy` — Nitro owns the adapter, so
+            # there is no `lunora deploy` in the path to mirror.
+            DEPLOY_DRYRUN_CMDS=("pnpm|exec|wrangler|deploy|--dry-run|--outdir|$out")
+            ;;
+        next)
+            # Two workers, two configs. The ROOT `wrangler.jsonc` is the Lunora
+            # worker (`deploy:lunora`); the Next SSR worker is built by OpenNext and
+            # deployed from `wrangler.opennext.jsonc` (`deploy:next`).
+            #
+            # `wrangler deploy --dry-run --config …` stands in for
+            # `opennextjs-cloudflare deploy`, which has no dry run and would reach
+            # the API to populate the incremental cache. The OpenNext BUILD is real:
+            # it is what produces `.open-next/worker.js`, and `pnpm run build`
+            # (`next build`) does not.
+            DEPLOY_DRYRUN_CMDS=(
+                "pnpm|exec|wrangler|deploy|--dry-run|--outdir|$out/lunora"
+                "pnpm|exec|opennextjs-cloudflare|build|--config|wrangler.opennext.jsonc"
+                "pnpm|exec|wrangler|deploy|--dry-run|--config|wrangler.opennext.jsonc|--outdir|$out/next"
+            )
+            ;;
+        *)
+            # `deploy` is `<build> && lunora deploy`. `lunora build` is that command
+            # with `--dry-run --outdir`, so it exercises the CLI's composed-entry
+            # resolution, its preflights and the wrangler validator — the parts a
+            # bare `wrangler deploy --dry-run` would skip.
+            DEPLOY_DRYRUN_CMDS=("node|$REPO_ROOT/packages/cli/dist/bin.mjs|build|--out-dir|$out")
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# Run this template's deploy dry runs and gate on what they produced.
+#
+# `expect_assets` is derived, not hand-maintained: a template with a `build`
+# script produces a client bundle, and a client bundle that no worker binds as
+# assets is a 404 per file.
+#
+# Prints its own FAIL lines and returns non-zero; the caller records the stage.
+# ---------------------------------------------------------------------------
+run_deploy_dryrun() {
+    local tname="$1"
+    local scaffold_dir="$2"
+    local out="$3"
+    local log="$4"
+    local expect_assets="$5"
+
+    : > "$log"
+    rm -rf "$out"
+
+    # `lunora add auth-ui` pulled in the `auth` registry item, which writes a D1
+    # binding carrying a `<replace-with-d1-create-id>` placeholder — and
+    # `lunora build` hard-blocks on it, correctly: shipping that placeholder is a
+    # broken deploy. Resolving it for real means `wrangler d1 create`, which needs
+    # a Cloudflare account. So stand a syntactically valid id in, the same way this
+    # matrix already substitutes tarball overrides and a typechecker into the
+    # scaffold. The placeholder gate has its own coverage in
+    # `packages/cli/__tests__/commands/deploy.test.ts`; what is measured here is
+    # whether the WORKER deploys.
+    local cfg
+    while IFS= read -r cfg; do
+        "${SED_INPLACE[@]}" 's/<replace-with-d1-create-id>/00000000-0000-4000-8000-000000000000/g' "$cfg"
+    done < <(find "$scaffold_dir" -maxdepth 1 -type f -name 'wrangler*.json*')
+
+    set_deploy_dryrun "$tname" "$out"
+
+    local spec
+    for spec in "${DEPLOY_DRYRUN_CMDS[@]}"; do
+        local -a argv=()
+        # `read -r -a`: `read -A` is zsh, and this script is bash.
+        IFS='|' read -r -a argv <<< "$spec"
+
+        echo "  ==> deploy dry run: ${argv[*]}"
+
+        local status=0
+        { (cd "$scaffold_dir" && "${argv[@]}" 2>&1) \
+            | sed -E "s/$(printf '\033')\[[0-9;]*m//g" >> "$log"; } || status=$?
+
+        if [[ "$status" -ne 0 ]]; then
+            echo "  FAIL: \`${argv[*]}\` in $tname exited $status (see $log)"
+            echo "        A scaffold that builds but cannot be deployed is broken for every user of this template."
+            tail -25 "$log" | sed 's/^/    /'
+            return 1
+        fi
+    done
+
+    # 1. The Durable Object binding must survive into the deployed worker. Wrangler
+    #    prints the binding table it is about to publish; a table without the DO
+    #    means the deploy path resolved a config the template does not ship.
+    if ! grep -qF "env.SHARD (ShardDO)" "$log"; then
+        echo "  FAIL: no \`env.SHARD (ShardDO)\` binding in $tname's deploy dry run (see $log)"
+        echo "        Every template's realtime plane needs the SHARD Durable Object; wrangler printed a"
+        echo "        binding table without it, so the deploy path resolved a config that does not bind it."
+        return 1
+    fi
+
+    # 2. A client build the deploy never uploads renders SSR HTML and 404s every
+    #    script and stylesheet it references. Wrangler cannot know that is wrong,
+    #    so the dry run exits 0 — this is the only place it is caught.
+    #
+    #    The signal is wrangler's own `Read N files from the assets directory …`,
+    #    NOT an `env.ASSETS` line: a worker that binds the asset fetcher and one
+    #    whose assets are served by the platform's router ahead of it are both
+    #    correct, and the class-A templates take the second shape (their adapter's
+    #    redirect config sets `assets.directory` with no `binding`). Requiring the
+    #    binding failed react-router, whose assets were being uploaded the whole
+    #    time. `[1-9]` because "Read 0 files" is a wrong directory, which is the
+    #    same 404 with a config that looks right.
+    if [[ "$expect_assets" == "yes" ]] && ! grep -qE "Read [1-9][0-9]* files? from the assets directory" "$log"; then
+        echo "  FAIL: $tname's deploy dry run uploaded no client assets (see $log)"
+        echo "        This template has a \`build\` script, so it emits a client bundle — and a client bundle the"
+        echo "        deploy never uploads 404s file by file against a page that renders fine. wrangler prints"
+        echo "        \`Read N files from the assets directory …\` when it has one; it printed none, or none with"
+        echo "        any files in it."
+        echo "        Add \`assets: { directory: … }\` to the wrangler config (with \`binding: \"ASSETS\"\` if the"
+        echo "        worker serves them itself, as Nitro's Cloudflare runtime does), or have the framework"
+        echo "        adapter inject one."
+        return 1
+    fi
+
+    # 3. The emitted bundle must be JavaScript. wrangler will happily "deploy" a
+    #    raw `.ts` entry when the config it resolved carries `no_bundle: true` (an
+    #    adapter redirect does) and something overrides `main` with a source path —
+    #    exit 0, binding table printed, and a worker that is a syntax error in
+    #    workerd. Nothing else here can tell that apart from a real deploy.
+    local ts_in_bundle
+    ts_in_bundle="$(find "$out" -type f \( -name '*.ts' -o -name '*.tsx' \) 2> /dev/null | head -5)"
+
+    if [[ -n "$ts_in_bundle" ]]; then
+        echo "  FAIL: $tname's deploy dry run emitted TypeScript SOURCE as the worker bundle:"
+        echo "$ts_in_bundle" | sed "s|$out/|    |"
+        echo "        The entry was passed through untranspiled — the deploy would succeed and the worker"
+        echo "        would fail to parse in workerd. Check what \`main\`/the positional entry resolved to."
+        return 1
+    fi
+
+    echo "  ==> deploy dry run OK ($(grep -c 'env\.' "$log" || true) binding line(s) across ${#DEPLOY_DRYRUN_CMDS[@]} command(s))"
+
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -590,6 +777,10 @@ FAIL=()
 XFAIL=()
 XPASS=()
 SKIP_BUILD=()
+# Templates whose deploy dry run actually ran. Every FAIL path above it
+# `continue`s, so a template missing from this list never reached the gate — and
+# a summary that did not say so would read as deploy coverage it does not have.
+DEPLOY_CHECKED=()
 # Templates whose auth-ui view the detector actually resolved. Everything the
 # matrix is really for hangs off a non-empty `authui_view`, so if that comes back
 # empty for every template the run proves nothing and has to say so.
@@ -846,6 +1037,15 @@ for tname in "${TEMPLATES[@]}"; do
         fi
 
         echo "  ==> codegen + typecheck OK"
+
+        # No `build` script means no client bundle, so no assets binding is
+        # expected — but the worker still has to deploy.
+        if ! run_deploy_dryrun "$tname" "$scaffold_dir" "$SCRATCH/${tname}-bundle" "$RESULTS_DIR/${tname}-deploy.log" "no"; then
+            FAIL+=("$tname(deploy)")
+            continue
+        fi
+
+        DEPLOY_CHECKED+=("$tname")
         PASS+=("$tname")
         continue
     fi
@@ -1076,6 +1276,21 @@ for tname in "${TEMPLATES[@]}"; do
     fi
 
     if [[ $build_exit -eq 0 ]]; then
+        # -- deploy dry run -------------------------------------------------
+        # Only meaningful after a successful build: every deploy path here consumes
+        # build output, so running it against a failed build would report the build
+        # failure a second time in a less legible place. An XFAIL template (expected
+        # build failure) never reaches this branch and is not asked to deploy.
+        #
+        # This template has a `build` script, so it emits a client bundle the deploy
+        # has to carry.
+        if ! run_deploy_dryrun "$tname" "$scaffold_dir" "$SCRATCH/${tname}-bundle" "$RESULTS_DIR/${tname}-deploy.log" "yes"; then
+            FAIL+=("$tname(deploy)")
+            continue
+        fi
+
+        DEPLOY_CHECKED+=("$tname")
+
         # Build passed.
         if is_xfail "$tname"; then
             echo "  XPASS: $tname was expected to fail but passed — remove from XFAIL_BUILD"
@@ -1135,6 +1350,10 @@ echo "  PASS     : ${#PASS[@]}   (${PASS[*]+${PASS[*]}})"
 # rather than failed: having no `build` script is legitimate for some frameworks,
 # but a green summary must say which templates got the lighter treatment.
 echo "  NO BUILD : ${#SKIP_BUILD[@]}   (${SKIP_BUILD[*]+${SKIP_BUILD[*]}})"
+# The deploy gate is the only thing here that proves a scaffold can SHIP, and it
+# is skipped for anything that failed earlier. Print who actually reached it, so
+# a green summary cannot be read as deploy coverage of the whole matrix.
+echo "  DEPLOYED : ${#DEPLOY_CHECKED[@]}   (${DEPLOY_CHECKED[*]+${DEPLOY_CHECKED[*]}}) — passed a credential-free deploy dry run"
 echo "  XFAIL    : ${#XFAIL[@]}  (${XFAIL[*]+${XFAIL[*]}})"
 echo "  FAIL     : ${#FAIL[@]}   (${FAIL[*]+${FAIL[*]}})"
 echo "  XPASS    : ${#XPASS[@]}  (${XPASS[*]+${XPASS[*]}})"

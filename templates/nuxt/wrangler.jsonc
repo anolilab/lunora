@@ -14,6 +14,13 @@
     "main": "worker.ts",
     "compatibility_date": "2026-06-10",
     "compatibility_flags": ["nodejs_compat"],
+    // Nitro's Cloudflare runtime serves client assets ONLY through `env.ASSETS`
+    // (`if (env.ASSETS && isPublicAssetURL(url.pathname)) return env.ASSETS.fetch(request)`).
+    // Without this binding the SSR HTML renders and every `/_nuxt/*` request
+    // 404s — no hydration, no Lunora client. `.output/public` is the
+    // `cloudflare_module` preset's `output.publicDir`, the same directory Nitro's
+    // own `wrangler deploy … --assets` hint points at.
+    "assets": { "binding": "ASSETS", "directory": ".output/public" },
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },

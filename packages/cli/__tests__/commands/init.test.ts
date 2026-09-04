@@ -472,7 +472,7 @@ describe("lunora init", () => {
         });
 
         it("next template scaffolds app router + two-worker entries", async () => {
-            expect.assertions(12);
+            expect.assertions(13);
 
             const result = await runInitCommand({
                 cwd: workdir,
@@ -491,9 +491,13 @@ describe("lunora init", () => {
             expect(existsSync(join(target, "app", "layout.tsx"))).toBe(true);
             expect(existsSync(join(target, "app", "page.tsx"))).toBe(true);
             expect(existsSync(join(target, "lunora", "schema.ts"))).toBe(true);
-            // Two-worker split: Next SSR worker config + standalone Lunora worker.
+            // Two-worker split. The ROOT `wrangler.jsonc` is the LUNORA worker — that is
+            // where `lunora verify|deploy|dev` look, and they require the SHARD binding —
+            // and the Next SSR worker config sits beside it, passed to every OpenNext
+            // command with `--config`.
             expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
-            expect(existsSync(join(target, "wrangler.lunora.jsonc"))).toBe(true);
+            expect(existsSync(join(target, "wrangler.opennext.jsonc"))).toBe(true);
+            expect(readFileSync(join(target, "wrangler.jsonc"), "utf8")).toContain('"class_name": "ShardDO"');
             expect(existsSync(join(target, "lunora", "server.ts"))).toBe(true);
 
             const pkg = readFileSync(join(target, "package.json"), "utf8");

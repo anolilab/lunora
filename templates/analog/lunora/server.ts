@@ -15,9 +15,9 @@ interface Env extends Record<string, unknown> {
  * The worker runs *in-process* inside Analog's Nitro server: the server route at
  * `src/server/routes/_lunora/[...].ts` imports this `app` and calls
  * `app.fetch(request, env, ctx)` for every `/_lunora/**` request. The `ShardDO`
- * class is re-exported to the Cloudflare worker entrypoint by the project root's
- * `exports.cloudflare.ts`, so a single Nitro deploy carries both the Analog SSR
- * handler and the Durable Object class.
+ * class reaches the deployed Cloudflare worker via the project root's
+ * `worker.ts` wrapper (`wrangler.jsonc`'s `main`), so a single deploy carries
+ * both the Analog SSR handler and the Durable Object class.
  *
  * Add `@lunora/storage` / `@lunora/scheduler` / `@lunora/auth` or a `.global()`
  * table and codegen surfaces `.storage()` / `.scheduler()` / `.auth()` /

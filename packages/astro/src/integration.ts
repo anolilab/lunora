@@ -55,9 +55,9 @@ interface ConfigDoneContext {
     };
 }
 
-/** Copy/paste wiring snippet shown when `serverEntry` doesn't call `withLunora`. */
+/** Copy/paste wiring snippet shown when `serverEntry` composes nothing. */
 const WITH_LUNORA_SNIPPET = [
-    "// src/worker.ts",
+    "// src/server.ts",
     'import { handle } from "@astrojs/cloudflare/handler";',
     'import { withLunora } from "@lunora/astro";',
     "",
@@ -69,21 +69,33 @@ const WITH_LUNORA_SNIPPET = [
 ].join("\n");
 
 /**
- * Matches an actual `withLunora(...)` CALL — e.g. `withLunora(astroWorker, …)`,
- * `export default withLunora(…)`, or `ns.withLunora(…)`. Deliberately does NOT
- * match `import { withLunora } from "@lunora/astro";`: that specifier is
- * followed by `}`/whitespace/`from`, never directly by `(`, so a file that
- * imports the helper but forgets to invoke it is correctly reported as missing
- * the wiring instead of passing on the import alone.
+ * Matches an actual composition CALL in the server entry — either spelling of the
+ * same seam:
+ *
+ * `withLunora(astroWorker, …)` is the standalone helper (an alias of
+ * `withFrameworkWorker`), and is what {@link WITH_LUNORA_SNIPPET} shows.
+ * `.buildFrameworkWorker(host)` is the generated `defineApp` builder's terminal,
+ * and is what the scaffolded template and every other class-B template use. It
+ * was missing here, so a fresh `astro build` warned "subscriptions will silently
+ * 404" about a worker that was correctly composed.
+ *
+ * Deliberately does NOT match `import { withLunora } from "@lunora/astro";`: that
+ * specifier is followed by `}`/whitespace/`from`, never directly by `(`, so a file
+ * that imports the helper but forgets to invoke it is correctly reported as
+ * missing the wiring instead of passing on the import alone.
  */
-const WITH_LUNORA_CALL_PATTERN = /\bwithLunora\s*\(/u;
+const WITH_LUNORA_CALL_PATTERN = /\b(?:withLunora|withFrameworkWorker|buildFrameworkWorker)\s*\(/u;
 
 /** Options for the `lunora` integration. */
 interface LunoraIntegrationOptions {
     /**
-     * Path (or specifier) of the module that calls `withLunora` and is the
-     * composed worker's `export default`. Documented for the wiring story; when
-     * omitted the integration assumes the conventional `src/worker.ts`.
+     * Path (or specifier) of the module that composes the Lunora plane with the
+     * Astro handler and is the composed worker's `export default`. Documented for
+     * the wiring story; when omitted the integration assumes the conventional
+     * `src/server.ts` — deliberately NOT `src/worker.ts`, which `lunora deploy`
+     * treats as a SvelteKit-shaped entry to pass to wrangler positionally, and
+     * which the `@astrojs/cloudflare` redirect's `no_bundle: true` then uploads
+     * untranspiled.
      */
     readonly serverEntry?: string;
 }
@@ -105,10 +117,11 @@ interface LunoraIntegrationOptions {
  *
  * What it does:
  *
- * - Documents the `serverEntry` (default `src/worker.ts`) where the
- *   `withLunora(astroWorker, { shardDO: env.SHARD, … })` composition lives.
+ * - Documents the `serverEntry` (default `src/server.ts`) where the
+ *   `withLunora(astroWorker, { shardDO: env.SHARD, … })` composition — or the
+ *   generated builder's `.buildFrameworkWorker(host)` — lives.
  * - Checks, at `astro:config:done`, that `serverEntry` exists and contains an
- *   actual `withLunora(...)` CALL (not merely an import of it) — and warns
+ *   actual composition CALL (not merely an import of it) — and warns
  *   (does not fail the build) when it doesn't, so a missing wrapper is caught
  *   at build time instead of shipping a worker where `/_lunora/*` is unrouted
  *   and realtime silently 404s.
@@ -122,7 +135,7 @@ interface LunoraIntegrationOptions {
  * middleware) without changing the public surface.
  */
 const lunora = (options: LunoraIntegrationOptions = {}): AstroIntegrationLike => {
-    const serverEntry = (options.serverEntry ?? "src/worker.ts").trim();
+    const serverEntry = (options.serverEntry ?? "src/server.ts").trim();
 
     return {
         hooks: {
@@ -183,7 +196,7 @@ const lunora = (options: LunoraIntegrationOptions = {}): AstroIntegrationLike =>
 
                 if (!WITH_LUNORA_CALL_PATTERN.test(source)) {
                     warn(
-                        `@lunora/astro: couldn't find a \`withLunora(...)\` call in the server entry "${serverEntry}" — \`/_lunora/*\` (Lunora realtime) will be unrouted and subscriptions will silently 404. Wrap the Astro worker:\n\n${WITH_LUNORA_SNIPPET}`,
+                        `@lunora/astro: couldn't find a \`withLunora(...)\` or \`.buildFrameworkWorker(...)\` call in the server entry "${serverEntry}" — \`/_lunora/*\` (Lunora realtime) will be unrouted and subscriptions will silently 404. Compose the Astro worker:\n\n${WITH_LUNORA_SNIPPET}`,
                     );
                 }
             },
