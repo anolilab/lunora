@@ -154,8 +154,10 @@ interface ContainerConfig {
      * of activity — a runaway-cost backstop on top of the idle
      * {@link ContainerConfig.sleepAfter}. Same grammar as `sleepAfter`
      * (`"30s"`, `"5m"`, `"1h"`, or a plain number of seconds). When it elapses,
-     * the `LunoraContainer.onHardTimeoutExpired` hook runs (default: `stop()`).
-     * (Upstream cloudflare/containers#85.)
+     * the `LunoraContainer.onHardTimeoutExpired` hook runs (default: `stop()`,
+     * which sends SIGTERM and does not escalate — a container that ignores the
+     * signal outlives its cap unless the hook is overridden to follow up with
+     * `destroy()`). (Upstream cloudflare/containers#85.)
      */
     hardTimeout?: number | string;
 
