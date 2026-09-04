@@ -1,7 +1,7 @@
 import { fingerprintError } from "@lunora/fingerprint";
 import { LunoraError } from "@lunora/server";
 
-import type { AlertChannel, AlertDelivery as AlertDeliveryBase, FiringRule, MetricObservation, MetricRule, MetricTarget } from "../src/telemetry/alerts";
+import type { AlertDelivery as AlertDeliveryBase, FiringRule, MetricRule, MetricTarget } from "../src/telemetry/alerts";
 import { fireCrossedRules, fireMetricRules } from "../src/telemetry/alerts";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
@@ -74,52 +74,11 @@ const telemetryEvent = v.object({
     // Event time in epoch ms (decoded from the span's end time).
     ts: v.number(),
 });
-
-interface IssueRow {
-    _id: Id<"issues">;
-    count: number;
-    lastSeen: number;
-}
-
-interface IncidentRow {
-    _id: Id<"incidents">;
-    count: number;
-    lastSeen: number;
-}
-
-interface AlertRuleRow {
-    _id: Id<"alertRules">;
-    baselineWindows?: number;
-    channel: AlertChannel;
-    comparator?: "gt" | "lt";
-    destination: string;
-    enabled: boolean;
-    functionPath?: string;
-    mode?: "deviation" | "threshold";
-    name: string;
-    target: "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime";
-    threshold: number;
-    windowMinutes?: number;
-}
-
-/** A metric rule's persisted firing latch (alertRuleState), read + advanced by the ingest. */
-interface AlertRuleStateRow {
-    _id: Id<"alertRuleState">;
-    firing: boolean;
-    ruleId: Id<"alertRules">;
-}
-
 /** Count-crossing rule targets the ingest evaluates via `fireCrossedRules`. */
 const COUNT_TARGETS = new Set(["incident", "issue"]);
 
 /** Metric-window rule targets the ingest evaluates via `fireMetricRules`. */
 const METRIC_TARGETS = new Set<MetricTarget>(["error_rate", "latency_p95", "llm_cost"]);
-
-/** One stored observation row, as the metric-rule window read consumes it. */
-interface MetricObservationRow extends MetricObservation {
-    organizationId: Id<"organizations">;
-}
-
 /** Recent spans scanned when a metric rule needs its window (bounds the read). */
 const METRIC_SCAN_LIMIT = 2000;
 
@@ -207,7 +166,7 @@ export const upsertIssue = async (
     now: number,
 ): Promise<{ after: number; before: number }> => {
     const { page } = await context.db.issues.findMany({ where: { hash: group.hash, organizationId } });
-    const existing = (page as unknown as IssueRow[])[0];
+    const existing = page[0];
     const before = existing ? existing.count : 0;
 
     if (existing) {
@@ -249,7 +208,7 @@ export const upsertIncident = async (
     now: number,
 ): Promise<{ after: number; before: number }> => {
     const { page } = await context.db.incidents.findMany({ where: { hash: group.hash, organizationId } });
-    const existing = (page as unknown as IncidentRow[])[0];
+    const existing = page[0];
     const before = existing ? existing.count : 0;
 
     if (existing) {
@@ -334,7 +293,7 @@ export const ingest = mutation
                 });
             }
             const { page: rulePage } = await context.db.alertRules.findMany({ where: { organizationId: args.organizationId } });
-            const enabledRules = (rulePage as unknown as AlertRuleRow[]).filter((rule) => rule.enabled);
+            const enabledRules = rulePage.filter((rule) => rule.enabled);
             // Count-crossing rules (issue/incident) evaluated per upserted group below.
             const rules: FiringRule[] = enabledRules
                 .filter((rule) => COUNT_TARGETS.has(rule.target))
@@ -351,7 +310,7 @@ export const ingest = mutation
             // Metric-window rules (error_rate/latency_p95/llm_cost) evaluated once
             // over the freshly-ingested observation window, after the loop.
             const metricRules: MetricRule[] = enabledRules
-                .filter((rule): rule is AlertRuleRow & { target: MetricTarget } => METRIC_TARGETS.has(rule.target as MetricTarget))
+                .filter((rule): rule is (typeof enabledRules)[number] & { target: MetricTarget } => METRIC_TARGETS.has(rule.target as MetricTarget))
                 .map((rule) => {
                     return {
                         baselineWindows: rule.baselineWindows,
@@ -435,9 +394,9 @@ export const ingest = mutation
                     orderBy: [{ startedAt: "desc" }],
                     where: { organizationId: args.organizationId },
                 });
-                const windowObservations = observationPage as unknown as MetricObservationRow[];
+                const windowObservations = observationPage;
                 const { page: statePage } = await context.db.alertRuleState.findMany({ where: { organizationId: args.organizationId } });
-                const stateByRule = new Map((statePage as unknown as AlertRuleStateRow[]).map((row) => [row.ruleId as string, row]));
+                const stateByRule = new Map(statePage.map((row) => [row.ruleId as string, row]));
 
                 const outcome = await fireMetricRules(
                     metricRules,
@@ -484,13 +443,6 @@ export const OBSERVATION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Rows one prune tick deletes. Bounds a single mutation; a backlog drains over ticks. */
 const PRUNE_BATCH = 1000;
-
-/** One stored observation row, for the retention scan. */
-interface ObservationRow {
-    _id: Id<"observations">;
-    startedAt: number;
-}
-
 /** Delete span observations past retention (Traces). SYSTEM only (cron dispatch). */
 export const pruneObservations = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
     const cutoff = context.now - OBSERVATION_RETENTION_MS;
@@ -500,7 +452,7 @@ export const pruneObservations = internalMutation.mutation(async ({ ctx: context
     // and PRUNE_BATCH bounds the work one cron tick does — a table far past retention
     // converges over several ticks instead of timing out on one.
     const { page } = await context.db.observations.findMany({ limit: PRUNE_BATCH, orderBy: [{ startedAt: "asc" }], where: { startedAt: { lt: cutoff } } });
-    const stale = page as unknown as ObservationRow[];
+    const stale = page;
 
     for (const row of stale) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple

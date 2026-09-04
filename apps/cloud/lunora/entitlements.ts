@@ -1,10 +1,10 @@
-import type { Entitlements, Subscription } from "@lunora/payment";
+import type { Entitlements, ProviderId, Subscription, SubscriptionState } from "@lunora/payment";
 import { resolveEntitlements } from "@lunora/payment";
 import { LunoraError } from "@lunora/server";
 
 import type { QuotaResource } from "../src/billing/plans";
 import { effectiveLimit, LUNORA_CLOUD_PLANS } from "../src/billing/plans";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as StoredRow, Id } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
 
 /**
@@ -16,11 +16,34 @@ import type { QueryCtx as QueryContext } from "./_generated/server.js";
  * baseline, so a non-subscriber is always bounded.
  */
 
+/**
+ * Adapt a stored subscription row to `@lunora/payment`'s `Subscription`.
+ *
+ * The row is keyed by Lunora's `_id`; the payment contract requires `id`. Nothing
+ * in `resolveEntitlements` reads it today, which is why the two shapes could sit
+ * behind a cast without anyone noticing — but the cast asserted a property that
+ * was never there, so the first reader of `id` would have found `undefined`.
+ */
+export const toSubscription = (row: StoredRow<"subscriptions">): Subscription => {return {
+    ...row,
+    id: row._id,
+    // `subscriptions` is `.externallyManaged()` — the payment webhook sync owns
+    // these two columns, so the schema keeps them `v.string()` instead of
+    // restating the provider layer's unions. Narrowed here rather than filtered:
+    // a value this build does not recognize must not silently drop a paying
+    // org's subscription out of entitlement resolution.
+    provider: row.provider as ProviderId,
+    state: row.state as SubscriptionState,
+}};
+
 /** Resolve an org's entitlements from its synced subscription state. */
 export const orgEntitlements = async (context: QueryContext, organizationId: Id<"organizations">): Promise<Entitlements> => {
     const { page } = await context.db.subscriptions.findMany({ where: { referenceId: organizationId } });
 
-    return resolveEntitlements(LUNORA_CLOUD_PLANS, page as unknown as Subscription[]);
+    return resolveEntitlements(
+        LUNORA_CLOUD_PLANS,
+        page.map((row) => toSubscription(row)),
+    );
 };
 
 /** The effective per-resource limit for an org, resolved from its subscriptions. */

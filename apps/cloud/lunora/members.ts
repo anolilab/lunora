@@ -43,7 +43,7 @@ export const add = mutation
             where: { organizationId: arguments_.organizationId, userId: arguments_.userId },
         });
 
-        const existing = (page as unknown as MemberRow[])[0];
+        const existing = page[0];
 
         if (existing) {
             throw new LunoraError("CONFLICT", "user is already a member");
@@ -51,7 +51,7 @@ export const add = mutation
 
         const all = await context.db.members.findMany({ where: { organizationId: arguments_.organizationId } });
 
-        await assertWithinQuota(context, arguments_.organizationId, "members", (all.page as unknown as MemberRow[]).length);
+        await assertWithinQuota(context, arguments_.organizationId, "members", all.page.length);
 
         return context.db.insert("members", {
             createdAt: context.now,
@@ -93,7 +93,7 @@ export const setRole = mutation
 
         if (target.role === "owner" && newRole !== "owner") {
             const { page } = await context.db.members.findMany({ where: { organizationId } });
-            const owners = (page as unknown as MemberRow[]).filter((member) => member.role === "owner");
+            const owners = page.filter((member) => member.role === "owner");
 
             if (owners.length <= 1) {
                 throw new LunoraError("CONFLICT", "cannot demote the last owner");

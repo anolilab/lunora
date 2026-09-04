@@ -189,7 +189,7 @@ export const ShardDO = createShardDO({
     payment: (env) => paymentConfig(env),
 });
 
-interface Env {
+type Env = {
     /** Secret backing the studio's better-auth sessions. */
     AUTH_SECRET?: string;
     /** Base URL better-auth resolves callbacks against. */
@@ -223,7 +223,7 @@ interface Env {
     SHARD: ShardNamespaceLike;
     /** AE dataset the dispatcher writes tenant request usage to. Defaults to `lunora_tenant_usage`. */
     USAGE_ANALYTICS_DATASET?: string;
-}
+};
 
 /** Build the OAuth provider map from env — only providers with creds are enabled. */
 const socialProviders = (env: Env): LunoraAuthOptions["socialProviders"] => {
@@ -313,10 +313,13 @@ const readLiveDeployments = async (env: Env): Promise<LiveDeploymentRow[]> => {
         return [];
     }
 
-    const database = createD1CtxDb({ exec: buildExec(env.DB as D1DatabaseLike), schema: schema as unknown as D1CtxDbOptions["schema"] });
+    const database: ControlPlaneDatabase = createD1CtxDb({
+        exec: buildExec(env.DB as D1DatabaseLike),
+        schema: schema as unknown as D1CtxDbOptions["schema"],
+    });
     const { page } = await database.findMany("deployments", { where: { status: "live" } });
 
-    return page as unknown as LiveDeploymentRow[];
+    return page as LiveDeploymentRow[];
 };
 
 /**
@@ -423,6 +426,7 @@ const sweepOverageReconciliation = async (env: Env): Promise<void> => {
 
     const creem = new Creem({ apiKey: env.CREEM_API_KEY, ...(env.CREEM_TEST_MODE === "true" ? { server: "test" as const } : {}) });
     const ledger = createCreemCreditsLedger({
+        // The SDK's client is structurally wider than the ledger's port.
         client: creem as unknown as CreemCreditsClientLike,
         resolveAccountId: (organizationId) => Promise.resolve(accounts.get(organizationId) ?? null),
     });
@@ -443,7 +447,7 @@ const deliverFiredAlerts = async (env: Env, database: ControlPlaneDatabase, deli
         return;
     }
 
-    const environmentRecord = env as unknown as Record<string, unknown>;
+    const environmentRecord = env;
 
     await Promise.all(
         deliveries.map(async (delivery) => {
@@ -702,7 +706,7 @@ const authOptions = (env: Env, requestOrigin?: string): LunoraAuthOptions => {
     // Built lazily inside each callback (not here): `createMailerFromEnv` throws
     // when no transport is configured (e.g. prod without MAIL_FROM), and we don't
     // want that to take down auth — only the individual email send.
-    const mailer = (): ReturnType<typeof createMailerFromEnv> => createMailerFromEnv(env as unknown as Record<string, unknown>);
+    const mailer = (): ReturnType<typeof createMailerFromEnv> => createMailerFromEnv(env);
 
     return {
         // Falls back to the origin of the request that built this isolate's auth

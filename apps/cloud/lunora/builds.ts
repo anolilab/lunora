@@ -65,7 +65,7 @@ export const recordPush = internalMutation
     })
     .mutation(async ({ ctx: context, args: { branch, commitSha, installationId, repository } }): Promise<null | { buildId: Id<"builds">; reused: boolean }> => {
         const { page } = await context.db.projects.findMany({ where: { githubRepo: repository } });
-        const project = (page as unknown as ProjectRow[])[0];
+        const project = page[0];
 
         if (!project) {
             return null;
@@ -75,14 +75,14 @@ export const recordPush = internalMutation
         // build (staged-claim model, github-installations.ts). A spoofed RPC
         // call must present a valid (org, installation) pair.
         const { page: installationPage } = await context.db.githubInstallations.findMany({ where: { installationId } });
-        const installation = (installationPage as unknown as { organizationId?: Id<"organizations"> }[])[0];
+        const installation = installationPage[0];
 
         if (installation?.organizationId !== project.organizationId) {
             return null;
         }
 
         const { page: existingPage } = await context.db.builds.findMany({ where: { commitSha, projectId: project._id } }); // secret-scanner:allow -- domain field name
-        const successful = (existingPage as unknown as BuildRow[]).find((build) => build.status === "successful" && build.bundleHash);
+        const successful = existingPage.find((build) => build.status === "successful" && build.bundleHash);
 
         if (successful) {
             return { buildId: successful._id, reused: true };
@@ -91,7 +91,7 @@ export const recordPush = internalMutation
         // Backpressure: cap unfinished builds per project so a webhook storm
         // (or spoofed spam) can't flood the queue.
         const { page: projectBuilds } = await context.db.builds.findMany({ where: { projectId: project._id } }); // secret-scanner:allow -- domain field name
-        const inFlight = (projectBuilds as unknown as BuildRow[]).filter((build) => build.status === "pending" || build.status === "building").length;
+        const inFlight = projectBuilds.filter((build) => build.status === "pending" || build.status === "building").length;
 
         if (inFlight >= 5) {
             throw new LunoraError("TOO_MANY_REQUESTS", "too many unfinished builds for this project");
@@ -142,10 +142,8 @@ export const claimNext = internalMutation
 
         // A `building` row is claimable only once its lease has gone stale — that is
         // how a dead runner's work is recovered.
-        const stale = (buildingPage.page as unknown as BuildRow[]).filter(
-            (build) => build.processingStartedAt != null && now - build.processingStartedAt > LEASE_STALE_MS,
-        );
-        const claimable = [...(pendingPage.page as unknown as BuildRow[]), ...stale].toSorted((a, b) => a.createdAt - b.createdAt);
+        const stale = buildingPage.page.filter((build) => build.processingStartedAt != null && now - build.processingStartedAt > LEASE_STALE_MS);
+        const claimable = [...pendingPage.page, ...stale].toSorted((a, b) => a.createdAt - b.createdAt);
         const next = claimable[0];
 
         if (!next) {
@@ -278,7 +276,7 @@ export const reportTarget = internalQuery
         }
 
         const { page } = await context.db.githubInstallations.findMany({ where: { organizationId: build.organizationId } });
-        const installation = (page as unknown as { claimedAt?: number; installationId: number }[]).find((row) => row.claimedAt !== undefined);
+        const installation = page.find((row) => row.claimedAt !== undefined);
 
         if (!installation) {
             return null;
@@ -295,7 +293,7 @@ export const listByProject = query
 
         const { page } = await context.db.builds.findMany({ where: { organizationId, projectId } }); // secret-scanner:allow -- domain field name
 
-        return (page as unknown as BuildRow[]).toSorted((a, b) => b.createdAt - a.createdAt);
+        return page.toSorted((a, b) => b.createdAt - a.createdAt);
     });
 
 /**
@@ -320,9 +318,7 @@ export const logs = query
             const { page } = await context.db.buildLogs.findMany({ where: { buildId } });
             const cursor = afterCreatedAt ?? 0;
 
-            return (page as unknown as { createdAt: number; level: "error" | "info"; line: string }[])
-                .filter((row) => row.createdAt > cursor)
-                .toSorted((a, b) => a.createdAt - b.createdAt);
+            return page.filter((row) => row.createdAt > cursor).toSorted((a, b) => a.createdAt - b.createdAt);
         },
     );
 
@@ -338,7 +334,7 @@ export const PENDING_EXPIRY_MS = 24 * 60 * 60 * 1000;
 export const expireStale = internalMutation.mutation(async ({ ctx: context }): Promise<{ expired: number }> => {
     const { now } = context;
     const { page } = await context.db.builds.findMany({});
-    const stale = (page as unknown as BuildRow[]).filter(
+    const stale = page.filter(
         (build) =>
             (build.status === "pending" && now - build.createdAt > PENDING_EXPIRY_MS) ||
             (build.status === "building" && build.processingStartedAt != null && now - build.processingStartedAt > 4 * LEASE_STALE_MS),

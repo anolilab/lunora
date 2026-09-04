@@ -34,7 +34,7 @@ export const list = query
         const { page } = await context.db.deployKeys.findMany({ where: { organizationId } });
 
         // Project to the public view — the stored hash is never returned.
-        return (page as unknown as DeployKeyRow[]).map((row) => {
+        return page.map((row) => {
             return {
                 _id: row._id,
                 capability: row.capability,
@@ -246,7 +246,7 @@ export const verify = mutation
 
             const hashedKey = await hashDeployKey(key);
             const { page } = await context.db.deployKeys.findMany({ where: { hashedKey } });
-            const row = (page as unknown as DeployKeyRow[])[0];
+            const row = page[0];
 
             // Reject a telemetry `ingest` key here too — this is the guard the deploy
             // route actually runs (`verifyKey`), so without it a scoped ingest token

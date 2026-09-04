@@ -60,7 +60,7 @@ export const claimAlias = async (context: MutationContext, alias: string, organi
     const currentOwner = async (): Promise<AliasOwnershipRow | undefined> => {
         const { page } = await context.db.aliasOwnership.findMany({ where: { alias } });
 
-        return (page as unknown as AliasOwnershipRow[])[0];
+        return page[0];
     };
 
     const existing = await currentOwner();
@@ -164,7 +164,7 @@ export const planForScript = query
     .input({ scriptName: boundedString(LIMITS.name) })
     .query(async ({ ctx: context, args: { scriptName } }): Promise<{ plan: string; protected?: boolean }> => {
         const { page } = await context.db.deployments.findMany({ where: { scriptName } });
-        const deployment = (page as unknown as DeploymentRow[])[0];
+        const deployment = page[0];
 
         if (!deployment) {
             return { plan: "free" };
@@ -241,7 +241,7 @@ export const listByProject = query
 
         const { page } = await context.db.deployments.findMany({ where: { organizationId, projectId } });
 
-        return (page as unknown as DeploymentRow[]).map((row) => toDeploymentView(row)).toSorted((a, b) => b.createdAt - a.createdAt);
+        return page.map((row) => toDeploymentView(row)).toSorted((a, b) => b.createdAt - a.createdAt);
     });
 
 /**
@@ -293,7 +293,7 @@ export const create = mutation
         // Integrity: the project must belong to the same org (no cross-org linkage).
         const { page } = await context.db.projects.findMany({ where: { organizationId: arguments_.organizationId } });
 
-        if (!(page as unknown as ProjectRow[]).some((project) => project._id === arguments_.projectId)) {
+        if (!page.some((project) => project._id === arguments_.projectId)) {
             throw new LunoraError("NOT_FOUND", "project not found in this organization");
         }
 
@@ -312,7 +312,7 @@ export const create = mutation
         // stable alias keeps serving the previous version until `activate`
         // swaps the pointer after the health check (GAPS.md A1).
         const { page: existing } = await context.db.deployments.findMany({ where: { projectId: arguments_.projectId } }); // secret-scanner:allow -- domain field name
-        const version = 1 + Math.max(0, ...(existing as unknown as DeploymentRow[]).filter((d) => d.kind === arguments_.kind).map((d) => d.version ?? 0));
+        const version = 1 + Math.max(0, ...existing.filter((d) => d.kind === arguments_.kind).map((d) => d.version ?? 0));
 
         const { now } = context;
         const deploymentId = await context.db.insert("deployments", {
@@ -371,7 +371,7 @@ export const activate = mutation
 
         const { now } = context;
         const { page } = await context.db.deployments.findMany({ where: { projectId: deployment.projectId } }); // secret-scanner:allow -- domain field name
-        const others = (page as unknown as DeploymentRow[]).filter((d) => d._id !== id && d.kind === deployment.kind && d.status === "live");
+        const others = page.filter((d) => d._id !== id && d.kind === deployment.kind && d.status === "live");
 
         for (const other of others) {
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
@@ -464,7 +464,7 @@ export const routeForAlias = query
     .input({ alias: boundedString(LIMITS.name) })
     .query(async ({ ctx: context, args: { alias } }): Promise<null | { candidateScriptName?: string; percent?: number; scriptName: string }> => {
         const { page } = await context.db.deployments.findMany({ where: { alias } });
-        const rows = page as unknown as DeploymentRow[];
+        const rows = page;
         const first = rows[0];
 
         if (!first) {
@@ -504,7 +504,7 @@ export const pruneSuperseded = internalMutation.mutation(async ({ ctx: context }
     // filtering afterwards meant live/failed/destroyed rows could fill the page and
     // starve the superseded ones this prune exists to collect.
     const { page } = await context.db.deployments.findMany({ where: { status: "superseded" } });
-    const superseded = page as unknown as DeploymentRow[];
+    const superseded = page;
 
     const byProjectKind = new Map<string, DeploymentRow[]>();
 
@@ -542,9 +542,7 @@ export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: co
     const { now } = context;
     const { page } = await context.db.deployments.findMany({ where: { kind: "preview" } });
 
-    const expired = (page as unknown as DeploymentRow[]).filter(
-        (deployment) => deployment.status !== "destroyed" && deployment.expiresAt != null && deployment.expiresAt < now,
-    );
+    const expired = page.filter((deployment) => deployment.status !== "destroyed" && deployment.expiresAt != null && deployment.expiresAt < now);
 
     for (const deployment of expired) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple

@@ -186,7 +186,7 @@ export const rollup = internalMutation.mutation(async ({ ctx: context }): Promis
         orderBy: [{ periodStart: "asc" }],
         where: { periodStart: { lt: cutoff } },
     });
-    const closed = page as unknown as PlatformUsageRow[];
+    const closed = page;
 
     const groups = new Map<string, PlatformUsageRow[]>();
 
@@ -311,13 +311,6 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
     return { suspended, unsuspended };
 });
 
-interface OverageDebitRow {
-    _id: Id<"overageDebits">;
-    debitedCredits: number;
-    organizationId: Id<"organizations">;
-    periodStart: number;
-}
-
 /**
  * The overage-debit watermark for (org, period) — how many prepaid credits
  * previous reconciliation runs already debited (GAPS.md C3 follow-up).
@@ -327,7 +320,7 @@ export const overageWatermark = internalQuery
     .input({ organizationId: v.id("organizations"), periodStart: v.number() })
     .query(async ({ ctx: context, args: { organizationId, periodStart } }): Promise<{ debitedCredits: number }> => {
         const { page } = await context.db.overageDebits.findMany({ where: { organizationId, periodStart } });
-        const row = (page as unknown as OverageDebitRow[])[0];
+        const row = page[0];
 
         return { debitedCredits: row?.debitedCredits ?? 0 };
     });
@@ -341,7 +334,7 @@ export const recordOverageDebit = internalMutation
     .input({ debitedCredits: v.number(), organizationId: v.id("organizations"), periodStart: v.number() })
     .mutation(async ({ ctx: context, args: { debitedCredits, organizationId, periodStart } }): Promise<void> => {
         const { page } = await context.db.overageDebits.findMany({ where: { organizationId, periodStart } });
-        const row = (page as unknown as OverageDebitRow[])[0];
+        const row = page[0];
         const { now } = context;
 
         if (!row) {
@@ -375,7 +368,7 @@ export const series = query
         const dayMs = 24 * 60 * 60 * 1000;
         const buckets = new Map<number, PeriodUsage>();
 
-        for (const row of page as unknown as PlatformUsageRow[]) {
+        for (const row of page) {
             if (!isUsageMeter(row.kind)) {
                 continue;
             }

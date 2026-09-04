@@ -47,5 +47,5 @@ export const list = query.input({ organizationId: v.id("organizations") }).query
 
     const { page } = await context.db.auditLog.findMany({ where: { organizationId } });
 
-    return (page as unknown as AuditRow[]).toSorted((a, b) => b.createdAt - a.createdAt);
+    return page.toSorted((a, b) => b.createdAt - a.createdAt);
 });

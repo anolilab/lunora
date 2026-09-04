@@ -76,7 +76,7 @@ export const listByOrg = query
 
         const { page } = await context.db.projects.findMany({ where: { organizationId } });
 
-        return (page as unknown as ProjectRow[]).map((row) => toProjectView(row));
+        return page.map((row) => toProjectView(row));
     });
 
 /**
@@ -95,7 +95,7 @@ export const byGithubRepo = internalQuery
     .input({ repository: boundedString(LIMITS.token) })
     .query(async ({ ctx: context, args: { repository } }): Promise<null | { organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string }> => {
         const { page } = await context.db.projects.findMany({ where: { githubRepo: repository } });
-        const project = (page as unknown as ProjectRow[])[0];
+        const project = page[0];
 
         return project ? { organizationId: project.organizationId, projectId: project._id, slug: project.slug } : null; // secret-scanner:allow -- domain field name
     });
@@ -120,7 +120,7 @@ export const create = mutation
 
         const { page } = await context.db.projects.findMany({ where: { organizationId: arguments_.organizationId } });
 
-        await assertWithinQuota(context, arguments_.organizationId, "projects", (page as unknown as ProjectRow[]).length);
+        await assertWithinQuota(context, arguments_.organizationId, "projects", page.length);
 
         return context.db.insert("projects", {
             createdAt: context.now,
@@ -192,11 +192,13 @@ export const remove = mutation
         for (const table of PROJECT_SCOPED_TABLES) {
             // The per-table facades don't unify, so the generic sweep goes through a
             // minimal structural cast — same shape `organizations.purgeDeleted` uses.
-            const facade = context.db[table] as unknown as { findMany: (q: { where: Record<string, unknown> }) => Promise<{ page: unknown[] }> };
+            const facade = context.db[table] as unknown as {
+                findMany: (q: { where: Record<string, unknown> }) => Promise<{ page: { _id: string }[] }>;
+            };
             // eslint-disable-next-line no-await-in-loop -- sequential per-table purge keeps the writer simple
             const { page: rows } = await facade.findMany({ where: { projectId: id } });
 
-            for (const row of rows as { _id: string }[]) {
+            for (const row of rows) {
                 // eslint-disable-next-line no-await-in-loop -- sequential deletes; a project's volumes are small
                 await context.db.delete(row._id as never);
             }
@@ -205,11 +207,11 @@ export const remove = mutation
         // Deployments transition rather than vanish, so the teardown sweep still
         // has something to tear down.
         const { page: deployments } = await context.db.deployments.findMany({ where: { projectId: id } });
-        const live = (deployments as unknown as { _id: string; status: string }[]).filter((row) => row.status !== "destroyed");
+        const live = deployments.filter((row) => row.status !== "destroyed");
 
         for (const deployment of live) {
             // eslint-disable-next-line no-await-in-loop -- sequential patches; a project's volumes are small
-            await context.db.patch(deployment._id as never, { destroyedAt: now, status: "destroyed", updatedAt: now });
+            await context.db.patch(deployment._id, { destroyedAt: now, status: "destroyed", updatedAt: now });
         }
 
         await context.db.delete(id);
@@ -306,7 +308,7 @@ export const verifyPreviewPassword = internalQuery
     .input({ password: boundedString(LIMITS.token), scriptName: boundedString(LIMITS.name) })
     .query(async ({ ctx: context, args: { password, scriptName } }): Promise<{ ok: boolean }> => {
         const { page } = await context.db.deployments.findMany({ where: { scriptName } });
-        const deployment = (page as unknown as { projectId?: Id<"projects"> }[])[0];
+        const deployment = page[0];
 
         if (!deployment?.projectId) {
             return { ok: false };

@@ -41,7 +41,7 @@ export const list = query
 
         const { page } = await context.db.invitations.findMany({ where: { organizationId } });
 
-        return (page as unknown as InvitationRow[]).map(({ tokenHash: _tokenHash, ...view }) => view);
+        return page.map(({ tokenHash: _tokenHash, ...view }) => view);
     });
 
 /**
@@ -102,7 +102,7 @@ export const accept = mutation
 
         const tokenHash = await sha256Hex(token);
         const { page } = await context.db.invitations.findMany({ where: { tokenHash } });
-        const invitation = (page as unknown as InvitationRow[])[0];
+        const invitation = page[0];
 
         if (invitation?.status !== "pending" || invitation.expiresAt < context.now) {
             throw new LunoraError("FORBIDDEN", "invitation is invalid, revoked, or expired");
@@ -110,7 +110,7 @@ export const accept = mutation
 
         const members = await context.db.members.findMany({ where: { organizationId: invitation.organizationId, userId } });
 
-        if ((members.page as unknown as unknown[]).length === 0) {
+        if (members.page.length === 0) {
             await context.db.insert("members", {
                 createdAt: context.now,
                 organizationId: invitation.organizationId,

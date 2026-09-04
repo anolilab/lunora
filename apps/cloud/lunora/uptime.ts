@@ -29,13 +29,6 @@ const CHECK_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
  */
 const PRUNE_SCAN_LIMIT = 2000;
 
-interface UptimeStateRow {
-    consecutiveFailures: number;
-    deploymentId: Id<"deployments">;
-    lastCheckedAt: number;
-    lastOk: boolean;
-}
-
 interface UptimeCheckRow {
     _id: Id<"uptimeChecks">;
     createdAt: number;
@@ -63,7 +56,7 @@ export const summary = query
         await assertMember(context, organizationId);
 
         const { page } = await context.db.uptimeState.findMany({ where: { organizationId } });
-        const states = page as unknown as UptimeStateRow[];
+        const states = page;
 
         const rows = await Promise.all(
             states.map(async (state): Promise<UptimeSummaryRow> => {
@@ -117,7 +110,7 @@ export const prune = internalMutation.mutation(async ({ ctx: context }): Promise
         orderBy: [{ createdAt: "asc" }],
         where: { createdAt: { lt: cutoff } },
     });
-    const stale = page as unknown as UptimeCheckRow[];
+    const stale = page;
 
     for (const row of stale) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple

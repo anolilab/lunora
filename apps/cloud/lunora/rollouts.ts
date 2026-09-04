@@ -160,7 +160,7 @@ export const promoteRollout = mutation
 
         const { now } = context;
         const { page } = await context.db.deployments.findMany({ where: { projectId } }); // secret-scanner:allow -- domain field name
-        const others = (page as unknown as DeploymentRow[]).filter((row) => row._id !== candidateId && row.kind === candidate.kind && row.status === "live");
+        const others = page.filter((row) => row._id !== candidateId && row.kind === candidate.kind && row.status === "live");
 
         for (const other of others) {
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple

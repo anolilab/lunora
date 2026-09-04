@@ -32,7 +32,7 @@ export const record = internalMutation
     .input({ accountLogin: v.string(), installationId: v.number() })
     .mutation(async ({ ctx: context, args: { accountLogin, installationId } }): Promise<Id<"githubInstallations">> => {
         const { page } = await context.db.githubInstallations.findMany({ where: { installationId } });
-        const existing = (page as unknown as InstallationRow[])[0];
+        const existing = page[0];
 
         if (existing) {
             return existing._id;
@@ -57,7 +57,7 @@ export const claim = mutation
         const { userId } = await assertMember(context, organizationId, ["owner", "admin"]);
 
         const { page } = await context.db.githubInstallations.findMany({ where: { installationId } });
-        const installation = (page as unknown as InstallationRow[])[0];
+        const installation = page[0];
 
         if (!installation) {
             throw new LunoraError("NOT_FOUND", "installation not found — install the GitHub App first");
@@ -102,7 +102,7 @@ export const unclaim = mutation
         const { userId } = await assertMember(context, organizationId, ["owner", "admin"]);
 
         const { page } = await context.db.githubInstallations.findMany({ where: { installationId } });
-        const installation = (page as unknown as InstallationRow[])[0];
+        const installation = page[0];
 
         // Only the CLAIMING org may release it — otherwise this is a way to detach
         // another tenant's integration by guessing a numeric id.
@@ -127,7 +127,7 @@ export const unclaim = mutation
  */
 export const remove = internalMutation.input({ installationId: v.number() }).mutation(async ({ ctx: context, args: { installationId } }): Promise<void> => {
     const { page } = await context.db.githubInstallations.findMany({ where: { installationId } });
-    const existing = (page as unknown as InstallationRow[])[0];
+    const existing = page[0];
 
     if (existing) {
         await context.db.delete(existing._id);

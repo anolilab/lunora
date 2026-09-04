@@ -44,7 +44,7 @@ export const store = mutation
         const { page } = await context.db.secrets.findMany({
             where: { environment, name: arguments_.name, organizationId: arguments_.organizationId, projectId: arguments_.projectId }, // secret-scanner:allow -- domain field name
         });
-        const existing = (page as unknown as SecretRow[])[0];
+        const existing = page[0];
         const { now } = context;
 
         if (existing) {
@@ -78,7 +78,7 @@ export const list = query
 
             const { page } = await context.db.secrets.findMany({ where: { organizationId, projectId } });
 
-            return (page as unknown as SecretRow[]).map((secret) => {
+            return page.map((secret) => {
                 return { createdAt: secret.createdAt, environment: secret.environment, id: secret._id, name: secret.name, updatedAt: secret.updatedAt };
             });
         },
@@ -105,7 +105,7 @@ export const listEncrypted = query
 
             const kind = environment ?? "production";
             const { page } = await context.db.secrets.findMany({ where: { organizationId, projectId } });
-            const rows = (page as unknown as SecretRow[]).filter((secret) => secret.environment === kind || secret.environment === "all");
+            const rows = page.filter((secret) => secret.environment === kind || secret.environment === "all");
 
             // Kind-specific rows override shared ("all") rows of the same name.
             const byName = new Map<string, SecretRow>();

@@ -109,7 +109,7 @@ export const list = query
                     : { deploymentId: args.deploymentId, organizationId: args.organizationId },
         });
 
-        const spans = page as unknown as ObservationRow[];
+        const spans = page;
 
         // Fold every scanned span, then apply the trace-level filters, then cap —
         // filtering after the cap would return fewer than `limit` matching traces.
@@ -205,7 +205,7 @@ export const get = query
             where: { organizationId: args.organizationId, traceId: args.traceId },
         });
 
-        return (page as unknown as ObservationRow[]).map((row) => toSpanView(row));
+        return page.map((row) => toSpanView(row));
     });
 
 /**

@@ -1,4 +1,3 @@
-import type { Subscription } from "@lunora/payment";
 import { resolveEntitlements } from "@lunora/payment";
 
 import { evaluateDunning } from "../src/billing/dunning";
@@ -7,6 +6,7 @@ import { effectiveLimit, LUNORA_CLOUD_PLANS } from "../src/billing/plans";
 import type { Id } from "./_generated/dataModel.js";
 import { action, internalMutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
+import { toSubscription } from "./entitlements";
 import { rateLimit } from "./guards";
 import { collectAll } from "./paginate";
 import { boundedString, LIMITS } from "./validators";
@@ -92,7 +92,10 @@ export const entitlements = query
             await assertMember(context, organizationId);
 
             const { page } = await context.db.subscriptions.findMany({ where: { referenceId: organizationId } });
-            const resolved = resolveEntitlements(LUNORA_CLOUD_PLANS, page as unknown as Subscription[]);
+            const resolved = resolveEntitlements(
+                LUNORA_CLOUD_PLANS,
+                page.map((row) => toSubscription(row)),
+            );
 
             const limits = Object.fromEntries(QUOTA_RESOURCES.map((resource) => [resource, effectiveLimit(resolved, resource)])) as Record<
                 QuotaResource,

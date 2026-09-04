@@ -3,16 +3,6 @@ import { LunoraError } from "@lunora/server";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, query, v } from "./_generated/server.js";
 
-interface CellRow {
-    _id: Id<"cells">;
-    cloudflareAccountId: string;
-    createdAt: number;
-    dispatchNamespacePrefix: string;
-    jurisdiction?: string;
-    name: string;
-    status: "active" | "draining" | "suspended";
-}
-
 /**
  * The cell fields safe to expose to any signed-in user (the org-create picker).
  * Deliberately omits infra identifiers (`cloudflareAccountId`,
@@ -42,7 +32,7 @@ export const list = query.query(async ({ ctx: context }): Promise<CellSummary[]>
 
     const { page } = await context.db.cells.findMany();
 
-    return (page as unknown as CellRow[]).map((cell) => {
+    return page.map((cell) => {
         return {
             _id: cell._id,
             jurisdiction: cell.jurisdiction,

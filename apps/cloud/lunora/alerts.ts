@@ -55,7 +55,7 @@ export const rules = query
 
         const { page } = await context.db.alertRules.findMany({ where: { organizationId } });
 
-        return (page as unknown as AlertRuleRow[]).toSorted((a, b) => b.createdAt - a.createdAt);
+        return page.toSorted((a, b) => b.createdAt - a.createdAt);
     });
 
 /**
@@ -211,7 +211,7 @@ export const list = query.input({ organizationId: v.id("organizations") }).query
 
     const { page } = await context.db.alerts.findMany({ where: { organizationId } });
 
-    return (page as unknown as AlertRow[]).toSorted((a, b) => b.createdAt - a.createdAt);
+    return page.toSorted((a, b) => b.createdAt - a.createdAt);
 });
 
 /**
@@ -268,7 +268,7 @@ export const fireDeployAlerts = async (
     source: DeployAlertSource,
 ): Promise<number> => {
     const { page } = await context.db.alertRules.findMany({ where: { organizationId, target: "deploy" } });
-    const enabled = (page as unknown as AlertRuleRow[]).filter((rule) => rule.enabled);
+    const enabled = page.filter((rule) => rule.enabled);
 
     return fireDeployRules(
         enabled.map((rule) => {
