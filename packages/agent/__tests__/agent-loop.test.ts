@@ -1,3 +1,4 @@
+import { createDispatchRunner } from "@lunora/dispatch";
 import { hasToolCall, jsonSchema } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it } from "vitest";
@@ -1746,6 +1747,61 @@ describe("a tool call whose input failed validation", () => {
         const toolRow = [...runtime.messages.values()].find((message) => message.role === "tool");
 
         expect(toolRow?.content).toContain('Error: invalid input for tool "charge" — it was not run.');
+    });
+});
+
+describe("a tool whose dispatch failed deterministically", () => {
+    it("is recorded as a recoverable tool result instead of burning the step's retries", async () => {
+        expect.assertions(3);
+
+        // Built the way production builds it — a real `{ error: { code, … } }`
+        // envelope through the dispatch runner — so the error carries the brand
+        // `isDeterministicDispatchFailure` keys on. A hand-rolled LunoraError
+        // with the same status would not, and would stay retryable.
+        const dispatchFailure = await createDispatchRunner({
+            env: { LUNORA_ADMIN_TOKEN: "tok", LUNORA_ORIGIN_URL: "https://app.example.com/" },
+            fetchImpl: async () => Response.json({ error: { code: "BAD_REQUEST", message: '"path" must be a string' } }, { status: 400 }),
+            label: "@lunora/agent",
+        })({ __lunoraRef: "sandbox:invoke" }).then(
+            () => undefined,
+            (error: unknown) => error,
+        );
+
+        let attempts = 0;
+        const agent = defineAgent({
+            maxTurns: 2,
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                fs: defineAgentTool({
+                    description: "read a file",
+                    // What a batteries-included `jsonSchema()` tool does with a
+                    // type-wrong model argument: the action's own validator 400s.
+                    execute: () => {
+                        attempts += 1;
+
+                        throw dispatchFailure;
+                    },
+                    // A bare `jsonSchema()`: no `validate`, so nothing upstream
+                    // rejects `path: 5` and the call never arrives as `invalid`.
+                    inputSchema: jsonSchema({ additionalProperties: true, type: "object" }),
+                }),
+            },
+        });
+        const runtime = memoryRuntime();
+
+        const result = await runAgentLoop(
+            loopDefaults(agent, {
+                generate: scriptedGenerate([toolTurn("call-1", "fs", { op: "read", path: 5 }), finalTurn("path has to be a string — retrying")]),
+                run: runtime.run,
+            }),
+        );
+
+        expect(result).toStrictEqual({ stopped: "final", text: "path has to be a string — retrying", turns: 2 });
+        expect(attempts).toBe(1);
+
+        const toolRow = [...runtime.messages.values()].find((message) => message.role === "tool");
+
+        expect(toolRow?.content).toContain('"path" must be a string');
     });
 });
 

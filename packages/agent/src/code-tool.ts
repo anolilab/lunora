@@ -118,7 +118,12 @@ const resolveReferences = (value: unknown, results: Record<string, unknown>): un
     if (typeof object["$from"] === "string") {
         const from = object["$from"];
 
-        if (!(from in results)) {
+        // `Object.hasOwn`, not `in`, for the same reason `getPath` uses it: `in`
+        // walks the prototype chain, so a model-supplied `$from` of
+        // `constructor` / `toString` / `__proto__` passed this guard and handed
+        // the composed tool a real `Function` or `Object.prototype` as its
+        // argument instead of raising the documented unknown-ref error.
+        if (!Object.hasOwn(results, from)) {
             throw new LunoraError("BAD_REQUEST", `@lunora/agent: code step references unknown result "${from}" (define it in an earlier step)`);
         }
 
@@ -226,7 +231,12 @@ const runToolScript = async (
     }
 
     for (const step of steps) {
-        const tool = tools[step.tool];
+        // Own-property lookup, like the `$from` guard above: `tools["constructor"]`
+        // is `Object` — truthy — so an inherited name slipped past this check and
+        // died later on `tool.execute is not a function`, a TypeError the host
+        // retries before failing the run, rather than the BAD_REQUEST that names
+        // the tools actually available.
+        const tool = Object.hasOwn(tools, step.tool) ? tools[step.tool] : undefined;
 
         if (!tool) {
             throw new LunoraError("BAD_REQUEST", `@lunora/agent: code step calls unknown tool "${step.tool}" (available: ${Object.keys(tools).join(", ")})`);

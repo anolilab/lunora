@@ -1,3 +1,5 @@
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
+import { isDeterministicDispatchFailure } from "@lunora/dispatch";
 import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
 
 import { APPROVAL_TIMEOUT_MAX_MS, definedColumns } from "./component-shared";
@@ -461,7 +463,50 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
         status = "approved";
     }
 
-    const output: unknown = await step.do(stepName, () => Promise.resolve(tool.execute(call.input as never, toolContext)));
+    // The `invalid` branch above only fires for a tool whose `inputSchema`
+    // carries a `validate` — a bare `jsonSchema()` (every batteries-included
+    // tool here, and the documented `functionTool` shape) has none, and the AI
+    // SDK's `safeValidateTypes` waves an unvalidated schema straight through.
+    // So a type-wrong model argument does not arrive as `invalid`; it arrives as
+    // the dispatched function's own 400 thrown out of `execute`, and the SAME
+    // 400 comes back on every retry. Recorded as a tool result the next turn can
+    // read, exactly as an `invalid` call is, rather than burning the durable
+    // step's retry budget re-dispatching it until the run fails. Only the
+    // branded deterministic statuses are converted — a transient failure keeps
+    // the host's retry, which is the whole point of running in a step. Mirrors
+    // `@lunora/workflow`'s `createRunStep`, which the loop does not route
+    // through.
+    //
+    // Caught INSIDE `step.do` so the outcome is what the host memoizes: caught
+    // outside, the step would have already exhausted its retries before the
+    // throw reached us.
+    const outcome = await step.do(stepName, async (): Promise<{ failed: string } | { ok: unknown }> => {
+        try {
+            return { ok: await tool.execute(call.input, toolContext) };
+        } catch (error: unknown) {
+            if (isDeterministicDispatchFailure(error)) {
+                return { failed: error.message };
+            }
+
+            throw error;
+        }
+    });
+
+    if ("failed" in outcome) {
+        await persist({
+            content: `Error: tool "${call.name}" failed and will not be retried. ${outcome.failed}`,
+            messageKey,
+            role: "tool",
+            stepName,
+            ...(status === undefined ? {} : { status }),
+            toolCallId: call.id,
+            toolName: call.name,
+        });
+
+        return;
+    }
+
+    const output: unknown = outcome.ok;
 
     await persist({
         // Capped, like `codeTool`'s per-step results: this row is re-rendered
@@ -1396,4 +1441,4 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 };
 
 export type { AgentLoopOptions };
-export { compactHistory, runAgentLoop, splitForCompaction };
+export { approvalTimeoutMs, compactHistory, runAgentLoop, splitForCompaction };
