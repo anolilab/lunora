@@ -150,6 +150,27 @@ describe("lunora init --here", () => {
         expect(log).toContain("/_lunora/*");
     });
 
+    it("class B (sveltekit) leaves the vite.config every SvelteKit project actually has alone", async () => {
+        expect.assertions(3);
+
+        // The fixture above deliberately omits `vite.config.ts` — but SvelteKit
+        // cannot build without one, so in a real project the class-B skip sat
+        // behind a condition that never held and `lunora()` was patched in.
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+
+        const viteConfig =
+            'import { sveltekit } from "@sveltejs/kit/vite";\nimport { defineConfig } from "vite";\n\nexport default defineConfig({ plugins: [sveltekit()] });\n';
+
+        writeFileSync(join(workdir, "vite.config.ts"), viteConfig, "utf8");
+
+        const logger = capturingLogger();
+        const result = await runInitCommand({ cwd: workdir, inPlace: true, logger });
+
+        expect(result.code).toBe(0);
+        expect(readFileSync(join(workdir, "vite.config.ts"), "utf8")).toBe(viteConfig);
+        expect(existsSync(join(workdir, "lunora", "schema.ts"))).toBe(true);
+    });
+
     it("class C (no framework, no vite config): creates a minimal vite.config and scaffolds lunora/", async () => {
         expect.assertions(4);
 

@@ -359,6 +359,21 @@ describe("lunora init --vite (overlay, end to end)", () => {
         expect(readFileSync(join(workdir, "my-app", "src", "App.tsx"), "utf8")).toContain("function App");
     });
 
+    it("cleans up the half-written project when the overlay apply fails", async () => {
+        expect.assertions(2);
+
+        // The base copies fine, then `patchPackageJson`'s JSON.parse throws —
+        // by which point the overlay has already written several files into the
+        // target. Leaving them there meant the retry (with the problem fixed)
+        // was refused with "target directory not empty".
+        writeFileSync(join(baseRoot, "template-react-ts", "package.json"), "{ not json", "utf8");
+
+        const result = await runInitCommand({ cwd: workdir, logger: silentLogger(), name: "my-app", overlayBaseFrom: baseRoot, vite: "react" });
+
+        expect(result.code).toBe(1);
+        expect(existsSync(join(workdir, "my-app"))).toBe(false);
+    });
+
     it("rejects an unknown --vite framework", async () => {
         expect.assertions(1);
 

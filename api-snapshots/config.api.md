@@ -1970,7 +1970,10 @@ interface WranglerConfig {
         stream?: string;
     } | null | undefined>;
     placement?: {
+        host?: string;
+        hostname?: string;
         mode?: string;
+        region?: string;
     };
     queues?: {
         consumers?: ReadonlyArray<WranglerQueueConsumer | null | undefined>;
@@ -2149,6 +2152,12 @@ const isRemoteEnvEnabled: (value: string | undefined) => boolean;
 
 ```ts
 const materializeRemoteWranglerConfig: (options: MaterializeOptions) => MaterializeResult;
+```
+
+### `mergeWranglerEnvironment` (const)
+
+```ts
+const mergeWranglerEnvironment: (wrangler: WranglerConfig, environment: string | undefined) => WranglerEnvironmentMerge;
 ```
 
 ### `planRemoteBindings` (const)

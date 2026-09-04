@@ -573,6 +573,147 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
                 expect(result.code).toBe(0);
             });
 
+            // `vars`, `d1_databases` and `containers` are all non-inheritable in
+            // wrangler: `deploy --env <name>` uses the env block's value and
+            // ignores the top level. The three read-only preflights used to read
+            // the TOP LEVEL regardless of `--env`, so an env-scoped placeholder /
+            // loopback origin shipped silently, and the reverse layout (real
+            // values in the env block, dev values at the top) was falsely blocked.
+            it("blocks a placeholder database_id declared only in env.production", async () => {
+                expect.assertions(2);
+
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "lunora-app",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-db-id-abc123" }],
+    "env": {
+        "production": {
+            "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+            "d1_databases": [{ "binding": "DB", "database_name": "x-prod", "database_id": "<replace-with-d1-create-id>" }]
+        }
+    }
+}
+`,
+                    "utf8",
+                );
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
+
+                await runDeployCommand({ cwd: workdir, env: "production", logger, secretLister: noRemoteSecrets, spawner });
+
+                expect(calls).toHaveLength(0);
+                expect(errors.join(" ")).toContain("placeholder database_id");
+            });
+
+            it("blocks a localhost origin var declared only in env.production", async () => {
+                expect.assertions(2);
+
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "lunora-app",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-db-id-abc123" }],
+    "vars": { "LUNORA_ORIGIN_URL": "https://app.example.com" },
+    "env": {
+        "production": {
+            "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+            "d1_databases": [{ "binding": "DB", "database_name": "x-prod", "database_id": "real-db-id-prod" }],
+            "vars": { "LUNORA_ORIGIN_URL": "http://localhost:8787" }
+        }
+    }
+}
+`,
+                    "utf8",
+                );
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
+
+                await runDeployCommand({ cwd: workdir, env: "production", logger, secretLister: noRemoteSecrets, spawner });
+
+                expect(calls).toHaveLength(0);
+                expect(errors.join(" ")).toContain("point at localhost");
+            });
+
+            it("does not block on a localhost origin the deployed environment overrides", async () => {
+                expect.assertions(1);
+
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "lunora-app",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-db-id-abc123" }],
+    "vars": { "LUNORA_ORIGIN_URL": "http://localhost:8787" },
+    "env": {
+        "production": {
+            "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+            "d1_databases": [{ "binding": "DB", "database_name": "x-prod", "database_id": "real-db-id-prod" }],
+            "vars": { "LUNORA_ORIGIN_URL": "https://app.example.com" }
+        }
+    }
+}
+`,
+                    "utf8",
+                );
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, env: "production", logger, secretLister: noRemoteSecrets, spawner });
+
+                expect(result.code).toBe(0);
+            });
+
+            it("surfaces validator warnings on the command that actually ships", async () => {
+                expect.assertions(2);
+
+                // The unexported-class check is deliberately a WARNING so a
+                // scanner miss cannot block a working deploy — but `deploy`
+                // printed `report.errors` only, so on the one command that ships
+                // a Worker the warning was invisible and wrangler failed instead.
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "lunora-app",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }, { "name": "SCHEDULER", "class_name": "SchedulerDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }],
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-db-id-abc123" }]
+}
+`,
+                    "utf8",
+                );
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(join(workdir, "src", "index.ts"), "export const ShardDO = class {};\nexport default { fetch() {} };\n", "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger, warns } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner });
+
+                expect(result.code).toBe(0);
+                expect(warns.join("\n")).toContain("SchedulerDO");
+            });
+
             it("blocks --env <name> that names no declared environment", async () => {
                 expect.assertions(3);
 
@@ -1479,6 +1620,32 @@ export const backfillNames = defineMigration({
                 expect(readFileSync(join(workdir, ".dev.vars.production"), "utf8")).toContain(`LUNORA_ADMIN_TOKEN="${mintedValue}"`);
                 // ...and the bare, environment-agnostic .dev.vars is left exactly as it was.
                 expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toBe(localDevVars);
+            });
+
+            it("makes the file it records a minted secret in un-committable first", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("production"), "utf8");
+                // What every scaffolded project ships: `.dev.vars` exactly, which
+                // git matches by exact name — it does NOT cover `.dev.vars.production`.
+                writeFileSync(join(workdir, ".gitignore"), "node_modules\n.dev.vars\n", "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    env: "production",
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(0);
+                expect(existsSync(join(workdir, ".dev.vars.production"))).toBe(true);
+                expect(readFileSync(join(workdir, ".gitignore"), "utf8")).toContain(".dev.vars.*");
             });
 
             it("interactively generates + pushes a missing mintable secret before deploying", async () => {

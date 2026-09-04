@@ -260,6 +260,33 @@ const isTextFile = (filePath: string): boolean => {
     return TEXT_EXTENSIONS.has(filePath.slice(lastDot));
 };
 
+/**
+ * wrangler's own worker-name rule (`isValidName` in its config schema). A name
+ * outside it is a hard error at `wrangler dev` / `deploy` time, long after the
+ * scaffold that wrote it into `wrangler.jsonc` reported success.
+ */
+const WRANGLER_WORKER_NAME = /^[a-z0-9_][a-z0-9\-_]*$/u;
+
+/** `myApp` → `my-App`, so camelCase suggests a kebab name rather than one long word. */
+const WORKER_NAME_CAMEL_BOUNDARY = /([a-z0-9])([A-Z])/gu;
+
+/** Any single character {@link WRANGLER_WORKER_NAME} rejects, replaced by the separator. */
+const WORKER_NAME_DISALLOWED = /[^a-z0-9_]/gu;
+
+/** The closest conforming worker name to `name`, for the rejection message. */
+const suggestWorkerName = (name: string): string => {
+    const segments = name
+        .replaceAll(WORKER_NAME_CAMEL_BOUNDARY, "$1-$2")
+        .toLowerCase()
+        .replaceAll(WORKER_NAME_DISALLOWED, "-")
+        .split("-")
+        .filter((segment) => segment.length > 0);
+
+    // Every remaining character is allowed and every segment is non-empty, so
+    // the join always satisfies `WRANGLER_WORKER_NAME`.
+    return segments.length > 0 ? segments.join("-") : "my-app";
+};
+
 const substitute = (content: string, name: string): string => content.replaceAll("{{name}}", name);
 
 /**
@@ -511,6 +538,27 @@ const logWould = (logger: Logger, action: string): void => {
     logger.info(`[dry-run] would ${action}`);
 };
 
+/**
+ * A scaffold that copied nothing is a failure, not a success.
+ *
+ * The remote path reaches this shape whenever the requested `templates/<type>/`
+ * subdirectory does not exist in the fetched tarball (a bad `--ref`, a custom
+ * `--source` laid out differently, a template renamed upstream): giget strips
+ * every entry outside the subdir and resolves without an error, so the
+ * directory walk finds nothing. The local `--from` path reaches it via an
+ * existing-but-empty `<type>/`. Both used to print "Project initialized!" and
+ * "scaffolded 0 files" over an empty project directory and exit 0.
+ *
+ * The non-zero code routes it through {@link resetPartialScaffold}, so the
+ * empty target is removed and a retry with the right ref is not met with
+ * "target directory not empty".
+ */
+const failEmptyScaffold = (logger: Logger, target: string, source: string): InitCommandResult => {
+    logger.error(`init: the template at ${source} contains no files — nothing was scaffolded. Check the template name, \`--source\` layout and \`--ref\`.`);
+
+    return { code: 1, files: [], target };
+};
+
 const logScaffoldSuccess = (logger: Logger, written: ReadonlyArray<string>, target: string): void => {
     // Cosmetic blank line above the success so it isn't glued to the task
     // checklist — TTY only, so piped / JSON output stays clean.
@@ -756,6 +804,10 @@ const scaffoldFromLocal = async (fromRoot: string, templateType: Template, targe
 
     const written = await copyTemplate(templateDirectory, target, name);
 
+    if (written.length === 0) {
+        return failEmptyScaffold(logger, target, templateDirectory);
+    }
+
     logScaffoldSuccess(logger, written, target);
 
     return { code: 0, files: written, target };
@@ -817,6 +869,10 @@ const scaffoldFromRemote = async (options: {
             ],
             { end: "Project initialized!", start: "Project initializing…" },
         );
+
+        if (written.length === 0) {
+            return failEmptyScaffold(logger, target, downloaded?.source ?? remote);
+        }
 
         const staged = collectFiles(stagingDirectory);
 
@@ -1103,17 +1159,22 @@ const printFrameworkNextSteps = (detection: FrameworkDetection, manager: Package
  * Returns the InitCommandResult so a hard write failure aborts the whole run.
  */
 const patchOrCreateViteConfig = (cwd: string, framework: DetectedFramework, logger: Logger): InitCommandResult => {
+    // SvelteKit / Nuxt / Astro own their build via their own config and wire
+    // Lunora through their server entry, so they get `lunora/` + instructions
+    // and no plugin patch. Gated on the framework ALONE: this used to sit
+    // behind "and no Vite config exists", which SvelteKit and Nuxt always have
+    // — so the skip never fired for them and a bare `lunora()` was patched in
+    // regardless, without the `{ cloudflare: false, validateWrangler: false }`
+    // options the class-B templates pass it.
+    if (framework === "sveltekit" || framework === "nuxt" || framework === "astro") {
+        logger.info(`${framework} wires Lunora through its server entry, not a lunora() Vite plugin — leaving the Vite config alone (see next steps)`);
+
+        return { code: 0, files: [], target: cwd };
+    }
+
     const viteConfigPath = findExistingViteConfig(cwd);
 
     if (viteConfigPath === undefined) {
-        // SvelteKit/Nuxt own their build via their own config; don't drop a
-        // standalone vite.config.ts on them. They get lunora/ + instructions only.
-        if (framework === "sveltekit" || framework === "nuxt" || framework === "astro") {
-            logger.info(`no Vite config found — ${framework} wires Lunora through its server entry (see next steps)`);
-
-            return { code: 0, files: [], target: cwd };
-        }
-
         return createMinimalViteConfig(cwd, logger);
     }
 
@@ -1514,6 +1575,22 @@ const scaffoldNewProject = async (
         return { code: 1, files: [], target: "" };
     }
 
+    // The name is substituted verbatim into `wrangler.jsonc`'s `name` field, and
+    // wrangler's own `isValidName` (`/^$|^[a-z0-9_][a-z0-9-_]*$/`) is a HARD
+    // error — so `MyApp` / `My App` scaffolded happily and then failed every
+    // subsequent `wrangler dev` and `wrangler deploy`. Rejecting here, with the
+    // conforming suggestion, is the only place the user can still act on it.
+    // It also rules out the `$&` / `$'` replacement patterns `String.replaceAll`
+    // interprets in a string replacement, and the `"` that would break the JSON.
+    if (!WRANGLER_WORKER_NAME.test(name)) {
+        options.logger.error(
+            `init: refusing project name "${name}" — a Cloudflare Worker name must be lowercase letters, digits, "-" or "_" ` +
+                `(starting with a letter, digit or "_"), and wrangler rejects anything else. Try \`${suggestWorkerName(name)}\`.`,
+        );
+
+        return { code: 1, files: [], target: "" };
+    }
+
     const target = resolve(cwd, name);
     const targetPreExisted = existsSync(target);
 
@@ -1540,7 +1617,7 @@ const scaffoldNewProject = async (
 
     // From here we commit to writing into `target`. Record it so a Ctrl-C abort
     // can reset it (a dir we created is removed; a pre-existing empty dir is
-    // emptied back out) — see `resetScaffoldOnCancel`.
+    // emptied back out) — see `resetPartialScaffold`.
     recordTarget(target, targetPreExisted);
 
     return choice.kind === "overlay"
@@ -1555,13 +1632,15 @@ interface ScaffoldCleanup {
 }
 
 /**
- * Undo a partially-created scaffold after the user aborts (Ctrl-C): restore the
- * target back to its pre-run state. A directory we created is removed outright; a
- * directory that already existed (verified empty before we wrote into it) is
- * emptied back out but kept. A no-op when nothing was created yet (cancel during
- * the early prompts) or for in-place init (which never sets `cleanup.target`).
+ * Undo a partially-created scaffold — after the user aborts (Ctrl-C) or after
+ * the scaffold itself fails: restore the target back to its pre-run state. A
+ * directory we created is removed outright; a directory that already existed
+ * (verified empty before we wrote into it) is emptied back out but kept. A
+ * no-op when nothing was created yet (cancel during the early prompts, a name
+ * rejected before `recordTarget`) or for in-place init (which never sets
+ * `cleanup.target`), so it can never touch a directory of the user's own.
  */
-const resetScaffoldOnCancel = (cleanup: ScaffoldCleanup, logger: Logger): void => {
+const resetPartialScaffold = (cleanup: ScaffoldCleanup, logger: Logger): void => {
     const { target, targetPreExisted } = cleanup;
 
     if (target === undefined || !existsSync(target)) {
@@ -1687,13 +1766,23 @@ const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandR
             if (!(await runPostScaffold(options, result, cwd))) {
                 result = { ...result, code: 1 };
             }
+        } else if (result.code !== 0) {
+            // A scaffold that FAILED (a failed overlay apply, an empty template)
+            // left its partial writes behind, and the retry — with the cause
+            // fixed — was then refused with "target directory not empty". Same
+            // reset the Ctrl-C path uses: a directory we created is removed, a
+            // pre-existing empty one is emptied back out. A failure raised
+            // before `recordTarget` (bad name, non-empty target) never recorded
+            // a target, so this is a no-op there and cannot delete the user's
+            // own directory.
+            resetPartialScaffold(cleanup, options.logger);
         }
     } catch (error) {
         // The user pressed Ctrl-C mid-flow — reset anything we created, then abort
         // cleanly with a friendly note (NOT the install/git failure path, which
         // prints recovery steps instead).
         if (error instanceof PromptCancelledError) {
-            resetScaffoldOnCancel(cleanup, options.logger);
+            resetPartialScaffold(cleanup, options.logger);
             process.stdout.write("\n  ✖  Setup cancelled — run `lunora init` again whenever you're ready. 🌙\n");
 
             return { code: 130, files: [], target: "" };

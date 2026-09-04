@@ -38,8 +38,10 @@ interface DurableObjectBinding {
 }
 
 interface MigrationEntry {
+    deleted_classes?: ReadonlyArray<string>;
     new_classes?: ReadonlyArray<string>;
     new_sqlite_classes?: ReadonlyArray<string>;
+    renamed_classes?: ReadonlyArray<{ from?: string; to?: string }>;
     tag?: string;
 }
 
@@ -362,6 +364,44 @@ const nextMigrationTag = (migrations: ReadonlyArray<MigrationEntry>): string => 
     return `v${String(index)}`;
 };
 
+/**
+ * The Durable Object classes the `migrations` list already declares, replayed
+ * in order exactly the way wrangler's own `getDeclaredDOClassNames` does:
+ * `deleted_classes` removes, `renamed_classes` moves `from` → `to`, and the two
+ * `new_*` lists add.
+ *
+ * Counting only the `new_*` lists made a class introduced by a rename look
+ * unregistered, so reconcile appended a second `new_sqlite_classes` entry for
+ * it — which wrangler then refuses ("Cannot apply new_sqlite_classes migration
+ * to existing class X"), permanently, because the append is written to the
+ * committed config with no rollback on the dev / prepare paths.
+ */
+const declaredClassNames = (migrations: ReadonlyArray<MigrationEntry>): Set<string> => {
+    const declared = new Set<string>();
+
+    for (const migration of migrations) {
+        for (const className of migration.deleted_classes ?? []) {
+            declared.delete(className);
+        }
+
+        for (const { from, to } of migration.renamed_classes ?? []) {
+            if (from !== undefined) {
+                declared.delete(from);
+            }
+
+            if (to !== undefined) {
+                declared.add(to);
+            }
+        }
+
+        for (const className of [...(migration.new_classes ?? []), ...(migration.new_sqlite_classes ?? [])]) {
+            declared.add(className);
+        }
+    }
+
+    return declared;
+};
+
 /** Add any missing Durable Object bindings + their migration classes. Pure. */
 const reconcileDurableObjects = (text: string, parsed: WranglerShape, required: ReadonlyArray<DurableObjectSpec>): ReconcileStep => {
     const existingBindings = parsed.durable_objects?.bindings ?? [];
@@ -384,8 +424,7 @@ const reconcileDurableObjects = (text: string, parsed: WranglerShape, required: 
     }
 
     const migrations = parsed.migrations ?? [];
-    const registered = new Set(migrations.flatMap((migration) => [...(migration.new_sqlite_classes ?? []), ...(migration.new_classes ?? [])]));
-    const missingClasses = required.map((object) => object.className).filter((className) => !registered.has(className));
+    const missingClasses = required.map((object) => object.className).filter((className) => !declaredClassNames(migrations).has(className));
 
     if (missingClasses.length > 0) {
         const nextMigrations = [...migrations, { new_sqlite_classes: missingClasses, tag: nextMigrationTag(migrations) }];

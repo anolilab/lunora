@@ -952,15 +952,28 @@ interface TasksViewProps<T> {
  * Run the task list sequentially, reporting each transition through `mark`, and
  * resolve with the collected results plus the first failure (if any). Never
  * rejects — a task error is captured into `failure` and stops the run.
+ *
+ * `isCancelled` is checked before each task starts. A task already in flight
+ * cannot be stopped (none of them take a signal), but no LATER one begins:
+ * Ctrl-C throws `PromptCancelledError` out of the render immediately while this
+ * chain keeps running, so `lunora init` would remove the partially-created
+ * project and the orphaned chain would then re-run `copyTemplate` and re-create
+ * the whole thing, right under the "removed the partially-created project" line
+ * the user just read.
  */
 const runTaskList = async <T,>(
     tasks: ReadonlyArray<TaskSpec<T>>,
     mark: (index: number, status: TaskStatus) => void,
+    isCancelled: () => boolean,
 ): Promise<{ failure: unknown; results: T[] }> => {
     const results: T[] = [];
     let failure: unknown;
 
     for (const [index, task] of tasks.entries()) {
+        if (isCancelled()) {
+            break;
+        }
+
         mark(index, "running");
 
         try {
@@ -999,22 +1012,29 @@ const startTasks = <T,>(
         }
     };
 
-    runTaskList(tasks, mark)
+    runTaskList(tasks, mark, () => !active)
         .then(({ failure, results }) => {
+            // Reported even after an unmount (Ctrl-C), so the caller can WAIT for
+            // this chain to stop touching the disk before it undoes what the
+            // chain wrote. Only the exit + the paint hold are gated on `active`.
+            onSettle(results, failure);
+
             // Hold briefly so the final "done" frame (green ✔ header + settled rows)
             // paints before we tear the app down — otherwise the last setState races
             // the exit and the header never flips to green.
             setTimeout(() => {
                 if (active) {
-                    onSettle(results, failure);
                     exit();
                 }
             }, 400);
 
             return undefined;
         })
-        .catch(() => {
-            // runTaskList captures task failures into its result; this only guards an unexpected reject.
+        .catch((error: unknown) => {
+            // runTaskList captures task failures into its result; this only guards
+            // an unexpected reject. It must still settle, or a caller awaiting the
+            // chain on the Ctrl-C path would wait forever.
+            onSettle([], error);
         });
 
     return () => {
@@ -1073,18 +1093,35 @@ const tuiTasks = async <T,>(tasks: ReadonlyArray<TaskSpec<T>>, labels: { end: st
 
     let results: T[] = [];
     let failure: unknown;
+    let markSettled = (): void => {};
+    // Resolves once the task chain has stopped — including after a Ctrl-C, where
+    // the render throws immediately but the in-flight task is still writing.
+    const settled = new Promise<void>((resolve) => {
+        markSettled = resolve;
+    });
 
-    await runInkApp(
-        <TasksView
-            end={labels.end}
-            onSettle={(settledResults, settledFailure) => {
-                results = settledResults;
-                failure = settledFailure;
-            }}
-            start={labels.start}
-            tasks={tasks}
-        />,
-    );
+    try {
+        await runInkApp(
+            <TasksView
+                end={labels.end}
+                onSettle={(settledResults, settledFailure) => {
+                    results = settledResults;
+                    failure = settledFailure;
+                    markSettled();
+                }}
+                start={labels.start}
+                tasks={tasks}
+            />,
+        );
+    } catch (error) {
+        // Ctrl-C. `runTaskList`'s gate stops any LATER task, but the one already
+        // running cannot be interrupted — so wait for it before letting the
+        // caller undo what it wrote. Without this, `lunora init` removed the
+        // partially-created project and the still-running copy re-created it.
+        await settled;
+
+        throw error;
+    }
 
     if (failure !== undefined) {
         throw toError(failure);
@@ -1244,6 +1281,7 @@ const withTuiBadgeProgress = async <T,>(badge: BadgeSpec, steps: ReadonlyArray<P
 
 export {
     createTuiConfirm,
+    runTaskList,
     tuiConfirm,
     tuiHeadline,
     tuiInfo,

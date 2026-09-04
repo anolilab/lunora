@@ -49,6 +49,7 @@ export type {
     WranglerWorkflowEntry,
 } from "./wrangler-validator";
 export {
+    mergeWranglerEnvironment,
     REQUIRED_COMPATIBILITY_DATE,
     REQUIRED_FLAG,
     validateWrangler,

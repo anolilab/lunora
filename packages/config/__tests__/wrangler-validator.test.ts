@@ -760,6 +760,32 @@ describe("wrangler-validator", () => {
                 expect(result.problems.some((line) => line.includes('d1_databases must include a binding named "DB"'))).toBe(true);
             });
 
+            it("does not throw on a malformed non-array workflows/containers block", () => {
+                expect.assertions(2);
+
+                writeSchema(SCHEMA_NO_GLOBAL);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "src/index.ts",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "compatibility_flags": ["nodejs_compat", "${REQUIRED_FLAG}"],
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "workflows": {},
+    "containers": {}
+}
+`,
+                    "utf8",
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.problems.join(" ")).toContain("workflows must be an array");
+                expect(result.problems.join(" ")).toContain("containers must be an array");
+            });
+
             it("an undeclared --env errors distinctly, without running the rest of validation", () => {
                 expect.assertions(3);
 
@@ -1573,12 +1599,21 @@ describe("wrangler-validator", () => {
             expect(validateWranglerConfig(validBase({ logpush: "true" as never })).errors.join(" ")).toContain("logpush must be a boolean");
         });
 
-        it("accepts placement.mode smart, and rejects a typo'd mode or wrong shape", () => {
-            expect.assertions(3);
+        it("accepts every placement.mode wrangler accepts, and rejects a typo'd mode or wrong shape", () => {
+            expect.assertions(5);
 
             expect(validateWranglerConfig(validBase({ placement: { mode: "smart" } })).valid).toBe(true);
-            expect(validateWranglerConfig(validBase({ placement: { mode: "fast" } })).errors.join(" ")).toContain('placement.mode must be "smart"');
+            expect(validateWranglerConfig(validBase({ placement: { mode: "off" } })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ placement: { mode: "targeted", region: "weur" } })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ placement: { mode: "fast" } })).errors.join(" ")).toContain("placement.mode must be one of");
             expect(validateWranglerConfig(validBase({ placement: "smart" as never })).errors.join(" ")).toContain("placement must be an object");
+        });
+
+        it("reports a null self-describing binding instead of throwing", () => {
+            expect.assertions(2);
+
+            expect(validateWranglerConfig(validBase({ browser: null as never })).errors.join(" ")).toContain("browser must be an object");
+            expect(validateWranglerConfig(validBase({ images: null as never })).errors.join(" ")).toContain("images must be an object");
         });
 
         it("accepts a well-formed assets block and flags a missing directory, wrong shape, or non-string binding", () => {

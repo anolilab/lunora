@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -622,6 +622,73 @@ describe("lunora init", () => {
             // The trimmed name is used for the target dir — no whitespace-padded folder.
             expect(existsSync(join(workdir, "padded-app", "package.json"))).toBe(true);
             expect(existsSync(join(workdir, "  padded-app  "))).toBe(false);
+        });
+
+        it("fails instead of reporting success when the template directory holds no files", async () => {
+            expect.assertions(3);
+
+            // A template subdirectory that exists but is empty — what a bad
+            // `--ref` / `--source` / template-name typo produces remotely, since
+            // giget drops every entry outside the requested subdir without
+            // throwing. This used to copy 0 files and exit 0 with
+            // "Project initialized!" over an empty project directory.
+            const emptySource = join(workdir, "empty-templates");
+
+            mkdirSync(join(emptySource, "tanstack-start-react"), { recursive: true });
+
+            const errors: string[] = [];
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: emptySource,
+                logger: { ...silentLogger(), error: (message) => errors.push(message) },
+                name: "hollow",
+                templateType: "tanstack-start-react",
+            });
+
+            expect(result.code).toBe(1);
+            expect(errors.join("\n")).toContain("no files");
+            expect(existsSync(join(workdir, "hollow"))).toBe(false);
+        });
+
+        it("refuses a project name wrangler will reject as a worker name", async () => {
+            expect.assertions(3);
+
+            // wrangler's own `isValidName` is /^$|^[a-z0-9_][a-z0-9-_]*$/ and a
+            // hard error, so `MyApp` scaffolds fine and then fails every
+            // `wrangler dev` / `deploy` on the substituted `name` field.
+            const errors: string[] = [];
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: { ...silentLogger(), error: (message) => errors.push(message) },
+                name: "MyApp",
+                templateType: "tanstack-start-react",
+            });
+
+            expect(result.code).toBe(1);
+            expect(errors.join("\n")).toContain("my-app");
+            expect(existsSync(join(workdir, "MyApp"))).toBe(false);
+        });
+
+        it("does not let a $-pattern in the name corrupt {{name}} substitution", async () => {
+            expect.assertions(2);
+
+            // `String.replaceAll` interprets `$&` / `$'` in a STRING replacement,
+            // so a name carrying one used to splice the matched text back in.
+            const errors: string[] = [];
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: { ...silentLogger(), error: (message) => errors.push(message) },
+                name: "app-$&-x",
+                templateType: "tanstack-start-react",
+            });
+
+            expect(result.code).toBe(1);
+            expect(errors.join("\n")).toContain("lowercase");
         });
 
         it("--from with missing template reports a helpful error", async () => {

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -546,6 +546,60 @@ describe("lunora dev", () => {
             expect(result.plan.workerOrigin).toBe("http://localhost:8787");
         });
 
+        it("provisions the bindings the code implies before starting the wrangler worker", async () => {
+            expect.assertions(2);
+
+            // `@lunora/vite` reconciles bindings on every dev-server start, but the
+            // wrangler flavor (standalone / expo / next — no `@lunora/vite` in
+            // dependencies) called no reconciler at all: a newly exported
+            // SchedulerDO got its binding only at `lunora deploy`, so `lunora dev`
+            // ran a worker missing it until then.
+            mkdirSync(join(workdir, "src", "server"), { recursive: true });
+            writeFileSync(
+                join(workdir, "src", "server", "index.ts"),
+                "export const ShardDO = class {};\nexport const SchedulerDO = class {};\nexport default { fetch() {} };\n",
+                "utf8",
+            );
+            mkdirSync(join(workdir, "lunora"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                'import { defineSchema, defineTable, v } from "@lunora/server";\n\nexport const schema = defineSchema({ messages: defineTable({ channelId: v.id("channels") }).shardBy("channelId") });\n',
+                "utf8",
+            );
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
+    "name": "x",
+    "main": "src/server/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"]
+}
+`,
+                "utf8",
+            );
+
+            const result = await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: silentLogger(),
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+            });
+
+            expect(result.code).toBe(0);
+
+            const written = readFileSync(join(workdir, "wrangler.jsonc"), "utf8");
+
+            expect(written).toContain("SchedulerDO");
+        });
+
         it("logs the framework redirect hint but still spawns the worker", async () => {
             expect.assertions(3);
 
@@ -731,6 +785,40 @@ describe("lunora dev", () => {
             ).rejects.toThrow("boom");
 
             // The `finally` teardown ran the disposer despite the throw.
+            expect(cleaned).toBe(true);
+        });
+
+        it("unlinks the remote temp config when the target is rejected right after it is written", async () => {
+            expect.assertions(2);
+
+            // `buildDevPlan` writes the temp config; `resolveRunnableTargetOrError`
+            // threw between that and the disposer's registration, so an unknown
+            // `--target` with `--remote` left the file orphaned in the project
+            // root (where the templates' exact-name `.wrangler` ignore misses it).
+            let cleaned = false;
+
+            await expect(
+                runDevCommand({
+                    cwd: workdir,
+                    logger: silentLogger(),
+                    materializeRemote: () => {
+                        return {
+                            cleanup: () => {
+                                cleaned = true;
+                            },
+                            configPath: join(workdir, "wrangler.remote.jsonc"),
+                            enabled: true,
+                            remoteBindings: [],
+                        };
+                    },
+                    remote: true,
+                    startWorker: () => {
+                        return { exited: Promise.resolve(0), kill: () => {} };
+                    },
+                    target: "not-a-registered-target",
+                }),
+            ).rejects.toThrow(/target/iu);
+
             expect(cleaned).toBe(true);
         });
 
