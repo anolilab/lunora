@@ -171,6 +171,12 @@ interface BadgeSpec {
 const CODEGEN_ENV = "LUNORA_CODEGEN";
 ```
 
+### `COMPOSED_WORKER_ENTRY` (const)
+
+```ts
+const COMPOSED_WORKER_ENTRY = "src/worker.ts";
+```
+
 ### `ClaimDevServerStateResult` (interface)
 
 ```ts
@@ -1970,7 +1976,10 @@ interface WranglerConfig {
         stream?: string;
     } | null | undefined>;
     placement?: {
+        host?: string;
+        hostname?: string;
         mode?: string;
+        region?: string;
     };
     queues?: {
         consumers?: ReadonlyArray<WranglerQueueConsumer | null | undefined>;
@@ -2062,6 +2071,16 @@ interface WranglerContainerEntry {
 }
 ```
 
+### `WranglerEnvironmentMerge` (interface)
+
+```ts
+interface WranglerEnvironmentMerge {
+    error?: string;
+    merged: WranglerConfig;
+    unverifiedKeys: string[];
+}
+```
+
 ### `WranglerProjectValidationOptions` (interface)
 
 ```ts
@@ -2149,6 +2168,12 @@ const isRemoteEnvEnabled: (value: string | undefined) => boolean;
 
 ```ts
 const materializeRemoteWranglerConfig: (options: MaterializeOptions) => MaterializeResult;
+```
+
+### `mergeWranglerEnvironment` (const)
+
+```ts
+const mergeWranglerEnvironment: (wrangler: WranglerConfig, environment: string | undefined) => WranglerEnvironmentMerge;
 ```
 
 ### `planRemoteBindings` (const)

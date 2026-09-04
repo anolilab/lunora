@@ -42,15 +42,19 @@ void caseFormatNumberMatchesEcmaScript() {
     (1e-21, '1e-21'),
     (1e20, '100000000000000000000'),
     (1e21, '1e+21'),
+    // An integral double past 2^53: ECMAScript prints the SHORTEST digits that
+    // read back as the same double and zero-pads, so this is not the exact
+    // expansion 1152921504606846976 that toStringAsFixed(0) writes.
+    (1.152921504606847e18, '1152921504606847000'),
+    // The key is `stableStringify`, not `String()`: it emits the bare token
+    // "-0", which is how a key keeps -0 and 0 apart. This case used to assert
+    // "0" and pinned the divergence it exists to catch.
+    (-0.0, '-0'),
   ];
 
   for (final (value, want) in expectations) {
     equals(formatDouble(value), want, 'formatDouble($value)');
   }
-
-  // Not in the shared table because the sibling ports render it "-0": ECMAScript
-  // spells negative zero "0", and Dart's toStringAsFixed does not.
-  equals(formatDouble(-0.0), '0', 'formatDouble(-0.0)');
 }
 
 /// JavaScript sorts by UTF-16 code unit, so an astral character is its high

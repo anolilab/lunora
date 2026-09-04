@@ -41,10 +41,39 @@ const TRACKING_TABLE_DDL = `CREATE TABLE IF NOT EXISTS ${TRACKING_TABLE_NAME} (i
 const WHITESPACE_RE = /\s/u;
 /** A character that continues a SQL word token (keyword or identifier). Hoisted to avoid per-call recompilation. */
 const WORD_CHAR_RE = /[$\w]/u;
-/** Leading whitespace and comments, so the `CREATE TRIGGER` probe can look past a migration's header comment. */
+
+/**
+ * One unit of SQL trivia BETWEEN two keywords: a whitespace char, a `--` line
+ * comment, or a `/* ... *\/` block comment. Written once and shared by both
+ * probes below — they drifted apart before, and only the leading position
+ * tolerated comments at all.
+ *
+ * A line comment here must be newline-terminated: something (the next keyword)
+ * always follows, so a `--` run to end-of-input cannot occur in this position.
+ */
+const TRIVIA_SOURCE = String.raw`(?:\s|--[^\n]*\n|\/\*[\s\S]*?\*\/)`;
+
+/**
+ * Leading whitespace and comments, so the `CREATE TRIGGER` probe can look past a
+ * migration's header comment.
+ *
+ * Unlike {@link TRIVIA_SOURCE} this position CAN run to end-of-input — a file of
+ * nothing but a comment is all trivia — hence the extra `$` alternative.
+ */
 const LEADING_TRIVIA_RE = /^(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*/u;
-/** `CREATE [TEMP|TEMPORARY] TRIGGER` at the head of a migration — the one statement whose body carries its own `;`s. */
-const CREATE_TRIGGER_RE = /^CREATE\s+(?:TEMP\s+|TEMPORARY\s+)?TRIGGER\b/iu;
+
+/**
+ * `CREATE [TEMP|TEMPORARY] TRIGGER` at the head of a migration — the one
+ * statement whose body carries its own `;`s.
+ *
+ * Trivia is matched BETWEEN the keywords, not just before them: SQLite accepts
+ * `CREATE /* … *\/ TRIGGER` as one statement, and a probe that only allowed
+ * `\s` there stopped recognising it as a trigger — `assertSingleStatement` then
+ * read the body's first `;` as a statement boundary and rejected the trailing
+ * `END`, telling the author to split a statement SQLite cannot have split.
+ */
+const CREATE_TRIGGER_RE = new RegExp(String.raw`^CREATE${TRIVIA_SOURCE}+(?:TEMP${TRIVIA_SOURCE}+|TEMPORARY${TRIVIA_SOURCE}+)?TRIGGER\b`, "iu");
+
 /** Lowercase hex SHA-256 shape guard before inlining the hash into SQL. Hoisted to avoid per-call recompilation. */
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/u;
 

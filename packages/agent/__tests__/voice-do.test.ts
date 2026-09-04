@@ -549,6 +549,22 @@ describe("voice session resource bounds", () => {
         expect(JSON.parse(sent[0] as string)).toMatchObject({ type: "error" });
     });
 
+    it("refuses a frame whose `type` is not one the session knows", async () => {
+        const instance = new TestVoiceDO(fakeState(), env, agent, "support");
+        const { sent, ws } = createFakeSocket({ connectionId: "c1", threadKey: "t1", turn: 0 });
+
+        // The `text` bound is keyed on `type === "text"`, and everything that was
+        // not `interrupt` or `commit` fell through to the text turn — so an
+        // unrecognised `type` carried its `text` to the model measured only
+        // against the ~4x larger raw-frame limit.
+        await instance.webSocketMessage(ws, JSON.stringify({ text: "x".repeat(5000), type: "typed" }));
+        // And a text frame with no `text` at all reached `frame.text.length`.
+        await instance.webSocketMessage(ws, JSON.stringify({ type: "text" }));
+
+        expect(turnsRun(instance)).toBe(0);
+        expect(sent.map((raw) => (JSON.parse(raw as string) as { type: string }).type)).toStrictEqual(["error", "error"]);
+    });
+
     it("rejects an oversized RAW control frame before parsing it", async () => {
         const instance = new TestVoiceDO(fakeState(), env, agent, "support");
         const { getClosed, sent, ws } = createFakeSocket({ connectionId: "c1", threadKey: "t1", turn: 0 });

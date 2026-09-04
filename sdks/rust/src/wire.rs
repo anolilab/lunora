@@ -15,7 +15,7 @@
 //!
 //! See `protocol/README.md` §2 for the normative grammar.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use serde_json::{Map, Number, Value};
@@ -31,6 +31,10 @@ pub const MAX_DEPTH: usize = 64;
 /// unbounded digit string from an untrusted peer is a denial of service.
 /// Applied only on decode — the untrusted direction.
 pub const MAX_BIGINT_DIGITS: usize = 1024;
+
+/// Largest epoch a `Date` holds (ECMAScript TimeClip). Past this, and for any
+/// non-finite epoch, `new Date(v)` is an Invalid Date.
+pub const MAX_TIME_VALUE: f64 = 8.64e15;
 
 /// Bytes per element for the typed-array views the codec round-trips. A view
 /// whose payload is not a whole number of elements is not a view the reference
@@ -230,8 +234,17 @@ pub const MAX_EXACT_INTEGER: f64 = 9_007_199_254_740_991.0;
 /// which formats numbers the ECMAScript way — so the two sides agreed on the
 /// comparison and disagreed on the bytes actually sent.
 fn encode_number(value: f64) -> Value {
-    if value.fract() == 0.0 && value.abs() <= MAX_EXACT_INTEGER {
-        // `-0.0` lands here as `0`, matching `JSON.stringify(-0) === "0"`.
+    // A negative zero keeps its f64 nature, so this renders `-0.0` on the wire
+    // where the reference renders `0`. Deliberate, and the lesser of the two
+    // divergences the Rust value model forces: `Value::Number` decides its
+    // rendering from the i64/f64 variant, while a JS number has no such split,
+    // so narrowing here is the only place the sign can be dropped — and
+    // `stableStringify` reads the ENCODED tree, spelling a negative zero `-0`
+    // (its own explicit `Object.is(value, -0)` branch, distinct from `0`).
+    // Narrowing would hand `{ "a": -0.0 }` the same cache key as `{ "a": 0 }`
+    // and serve one the other's data; `-0.0` and `0` are the same number to
+    // every JSON reader, so the wire spelling costs nothing.
+    if value.fract() == 0.0 && value.abs() <= MAX_EXACT_INTEGER && !(value == 0.0 && value.is_sign_negative()) {
         return Value::Number(Number::from(value as i64));
     }
 
@@ -379,7 +392,9 @@ fn map_key_identity(key: &WireValue) -> Option<String> {
         WireValue::Null => "null".to_owned(),
         WireValue::Undefined => "undefined".to_owned(),
         WireValue::Bool(value) => format!("bool:{value}"),
-        WireValue::Number(value) => format!("num:{value}"),
+        // `+ 0.0` clears the sign of a zero and changes nothing else: SameValueZero
+        // holds -0 equal to 0, while `{}` on an f64 keeps the sign ("-0").
+        WireValue::Number(value) => format!("num:{}", value + 0.0),
         WireValue::NaN => "num:nan".to_owned(),
         WireValue::Infinity => "num:inf".to_owned(),
         WireValue::NegInfinity => "num:-inf".to_owned(),
@@ -421,7 +436,12 @@ fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
                 return Err(WireError::InvalidBigInt);
             }
 
-            WireValue::BigInt(raw.to_string())
+            // Canonicalise on the way in. The reference decodes to a real
+            // `bigint` and re-encodes with `toString()`, so `"007"` and `"-0"`
+            // leave it as `"7"` and `"0"`. Carrying the digits verbatim
+            // re-encoded a spelling the reference never emits, and two peers
+            // keyed a subscription differently on the same value.
+            WireValue::BigInt(normalise_bigint(raw))
         }
         "date" => {
             // Epoch milliseconds, and nothing else. The payload is DECODED first
@@ -431,11 +451,18 @@ fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
             // legitimate-looking date tag.
             let epoch = decode_at(items.get(2).ok_or(WireError::Malformed("date"))?, depth + 1)?;
 
-            if !matches!(epoch, WireValue::Number(_) | WireValue::NaN | WireValue::Infinity | WireValue::NegInfinity) {
-                return Err(WireError::Malformed("date"));
-            }
+            // TimeClip, exactly as `new Date(epoch)` applies it: truncate toward
+            // zero, and turn anything non-finite or past +-8.64e15 into an
+            // Invalid Date. Kept verbatim, an out-of-range epoch re-encoded as a
+            // date tag the reference — whose own `Date` can never hold that
+            // value — refuses to produce.
+            let clipped = match epoch {
+                WireValue::Number(epoch) if epoch.abs() <= MAX_TIME_VALUE => WireValue::Number(epoch.trunc()),
+                WireValue::Number(_) | WireValue::NaN | WireValue::Infinity | WireValue::NegInfinity => WireValue::NaN,
+                _ => return Err(WireError::Malformed("date")),
+            };
 
-            WireValue::Date(Box::new(epoch))
+            WireValue::Date(Box::new(clipped))
         }
         "url" => WireValue::Url(items.get(2).and_then(Value::as_str).ok_or(WireError::Malformed("url"))?.to_string()),
         "map" => {
@@ -460,7 +487,10 @@ fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
                 // deployment reading a different value from identical bytes.
                 if let Some(identity) = map_key_identity(&key) {
                     if let Some(&index) = seen.get(&identity) {
-                        entries[index] = (key, item);
+                        // Only the VALUE. `Map.prototype.set` on a key already
+                        // present keeps the key it holds, so a later `-0` never
+                        // replaces the `0` stored under it.
+                        entries[index].1 = item;
 
                         continue;
                     }
@@ -475,21 +505,40 @@ fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
         }
         "set" => {
             let raw = items.get(2).and_then(Value::as_array).ok_or(WireError::Malformed("set"))?;
+            let mut entries: Vec<WireValue> = Vec::with_capacity(raw.len());
+            let mut seen: HashSet<String> = HashSet::new();
 
-            WireValue::Set(raw.iter().map(|item| decode_at(item, depth + 1)).collect::<WireResult<_>>()?)
+            // The reference builds a real Set, which de-duplicates by
+            // SameValueZero and keeps the FIRST occurrence's position — the same
+            // rule as a Map's keys, so the same identity helper decides it.
+            // Carrying both copies re-encoded a set the reference never emits.
+            for item in raw {
+                let item = decode_at(item, depth + 1)?;
+
+                if let Some(identity) = map_key_identity(&item) {
+                    if !seen.insert(identity) {
+                        continue;
+                    }
+                }
+
+                entries.push(item);
+            }
+
+            WireValue::Set(entries)
         }
         "error" => {
-            // The props slot is NOT optional and NOT nullable: the reference
-            // reads it with `Object.keys`, which throws on a null or missing
-            // slot, so quietly substituting an empty map accepted a frame the
-            // reference refuses.
+            // The props slot is NOT optional, NOT nullable and NOT a primitive:
+            // the reference reads it with `Object.keys`, which throws on a null
+            // or missing slot and ENUMERATES a string/number/boolean/array — so
+            // `[TAG,"error","E","m","ab"]` would decode there with the invented
+            // props {0:"a",1:"b"} while quietly substituting an empty map
+            // accepted the same frame here.
             let props = match items.get(4) {
                 Some(Value::Object(fields)) => fields
                     .iter()
                     .map(|(key, item)| Ok((key.clone(), decode_at(item, depth + 1)?)))
                     .collect::<WireResult<Vec<_>>>()?,
-                None | Some(Value::Null) => return Err(WireError::Malformed("error")),
-                Some(_) => Vec::new(),
+                _ => return Err(WireError::Malformed("error")),
             };
 
             WireValue::Error {

@@ -508,6 +508,22 @@ interface WorkerEntry {
  */
 const COMPOSED_ENTRY_DURABLE_OBJECTS: DurableObjectClass[] = ["ShardDO"];
 
+/**
+ * The class-B composed entry. `lunora deploy` passes this file to wrangler as
+ * the positional script whenever it exists, overriding `wrangler.main` — so it
+ * is what actually gets bundled and what wrangler checks its DO/Workflow
+ * bindings against. `main` in a class-B project names the framework adapter's
+ * build output (`.svelte-kit/cloudflare/_worker.js`, `dist/_worker.js`), which
+ * exists after `vite build` and exports only the SSR fetch handler. Lexing that
+ * instead read every declared class as unexported: nothing provisioned, plus a
+ * "add `export * from …`" warning the user cannot silence.
+ *
+ * Exported, not documented-as-duplicated: the CLI's `resolveComposedWorkerEntry`
+ * imports this constant, so the deploy's positional entry and the file this
+ * module lexes for exported classes cannot drift apart.
+ */
+const COMPOSED_WORKER_ENTRY = "src/worker.ts";
+
 /** Read the worker entry from `wrangler.main`, or probe known fallbacks. */
 const resolveWorkerEntry = (projectRoot: string): WorkerEntry => {
     for (const candidate of WRANGLER_FILES) {
@@ -526,6 +542,12 @@ const resolveWorkerEntry = (projectRoot: string): WorkerEntry => {
         // file's exports.
         if (main === LUNORA_WORKER_VIRTUAL_ID) {
             return { composed: true };
+        }
+
+        const composedPath = join(projectRoot, COMPOSED_WORKER_ENTRY);
+
+        if (existsSync(composedPath)) {
+            return { composed: false, path: composedPath };
         }
 
         if (typeof main === "string" && existsSync(join(projectRoot, main))) {
@@ -970,11 +992,21 @@ export type {
     InferredWorkflow,
     WorkerEntry,
 };
-// `resolveWorkerEntry` + `isTypeOnlyExportEntry` are shared with the wrangler
-// validator's exported-class check, which answers the same question
-// ("which classes does the entry export as runtime values?") synchronously.
-// Exported rather than copied — the copy that existed drifted immediately.
+// `COMPOSED_WORKER_ENTRY`, `WORKER_ENTRY_FALLBACKS` and `isTypeOnlyExportEntry`
+// are shared with the wrangler validator's exported-class check, which answers
+// the same question ("which classes does the entry export as runtime values?")
+// against the same file. The validator keeps its own path resolver because it
+// resolves `main` from the `--env` view relative to the config file, which this
+// one (deliberately projectRoot-relative, and reading the top level) does not.
 // `resolveWorkerEntry` returns a {@link WorkerEntry}, not a path: the class-A
 // composed entry (`main: "virtual:lunora/worker"`) has no file, and reading that
 // as "no worker entry" is what left every container/workflow/agent unprovisioned.
-export { inferLunoraBindings, isTypeOnlyExportEntry, LUNORA_WORKER_VIRTUAL_ID, packageNamesFromBindings, resolveWorkerEntry, WORKER_ENTRY_FALLBACKS };
+export {
+    COMPOSED_WORKER_ENTRY,
+    inferLunoraBindings,
+    isTypeOnlyExportEntry,
+    LUNORA_WORKER_VIRTUAL_ID,
+    packageNamesFromBindings,
+    resolveWorkerEntry,
+    WORKER_ENTRY_FALLBACKS,
+};

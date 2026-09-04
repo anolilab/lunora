@@ -141,6 +141,8 @@ change that adds or removes a capability.
 | Per-shard drain               | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Batched offline replay        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Rate-limit backoff            | ✅⁵    | ✅⁵ | ✅⁵  | ✅⁵  | ✅⁵   | ✅⁵  | ✅⁵    | ✅⁵  |
+| Row-delta merge into a list   | ❌⁷    | ❌⁷ | ❌⁷  | ❌⁷  | ❌⁷   | ❌⁷  | ❌⁷    | ❌⁷  |
+| `chunk` / `whisper` frames    | ❌⁸    | ❌⁸ | ❌⁸  | ❌⁸  | ❌⁸   | ❌⁸  | ❌⁸    | ❌⁸  |
 | Multi-tab leader election     | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Built-in HTTP / socket        | ✅⁴    | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Several sockets per client    | ❌³    | ❌³ | ❌³  | ❌³  | ❌³   | ❌³  | ❌³    | ❌³  |
@@ -196,6 +198,25 @@ after the first socket drop every `subscribeShape` view stopped receiving pokes
 for the life of the process — silently, because a shape is only ever fed by pokes
 the server had stopped sending. `shape_subscriptions_resend_after_reconnect` in
 `conformance-cases.json` is what makes the claim checkable rather than asserted.
+
+⁷ **A `delta` frame REPLACES the value here; the reference MERGES it.** All eight
+route `data` and `delta` through one arm and publish `frame.data ?? frame.delta`,
+while `@lunora/client` recognises a `{ key, op, table, row }` row change
+(`delta-merge.ts`) and splices it into the cached list by `_id`, falling back to
+replacement only when it cannot. So on the `broadcastDelta` fan-out these clients
+publish the row-change envelope itself over a query result. It is a missing
+FEATURE rather than a wire divergence — the frames are decoded correctly — and it
+is a row here rather than a conformance case because `conformance-cases.json` may
+only require behaviour every port has. Closing it is one merge implementation per
+language against the placement rule in `protocol/README.md` §5.1.1, which the
+`pageDeltaFrames` goldens already carry.
+
+⁸ **Neither frame is handled.** `chunk` (a streaming-query chunk, with the durable
+`seq`/`generation` resume watermark) and `whisper` (the ephemeral topic relay) are
+in `protocol/README.md` §5.2 and reach the default arm of every port's frame
+switch, where they are ignored. No port sends `stream`, `whisper_subscribe` or
+`whisper` either, so nothing arrives to drop; the gap is that a deployment using
+those features has no non-JS client for them.
 
 **The two argument rows are one problem with two halves, and no port can pass
 both by a rule applied at the transport.** An unset `v.optional()` must reach the
@@ -501,7 +522,7 @@ Each of these is forced by what these SDKs are rather than chosen:
 | **`submit` is a NEW method; `mutation` is unchanged.** `mutation` stays one direct HTTP round-trip that fails when the deployment is unreachable, because the generated surface calls it and a typed wrapper must keep returning a typed result. `submit` is the write path that survives a dropped socket.                                                            | Changing `mutation`'s contract under the generated code would turn "this write failed" into "this write is queued" for every existing caller.                                                                                                                                                                                                                                                                                                                                                                  |
 | **`submit` returns immediately with a `status` of `committed` or `queued`.** The browser client's `mutation()` returns a promise that stays PENDING until a queued write finally replays; the eventual verdict here arrives through `onSettled` (per write) or `onMutationSettled` (per client).                                                                       | A pending promise is fine in a browser event loop and bad on a goroutine, a Ruby thread or a JVM thread pool. A caller that must not report success early checks `status`.                                                                                                                                                                                                                                                                                                                                     |
 | **The persistence adapter is SYNCHRONOUS** in the seven non-Dart ports. The browser client's is async because IndexedDB is, and Dart's stays async because its IO is.                                                                                                                                                                                                  | A consumer injects whatever it likes — a file, SQLite, a key-value store — and owns its own threading, exactly as it already does for the HTTP poster and the frame sender.                                                                                                                                                                                                                                                                                                                                    |
-| **The identity stamp is an opaque string the CONSUMER sets** (`client.identity`), not a fingerprint derived from an auth token.                                                                                                                                                                                                                                        | These SDKs do not manage auth sessions, and a derived stamp would mean persisting a hash of a bearer token in the consumer's storage. Put a stable, non-secret subject (a user id) there.                                                                                                                                                                                                                                                                                                                      |
+| **The identity stamp is an opaque string the CONSUMER sets** (`client.identity`) in seven ports — Dart is the exception and mirrors the reference, deriving one from `authSubject` or, failing that, from a non-cryptographic digest of the token (`dart/lib/src/transport.dart`).                                                                                     | These SDKs do not manage auth sessions, so a derived stamp would mean persisting a digest of a bearer token in the consumer's storage. Put a stable, non-secret subject (a user id) there — in Dart, `authSubject`, which is what its fallback exists to avoid needing.                                                                                                                                                                                                                                        |
 | **A transient replay failure is classified by code AND by status**: a raw transport error, `SHARD_ERROR`/`SHARD_UNAVAILABLE`, `RATE_LIMITED`/`TOO_MANY_REQUESTS`, any 5xx, and any non-2xx carrying no `{ error }` envelope all re-queue; everything else coded is terminal. One predicate governs the single-call path, a batch slot and a whole-batch outcome alike. | `protocol/README.md` §4.3. A durable write's fate must not depend on how many siblings were queued alongside it, which is exactly what it did: the same envelope-less 502 was transient for a batch and terminal for a lone write. **Behind §4.3 on one half**: an envelope-less **4xx** is a refusal that resending only reproduces, and the spec now settles those terminally rather than parking the outbox head behind them forever. These eight still re-queue every envelope-less non-2xx alike.         |
 | **A rate limit defers the next flush rather than dropping the write.** `FlushReport.retryAfterMs` carries the envelope's `data.retryAfterMs`, clamped to 60 s, and a flush inside that window is a no-op reporting the time remaining.                                                                                                                                 | "Not now" is not "no", and a queue that honours a limiter by discarding loses data for being punctual. The `Retry-After` HEADER is not read: the injected poster surfaces `(status, body)` only — see the capability matrix's note ⁵. The window is also **passive and global**: nothing schedules a re-flush when it elapses (the caller's next flush is what tries again), a refusal carrying no hint sets no window at all, and the one field gates every shard rather than the shard that met the limiter. |
 | **Every fold notifies.** The TypeScript engine suppresses a notification whose folded result is reference-identical to the value already displayed.                                                                                                                                                                                                                    | Reference identity has no portable meaning across eight languages. A consumer sees at most a few redundant callbacks carrying the same value, never a missing one.                                                                                                                                                                                                                                                                                                                                             |
@@ -514,7 +535,7 @@ here.
 
 ### The queue never calls back; it returns what it let go of
 
-In all seven ports, every queue method that lets go of a write — an overflow
+In all eight ports, every queue method that lets go of a write — an overflow
 eviction, a failed precondition, a close — **returns** the discarded entry with a
 coded reason instead of rejecting it in place. The client settles those once it
 has released its lock.
@@ -537,7 +558,7 @@ an eviction dropping a durable write in silence was itself dropping it in silenc
 Every port now has a case asserting that an eviction raised from inside `submit`
 settles exactly once, with the documented code.
 
-The same rule is what makes the rest of the write path safe, so all seven ports
+The same rule is what makes the rest of the write path safe, so all eight ports
 hold to it: **on the write path, nothing you supply runs while the client holds
 its lock.** The optimistic transform is run against a snapshot and its result
 recorded; a queued write's `precondition` is evaluated on a snapshot too; the
@@ -741,7 +762,7 @@ the row as "a case exists and runs under this name", and rely on the assertions
 themselves for the rest.
 
 **The manifest holds a suite to every name in
-`protocol/conformance-cases.json` — 37 of them today; it cannot hold one that ran
+`protocol/conformance-cases.json` — 40 of them today; it cannot hold one that ran
 nothing at all.** Six of these eight test tools exit 0 having collected NO tests
 — `unittest discover` finding no matching module, an empty `test/test_*.rb`
 glob, a Go package with no `_test.go`, `cargo test` and `swift test` with
@@ -798,6 +819,148 @@ against — `protocol/fixtures/*.json` and `protocol/conformance-cases.json` —
 outside the Go module, so the test cache cannot see those files change and replays
 a PASS recorded before the edit. Without it, editing a fixture or the manifest
 leaves the go leg green without having run.
+
+### Coverage matrix — what the fixtures actually pin
+
+Derived from the reference source (`shared/wire-codec.ts`, `shared/stable-key.ts`,
+`shared/wire-key.ts`, `packages/client/src/lunora-client.ts`) rather than from
+the fixtures, so a behaviour the fixtures forgot shows up as a row with no case
+against it. The test is "would a port that got this WRONG go red", not "is it
+mentioned somewhere" — that distinction is the whole point: `rejected[]` once
+listed only null and missing payload slots, so six ports accepting a non-object
+`error` props slot was invisible to it for as long as it existed.
+
+Every row below is either pinned by a named case or listed under
+[deliberately unpinned](#deliberately-unpinned-and-why). Nothing is silent.
+
+**Codec — encode**
+
+| Reference behaviour                                            | Pinned by                                                                                                         |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| identity for `null` / bool / string / finite number            | `null`, `boolean`, `string`, `number-int`, `number-float`, `number-zero`                                          |
+| plain object and array recurse                                 | `pure-json-object`, `pure-json-array`, `empty-object`, `empty-array`, `nested-typed`                              |
+| `bigint` → `[TAG,"bigint",digits]`                             | `bigint`, `bigint-negative`, `bigint-in-object`                                                                   |
+| `NaN` / `Infinity` / `-Infinity` tags                          | `nan`, `inf`, `-inf`                                                                                              |
+| `undefined` tagged in an array, DROPPED as an object field     | `undefined-in-array`, `undefined-object-field`                                                                    |
+| `Date` → epoch routed back through the encoder                 | `date`, `date-invalid`                                                                                            |
+| `URL` → `href`                                                 | `url`                                                                                                             |
+| `Map` entries recurse, insertion order                         | `map`, `nested-map-in-set`, `map-empty`                                                                           |
+| `Set` items recurse, insertion order                           | `set`, `set-empty`, `nested-map-in-set`                                                                           |
+| `Uint8Array` 3-element, `ArrayBuffer` 4-element                | `bytes-uint8`, `bytes-arraybuffer`, `bytes-empty`                                                                 |
+| every other view carries its ctor name                         | `bytes-int8`/`-uint8clamped`/`-int16`/`-uint16`/`-int32`/`-uint32`/`-float32`/`-float64`/`-bigint64`/`-biguint64` |
+| `Error` → name, message, own props, optional `cause`           | `error`, `error-with-props`, `error-with-cause`, `error-with-null-cause`                                          |
+| `Error` drops an `undefined` own prop and an `undefined` cause | `error-prop-undefined`, `error-cause-undefined`                                                                   |
+| an array starting with the sentinel is escaped as `"arr"`      | `array-sentinel-escape`, `tag-only-array`, `unknown-tag`                                                          |
+| `__proto__` written as an own data property, never by setter   | `proto-key`                                                                                                       |
+| `MAX_DEPTH` (64) refused on the way out                        | `depth_cap_enforced` (manifest; native, no fixture can nest 65 deep readably)                                     |
+| a non-plain object (`RegExp`, a class instance) is refused     | `offline_flush_unencodable_write_settles_terminal` (manifest; native construction)                                |
+
+**Codec — decode, per tag**
+
+| Tag                    | Accepted, pinned by                                                                                                                      | Refused, pinned by                                                                                                                                                                               |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `bigint`               | `bigint*`; canonicalised: `bigint-leading-zeros`, `bigint-negative-zero`                                                                 | `bigint-payload-number`, `-missing-payload`, `-empty-string`, `-leading-plus`, `-decimal-point`, `-surrounding-space`, `-hex-prefix`, `-non-ascii-digits`; length by `over_long_bigint_rejected` |
+| `date`                 | `date`, `date-invalid`, TimeClip by `date-epoch-max`, `-past-max`, `-out-of-range`, `-non-finite`, `-fractional`, `-fractional-negative` | `date-payload-not-number`, `-string`, `-boolean`, `-object`, `-array`, `-bigint-tag`                                                                                                             |
+| `url`                  | `url`                                                                                                                                    | `url-href-not-string`, `url-href-missing`                                                                                                                                                        |
+| `map`                  | `map`, `map-empty`, `map-duplicate-keys`, `map-duplicate-nonstring-keys`, `map-duplicate-zero-sign-keys`                                 | `map-payload-not-array`, `-payload-missing`, `-entry-not-array`, `-entry-too-short`, `-entry-too-long`                                                                                           |
+| `set`                  | `set`, `set-empty`, `set-duplicate-scalars`, `set-duplicate-nonscalars`, `set-duplicate-zero-signs`                                      | `set-payload-not-array`, `-payload-missing`, `-payload-object`                                                                                                                                   |
+| `arr`                  | `array-sentinel-escape`, `arr-empty-payload`                                                                                             | `arr-payload-not-array`, `-payload-missing`, `-payload-object`                                                                                                                                   |
+| `bytes`                | the ten ctor cases above, `bytes-unknown-ctor`, `bytes-null-ctor`                                                                        | `bytes-payload-not-string`, `-payload-number`, `-outside-alphabet`, `-truncated-quantum`, `-padding-inside`, `-element-misaligned`, `-misaligned-int16`, `-misaligned-float64`                   |
+| `error`                | `error*`, allow-listed ctor by `error-with-props` (`TypeError`)                                                                          | `error-props-not-object`, `-missing-props`, `-string`, `-array`, `-number`, `-boolean`                                                                                                           |
+| `nan` / `inf` / `-inf` | `nan`, `inf`, `-inf`                                                                                                                     | —                                                                                                                                                                                                |
+| `undefined`            | `undefined-in-array`, `undefined-object-field`                                                                                           | —                                                                                                                                                                                                |
+| unknown tag            | `unknown-tag` (decodes as an ordinary array, re-encodes escaped)                                                                         | —                                                                                                                                                                                                |
+| depth                  | `depth_cap_enforced` (manifest)                                                                                                          | same                                                                                                                                                                                             |
+
+**Stable key (`stableStringify ∘ encodeWire`)**
+
+| Reference behaviour                                    | Pinned by                                                                                                                    |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| keys sorted at every depth, UTF-16 code UNIT order     | `sorted-top-level`, `sorted-nested`, `codepoint-order`, `key-order-surrogate-vs-pua`, `key_order_matches_utf16`              |
+| an empty-string key sorts first                        | `empty-string-key`                                                                                                           |
+| arrays keep order; nested objects still sort           | `arrays-keep-order`, `nested-array-of-objects`                                                                               |
+| `null` field kept, `undefined` field dropped           | `null-field-kept`, `undefined-object-field-arg`                                                                              |
+| `undefined` in an array keys as its tag, not as `null` | `undefined-in-array-arg`                                                                                                     |
+| string escaping matches `JSON.stringify`               | `string-with-quote`, `escape-set-matches-json-stringify`, `string_escaping_matches_json_stringify`                           |
+| number spelling matches `String(v)`                    | `number-exponent-forms`, `format_number_matches_ecmascript`                                                                  |
+| a negative zero keys as `-0`, distinct from `0`        | `negative-zero`                                                                                                              |
+| empty containers                                       | `empty`, `nested-empty-containers`                                                                                           |
+| wire-typed args tokenise rather than throwing          | `bigint-arg`, `date-arg`, `bytes-arg`, `map-arg-keeps-insertion-order`, `set-arg`, `url-arg`, `error-arg`, `non-finite-args` |
+| the `(functionPath, args, shardKey)` composition       | `empty_shard_key_is_omitted`                                                                                                 |
+
+**RPC and frames**
+
+| Reference behaviour                                   | Pinned by                                                                                                                                                |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| request body, with and without `shardKey`             | `rpc.request.cases`, `rpc_request_bodies`                                                                                                                |
+| `{ result }`, `commitCursor`, `lastMutationId`        | `rpc.responseOk`, `rpc_responses`                                                                                                                        |
+| `{ error }` with `code` / `message` / `data`          | `rpc.responseError`                                                                                                                                      |
+| a non-2xx body with no envelope is `INTERNAL`         | `non_2xx_without_error_envelope_fails`                                                                                                                   |
+| `connect` / `subscribe` / `unsubscribe` frames        | `clientFrames`, `client_frame_builders`                                                                                                                  |
+| `shape_subscribe`, resume across reconnect            | `shape_subscribe_frame`, `shape_subscriptions_resend_after_reconnect`                                                                                    |
+| `ack` / `data` / `error` / `resume` / `settled`       | `serverFrames`, `server_frame_consumer`                                                                                                                  |
+| poke buffering, `reset`, bounded buffers              | `poke_sequence_materialises_rows`, `poke_parts_do_not_apply_before_poke_end`, `shape_reset_poke_replaces_membership`, `pending_poke_buffers_are_bounded` |
+| batched replay, its cap and its split                 | `offline_flush_batches_multiple_writes`, `offline_flush_batch_splits_on_payload_too_large`, `batch_entry_cap_matches_protocol`                           |
+| `shape_unsubscribe` spelling                          | **unpinned** — see below                                                                                                                                 |
+| `delta` merged into a cached list, `chunk`, `whisper` | **not implemented in any port** — see the capability matrix above                                                                                        |
+
+#### Deliberately unpinned, and why
+
+Beyond the two decoder leniencies below, four rows above resolve to "no case, on
+purpose". Each is measured, not assumed:
+
+- **A lone surrogate in a stable key.** The reference escapes one (`\ud800`) via
+  `JSON.stringify`, but the fixture cannot carry the input: ruby's `JSON.parse`
+  raises `incomplete surrogate pair` on the whole FILE (taking every other
+  stable-key case down with it), and go's `encoding/json` silently substitutes
+  U+FFFD before the port's key encoder ever sees it. Two of eight cannot express
+  it, and the same two refuse the value on a real wire, so it is unreachable
+  there rather than mishandled.
+- **`Error` `name` / `message` that are not strings.** The reference is LENIENT
+  and JS-accidentally so: `[TAG,"error",7,"m",{}]` keeps a numeric `name`
+  through `defineProperty`, and `[TAG,"error","Error",7,{}]` ToString-coerces the
+  message to `"7"`. A case demanding rejection would assert against the
+  reference; one demanding acceptance would ask eight languages to reproduce two
+  JS coercions. The sibling slots (`props`, `date` epoch, `bytes` payload, `url`
+  href) are all type-CHECKED and are pinned; these two are the remainder.
+- **`Error` own props carrying `__proto__`.** The decode side handles it (an own
+  data property, never the setter), but the ENCODE side's Error branch writes
+  `properties[key] = …` with no such guard, so the prop lands on the props
+  object's prototype and re-encodes as `{}`. That is a defect in the reference,
+  not a contract to port — recorded here rather than pinned, because a fixture
+  would freeze the bug into eight languages.
+- **`shape_unsubscribe`.** All eight emit `{ id, type: "shape_unsubscribe" }`,
+  verified by reading each; a golden would need a new assertion in eight suites
+  and would catch nothing today. The `clientFrames` goldens that DO exist are the
+  ones that once diverged.
+
+The `connect-with-caps` and `pageDeltaFrames` goldens stay opt-in, as
+`ws-frames.json`'s own comment declares: a client that has not announced the
+`pageDelta` token never receives such a frame, and running those cases would hold
+it to a merge it correctly does not do.
+
+### Two decoder leniencies the fixtures deliberately do not pin
+
+Both are places where a port is STRICTER than the reference, and both are left
+unpinned on purpose — a fixture demanding rejection would assert against the
+reference, and one demanding acceptance would ask six languages to hand-roll a
+decoder whose only new behaviour is accepting malformed input. A conforming
+encoder emits neither shape, so nothing on a conforming wire reaches them.
+Measured, not assumed:
+
+| Input                                          | Accepted by                                   | Refused by                              |
+| ---------------------------------------------- | --------------------------------------------- | --------------------------------------- |
+| unpadded base64 (`AQI`)                        | reference (`atob`), rust, java, kotlin        | go, python, ruby, swift, dart           |
+| base64 with inner whitespace                   | reference (`atob`), rust, go (`\n`/`\r` only) | java, kotlin, python, ruby, swift, dart |
+| a `url` href `new URL` refuses (`"not a url"`) | every port — the href is stored verbatim      | the reference only                      |
+
+The `url` row is the one that can bite in the other direction: a port will put a
+non-canonical href (`HTTPS://EXAMPLE.COM`) on the wire where the reference emits
+`new URL(href).href` (`https://example.com/`), and the runtime decodes with the
+reference codec. Eight native URL types do not agree with WHATWG parsing on
+enough edges to reproduce it — a half-validator would be a NINTH behaviour — so
+the ports carry the href through untouched and a consumer that needs the
+reference's spelling normalises before it constructs the value.
 
 CI runs all eight per PR (`sdk-conformance` in `.github/workflows/test.yml`),
 one language per matrix leg — and each leg invokes **this same script**,

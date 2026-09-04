@@ -258,6 +258,23 @@ describe("applyLunoraOverlay", () => {
         expect(secondPass).toBe(firstPass);
     });
 
+    it("keeps a base's existing negations below the globs it appends", async () => {
+        expect.assertions(2);
+
+        writeReactBase(base);
+        // A base that already un-ignores its example env file but has never seen
+        // `.env.*`. git is last-match-wins, so appending the glob below the
+        // negation re-ignores a file the project deliberately tracks.
+        write(base, ".gitignore", "node_modules\ndist\n.env\n!.env.example\n");
+
+        await applyLunoraOverlay({ adapter: ADAPTERS.react, distTag: "alpha", logger: silentLogger(), name: "my-app", target: base });
+
+        const lines = readFileSync(join(base, ".gitignore"), "utf8").split(/\r?\n/);
+
+        expect(lines).toContain(".env.*");
+        expect(lines.lastIndexOf("!.env.example")).toBeGreaterThan(lines.lastIndexOf(".env.*"));
+    });
+
     it("wires every framework adapter's entry to its Lunora client API", async () => {
         expect.assertions(4);
 
@@ -357,6 +374,21 @@ describe("lunora init --vite (overlay, end to end)", () => {
         expect(existsSync(planted)).toBe(false);
         // The real files still arrive — the skip is scoped to links, not the copy.
         expect(readFileSync(join(workdir, "my-app", "src", "App.tsx"), "utf8")).toContain("function App");
+    });
+
+    it("cleans up the half-written project when the overlay apply fails", async () => {
+        expect.assertions(2);
+
+        // The base copies fine, then `patchPackageJson`'s JSON.parse throws —
+        // by which point the overlay has already written several files into the
+        // target. Leaving them there meant the retry (with the problem fixed)
+        // was refused with "target directory not empty".
+        writeFileSync(join(baseRoot, "template-react-ts", "package.json"), "{ not json", "utf8");
+
+        const result = await runInitCommand({ cwd: workdir, logger: silentLogger(), name: "my-app", overlayBaseFrom: baseRoot, vite: "react" });
+
+        expect(result.code).toBe(1);
+        expect(existsSync(join(workdir, "my-app"))).toBe(false);
     });
 
     it("rejects an unknown --vite framework", async () => {

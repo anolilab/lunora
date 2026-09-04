@@ -4,9 +4,11 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The tagged value codec for Lunora's client↔server wire, ported from {@code shared/wire-codec.ts}.
@@ -43,6 +45,27 @@ public final class Wire {
      * its tag exist for that case.
      */
     public static final long MAX_EXACT_INTEGER = (1L << 53) - 1;
+
+    /**
+     * Largest epoch a Date holds (ECMAScript TimeClip). Past this, and for any non-finite epoch,
+     * {@code new Date(v)} is an Invalid Date.
+     */
+    public static final double MAX_TIME_VALUE = 8.64e15;
+
+    /**
+     * {@code new Date(epoch).getTime()} — ECMAScript TimeClip.
+     *
+     * <p>A Date truncates its argument toward zero, and anything non-finite or past ±8.64e15
+     * becomes an Invalid Date, which the reference re-encodes as a NaN tag. Kept verbatim, the
+     * epoch went back on the wire as a date the reference's own Date can never hold.
+     */
+    static double timeClip(double epoch) {
+        if (Double.isNaN(epoch) || Double.isInfinite(epoch) || Math.abs(epoch) > MAX_TIME_VALUE) {
+            return Double.NaN;
+        }
+
+        return epoch < 0 ? Math.ceil(epoch) : Math.floor(epoch);
+    }
 
     /**
      * Bytes per element for the typed-array views the codec round-trips. A view whose payload is
@@ -362,17 +385,32 @@ public final class Wire {
                 return decodeBigInt(items);
             case "date":
                 return new WireDate(
-                        asNumber(decode(payload(items, "date"), depth + 1), "date").doubleValue());
+                        timeClip(
+                                asNumber(decode(payload(items, "date"), depth + 1), "date")
+                                        .doubleValue()));
             case "url":
                 return new WireUrl(asString(payload(items, "url"), "url"));
             case "map":
                 return decodeMap(items, depth);
             case "set":
                 {
+                    // The reference builds a real Set, which de-duplicates by
+                    // SameValueZero and keeps the FIRST occurrence's position —
+                    // the same rule as a Map's keys, so the same identity helper
+                    // decides it. Carrying both copies re-encoded a set the
+                    // reference would never emit.
                     List<Object> decoded = new ArrayList<>();
+                    Set<String> seen = new HashSet<>();
 
                     for (Object item : asList(payload(items, "set"), "set")) {
-                        decoded.add(decode(item, depth + 1));
+                        Object value = decode(item, depth + 1);
+                        String identity = mapKeyIdentity(value);
+
+                        if (identity != null && !seen.add(identity)) {
+                            continue;
+                        }
+
+                        decoded.add(value);
                     }
 
                     return new WireSet(decoded);
@@ -447,7 +485,10 @@ public final class Wire {
                 Integer index = seen.get(identity);
 
                 if (index != null) {
-                    entries.set(index, entry);
+                    // Only the VALUE. Map.prototype.set on a key already present
+                    // keeps the key it holds, so a later -0 never replaces the 0
+                    // stored under it.
+                    entries.set(index, Map.entry(entries.get(index).getKey(), entry.getValue()));
 
                     continue;
                 }
@@ -490,7 +531,10 @@ public final class Wire {
         }
 
         if (key instanceof Number number) {
-            double numeric = number.doubleValue();
+            // `+ 0.0` clears the sign of a zero and changes nothing else:
+            // SameValueZero holds -0 equal to 0, while Double.toString keeps the
+            // sign ("-0.0"), which made a signed zero its own key.
+            double numeric = number.doubleValue() + 0.0;
 
             return Double.isNaN(numeric) ? "num:nan" : "num:" + numeric;
         }
@@ -537,18 +581,23 @@ public final class Wire {
             throw new WireFormatException("wire-codec: malformed error tag");
         }
 
-        // The props slot is NOT optional and NOT nullable: the reference reads it with
-        // Object.keys, which throws on a null or missing slot, so quietly substituting an
-        // empty map accepted a frame the reference refuses.
+        // The props slot is NOT optional, NOT nullable and NOT a primitive: the reference
+        // reads it with Object.keys, which throws on a null or missing slot and ENUMERATES a
+        // string/number/boolean/array — so [TAG,"error","E","m","ab"] would decode there with
+        // the invented props {0:"a",1:"b"} while substituting an empty map accepted the same
+        // frame here.
         if (items.size() < 5 || items.get(4) == null) {
             throw new WireFormatException("wire-codec: malformed error tag");
         }
 
         Object decodedProps = decode(items.get(4), depth + 1);
-        Map<String, Object> props =
-                decodedProps instanceof Map<?, ?>
-                        ? (Map<String, Object>) decodedProps
-                        : new LinkedHashMap<>();
+
+        if (!(decodedProps instanceof Map<?, ?>)) {
+            throw new WireFormatException(
+                    "wire-codec: malformed error tag — props must be an object");
+        }
+
+        Map<String, Object> props = (Map<String, Object>) decodedProps;
         Object cause = items.size() > 5 ? decode(items.get(5), depth + 1) : UNDEFINED;
 
         // Name and message default rather than throw, matching the other ports:

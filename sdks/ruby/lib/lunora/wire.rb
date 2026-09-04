@@ -55,6 +55,10 @@ module Lunora
   # changing value — WireBigInt and its tag exist for that case.
   MAX_EXACT_INTEGER = (2**53) - 1
 
+  # Largest epoch a Date holds (ECMAScript TimeClip). Past this, and for any
+  # non-finite epoch, +new Date(v)+ is an Invalid Date.
+  MAX_TIME_VALUE = 8.64e15
+
   # JavaScript's +undefined+, distinct from JSON null.
   #
   # As an object field it is dropped on encode (matching JSON.stringify); in an
@@ -218,7 +222,7 @@ module Lunora
     when "date" then decode_date(value, depth)
     when "url" then WireUrl.new(payload_of(value, "url", ::String))
     when "map" then decode_map(value, depth)
-    when "set" then WireSet.new(payload_of(value, "set", ::Array).map { |item| decode_wire(item, depth + 1) })
+    when "set" then decode_set(value, depth)
     when "error" then decode_error(value, depth)
     when "bytes" then decode_bytes(value)
     when "arr" then payload_of(value, "arr", ::Array).map { |item| decode_wire(item, depth + 1) }
@@ -255,7 +259,20 @@ module Lunora
     epoch = decode_wire(payload(value, "date"), depth + 1)
     raise WireFormatError, "wire-codec: malformed date tag" unless epoch.is_a?(::Numeric)
 
-    WireDate.new(epoch)
+    WireDate.new(time_clip(epoch))
+  end
+
+  # +new Date(epoch).getTime()+ — ECMAScript TimeClip.
+  #
+  # A Date truncates its argument toward zero, and anything non-finite or past
+  # +-8.64e15 becomes an Invalid Date, which the reference re-encodes as a NaN
+  # tag. Keeping the epoch verbatim put a date back on the wire carrying a value
+  # the reference's own Date never holds.
+  def time_clip(epoch)
+    milliseconds = epoch.to_f
+    return ::Float::NAN if milliseconds.nan? || milliseconds.infinite? || milliseconds.abs > MAX_TIME_VALUE
+
+    milliseconds.truncate
   end
 
   def decode_bigint(value)
@@ -265,6 +282,29 @@ module Lunora
     end
 
     WireBigInt.new(Integer(raw, 10))
+  end
+
+  # Decode a +set+ tag, collapsing duplicates the way a real Set does.
+  #
+  # The reference builds a +new Set+, which de-duplicates by SameValueZero and
+  # keeps the FIRST occurrence's position — the same rule as a Map's keys, so
+  # the same identity helper decides it. Carrying both copies re-encoded a set
+  # the reference would never emit.
+  def decode_set(value, depth)
+    items = []
+    seen = {}
+
+    payload_of(value, "set", ::Array).each do |entry|
+      item = decode_wire(entry, depth + 1)
+      identity = map_key_identity(item)
+
+      next if !identity.nil? && seen.key?(identity)
+
+      seen[identity] = true unless identity.nil?
+      items << item
+    end
+
+    WireSet.new(items)
   end
 
   # Decode a +map+ tag, refusing an entry that is not a real pair.
@@ -289,7 +329,9 @@ module Lunora
       # entries left two peers of one deployment reading a different value from
       # identical bytes.
       if !identity.nil? && seen.key?(identity)
-        pairs[seen[identity]] = [key, item]
+        # Only the VALUE. Map.prototype.set on a key already present keeps the
+        # key it holds, so a later -0 never replaces the 0 stored under it.
+        pairs[seen[identity]][1] = item
         next
       end
 
@@ -310,7 +352,10 @@ module Lunora
     when nil then "null"
     when true, false then "bool:#{key}"
     when WireBigInt then "big:#{key.value}"
-    when ::Numeric then key.is_a?(::Float) && key.nan? ? "num:nan" : "num:#{key.to_f}"
+    # SameValueZero holds -0 equal to 0, so a signed zero must not be its own
+    # key. `(-0.0).to_f.to_s` is "-0.0", which split the two; `+ 0.0` is the
+    # IEEE-754 identity that clears the sign of a zero and changes nothing else.
+    when ::Numeric then key.is_a?(::Float) && key.nan? ? "num:nan" : "num:#{key.to_f + 0.0}"
     when ::String then "str:#{key}"
     else key.equal?(UNDEFINED) ? "undefined" : nil
     end

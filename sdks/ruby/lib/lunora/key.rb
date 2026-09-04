@@ -53,12 +53,33 @@ module Lunora
   # never pads. Those spellings must match or the key differs.
   def format_number(value)
     return "null" if value.nan? || value.infinite?
-    return value.to_i.to_s if value == value.truncate && value.abs < 1e21
+    return integral(value) if value == value.truncate && value.abs < 1e21
 
     magnitude = value.abs
     return positional(value) if magnitude >= 1e-6 && magnitude < 1e21
 
     exponential(value)
+  end
+
+  # Positional rendering of an integral double, ECMAScript-style: the SHORTEST
+  # digit string that reads back as the same double, zero-padded out to the
+  # decimal point. +String(2**60)+ is "1152921504606847000", not the exact
+  # expansion "1152921504606846976" that +to_i+ yields — and +String()+ of a
+  # negative zero inside a key is "-0", which every integer conversion drops.
+  def integral(value)
+    (0..17).each do |precision|
+      candidate = format("%.#{precision}e", value)
+      next unless candidate.to_f == value
+
+      mantissa, exponent = candidate.split("e")
+      sign = mantissa.start_with?("-") ? "-" : ""
+      digits = mantissa.delete("-").delete(".").sub(/0+\z/, "")
+      digits = "0" if digits.empty?
+
+      return sign + digits.ljust(exponent.to_i + 1, "0")
+    end
+
+    value.to_i.to_s
   end
 
   # Positional (non-exponent) rendering at the shortest precision that still

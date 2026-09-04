@@ -185,10 +185,12 @@ Both workers below still target Nitro's `cloudflare_module` preset (the only
 one `@lunora/nuxt`'s in-process mounting or this split supports); this is a
 topology choice, not a way to reach an unsupported preset:
 
-- The Nuxt/Nitro SSR worker (`wrangler.jsonc`, `cloudflare_module` preset)
+- The Nuxt/Nitro SSR worker (`wrangler.nuxt.jsonc`, `cloudflare_module` preset)
   handles all pages and server routes.
-- A separate standalone Lunora worker (`wrangler.lunora.jsonc`,
-  `lunora/server.ts`) owns `/_lunora/*` + `ShardDO`.
+- A separate standalone Lunora worker (the root `wrangler.jsonc`,
+  `lunora/server.ts`) owns `/_lunora/*` + `ShardDO`. Keep the Lunora worker on
+  the root `wrangler.jsonc` — that is the file `lunora verify|deploy|dev` read,
+  and they require the `SHARD` binding.
 - `runtimeConfig.public.lunoraUrl` (`NUXT_PUBLIC_LUNORA_URL`) tells the SSR
   loader and the browser client where to reach the Lunora worker.
 

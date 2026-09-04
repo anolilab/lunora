@@ -23,6 +23,7 @@ import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format"
 import type { DurableObjectSpec, InferredAgent, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow } from "../infer-bindings";
 import { applyModify } from "../jsonc-edit";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
+import { objectBindingEntries, stringEntries } from "./wrangler-validator";
 
 /**
  * Placeholder `database_id` written for an auto-provisioned `DB` binding. It is
@@ -37,9 +38,18 @@ interface DurableObjectBinding {
     name?: string;
 }
 
+/**
+ * One `migrations[]` record as READ BACK from a hand-edited `wrangler.jsonc` —
+ * so every list may hold a `null` (a trailing comma in a JSONC array parses to
+ * one). The nullability is in the type on purpose: it was absent, the replay
+ * below trusted it, and a stray `null` threw a raw `TypeError` out of a step
+ * that runs on every dev-server start.
+ */
 interface MigrationEntry {
-    new_classes?: ReadonlyArray<string>;
-    new_sqlite_classes?: ReadonlyArray<string>;
+    deleted_classes?: ReadonlyArray<string | null | undefined>;
+    new_classes?: ReadonlyArray<string | null | undefined>;
+    new_sqlite_classes?: ReadonlyArray<string | null | undefined>;
+    renamed_classes?: ReadonlyArray<{ from?: string; to?: string } | null | undefined>;
     tag?: string;
 }
 
@@ -88,7 +98,7 @@ interface WranglerShape {
     images?: { binding?: string };
     // Hint-only: the namespace `id` is a remote KV resource Lunora can't mint — warned, never written.
     kv_namespaces?: ReadonlyArray<{ binding?: string; id?: string }>;
-    migrations?: ReadonlyArray<MigrationEntry>;
+    migrations?: ReadonlyArray<MigrationEntry | null | undefined>;
     name?: string;
     observability?: { enabled?: boolean; head_sampling_rate?: number; logs?: { enabled?: boolean; head_sampling_rate?: number } };
     // Hint-only: the `pipeline` name is a remote resource Lunora can't mint — warned, never written.
@@ -351,8 +361,8 @@ const collectWarnings = (inferred: InferredBindings, projectRoot: string, parsed
 };
 
 /** Compute the lowest free `vN` `migrations` tag (`v1`, `v2`, …). */
-const nextMigrationTag = (migrations: ReadonlyArray<MigrationEntry>): string => {
-    const used = new Set(migrations.map((migration) => migration.tag));
+const nextMigrationTag = (migrations: ReadonlyArray<MigrationEntry | null | undefined>): string => {
+    const used = new Set(objectBindingEntries(migrations).map((migration) => migration.tag));
     let index = 1;
 
     while (used.has(`v${String(index)}`)) {
@@ -360,6 +370,49 @@ const nextMigrationTag = (migrations: ReadonlyArray<MigrationEntry>): string => 
     }
 
     return `v${String(index)}`;
+};
+
+/**
+ * The Durable Object classes the `migrations` list already declares, replayed
+ * in order exactly the way wrangler's own `getDeclaredDOClassNames` does:
+ * `deleted_classes` removes, `renamed_classes` moves `from` → `to`, and the two
+ * `new_*` lists add.
+ *
+ * Counting only the `new_*` lists made a class introduced by a rename look
+ * unregistered, so reconcile appended a second `new_sqlite_classes` entry for
+ * it — which wrangler then refuses ("Cannot apply new_sqlite_classes migration
+ * to existing class X"), permanently, because the append is written to the
+ * committed config with no rollback on the dev / prepare paths.
+ */
+const declaredClassNames = (migrations: ReadonlyArray<MigrationEntry | null | undefined>): Set<string> => {
+    const declared = new Set<string>();
+
+    // Normalised the same way (and with the same helpers) as the validator's
+    // `foldMigrationClassKinds`, which folds this identical hand-edited list:
+    // a bare walk threw a raw `TypeError` on a `null` record or rename entry,
+    // and a non-array `"new_classes": "ShardDO"` folded in one CHARACTER per
+    // iteration instead of the class name.
+    for (const migration of objectBindingEntries(migrations)) {
+        for (const className of stringEntries(migration.deleted_classes)) {
+            declared.delete(className);
+        }
+
+        for (const { from, to } of objectBindingEntries(migration.renamed_classes)) {
+            if (from !== undefined) {
+                declared.delete(from);
+            }
+
+            if (to !== undefined) {
+                declared.add(to);
+            }
+        }
+
+        for (const className of [...stringEntries(migration.new_classes), ...stringEntries(migration.new_sqlite_classes)]) {
+            declared.add(className);
+        }
+    }
+
+    return declared;
 };
 
 /** Add any missing Durable Object bindings + their migration classes. Pure. */
@@ -384,8 +437,7 @@ const reconcileDurableObjects = (text: string, parsed: WranglerShape, required: 
     }
 
     const migrations = parsed.migrations ?? [];
-    const registered = new Set(migrations.flatMap((migration) => [...(migration.new_sqlite_classes ?? []), ...(migration.new_classes ?? [])]));
-    const missingClasses = required.map((object) => object.className).filter((className) => !registered.has(className));
+    const missingClasses = required.map((object) => object.className).filter((className) => !declaredClassNames(migrations).has(className));
 
     if (missingClasses.length > 0) {
         const nextMigrations = [...migrations, { new_sqlite_classes: missingClasses, tag: nextMigrationTag(migrations) }];

@@ -177,6 +177,94 @@ describe("reconcileWranglerBindings", () => {
         expect(config.migrations.flatMap((migration: { new_sqlite_classes?: string[] }) => migration.new_sqlite_classes ?? [])).toContain("SchedulerDO");
     });
 
+    it("treats a class introduced by renamed_classes as already registered", () => {
+        expect.assertions(2);
+
+        // wrangler's own `getDeclaredDOClassNames` applies deleted_classes and
+        // renamed_classes alongside the new_* lists. Appending a second
+        // `new_sqlite_classes: ["ShardDO"]` here makes miniflare throw
+        // "Cannot apply new_sqlite_classes migration to existing class ShardDO",
+        // and the write persists in the committed config.
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["OldShardDO"] },
+        { "tag": "v2", "renamed_classes": [{ "from": "OldShardDO", "to": "ShardDO" }] }
+    ],
+}
+`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred());
+
+        expect(result.changed).toBe(false);
+        expect(readConfig().migrations).toHaveLength(2);
+    });
+
+    it("re-registers a class a later deleted_classes migration removed", () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ShardDO"] },
+        { "tag": "v2", "deleted_classes": ["ShardDO"] }
+    ],
+}
+`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred());
+
+        expect(result.changed).toBe(true);
+        expect(readConfig().migrations.at(-1)).toEqual({ new_sqlite_classes: ["ShardDO"], tag: "v3" });
+    });
+
+    // `wrangler.jsonc` is hand-edited, so a stray `null` (a trailing comma in a
+    // JSONC array parses to one) reaches the replay. Reconcile must still return
+    // a report — the malformed shape is the validator's error to describe, not a
+    // raw TypeError out of a provisioning step that runs on every dev start.
+    it("reconciles past null entries in migrations, renamed_classes and the class lists", () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [
+        null,
+        { "tag": "v1", "new_sqlite_classes": ["OldShardDO", null] },
+        { "tag": "v2", "renamed_classes": [null, { "from": "OldShardDO", "to": "ShardDO" }] },
+        { "tag": "v3", "deleted_classes": [null] }
+    ],
+}
+`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred());
+
+        // `ShardDO` IS declared (by the rename), so nothing is appended — the
+        // null entries must not hide that and trigger a duplicate migration.
+        expect(result.changed).toBe(false);
+        expect(readConfig().migrations).toHaveLength(4);
+    });
+
     it("adds the DB binding when a global schema is inferred, and warns about the placeholder id", () => {
         expect.assertions(3);
 

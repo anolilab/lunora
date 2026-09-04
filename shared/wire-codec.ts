@@ -308,8 +308,22 @@ const encodeWire = (value: unknown, depth = 0): unknown => {
         const properties: Record<string, unknown> = {};
 
         for (const key of Object.keys(error)) {
-            if (error[key] !== undefined) {
-                properties[key] = encodeWire(error[key], depth + 1);
+            if (error[key] === undefined) {
+                continue;
+            }
+
+            const encoded = encodeWire(error[key], depth + 1);
+
+            // Same `UNSAFE_KEY` guard as the plain-object branch below and both
+            // decode branches: a plain `properties[key] = …` for `"__proto__"`
+            // fires the prototype SETTER, so the field never becomes an own
+            // property (it re-encodes as `{}`, silently dropped) and `properties`
+            // itself ends up with an attacker-chosen prototype. `defineProperty`
+            // installs it as an own data property instead (Cap'n Web #190).
+            if (key === UNSAFE_KEY) {
+                Object.defineProperty(properties, key, { configurable: true, enumerable: true, value: encoded, writable: true });
+            } else {
+                properties[key] = encoded;
             }
         }
 

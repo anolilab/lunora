@@ -25,7 +25,11 @@ class TestFormatNumber < Minitest::Test
     1.5e-7 => "1.5e-7",
     1e-21 => "1e-21",
     1e20 => "100000000000000000000",
-    1e21 => "1e+21"
+    1e21 => "1e+21",
+    # An integral double past 2**53: ECMAScript prints the SHORTEST digits that
+    # read back as the same double and zero-pads, so this is not the exact
+    # expansion 1152921504606846976 that Float#to_i yields.
+    2.0**60 => "1152921504606847000"
   }.freeze
 
   def test_matches_ecmascript
@@ -34,6 +38,10 @@ class TestFormatNumber < Minitest::Test
     CASES.each do |value, want|
       assert_equal want, Lunora.format_number(value), "format_number(#{value})"
     end
+
+    # Negative zero keeps its sign in a key, and every integer conversion drops
+    # it. Not in CASES: -0.0.eql?(0.0), so a Hash cannot hold both.
+    assert_equal "-0", Lunora.format_number(-0.0)
   end
 end
 

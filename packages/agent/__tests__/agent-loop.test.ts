@@ -1,3 +1,4 @@
+import { createDispatchRunner } from "@lunora/dispatch";
 import { hasToolCall, jsonSchema } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it } from "vitest";
@@ -6,6 +7,7 @@ import { runAgentLoop } from "../src/agent-loop";
 import { defineAgent, defineAgentTool } from "../src/define-agent";
 import { createAgentGenerate } from "../src/generate";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "../src/paths";
+import { MAX_TOOL_OUTPUT_CHARS } from "../src/tool-output";
 import type {
     AgentCompact,
     AgentDefinition,
@@ -23,6 +25,7 @@ import type {
 } from "../src/types";
 import { memoryRuntime } from "./loop-harness";
 
+const CAPPED_TOOL_FAILURE_PATTERN = /^Error: tool "charge" failed and will not be retried\. x+… \[truncated\]$/u;
 const IN_FLIGHT_PATTERN = /already has a run in flight/u;
 const TRANSIENT_WAIT_FAILURE_PATTERN = /temporarily unavailable/u;
 
@@ -60,6 +63,11 @@ class DurableStepJournal {
     private readonly entries = new Map<string, { output: unknown }>();
 
     private readonly resolvedWaits = new Map<string, { payload: unknown }>();
+
+    /** Record a completed step as a PREVIOUS deploy would have written it, so a replay reads that shape back. */
+    public seed(name: string, output: unknown): void {
+        this.entries.set(name, { output });
+    }
 
     public async do<T>(name: string, callback: () => Promise<T>): Promise<T> {
         const existing = this.entries.get(name);
@@ -309,6 +317,84 @@ describe(runAgentLoop, () => {
 
         expect(thread.map((message) => message.role)).toStrictEqual(["user", "assistant", "tool", "assistant"]);
         expect(runtime.threads.get("thread-1")?.status).toBe("idle");
+    });
+
+    it.each([
+        ["a string", "charged", "charged"],
+        ["null", null, "null"],
+        ["a number", 42, "42"],
+        // The shape a naive `"ok" in memo` probe unwraps to `true` — the wrapper
+        // key is what keeps an ordinary tool result from being read as an envelope.
+        ["an object that looks like the new envelope", { ok: true }, '{"ok":true}'],
+    ])("replays a tool step memoized as %s by a PREVIOUS deploy as the raw output it was", async (_label, memo, expected) => {
+        let toolRuns = 0;
+
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                charge: defineAgentTool({
+                    description: "Charge the card.",
+                    execute: () => {
+                        toolRuns += 1;
+
+                        return "re-charged";
+                    },
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                }),
+            },
+        });
+
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+
+        // The run was parked (approval hibernation, a long multi-turn) across the
+        // deploy that wrapped this step's value in an outcome envelope. The step
+        // NAME did not change, so the host still serves the old memo back.
+        journal.seed("tool:charge:call_9", memo);
+
+        const generate = scriptedGenerate([toolTurn("call_9", "charge", { amount: 100 }), finalTurn("done")]);
+        const result = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        expect(result).toStrictEqual({ stopped: "final", text: "done", turns: 2 });
+
+        // The completed side effect is still not repeated…
+        expect(toolRuns).toBe(0);
+
+        // …and the tool row carries the output, not `undefined` (which every later
+        // turn on this thread would then read back as the tool's answer).
+        const thread = [...runtime.messages.values()].toSorted((a, b) => a.seq - b.seq);
+
+        expect(thread.map((message) => message.role)).toStrictEqual(["user", "assistant", "tool", "assistant"]);
+        expect(thread[2]?.content).toBe(expected);
+    });
+
+    it("caps a deterministic tool failure the same way it caps a tool output", async () => {
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                charge: defineAgentTool({
+                    description: "Charge the card.",
+                    execute: () => "unused",
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                }),
+            },
+        });
+
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+
+        // A server-supplied failure message is unbounded, and this row is
+        // re-rendered into every later turn AND every later run on the thread.
+        journal.seed("tool:charge:call_9", { lunoraToolOutcome: { failed: "x".repeat(20_000) } });
+
+        const generate = scriptedGenerate([toolTurn("call_9", "charge", { amount: 100 }), finalTurn("done")]);
+
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        const thread = [...runtime.messages.values()].toSorted((a, b) => a.seq - b.seq);
+
+        expect(thread[2]?.content).toHaveLength(MAX_TOOL_OUTPUT_CHARS);
+        expect(thread[2]?.content).toMatch(CAPPED_TOOL_FAILURE_PATTERN);
     });
 
     it("runs the memory step once and injects the retrieved context", async () => {
@@ -1746,6 +1832,61 @@ describe("a tool call whose input failed validation", () => {
         const toolRow = [...runtime.messages.values()].find((message) => message.role === "tool");
 
         expect(toolRow?.content).toContain('Error: invalid input for tool "charge" — it was not run.');
+    });
+});
+
+describe("a tool whose dispatch failed deterministically", () => {
+    it("is recorded as a recoverable tool result instead of burning the step's retries", async () => {
+        expect.assertions(3);
+
+        // Built the way production builds it — a real `{ error: { code, … } }`
+        // envelope through the dispatch runner — so the error carries the brand
+        // `isDeterministicDispatchFailure` keys on. A hand-rolled LunoraError
+        // with the same status would not, and would stay retryable.
+        const dispatchFailure = await createDispatchRunner({
+            env: { LUNORA_ADMIN_TOKEN: "tok", LUNORA_ORIGIN_URL: "https://app.example.com/" },
+            fetchImpl: async () => Response.json({ error: { code: "BAD_REQUEST", message: '"path" must be a string' } }, { status: 400 }),
+            label: "@lunora/agent",
+        })({ __lunoraRef: "sandbox:invoke" }).then(
+            () => undefined,
+            (error: unknown) => error,
+        );
+
+        let attempts = 0;
+        const agent = defineAgent({
+            maxTurns: 2,
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                fs: defineAgentTool({
+                    description: "read a file",
+                    // What a batteries-included `jsonSchema()` tool does with a
+                    // type-wrong model argument: the action's own validator 400s.
+                    execute: () => {
+                        attempts += 1;
+
+                        throw dispatchFailure;
+                    },
+                    // A bare `jsonSchema()`: no `validate`, so nothing upstream
+                    // rejects `path: 5` and the call never arrives as `invalid`.
+                    inputSchema: jsonSchema({ additionalProperties: true, type: "object" }),
+                }),
+            },
+        });
+        const runtime = memoryRuntime();
+
+        const result = await runAgentLoop(
+            loopDefaults(agent, {
+                generate: scriptedGenerate([toolTurn("call-1", "fs", { op: "read", path: 5 }), finalTurn("path has to be a string — retrying")]),
+                run: runtime.run,
+            }),
+        );
+
+        expect(result).toStrictEqual({ stopped: "final", text: "path has to be a string — retrying", turns: 2 });
+        expect(attempts).toBe(1);
+
+        const toolRow = [...runtime.messages.values()].find((message) => message.role === "tool");
+
+        expect(toolRow?.content).toContain('"path" must be a string');
     });
 });
 

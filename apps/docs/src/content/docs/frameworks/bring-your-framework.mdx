@@ -150,8 +150,8 @@ const lunora = createLunoraHandler((env) => ({ shardDO: env.MY_SHARD, auth }));
 <Callout type="info">
     **Why no `@lunora/hono` / `@lunora/nitro` / `@lunora/elysia` packages?** Because there is nothing framework-specific left to package: each integration is
     the one-/two-line bridge above over the shared `createLunoraHandler`. A dedicated package is only warranted when a framework needs real build/module wiring
-    beyond a fetch bridge (e.g. **Nuxt**, which registers a server handler, a `#lunora/app` virtual, and re-exports `ShardDO` via `exports.cloudflare.ts`; hence
-    `@lunora/nuxt` exists).
+    beyond a fetch bridge (e.g. **Nuxt**, which registers a server handler, a `#lunora/app` virtual, and re-exports `ShardDO` from a root `worker.ts` wrapper;
+    hence `@lunora/nuxt` exists).
 </Callout>
 
 ## The per-framework matrix
@@ -159,11 +159,11 @@ const lunora = createLunoraHandler((env) => ({ shardDO: env.MY_SHARD, auth }));
 How a framework composes with Lunora depends on who owns the worker entry. This
 mirrors void's class-a/b/c model.
 
-| Class                                 | Frameworks                                      | Composition strategy                                                                                                                                                                                                                          | Status                                                                  |
-| ------------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| **A: Vite-native, we own the entry**  | TanStack Start, React Router (Vite), SolidStart | `createWorker({ httpRouter: <framework SSR handler> })` directly in the worker entry. Cleanest tier; in-process `serverQuery` available here.                                                                                                 | TanStack Start proven; React Router + SolidStart templated, in progress |
-| **B: own CF adapter, hook-injection** | SvelteKit, Astro                                | The framework builds its own server and emits its handler as an importable module; `src/worker.ts` wraps that output with `withFrameworkWorker` (realtime under `/_lunora/*`) and `lunora deploy` bundles it as the deploy entry. One worker. | SvelteKit proven end-to-end; Astro wired on the same mechanism          |
-| **C: non-CF or SSR-less**             | static / SPA                                    | No SSR loaders. Ship the client adapter plus a standalone Lunora worker (the current default for SPA apps). Data is still live; it just hydrates client-side instead of from the HTML.                                                        | shipped                                                                 |
+| Class                                 | Frameworks                                      | Composition strategy                                                                                                                                                                                                 | Status                                                                  |
+| ------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| **A: Vite-native, we own the entry**  | TanStack Start, React Router (Vite), SolidStart | `createWorker({ httpRouter: <framework SSR handler> })` directly in the worker entry. Cleanest tier; in-process `serverQuery` available here.                                                                        | TanStack Start proven; React Router + SolidStart templated, in progress |
+| **B: own CF adapter, hook-injection** | SvelteKit, Astro                                | The framework builds its own server and emits its handler as an importable module; a composed entry wraps that output with `withFrameworkWorker` (realtime under `/_lunora/*`) and it ships as the one deploy entry. | SvelteKit proven end-to-end; Astro wired on the same mechanism          |
+| **C: non-CF or SSR-less**             | static / SPA                                    | No SSR loaders. Ship the client adapter plus a standalone Lunora worker (the current default for SPA apps). Data is still live; it just hydrates client-side instead of from the HTML.                               | shipped                                                                 |
 
 **Class A** is the cleanest: we own the Cloudflare worker entry, so we drop the
 framework's SSR handler straight into `httpRouter`. **Class B** frameworks bundle
@@ -201,14 +201,21 @@ then `wrangler deploy --dry-run`:
 
 The dry-run confirms a single worker exporting `ShardDO` with both the `SHARD`
 (Durable Object) and `ASSETS` bindings: no second worker, no class-C fallback.
-Astro composes the same way via `src/worker.ts` plus `buildFrameworkWorker`,
-but its wrinkle runs the opposite direction from SvelteKit's: `@astrojs/cloudflare`
-exports its SSR handler as an importable function (`handle` from
-`@astrojs/cloudflare/handler`) rather than writing an adapter-owned worker
-entry to disk that would clobber `main`. `src/worker.ts` imports `handle`
-directly and hands it to `buildFrameworkWorker`, so wrangler's `main` points
-straight at `src/worker.ts` with no redirection: there is no build output to
-avoid overwriting in the first place.
+Astro composes the same way, but with `src/server.ts` rather than
+`src/worker.ts`, and its adapter takes the opposite route from SvelteKit's.
+`@astrojs/cloudflare` exports its SSR handler as an importable function
+(`handle` from `@astrojs/cloudflare/handler`), so the composed entry imports
+`handle` directly and hands it to `buildFrameworkWorker`, and wrangler's `main`
+points straight at that source file. The adapter's embedded
+`@cloudflare/vite-plugin` then builds it into `dist/server/entry.mjs` and writes
+a `.wrangler/deploy/config.json` redirect — `main` is never clobbered, it is
+_redirected_.
+
+That redirect carries `no_bundle: true`, which is why the file must **not** be
+called `src/worker.ts`: `lunora deploy` treats that exact path as SvelteKit's
+shape and passes it positionally, and a positional under `no_bundle` is uploaded
+as the worker verbatim — raw TypeScript, exit 0, and a worker that cannot
+parse.
 
 </Callout>
 
@@ -298,7 +305,7 @@ lunora init my-app -t standalone       # worker-only, no frontend
 `lunora init -t tanstack-start` is fully wired: it mounts the framework SSR
 handler as the worker's `httpRouter`, ships a sample **live loader** route, and
 sets up the `@lunora/react` provider. `lunora init -t sveltekit` is proven
-end-to-end; its `src/worker.ts`, `wrangler.jsonc`, and `lunora deploy` compose
+end-to-end; its `src/server.ts`, `wrangler.jsonc`, and `lunora deploy` compose
 into a single worker (verified through `vite build` then `wrangler deploy --dry-run`,
 exporting `ShardDO` with the `SHARD` and `ASSETS` bindings). Templates for
 `react-router`, `solid-start`, `nuxt`, and `astro` exist alongside their

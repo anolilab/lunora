@@ -15,7 +15,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { isEnvEnabled } from "../../../../shared/env-flag";
-import { WORKER_ENTRY_FALLBACKS } from "../infer-bindings";
+import { COMPOSED_WORKER_ENTRY, WORKER_ENTRY_FALLBACKS } from "../infer-bindings";
 import join from "../path";
 import type { SchemaInfo } from "../schema-info";
 import { discoverSchemaInfo } from "../schema-info";
@@ -169,7 +169,7 @@ interface WranglerConfig {
     pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string; stream?: string } | null | undefined>;
     // Smart Placement (`{ mode: "smart" }` — the only documented mode). See
     // `validatePlacement`.
-    placement?: { mode?: string };
+    placement?: { host?: string; hostname?: string; mode?: string; region?: string };
     // Cloudflare Queues — producer bindings (`env.<BINDING>.send(...)`) and
     // push/pull consumers. Lunora reconciles both from `lunora/queues.ts`; the
     // entries are parsed from untrusted JSONC, so `validateQueues` guards shape.
@@ -234,6 +234,7 @@ interface WranglerValidationReport {
  * state it explicitly (or to contradict this).
  */
 const NON_INHERITABLE_KEYS = [
+    "containers",
     "d1_databases",
     "durable_objects",
     "kv_namespaces",
@@ -830,15 +831,21 @@ const SELF_DESCRIBING_BINDING_RULES = [
     { key: "images", message: 'images must be an object with a non-empty "binding" (e.g. { "binding": "IMAGES" })' },
 ] as const satisfies ReadonlyArray<{ key: keyof WranglerConfig; message: string }>;
 
-/** Validate one self-describing `{ binding }` object against its rule (pure shape check). */
+/**
+ * Validate one self-describing `{ binding }` object against its rule (pure shape
+ * check). Read as `unknown`: `WranglerConfig` describes a WELL-FORMED config, but
+ * the value here comes from hand-edited JSONC, where `"browser": null` is what a
+ * user writes to disable a binding — and `typeof null === "object"` made the
+ * property read throw a TypeError out of the whole validator.
+ */
 const validateSelfDescribingBinding = (wrangler: WranglerConfig, rule: (typeof SELF_DESCRIBING_BINDING_RULES)[number], errors: string[]): void => {
-    const value = wrangler[rule.key];
+    const value: unknown = wrangler[rule.key];
 
     if (value === undefined) {
         return;
     }
 
-    if (typeof value !== "object" || Array.isArray(value) || !isNonEmptyString((value as { binding?: unknown }).binding)) {
+    if (typeof value !== "object" || value === null || Array.isArray(value) || !isNonEmptyString((value as { binding?: unknown }).binding)) {
         errors.push(rule.message);
     }
 };
@@ -983,26 +990,39 @@ const validateLogpush = (wrangler: WranglerConfig, errors: string[]): void => {
 };
 
 /**
- * `placement` is Smart Placement config — `{ "mode": "smart" }` is the only
- * documented shape. Recognizing it catches a typo'd mode (`"smrat"`) wrangler
- * would silently drop. Smart Placement is opt-in only and never auto-injected
- * (it can regress geo-distributed latency for a DO/D1-centric app).
+ * The `placement.mode` values wrangler's own config schema accepts:
+ * `"smart"` opts into Smart Placement, `"targeted"` pins the Worker to a
+ * region/host/hostname, and `"off"` disables placement for a Worker that
+ * would otherwise inherit an account default. Anything else is a typo
+ * wrangler drops silently.
+ */
+const PLACEMENT_MODES = new Set(["off", "smart", "targeted"]);
+
+/**
+ * `placement` is Smart/targeted Placement config. Recognizing the mode catches a
+ * typo (`"smrat"`) wrangler would silently drop, without hard-blocking the two
+ * non-smart modes wrangler accepts. Placement is opt-in only and never
+ * auto-injected (it can regress geo-distributed latency for a DO/D1-centric app).
  */
 const validatePlacement = (wrangler: WranglerConfig, errors: string[]): void => {
-    const { placement } = wrangler;
+    // `unknown`, for the same reason as `validateSelfDescribingBinding`: this is
+    // hand-edited JSONC, not a value TypeScript has vouched for.
+    const { placement }: { placement?: unknown } = wrangler;
 
     if (placement === undefined) {
         return;
     }
 
-    if (typeof placement !== "object" || Array.isArray(placement)) {
+    if (typeof placement !== "object" || placement === null || Array.isArray(placement)) {
         errors.push('placement must be an object (e.g. { "mode": "smart" })');
 
         return;
     }
 
-    if (placement.mode !== undefined && placement.mode !== "smart") {
-        errors.push('placement.mode must be "smart" (the only supported Smart Placement mode)');
+    const { mode } = placement as { mode?: unknown };
+
+    if (mode !== undefined && (typeof mode !== "string" || !PLACEMENT_MODES.has(mode))) {
+        errors.push(`placement.mode must be one of ${[...PLACEMENT_MODES].map((value) => `"${value}"`).join(", ")}`);
     }
 };
 
@@ -1387,6 +1407,17 @@ interface WranglerProjectValidationResult {
 }
 
 /**
+ * The entries of a config array that TypeScript believes is an array but JSONC
+ * does not guarantee. `WranglerConfig` describes a WELL-FORMED config; a
+ * hand-written `"containers": {}` / `"workflows": {}` is reported by the shape
+ * validator, but the FS-aware checks below run regardless and a bare `for…of`
+ * over the object threw `is not iterable` out of `validateWranglerProject` —
+ * a stack trace instead of the diagnostic, on every deploy/prepare/verify and
+ * every `lunora dev` start.
+ */
+const iterableEntries = <T>(value: ReadonlyArray<T> | undefined): ReadonlyArray<T> => (Array.isArray(value) ? (value as ReadonlyArray<T>) : []);
+
+/**
  * FS-aware existence check for local-path container images: every `./`, `../`,
  * `/`, or `Dockerfile`-bearing image must resolve to an existing file (wrangler
  * resolves it relative to the config file). Registry references are skipped.
@@ -1398,7 +1429,7 @@ const collectContainerImageErrors = (
 ): string[] => {
     const errors: string[] = [];
 
-    for (const entry of containers) {
+    for (const entry of iterableEntries(containers)) {
         const image = entry?.image;
 
         if (typeof image !== "string" || !(image.startsWith("./") || image.startsWith("../") || image.startsWith("/") || image.includes("Dockerfile"))) {
@@ -1415,8 +1446,19 @@ const collectContainerImageErrors = (
     return errors;
 };
 
-/** Resolve the worker entry: `wrangler.main` (relative to the config file) if it exists, else the conventional fallbacks. */
+/**
+ * Resolve the worker entry the way `lunora deploy` bundles it: the class-B
+ * composed entry when present (it is passed to wrangler as the positional
+ * script, overriding `main`), else `wrangler.main` relative to the config file,
+ * else the conventional fallbacks.
+ */
 const resolveWorkerEntryPath = (main: string | undefined, projectRoot: string, wranglerPath: string): string | undefined => {
+    const composed = join(projectRoot, COMPOSED_WORKER_ENTRY);
+
+    if (existsSync(composed)) {
+        return composed;
+    }
+
     if (typeof main === "string" && main.length > 0) {
         const resolved = join(dirname(wranglerPath), main);
 
@@ -1647,7 +1689,7 @@ const collectUnexportedClassErrors = (wrangler: WranglerConfig, projectRoot: str
         }
     }
 
-    for (const entry of wrangler.workflows ?? []) {
+    for (const entry of iterableEntries(wrangler.workflows)) {
         // Same `script_name` carve-out as the durable-object bindings above:
         // Cloudflare lets a workflow binding target a class in ANOTHER Worker,
         // which that script exports, not this entry.
@@ -1774,9 +1816,30 @@ export type {
     TailConsumer,
     WranglerConfig,
     WranglerContainerEntry,
+    WranglerEnvironmentMerge,
     WranglerProjectValidationOptions,
     WranglerProjectValidationResult,
     WranglerValidationReport,
     WranglerWorkflowEntry,
 };
-export { REQUIRED_COMPATIBILITY_DATE, REQUIRED_FLAG, validateWrangler, validateWranglerConfig, validateWranglerProject, withTailConsumer };
+// `mergeWranglerEnvironment` is exported so `lunora deploy`'s read-only
+// preflights (D1 placeholder, localhost origin, container Docker) inspect the
+// same `--env` view wrangler will deploy. Reading the top level there let an
+// env-scoped placeholder / loopback origin ship silently, and falsely blocked
+// the reverse layout.
+//
+// `objectBindingEntries` / `stringEntries` are exported for `reconcile-bindings`,
+// which replays the same hand-edited `migrations` list this validator folds and
+// hit the same raw `TypeError` on a `null` entry. Package-internal only — the
+// `./cloudflare` barrel re-exports by name and deliberately does not list them.
+export {
+    mergeWranglerEnvironment,
+    objectBindingEntries,
+    REQUIRED_COMPATIBILITY_DATE,
+    REQUIRED_FLAG,
+    stringEntries,
+    validateWrangler,
+    validateWranglerConfig,
+    validateWranglerProject,
+    withTailConsumer,
+};

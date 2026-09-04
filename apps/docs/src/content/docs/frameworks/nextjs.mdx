@@ -25,15 +25,19 @@ OpenNext (`@opennextjs/cloudflare`) emits its own worker entry
 routes or Durable Object classes into that output, so `/_lunora/*` cannot ride
 inside the Next worker.
 
-| Worker          | Config                  | Owns                                    |
-| --------------- | ----------------------- | --------------------------------------- |
-| Next.js SSR     | `wrangler.jsonc`        | Pages, RSC renders, route handlers      |
-| Lunora realtime | `wrangler.lunora.jsonc` | `/_lunora/*` RPC + WebSocket, `ShardDO` |
+| Worker          | Config                    | Owns                                    |
+| --------------- | ------------------------- | --------------------------------------- |
+| Next.js SSR     | `wrangler.opennext.jsonc` | Pages, RSC renders, route handlers      |
+| Lunora realtime | `wrangler.jsonc`          | `/_lunora/*` RPC + WebSocket, `ShardDO` |
+
+The Lunora worker takes the ROOT `wrangler.jsonc`: `lunora verify`, `lunora deploy`
+and `lunora dev` probe that filename and require the `SHARD`/`ShardDO` binding.
+Every OpenNext command is passed `--config wrangler.opennext.jsonc` instead.
 
 The Lunora worker is identical in shape to the `standalone` template: a
 `lunora/server.ts` entry that exports `ShardDO`.
 
-```jsonc title="wrangler.lunora.jsonc"
+```jsonc title="wrangler.jsonc"
 {
     "name": "my-app-lunora",
     "main": "lunora/server.ts",
@@ -186,7 +190,7 @@ Two processes, because there are two workers:
 
 ```bash
 # Terminal 1 — the Lunora worker (RPC + WebSocket + ShardDO)
-pnpm dev:lunora        # wrangler dev --config wrangler.lunora.jsonc
+pnpm dev:lunora        # wrangler dev (the root wrangler.jsonc)
 
 # Terminal 2 — Next.js
 NEXT_PUBLIC_LUNORA_URL=http://localhost:8787 pnpm dev
@@ -216,4 +220,5 @@ NEXT_PUBLIC_LUNORA_URL=https://my-app-lunora.workers.dev pnpm deploy:next
 ```
 
 `pnpm deploy` runs both in that order. Preview the Cloudflare build locally with
-`pnpm preview` (`opennextjs-cloudflare build && opennextjs-cloudflare preview`).
+`pnpm preview` (`opennextjs-cloudflare build && opennextjs-cloudflare preview`, both
+passed `--config wrangler.opennext.jsonc`).

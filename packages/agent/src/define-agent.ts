@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import { approvalTimeoutMs } from "./agent-loop";
 import { collectAgenticMemoryTools } from "./agentic-memory";
 import { agentAsTool } from "./as-tool";
 import { isInjectedMemorySource } from "./memory";
@@ -181,6 +182,33 @@ const assertMemorySourcesConfigured = (config: AgentConfig, skills: ReadonlyArra
 };
 
 /**
+ * Reject an `approvalTimeout` that resolves to no wait at all.
+ *
+ * `approvalTimeoutMs` clamps the UPPER bound and nothing guarded the lower one,
+ * so `approvalTimeout: 0` — a plausible reading of "no timeout", or a units slip
+ * such as `3` meaning three days — made `step.waitForEvent` elapse immediately:
+ * EVERY human-in-the-loop tool was recorded as "approval timed out" and reported
+ * to the model as a user rejection, before any client could render the approval
+ * marker. Same policy as `maxTurns`: a bogus value throws at declaration time
+ * rather than silently misbehaving once per gated call.
+ *
+ * Checked on the RESOLVED milliseconds, so the string form (`"0 seconds"`) goes
+ * through the same bound, and `NaN` — which every comparison lets past — is
+ * rejected explicitly.
+ */
+const assertPositiveApprovalTimeout = (configured: number | string | undefined): void => {
+    if (configured === undefined) {
+        return;
+    }
+
+    const resolved = approvalTimeoutMs(configured);
+
+    if (!Number.isFinite(resolved) || resolved <= 0) {
+        throw new LunoraError("INTERNAL", "@lunora/agent: `approvalTimeout` must resolve to a positive duration");
+    }
+};
+
+/**
  * Declare a durable agent. The definition compiles onto a Cloudflare Workflow
  * (each LLM turn and each tool call a named durable step; thread messages
  * persisted idempotently in DO SQLite), invoked from mutations/actions via
@@ -229,6 +257,8 @@ const defineAgent = (config: AgentConfig): AgentDefinition => {
     if (config.voice?.maxTurns !== undefined && !isPositiveInteger(config.voice.maxTurns)) {
         throw new LunoraError("INTERNAL", "@lunora/agent: `voice.maxTurns` must be a positive integer");
     }
+
+    assertPositiveApprovalTimeout(config.approvalTimeout);
 
     const skills = config.skills ?? [];
 

@@ -101,6 +101,25 @@ interface HibernatableWebSocket {
 }
 
 /**
+ * True for a parsed control frame the session actually handles.
+ *
+ * `VoiceClientFrame` is a closed union, so a bare `as VoiceClientFrame` on
+ * `JSON.parse` output is a lie the compiler then reasons from — and the
+ * reasoning ran the wrong way: `handleControl` treats everything that is not
+ * `interrupt` or `commit` as a text turn, so an unknown `type` bypassed the
+ * `text` bound and a `{"type":"text"}` frame reached `.length` on `undefined`.
+ */
+const isVoiceClientFrame = (value: unknown): value is VoiceClientFrame => {
+    if (value === null || typeof value !== "object") {
+        return false;
+    }
+
+    const { text, type } = value as { text?: unknown; type?: unknown };
+
+    return type === "commit" || type === "interrupt" || (type === "text" && typeof text === "string");
+};
+
+/**
  * A hibernatable-WebSocket Durable Object that runs an agent's real-time VOICE
  * session. One instance per `threadKey`: the client opens a WebSocket, streams
  * 16kHz mono PCM as binary frames, and marks utterance boundaries with a JSON
@@ -308,13 +327,32 @@ class VoiceSessionDO {
             return;
         }
 
-        let frame: VoiceClientFrame;
+        let parsed: unknown;
 
         try {
-            frame = JSON.parse(raw) as VoiceClientFrame;
+            parsed = JSON.parse(raw);
         } catch {
             return;
         }
+
+        // Narrowed by a real check, not by `as VoiceClientFrame`. The union is
+        // closed and the tail of this method treats whatever reaches it as a
+        // text turn, so the cast made an unrecognised `type` skip the bound
+        // below — which is keyed on `type === "text"` — and carry its `text` to
+        // the model measured only against the ~4x larger raw-frame limit, while
+        // `{"type":"text"}` reached `.length` on `undefined`. Refused here,
+        // before the thread round-trip and before the session-turn counter
+        // advances, which is what keeps the tail's reading true.
+        if (!isVoiceClientFrame(parsed)) {
+            this.send(ws, {
+                message: 'unsupported control frame — expected { type: "text", text }, { type: "commit" } or { type: "interrupt" }',
+                type: "error",
+            });
+
+            return;
+        }
+
+        const frame: VoiceClientFrame = parsed;
 
         if (frame.type === "interrupt") {
             this.controllers.get(attachment.connectionId)?.abort();

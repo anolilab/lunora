@@ -33,6 +33,12 @@ object Wire {
     const val MAX_BIGINT_DIGITS: Int = 1024
 
     /**
+     * Largest epoch a Date holds (ECMAScript TimeClip). Past this, and for any
+     * non-finite epoch, `new Date(v)` is an Invalid Date.
+     */
+    const val MAX_TIME_VALUE: Double = 8.64e15
+
+    /**
      * Bytes per element for the typed-array views the codec round-trips. A view
      * whose payload is not a whole number of elements is not a view the
      * reference can rebuild — `new Float32Array(buffer)` raises a RangeError
@@ -130,7 +136,7 @@ object Wire {
         "date" -> decodeDate(items, depth)
         "url" -> WireValue.Url(items.getOrNull(2) as? String ?: throw WireFormatException("wire-codec: malformed url tag"))
         "map" -> decodeMap(items, depth)
-        "set" -> WireValue.WireSet(payloadList(items, "set").map { decode(it, depth + 1) })
+        "set" -> decodeSet(items, depth)
         "error" -> decodeError(items, depth)
         "bytes" -> decodeBytes(items)
         "arr" -> WireValue.Arr(payloadList(items, "arr").map { decode(it, depth + 1) })
@@ -175,7 +181,10 @@ object Wire {
                 val index = seen[identity]
 
                 if (index != null) {
-                    entries[index] = pair
+                    // Only the VALUE. `Map.prototype.set` on a key already
+                    // present keeps the key it holds, so a later `-0` never
+                    // replaces the `0` stored under it.
+                    entries[index] = entries[index].first to pair.second
 
                     continue
                 }
@@ -187,6 +196,32 @@ object Wire {
         }
 
         return WireValue.WireMap(entries)
+    }
+
+    /**
+     * Decode a `set` tag, collapsing duplicates the way a real `Set` does.
+     *
+     * The reference builds a `new Set`, which de-duplicates by SameValueZero and
+     * keeps the FIRST occurrence's position — the same rule as a `Map`'s keys, so
+     * the same identity helper decides it. Carrying both copies re-encoded a set
+     * the reference would never emit.
+     */
+    private fun decodeSet(items: List<*>, depth: Int): WireValue {
+        val decoded = mutableListOf<WireValue>()
+        val seen = mutableSetOf<String>()
+
+        for (entry in payloadList(items, "set")) {
+            val value = decode(entry, depth + 1)
+            val identity = mapKeyIdentity(value)
+
+            if (identity != null && !seen.add(identity)) {
+                continue
+            }
+
+            decoded.add(value)
+        }
+
+        return WireValue.WireSet(decoded)
     }
 
     /**
@@ -203,7 +238,9 @@ object Wire {
         is WireValue.Infinity -> "num:inf"
         is WireValue.NegInfinity -> "num:-inf"
         is WireValue.Bool -> "bool:${key.value}"
-        is WireValue.Num -> "num:${key.value}"
+        // `+ 0.0` clears the sign of a zero and changes nothing else: SameValueZero
+        // holds -0 equal to 0, while Double.toString keeps the sign ("-0.0").
+        is WireValue.Num -> "num:${key.value + 0.0}"
         is WireValue.Text -> "str:${key.value}"
         is WireValue.BigInt -> "big:${key.value}"
         else -> null
@@ -220,7 +257,18 @@ object Wire {
             throw WireFormatException("wire-codec: malformed date tag")
         }
 
-        return WireValue.Date(epoch)
+        // TimeClip, exactly as `new Date(epoch)` applies it: truncate toward
+        // zero, and turn anything non-finite or past +-8.64e15 into an Invalid
+        // Date. Kept verbatim, an out-of-range epoch re-encoded as a date tag
+        // the reference — whose own Date can never hold that value — refuses to
+        // produce.
+        val clipped = when {
+            epoch is WireValue.Num && Math.abs(epoch.value) <= MAX_TIME_VALUE ->
+                WireValue.Num(if (epoch.value < 0) Math.ceil(epoch.value) else Math.floor(epoch.value))
+            else -> WireValue.NaN
+        }
+
+        return WireValue.Date(clipped)
     }
 
     private fun decodeBigInt(items: List<*>): WireValue {
@@ -234,14 +282,16 @@ object Wire {
     }
 
     private fun decodeError(items: List<*>, depth: Int): WireValue {
-        // The props slot is NOT optional and NOT nullable: the reference reads it
-        // with `Object.keys`, which throws on a null or missing slot, so quietly
-        // substituting an empty map accepted a frame the reference refuses.
+        // The props slot is NOT optional, NOT nullable and NOT a primitive: the
+        // reference reads it with `Object.keys`, which throws on a null or
+        // missing slot and ENUMERATES a string/number/boolean/array — so
+        // `[TAG,"error","E","m","ab"]` would decode there with the invented props
+        // {0:"a",1:"b"} while substituting an empty map accepted the same frame
+        // here.
         if (items.size < 5 || items[4] == null) throw WireFormatException("wire-codec: malformed error tag")
 
-        val props = (items[4] as? Map<*, *>)
-            ?.map { (key, item) -> key.toString() to decode(item, depth + 1) }
-            ?: emptyList()
+        val raw = items[4] as? Map<*, *> ?: throw WireFormatException("wire-codec: malformed error tag — props must be an object")
+        val props = raw.map { (key, item) -> key.toString() to decode(item, depth + 1) }
 
         return WireValue.Err(
             name = items.getOrNull(2) as? String ?: "",

@@ -14,11 +14,61 @@
             "key": "{\"z\":3,\"\ud83d\ude00\":1,\"\ue000\":2}"
         },
         { "name": "nested-array-of-objects", "args": { "rows": [{ "b": 1, "a": 2 }] }, "key": "{\"rows\":[{\"a\":2,\"b\":1}]}" },
-        { "name": "string-with-quote", "args": { "s": "a\"b" }, "key": "{\"s\":\"a\\\"b\"}" }
+        { "name": "string-with-quote", "args": { "s": "a\"b" }, "key": "{\"s\":\"a\\\"b\"}" },
+        { "name": "empty-string-key", "args": { "": 1, "a": 2 }, "key": "{\"\":1,\"a\":2}" },
+        {
+            "name": "escape-set-matches-json-stringify",
+            "args": { "s": "a\"b\\c\nd\te\u0000f\u001fg" },
+            "key": "{\"s\":\"a\\\"b\\\\c\\nd\\te\\u0000f\\u001fg\"}"
+        },
+        {
+            "$comment": "Negative zero keys as the bare token `-0`, distinct from `0` — `stableStringify` has an explicit `Object.is(value, -0)` branch, because `JSON.stringify` renders both as \"0\" and would collide the two args. Written `-0.0` rather than `-0` on purpose: a JSON parser that reads an integral literal as an integer (python `json`, ruby, dart) drops the sign before the codec ever sees it, so the bare form would test the fixture loader instead of the key.",
+            "name": "negative-zero",
+            "args": { "a": -0.0, "b": 0 },
+            "key": "{\"a\":-0,\"b\":0}"
+        },
+        { "name": "nested-empty-containers", "args": { "a": {}, "b": [] }, "key": "{\"a\":{},\"b\":[]}" },
+        { "name": "number-exponent-forms", "args": { "a": 1e21, "b": 1e-7, "c": 1.5, "d": -2 }, "key": "{\"a\":1e+21,\"b\":1e-7,\"c\":1.5,\"d\":-2}" }
     ],
     "typed": [
         { "name": "bigint-arg", "wireArgs": { "n": ["$lunora.wire$", "bigint", "7"] }, "key": "{\"n\":[\"$lunora.wire$\",\"bigint\",\"7\"]}" },
         { "name": "date-arg", "wireArgs": { "d": ["$lunora.wire$", "date", 1700000000000] }, "key": "{\"d\":[\"$lunora.wire$\",\"date\",1700000000000]}" },
-        { "name": "bytes-arg", "wireArgs": { "b": ["$lunora.wire$", "bytes", "AQID"] }, "key": "{\"b\":[\"$lunora.wire$\",\"bytes\",\"AQID\"]}" }
+        { "name": "bytes-arg", "wireArgs": { "b": ["$lunora.wire$", "bytes", "AQID"] }, "key": "{\"b\":[\"$lunora.wire$\",\"bytes\",\"AQID\"]}" },
+        {
+            "name": "error-arg",
+            "wireArgs": { "e": ["$lunora.wire$", "error", "TypeError", "bad", { "code": "E" }] },
+            "key": "{\"e\":[\"$lunora.wire$\",\"error\",\"TypeError\",\"bad\",{\"code\":\"E\"}]}"
+        },
+        {
+            "name": "map-arg-keeps-insertion-order",
+            "wireArgs": {
+                "m": [
+                    "$lunora.wire$",
+                    "map",
+                    [
+                        ["b", 1],
+                        ["a", 2]
+                    ]
+                ]
+            },
+            "key": "{\"m\":[\"$lunora.wire$\",\"map\",[[\"b\",1],[\"a\",2]]]}"
+        },
+        {
+            "name": "non-finite-args",
+            "wireArgs": { "a": ["$lunora.wire$", "nan"], "b": ["$lunora.wire$", "inf"], "c": ["$lunora.wire$", "-inf"] },
+            "key": "{\"a\":[\"$lunora.wire$\",\"nan\"],\"b\":[\"$lunora.wire$\",\"inf\"],\"c\":[\"$lunora.wire$\",\"-inf\"]}"
+        },
+        { "name": "set-arg", "wireArgs": { "s": ["$lunora.wire$", "set", [3, 1]] }, "key": "{\"s\":[\"$lunora.wire$\",\"set\",[3,1]]}" },
+        {
+            "name": "undefined-in-array-arg",
+            "wireArgs": { "a": [1, ["$lunora.wire$", "undefined"], 2] },
+            "key": "{\"a\":[1,[\"$lunora.wire$\",\"undefined\"],2]}"
+        },
+        { "name": "undefined-object-field-arg", "wireArgs": { "a": ["$lunora.wire$", "undefined"], "b": 1 }, "key": "{\"b\":1}" },
+        {
+            "name": "url-arg",
+            "wireArgs": { "u": ["$lunora.wire$", "url", "https://example.com/x"] },
+            "key": "{\"u\":[\"$lunora.wire$\",\"url\",\"https://example.com/x\"]}"
+        }
     ]
 }

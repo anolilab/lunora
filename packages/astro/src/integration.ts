@@ -55,9 +55,9 @@ interface ConfigDoneContext {
     };
 }
 
-/** Copy/paste wiring snippet shown when `serverEntry` doesn't call `withLunora`. */
+/** Copy/paste wiring snippet shown when `serverEntry` composes nothing. */
 const WITH_LUNORA_SNIPPET = [
-    "// src/worker.ts",
+    "// src/server.ts",
     'import { handle } from "@astrojs/cloudflare/handler";',
     'import { withLunora } from "@lunora/astro";',
     "",
@@ -69,21 +69,106 @@ const WITH_LUNORA_SNIPPET = [
 ].join("\n");
 
 /**
- * Matches an actual `withLunora(...)` CALL — e.g. `withLunora(astroWorker, …)`,
- * `export default withLunora(…)`, or `ns.withLunora(…)`. Deliberately does NOT
- * match `import { withLunora } from "@lunora/astro";`: that specifier is
- * followed by `}`/whitespace/`from`, never directly by `(`, so a file that
- * imports the helper but forgets to invoke it is correctly reported as missing
- * the wiring instead of passing on the import alone.
+ * Matches an actual composition CALL in the server entry — either spelling of the
+ * same seam:
+ *
+ * `withLunora(astroWorker, …)` is the standalone helper (an alias of
+ * `withFrameworkWorker`), and is what {@link WITH_LUNORA_SNIPPET} shows.
+ * `.buildFrameworkWorker(host)` is the generated `defineApp` builder's terminal,
+ * and is what the scaffolded template and every other class-B template use. It
+ * was missing here, so a fresh `astro build` warned "subscriptions will silently
+ * 404" about a worker that was correctly composed.
+ *
+ * Deliberately does NOT match `import { withLunora } from "@lunora/astro";`: that
+ * specifier is followed by `}`/whitespace/`from`, never directly by `(`, so a file
+ * that imports the helper but forgets to invoke it is correctly reported as
+ * missing the wiring instead of passing on the import alone.
+ *
+ * Run against {@link codeOnly}, never the raw file: a name inside a comment or a
+ * string is not a call, and matching one suppressed the warning for an entry
+ * that composed nothing.
  */
-const WITH_LUNORA_CALL_PATTERN = /\bwithLunora\s*\(/u;
+const WITH_LUNORA_CALL_PATTERN = /\b(?:withLunora|withFrameworkWorker|buildFrameworkWorker)\s*\(/u;
+
+/** `/* … *\/`, non-greedy so it ends at the FIRST `*\/`. */
+const BLOCK_COMMENT = String.raw`\/\*[\s\S]*?\*\/`;
+/** `// …` to end of line. */
+const LINE_COMMENT = String.raw`\/\/[^\n]*`;
+/** `"…"`, honouring backslash escapes and never crossing a newline. */
+const DOUBLE_QUOTED = String.raw`"(?:[^"\\\n]|\\.)*"`;
+/** `'…'`, the same rules as {@link DOUBLE_QUOTED}. */
+const SINGLE_QUOTED = String.raw`'(?:[^'\\\n]|\\.)*'`;
+
+/**
+ * A template literal with NO `${…}` in it (that is what the `\$(?!\{)` guard
+ * costs). One that interpolates is deliberately left alone: its interpolations
+ * are real code, and blanking the whole literal would hide a composition call
+ * written inside one.
+ *
+ * The delimiter is written `\x60` rather than an escaped backtick because
+ * `String.raw` would keep that backslash, and `\`` is not a legal escape in a
+ * unicode-mode pattern.
+ */
+const PLAIN_TEMPLATE = String.raw`\x60(?:[^\x60\\$]|\\.|\$(?!\{))*\x60`;
+
+/**
+ * Comments and string literals, matched left to right in ONE alternation so
+ * whichever construct OPENS first wins: a quote inside a comment is part of that
+ * comment, and a `//` inside a string is part of that string. That ordering is
+ * the whole trick — it is what a hand-rolled mode machine buys you, without the
+ * machine. Assembled from the named parts above rather than written as one
+ * literal, because as a literal it is unreadable.
+ */
+const SKIPPABLE_RE = new RegExp([BLOCK_COMMENT, LINE_COMMENT, DOUBLE_QUOTED, SINGLE_QUOTED, PLAIN_TEMPLATE].join("|"), "gu");
+
+/** Every character except a newline — line structure survives when a span is blanked. */
+const NON_NEWLINE_RE = /[^\n]/gu;
+
+/**
+ * The source with its comments and string literals blanked out, so the call
+ * probe above sees code and only code.
+ *
+ * A scan rather than a parser: this package has no parser dependency and would
+ * not add one for a build-time warning, and the check only has to answer "is
+ * this identifier followed by `(` somewhere that executes".
+ *
+ * Spans are replaced with spaces rather than deleted, so nothing that was
+ * separated becomes adjacent.
+ *
+ * Known ceiling: a template literal that BOTH interpolates and mentions one of
+ * the names in its string part still reads as a call. Narrowing that needs real
+ * parsing, and this check only drives a warning.
+ */
+const codeOnly = (source: string): string => source.replaceAll(SKIPPABLE_RE, (span) => span.replaceAll(NON_NEWLINE_RE, " "));
+
+/**
+ * Where the composition lives when the caller names nothing.
+ *
+ * Deliberately NOT `src/worker.ts`: `lunora deploy` treats that exact path as a
+ * SvelteKit-shaped composed entry and passes it to wrangler positionally, which
+ * combined with the `@astrojs/cloudflare` redirect's `no_bundle: true` uploads the
+ * raw TypeScript source as the worker.
+ */
+const DEFAULT_SERVER_ENTRY = "src/server.ts";
+
+/**
+ * The default this integration used to carry. Probed only to tell a project that
+ * predates the rename WHY its entry is suddenly "not found" — never silently
+ * accepted as the entry, because composing at that path is the deploy bug
+ * {@link DEFAULT_SERVER_ENTRY} exists to avoid.
+ */
+const PREVIOUS_SERVER_ENTRY = "src/worker.ts";
 
 /** Options for the `lunora` integration. */
 interface LunoraIntegrationOptions {
     /**
-     * Path (or specifier) of the module that calls `withLunora` and is the
-     * composed worker's `export default`. Documented for the wiring story; when
-     * omitted the integration assumes the conventional `src/worker.ts`.
+     * Path (or specifier) of the module that composes the Lunora plane with the
+     * Astro handler and is the composed worker's `export default`. Documented for
+     * the wiring story; when omitted the integration assumes the conventional
+     * `src/server.ts` — deliberately NOT `src/worker.ts`, which `lunora deploy`
+     * treats as a SvelteKit-shaped entry to pass to wrangler positionally, and
+     * which the `@astrojs/cloudflare` redirect's `no_bundle: true` then uploads
+     * untranspiled.
      */
     readonly serverEntry?: string;
 }
@@ -105,10 +190,11 @@ interface LunoraIntegrationOptions {
  *
  * What it does:
  *
- * - Documents the `serverEntry` (default `src/worker.ts`) where the
- *   `withLunora(astroWorker, { shardDO: env.SHARD, … })` composition lives.
+ * - Documents the `serverEntry` (default `src/server.ts`) where the
+ *   `withLunora(astroWorker, { shardDO: env.SHARD, … })` composition — or the
+ *   generated builder's `.buildFrameworkWorker(host)` — lives.
  * - Checks, at `astro:config:done`, that `serverEntry` exists and contains an
- *   actual `withLunora(...)` CALL (not merely an import of it) — and warns
+ *   actual composition CALL (not merely an import of it) — and warns
  *   (does not fail the build) when it doesn't, so a missing wrapper is caught
  *   at build time instead of shipping a worker where `/_lunora/*` is unrouted
  *   and realtime silently 404s.
@@ -122,7 +208,7 @@ interface LunoraIntegrationOptions {
  * middleware) without changing the public surface.
  */
 const lunora = (options: LunoraIntegrationOptions = {}): AstroIntegrationLike => {
-    const serverEntry = (options.serverEntry ?? "src/worker.ts").trim();
+    const serverEntry = (options.serverEntry ?? DEFAULT_SERVER_ENTRY).trim();
 
     return {
         hooks: {
@@ -157,8 +243,17 @@ const lunora = (options: LunoraIntegrationOptions = {}): AstroIntegrationLike =>
                 const entryPath = fileURLToPath(new URL(serverEntry, root));
 
                 if (!existsSync(entryPath)) {
+                    // The default moved off `src/worker.ts`, so a project that
+                    // predates the move and never set `serverEntry` reaches here
+                    // on EVERY build. "Not found" would be both wrong about the
+                    // cause and unactionable, and the rename is not cosmetic —
+                    // see {@link PREVIOUS_SERVER_ENTRY}.
+                    const renamed = options.serverEntry === undefined && existsSync(fileURLToPath(new URL(PREVIOUS_SERVER_ENTRY, root)));
+
                     warn(
-                        `@lunora/astro: server entry "${serverEntry}" not found — add it (or point \`lunora({ serverEntry })\` at the right path) and wrap the Astro worker with \`withLunora\`, or \`/_lunora/*\` (Lunora realtime) will be unrouted:\n\n${WITH_LUNORA_SNIPPET}`,
+                        renamed
+                            ? `@lunora/astro: the default server entry is now "${DEFAULT_SERVER_ENTRY}", and this project still composes in "${PREVIOUS_SERVER_ENTRY}". Rename it — \`lunora deploy\` passes a file at that exact path to wrangler positionally, and @astrojs/cloudflare's \`no_bundle\` redirect then uploads it untranspiled — or keep the old name with \`lunora({ serverEntry: "${PREVIOUS_SERVER_ENTRY}" })\`.`
+                            : `@lunora/astro: server entry "${serverEntry}" not found — add it (or point \`lunora({ serverEntry })\` at the right path) and wrap the Astro worker with \`withLunora\`, or \`/_lunora/*\` (Lunora realtime) will be unrouted:\n\n${WITH_LUNORA_SNIPPET}`,
                     );
 
                     return;
@@ -181,9 +276,9 @@ const lunora = (options: LunoraIntegrationOptions = {}): AstroIntegrationLike =>
                     return;
                 }
 
-                if (!WITH_LUNORA_CALL_PATTERN.test(source)) {
+                if (!WITH_LUNORA_CALL_PATTERN.test(codeOnly(source))) {
                     warn(
-                        `@lunora/astro: couldn't find a \`withLunora(...)\` call in the server entry "${serverEntry}" — \`/_lunora/*\` (Lunora realtime) will be unrouted and subscriptions will silently 404. Wrap the Astro worker:\n\n${WITH_LUNORA_SNIPPET}`,
+                        `@lunora/astro: couldn't find a \`withLunora(...)\` or \`.buildFrameworkWorker(...)\` call in the server entry "${serverEntry}" — \`/_lunora/*\` (Lunora realtime) will be unrouted and subscriptions will silently 404. Compose the Astro worker:\n\n${WITH_LUNORA_SNIPPET}`,
                     );
                 }
             },

@@ -3,14 +3,24 @@
     // `cloudflare-module` preset) AND the Lunora realtime plane (`/_lunora/*`
     // + ShardDO) in one deploy.
     //
-    // `main` points at Nitro's emitted worker entry (produced by `vite build`).
-    // The `ShardDO` Durable Object class is re-exported onto that entry by the
-    // project-root `exports.cloudflare.ts`, so the `SHARD` binding below resolves.
+    // `main` points at the root `worker.ts` wrapper, NOT at Nitro's emitted
+    // `dist/analog/server/index.mjs`: that output exports only the SSR handler as
+    // `default`, so deploying it directly fails with "Durable Objects … not
+    // exported". The wrapper re-exports it plus the `ShardDO` class, so the
+    // `SHARD` binding below resolves. `dist/` exists at deploy time because the
+    // `deploy` script runs `vite build` first.
     "$schema": "node_modules/wrangler/config-schema.json",
     "name": "{{name}}",
-    "main": "dist/analog/server/index.mjs",
+    "main": "worker.ts",
     "compatibility_date": "2026-06-10",
     "compatibility_flags": ["nodejs_compat"],
+    // Nitro's Cloudflare runtime serves client assets ONLY through `env.ASSETS`
+    // (`if (env.ASSETS && isPublicAssetURL(url.pathname)) return env.ASSETS.fetch(request)`).
+    // Without this binding the SSR HTML renders and every `/assets/*` request
+    // 404s — no hydration, no Lunora client. `dist/analog/public` is the
+    // `cloudflare-module` preset's `output.publicDir`, the same directory Nitro's
+    // own `wrangler deploy … --assets` command points at.
+    "assets": { "binding": "ASSETS", "directory": "dist/analog/public" },
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },

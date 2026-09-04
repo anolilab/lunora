@@ -269,9 +269,15 @@ public final class ConformanceTest {
 
         String kind = client.handleFrame(Json.write(frame));
 
-        check("data".equals(kind), "handleFrame must return normally rather than throw");
+        // "error", not "data": the frame was NOT delivered, and the other seven
+        // ports say so. This test used to pin the divergence it was meant to
+        // catch by asserting "data" and never looking at the code.
+        check("error".equals(kind), "a frame that would not decode is reported as an error");
         check(seen.isEmpty(), "a malformed value must not reach onData");
         check(errors.size() == 1, "a malformed value must surface via onError");
+        check(
+                Client.CODE_INVALID_FRAME.equals(errors.get(0).code()),
+                "the error carries the shared INVALID_FRAME code, not null");
     }
 
     /**
@@ -452,9 +458,22 @@ public final class ConformanceTest {
         covers("format_number_matches_ecmascript");
 
         Object[][] cases = {
-            {0.0, "0"}, {3.0, "3"}, {1.5, "1.5"}, {-2.5, "-2.5"},
-            {1e-5, "0.00001"}, {1e-6, "0.000001"}, {1e-7, "1e-7"}, {1.5e-7, "1.5e-7"},
-            {1e-21, "1e-21"}, {1e20, "100000000000000000000"}, {1e21, "1e+21"},
+            {0.0, "0"},
+            {3.0, "3"},
+            {1.5, "1.5"},
+            {-2.5, "-2.5"},
+            {1e-5, "0.00001"},
+            {1e-6, "0.000001"},
+            {1e-7, "1e-7"},
+            {1.5e-7, "1.5e-7"},
+            {1e-21, "1e-21"},
+            {1e20, "100000000000000000000"},
+            {1e21, "1e+21"},
+            // An integral double past 2^53 keeps ECMAScript's shortest-digits
+            // spelling rather than the exact expansion 1152921504606846976.
+            {1.152921504606847e18, "1152921504606847000"},
+            // Negative zero keeps its sign; every integer conversion drops it.
+            {-0.0, "-0"},
         };
 
         for (Object[] testCase : cases) {

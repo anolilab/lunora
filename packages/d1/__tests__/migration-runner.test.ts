@@ -21,6 +21,13 @@ BEGIN
     INSERT INTO audit (post_id, label) VALUES (NEW.id, CASE WHEN NEW.id > 0 THEN 'positive' ELSE 'other' END);
 END;`;
 
+// The same trigger with a block comment BETWEEN `CREATE` and `TRIGGER`. SQLite
+// allows trivia between any two keywords, so this is one valid statement.
+const COMMENTED_TRIGGER_SQL = `CREATE /* audit hook */ TRIGGER posts_audit AFTER INSERT ON posts
+BEGIN
+    INSERT INTO audit (post_id, label) VALUES (NEW.id, CASE WHEN NEW.id > 0 THEN 'positive' ELSE 'other' END);
+END;`;
+
 const sha256Hex = async (text: string): Promise<string> => {
     const bytes = new TextEncoder().encode(text);
     const digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -413,5 +420,38 @@ describe("migrationRunner", () => {
         } finally {
             sqlite.close();
         }
+    });
+
+    // Trivia is legal between `CREATE` and `TRIGGER`, so the header probe has to
+    // look past it. When it did not, the trigger stopped being recognised as a
+    // trigger and its body's first `;` was read as a statement boundary — the
+    // author was told to split a statement SQLite cannot have split.
+    it("applies a CREATE TRIGGER with a comment between CREATE and TRIGGER", async () => {
+        expect.assertions(3);
+
+        const sqlite = new DatabaseSync(":memory:");
+
+        try {
+            sqlite.prepare("CREATE TABLE posts (id INTEGER PRIMARY KEY)").all();
+            sqlite.prepare("CREATE TABLE audit (post_id INTEGER, label TEXT)").all();
+
+            const runner = new MigrationRunner(createSqliteDatabase(sqlite), [{ name: "audit_trigger", sql: COMMENTED_TRIGGER_SQL, version: 1 }]);
+            const result = await runner.run();
+
+            expect(result.applied.map((m) => m.version)).toEqual([1]);
+
+            sqlite.prepare("INSERT INTO posts (id) VALUES (7)").all();
+
+            expect(sqlite.prepare("SELECT post_id, label FROM audit").all()).toEqual([{ label: "positive", post_id: 7 }]);
+        } finally {
+            sqlite.close();
+        }
+
+        // The relaxation must not reopen the multi-statement hole for the
+        // commented spelling either.
+        const database = await createDatabase();
+        const plus = new MigrationRunner(database, [{ name: "trigger_plus", sql: `${COMMENTED_TRIGGER_SQL} DROP TABLE posts;`, version: 1 }]);
+
+        await expect(plus.run()).rejects.toThrow(MULTI_STATEMENT_RE);
     });
 });

@@ -6,6 +6,12 @@ import XCTest
 /// Protocol-conformance tests: drive the Swift SDK against the shared golden
 /// fixtures in `protocol/fixtures/`, the same files the TypeScript client and
 /// the Python, Go and Ruby ports are tested against.
+/// The golden fixtures are not optional: without them this suite asserts
+/// nothing, so their absence is a failure rather than a reason to skip.
+struct FixturesUnreachable: Error, CustomStringConvertible {
+    var description: String { "could not locate protocol/fixtures" }
+}
+
 final class ConformanceTests: XCTestCase {
     /// Walks up from this source file to the repo's `protocol/fixtures`.
     ///
@@ -20,7 +26,13 @@ final class ConformanceTests: XCTestCase {
             if parent.path == directory.path { break }
             directory = parent
         }
-        throw XCTSkip("could not locate protocol/fixtures")
+        // NOT `XCTSkip`: a skipped test still exits 0, and this helper is what
+        // the manifest driver calls, so unreachable fixtures would have printed
+        // `Executed 11 tests, with 2 skipped` — a PASS with 0 of the 40 manifest
+        // cases run. Every sibling port raises here (Python FileNotFoundError,
+        // Go error, Ruby raise, Rust panic, JVM IllegalStateException, Dart
+        // StateError); a thrown Error fails the test the same way.
+        throw FixturesUnreachable()
     }
 
     func fixture(_ name: String) throws -> [String: Any] {
@@ -238,6 +250,12 @@ final class ConformanceTests: XCTestCase {
             (0, "0"), (3, "3"), (1.5, "1.5"), (-2.5, "-2.5"),
             (1e-5, "0.00001"), (1e-6, "0.000001"), (1e-7, "1e-7"), (1.5e-7, "1.5e-7"),
             (1e-21, "1e-21"), (1e20, "100000000000000000000"), (1e21, "1e+21"),
+            // An integral double past 2^53: ECMAScript prints the SHORTEST
+            // digits that read back as the same double and zero-pads, so this
+            // is not the exact expansion 1152921504606846976 that %.0f writes.
+            (1.152_921_504_606_847e18, "1152921504606847000"),
+            // Negative zero keeps its sign in a key.
+            (-0.0, "-0"),
         ]
         for (value, want) in cases {
             XCTAssertEqual(Wire.formatDouble(value), want, "formatDouble(\(value))")

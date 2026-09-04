@@ -92,15 +92,28 @@ Notes that a port MUST honour:
 - **Map entries** are exactly two elements. A shorter or LONGER entry is
   refused — a decoder that reads slots 0 and 1 out of a 3-element entry accepts
   a frame the reference throws on.
+- **A `bigint` digit string is canonicalised on decode.** The reference decodes
+  to a real `bigint` and re-encodes with `toString()`, so `"007"` re-encodes as
+  `"7"` and `"-0"` as `"0"`. A decoder carrying the digits verbatim emits a
+  spelling the reference never produces, and keys a subscription differently on
+  a value both ends agree about.
+- **A `set` de-duplicates.** The reference decodes into a real `Set`, so its
+  items collapse under the same SameValueZero rule as map keys below, keeping
+  the FIRST occurrence's position: `[TAG, "set", [1, 1, 2]]` re-encodes as
+  `[TAG, "set", [1, 2]]`, while two structurally identical `Date` items stay two.
 - **Duplicate map keys collapse, last value wins, at the FIRST occurrence's
   position** — the reference decodes into a real `Map`, and `Map.prototype.set`
-  on a key already present overwrites in place. So
+  on a key already present overwrites in place. It overwrites the VALUE only:
+  the key already stored is kept, so `[[0,"a"],[-0,"b"]]` re-encodes with the
+  `0` it first held, not the `-0` that collapsed onto it. So
   `[TAG, "map", [["a",1],["b",2],["a",3]]]` decodes to two entries and
   re-encodes as `[["a",3],["b",2]]`. Keys collapse under SameValueZero: the
   scalar kinds (`null`, `undefined`, boolean, number — `NaN` equal to itself —
   string, `bigint`) compare by VALUE, and everything else (`Date`, `URL`, bytes,
   a nested `Map`/`Set`, an object or array) compares by REFERENCE, so two
-  structurally identical non-scalar keys stay two entries.
+  structurally identical non-scalar keys stay two entries. SameValueZero holds
+  `-0` equal to `0`, so a signed zero is never its own key — a port whose number
+  formatting keeps the sign must clear it before comparing.
 - **Error** `ownProps` is neither optional nor nullable: the reference reads it
   with `Object.keys`, which throws on a missing or `null` slot, so a 4-element
   error tag and `[TAG, "error", n, m, null]` are both refused.
@@ -112,7 +125,11 @@ Notes that a port MUST honour:
   typed-array ctor name decodes to raw bytes, DROPPING the name — so it
   re-encodes as the 3-element `Uint8Array` form, not as the 4-element form it
   arrived in. (A name it does not recognise carries no element size, so the
-  alignment rule above does not apply to it.)
+  alignment rule above does not apply to it.) An unknown tag is not a fixed
+  point: decoded as an ordinary array whose first element is the sentinel, it
+  re-encodes through the `"arr"` escape, so `[TAG, "futuretag", 1]` comes back
+  as `[TAG, "arr", [TAG, "futuretag", 1]]`. A `bytes` ctor slot holding `null`
+  is the absent slot (`?? "Uint8Array"`) and likewise re-encodes 3-element.
 
 ### 2.2 Native-type mapping for a non-TS SDK
 
@@ -174,6 +191,14 @@ stableWireKey(v) = stableStringify(encodeWire(v))
 depth** (UTF-16 **code-unit** order), arrays keep order, `null` fields are kept,
 and `undefined` object fields are dropped. Two structurally-equal arg records
 with different key insertion order collapse to one key.
+
+It is NOT `JSON.stringify` over the encoded tree, and one value separates them:
+a **negative zero keys as the bare token `-0`**, distinct from `0`, because
+`JSON.stringify` renders both as `"0"` and would collide the two args. A port
+whose value model narrows an integral float to an integer drops the sign before
+the key is spelled and must keep it here; `negative-zero` in the fixture below
+is what catches that. (Every other spelling divergence — `1e+21`, `1e-7`,
+non-finite tokens — is `String(v)`'s, which the key follows exactly.)
 
 Code-unit order, not code-point order: the reference implementation is
 `Object.keys(record).sort()`, whose default comparator compares UTF-16 code
@@ -328,9 +353,13 @@ carried. Every other `4xx` is a refusal of the REQUEST that resending can only
 reproduce, and is terminal for the write: dropping a write the edge refused is the
 lesser harm against replaying it forever.
 
-No golden fixtures, and no case in `conformance-cases.json`: the endpoint is
-optional, so requiring it would fail the seven SDKs that correctly do not
-implement it. `sdks/README.md` records which do.
+The endpoint is optional for a client, but every SDK here implements it, so it
+is held to goldens like the rest: `offlineQueue.batchReplay` in
+[`fixtures/offline-optimistic.json`](./fixtures/offline-optimistic.json) carries
+the calls, the slot outcomes and the normative entry cap, and
+`conformance-cases.json` requires `offline_flush_batches_multiple_writes`,
+`offline_flush_batch_splits_on_payload_too_large` and
+`batch_entry_cap_matches_protocol`. `sdks/README.md` records the per-port state.
 
 ## 5. WebSocket subscription protocol (`GET /_lunora/ws`)
 

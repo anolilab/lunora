@@ -126,6 +126,22 @@ describe("inferLunoraBindings", () => {
         expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
     });
 
+    it("lexes src/worker.ts over an adapter-built main, matching what deploy bundles", async () => {
+        expect.assertions(1);
+
+        // Class-B (SvelteKit/Astro): `main` points at the framework adapter's
+        // build output, which exists after `vite build` and exports only the SSR
+        // fetch handler — while `lunora deploy` bundles `src/worker.ts` as the
+        // positional entry. Lexing `main` there reads every class as unexported.
+        write("wrangler.jsonc", '{ "name": "app", "main": "build/_worker.js", "compatibility_date": "2026-04-07" }');
+        write("build/_worker.js", "export default { fetch() { return new Response('ok'); } };\n");
+        write("src/worker.ts", ENTRY_SHARD_ONLY);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+    });
+
     it("reports no Durable Objects when the worker entry cannot be found", async () => {
         expect.assertions(1);
 

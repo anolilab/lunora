@@ -20,5 +20,5 @@
         "strictInputAccessModifiers": true,
         "strictTemplates": true
     },
-    "include": ["src/**/*", "lunora/**/*", "exports.cloudflare.ts", "vite.config.ts"]
+    "include": ["src/**/*", "lunora/**/*", "worker.ts", "vite.config.ts"]
 }

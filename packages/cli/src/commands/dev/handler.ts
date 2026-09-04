@@ -58,6 +58,7 @@ import type { StudioServerHandle } from "../../util/studio-server";
 import { startStudioServer } from "../../util/studio-server";
 import { createTuiConfirm } from "../../util/tui-prompts";
 import markWorkerReadyWhenServing from "../../util/worker-ready";
+import { provisionBindings } from "../deploy/handler";
 import type { DevOptions } from "./index";
 import type { DevFlavor } from "./lifecycle";
 import {
@@ -1161,9 +1162,12 @@ const ensureSidecarGenerated = (plan: DevCommandPlan, options: DevCommandOptions
  * studio, codegen) are injectable so this is testable without real I/O.
  */
 const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number; plan: DevCommandPlan }> => {
-    const plan = await buildDevPlan(options);
     const { logger } = options;
-    const cwd = plan.wrangler.cwd ?? process.cwd();
+    // Resolved the same way `buildDevPlan` / `planDevCommand` resolve them, so
+    // the pre-plan work below sees exactly the project (and flavor) the plan
+    // will describe.
+    const cwd = options.cwd ?? process.cwd();
+    const flavor = options.flavor ?? detectDevFlavor(cwd);
     // Resolved for every flavor, not just the ones that run the codegen watcher:
     // the `vite` and `framework-worker` flavors have `runsCodegenWatch === false`,
     // so gating on it accepted `--target` and then used it nowhere — while
@@ -1176,6 +1180,11 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     // spawn, and `toolchain?.dev(...)` used to fall through to `wrangler dev` —
     // serving a Node-target app on Cloudflare's runtime, then hard-failing at
     // deploy.
+    //
+    // Ahead of `buildDevPlan`, so a bad `--target` throws before the `--remote`
+    // temp config is written rather than orphaning that file in the project root
+    // (where the templates' exact-name `.wrangler` ignore does not match it).
+    // There is nothing to tear down yet on this path.
     const resolvedTarget = resolveRunnableTargetOrError(cwd, options.target);
 
     if (resolvedTarget.target === undefined) {
@@ -1183,8 +1192,29 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     }
 
     const { target } = resolvedTarget;
-    // Register the remote temp-config disposer up front so it's torn down on
-    // every exit path — including a throw during startup below (the `finally`).
+
+    // Auto-provision the bindings the project's code implies, the same way
+    // `@lunora/vite` does on every dev-server start — for the wrangler flavor
+    // there is no plugin to do it, so a newly exported `SchedulerDO` /
+    // `defineWorkflow` / `defineQueue` used to get its binding only at
+    // `lunora deploy`, and `lunora dev` ran a worker missing it until then.
+    // Idempotent and best-effort (it logs and moves on), so it is safe on every
+    // start. No cron argument: dev has no codegen result to prove the project's
+    // cron set here, and clearing a committed `triggers.crons` on a guess would
+    // stop production crons.
+    //
+    // BEFORE `buildDevPlan`, which under `--remote` snapshots `wrangler.jsonc`
+    // into the temp config the spawned wrangler runs with (`--config`). Taken
+    // first, that copy is a binding short — the worker booted without the
+    // binding this call had just written. Same ordering the Vite plugin's remote
+    // path had to adopt.
+    if (flavor === "wrangler") {
+        await provisionBindings(cwd, logger, undefined, target, undefined);
+    }
+
+    const plan = await buildDevPlan({ ...options, flavor });
+    // Torn down on every exit path, including a throw during startup (the
+    // `finally`).
     const handles: Teardown = { remoteCleanup: plan.remote.cleanup };
 
     try {

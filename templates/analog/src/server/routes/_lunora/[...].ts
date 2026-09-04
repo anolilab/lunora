@@ -10,9 +10,10 @@
  * `_lunora/[...].ts` catch-all owns `/_lunora/**`.
  *
  * The Lunora worker is imported from `~/../lunora/server` (`defineApp().build()`,
- * which also re-exports `ShardDO`). The same `ShardDO` is re-exported to the
- * Cloudflare worker entrypoint via the project root's `exports.cloudflare.ts`,
- * so one deploy carries both the SSR handler and the Durable Object class.
+ * which also re-exports `ShardDO`). The same `ShardDO` reaches the deployed
+ * Cloudflare worker entrypoint via the project root's `worker.ts` wrapper
+ * (`wrangler.jsonc`'s `main`), so one deploy carries both the SSR handler and
+ * the Durable Object class.
  *
  * `defineEventHandler`, `getRequestURL`, `toWebRequest` and friends are
  * Nitro/H3 utilities; on Cloudflare the inbound request is already a Web

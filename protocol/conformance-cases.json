@@ -2,7 +2,7 @@
     "$comment": [
         "The case list every SDK's conformance suite must exercise.",
         "",
-        "The assertion CODE cannot be shared across seven languages, but the case",
+        "The assertion CODE cannot be shared across eight languages, but the case",
         "LIST is data, and its absence is what let coverage drift: the four later",
         "ports gained six hardening cases the first three never got, so MAX_DEPTH",
         "and MAX_BIGINT_DIGITS - both justified as defences against a hostile peer -",
@@ -22,7 +22,7 @@
         "This paragraph was once false: nothing read the file, and the coverage it",
         "was created to hold could drift again unnoticed. It was, in two ports.",
         "",
-        "The last fourteen names cover the client-side write features (optimistic",
+        "The last seventeen names cover the client-side write features (optimistic",
         "layers, offline queue) rather than the wire. They assert against",
         "fixtures/offline-optimistic.json, which carries the values and orderings",
         "all eight ports must agree on.",

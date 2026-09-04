@@ -491,9 +491,16 @@ consuming step rebuild it.
 This is a **safe interpreted data-flow** between the whitelisted tools you hand
 `codeTool`, not arbitrary JavaScript, so there is no `eval` or isolate and it
 runs natively in workerd. Each composed tool still dispatches through the same
-durable context a normal call gets, keeping its RLS, and each step's
-resolved input is validated against that tool's own `inputSchema` — the same
-check a top-level call gets.
+durable context a normal call gets, keeping its RLS, and each step's resolved
+input goes through the same check a top-level call gets — no more and no less.
+That check is only as strong as the tool's own `inputSchema`: a schema carrying
+a validator (a Standard Schema such as zod/valibot, or
+`jsonSchema(schema, { validate })`) rejects a wrong-typed argument before the
+tool runs, while a **bare `jsonSchema(schema)` validates nothing** — the AI SDK
+treats a validator-less schema as pass-through, on this path and on the
+top-level one alike. Without a validator the argument reaches the tool and its
+own rejection (a dispatched function's `400`, say) is recorded as a tool error
+the model reads and corrects on its next turn, rather than failing the run.
 
 A composed tool's own `needsApproval` gate is **not** carried, because a script
 runs its steps in one shot and cannot hibernate mid-way for a human decision.

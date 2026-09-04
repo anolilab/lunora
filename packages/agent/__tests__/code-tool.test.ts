@@ -14,6 +14,7 @@ const BOOM_PATTERN = /boom/u;
 const MAX_STEPS_PATTERN = /`maxSteps` must be a positive integer/u;
 const TOO_MANY_STEPS_PATTERN = /code_tool_too_many_steps — the script has 10 steps, over the cap of 3/u;
 const INVALID_STEP_INPUT_PATTERN = /code step "a" input is invalid for tool "charge": amount must be a number/u;
+const INHERITED_REF_PATTERNS = [/unknown result "constructor"/u, /unknown result "__proto__"/u, /unknown result "hasOwnProperty"/u];
 
 // `step` is required on AgentToolContext — production always threads a real
 // durable handle — so a hand-built context supplies the pass-through double.
@@ -60,6 +61,15 @@ describe(resolveReferences, () => {
 
         expect(resolved.x).toBeUndefined();
         expect(resolved.y).toBeUndefined();
+    });
+
+    it("does not resolve a `$from` onto the prototype chain", () => {
+        // `"constructor" in {}` is true, so an inherited name resolved to a real
+        // `Function`/`Object.prototype` and was handed to the composed tool as an
+        // argument — instead of the documented hard error for an unknown ref.
+        for (const [index, name] of ["constructor", "__proto__", "hasOwnProperty"].entries()) {
+            expect(() => resolveReferences({ $from: name }, {})).toThrow(INHERITED_REF_PATTERNS[index]);
+        }
     });
 
     it("skips a `__proto__` own key when rebuilding input objects", () => {
@@ -114,6 +124,18 @@ describe(runToolScript, () => {
 
     it("throws on a step calling an unknown tool", async () => {
         await expect(runToolScript({ steps: [{ id: "x", tool: "nope" }] }, { real: fakeTool(1) }, context, 16)).rejects.toThrow(UNKNOWN_TOOL_PATTERN);
+    });
+
+    it("throws on a step naming an inherited property instead of a composed tool", async () => {
+        // `tools["constructor"]` is `Object` — truthy, so the unknown-tool guard
+        // waved it through and the step died on `tool.execute is not a function`
+        // (a TypeError the host retries) rather than the documented BAD_REQUEST.
+        for (const name of ["constructor", "toString", "hasOwnProperty", "__proto__"]) {
+            // eslint-disable-next-line no-await-in-loop -- each name is its own assertion; the loop is the fixture
+            await expect(runToolScript({ steps: [{ id: "x", tool: name }] }, { real: fakeTool(1) }, context, 16)).rejects.toThrow(
+                new RegExp(`unknown tool "${name === "__proto__" ? String.raw`__proto__` : name}"`, "u"),
+            );
+        }
     });
 
     it("rejects duplicate step ids up front, before running any tool", async () => {

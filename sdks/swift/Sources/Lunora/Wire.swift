@@ -36,6 +36,22 @@ public enum Wire {
     /// without changing value — ``WireBigInt`` and its tag exist for that case.
     public static let maxExactInteger = 9_007_199_254_740_991.0
 
+    /// Largest epoch a `Date` holds (ECMAScript TimeClip). Past this, and for
+    /// any non-finite epoch, `new Date(v)` is an Invalid Date.
+    public static let maxTimeValue = 8.64e15
+
+    /// `new Date(epoch).getTime()` — ECMAScript TimeClip.
+    ///
+    /// A `Date` truncates its argument toward zero, and anything non-finite or
+    /// past ±8.64e15 becomes an Invalid Date, which the reference re-encodes as
+    /// a NaN tag. Kept verbatim, the epoch went back on the wire as a date the
+    /// reference's own `Date` can never hold.
+    static func timeClip(_ epoch: Double) -> Double {
+        guard epoch.isFinite, abs(epoch) <= maxTimeValue else { return Double.nan }
+
+        return epoch.rounded(.towardZero)
+    }
+
     /// Bytes per element for the typed-array views the codec round-trips. A view
     /// whose payload is not a whole number of elements is not a view the
     /// reference can rebuild — `Float32Array(buffer)` raises a `RangeError`
@@ -280,17 +296,25 @@ extension Wire {
         case "-inf": return -Double.infinity
         case "bigint": return try decodeBigInt(value)
         case "date":
-            guard value.count >= 3, let epoch = try decode(value[2], depth: depth + 1) as? NSNumber else {
+            // `Bool` bridges to `NSNumber` under `as?` (true -> 1), so the
+            // CoreFoundation type is checked first — the same trap `encode`,
+            // `mapKeyIdentity` and `parseCommitCursor` already guard. Without
+            // it `[TAG,"date",true]` decoded as epoch 1 where the reference,
+            // whose check is `typeof epoch !== "number"`, refuses the frame.
+            guard value.count >= 3,
+                let epoch = try decode(value[2], depth: depth + 1) as? NSNumber,
+                CFGetTypeID(epoch) != CFBooleanGetTypeID()
+            else {
                 throw WireFormatError.malformed("date")
             }
-            return WireDate(epoch.doubleValue)
+            return WireDate(timeClip(epoch.doubleValue))
         case "url":
             guard value.count >= 3, let href = value[2] as? String else { throw WireFormatError.malformed("url") }
             return WireURL(href)
         case "map": return try decodeMap(value, depth: depth)
         case "set":
             guard value.count >= 3, let items = value[2] as? [Any] else { throw WireFormatError.malformed("set") }
-            return WireSet(try items.map { try decode($0, depth: depth + 1) })
+            return try decodeSet(items, depth: depth)
         case "error": return try decodeError(value, depth: depth)
         case "bytes": return try decodeBytes(value)
         case "arr":
@@ -306,7 +330,35 @@ extension Wire {
         guard value.count >= 3, let raw = value[2] as? String, raw.count <= maxBigIntDigits, isBigIntLiteral(raw) else {
             throw WireFormatError.invalidBigInt
         }
-        return WireBigInt(raw)
+        // Canonicalise on the way in. The reference decodes to a real `bigint`
+        // and re-encodes with `toString()`, so `"007"` and `"-0"` leave it as
+        // `"7"` and `"0"`. Carrying the digits verbatim re-encoded a spelling
+        // the reference never emits, and keyed a subscription differently on a
+        // value the two ends agree about.
+        return WireBigInt(normaliseBigInt(raw))
+    }
+
+    /// Decode a `set` payload, collapsing duplicates the way a real `Set` does.
+    ///
+    /// The reference builds a `new Set`, which de-duplicates by SameValueZero
+    /// and keeps the FIRST occurrence's position — the same rule as a `Map`'s
+    /// keys, so the same identity helper decides it. Carrying both copies
+    /// re-encoded a set the reference would never emit.
+    private static func decodeSet(_ raw: [Any], depth: Int) throws -> WireSet {
+        var items: [Any] = []
+        var seen: Set<String> = []
+
+        for entry in raw {
+            let item = try decode(entry, depth: depth + 1)
+
+            if let identity = mapKeyIdentity(item) {
+                if seen.contains(identity) { continue }
+                seen.insert(identity)
+            }
+
+            items.append(item)
+        }
+        return WireSet(items)
     }
 
     private static func decodeMap(_ value: [Any], depth: Int) throws -> Any {
@@ -328,7 +380,10 @@ extension Wire {
             // from identical bytes.
             if let identity = mapKeyIdentity(key) {
                 if let index = seen[identity] {
-                    entries[index] = entry
+                    // Only the VALUE. `Map.prototype.set` on a key already
+                    // present keeps the key it holds, so a later `-0` never
+                    // replaces the `0` stored under it.
+                    entries[index].value = entry.value
                     continue
                 }
 
@@ -357,10 +412,12 @@ extension Wire {
         // would collapse 0 and 1 onto false and true.
         if let number = key as? NSNumber {
             if CFGetTypeID(number) == CFBooleanGetTypeID() { return "bool:\(number.boolValue)" }
-            return number.doubleValue.isNaN ? "num:nan" : "num:\(number.doubleValue)"
+            return number.doubleValue.isNaN ? "num:nan" : "num:\(number.doubleValue + 0.0)"
         }
 
-        if let double = key as? Double { return double.isNaN ? "num:nan" : "num:\(double)" }
+        // `+ 0.0` clears the sign of a zero and changes nothing else: SameValueZero
+        // holds -0 equal to 0, while interpolating a Double keeps the sign ("-0.0").
+        if let double = key as? Double { return double.isNaN ? "num:nan" : "num:\(double + 0.0)" }
 
         return nil
     }
@@ -380,12 +437,16 @@ extension Wire {
     private static func decodeError(_ value: [Any], depth: Int) throws -> Any {
         guard value.count >= 4 else { throw WireFormatError.malformed("error") }
 
-        // The props slot is NOT optional and NOT nullable: the reference reads it
-        // with `Object.keys`, which throws on a null or missing slot, so quietly
-        // substituting an empty map accepted a frame the reference refuses.
+        // The props slot is NOT optional, NOT nullable and NOT a primitive: the
+        // reference reads it with `Object.keys`, which throws on a null or
+        // missing slot and ENUMERATES a string/number/boolean/array — so
+        // `[TAG,"error","E","m","ab"]` would decode there with the invented
+        // props {0:"a",1:"b"} while substituting an empty map accepted the same
+        // frame here.
         guard value.count > 4, !(value[4] is NSNull) else { throw WireFormatError.malformed("error") }
-
-        let props = (try decode(value[4], depth: depth + 1)) as? [String: Any] ?? [:]
+        guard let props = (try decode(value[4], depth: depth + 1)) as? [String: Any] else {
+            throw WireFormatError.malformed("error")
+        }
         let cause = value.count > 5 ? try decode(value[5], depth: depth + 1) : nil
         return WireError(
             name: value[2] as? String ?? "",
