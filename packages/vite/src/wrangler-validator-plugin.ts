@@ -67,12 +67,18 @@ const formatError = (wranglerPath: string, problems: ReadonlyArray<string>): Err
  *
  * It provisions before it validates, which is the order `lunora dev` uses
  * (infer → reconcile, no validation pass): the bindings this check requires are
- * the ones Lunora writes itself, and its reconcile lives in the codegen plugin's
- * `buildStart` — a hook Vite only reaches once `configResolved` has SUCCEEDED.
- * Validating first therefore killed the dev server over a binding the very next
- * hook would have added, the first time a project declared a `.global()` table
- * or a container. The reconcile is idempotent, so the `buildStart` one then
- * finds nothing to change.
+ * the ones Lunora writes itself, so validating first killed the dev server the
+ * first time a project declared a `.global()` table or a container.
+ *
+ * The provisioning write has to happen in `config`, not `configResolved`:
+ * `@cloudflare/vite-plugin` parses `wrangler.jsonc` in its own `config` hook and
+ * builds the miniflare worker options from that already-parsed object, and it
+ * only starts watching the file for changes in `configureServer`. A write from
+ * `configResolved` therefore lands after the parse and before the watcher exists
+ * — the file on disk gains the binding, the validator passes, and the worker
+ * boots without `env.DB`. `enforce: "pre"` puts this hook ahead of the Cloudflare
+ * plugin's in the same phase. The reconcile is idempotent, so the codegen
+ * plugin's `buildStart` one still finds nothing to change.
  *
  * Skipped under `vite preview`, which resolves with `command: "serve"` and so
  * runs `apply: "serve"` plugins: previewing a built app must not probe Docker.
@@ -82,10 +88,9 @@ const wranglerValidatorPlugin = (options: ResolvedLunoraPluginOptions): Plugin =
 
     return {
         // `isPreview` is on the config-hook env only — never on the resolved config.
-        config(_userConfig, env) {
+        async config(_userConfig, env) {
             isPreview = env.isPreview === true;
-        },
-        async configResolved() {
+
             if (isPreview) {
                 return;
             }
@@ -100,6 +105,11 @@ const wranglerValidatorPlugin = (options: ResolvedLunoraPluginOptions): Plugin =
                     console.warn(message);
                 },
             });
+        },
+        configResolved() {
+            if (isPreview) {
+                return;
+            }
 
             const result = validateWranglerProject({
                 projectRoot: options.projectRoot,
@@ -128,6 +138,7 @@ const wranglerValidatorPlugin = (options: ResolvedLunoraPluginOptions): Plugin =
 
             warnWhenDockerMissing(result.wranglerPath);
         },
+        enforce: "pre",
         name: "lunora:wrangler-validator",
     };
 };

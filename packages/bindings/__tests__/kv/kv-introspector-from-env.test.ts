@@ -81,6 +81,23 @@ describe("createKvIntrospectorFromEnv", () => {
         expect(page.keys.map((entry) => entry.name)).toStrictEqual(["greeting:en", "greeting:fr"]);
     });
 
+    // KV resolves `expiration` + `expirationTtl` by taking the TTL and dropping
+    // the absolute timestamp — so forwarding both silently gives the caller an
+    // expiry it never asked for. `createKv` already rejects the pair; the admin
+    // introspector used to forward it.
+    it("rejects putValue carrying both expiration and expirationTtl", async () => {
+        expect.assertions(2);
+
+        const namespace = fakeNamespace();
+        const introspector = createKvIntrospectorFromEnv({ CACHE: namespace });
+
+        await expect(introspector.putValue({ expiration: 1_700_000_000, expirationTtl: 60, key: "k", namespace: "CACHE", value: "v" })).rejects.toThrow(
+            /mutually exclusive/u,
+        );
+
+        await expect(introspector.getValue({ key: "k", namespace: "CACHE" })).resolves.toStrictEqual({ metadata: null, value: null });
+    });
+
     it("returns an empty-but-usable introspector when env holds no KV bindings", async () => {
         expect.assertions(4);
 

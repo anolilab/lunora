@@ -10,6 +10,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { assertOneExpirationForm } from "./create-kv";
 import type { KVNamespaceLike } from "./types";
 
 /** One KV namespace as the studio's KV browser surfaces it (mirrors the runtime's KvNamespaceSummary). */
@@ -140,6 +141,10 @@ const createKvIntrospector = (options: CreateKvIntrospectorOptions): KvIntrospec
 
         // `expiration` (absolute) lets the studio round-trip a key's existing TTL
         // on edit so saving a value doesn't silently make an expiring key permanent.
+        // It cannot be combined with `expirationTtl`, which KV would silently
+        // prefer — same rule `createKv` enforces, same helper.
+        assertOneExpirationForm(putOptions);
+
         await ns.put(putOptions.key, putOptions.value, {
             expiration: putOptions.expiration,
             expirationTtl: putOptions.expirationTtl,
