@@ -114,6 +114,32 @@ A blocked signup fails with the coded error `EMAIL_DOMAIN_BLOCKED` (HTTP 400); a
 - **Programmatic / non-auth use:** `classifyEmail(email, config)` (sync, pure-data) and `assertEmailAllowed(email, config)` (async; throws the coded error) come from `@lunora/auth/email-guard`, plus `emailGateMiddleware({ email: (ctx) => ctx.args.email })` for a `.use()` gate on your own signup mutations.
 - **Edge-safety:** on workerd, `await loadEmailDomainLists()` once at worker init (the gate helpers do this for you). The optional `mx: true` deliverability check is loaded via a dynamic import so `node:dns` never enters the default bundle — enable it only with `nodejs_compat` (or a DNS-over-HTTPS shim).
 
+### Invite-only sign-up
+
+Close self-serve registration: `inviteOnly()` creates an account only for an address an administrator invited. It hooks `user.create.before`, so it gates every path that mints a user — password sign-up, an OAuth callback creating a new account, magic link, `admin.createUser`, and Lunora's own `AuthAdmin.createUser` — and declares the `signUpInvitation` table it reads, so migrations pick it up on their own.
+
+```ts
+import { createAuth, createSignUpInvitation } from "@lunora/auth";
+import { inviteOnly } from "@lunora/auth/plugins";
+
+const auth = createAuth({
+    secret: env.AUTH_SECRET,
+    database: lunoraD1Adapter(env.DB),
+    emailAndPassword: { enabled: true, requireEmailVerification: true },
+    plugins: [inviteOnly()],
+});
+
+// …from your own admin-authorized code:
+const invite = await createSignUpInvitation(auth, { email: "ada@example.com" });
+```
+
+An uninvited signup fails with the coded error `SIGN_UP_INVITE_REQUIRED` (HTTP **400** — a 403 from a create hook is swallowed by better-auth's sign-up route and answered with a fabricated success). Leave `emailAndPassword.disableSignUp` **off** — the invitee still uses the ordinary sign-up form, which `@lunora/auth-ui` prefills from `?email=`. `listSignUpInvitations` and `revokeSignUpInvitation` complete the set; all three are trusted server-side calls with no authorization of their own, so gate them like any other admin action.
+
+- **An invitation is keyed by email and nothing else** — no secret token — so anyone who learns an invited address can spend that seat. `requireEmailVerification` does **not** close this: the user row is written before the token is mailed, so the attacker still creates an account and still burns the invitation; what it buys is that they hold no session until someone clicks a link that lands in the invitee's inbox. Recovery is `AuthAdmin.removeUser` plus a fresh invitation. The plugin warns on startup when password sign-up runs without verification.
+- **Plugins that synthesize an address are refused, not admitted.** `anonymous` (`temp-<id>@…`), `siwe` (`<wallet>@<domain>`), and `phoneNumber`'s sign-up-on-verification all create users with a generated email that matches no invitation, so those flows are rejected — but only once a user exists. Under `allowFirstUser: true` the bootstrap runs before the address is compared, so the first anonymous session or wallet sign-in is what claims it. Don't combine them with this.
+- **Nobody signs up before the first invitation exists, including you.** Seed it with `createSignUpInvitation` at worker init or from a one-off internal mutation. `inviteOnly({ allowFirstUser: true })` instead admits the first account uninvited — convenient, but the "is the user table empty" check is racy and open to whoever finds the URL first.
+- **Revocation is not retroactive, and not atomic against a sign-up in flight.** better-auth does not wrap the `before` hook and the user insert in one transaction, and the adapter contract offers no conditional consume, so a revoke landing between the two lets that one account through. `AuthAdmin.removeUser` is how you undo one that already happened.
+
 ### Security / audit trail
 
 Record authentication & security events (sign-in, sign-up, password change, MFA enable/disable, token refresh, session revoke, …) to a durable, queryable audit trail. Install the better-auth `hooks.after` recorder with `authAuditHook` (or compose via `withAuthAudit`), backed by the same D1 database as the auth tables:

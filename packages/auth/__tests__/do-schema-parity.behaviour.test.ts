@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { resolveAuthOptions } from "../src/create-auth";
 import { authDoSchemaStatements } from "../src/do-schema";
-import { admin, scim } from "../src/plugins";
+import { admin, inviteOnly, scim } from "../src/plugins";
 
 /**
  * Does our DDL produce the same schema better-auth's own migrator produces?
@@ -155,9 +155,10 @@ describe("do schema parity with better-auth's own migrator", () => {
     it("agrees on a plugin-heavy config, where the tables are generated rather than fixed", async () => {
         expect.assertions(2);
 
-        // `admin` adds columns to `user`; `scim` adds seven tables of its own. If the
-        // mirror is going to drift anywhere, it is on plugin-contributed schema.
-        const options = { plugins: [scim(scimOptions), admin()], secret: SECRET };
+        // `admin` adds columns to `user`; `scim` adds seven tables of its own;
+        // `inviteOnly` adds one with a UNIQUE string column. If the mirror is going
+        // to drift anywhere, it is on plugin-contributed schema.
+        const options = { plugins: [scim(scimOptions), admin(), inviteOnly()], secret: SECRET };
         const ours = ourSnapshot(options);
         const theirs = await upstreamSnapshot(options);
 

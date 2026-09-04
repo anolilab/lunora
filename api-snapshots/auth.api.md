@@ -646,6 +646,14 @@ interface ImpersonationResult {
 }
 ```
 
+### `InviteOnlyOptions` (interface)
+
+```ts
+interface InviteOnlyOptions {
+    allowFirstUser?: boolean;
+}
+```
+
 ### `ListUsersOptions` (interface)
 
 ```ts
@@ -719,6 +727,19 @@ interface ReadAuthAuditOptions {
 
 ```ts
 type SessionPolicy = NonNullable<BetterAuthOptions["session"]>;
+```
+
+### `SignUpInvitation` (interface)
+
+```ts
+interface SignUpInvitation {
+    acceptedAt: Date | null;
+    createdAt: Date;
+    email: string;
+    expiresAt: Date;
+    id: string;
+    invitedBy: null | string;
+}
 ```
 
 ### `SqlExecutor` (interface)
@@ -876,6 +897,16 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 const createMemoryAuthStore: () => AuthStore;
 ```
 
+### `createSignUpInvitation` (const)
+
+```ts
+const createSignUpInvitation: (auth: LunoraAuth, input: {
+    email: string;
+    expiresInSeconds?: number;
+    invitedBy?: string;
+}) => Promise<SignUpInvitation>;
+```
+
 ### `createSqlAuthStore` (const)
 
 ```ts
@@ -926,6 +957,14 @@ const eventForPath: (path: string) => AuthAuditEvent | undefined;
 const handleAuthRequest: (auth: LunoraAuth, request: Request, basePath?: string) => Promise<Response | undefined>;
 ```
 
+### `listSignUpInvitations` (const)
+
+```ts
+const listSignUpInvitations: (auth: LunoraAuth, options?: {
+    pendingOnly?: boolean;
+}) => Promise<SignUpInvitation[]>;
+```
+
 ### `loadEmailDomainLists` (const)
 
 ```ts
@@ -964,6 +1003,14 @@ const readAuthAuditLog: (executor: SqlExecutor, options?: ReadAuthAuditOptions) 
 
 ```ts
 const resolveAuthOptions: (options: LunoraAuthOptions) => LunoraAuthOptions;
+```
+
+### `revokeSignUpInvitation` (const)
+
+```ts
+const revokeSignUpInvitation: (auth: LunoraAuth, input: {
+    email: string;
+}) => Promise<void>;
 ```
 
 ### `sessionPresets` (const)
@@ -1134,6 +1181,14 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ## `@lunora/auth/plugins`
 
+### `InviteOnlyOptions` (interface)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `SignUpInvitation` (interface)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
 ### `UiConfigOptions` (interface)
 
 ```ts
@@ -1221,6 +1276,12 @@ Re-exported from `better-auth` — signature tracked at its source.
 ### `haveIBeenPwned` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
+
+### `inviteOnly` (const)
+
+```ts
+const inviteOnly: (options?: InviteOnlyOptions) => BetterAuthPlugin;
+```
 
 ### `jwt` (const)
 

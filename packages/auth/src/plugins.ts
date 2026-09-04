@@ -56,6 +56,15 @@
  */
 
 /**
+ * Close self-serve sign-up to invited addresses only: an account is created only
+ * for an email an administrator has invited with `createSignUpInvitation`.
+ * Declares the `signUpInvitation` table it reads. Lunora's own, not a better-auth
+ * re-export.
+ */
+export type { InviteOnlyOptions, SignUpInvitation } from "./invite-only";
+export { inviteOnly } from "./invite-only";
+
+/**
  * Publish which plugins and social providers this deployment enabled, at
  * `GET {basePath}/ui-config`, so an auth UI configures itself instead of making
  * you restate the list client-side. Lunora's own, not a better-auth re-export.
