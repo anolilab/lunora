@@ -49,6 +49,15 @@ export const toQueuedPayload = (options: SendOptions): QueuedSend => {
  * duplicate for the one it does not: the provider accepted the message and the
  * worker died before acking.
  *
+ * The recipe below NARROWS that window; it does not close it, and nothing on
+ * this path can. The mark is written after the provider accepted the message, so
+ * a crash in between still redelivers and resends, and a KV read is eventually
+ * consistent — a redelivery seconds later can miss a mark that was written.
+ * Delivery is at-least-once end to end. An app that must not double-send needs a
+ * strongly-consistent mark taken BEFORE the send (a Durable Object or D1 row
+ * claimed by this key, released on failure), and even then the send-then-crash
+ * window is only ever traded for a send-that-may-not-have-happened one.
+ *
  * ```ts
  * export default {
  *   queue: async (batch, env) => {

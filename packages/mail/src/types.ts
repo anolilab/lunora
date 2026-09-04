@@ -45,8 +45,9 @@ export interface SendOptions {
      * Not forwarded to the mail provider, and no transport can: Resend dedupes on an
      * `Idempotency-Key` REQUEST header, and the provider client exposes no hook for
      * one (its own `headers` field becomes message headers in the JSON body). So a
-     * consumer wanting exactly-once delivery MUST dedupe against its own store using
-     * this key — see `consumeQueuedSend` for the shape.
+     * consumer that wants to collapse redeliveries MUST dedupe against its own store
+     * using this key — see `consumeQueuedSend` for the shape, and for why that is a
+     * narrowed at-least-once rather than exactly-once.
      */
     idempotencyKey?: string;
     react?: ReactElement;

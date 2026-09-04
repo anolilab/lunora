@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import bindingsProvisionPlugin from "../src/bindings-provision-plugin";
 import type { ResolvedLunoraPluginOptions } from "../src/types";
 import { warnWhenDockerMissing, wranglerValidatorPlugin } from "../src/wrangler-validator-plugin";
 
@@ -85,9 +86,9 @@ const writeSchema = (source: string): void => {
 };
 
 /**
- * Run only the plugin's `config` hook — the phase `@cloudflare/vite-plugin`
- * parses `wrangler.jsonc` in, so anything this hook writes must be on disk by
- * the time it returns.
+ * Run one plugin's `config` hook — the phase `@cloudflare/vite-plugin` parses
+ * `wrangler.jsonc` in, so anything this hook writes must be on disk by the time
+ * it returns.
  */
 const runConfigHook = async (plugin: ReturnType<typeof wranglerValidatorPlugin>, isPreview = false): Promise<void> => {
     await (plugin.config as (this: unknown, userConfig: unknown, environment: { command: string; isPreview: boolean }) => Promise<void>).call(
@@ -101,12 +102,15 @@ const runConfigHook = async (plugin: ReturnType<typeof wranglerValidatorPlugin>,
 };
 
 /**
- * Drive the plugin through Vite's hook order: `config` (where `isPreview` lives
- * and the binding reconcile runs) and then `configResolved` — the same sequence
+ * Drive the pair through Vite's hook order: both `config` hooks in registration
+ * order — `bindingsProvisionPlugin` writes the inferred bindings, then the
+ * validator records `isPreview` — and then `configResolved`. The same sequence
  * `resolveConfig` runs, so a test cannot accidentally validate in an order the
- * dev server never uses.
+ * dev server never uses, nor validate against bindings the dev server would only
+ * have provisioned later.
  */
 const runHooks = async (plugin: ReturnType<typeof wranglerValidatorPlugin>, isPreview = false): Promise<void> => {
+    await runConfigHook(bindingsProvisionPlugin(makeOptions(workdir)), isPreview);
     await runConfigHook(plugin, isPreview);
 
     await (plugin.configResolved as (this: unknown) => void | Promise<void>).call(undefined);
@@ -197,14 +201,17 @@ describe("wrangler-validator-plugin", () => {
             writeSchema(SCHEMA_WITH_GLOBAL);
             writeFileSync(join(workdir, "wrangler.jsonc"), WRANGLER_WITHOUT_D1, "utf8");
 
-            const plugin = wranglerValidatorPlugin(makeOptions(workdir));
-
+            // The write lives in its OWN plugin, registered unconditionally: it is
+            // not the validator's job and must not be skippable with the checks.
+            //
             // `@cloudflare/vite-plugin` reads and parses `wrangler.jsonc` inside its
             // own `config` hook and builds the miniflare worker options from that
             // parsed object; its restart watcher only exists from `configureServer`.
             // So a binding written any later than `config` never reaches the worker
             // that boots — `env.DB` is missing while the file on disk looks right.
             // `enforce: "pre"` is what puts this hook ahead of the Cloudflare one.
+            const plugin = bindingsProvisionPlugin(makeOptions(workdir));
+
             await runConfigHook(plugin);
 
             expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toMatch(D1_DATABASES);

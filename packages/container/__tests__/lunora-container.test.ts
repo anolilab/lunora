@@ -262,7 +262,7 @@ describe("lunoraContainer lifecycle logging", () => {
      * regression is visible rather than merely differently-worded.
      * @returns A record whose `aborted` flag flips if the gate saw a rejection.
      */
-    const baseStartGate = (onContainerStarted?: () => void): { aborted: boolean } => {
+    const baseStartGate = (onContainerStarted?: () => void, syncPendingStoppedEvents?: (self: LunoraContainer) => Promise<void>): { aborted: boolean } => {
         const record = { aborted: false };
 
         const gate = async function runGate(this: { onStart: () => Promise<void> }): Promise<void> {
@@ -288,7 +288,14 @@ describe("lunoraContainer lifecycle logging", () => {
         // The base ends BOTH start entry points this way, and only
         // `startAndWaitForPorts` syncs the pending `onStop` first — so a test that
         // stubs only one of them cannot see the difference between the two paths.
-        vi.spyOn(Container.prototype, "startAndWaitForPorts").mockImplementation(gate);
+        // That sync is where a previous run's `onStop` is finally delivered, and it
+        // runs INSIDE this call, which is what `syncPendingStoppedEvents` models.
+        vi.spyOn(Container.prototype, "startAndWaitForPorts").mockImplementation(async function runWaitGate(
+            this: LunoraContainer & { onStart: () => Promise<void> },
+        ): Promise<void> {
+            await syncPendingStoppedEvents?.(this);
+            await gate.call(this);
+        });
         vi.spyOn(Container.prototype, "start").mockImplementation(gate);
 
         return record;
@@ -585,6 +592,74 @@ describe("lunoraContainer lifecycle logging", () => {
 
         expect(scheduleSpy).toHaveBeenCalledTimes(2);
         expect(probes).toHaveBeenCalledTimes(2);
+    });
+
+    it("caps the new run when the container exits while the Secrets Store is being resolved", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        // `resolveSecretsStoreEnv` is a real Secrets Store RPC on its first call,
+        // and the run identity was snapshotted BEFORE it. A container that exits
+        // in that window (a crash, `sleepAfter`, the hard timeout's own SIGTERM)
+        // leaves the snapshot saying "already running" while the base goes on to
+        // start a SECOND run — which is then never armed, and runs uncapped.
+        const definition = defineContainer({
+            defaultPort: 8080,
+            hardTimeout: "30s",
+            image: "./app",
+            readyOn: [{ path: "/ready" }],
+            secretsStore: { STRIPE_KEY: "STRIPE_SECRET" },
+        });
+        const container = runningFlagContainer(true);
+        const get = vi.fn<() => Promise<string>>(async () => {
+            container.running = false;
+
+            return "sk_live_123";
+        });
+        const instance = new LunoraContainer(fakeDurableObjectContext({ container }) as never, { STRIPE_SECRET: { get } }, definition, "transcoder");
+        const scheduleSpy = vi.spyOn(instance, "schedule").mockResolvedValue(undefined as never);
+        const probes = vi.spyOn(container, "getTcpPort");
+
+        baseStartGate(() => {
+            container.running = true;
+        });
+
+        await instance.startAndWaitForPorts();
+
+        expect(scheduleSpy).toHaveBeenCalledTimes(1);
+        expect(probes).toHaveBeenCalledTimes(1);
+    });
+
+    it("caps the new run when the base reports the previous run's stop during its own start", async () => {
+        expect.assertions(1);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        // `startAndWaitForPorts` calls `syncPendingStoppedEvents` before it starts
+        // anything, which is what finally delivers the previous run's `onStop`. It
+        // lands INSIDE the base call, after the snapshot: the exit is reported,
+        // the base starts a fresh run, and the snapshot still says "already
+        // running", so the hard timeout is never armed for it.
+        const definition = defineContainer({ defaultPort: 8080, hardTimeout: "30s", image: "./app" });
+        const container = runningFlagContainer(true);
+        const instance = new LunoraContainer(fakeDurableObjectContext({ container }) as never, {}, definition, "transcoder");
+        const scheduleSpy = vi.spyOn(instance, "schedule").mockResolvedValue(undefined as never);
+
+        baseStartGate(
+            () => {
+                container.running = true;
+            },
+            async (self) => {
+                container.running = false;
+
+                await self.onStop({ exitCode: 0, reason: "exit" });
+            },
+        );
+
+        await instance.startAndWaitForPorts();
+
+        expect(scheduleSpy).toHaveBeenCalledTimes(1);
     });
 
     it("does not re-arm the hard timeout when a start finds the container already running", async () => {

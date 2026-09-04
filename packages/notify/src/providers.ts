@@ -184,6 +184,16 @@ const failureText = (error: unknown): string | undefined => {
  * too. That is safe HERE and not at the prune site: a false positive costs a retry
  * that would probably have failed anyway, where at the prune site it would delete a
  * live subscription. `deliver` still decides pruning with the row's real `kind`.
+ *
+ * Kind-less also means CHANNEL-less. {@link attachResilience} registers one
+ * retry middleware on the engine, so this predicate now decides retry for
+ * `chat`, `webhook` and `inApp` as well as for push, and it can only read the
+ * failure text. What it matches there is `HTTP 404`/`410`, an FCM
+ * `UNREGISTERED`-family code, or prose calling a *subscription* gone — an
+ * endpoint that is not there, on any channel, which a 250 ms backoff does not
+ * bring back. The cost of a false positive stays one skipped retry, never a
+ * dropped row; the cost of the alternative was every dead device spending four
+ * POSTs and ~2.2 s before the very next line deleted it.
  */
 const isPermanentFailure = (error: unknown): boolean => isGoneError(failureText(error));
 
@@ -228,8 +238,14 @@ const perProviderCircuitBreaker = (): Middleware => {
                 };
             }
 
-            // Half-open: let exactly one send through. It either clears the
-            // counter or puts it straight back over the threshold.
+            // Half-open: drop back under the threshold so the next send is
+            // tried. It either clears the counter or puts it straight back over.
+            // Not "exactly one": the counter only rises again once a trial
+            // SETTLES, so sends that start while one is in flight pass too — a
+            // broadcast's concurrent batch probes a recovering provider with as
+            // many sends as it has in flight. Bounded and self-correcting (the
+            // first failure to land re-opens), and a shared in-flight gate would
+            // serialise every send through this middleware to get it.
             state.failures = CIRCUIT_THRESHOLD - 1;
         }
 

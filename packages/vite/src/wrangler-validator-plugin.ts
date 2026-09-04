@@ -5,7 +5,6 @@ import { readWranglerJsonc, validateWranglerProject } from "@lunora/config/cloud
 import { LunoraError } from "@lunora/errors";
 import type { Plugin } from "vite";
 
-import { reconcileBindingsSafely } from "./codegen-plugin";
 import { lunoraLine } from "./log";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
@@ -65,20 +64,13 @@ const formatError = (wranglerPath: string, problems: ReadonlyArray<string>): Err
  * validation logic to `@lunora/config` so the rules stay in lockstep with
  * the CLI (`lunora deploy`).
  *
- * It provisions before it validates, which is the order `lunora dev` uses
- * (infer → reconcile, no validation pass): the bindings this check requires are
- * the ones Lunora writes itself, so validating first killed the dev server the
- * first time a project declared a `.global()` table or a container.
- *
- * The provisioning write has to happen in `config`, not `configResolved`:
- * `@cloudflare/vite-plugin` parses `wrangler.jsonc` in its own `config` hook and
- * builds the miniflare worker options from that already-parsed object, and it
- * only starts watching the file for changes in `configureServer`. A write from
- * `configResolved` therefore lands after the parse and before the watcher exists
- * — the file on disk gains the binding, the validator passes, and the worker
- * boots without `env.DB`. `enforce: "pre"` puts this hook ahead of the Cloudflare
- * plugin's in the same phase. The reconcile is idempotent, so the codegen
- * plugin's `buildStart` one still finds nothing to change.
+ * Provisioning runs BEFORE this, in `bindingsProvisionPlugin`'s `config` hook,
+ * which is the order `lunora dev` uses (infer → reconcile, no validation pass):
+ * the bindings this check requires are the ones Lunora writes itself, so
+ * validating first killed the dev server the first time a project declared a
+ * `.global()` table or a container. That plugin is registered unconditionally and
+ * ahead of this one — the write is not optional the way the check is, and it must
+ * land in `config` to reach the worker at all (see its docblock).
  *
  * Skipped under `vite preview`, which resolves with `command: "serve"` and so
  * runs `apply: "serve"` plugins: previewing a built app must not probe Docker.
@@ -88,23 +80,8 @@ const wranglerValidatorPlugin = (options: ResolvedLunoraPluginOptions): Plugin =
 
     return {
         // `isPreview` is on the config-hook env only — never on the resolved config.
-        async config(_userConfig, env) {
+        config(_userConfig, env) {
             isPreview = env.isPreview === true;
-
-            if (isPreview) {
-                return;
-            }
-
-            await reconcileBindingsSafely(options, {
-                info: (message: string): void => {
-                    // eslint-disable-next-line no-console -- dev-server startup notice, before Vite's logger is wired up
-                    console.info(message);
-                },
-                warn: (message: string): void => {
-                    // eslint-disable-next-line no-console -- dev-server startup notice, before Vite's logger is wired up
-                    console.warn(message);
-                },
-            });
         },
         configResolved() {
             if (isPreview) {

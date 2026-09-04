@@ -203,6 +203,12 @@ const legacyIdFor = (subscription: StoredSubscription): string | undefined => {
  * silently, because unlike `unregister` there is nothing safe to return: the
  * caller's own record is what `register` echoes back, and the stored row is
  * someone else's delivery keys.
+ *
+ * The operational consequence — written up in the README's register recipe — is
+ * that an app MUST `unregister` at sign-out. `subscribeToPush` reuses the
+ * browser's existing subscription while the VAPID key is unchanged, so every
+ * account signing in on one browser derives the SAME id, and the second one is
+ * refused here until the first releases the row.
  */
 const claimRefusal = (stored: StoredSubscription | undefined, incoming: StoredSubscription): LunoraError | undefined => {
     const owner = stored?.userId ?? null;

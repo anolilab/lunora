@@ -170,6 +170,11 @@ const NO_SUBSCRIPTION_PATTERN = /no registered subscription/u;
  * provider-scoping it has on the broadcast path (`kindOfId` answers `undefined` for
  * an id this package did not mint, which tests every pattern: the documented
  * unknown-provider behaviour).
+ *
+ * It is only a LABEL. `push.send` above has already routed through `deliver`,
+ * which decided pruning from the stored row's real `kind`; nothing here deletes
+ * anything, so an id whose prefix is unknown costs at worst an outcome reported
+ * `expired` rather than `failed` — never a live subscription.
  */
 const retryOne = async (push: LunoraPush, payload: PushContent, id: string): Promise<BroadcastOutcome> => {
     try {
