@@ -1482,6 +1482,10 @@ interface WorkerOptions {
      * origin worker refuses to dispatch a paid procedure with a config error
      * (`500`) when this is absent, rather than serving it free — the paywall is
      * fail-closed by construction. See {@link X402ChargeGate}.
+     *
+     * The converse also holds: setting this without {@link WorkerOptions.functions}
+     * throws at construction. The `.x402` tags are read off that registry, so a
+     * gate with no registry would paywall nothing.
      */
     x402Charge?: X402ChargeGate;
 }
@@ -2037,9 +2041,6 @@ const logRpcDebug = (env: unknown, envelope: RpcEnvelope): void => {
     console.warn(`[lunora:rpc] ${envelope.fanOut ? "fan-out" : `shard=${envelope.shardKey ?? "(root)"}`} ${envelope.functionPath}`);
 };
 
-/** Worker options already warned about a configured `x402Charge` with no `functions` registry — the log line is once per worker, not once per RPC. */
-const warnedX402WithoutRegistry = new WeakSet<WorkerOptions>();
-
 /**
  * Resolve (and validate) the x402 charge tag for a single RPC: returns the paid
  * function's `.x402({ price })` tag, or `undefined` when the function is free.
@@ -2048,28 +2049,13 @@ const warnedX402WithoutRegistry = new WeakSet<WorkerOptions>();
  * no `x402Charge` gate configured on the worker, throws here rather than being
  * dispatched free. Extracted from `handleRpc` so the paid-procedure guard
  * doesn't inflate that hot path's cognitive complexity.
+ *
+ * A worker configured with `x402Charge` but no `functions` never reaches this —
+ * {@link assertX402Configurable} refuses to build it (see there for why the
+ * refusal belongs at construction).
  */
 const resolveX402Charge = (envelope: RpcEnvelope, options: WorkerOptions): FunctionRegistryEntry["x402"] => {
-    // The third fail-closed condition, and the one that was silent: with no
-    // `functions` registry there is nothing to read `.x402` off, so EVERY paid
-    // procedure dispatches free — no 402, no settlement, no diagnostic — under a
-    // docblock promising the paywall is fail-closed by construction. `defineApp()`
-    // always supplies the registry; a hand-rolled `createWorker({ shardDO,
-    // x402Charge })` does not (`examples/payment-demo/src/server/index.ts` is
-    // exactly that shape). Refusing every RPC would take a free app down over a
-    // paid-function config, so this warns instead — same call the identical
-    // missing-registry condition makes for `replicaReads`, and for the same stated
-    // reason: a silently inert feature flag is worse than a log line.
     if (options.functions === undefined) {
-        if (options.x402Charge !== undefined && !warnedX402WithoutRegistry.has(options)) {
-            warnedX402WithoutRegistry.add(options);
-
-            // eslint-disable-next-line no-console -- a silently inert paywall is worse than a log line
-            console.warn(
-                "[lunora] `x402Charge` has no effect without `functions` — paid (.x402) procedures are read from the function registry, so every one of them dispatches FREE.",
-            );
-        }
-
         return undefined;
     }
 
@@ -2473,10 +2459,34 @@ const detectBindingProbe = (key: string, value: unknown): HealthProbe | undefine
 };
 
 /**
+ * Refuse to build a worker whose paywall cannot see the functions it is meant to
+ * charge for.
+ *
+ * `.x402({ price })` tags live on the `functions` registry, so with no registry
+ * there is nothing to read them off: every paid procedure would dispatch FREE —
+ * no 402, no settlement, no diagnostic — under a docblock promising the paywall
+ * is fail-closed by construction. `defineApp()` always supplies the registry, so
+ * only a hand-rolled `createWorker({ shardDO, x402Charge })` can land here, and
+ * that is a configuration mistake with exactly one honest moment to report it:
+ * when the worker is built. Warning per isolate while paid dispatches sail
+ * through trades a revenue/authorization hole for a log line nobody reads.
+ */
+const assertX402Configurable = (options: WorkerOptions): void => {
+    if (options.x402Charge !== undefined && options.functions === undefined) {
+        throw new LunoraError(
+            "`x402Charge` requires `functions`: paid (.x402) procedures are read from the function registry, so without it every paid procedure would dispatch FREE. Build the worker with `defineApp()` (which supplies the registry) or pass `functions` explicitly.",
+            { code: "MISCONFIGURED", status: 500 },
+        );
+    }
+};
+
+/**
  * Build a Cloudflare Worker entry. Returns an object with `fetch` so it can
  * be re-exported directly as `export default createWorker(...)`.
  */
 const createWorker = (options: WorkerOptions): LunoraWorker => {
+    assertX402Configurable(options);
+
     // Resolved once here rather than per request: the trust policy is fixed for
     // the worker's lifetime, so a dispatch pays a single predicate call.
     const isTrustedUpstream = resolveTraceTrust(options.trustInboundTraceContext);
