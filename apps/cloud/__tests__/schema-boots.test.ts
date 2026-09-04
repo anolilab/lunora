@@ -14,9 +14,6 @@ import { describe, expect, it } from "vitest";
  * constructed, and the Worker could not boot — every route 500ed. The entire
  * unit suite passed throughout, because nothing imported the schema module for
  * its side effect.
- *
- * This is that missing import. It is one line of assertion and it is the only
- * thing standing between a schema rule and a control plane that does not start.
  */
 describe("control-plane schema", () => {
     it("constructs — every `defineSchema` rule is satisfied", async () => {

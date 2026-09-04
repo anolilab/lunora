@@ -1,16 +1,10 @@
-/**
- * Shared primitives for building Analytics Engine SQL.
- *
- * The AE SQL API takes raw text — there are no bound parameters — so the escape
- * function below IS the entire defence against injection on every read that
- * interpolates a value. That makes a second, weaker copy of it a real liability
- * rather than a tidiness complaint, which is exactly what had happened: the
- * traffic reader hardened `quote` against backslash escaping and documented why,
- * and the metrics reader beside it kept the original one-liner.
- */
+/** Shared primitives for building Analytics Engine SQL, used by every AE reader. */
 
 /**
  * Escape a string for a single-quoted SQL literal.
+ *
+ * The AE SQL API takes raw text — there are no bound parameters — so this is the
+ * entire defence against injection on every read that interpolates a value.
  *
  * Backslash FIRST, then the quote. The AE SQL API is ClickHouse, which honours
  * backslash escapes inside string literals, so doubling the quote alone leaves a
