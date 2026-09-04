@@ -242,6 +242,22 @@ describe("migrationRunner", () => {
         expect(result.applied.map((m) => m.version)).toEqual([1]);
     });
 
+    it("permits semicolons inside bracket- and backtick-quoted identifiers", async () => {
+        expect.assertions(2);
+
+        const database = await createDatabase();
+        // SQLite accepts both quotings (for MS-Access and MySQL compatibility);
+        // the lexer modelled only `'…'` and `"…"`, so a `;` inside either read as
+        // a terminator and the migration was rejected as multi-statement.
+        const bracket = new MigrationRunner(database, [{ name: "bracket", sql: `CREATE TABLE [a;b] (id INTEGER);`, version: 1 }]);
+
+        await expect(bracket.run()).resolves.toMatchObject({ applied: [{ version: 1 }] });
+
+        const backtick = new MigrationRunner(await createDatabase(), [{ name: "backtick", sql: "CREATE TABLE `c;d` (id INTEGER);", version: 1 }]);
+
+        await expect(backtick.run()).resolves.toMatchObject({ applied: [{ version: 1 }] });
+    });
+
     // Finding 2: a trailing comment after the terminator used to survive the
     // regex trim and reach D1 (which rejects content past the statement). The
     // body submitted must be the bare statement — no `;`, no trailing comment.
