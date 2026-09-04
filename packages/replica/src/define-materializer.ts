@@ -174,6 +174,12 @@ interface MaterializerRuntimeOptions {
      * for such a reducer, and no option here can make them otherwise — write the
      * reducer's default branch as `return UNHANDLED` if you want to hear about
      * unknown types.
+     *
+     * A materializer whose own watermark is already past the entry does not run
+     * for it, and does not count as declining it: an entry that was already
+     * applied has already been classified, so a catch-up replaying it for a
+     * LAGGING materializer alone never re-reports it. Without that, `"fail"`
+     * aborted a catch-up on events a snapshot-recovered sibling had processed.
      * @default "warn"
      */
     unknownEventHandling?: UnknownEventHandling;
@@ -234,45 +240,26 @@ class MaterializerRuntime {
         let count = 0;
 
         for (const entry of entries) {
-            let appliedToAny = false;
-            let anyHandled = false;
+            const { advancedIndices, anyHandled } = this.#reduceEntry(entry);
 
-            // Stage which materializers advanced; commit their watermarks only
-            // AFTER the unknown-event strategy has run without throwing (below).
-            // A throwing `"fail"` strategy must leave every watermark where it
-            // was, so a catch-and-retry re-surfaces this exact event instead of
-            // silently skipping it and under-reporting `count`. Every advance is
-            // to the same `entry.seq + 1`, so only the index needs staging.
-            const advancedIndices: number[] = [];
-
-            for (const [i, materializer] of this.#materializers.entries()) {
-                const watermark = this.#watermarks[i] ?? 0;
-
-                if (entry.seq < watermark) {
-                    continue;
-                }
-
-                // The reducer's OWN answer, not a state-identity guess: a
-                // recognised event whose reduction is a no-op returns the same
-                // state and must not be reported as unhandled (REPLICA-07).
-                if (materializer.apply(entry)) {
-                    anyHandled = true;
-                }
-
-                appliedToAny = true;
-
-                advancedIndices.push(i);
-            }
-
-            if (!appliedToAny) {
+            if (advancedIndices.length === 0) {
                 // Every materializer was already at or past this seq.
                 continue;
             }
 
-            if (!anyHandled) {
-                // May throw under the `"fail"` strategy — deliberately BEFORE
-                // the watermark commit below, so a throw leaves the watermark
-                // re-surfaceable.
+            // An entry only SOME materializers ran for was already processed by
+            // the rest on an earlier pass — and classified there. This pass
+            // cannot see whether they handled or declined it, so calling it
+            // unknown from what is left is a false positive: it is exactly the
+            // shape of a catch-up over events a snapshot-recovered sibling has
+            // applied (REPLICA-04), where `"fail"` would abort on an entry that
+            // WAS processed. Unknown means NO materializer handled the entry,
+            // not that the subset still behind it declined.
+            //
+            // May throw under the `"fail"` strategy — deliberately BEFORE the
+            // watermark commit below, so a throw leaves the watermark
+            // re-surfaceable.
+            if (!anyHandled && advancedIndices.length === this.#materializers.length) {
                 this.#handleUnknownEvent(entry);
             }
 
@@ -284,6 +271,40 @@ class MaterializerRuntime {
         }
 
         return count;
+    }
+
+    /**
+     * Run one entry through every materializer whose own watermark is behind
+     * it. Split out of {@link MaterializerRuntime.applyEntries} to keep that
+     * method's cognitive complexity within budget.
+     *
+     * Watermarks are NOT committed here: the caller stages the advance until
+     * the unknown-event strategy has run without throwing, so a throwing
+     * `"fail"` leaves this exact entry re-surfaceable for a catch-and-retry.
+     * Every advance is to the same `entry.seq + 1`, so only the index is staged.
+     * @returns The materializer indices that ran, and whether any of their
+     * reducers handled the entry.
+     */
+    #reduceEntry(entry: EventLogEntry): { advancedIndices: number[]; anyHandled: boolean } {
+        const advancedIndices: number[] = [];
+        let anyHandled = false;
+
+        for (const [index, materializer] of this.#materializers.entries()) {
+            if (entry.seq < (this.#watermarks[index] ?? 0)) {
+                continue;
+            }
+
+            // The reducer's OWN answer, not a state-identity guess: a recognised
+            // event whose reduction is a no-op returns the same state and must
+            // not be reported as unhandled (REPLICA-07).
+            if (materializer.apply(entry)) {
+                anyHandled = true;
+            }
+
+            advancedIndices.push(index);
+        }
+
+        return { advancedIndices, anyHandled };
     }
 
     /**

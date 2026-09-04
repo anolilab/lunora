@@ -1,76 +1,6 @@
 import { fnv1a64Hex } from "../../../shared/fnv1a";
+import { stableWireKey } from "../../../shared/wire-key";
 import type { TableDiff } from "./table-diff";
-
-/**
- * Recursively canonicalize a JSON-serialisable value so structurally
- * identical `data` always encodes identically regardless of object-key
- * insertion order at ANY nesting depth — not just the top level. Arrays
- * keep their order; only object keys are sorted.
- *
- * Keys are sorted by UTF-16 code unit (`Array.prototype.sort`'s default), NOT
- * by `localeCompare`. `localeCompare` resolves against the runtime's default
- * locale and ICU version, so it orders `["B", "a"]` as `["a", "B"]` on a
- * full-ICU Node build but `["B", "a"]` under code-unit ordering — meaning two
- * clients in different locales would derive DIFFERENT ids for the SAME row and
- * diverge, which is precisely the failure {@link deriveInsertId} exists to
- * prevent (REPLICA-05). Code-unit ordering is locale-independent and is the
- * ordering canonical-JSON schemes (JCS, RFC 8785) specify.
- *
- * MIGRATION: this changed derived ids more broadly than "mixed-case keys".
- * Code-unit order differs from ICU collation for punctuation and separators
- * (`a-b` / `a_b` / `aXb`) and for non-ASCII keys (`"é"` now sorts after `"z"`),
- * so in practice any row whose keys are not all lowercase ASCII letters hashes
- * differently than before. One class was never locale-dependent at all: keys
- * are sorted but then reassigned into a fresh object, and JS re-orders
- * integer-like keys ("2", "10") into ascending numeric order on any object — so
- * `JSON.stringify` emits a spec-determined order the sort never controlled.
- * Nothing in this repo persists these ids and all three exports are
- * `@experimental`, so this is a release note rather than a migration.
- *
- * The caller hands the result to `JSON.stringify`. Encoding it here by hand
- * instead — one pass, no intermediate copy — was tried and REVERTED: it measured
- * slower on nested payloads, because `JSON.stringify` is a native fast path that
- * JS-side string building cannot beat, and it meant re-implementing
- * `JSON.stringify`'s escaping and `undefined`/`toJSON` rules by hand for no gain.
- * See `__bench__/apply-diff-hotpath.bench.ts`, which keeps that comparison so the
- * conclusion stays checkable.
- *
- * NOT `shared/stable-key.ts`, deliberately — which is this repo's canonical
- * stable-JSON encoder and reaches the same code-point ordering for the same
- * locale-independence reason. It cannot be used here because it is fail-LOUD by
- * contract: it throws a `TypeError` on `bigint` and on any non-plain object
- * (`Date`, typed arrays, class instances). That is right for a cache key, where
- * a silent collision would serve one caller another's data. It is wrong here —
- * `deriveInsertId` runs on untrusted row data straight off the poke protocol, so
- * a `Date` in a payload must hash, not throw and break replication. Those are
- * genuinely different contracts, so the duplication is intentional.
- */
-const canonicalizeForHash = (value: unknown): unknown => {
-    if (Array.isArray(value)) {
-        return value.map((item) => canonicalizeForHash(item));
-    }
-
-    if (value !== null && typeof value === "object") {
-        const record = value as Record<string, unknown>;
-        const sortedKeys = Object.keys(record);
-
-        // The bare (code-unit) sort is deliberate and must NOT gain a
-        // `localeCompare` comparator — see the ordering rationale above. Sorting
-        // in place is safe because `Object.keys` returns a fresh array.
-        // eslint-disable-next-line sonarjs/no-alphabetical-sort -- code-unit order is required for cross-locale determinism; a localeCompare comparator is the bug, not the fix
-        sortedKeys.sort();
-
-        const result: Record<string, unknown> = {};
-
-        for (const key of sortedKeys) {
-            result[key] = canonicalizeForHash(record[key]);
-        }
-
-        return result;
-    }
-
-    return value;
-};
 
 /**
  * Derive a deterministic id for an id-less insert, from the row's CONTENT.
@@ -103,9 +33,42 @@ const canonicalizeForHash = (value: unknown): unknown => {
  * because it is declared `string` but arrives as untyped JSON over the poke
  * protocol — a template literal coerces a stray number into the digest instead
  * of contributing nothing to it. Covered in `apply-diff-canonical.test.ts`.
+ *
+ * ## Why the content is encoded with `stableWireKey`
+ *
+ * The rows reaching here have already been through `decodeWire`, so a column can
+ * hold a real `bigint`, `Date`, `URL`, `Map`, `Set`, `ArrayBuffer` or typed-array
+ * view. A plain JSON encoding of that decoded tree is not an identity: every
+ * value with no own enumerable key renders as `{}`, so a `Date`, a `URL`, a
+ * `Map`, a `Set`, an `ArrayBuffer` and a literal `{}` all shared ONE digest and
+ * therefore one mirror row — the upsert that this content-keying exists to make
+ * possible was overwriting unrelated rows. `NaN`/`±Infinity` collapsed onto
+ * `null` the same way, a typed array aliased the plain object with the same
+ * indices, and a `bigint` did not hash at all: `JSON.stringify` threw, which in
+ * `applyDiffToDb` happens inside `database.transaction` and discards every
+ * well-keyed row in the batch.
+ *
+ * `stableWireKey` (`shared/wire-key.ts`) is `encodeWire` composed with
+ * `stableStringify`, which is exactly the fix: the wire form separates every
+ * value the wire can carry, and the stable encoding sorts object keys by UTF-16
+ * code unit — locale-independent, so two clients in different locales still
+ * derive the SAME id for the same row (REPLICA-05; a `localeCompare` comparator
+ * is the bug, not the fix). It is also already what `subscribeToMirror` keys its
+ * `known` map with, so the keyed and un-keyed paths now agree on what "the same
+ * row content" means instead of using two different encodings.
+ *
+ * `encodeWire` still refuses what the wire itself refuses — a `RegExp`, a class
+ * instance, a cyclic graph — with a `TypeError`. Such a value cannot have
+ * arrived over the poke protocol (it could not have been encoded to send), and
+ * for a locally-built diff a loud throw beats the silent `{}` collision it used
+ * to get.
+ *
+ * MIGRATION: derived ids change for any row holding one of the values above,
+ * and are unchanged for pure-JSON rows (`encodeWire` is identity for those, and
+ * `stableStringify` agrees byte for byte with a key-sorted `JSON.stringify`).
+ * Nothing in this repo persists them and both exports are `@experimental`.
  */
-const deriveInsertId = (diff: Pick<TableDiff, "table">, data: Record<string, unknown>): string =>
-    `row-${fnv1a64Hex(`${diff.table}::${JSON.stringify(canonicalizeForHash(data))}`)}`;
+const deriveInsertId = (diff: Pick<TableDiff, "table">, data: Record<string, unknown>): string => `row-${fnv1a64Hex(`${diff.table}::${stableWireKey(data)}`)}`;
 
 /**
  * Apply a diff's changes onto `target` **in place**.
@@ -240,7 +203,7 @@ export { applyDiff, applyDiffs, applyDiffToSnapshot };
  * regression" forever. That is exactly the failure the `lintNamed` guard in
  * `@lunora/advisor`'s bench exists to prevent, so the same standard applies here.
  */
-export { canonicalizeForHash, deriveInsertId };
+export { deriveInsertId };
 // Re-exported (not redefined) so the bench and tests measure/pin the ONE
 // implementation in `shared/fnv1a.ts` that `@lunora/notify` and `@lunora/agent`
 // also call.

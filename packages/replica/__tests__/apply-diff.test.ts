@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyDiff, applyDiffs, applyDiffToSnapshot, canonicalizeForHash, deriveInsertId, fnv1a64Hex } from "../src/apply-diff";
+import { applyDiff, applyDiffs, applyDiffToSnapshot, deriveInsertId, fnv1a64Hex } from "../src/apply-diff";
 import type { RowChange, TableDiff } from "../src/table-diff";
 
 const diffOf = (changes: RowChange[], id = "diff-1"): TableDiff => {
@@ -35,7 +35,17 @@ const referenceFnv1a64 = (input: string): string => {
     /* eslint-enable no-bitwise */
 };
 
-/** Recreate the exact hash input `deriveInsertId` builds, via a canonicalizing replacer. */
+/**
+ * Recreate the hash input `deriveInsertId` builds, the obvious way: sort every
+ * object's keys by code unit and hand the copy to `JSON.stringify`.
+ *
+ * The shipped encoder is `stableWireKey`, which must agree with this byte for
+ * byte on PURE-JSON rows — that identity is what keeps ids stable for the rows
+ * that carry no wire-typed value, and it is the reason this reference is worth
+ * keeping rather than re-deriving through the code under test. Rows holding a
+ * `bigint`/`Date`/`Map`/bytes are covered in `apply-diff-canonical.test.ts`,
+ * where this reference does NOT apply.
+ */
 const canonicalize = (value: unknown): unknown => {
     if (Array.isArray(value)) {
         return value.map((item) => canonicalize(item));
@@ -168,17 +178,34 @@ describe("fnv1a64Hex", () => {
     });
 });
 
-describe("canonicalizeForHash", () => {
-    it("orders keys by code unit, so JSON.stringify is byte-stable", () => {
-        expect.assertions(3);
-        expect(JSON.stringify(canonicalizeForHash({ B: 1, a: 2 }))).toBe('{"B":1,"a":2}');
-        expect(JSON.stringify(canonicalizeForHash({ a: 2, B: 1 }))).toBe('{"B":1,"a":2}');
-        expect(JSON.stringify(canonicalizeForHash({ "a-b": 1, aXb: 3, a_b: 2 }))).toBe('{"a-b":1,"aXb":3,"a_b":2}');
+describe("the content encoding behind a derived id", () => {
+    it("orders keys by code unit, not by locale collation", () => {
+        expect.assertions(4);
+
+        // The pins that matter are the pairs a `localeCompare` comparator would
+        // order the other way round — a locale-dependent order derives DIFFERENT
+        // ids for the SAME row on two clients (REPLICA-05). Asserting against a
+        // key-sorted `JSON.stringify` also pins the byte-for-byte agreement with
+        // the reference on pure-JSON rows.
+        for (const data of [
+            { B: 1, a: 2 },
+            { a: 2, B: 1 },
+            { "a-b": 1, aXb: 3, a_b: 2 },
+            { o: { z: 1, a: { y: 1, b: 2 } }, list: [3, 1, 2] },
+        ]) {
+            const diff = diffOf([{ data, type: "insert" }]);
+
+            expect(deriveInsertId(diff, data), `mismatch for ${JSON.stringify(data)}`).toBe(expectedDerivedId(diff, data));
+        }
     });
 
-    it("sorts at every depth and preserves array order", () => {
-        expect.assertions(1);
-        expect(JSON.stringify(canonicalizeForHash({ o: { z: 1, a: { y: 1, b: 2 } }, list: [3, 1, 2] }))).toBe('{"list":[3,1,2],"o":{"a":{"b":2,"y":1},"z":1}}');
+    it("is insensitive to insertion order at every depth", () => {
+        expect.assertions(2);
+
+        const diff = diffOf([]);
+
+        expect(deriveInsertId(diff, { B: 1, a: 2 })).toBe(deriveInsertId(diff, { a: 2, B: 1 }));
+        expect(deriveInsertId(diff, { o: { z: 1, a: 2 }, list: [3, 1] })).toBe(deriveInsertId(diff, { list: [3, 1], o: { a: 2, z: 1 } }));
     });
 });
 
@@ -278,21 +305,27 @@ describe("deriveInsertId (via id-less inserts)", () => {
         expect([...a.keys()]).toStrictEqual([...b.keys()]);
     });
 
-    it("matches JSON.stringify's treatment of undefined in objects and arrays", () => {
-        expect.assertions(2);
+    it("drops undefined object fields but keeps an undefined array element distinct from null", () => {
+        expect.assertions(3);
 
-        // JSON.stringify omits undefined-valued object entries, so `{ a: 1 }`
-        // and `{ a: 1, b: undefined }` must canonicalize identically...
+        // An undefined-valued object entry is absent, exactly as `JSON.stringify`
+        // treats it, so `{ a: 1 }` and `{ a: 1, b: undefined }` are one row...
         const withUndefined = applyDiff(new Map(), diffOf([{ data: { a: 1, b: undefined }, type: "insert" }]));
         const without = applyDiff(new Map(), diffOf([{ data: { a: 1 }, type: "insert" }]));
 
         expect([...withUndefined.keys()]).toStrictEqual([...without.keys()]);
 
-        // ...while an undefined array *element* becomes null, so it stays distinct.
-        const holeData = { list: [1, undefined, 3] };
-        const holeDiff = diffOf([{ data: holeData, type: "insert" }]);
+        // ...while an undefined array ELEMENT keeps its own identity. `undefined`
+        // in an array position is one of the things the wire encodes rather than
+        // coercing (`JSON.stringify` would write `null` and lose the difference),
+        // so two rows that differ only there are two rows, not one.
+        const holeDiff = diffOf([{ data: { list: [1, undefined, 3] }, type: "insert" }]);
+        const nullDiff = diffOf([{ data: { list: [1, null, 3] }, type: "insert" }]);
 
-        expect(derivedKeys(applyDiff(new Map(), holeDiff))).toStrictEqual([expectedDerivedId(holeDiff, { list: [1, null, 3] })]);
+        expect(derivedKeys(applyDiff(new Map(), holeDiff))).not.toStrictEqual(derivedKeys(applyDiff(new Map(), nullDiff)));
+
+        // The null form is pure JSON, so it still agrees with the reference.
+        expect(derivedKeys(applyDiff(new Map(), nullDiff))).toStrictEqual([expectedDerivedId(nullDiff, { list: [1, null, 3] })]);
     });
 });
 

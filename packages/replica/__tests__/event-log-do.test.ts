@@ -317,6 +317,76 @@ describe(EventLogDO, () => {
         expect(((await smallRes.json()) as { entries: unknown[] }).entries).toHaveLength(1);
     });
 
+    /*
+     * The entry COUNT alone does not bound the body. A log of a few big events
+     * is under every count limit and still serialises to more than an isolate
+     * can hold, so the byte budget has to be checked before the payloads are
+     * parsed and the body is built — and the append side has to agree with it,
+     * or an event can be stored that no read can ever return.
+     */
+    it("refuses /state for a log whose payloads exceed the response byte budget", async () => {
+        expect.assertions(4);
+
+        const do_ = createDO();
+        // 140 payloads just under the per-event cap: each one is individually
+        // acceptable, the log is well under the 1000-entry limit, and together
+        // they are more than one response body may carry.
+        const bigPayload = { blob: "x".repeat(32_000) };
+
+        const appendRes = await doFetch(do_, "POST", "/append", {
+            events: Array.from({ length: 140 }, () => {
+                return { payload: bigPayload, type: "e" };
+            }),
+        });
+
+        expect(appendRes.status).toBe(200);
+
+        const res = await doFetch(do_, "GET", "/state");
+
+        expect(res.status).toBe(413);
+
+        const error = (await res.json()) as { error: { message: string } };
+
+        expect(error.error.message).toMatch(/\/since/);
+
+        // `/since` is the read the refusal names, so it must not have the same
+        // unbounded body — it shortens the page and reports it as truncated.
+        const page = await doFetch(do_, "GET", "/since?seq=0");
+        const data = (await page.json()) as SincePage;
+
+        expect(data.entries.length).toBeLessThan(140);
+    });
+
+    it("rejects an append whose single payload exceeds the per-event budget", async () => {
+        expect.assertions(3);
+
+        const do_ = createDO();
+
+        const tooBig = await doFetch(do_, "POST", "/append", { events: [{ payload: { blob: "x".repeat(64_000) }, type: "e" }] });
+
+        expect(tooBig.status).toBe(400);
+
+        // The per-event budget must leave every accepted event readable: an
+        // event at the limit has to fit in a response, or it would be stored
+        // and then permanently unreadable through both read routes.
+        const atLimit = await doFetch(do_, "POST", "/append", { events: [{ payload: { blob: "x".repeat(32_000) }, type: "e" }] });
+
+        expect(atLimit.status).toBe(200);
+
+        const state = await doFetch(do_, "GET", "/state");
+
+        expect(state.status).toBe(200);
+    });
+
+    it("rejects an append with no payload rather than failing the NOT NULL column", async () => {
+        expect.assertions(1);
+
+        const do_ = createDO();
+        const res = await doFetch(do_, "POST", "/append", { events: [{ type: "e" }] });
+
+        expect(res.status).toBe(400);
+    });
+
     it("rejects an out-of-range /since limit", async () => {
         expect.assertions(2);
 
