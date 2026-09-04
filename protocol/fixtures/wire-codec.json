@@ -21,6 +21,13 @@
         "duplicate entries, and all eight round-tripped an out-of-range epoch back",
         "onto the wire as a date no reference decoder will accept.",
         "",
+        "`proto-key` and `error-proto-key` are the same assertion in the two places a",
+        "wire object is rebuilt — a bare object and an `error` tag's props slot. They",
+        "are a JS-only hazard (`__proto__` is an ordinary map key in the other seven",
+        "languages, which is why all eight ports passed them before the reference did),",
+        "and they only pin round-trip fidelity here: an assignment fires the prototype",
+        "SETTER, so the field never becomes an own property and re-encodes as `{}`.",
+        "",
         "`rejected[]` is the other half: wire values every port MUST refuse to decode.",
         "It is data for the same reason the case list is — a rejection each suite",
         "hard-codes for itself is a rejection only some suites have. The base64 entries",
@@ -163,6 +170,7 @@
             "reencoded": ["$lunora.wire$", "bytes", "AQID"]
         },
         { "name": "proto-key", "encoded": { "__proto__": { "polluted": true } } },
+        { "name": "error-proto-key", "encoded": ["$lunora.wire$", "error", "Error", "boom", { "__proto__": { "polluted": true } }] },
         {
             "name": "nested-typed",
             "encoded": {
