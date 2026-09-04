@@ -69,6 +69,29 @@ const checksWorsened = (before: ReadonlyArray<CheckResult>, after: ReadonlyArray
 /** A finite number, i.e. one that can be compared and round-tripped through JSON. */
 const isScore = (value: unknown): boolean => typeof value === "number" && Number.isFinite(value);
 
+/**
+ * Structural check for a `checks` array read off disk — container *and* entries.
+ *
+ * `checksWorsened` is the only thing a baseline's checks reach: it keys a `Map`
+ * on `name` and compares `occurrences` with `>`. Validating just the container
+ * leaves the same defect one level in — a `null` entry throws there, and a
+ * non-numeric `occurrences` makes every comparison `false`, so the growth signal
+ * reads "no regression" for a baseline that is corrupt. `level` and `weight` go
+ * unchecked on purpose: nothing reads them off a baseline, and rejecting a row
+ * over a field the gate never touches would fail runs that can still be verified.
+ */
+const isCheckList = (value: unknown): boolean =>
+    Array.isArray(value) &&
+    value.every((entry: unknown) => {
+        if (typeof entry !== "object" || entry === null) {
+            return false;
+        }
+
+        const check = entry as Record<string, unknown>;
+
+        return typeof check.name === "string" && isScore(check.occurrences);
+    });
+
 /** Structural check for one row of a baseline read off disk. */
 const isProcedureRow = (value: unknown): boolean => {
     if (typeof value !== "object" || value === null) {
@@ -81,9 +104,7 @@ const isProcedureRow = (value: unknown): boolean => {
     // `compareToBaseline` hands it to `checksWorsened`, which calls `.map` on it.
     // `?? []` only covers `null`/`undefined`, so a `checks: {}` left by a
     // truncated or merge-conflicted artifact would throw inside the CI gate.
-    return (
-        typeof row.id === "string" && isScore(row.score) && typeof row.coverage === "string" && COVERAGE_VALUES.has(row.coverage) && Array.isArray(row.checks)
-    );
+    return typeof row.id === "string" && isScore(row.score) && typeof row.coverage === "string" && COVERAGE_VALUES.has(row.coverage) && isCheckList(row.checks);
 };
 
 /** Structural check for the project bucket of a baseline read off disk. */
@@ -94,7 +115,7 @@ const isProjectBucket = (value: unknown): boolean => {
 
     const bucket = value as Record<string, unknown>;
 
-    return Array.isArray(bucket.checks) && isScore(bucket.score);
+    return isCheckList(bucket.checks) && isScore(bucket.score);
 };
 
 /**
