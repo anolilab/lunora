@@ -102,7 +102,10 @@ const MAX_LISTED = 500;
  * for the same reason.
  */
 const ERROR_CODES = defineErrorCodes({
-    SIGN_UP_INVITE_REQUIRED: "sign-up is invite-only — ask an administrator for an invitation",
+    // Sentence case: `@lunora/auth-ui`'s `mapAuthError` renders a server message
+    // verbatim in the sign-up card's banner, beside better-auth's own
+    // ("Invalid email or password").
+    SIGN_UP_INVITE_REQUIRED: "Sign-up is invite-only — ask an administrator for an invitation.",
 });
 
 /** One pending or spent sign-up invitation. */
@@ -412,5 +415,41 @@ const revokeSignUpInvitation = async (auth: LunoraAuth, input: { email: string }
     await context.adapter.delete({ model: INVITATION_MODEL, where: [{ field: "email", value: normalizeEmail(input.email) }] });
 };
 
+/**
+ * Delete invitations that expired without being used, and report how many went.
+ *
+ * Only the dead ones: a spent invitation is the record of who was let in, and an
+ * unexpired one is still live, so both stay. Nothing calls this for you — an app
+ * that invites at any volume should put it on a cron; one that doesn't can leave
+ * the rows.
+ *
+ * Bounded by `limit` and therefore incremental: a backlog larger than one pass
+ * takes several. It reads a page and deletes row by row rather than issuing one
+ * ranged `deleteMany`, because a `lt` comparison against a `date` column is the
+ * kind of thing that behaves differently on each of the three adapters this
+ * package ships, and a prune job is not where that should be discovered.
+ */
+const pruneSignUpInvitations = async (auth: LunoraAuth, options: { limit?: number } = {}): Promise<number> => {
+    const context = await auth.$context;
+
+    const rows = await context.adapter.findMany<Record<string, unknown>>({
+        limit: Math.min(options.limit ?? MAX_LISTED, MAX_LISTED),
+        model: INVITATION_MODEL,
+        sortBy: { direction: "asc", field: "createdAt" },
+    });
+
+    const dead = rows.map((row) => toInvitation(row)).filter((row) => row.acceptedAt === null && row.expiresAt.getTime() <= Date.now());
+
+    for (const invitation of dead) {
+        // Sequential rather than `Promise.all`: this runs on a scheduled worker
+        // against the same store as live sign-ups, and a burst of concurrent
+        // deletes is the wrong thing to spend that budget on.
+        // eslint-disable-next-line no-await-in-loop -- see above.
+        await context.adapter.delete({ model: INVITATION_MODEL, where: [{ field: "email", value: invitation.email }] });
+    }
+
+    return dead.length;
+};
+
 export type { InviteOnlyOptions, SignUpInvitation };
-export { createSignUpInvitation, inviteOnly, listSignUpInvitations, revokeSignUpInvitation };
+export { createSignUpInvitation, inviteOnly, listSignUpInvitations, pruneSignUpInvitations, revokeSignUpInvitation };

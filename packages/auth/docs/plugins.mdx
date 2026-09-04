@@ -196,6 +196,7 @@ Three server-side helpers, exported from `@lunora/auth`:
 | `createSignUpInvitation(auth, { email, … })`    | Invite an address, or refresh an existing invitation for it. Returns the stored row.          |
 | `listSignUpInvitations(auth, { pendingOnly? })` | The 500 most recent invitations, newest first; `pendingOnly` drops the spent and the expired. |
 | `revokeSignUpInvitation(auth, { email })`       | Withdraw it.                                                                                  |
+| `pruneSignUpInvitations(auth)`                  | Delete invitations that expired unused, and report how many. Nothing calls it for you.        |
 
 ```ts
 const invite = await createSignUpInvitation(auth, {
@@ -219,6 +220,33 @@ with nothing further to write. Nothing prunes it either — a spent or expired r
 stays until you revoke it, which is also what keeps it a record of who was let in.
 `listSignUpInvitations` is capped rather than paged; past 500 rows, query the
 table directly.
+
+### From the studio
+
+With the plugin installed, the studio's **Users** page grows a **Sign-up
+invitations** section: invite an address, see who is pending / accepted /
+expired and who invited them, and revoke. It is gated on the same
+`capabilities.inviteOnly` flag the rest of the auth panels use, so a deployment
+without the plugin never shows it.
+
+The same three operations sit on the trusted admin plane
+(`AuthAdmin.createSignUpInvitation` / `listSignUpInvitations` /
+`revokeSignUpInvitation`) behind the worker's admin-token gate, and on the client
+as `listAuthSignUpInvitations` / `createAuthSignUpInvitation` /
+`revokeAuthSignUpInvitation`. `@lunora/react` exposes `useSignUpInvitations()`
+for the read. Those hand back timestamps as epoch-ms, like every other admin row;
+the module-level helpers above hand back `Date`s.
+
+Inviting from the studio still sends nothing — delivery is the app's, wherever
+the invitation is issued from.
+
+### Housekeeping
+
+Nothing prunes the table on its own. `pruneSignUpInvitations(auth)` deletes the
+invitations that expired without being used and returns the count. Spent ones
+stay, since they are the record of who was let in, and live ones obviously stay.
+It is bounded per call, so a large backlog takes several passes — put it on a
+cron if you invite at any volume.
 
 ### What an invitation is, and what it is not
 

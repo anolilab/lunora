@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAuthAdmin } from "../src/admin";
 import { createAuth } from "../src/create-auth";
-import { createSignUpInvitation, inviteOnly, listSignUpInvitations, revokeSignUpInvitation } from "../src/invite-only";
+import { createSignUpInvitation, inviteOnly, listSignUpInvitations, pruneSignUpInvitations, revokeSignUpInvitation } from "../src/invite-only";
 
 /**
  * Round-trip behaviour for `inviteOnly()` against the real better-auth runtime
@@ -152,6 +152,94 @@ describe("inviteOnly", () => {
         await expect(adminApi.createUser({ email: "ada@example.com", name: "Ada" })).resolves.toBeDefined();
     });
 
+    /**
+     * The docs claim every account-minting path is gated, but only `/sign-up/email`
+     * and `AuthAdmin.createUser` have routes to exercise here. `createOAuthUser` is
+     * the third shape — a provider callback minting an account — and it runs the
+     * same `createWithHooks`, so this is the spec that keeps the claim honest
+     * across an upstream bump.
+     */
+    it("gates an OAuth callback minting a new account", async () => {
+        expect.assertions(2);
+
+        const context = await auth.$context;
+
+        await expect(
+            context.internalAdapter.createOAuthUser(
+                { email: "stranger@example.com", emailVerified: true, name: "Ada" },
+                { accountId: "gh-1", providerId: "github" },
+            ),
+        ).rejects.toThrow(/invite-only/);
+
+        await createSignUpInvitation(auth, { email: "ada@example.com" });
+
+        await expect(
+            context.internalAdapter.createOAuthUser(
+                { email: "ada@example.com", emailVerified: true, name: "Ada" },
+                { accountId: "gh-2", providerId: "github" },
+            ),
+        ).resolves.toBeDefined();
+    });
+
+    it("stops counting users once the bootstrap window has closed", async () => {
+        expect.assertions(3);
+
+        let counts = 0;
+
+        auth = createAuth({
+            baseURL: "http://localhost",
+            database: (options: never) => {
+                const inner = memoryAdapter(database)(options);
+
+                return new Proxy(inner, {
+                    get: (target, property, receiver) => {
+                        if (property === "count") {
+                            return async (...arguments_: unknown[]) => {
+                                counts += 1;
+
+                                return (target as unknown as { count: (...a: unknown[]) => Promise<number> }).count(...arguments_);
+                            };
+                        }
+
+                        return Reflect.get(target, property, receiver) as unknown;
+                    },
+                });
+            },
+            emailAndPassword: { enabled: true },
+            plugins: [inviteOnly({ allowFirstUser: true })],
+            secret: SECRET,
+        });
+
+        await signUp("owner@example.com");
+        const afterBootstrap = counts;
+
+        await expect(signUp("one@example.com")).rejects.toThrow(/invite-only/);
+        await expect(signUp("two@example.com")).rejects.toThrow(/invite-only/);
+
+        // The first rejection observes a non-empty table and latches; the second
+        // must not ask again.
+        expect(counts).toBe(afterBootstrap + 1);
+    });
+
+    it("prunes the expired and unspent, and leaves the live and the spent alone", async () => {
+        expect.assertions(3);
+
+        await createSignUpInvitation(auth, { email: "spent@example.com", expiresInSeconds: 60 });
+        await signUp("spent@example.com");
+        await createSignUpInvitation(auth, { email: "dead@example.com", expiresInSeconds: 60 });
+        await createSignUpInvitation(auth, { email: "live@example.com", expiresInSeconds: 3600 });
+
+        vi.useFakeTimers();
+        vi.setSystemTime(Date.now() + 61 * 1000);
+
+        const pruned = await pruneSignUpInvitations(auth);
+        const left = await listSignUpInvitations(auth);
+
+        expect(pruned).toBe(1);
+        expect(left.map((row) => row.email).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["live@example.com", "spent@example.com"]);
+        expect(invitationRow("dead@example.com")).toBeUndefined();
+    });
+
     it("re-inviting refreshes the row in place rather than adding a second one", async () => {
         expect.assertions(3);
 
@@ -203,6 +291,58 @@ describe("inviteOnly", () => {
 
         expect(all.map((row) => row.email)).toStrictEqual(["pending@example.com", "expired@example.com", "accepted@example.com"]);
         expect(pending.map((row) => row.email)).toStrictEqual(["pending@example.com"]);
+    });
+
+    describe("the admin plane", () => {
+        it("reports the capability only when the plugin is installed", async () => {
+            expect.assertions(2);
+
+            await expect(createAuthAdmin(auth).capabilities()).resolves.toMatchObject({ inviteOnly: true });
+
+            const plain = createAuth({ baseURL: "http://localhost", database: memoryAdapter(database), emailAndPassword: { enabled: true }, secret: SECRET });
+
+            await expect(createAuthAdmin(plain).capabilities()).resolves.toMatchObject({ inviteOnly: false });
+        });
+
+        it("returns timestamps as epoch-ms, like every other row the plane hands back", async () => {
+            expect.assertions(3);
+
+            const invite = await createAuthAdmin(auth).createSignUpInvitation({ email: "Ada@Example.com", invitedBy: "owner" });
+
+            expect(invite.email).toBe("ada@example.com");
+            expect(typeof invite.expiresAt).toBe("number");
+            expect(invite.acceptedAt ?? null).toBeNull();
+        });
+
+        it("pages newest-first and reports the unpaginated total", async () => {
+            expect.assertions(2);
+
+            const adminApi = createAuthAdmin(auth);
+
+            vi.useFakeTimers();
+
+            for (const [index, email] of ["a@example.com", "b@example.com", "c@example.com"].entries()) {
+                vi.setSystemTime(new Date(`2026-01-0${String(index + 1)}T00:00:00Z`));
+                // eslint-disable-next-line no-await-in-loop -- the point is a distinct createdAt per row.
+                await adminApi.createSignUpInvitation({ email });
+            }
+
+            const first = await adminApi.listSignUpInvitations({ limit: 2 });
+
+            expect(first.total).toBe(3);
+            expect(first.rows.map((row) => row.email)).toStrictEqual(["c@example.com", "b@example.com"]);
+        });
+
+        it("revokes by address", async () => {
+            expect.assertions(1);
+
+            const adminApi = createAuthAdmin(auth);
+
+            await adminApi.createSignUpInvitation({ email: "ada@example.com" });
+            await adminApi.revokeSignUpInvitation({ email: "ADA@example.com" });
+
+            await expect(adminApi.listSignUpInvitations({})).resolves.toMatchObject({ total: 0 });
+        });
     });
 
     it("warns when password sign-up runs without email verification", async () => {
