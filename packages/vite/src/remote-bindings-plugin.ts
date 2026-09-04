@@ -10,8 +10,10 @@
  * `configPath` at it. All the decision + materialization logic is reused from
  * `@lunora/config` — this module only wires it into the Vite plugin lifecycle.
  *
- * Cleanup runs when Vite's dev server closes (the `buildEnd`/`closeBundle`
- * hooks), so the temp config never leaks past the dev session.
+ * Materialization and cleanup both live in the plugin lifecycle: the temp config
+ * is written from the `config` hook — after Lunora has provisioned the bindings
+ * the project's code implies — and disposed when Vite's dev server closes (the
+ * `buildEnd`/`closeBundle` hooks), so it never leaks past the dev session.
  */
 import { readProjectRemotePreference } from "@lunora/config";
 import { materializeRemoteWranglerConfig, resolveRemoteEnabled } from "@lunora/config/cloudflare";
@@ -63,6 +65,9 @@ const noopCleanup = (): void => {};
  *
  * There is no `--remote` flag on the Vite path (Vite has no Lunora CLI flags),
  * so the precedence reduces to `LUNORA_REMOTE` env > `lunora.json` `remote`.
+ *
+ * Call this from a `config` hook, never at plugin-factory time — see
+ * {@link remoteBindingsPlugin} for the two defects that timing caused.
  */
 const planViteRemoteBindings = (options: PlanViteRemoteOptions): ViteRemotePlan => {
     const readPreference = options.readPreference ?? readProjectRemotePreference;
@@ -94,9 +99,9 @@ const planViteRemoteBindings = (options: PlanViteRemoteOptions): ViteRemotePlan 
  * wins (their explicit choice).
  *
  * Pure decision only — the serve-vs-build gate lives in
- * {@link remoteBindingsConfigPlugin}'s `config` hook, because the resolved Vite
- * `command` is unknown at plugin-factory time (when this runs). An eager serve
- * check here would always read `command` as undefined and strip `configPath`.
+ * {@link remoteBindingsPlugin}'s `config` hook, because the resolved Vite
+ * `command` is unknown at plugin-factory time. An eager serve check there would
+ * always read `command` as undefined and strip `configPath`.
  */
 const withRemoteBindings = (options: CloudflarePluginOptions, plan: ViteRemotePlan): CloudflarePluginOptions => {
     if (!plan.enabled || plan.configPath === undefined) {
@@ -114,18 +119,36 @@ const withRemoteBindings = (options: CloudflarePluginOptions, plan: ViteRemotePl
 };
 
 /**
- * A `enforce: "pre"` plugin whose `config` hook injects the materialized remote
- * temp config into the cloudflare plugin's `configPath` — but only on a `vite`
- * serve, never a production build (so the deployed worker is never affected).
+ * A `enforce: "pre"` plugin that materializes the remote temp wrangler config
+ * and injects it into the cloudflare plugin's `configPath` — but only on a
+ * `vite` serve, never a production build (so the deployed worker is never
+ * affected) — then disposes the temp file when the dev server tears down.
  *
- * The deferral is the whole point: at plugin-factory time Vite has not yet told
- * us `serve` vs `build`, so the check must run in a `config` hook (where
- * `env.command` is known). It mutates the SAME options object handed to
- * `cloudflare()` in place — the cloudflare plugin reads `pluginConfig.configPath`
- * lazily inside its own `config` hook, which runs after this `enforce: "pre"`
- * one, so the injection takes effect. An eager factory-time serve check (the old
- * behaviour) always saw `command` undefined and silently dropped the path, so
- * remote bindings never activated on `vite dev`.
+ * Both halves are deferred into the `config` hook, and each deferral closes a
+ * defect of its own.
+ *
+ * The command check: at plugin-factory time Vite has not yet resolved `serve`
+ * vs `build`, so it has to run here. An eager factory-time check always read
+ * `command` as undefined and stripped `configPath`, so remote bindings never
+ * activated on `vite dev` at all.
+ *
+ * The materialization: the temp config is a COPY of `wrangler.jsonc`, and
+ * Lunora provisions the bindings the project's code implies from
+ * `wranglerValidatorPlugin`'s own `config` hook — earlier in this same phase,
+ * since both are `enforce: "pre"` and that plugin is registered first. Copying
+ * the file at factory time therefore snapshotted it BEFORE that write, and the
+ * dev worker booted against a config missing the binding Lunora had just added:
+ * a `vite dev` that logged `inferred bindings → AI (Workers AI)`, passed
+ * validation, and served a worker with no `env.AI`. That is the remote twin of
+ * the local defect the reconcile's move into `config` fixed.
+ *
+ * The injection mutates the SAME options object handed to `cloudflare()` in
+ * place — the cloudflare plugin reads `pluginConfig.configPath` lazily inside
+ * its own `config` hook, which runs after this `enforce: "pre"` one, so the
+ * injection takes effect.
+ *
+ * The disposer reads the CURRENT plan rather than a factory-time capture,
+ * because no plan exists until `config` has run.
  *
  * When remote mode was requested but nothing materialized (no eligible binding,
  * no wrangler file, …), the plan's `reason` is logged so the degradation isn't
@@ -136,12 +159,26 @@ const withRemoteBindings = (options: CloudflarePluginOptions, plan: ViteRemotePl
  * inject into: the materialized path is printed with what to do with it, rather
  * than leaving `LUNORA_REMOTE` looking like it took effect.
  */
-const remoteBindingsConfigPlugin = (options: CloudflarePluginOptions | undefined, plan: ViteRemotePlan): Plugin => {
+const remoteBindingsPlugin = (options: CloudflarePluginOptions | undefined, planOptions: PlanViteRemoteOptions): Plugin => {
+    let plan: ViteRemotePlan = { cleanup: noopCleanup, enabled: false };
+
+    const dispose = (): void => {
+        plan.cleanup();
+    };
+
     return {
+        buildEnd: dispose,
+        closeBundle: dispose,
         config(_userConfig, env) {
             if (env.command !== "serve") {
                 return;
             }
+
+            // A no-op before the first materialization; it only bites when Vite
+            // re-runs `config` on the same plugin instance, where replacing the
+            // plan without disposing would orphan the previous temp file.
+            plan.cleanup();
+            plan = planViteRemoteBindings(planOptions);
 
             if (options === undefined) {
                 if (plan.enabled && plan.configPath !== undefined) {
@@ -167,27 +204,9 @@ const remoteBindingsConfigPlugin = (options: CloudflarePluginOptions | undefined
             }
         },
         enforce: "pre",
-        name: "lunora:remote-bindings-config",
-    };
-};
-
-/**
- * A tiny Vite plugin that runs the remote temp-config disposer when the dev
- * server tears down (`buildEnd` fires on close in serve; `closeBundle` covers
- * the build/close path). Idempotent cleanup means firing on both is safe.
- */
-const remoteBindingsCleanupPlugin = (cleanup: () => void): Plugin => {
-    return {
-        buildEnd() {
-            cleanup();
-        },
-        closeBundle() {
-            cleanup();
-        },
-        enforce: "pre",
-        name: "lunora:remote-bindings-cleanup",
+        name: "lunora:remote-bindings",
     };
 };
 
 export type { PlanViteRemoteOptions, ViteRemotePlan };
-export { planViteRemoteBindings, remoteBindingsCleanupPlugin, remoteBindingsConfigPlugin, withRemoteBindings };
+export { planViteRemoteBindings, remoteBindingsPlugin, withRemoteBindings };
