@@ -314,7 +314,7 @@ extension Wire {
         case "map": return try decodeMap(value, depth: depth)
         case "set":
             guard value.count >= 3, let items = value[2] as? [Any] else { throw WireFormatError.malformed("set") }
-            return WireSet(try items.map { try decode($0, depth: depth + 1) })
+            return try decodeSet(items, depth: depth)
         case "error": return try decodeError(value, depth: depth)
         case "bytes": return try decodeBytes(value)
         case "arr":
@@ -330,7 +330,35 @@ extension Wire {
         guard value.count >= 3, let raw = value[2] as? String, raw.count <= maxBigIntDigits, isBigIntLiteral(raw) else {
             throw WireFormatError.invalidBigInt
         }
-        return WireBigInt(raw)
+        // Canonicalise on the way in. The reference decodes to a real `bigint`
+        // and re-encodes with `toString()`, so `"007"` and `"-0"` leave it as
+        // `"7"` and `"0"`. Carrying the digits verbatim re-encoded a spelling
+        // the reference never emits, and keyed a subscription differently on a
+        // value the two ends agree about.
+        return WireBigInt(normaliseBigInt(raw))
+    }
+
+    /// Decode a `set` payload, collapsing duplicates the way a real `Set` does.
+    ///
+    /// The reference builds a `new Set`, which de-duplicates by SameValueZero
+    /// and keeps the FIRST occurrence's position — the same rule as a `Map`'s
+    /// keys, so the same identity helper decides it. Carrying both copies
+    /// re-encoded a set the reference would never emit.
+    private static func decodeSet(_ raw: [Any], depth: Int) throws -> WireSet {
+        var items: [Any] = []
+        var seen: Set<String> = []
+
+        for entry in raw {
+            let item = try decode(entry, depth: depth + 1)
+
+            if let identity = mapKeyIdentity(item) {
+                if seen.contains(identity) { continue }
+                seen.insert(identity)
+            }
+
+            items.append(item)
+        }
+        return WireSet(items)
     }
 
     private static func decodeMap(_ value: [Any], depth: Int) throws -> Any {
@@ -352,7 +380,10 @@ extension Wire {
             // from identical bytes.
             if let identity = mapKeyIdentity(key) {
                 if let index = seen[identity] {
-                    entries[index] = entry
+                    // Only the VALUE. `Map.prototype.set` on a key already
+                    // present keeps the key it holds, so a later `-0` never
+                    // replaces the `0` stored under it.
+                    entries[index].value = entry.value
                     continue
                 }
 
@@ -381,10 +412,12 @@ extension Wire {
         // would collapse 0 and 1 onto false and true.
         if let number = key as? NSNumber {
             if CFGetTypeID(number) == CFBooleanGetTypeID() { return "bool:\(number.boolValue)" }
-            return number.doubleValue.isNaN ? "num:nan" : "num:\(number.doubleValue)"
+            return number.doubleValue.isNaN ? "num:nan" : "num:\(number.doubleValue + 0.0)"
         }
 
-        if let double = key as? Double { return double.isNaN ? "num:nan" : "num:\(double)" }
+        // `+ 0.0` clears the sign of a zero and changes nothing else: SameValueZero
+        // holds -0 equal to 0, while interpolating a Double keeps the sign ("-0.0").
+        if let double = key as? Double { return double.isNaN ? "num:nan" : "num:\(double + 0.0)" }
 
         return nil
     }

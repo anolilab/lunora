@@ -676,7 +676,10 @@ func decodeMap(value []any, depth int) (any, error) {
 
 		if collapses {
 			if index, duplicate := seen[identity]; duplicate {
-				entries[index] = MapEntry{Key: key, Value: decoded}
+				// Only the VALUE. `Map.prototype.set` on a key already present
+				// keeps the key it holds, so a later `-0` never replaces the
+				// `0` already stored under it.
+				entries[index].Value = decoded
 
 				continue
 			}
@@ -713,7 +716,9 @@ func mapKeyIdentity(key any) (string, bool) {
 			return "num:nan", true
 		}
 
-		return fmt.Sprintf("num:%v", typed), true
+		// `+ 0` clears the sign of a zero and changes nothing else: SameValueZero
+		// holds -0 equal to 0, while %v keeps the sign ("-0").
+		return fmt.Sprintf("num:%v", typed+0), true
 	}
 
 	return "", false
@@ -729,9 +734,31 @@ func decodeSet(value []any, depth int) (any, error) {
 		return nil, fmt.Errorf("wire-codec: set payload is %T, want array", value[2])
 	}
 
-	items, err := decodeSlice(raw, depth)
+	decoded, err := decodeSlice(raw, depth)
 	if err != nil {
 		return nil, err
+	}
+
+	// The reference builds a real Set, which de-duplicates by SameValueZero and
+	// keeps the FIRST occurrence's position — the same rule as a Map's keys, so
+	// the same identity helper decides it. Carrying both copies through re-encoded
+	// a set the reference would never emit, and left two peers of one deployment
+	// disagreeing about a set's membership.
+	items := make([]any, 0, len(decoded))
+	seen := map[string]struct{}{}
+
+	for _, item := range decoded {
+		identity, collapses := mapKeyIdentity(item)
+
+		if collapses {
+			if _, duplicate := seen[identity]; duplicate {
+				continue
+			}
+
+			seen[identity] = struct{}{}
+		}
+
+		items = append(items, item)
 	}
 
 	return Set{Items: items}, nil

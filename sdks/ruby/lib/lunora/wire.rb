@@ -222,7 +222,7 @@ module Lunora
     when "date" then decode_date(value, depth)
     when "url" then WireUrl.new(payload_of(value, "url", ::String))
     when "map" then decode_map(value, depth)
-    when "set" then WireSet.new(payload_of(value, "set", ::Array).map { |item| decode_wire(item, depth + 1) })
+    when "set" then decode_set(value, depth)
     when "error" then decode_error(value, depth)
     when "bytes" then decode_bytes(value)
     when "arr" then payload_of(value, "arr", ::Array).map { |item| decode_wire(item, depth + 1) }
@@ -284,6 +284,29 @@ module Lunora
     WireBigInt.new(Integer(raw, 10))
   end
 
+  # Decode a +set+ tag, collapsing duplicates the way a real Set does.
+  #
+  # The reference builds a +new Set+, which de-duplicates by SameValueZero and
+  # keeps the FIRST occurrence's position — the same rule as a Map's keys, so
+  # the same identity helper decides it. Carrying both copies re-encoded a set
+  # the reference would never emit.
+  def decode_set(value, depth)
+    items = []
+    seen = {}
+
+    payload_of(value, "set", ::Array).each do |entry|
+      item = decode_wire(entry, depth + 1)
+      identity = map_key_identity(item)
+
+      next if !identity.nil? && seen.key?(identity)
+
+      seen[identity] = true unless identity.nil?
+      items << item
+    end
+
+    WireSet.new(items)
+  end
+
   # Decode a +map+ tag, refusing an entry that is not a real pair.
   #
   # +map { |k, v| ... }+ destructures a 1-element entry into k="a", v=nil, so a
@@ -306,7 +329,9 @@ module Lunora
       # entries left two peers of one deployment reading a different value from
       # identical bytes.
       if !identity.nil? && seen.key?(identity)
-        pairs[seen[identity]] = [key, item]
+        # Only the VALUE. Map.prototype.set on a key already present keeps the
+        # key it holds, so a later -0 never replaces the 0 stored under it.
+        pairs[seen[identity]][1] = item
         next
       end
 
@@ -327,7 +352,10 @@ module Lunora
     when nil then "null"
     when true, false then "bool:#{key}"
     when WireBigInt then "big:#{key.value}"
-    when ::Numeric then key.is_a?(::Float) && key.nan? ? "num:nan" : "num:#{key.to_f}"
+    # SameValueZero holds -0 equal to 0, so a signed zero must not be its own
+    # key. `(-0.0).to_f.to_s` is "-0.0", which split the two; `+ 0.0` is the
+    # IEEE-754 identity that clears the sign of a zero and changes nothing else.
+    when ::Numeric then key.is_a?(::Float) && key.nan? ? "num:nan" : "num:#{key.to_f + 0.0}"
     when ::String then "str:#{key}"
     else key.equal?(UNDEFINED) ? "undefined" : nil
     end

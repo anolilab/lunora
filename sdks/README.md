@@ -141,6 +141,8 @@ change that adds or removes a capability.
 | Per-shard drain               | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Batched offline replay        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Rate-limit backoff            | ✅⁵    | ✅⁵ | ✅⁵  | ✅⁵  | ✅⁵   | ✅⁵  | ✅⁵    | ✅⁵  |
+| Row-delta merge into a list   | ❌⁷    | ❌⁷ | ❌⁷  | ❌⁷  | ❌⁷   | ❌⁷  | ❌⁷    | ❌⁷  |
+| `chunk` / `whisper` frames    | ❌⁸    | ❌⁸ | ❌⁸  | ❌⁸  | ❌⁸   | ❌⁸  | ❌⁸    | ❌⁸  |
 | Multi-tab leader election     | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Built-in HTTP / socket        | ✅⁴    | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Several sockets per client    | ❌³    | ❌³ | ❌³  | ❌³  | ❌³   | ❌³  | ❌³    | ❌³  |
@@ -196,6 +198,25 @@ after the first socket drop every `subscribeShape` view stopped receiving pokes
 for the life of the process — silently, because a shape is only ever fed by pokes
 the server had stopped sending. `shape_subscriptions_resend_after_reconnect` in
 `conformance-cases.json` is what makes the claim checkable rather than asserted.
+
+⁷ **A `delta` frame REPLACES the value here; the reference MERGES it.** All eight
+route `data` and `delta` through one arm and publish `frame.data ?? frame.delta`,
+while `@lunora/client` recognises a `{ key, op, table, row }` row change
+(`delta-merge.ts`) and splices it into the cached list by `_id`, falling back to
+replacement only when it cannot. So on the `broadcastDelta` fan-out these clients
+publish the row-change envelope itself over a query result. It is a missing
+FEATURE rather than a wire divergence — the frames are decoded correctly — and it
+is a row here rather than a conformance case because `conformance-cases.json` may
+only require behaviour every port has. Closing it is one merge implementation per
+language against the placement rule in `protocol/README.md` §5.1.1, which the
+`pageDeltaFrames` goldens already carry.
+
+⁸ **Neither frame is handled.** `chunk` (a streaming-query chunk, with the durable
+`seq`/`generation` resume watermark) and `whisper` (the ephemeral topic relay) are
+in `protocol/README.md` §5.2 and reach the default arm of every port's frame
+switch, where they are ignored. No port sends `stream`, `whisper_subscribe` or
+`whisper` either, so nothing arrives to drop; the gap is that a deployment using
+those features has no non-JS client for them.
 
 **The two argument rows are one problem with two halves, and no port can pass
 both by a rule applied at the transport.** An unset `v.optional()` must reach the
@@ -798,6 +819,125 @@ against — `protocol/fixtures/*.json` and `protocol/conformance-cases.json` —
 outside the Go module, so the test cache cannot see those files change and replays
 a PASS recorded before the edit. Without it, editing a fixture or the manifest
 leaves the go leg green without having run.
+
+### Coverage matrix — what the fixtures actually pin
+
+Derived from the reference source (`shared/wire-codec.ts`, `shared/stable-key.ts`,
+`shared/wire-key.ts`, `packages/client/src/lunora-client.ts`) rather than from
+the fixtures, so a behaviour the fixtures forgot shows up as a row with no case
+against it. The test is "would a port that got this WRONG go red", not "is it
+mentioned somewhere" — that distinction is the whole point: `rejected[]` once
+listed only null and missing payload slots, so six ports accepting a non-object
+`error` props slot was invisible to it for as long as it existed.
+
+Every row below is either pinned by a named case or listed under
+[deliberately unpinned](#deliberately-unpinned-and-why). Nothing is silent.
+
+**Codec — encode**
+
+| Reference behaviour                                            | Pinned by                                                                                                         |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| identity for `null` / bool / string / finite number            | `null`, `boolean`, `string`, `number-int`, `number-float`, `number-zero`                                          |
+| plain object and array recurse                                 | `pure-json-object`, `pure-json-array`, `empty-object`, `empty-array`, `nested-typed`                              |
+| `bigint` → `[TAG,"bigint",digits]`                             | `bigint`, `bigint-negative`, `bigint-in-object`                                                                   |
+| `NaN` / `Infinity` / `-Infinity` tags                          | `nan`, `inf`, `-inf`                                                                                              |
+| `undefined` tagged in an array, DROPPED as an object field     | `undefined-in-array`, `undefined-object-field`                                                                    |
+| `Date` → epoch routed back through the encoder                 | `date`, `date-invalid`                                                                                            |
+| `URL` → `href`                                                 | `url`                                                                                                             |
+| `Map` entries recurse, insertion order                         | `map`, `nested-map-in-set`, `map-empty`                                                                           |
+| `Set` items recurse, insertion order                           | `set`, `set-empty`, `nested-map-in-set`                                                                           |
+| `Uint8Array` 3-element, `ArrayBuffer` 4-element                | `bytes-uint8`, `bytes-arraybuffer`, `bytes-empty`                                                                 |
+| every other view carries its ctor name                         | `bytes-int8`/`-uint8clamped`/`-int16`/`-uint16`/`-int32`/`-uint32`/`-float32`/`-float64`/`-bigint64`/`-biguint64` |
+| `Error` → name, message, own props, optional `cause`           | `error`, `error-with-props`, `error-with-cause`, `error-with-null-cause`                                          |
+| `Error` drops an `undefined` own prop and an `undefined` cause | `error-prop-undefined`, `error-cause-undefined`                                                                   |
+| an array starting with the sentinel is escaped as `"arr"`      | `array-sentinel-escape`, `tag-only-array`, `unknown-tag`                                                          |
+| `__proto__` written as an own data property, never by setter   | `proto-key`                                                                                                       |
+| `MAX_DEPTH` (64) refused on the way out                        | `depth_cap_enforced` (manifest; native, no fixture can nest 65 deep readably)                                     |
+| a non-plain object (`RegExp`, a class instance) is refused     | `offline_flush_unencodable_write_settles_terminal` (manifest; native construction)                                |
+
+**Codec — decode, per tag**
+
+| Tag                    | Accepted, pinned by                                                                                                                      | Refused, pinned by                                                                                                                                                                               |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `bigint`               | `bigint*`; canonicalised: `bigint-leading-zeros`, `bigint-negative-zero`                                                                 | `bigint-payload-number`, `-missing-payload`, `-empty-string`, `-leading-plus`, `-decimal-point`, `-surrounding-space`, `-hex-prefix`, `-non-ascii-digits`; length by `over_long_bigint_rejected` |
+| `date`                 | `date`, `date-invalid`, TimeClip by `date-epoch-max`, `-past-max`, `-out-of-range`, `-non-finite`, `-fractional`, `-fractional-negative` | `date-payload-not-number`, `-string`, `-boolean`, `-object`, `-array`, `-bigint-tag`                                                                                                             |
+| `url`                  | `url`                                                                                                                                    | `url-href-not-string`, `url-href-missing`                                                                                                                                                        |
+| `map`                  | `map`, `map-empty`, `map-duplicate-keys`, `map-duplicate-nonstring-keys`, `map-duplicate-zero-sign-keys`                                 | `map-payload-not-array`, `-payload-missing`, `-entry-not-array`, `-entry-too-short`, `-entry-too-long`                                                                                           |
+| `set`                  | `set`, `set-empty`, `set-duplicate-scalars`, `set-duplicate-nonscalars`, `set-duplicate-zero-signs`                                      | `set-payload-not-array`, `-payload-missing`, `-payload-object`                                                                                                                                   |
+| `arr`                  | `array-sentinel-escape`, `arr-empty-payload`                                                                                             | `arr-payload-not-array`, `-payload-missing`, `-payload-object`                                                                                                                                   |
+| `bytes`                | the ten ctor cases above, `bytes-unknown-ctor`, `bytes-null-ctor`                                                                        | `bytes-payload-not-string`, `-payload-number`, `-outside-alphabet`, `-truncated-quantum`, `-padding-inside`, `-element-misaligned`, `-misaligned-int16`, `-misaligned-float64`                   |
+| `error`                | `error*`, allow-listed ctor by `error-with-props` (`TypeError`)                                                                          | `error-props-not-object`, `-missing-props`, `-string`, `-array`, `-number`, `-boolean`                                                                                                           |
+| `nan` / `inf` / `-inf` | `nan`, `inf`, `-inf`                                                                                                                     | —                                                                                                                                                                                                |
+| `undefined`            | `undefined-in-array`, `undefined-object-field`                                                                                           | —                                                                                                                                                                                                |
+| unknown tag            | `unknown-tag` (decodes as an ordinary array, re-encodes escaped)                                                                         | —                                                                                                                                                                                                |
+| depth                  | `depth_cap_enforced` (manifest)                                                                                                          | same                                                                                                                                                                                             |
+
+**Stable key (`stableStringify ∘ encodeWire`)**
+
+| Reference behaviour                                    | Pinned by                                                                                                                    |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| keys sorted at every depth, UTF-16 code UNIT order     | `sorted-top-level`, `sorted-nested`, `codepoint-order`, `key-order-surrogate-vs-pua`, `key_order_matches_utf16`              |
+| an empty-string key sorts first                        | `empty-string-key`                                                                                                           |
+| arrays keep order; nested objects still sort           | `arrays-keep-order`, `nested-array-of-objects`                                                                               |
+| `null` field kept, `undefined` field dropped           | `null-field-kept`, `undefined-object-field-arg`                                                                              |
+| `undefined` in an array keys as its tag, not as `null` | `undefined-in-array-arg`                                                                                                     |
+| string escaping matches `JSON.stringify`               | `string-with-quote`, `escape-set-matches-json-stringify`, `string_escaping_matches_json_stringify`                           |
+| number spelling matches `String(v)`                    | `number-exponent-forms`, `format_number_matches_ecmascript`                                                                  |
+| a negative zero keys as `-0`, distinct from `0`        | `negative-zero`                                                                                                              |
+| empty containers                                       | `empty`, `nested-empty-containers`                                                                                           |
+| wire-typed args tokenise rather than throwing          | `bigint-arg`, `date-arg`, `bytes-arg`, `map-arg-keeps-insertion-order`, `set-arg`, `url-arg`, `error-arg`, `non-finite-args` |
+| the `(functionPath, args, shardKey)` composition       | `empty_shard_key_is_omitted`                                                                                                 |
+
+**RPC and frames**
+
+| Reference behaviour                                   | Pinned by                                                                                                                                                |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| request body, with and without `shardKey`             | `rpc.request.cases`, `rpc_request_bodies`                                                                                                                |
+| `{ result }`, `commitCursor`, `lastMutationId`        | `rpc.responseOk`, `rpc_responses`                                                                                                                        |
+| `{ error }` with `code` / `message` / `data`          | `rpc.responseError`                                                                                                                                      |
+| a non-2xx body with no envelope is `INTERNAL`         | `non_2xx_without_error_envelope_fails`                                                                                                                   |
+| `connect` / `subscribe` / `unsubscribe` frames        | `clientFrames`, `client_frame_builders`                                                                                                                  |
+| `shape_subscribe`, resume across reconnect            | `shape_subscribe_frame`, `shape_subscriptions_resend_after_reconnect`                                                                                    |
+| `ack` / `data` / `error` / `resume` / `settled`       | `serverFrames`, `server_frame_consumer`                                                                                                                  |
+| poke buffering, `reset`, bounded buffers              | `poke_sequence_materialises_rows`, `poke_parts_do_not_apply_before_poke_end`, `shape_reset_poke_replaces_membership`, `pending_poke_buffers_are_bounded` |
+| batched replay, its cap and its split                 | `offline_flush_batches_multiple_writes`, `offline_flush_batch_splits_on_payload_too_large`, `batch_entry_cap_matches_protocol`                           |
+| `shape_unsubscribe` spelling                          | **unpinned** — see below                                                                                                                                 |
+| `delta` merged into a cached list, `chunk`, `whisper` | **not implemented in any port** — see the capability matrix above                                                                                        |
+
+#### Deliberately unpinned, and why
+
+Beyond the two decoder leniencies below, four rows above resolve to "no case, on
+purpose". Each is measured, not assumed:
+
+- **A lone surrogate in a stable key.** The reference escapes one (`\ud800`) via
+  `JSON.stringify`, but the fixture cannot carry the input: ruby's `JSON.parse`
+  raises `incomplete surrogate pair` on the whole FILE (taking every other
+  stable-key case down with it), and go's `encoding/json` silently substitutes
+  U+FFFD before the port's key encoder ever sees it. Two of eight cannot express
+  it, and the same two refuse the value on a real wire, so it is unreachable
+  there rather than mishandled.
+- **`Error` `name` / `message` that are not strings.** The reference is LENIENT
+  and JS-accidentally so: `[TAG,"error",7,"m",{}]` keeps a numeric `name`
+  through `defineProperty`, and `[TAG,"error","Error",7,{}]` ToString-coerces the
+  message to `"7"`. A case demanding rejection would assert against the
+  reference; one demanding acceptance would ask eight languages to reproduce two
+  JS coercions. The sibling slots (`props`, `date` epoch, `bytes` payload, `url`
+  href) are all type-CHECKED and are pinned; these two are the remainder.
+- **`Error` own props carrying `__proto__`.** The decode side handles it (an own
+  data property, never the setter), but the ENCODE side's Error branch writes
+  `properties[key] = …` with no such guard, so the prop lands on the props
+  object's prototype and re-encodes as `{}`. That is a defect in the reference,
+  not a contract to port — recorded here rather than pinned, because a fixture
+  would freeze the bug into eight languages.
+- **`shape_unsubscribe`.** All eight emit `{ id, type: "shape_unsubscribe" }`,
+  verified by reading each; a golden would need a new assertion in eight suites
+  and would catch nothing today. The `clientFrames` goldens that DO exist are the
+  ones that once diverged.
+
+The `connect-with-caps` and `pageDeltaFrames` goldens stay opt-in, as
+`ws-frames.json`'s own comment declares: a client that has not announced the
+`pageDelta` token never receives such a frame, and running those cases would hold
+it to a merge it correctly does not do.
 
 ### Two decoder leniencies the fixtures deliberately do not pin
 

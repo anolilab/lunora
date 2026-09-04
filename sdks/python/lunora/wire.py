@@ -276,7 +276,7 @@ def decode_wire(value: Any, depth: int = 0) -> Any:
             if tag == "map":
                 return _decode_map(value, depth)
             if tag == "set":
-                return WireSet([decode_wire(item, depth + 1) for item in _payload_list(value, "set")])
+                return _decode_set(value, depth)
             if tag == "error":
                 return _decode_error(value, depth)
             if tag == "bytes":
@@ -341,6 +341,33 @@ def _decode_error(value: list, depth: int) -> WireError:
     return WireError(value[2], value[3], dict(props), cause)
 
 
+def _decode_set(value: list, depth: int) -> WireSet:
+    """Decode a ``set`` tag, collapsing duplicates the way a real ``Set`` does.
+
+    The reference builds a ``new Set``, which de-duplicates by SameValueZero and
+    keeps the FIRST occurrence's position — the same rule as a ``Map``'s keys, so
+    the same identity helper decides it. Carrying both copies re-encoded a set
+    the reference would never emit.
+    """
+
+    items: list[Any] = []
+    seen: set[str] = set()
+
+    for entry in _payload_list(value, "set"):
+        item = decode_wire(entry, depth + 1)
+        identity = _map_key_identity(item)
+
+        if identity is not None:
+            if identity in seen:
+                continue
+
+            seen.add(identity)
+
+        items.append(item)
+
+    return WireSet(items)
+
+
 def _decode_map(value: list, depth: int) -> WireMap:
     """Decode a ``map`` tag, refusing an entry that is not a real pair.
 
@@ -367,7 +394,10 @@ def _decode_map(value: list, depth: int) -> WireMap:
         # from identical bytes, and re-encoded as two entries a map the
         # reference emits as one.
         if identity is not None and identity in seen:
-            pairs[seen[identity]] = (key, item)
+            # Only the VALUE. ``Map.prototype.set`` on a key already present keeps
+            # the key it holds, so a later ``-0`` never replaces the ``0`` stored
+            # under it.
+            pairs[seen[identity]] = (pairs[seen[identity]][0], item)
             continue
 
         if identity is not None:
@@ -475,6 +505,11 @@ def _map_key_identity(key: Any) -> str | None:
             # JSON.parse renders an over-large literal as +-Infinity; Python
             # keeps it exact, so collapse it the way the reference would see it.
             number = math.inf if key > 0 else -math.inf
+
+        # SameValueZero holds -0 equal to 0, so a signed zero must not be its own
+        # key. Python's repr keeps the sign (``-0.0``), which split the two.
+        if number == 0.0:
+            number = 0.0
 
         return f"num:{number!r}"
 

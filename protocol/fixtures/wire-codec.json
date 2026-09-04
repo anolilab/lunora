@@ -172,7 +172,89 @@
                 ],
                 "flag": true
             }
-        }
+        },
+        { "name": "unknown-tag", "encoded": ["$lunora.wire$", "futuretag", 1], "reencoded": ["$lunora.wire$", "arr", ["$lunora.wire$", "futuretag", 1]] },
+        { "name": "map-empty", "encoded": ["$lunora.wire$", "map", []] },
+        { "name": "set-empty", "encoded": ["$lunora.wire$", "set", []] },
+        { "name": "set-duplicate-scalars", "encoded": ["$lunora.wire$", "set", [1, 1, 2]], "reencoded": ["$lunora.wire$", "set", [1, 2]] },
+        {
+            "$comment": "SameValueZero holds -0 equal to 0, so a signed zero collapses onto an unsigned one in both a set and a map. Spelled `-0.0` rather than `-0` on purpose: a JSON parser that reads an integral literal as an integer drops the sign before the codec sees it, which would make this pass vacuously.",
+            "name": "set-duplicate-zero-signs",
+            "encoded": ["$lunora.wire$", "set", [0, -0.0, 1]],
+            "reencoded": ["$lunora.wire$", "set", [0, 1]]
+        },
+        {
+            "name": "map-duplicate-zero-sign-keys",
+            "encoded": [
+                "$lunora.wire$",
+                "map",
+                [
+                    [0, "a"],
+                    [-0.0, "b"],
+                    [1, "c"]
+                ]
+            ],
+            "reencoded": [
+                "$lunora.wire$",
+                "map",
+                [
+                    [0, "b"],
+                    [1, "c"]
+                ]
+            ]
+        },
+        {
+            "name": "set-duplicate-nonscalars",
+            "encoded": [
+                "$lunora.wire$",
+                "set",
+                [
+                    ["$lunora.wire$", "bigint", "1"],
+                    ["$lunora.wire$", "date", 0],
+                    ["$lunora.wire$", "bigint", "1"],
+                    ["$lunora.wire$", "date", 0]
+                ]
+            ],
+            "reencoded": [
+                "$lunora.wire$",
+                "set",
+                [
+                    ["$lunora.wire$", "bigint", "1"],
+                    ["$lunora.wire$", "date", 0],
+                    ["$lunora.wire$", "date", 0]
+                ]
+            ]
+        },
+        { "name": "arr-empty-payload", "encoded": ["$lunora.wire$", "arr", []], "reencoded": [] },
+        { "name": "date-epoch-max", "encoded": ["$lunora.wire$", "date", 8640000000000000] },
+        {
+            "name": "date-epoch-past-max",
+            "encoded": ["$lunora.wire$", "date", 8640000000000001],
+            "reencoded": ["$lunora.wire$", "date", ["$lunora.wire$", "nan"]]
+        },
+        { "name": "bigint-leading-zeros", "encoded": ["$lunora.wire$", "bigint", "007"], "reencoded": ["$lunora.wire$", "bigint", "7"] },
+        { "name": "bigint-negative-zero", "encoded": ["$lunora.wire$", "bigint", "-0"], "reencoded": ["$lunora.wire$", "bigint", "0"] },
+        { "name": "bytes-empty", "encoded": ["$lunora.wire$", "bytes", ""] },
+        { "name": "bytes-null-ctor", "encoded": ["$lunora.wire$", "bytes", "AQID", null], "reencoded": ["$lunora.wire$", "bytes", "AQID"] },
+        { "name": "bytes-int8", "encoded": ["$lunora.wire$", "bytes", "AQID", "Int8Array"] },
+        { "name": "bytes-uint8clamped", "encoded": ["$lunora.wire$", "bytes", "AQID", "Uint8ClampedArray"] },
+        { "name": "bytes-int16", "encoded": ["$lunora.wire$", "bytes", "AQIDBA==", "Int16Array"] },
+        { "name": "bytes-uint16", "encoded": ["$lunora.wire$", "bytes", "AQIDBA==", "Uint16Array"] },
+        { "name": "bytes-int32", "encoded": ["$lunora.wire$", "bytes", "AQIDBA==", "Int32Array"] },
+        { "name": "bytes-uint32", "encoded": ["$lunora.wire$", "bytes", "AQIDBA==", "Uint32Array"] },
+        { "name": "bytes-float64", "encoded": ["$lunora.wire$", "bytes", "AAAAAAAA8D8=", "Float64Array"] },
+        { "name": "bytes-biguint64", "encoded": ["$lunora.wire$", "bytes", "AQAAAAAAAAA=", "BigUint64Array"] },
+        {
+            "name": "error-cause-undefined",
+            "encoded": ["$lunora.wire$", "error", "Error", "boom", {}, ["$lunora.wire$", "undefined"]],
+            "reencoded": ["$lunora.wire$", "error", "Error", "boom", {}]
+        },
+        {
+            "name": "error-prop-undefined",
+            "encoded": ["$lunora.wire$", "error", "Error", "boom", { "a": ["$lunora.wire$", "undefined"], "b": 1 }],
+            "reencoded": ["$lunora.wire$", "error", "Error", "boom", { "b": 1 }]
+        },
+        { "name": "nested-map-in-set", "encoded": ["$lunora.wire$", "set", [["$lunora.wire$", "map", [["a", 1]]]]] }
     ],
     "rejected": [
         { "name": "bytes-outside-alphabet", "encoded": ["$lunora.wire$", "bytes", "not@@base64!!"] },
@@ -194,6 +276,27 @@
         { "name": "date-payload-string", "encoded": ["$lunora.wire$", "date", "abc"] },
         { "name": "date-payload-boolean", "encoded": ["$lunora.wire$", "date", true] },
         { "name": "bytes-payload-not-string", "encoded": ["$lunora.wire$", "bytes", null] },
-        { "name": "url-href-not-string", "encoded": ["$lunora.wire$", "url", ["http://x.example/"]] }
+        { "name": "url-href-not-string", "encoded": ["$lunora.wire$", "url", ["http://x.example/"]] },
+        { "name": "map-payload-not-array", "encoded": ["$lunora.wire$", "map", "xx"] },
+        { "name": "map-payload-missing", "encoded": ["$lunora.wire$", "map"] },
+        { "name": "map-entry-not-array", "encoded": ["$lunora.wire$", "map", ["ab"]] },
+        { "name": "set-payload-missing", "encoded": ["$lunora.wire$", "set"] },
+        { "name": "set-payload-object", "encoded": ["$lunora.wire$", "set", {}] },
+        { "name": "arr-payload-missing", "encoded": ["$lunora.wire$", "arr"] },
+        { "name": "arr-payload-object", "encoded": ["$lunora.wire$", "arr", {}] },
+        { "name": "url-href-missing", "encoded": ["$lunora.wire$", "url"] },
+        { "name": "bigint-payload-number", "encoded": ["$lunora.wire$", "bigint", 7] },
+        { "name": "bigint-empty-string", "encoded": ["$lunora.wire$", "bigint", ""] },
+        { "name": "bigint-leading-plus", "encoded": ["$lunora.wire$", "bigint", "+5"] },
+        { "name": "bigint-decimal-point", "encoded": ["$lunora.wire$", "bigint", "1.5"] },
+        { "name": "bigint-surrounding-space", "encoded": ["$lunora.wire$", "bigint", " 7 "] },
+        { "name": "bigint-hex-prefix", "encoded": ["$lunora.wire$", "bigint", "0x10"] },
+        { "name": "date-payload-object", "encoded": ["$lunora.wire$", "date", {}] },
+        { "name": "date-payload-array", "encoded": ["$lunora.wire$", "date", []] },
+        { "name": "date-payload-bigint-tag", "encoded": ["$lunora.wire$", "date", ["$lunora.wire$", "bigint", "1"]] },
+        { "name": "bytes-payload-number", "encoded": ["$lunora.wire$", "bytes", 1234] },
+        { "name": "bytes-misaligned-int16", "encoded": ["$lunora.wire$", "bytes", "AQ==", "Int16Array"] },
+        { "name": "bytes-misaligned-float64", "encoded": ["$lunora.wire$", "bytes", "AQID", "Float64Array"] },
+        { "name": "error-props-boolean", "encoded": ["$lunora.wire$", "error", "Error", "boom", true] }
     ]
 }

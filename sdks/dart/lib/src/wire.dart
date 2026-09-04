@@ -412,7 +412,7 @@ Object? _decodeTagged(List<Object?> value, int depth) {
       return _decodeMap(value, depth);
     case 'set':
       _require(value.length >= 3 && value[2] is List, 'set');
-      return WireSet(<Object?>[for (final item in value[2] as List<Object?>) decodeWire(item, depth + 1)]);
+      return _decodeSet(value[2] as List<Object?>, depth);
     case 'error':
       return _decodeError(value, depth);
     case 'bytes':
@@ -492,7 +492,9 @@ Object? _decodeMap(List<Object?> value, int depth) {
       final index = seen[identity];
 
       if (index != null) {
-        entries[index] = entry;
+        // Only the VALUE. `Map.prototype.set` on a key already present keeps the
+        // key it holds, so a later `-0` never replaces the `0` stored under it.
+        entries[index] = MapEntry(entries[index].key, entry.value);
         continue;
       }
 
@@ -503,6 +505,30 @@ Object? _decodeMap(List<Object?> value, int depth) {
   }
 
   return WireMap(entries);
+}
+
+/// Decode a `set` payload, collapsing duplicates the way a real `Set` does.
+///
+/// The reference builds a `new Set`, which de-duplicates by SameValueZero and
+/// keeps the FIRST occurrence's position — the same rule as a `Map`'s keys, so
+/// the same identity helper decides it. Carrying both copies re-encoded a set
+/// the reference would never emit.
+WireSet _decodeSet(List<Object?> raw, int depth) {
+  final items = <Object?>[];
+  final seen = <String>{};
+
+  for (final entry in raw) {
+    final item = decodeWire(entry, depth + 1);
+    final identity = _mapKeyIdentity(item);
+
+    if (identity != null && !seen.add(identity)) {
+      continue;
+    }
+
+    items.add(item);
+  }
+
+  return WireSet(items);
 }
 
 /// A map key's collapse identity, or `null` when it never collapses.
@@ -534,8 +560,10 @@ String? _mapKeyIdentity(Object? key) {
 
   if (key is num) {
     // `1` and `1.0` are one key to the reference, where every JSON number is a
-    // double — so they must not split on Dart's int/double distinction.
-    return key.isNaN ? 'num:nan' : 'num:${key.toDouble()}';
+    // double — so they must not split on Dart's int/double distinction. `+ 0.0`
+    // then clears the sign of a zero and changes nothing else: SameValueZero
+    // holds -0 equal to 0, while `(-0.0).toString()` is "-0.0".
+    return key.isNaN ? 'num:nan' : 'num:${key.toDouble() + 0.0}';
   }
 
   return null;

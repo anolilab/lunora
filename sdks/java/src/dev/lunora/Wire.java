@@ -4,9 +4,11 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The tagged value codec for Lunora's client↔server wire, ported from {@code shared/wire-codec.ts}.
@@ -392,10 +394,23 @@ public final class Wire {
                 return decodeMap(items, depth);
             case "set":
                 {
+                    // The reference builds a real Set, which de-duplicates by
+                    // SameValueZero and keeps the FIRST occurrence's position —
+                    // the same rule as a Map's keys, so the same identity helper
+                    // decides it. Carrying both copies re-encoded a set the
+                    // reference would never emit.
                     List<Object> decoded = new ArrayList<>();
+                    Set<String> seen = new HashSet<>();
 
                     for (Object item : asList(payload(items, "set"), "set")) {
-                        decoded.add(decode(item, depth + 1));
+                        Object value = decode(item, depth + 1);
+                        String identity = mapKeyIdentity(value);
+
+                        if (identity != null && !seen.add(identity)) {
+                            continue;
+                        }
+
+                        decoded.add(value);
                     }
 
                     return new WireSet(decoded);
@@ -470,7 +485,10 @@ public final class Wire {
                 Integer index = seen.get(identity);
 
                 if (index != null) {
-                    entries.set(index, entry);
+                    // Only the VALUE. Map.prototype.set on a key already present
+                    // keeps the key it holds, so a later -0 never replaces the 0
+                    // stored under it.
+                    entries.set(index, Map.entry(entries.get(index).getKey(), entry.getValue()));
 
                     continue;
                 }
@@ -513,7 +531,10 @@ public final class Wire {
         }
 
         if (key instanceof Number number) {
-            double numeric = number.doubleValue();
+            // `+ 0.0` clears the sign of a zero and changes nothing else:
+            // SameValueZero holds -0 equal to 0, while Double.toString keeps the
+            // sign ("-0.0"), which made a signed zero its own key.
+            double numeric = number.doubleValue() + 0.0;
 
             return Double.isNaN(numeric) ? "num:nan" : "num:" + numeric;
         }
