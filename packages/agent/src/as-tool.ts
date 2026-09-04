@@ -186,6 +186,12 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
         // Derived, replay-stable identifiers: the same parent step re-running
         // (only on failure — a completed step is memoized) reuses the same child
         // run instead of starting a second one.
+        //
+        // `childInstanceId` must satisfy Cloudflare's instance-id grammar —
+        // `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`, at most 100 characters, NO `:` — which
+        // `create` rejects deterministically. Both parts hold today (`name` is an
+        // export name, `toolCallId` a provider/AI-SDK id, both alphanumeric), so
+        // this is a note for whoever changes the shape, not a live hazard.
         const childThreadKey = `${context.threadKey}::sub::${name}::${context.toolCallId}`;
         const childInstanceId = `sub-${name}-${context.toolCallId}`;
         // The child thread inherits the PARENT's verified owner. Created without

@@ -137,13 +137,12 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     }
 
     /**
-     * Proxy entry for every `ctx.containers.<name>` fetch. Resolves the
-     * `secretsStore` bindings into `envVars` before delegating, so the values
-     * are present when the base implicitly starts the container for this
-     * request — a no-op when `secretsStore` is unset.
+     * Proxy entry for every `ctx.containers.<name>` fetch. The base starts the
+     * container for this request through {@link startAndWaitForPorts}, which is
+     * where the `secretsStore` resolution lives — a request that finds the
+     * container already healthy needs no resolution at all.
      */
     public override async containerFetch(...args: Parameters<Container<Env>["containerFetch"]>): Promise<Response> {
-        await this.resolveSecretsStoreEnv();
         await this.awaitReadinessGate();
 
         return super.containerFetch(...args);
@@ -151,14 +150,22 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
 
     /**
      * The start path `containerFetch` takes (and the one an app can call itself).
+     * Resolves the `secretsStore` bindings into `envVars` first — `doStartContainer`
+     * reads `this.envVars`, so a container started this way would otherwise boot
+     * without its Secrets Store values.
+     *
      * The base's last act is `blockConcurrencyWhile(… onStart())`, so this
      * override resumes on the far side of that gate — which is where
      * {@link afterContainerStart} has to run. See its docblock.
      */
     public override async startAndWaitForPorts(...args: Parameters<Container<Env>["startAndWaitForPorts"]>): Promise<void> {
+        const wasRunning = this.beginStart();
+
+        await this.resolveSecretsStoreEnv();
+
         await super.startAndWaitForPorts(...args);
 
-        await this.afterContainerStart();
+        await this.afterContainerStart(wasRunning);
     }
 
     /**
@@ -173,6 +180,7 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
      */
     public override async start(...args: Parameters<Container<Env>["start"]>): Promise<void> {
         const [options] = args;
+        const wasRunning = this.beginStart();
 
         if (options?.envVars === undefined) {
             await this.resolveSecretsStoreEnv();
@@ -180,7 +188,7 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
 
         await super.start(...args);
 
-        await this.afterContainerStart();
+        await this.afterContainerStart(wasRunning);
     }
 
     public override async onActivityExpired(): Promise<void> {
@@ -216,6 +224,11 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
      * {@link onStart}). Default: stop the instance. Override to drain/checkpoint
      * first. A stale schedule from a previous run, or an already-stopped
      * instance, is ignored (upstream cloudflare/containers#85).
+     *
+     * `stop()` sends SIGTERM and returns; nothing escalates to `destroy()`. The
+     * cap is therefore a signal, not a bound — a container that traps or ignores
+     * SIGTERM keeps running. Override this hook and follow the stop with a
+     * `destroy()` after a grace period if your workload needs a real ceiling.
      */
     public async onHardTimeoutExpired(payload?: { generation?: number }): Promise<void> {
         const current = await this.ctx.storage.get<number>(HARD_TIMEOUT_GENERATION_KEY);
@@ -243,13 +256,12 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
 
         this.surfaceInStudioLogs(envelope);
 
-        // The gate belongs to the run that just ended. Left in place, the next
-        // start would find it already settled and skip both `armHardTimeout` and
-        // the `readyOn` probes — so a restarted app would be proxied to before it
-        // reported ready, and its hard timeout would never be re-armed. Cleared
-        // here rather than at the top of a start so that single-flight still holds
-        // WITHIN a run: two concurrent starts must share one gate, or they each
-        // arm a schedule stamped with the same generation.
+        // The gate belongs to the run that just ended; drop it at the earliest
+        // point we learn the run is over. This hook is NOT the only place that
+        // has to do it — the base reaches `onStop` solely through
+        // `syncPendingStoppedEvents`, which `start()` never calls — so
+        // {@link beginStart} makes the same decision from the container's own
+        // `running` flag on every start path. See its docblock.
         this.lunoraReadiness = undefined;
 
         await super.onStop(parameters);
@@ -280,12 +292,14 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
      * `awaitReadinessGate` is for, and it is the seam the move cost us —
      * the in-gate placement got this for free from `blockConcurrencyWhile`.
      */
-    private async afterContainerStart(): Promise<void> {
+    private async afterContainerStart(wasRunning: boolean): Promise<void> {
         // Single-flight. The base coalesces the container start itself
         // (`startContainerIfNotRunning`) but not this tail, and it no longer runs
         // inside `blockConcurrencyWhile` — so without this, two concurrent starts
         // both read the same hard-timeout generation and each arm a schedule
         // stamped with it, leaving two live schedules that both look current.
+        // `beginStart` has already dropped a gate belonging to a finished run, so
+        // anything still here belongs to THIS run.
         const inFlight = this.lunoraReadiness;
 
         if (inFlight !== undefined) {
@@ -295,7 +309,17 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         }
 
         const gate = (async () => {
-            await this.armHardTimeout();
+            // A start that found the container already up began no new run: its
+            // hard timeout is already armed (the schedule row is SQLite and
+            // outlives the isolate), and arming again would stamp a fresh
+            // generation, orphan the live row, and push the "total lifetime" cap
+            // out by another full `hardTimeout`. The `readyOn` probes still run —
+            // this isolate has no gate on record and must not proxy on the base's
+            // healthy state alone.
+            if (!wasRunning) {
+                await this.armHardTimeout();
+            }
+
             await this.awaitContainerReadiness();
         })();
 
@@ -308,11 +332,48 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         } catch (error) {
             // Drop a failed gate rather than leaving it to reject every later
             // request forever: the base has already committed the healthy state,
-            // so the next request re-probes instead of trusting it.
-            this.lunoraReadiness = undefined;
+            // so the next request re-probes instead of trusting it. Identity-
+            // checked, so a slow gate failing for a run that has since ended
+            // cannot discard the current run's.
+            if (this.lunoraReadiness === gate) {
+                this.lunoraReadiness = undefined;
+            }
 
             throw error;
         }
+    }
+
+    /**
+     * Decide — synchronously, before anything is started — whether this start
+     * begins a NEW container run, and drop the previous run's readiness gate when
+     * it does. Returns whether the container was already running.
+     *
+     * The gate has to be keyed on the run, and `onStop` alone cannot key it:
+     * `@cloudflare/containers` reaches `onStop` only through
+     * `syncPendingStoppedEvents`, which `start()` never calls (only
+     * `startAndWaitForPorts`, `stop()` and the alarm loop do), while the monitor
+     * callback that observes a container exit merely records the state. So a
+     * `start()` in the up-to-three-minute window before the next alarm found the
+     * finished run's settled gate and skipped BOTH `armHardTimeout` and the
+     * `readyOn` probes — run 2 ran uncapped and was proxied to before it reported
+     * ready. A `hardTimeout` firing its own SIGTERM lands in exactly that window.
+     *
+     * The mirror case is why the answer is not "always re-arm": a start that finds
+     * the container already up begins no run, and re-arming there moves the cap
+     * (see {@link afterContainerStart}).
+     *
+     * Read before any `await`, so two concurrent starts of a stopped container
+     * both observe `false` and the second joins the first's gate instead of
+     * arming a second schedule.
+     */
+    private beginStart(): boolean {
+        const wasRunning = this.ctx.container?.running === true;
+
+        if (!wasRunning) {
+            this.lunoraReadiness = undefined;
+        }
+
+        return wasRunning;
     }
 
     /**
@@ -349,10 +410,16 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
             this.lunoraReadiness = this.awaitContainerReadiness();
         }
 
+        const gate = this.lunoraReadiness;
+
         try {
-            await this.lunoraReadiness;
+            await gate;
         } catch (error) {
-            this.lunoraReadiness = undefined;
+            // Identity-checked: a gate that fails late must not discard the one a
+            // newer run has since installed.
+            if (this.lunoraReadiness === gate) {
+                this.lunoraReadiness = undefined;
+            }
 
             throw error;
         }
