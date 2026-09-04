@@ -1,3 +1,26 @@
+## @lunora/react [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.80...@lunora/react@1.0.0-alpha.81) (2026-09-04)
+
+### ⚠ BREAKING CHANGES
+
+* **adapters:** `@lunora/angular`'s `VoiceAgentOptions.threadKey` is now `(() => string) | string`
+and is resolved every time a call opens, matching the reactive-args form `liveQuery` and
+`paginatedQuery` already take. A plain string keeps working; a `Signal<string>` is now honoured
+instead of silently pinning every later call to the thread the component started on.
+
+Tests: each harness now records the URL it was asked for, and the endpoint, the auto-teardown
+wiring, the `error`/`interrupted` frames, `onclose`/`onerror`, teardown-while-mic-pending, duplicate
+`startCall`, `sendText` on a closed socket and `toggleMute` before a call are asserted in all five
+ports — 31 voice tests to 91.
+
+
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **adapters:** credential the voice socket and stop five copies drifting ([#597](https://github.com/anolilab/lunora/issues/597)) ([8bc777c](https://github.com/anolilab/lunora/commit/8bc777cfa5d7f2e8908a3a96f6463098283886ae))
+
 ## @lunora/react [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.79...@lunora/react@1.0.0-alpha.80) (2026-09-04)
 
 ### ⚠ BREAKING CHANGES
