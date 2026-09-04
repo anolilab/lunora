@@ -1,3 +1,301 @@
+## @lunora/seed [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/seed@1.0.0-alpha.106...@lunora/seed@1.0.0-alpha.107) (2026-09-04)
+
+### ⚠ BREAKING CHANGES
+
+* the KV mutual-exclusion error is raised with code `BAD_REQUEST`
+instead of `INTERNAL`, and it now fires from the admin `putValue` path as well as
+`createKv`.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(vite): materialize the remote wrangler config after bindings are provisioned
+
+`planViteRemoteBindings` ran at plugin-factory time, before any Vite hook. The temp
+config it writes is a copy of `wrangler.jsonc` with `"remote": true` injected on each
+eligible binding, and Lunora provisions the bindings the project's code implies from
+`wranglerValidatorPlugin`'s `config` hook — so the copy was always taken one write too
+early. Under `LUNORA_REMOTE` the cloudflare plugin was then pointed at a snapshot that
+predated the provisioning, and the dev worker booted without the binding that had just
+been written. This is the remote twin of the local defect that moving the reconcile into
+`config` closed; that move did not reach this path.
+
+Observed live against a real account on an example app: `vite dev` logged
+"inferred bindings -> AI (Workers AI) (written to .../wrangler.jsonc)", the file on disk
+gained `"ai": { "binding": "AI" }`, the materialized temp config did not, and a probe
+route reported `["DB","LUNORA_ADMIN_TOKEN","SHARD","WORKER_ENV"]`. After the change the
+same probe reports `["AI","DB","LUNORA_ADMIN_TOKEN","SHARD","WORKER_ENV"]` and the temp
+config carries `"ai": { "binding": "AI", "remote": true }`.
+
+Materialization now happens in the `config` hook, which is registered after the
+validator's and therefore runs after it (both are `enforce: "pre"`). The build gate moves
+with it, so `vite build` no longer writes a temp config it never uses. Cleanup folds into
+the same plugin because the disposer cannot be captured before the plan exists; a
+re-entered `config` hook disposes the previous generation rather than orphaning its file.
+* `remoteBindingsConfigPlugin` and `remoteBindingsCleanupPlugin` are
+replaced by a single `remoteBindingsPlugin(options, planOptions)`, which takes the plan
+inputs rather than an already-materialized plan.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(notify): close the register-side takeover and the dead-device blackout
+
+`ctx.push.register()` upserted a subscription with `user_id = ?` in the `DO UPDATE SET` list, so
+registering an endpoint already stored for someone else re-owned it. The id is derived from the
+endpoint, i.e. a caller-controlled key — the same precondition `unregister` was given an atomic
+`deleteOwned` for. Registering a victim's endpoint with garbage keys under your own id took their
+device dark (an encryption failure is not a gone signal, so it was never pruned either) and handed
+you `unregister` over it. Both stores now refuse a put that would move a row to a different owner —
+D1 in the `ON CONFLICT … DO UPDATE`'s own `WHERE`, memory with no await between check and write —
+and the legacy-prefix eviction inside `put`, a DELETE on a different primary key the guarded upsert
+never sees, is scoped the same way (with the CLAIM predicate, so an anonymous device that signs in
+still loses its old row).
+
+FCM dead tokens were never detected as gone. The provider forwards `body.error.message` only, and
+FCM HTTP v1 keeps `UNREGISTERED` in `error.details[].errorCode`, which it drops — so the codes
+`isGoneError` matched could not arrive and every uninstalled device stayed registered forever, was
+re-POSTed on every broadcast, and counted `failed`. Match the `NOT_FOUND` prose the transport
+actually emits, still scoped to FCM.
+
+A gone subscription also cost four POSTs and ~2.2 s of backoff before being deleted, because
+`retryMiddleware` had no `shouldRetry`; those attempts then fed a circuit breaker whose counter is
+closure state shared by every channel, so two dead devices blacked out `chat`/`webhook`/`inApp` for
+30 s — and the second device's result became `Circuit open`, which is not a gone signal, so it
+survived to repeat it. Permanent failures are no longer retried, and the breaker is per provider and
+ignores them; it still opens for five consecutive transient failures.
+
+On the retry path a gone receipt was reported `failed`, so the pruned id went back into `failedIds`
+and the narrower retry could only throw `no registered subscription` until the queue dead-lettered
+an unsubscribe. It settles as `expired` now, kinded by the id's own prefix, as does an id whose row
+is already gone.
+
+Seeded `email` columns used faker's `free_email` default, so generated rows carried deliverable
+gmail/hotmail/yahoo addresses; seed a staging database, run any user-driven mail flow, and the app
+mails real strangers from its own verified domain. They are built on the RFC 2606 reserved
+`example.com` now — goldens regenerated, since an explicit provider also shifts faker's draw.
+
+Also: the mail capture sink logs when it has nowhere to record instead of returning a success-shaped
+`uncaptured` in silence; the inbound `verify` gate proceeds only on `true`/`undefined` rather than
+on anything but `false`; the queue recipe and `idempotencyKey` docs say that consumer-side dedupe is
+the only mechanism, since no transport can reach Resend's `Idempotency-Key` request header; the
+studio seed host answers `409 fk-parents-empty` (a code its client already decoded and nothing ever
+sent) instead of returning children whose fabricated parents it drops; and `flagshipProvider`
+refuses a literal empty `authToken` as the thunk path already did.
+* `SubscriptionStore.put` must refuse a put that would move a row to a different
+owner, and `ctx.push.register()` now rejects with `FORBIDDEN` for an endpoint registered to another
+user. `@lunora/seed` generates `@example.com` addresses, changing every seeded email value.
+`handleSeedRequest` returns 409 instead of 200 for a table whose foreign-key parents were not
+supplied in `existingIds`.
+
+Test doubles were the reason two of these went unnoticed and are tightened here: the notify mock
+engine now wires the real resilience middleware through the same `attachResilience` production
+uses (a bare `createNotification` exercised none of it), the mock push provider answers each
+provider's real gone phrasing per kind, and `fakeD1` models the `ON CONFLICT … DO UPDATE … WHERE`
+refusal and each of the three `DELETE` owner predicates instead of overwriting and deleting
+unconditionally.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(workflow): spawn compensations under an id the engine accepts
+
+The Workflows engine validates an instance id on `create` before it does anything
+else: at most 100 characters matching `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`. `:` is not in
+that class, so `ctx.parallel`'s group-saga rollback — spawned as
+`<childId>:compensate` — was rejected on every attempt, in every deployment. The
+rejection is not a duplicate-instance error, so the durable step burned its whole
+retry budget, the catch in `compensateCompleted` logged it and moved on, and the
+group failed with the completed branches never rolled back. A `chargeCard` branch
+with `compensateWith: "refundCard"` took the money and refunded nothing.
+
+The five unit tests hard-coded the `:compensate` id against a `create` double that
+accepted any string, and the workerd smoke never spawns, so nothing caught it. The
+double now applies the engine's own id check, and a new test asserts that every id
+the package mints from a Cloudflare-shaped parent — children and compensations
+alike — satisfies that grammar, so a future suffix carrying a `:` fails there.
+
+Only the suffix is ours to constrain. The parent id it is appended to belongs to
+the host, and `@lunora/platform-node` runs this same orchestrator on
+`@visulima/workflow`, whose `generateRunId` mints `<definitionId>:<uuid>` and
+accepts no override. A test pins that a host-issued parent id the Cloudflare engine
+would refuse still fans out and compensates, so the Cloudflare grammar stays in the
+assertion that belongs to Cloudflare rather than leaking into the portable path.
+
+Also in this change:
+
+- `ctx.parallel` reads an attached child's terminal `status()` instead of waiting
+  for an event that has already been consumed. `instance.restart()` on a parent
+  that had fanned out wipes the parent's step cache AND its event map, so the
+  re-run spawn steps re-attach to children that already signalled; the joins then
+  hibernated for the branch timeout (24 hours by default) and failed the group with
+  the finished children's results sitting unread on their handles. The status read
+  costs nothing on a first spawn — only the attach path performs it — and also
+  recovers a join whose signal was lost for any other reason.
+
+- `isDuplicateInstanceError` no longer misses an `already_exists` spelling. The
+  predicate cannot be pinned against a live engine (miniflare never rejects a
+  duplicate create at all, so the attach branch is unreachable under workerd), and
+  the test now records why along with the separator variants it does defend.
+* a group-saga compensation instance is now created as
+`<childId>-compensate`, not `<childId>:compensate`. Nothing could observe the old
+id — the engine rejected it — but an app that derived the name itself must update.
+The `lunora:spawn:*` durable step now memoizes a branch outcome rather than the
+child id; a parent already in flight replays the old string and joins as before.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(container): key the readiness gate on the run, not on onStop
+
+`lunoraReadiness` was cleared only in `onStop`, but the base reaches that hook
+solely through `syncPendingStoppedEvents` — which `start()` never calls (only
+`startAndWaitForPorts`, `stop()` and the alarm loop do), while the monitor callback
+that observes a container exit merely records the state. So an explicit `start()`
+inside the up-to-three-minute window before the next alarm found the finished run's
+settled gate and returned early, skipping BOTH `armHardTimeout` and the `readyOn`
+probes: run 2 had no hard timeout at all and was proxied to before it reported
+ready. The hard timeout's own SIGTERM lands squarely in that window, so the
+runaway-cost backstop disarmed itself on the way out.
+
+The mirror case is why "always re-arm" is not the answer: a no-op `start()` on an
+already-running container — an isolate recycled under a live run, or a periodic
+"ensure started" call — begins no new run, and re-arming stamped a fresh generation
+that orphaned the live schedule row and pushed the total-lifetime cap out
+indefinitely.
+
+Both now hang off one synchronous observation taken before anything is started:
+the container was not running (a new run — drop the old gate, arm, probe) or it was
+(no new run — probe for this isolate, leave the armed schedule alone). Read before
+any await, so two concurrent starts of a stopped container still share one gate.
+The two sites that drop a failed gate are identity-checked, so a gate failing late
+for a run that has since ended cannot discard the current run's.
+
+The existing test called `onStop` by hand between the two starts, encoding exactly
+the assumption that does not hold; it now lets the run end the way the base does.
+The start double stubs both entry points and flips the container's `running` flag
+the way `doStartContainer` does, so a no-op start is distinguishable from a first
+start.
+
+Also in this change:
+
+- `startAndWaitForPorts()` resolves the Secrets Store env. It was the only start
+  entry that did not, despite being the path `containerFetch` routes through and the
+  one an app can call itself; `doStartContainer` reads `this.envVars`, so a container
+  started that way booted without its `secretsStore` values. Resolution moves out of
+  `containerFetch`, which now performs it only when a start is actually needed.
+
+- `hardTimeout` is documented as what it is. `stop()` sends SIGTERM and does not
+  escalate to `destroy()`, so a container that traps or ignores the signal outlives
+  its cap; the docs promised it would "never run longer than an hour, busy or not".
+  The hook docblock names the escalation an app can add.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* build: regenerate the lockfile against the released manifest versions
+
+`alpha`'s release commits bumped `@lunora/observability` to alpha.56 and
+`@lunora/platform-cloudflare` to alpha.32 without updating `pnpm-lock.yaml`, so
+every CI job fails in its setup step: the workflows install with
+`--frozen-lockfile`, which refuses a lockfile whose specifiers disagree with the
+manifests. That turns roughly a dozen checks red at once, including both
+required ones, for reasons that look unrelated to the change under review.
+
+Regenerated rather than hand-edited — a text-merged lockfile passes locally and
+fails on the merge ref CI actually builds.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(flags): reword a comment that tripped the secret-entropy rule
+
+The literal env-var reference in the new test's comment reads as a high-entropy
+string to `no-secrets`, which fails `lint:eslint` at --max-warnings=0. The
+comment says the same thing without spelling the identifier.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix: close the id, run-identity and provisioning gaps left open
+
+`ctx.parallel`'s group-saga rollback was still unreachable, gated on length instead of the colon.
+The engine's create-time id check tests `id.length > 100` BEFORE the character class, and a branch
+id is caller-controlled right up to that ceiling — an explicit `branch(…, { id })`, or a derived
+`<parentId>-c<n>` under a long host-issued parent. Adding `-compensate` puts the rollback over it,
+`create` rejects, `compensateCompleted` logs and continues, and a completed branch that took payment
+is never refunded. An over-long compensation id now folds back under the ceiling, keeping a digest
+of the whole child id and the readable suffix. The regression test's short synthetic parent only
+ever exercised the character class; it says so now, and a 90-character branch id covers the rest.
+
+`codeTool` and `agent.asTool()` could never be used together. `codeTool` gives each script step a
+tool-call id of `${toolCallId}:${step.id}` and takes any tool in its map, so `agentAsTool`'s
+`sub-<name>-<toolCallId>` carried a colon into `create`, which rejects it — not as a duplicate, so
+it rethrows and the per-step `step.do` burns its retries. The call id is hashed into the instance id
+now (the thread key still carries it raw), and the docblock that called this "a note for whoever
+changes the shape, not a live hazard" is gone. The agent binding double applies the engine's own id
+check, which is what let this pass unnoticed.
+
+The attach path returned a child's outcome straight into the durable step cache while only the event
+path bounded it. Both channels cap at 1 MiB, and a step return the host cannot serialise aborts the
+instance rather than failing one branch, so the attach path bounds it the same way.
+
+Provisioning was reachable only through `validateWrangler`. `reconcileBindingsSafely` lived in the
+wrangler validator's `config` hook, so turning the CHECKS off — an option whose name promises
+nothing about writes — took the write back out of `config`, and the Cloudflare plugin parsed
+`wrangler.jsonc`, and `remoteBindingsPlugin` copied it, before the binding existed: the exact
+missing-`env.DB` boot that hook was moved to fix. It is its own unconditionally registered plugin
+now, still `enforce: "pre"` and still ahead of the remote-bindings copy.
+
+A re-entrant Vite `config` pass left `configPath` naming a deleted file: cleanup unlinked temp A, a
+new plan wrote temp B, and `withRemoteBindings` read the A still on the options object as a
+user-supplied path and returned unchanged. The plugin tracks what it injected, so only a path it did
+not write counts as the user's.
+
+The container's `beginStart()` snapshot was a TOCTOU across two awaits — a Secrets Store RPC, and
+the base's own pre-start work. A container exiting in that window let a new run start with
+`wasRunning === true`, so the hard timeout was never armed and (via `start()`) the readiness probes
+were skipped too: run 2 ran uncapped and was proxied to before it reported ready. The snapshot moved
+past the secrets resolution, and an `onStop` observed ACROSS the base call now demotes it. What
+remains uncovered is an exit inside `start()`'s own base call, which never syncs pending stop
+events — documented on `beginStart`, along with the hard timeout being a one-shot signal that
+nothing re-sends to a container ignoring SIGTERM.
+
+Docs and comments that overstated a guarantee: the mail queue recipe promised exactly-once for a
+mark written after the send and read from an eventually-consistent store; `register()`'s owner guard
+hard-fails browser account switching, because `subscribeToPush` reuses the browser's subscription
+and every account derives the same id, so the README now makes the sign-out `unregister` part of the
+recipe rather than an aside; the half-open breaker lets through every send already in flight, not
+"exactly one"; `isPermanentFailure` is channel-less as well as kind-less and now governs retry for
+chat/webhook/inApp; the duplicate-instance matcher is unreachable LOCALLY, not in production, which
+is why `createOrAttach` exists at all.
+* `flagshipProvider({ authToken: "" })` now throws at construction instead of
+evaluating flags against their checked-in defaults — a deployment reading an unset secret straight
+off `env` fails to boot rather than failing closed in silence. Omit `authToken` for an
+unauthenticated endpoint, or pass a thunk. A sub-agent child run's instance id is now
+`sub-<name>-<digest>` rather than `sub-<name>-<toolCallId>`, so a run in flight across the upgrade
+starts a second child instead of re-attaching.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* chore(deps): regenerate the lockfile after merging alpha
+
+The merge took the branch's lockfile, which still carried the released-version
+specifiers the new root overrides replace.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* make saga compensation, container restarts and push ownership actually work ([#592](https://github.com/anolilab/lunora/issues/592)) ([6fae07a](https://github.com/anolilab/lunora/commit/6fae07a056a6c93fea1fc11aa88c8d35ee031019))
+
+
+### Dependencies
+
+* **@lunora/testing:** upgraded to 1.0.0-alpha.146
+
 ## @lunora/seed [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/seed@1.0.0-alpha.105...@lunora/seed@1.0.0-alpha.106) (2026-09-04)
 
 
