@@ -74,6 +74,43 @@ used to probe which endpoints exist. Register with the same `userId` you
 unregister with; devices registered anonymously (`userId` absent) all share the
 one anonymous scope and get no separation from this check.
 
+`register` is scoped the same way, because an unguarded upsert closes only half
+of that: re-registering a victim's endpoint under your own `userId` (with keys of
+your choosing) takes their device dark just as effectively, and hands you
+`unregister` over it. An endpoint already registered to another user is
+**refused** (`FORBIDDEN`) rather than re-owned — unowned rows stay claimable (the
+device signed in), and a device that legitimately changes hands unregisters as
+its current owner first.
+
+**Unregister on sign-out, or the next account on that browser cannot register.**
+`subscribeToPush` REUSES the browser's existing subscription while the VAPID key
+is unchanged, so the endpoint — and the store id derived from it — is the same
+for every account that signs in on that browser. Without the sign-out call, user
+B's `register` hits user A's row and throws `FORBIDDEN`; since `register` is
+usually fire-and-forget on sign-in, that surfaces as a failed mutation and B
+silently never receives a push. Release the row where you clear the session:
+
+```ts
+// lunora/registerDevice.ts — the same file as above
+export const unregisterDevice = mutation.input({ endpoint: v.string() }).mutation(async ({ args: { endpoint }, ctx }) => {
+    await ctx.push.unregister(webPushId(endpoint), { userId: ctx.auth?.userId });
+});
+```
+
+```ts
+// wherever you sign out. `subscription.endpoint` is on the object subscribeToPush returned.
+await client.mutation("unregisterDevice", { endpoint: subscription.endpoint });
+await auth.signOut();
+```
+
+Keep the browser subscription itself (don't call `unsubscribeFromPush`) unless
+the user is turning notifications off: dropping it re-prompts for permission on
+the next sign-in. Note that only the owner can release a row — B cannot
+`unregister` A's — so a sign-out that never runs (the tab was closed, the session
+expired) leaves the next account refused until A signs in again on that browser
+or the row is removed server-side. On a browser several people sign in on, treat
+the sign-out unregister as required, not as cleanup.
+
 ## Send (from an action)
 
 Notification sends are external I/O, so they belong in **actions** (the `notify_send_outside_action` advisor lint enforces this):
@@ -85,7 +122,7 @@ export const announce = action.input({ title: v.string(), body: v.string() }).ac
 });
 ```
 
-`broadcast` reuses the engine's retry + circuit-breaker middleware and prunes subscriptions the push service reports as gone (HTTP 404/410, FCM `UNREGISTERED`). A single targeted send:
+`broadcast` reuses the engine's retry + circuit-breaker middleware and prunes subscriptions the push service reports as gone (Web Push HTTP 404/410; FCM's `NOT_FOUND` answer for a dead token, plus the `UNREGISTERED`/`NotRegistered` codes a legacy transport sends). A single targeted send:
 
 ```ts
 await ctx.push.send(subscriptionId, { title: "Hi", body: "…" });
@@ -179,7 +216,7 @@ client-supplied data, so the facade enforces two boundaries:
 
 Every send is counted onto `ctx.metrics` and failures onto `ctx.log` for you — codegen threads the request's logger/metrics into `ctx.notify` (`createNotify(notifyConfig, env, { log, metrics })`), so there is nothing to wire. Two low-cardinality metric series feed the durable metric history + trend charts:
 
-- **`notify.send`** `{ channel, provider, status }` — attempted sends. `status` is `accepted` (the provider took it), `failed`, or `gone` (endpoint unregistered — 404/410 / FCM `UNREGISTERED` — and pruned). A single send counts 1; a **broadcast aggregates** into one count per `(provider, status)` bucket (value = the bucket's count), not one per recipient — each `ctx.metrics.count` is a durable write.
+- **`notify.send`** `{ channel, provider, status }` — attempted sends. `status` is `accepted` (the provider took it), `failed`, or `gone` (endpoint unregistered — Web Push 404/410, or FCM's `NOT_FOUND` for a dead token — and pruned). A single send counts 1; a **broadcast aggregates** into one count per `(provider, status)` bucket (value = the bucket's count), not one per recipient — each `ctx.metrics.count` is a durable write.
 - **`notify.skipped`** `{ channel, reason }` — a send that reached nobody: `no-subscriptions-matched` (empty broadcast) or `channel-not-configured`.
 
 A **failed** send also emits one `ctx.log.warn` line carrying the error and, for push, the subscription/user ids — trace-correlated to the enclosing action and durably archived. Successes and prunes stay off the log; failure logs stay per-recipient even in a broadcast (they have no durable write).

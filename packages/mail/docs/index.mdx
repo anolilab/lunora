@@ -109,7 +109,20 @@ export default {
         const mailer = createMailer({ apiKey: env.RESEND_API_KEY, from: "Acme <noreply@acme.test>" });
 
         for (const message of batch.messages) {
+            const { idempotencyKey } = message.body;
+
+            // The dedupe is YOURS to do. Nothing downstream does it for you: no
+            // transport forwards the key to the provider (Resend dedupes on an
+            // `Idempotency-Key` REQUEST header, which the provider client does not
+            // expose), so this store is the only thing standing between a
+            // redelivery and a second copy of the same email.
+            if (await env.SENT.get(idempotencyKey)) {
+                message.ack();
+                continue;
+            }
+
             await consumeQueuedSend(mailer, message.body);
+            await env.SENT.put(idempotencyKey, "1", { expirationTtl: 86_400 });
             message.ack();
         }
     },
@@ -117,9 +130,19 @@ export default {
 ```
 
 Each queued send carries a stable `idempotencyKey` — a caller-supplied one, or one
-generated at enqueue time — so a redelivered message can be deduped against your
-own store even though the ack above already narrows retries to the message that
-actually failed.
+generated at enqueue time. The `ack` narrows retries to the message that actually
+failed, and the key is what stops a redelivery from mailing a second copy: skip
+the store and the window where the provider accepted the send but the worker died
+before acking sends a duplicate every time.
+
+It narrows that window rather than closing it, and nothing on this path can close
+it. The mark is written after the provider accepted the message, so a crash in
+between still redelivers and resends, and KV is eventually consistent — a
+redelivery seconds later can miss a mark that was written. Delivery is
+at-least-once end to end. If a second copy is unacceptable, claim the key in a
+strongly-consistent store (a Durable Object, or a D1 row) _before_ the send and
+release it on failure; that trades a possible duplicate for a possible unsent
+message, which is the only other side of this coin.
 
 ## Receiving email
 

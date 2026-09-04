@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
-import type { Notification, NotificationProviders, NotificationResult, Provider, PushPayload, Result } from "@visulima/notification";
+import type { Middleware, Notification, NotificationProviders, NotificationResult, Provider, PushPayload, Result } from "@visulima/notification";
 import { createNotification } from "@visulima/notification";
-import { circuitBreakerMiddleware, retryMiddleware } from "@visulima/notification/middleware";
+import { retryMiddleware } from "@visulima/notification/middleware";
 import type { FcmConfig } from "@visulima/notification/providers/fcm";
 import { fcmProvider } from "@visulima/notification/providers/fcm";
 import type { WebPushConfig } from "@visulima/notification/providers/web-push";
@@ -10,6 +10,7 @@ import { webPushProvider } from "@visulima/notification/providers/web-push";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { SsrfResolution } from "../../../shared/ssrf-resolve";
 import { resolveHostSsrf } from "../../../shared/ssrf-resolve";
+import { isGoneError } from "./subscriptions/normalize";
 
 /**
  * The web-push `endpoint` of a routed target, or `undefined` when the target is
@@ -157,6 +158,113 @@ const mergeGroupResults = (webPush: Result<NotificationResult>, fcm: Result<Noti
     return data === undefined ? { success: true } : { data, success: true };
 };
 
+/**
+ * The failure text of a middleware `Result`, or `undefined` when there is none to
+ * read. Providers answer with an `Error` (the engine wraps a provider's own
+ * failure in a `NotificationError` whose message carries the provider text
+ * verbatim); a bare string is accepted for the same reason `Result.error` is typed
+ * `unknown`.
+ */
+const failureText = (error: unknown): string | undefined => {
+    if (error instanceof Error) {
+        return error.message;
+    }
+
+    return typeof error === "string" ? error : undefined;
+};
+
+/**
+ * Whether a failed send can never succeed for this recipient — the device
+ * unsubscribed or its token was revoked. The facade is about to DELETE the
+ * subscription for exactly this signal (see `isGoneError`), so it is the one
+ * failure class that is provably not worth a second attempt.
+ *
+ * Deliberately kind-less: a middleware sees a provider id, not the stored
+ * subscription, so the FCM-specific patterns are tested against a web-push failure
+ * too. That is safe HERE and not at the prune site: a false positive costs a retry
+ * that would probably have failed anyway, where at the prune site it would delete a
+ * live subscription. `deliver` still decides pruning with the row's real `kind`.
+ *
+ * Kind-less also means CHANNEL-less. {@link attachResilience} registers one
+ * retry middleware on the engine, so this predicate now decides retry for
+ * `chat`, `webhook` and `inApp` as well as for push, and it can only read the
+ * failure text. What it matches there is `HTTP 404`/`410`, an FCM
+ * `UNREGISTERED`-family code, or prose calling a *subscription* gone — an
+ * endpoint that is not there, on any channel, which a 250 ms backoff does not
+ * bring back. The cost of a false positive stays one skipped retry, never a
+ * dropped row; the cost of the alternative was every dead device spending four
+ * POSTs and ~2.2 s before the very next line deleted it.
+ */
+const isPermanentFailure = (error: unknown): boolean => isGoneError(failureText(error));
+
+/** Consecutive non-permanent failures on one provider before its circuit opens. */
+const CIRCUIT_THRESHOLD = 5;
+
+/** How long a provider's circuit stays open before a single trial send. */
+const CIRCUIT_RESET_MS = 30_000;
+
+/**
+ * A circuit breaker keyed PER PROVIDER that does not count a permanently-gone
+ * recipient as evidence the service is down.
+ *
+ * Both halves replace real behaviour of the engine's own `circuitBreakerMiddleware`,
+ * which cannot express either: its counter is closure state of the single instance
+ * registered on the engine, shared by every channel, and it counts any `!success`.
+ * So two dead devices in a row (whose 4th and 5th attempts are consecutive
+ * failures) opened ONE breaker and every `chat`/`webhook`/`inApp` send in that
+ * isolate answered `Circuit open` for the next 30 seconds — and the second dead
+ * device's own result became `Circuit open` too, which is not a gone signal, so it
+ * was never pruned and came back on the next broadcast to do it again. A retry job
+ * over known-failing ids reproduced it every redelivery.
+ *
+ * A breaker is for a provider that is DOWN. An unsubscribed browser is not that.
+ */
+const perProviderCircuitBreaker = (): Middleware => {
+    const states = new Map<string, { failures: number; openedAt: number }>();
+
+    return async (context, next) => {
+        const state = states.get(context.provider) ?? { failures: 0, openedAt: 0 };
+
+        states.set(context.provider, state);
+
+        if (state.failures >= CIRCUIT_THRESHOLD) {
+            if (Date.now() - state.openedAt < CIRCUIT_RESET_MS) {
+                return {
+                    error: new LunoraError(
+                        "SERVICE_UNAVAILABLE",
+                        `@lunora/notify: circuit open for provider "${context.provider}" after ${CIRCUIT_THRESHOLD.toString()} consecutive failures`,
+                    ),
+                    success: false,
+                };
+            }
+
+            // Half-open: drop back under the threshold so the next send is
+            // tried. It either clears the counter or puts it straight back over.
+            // Not "exactly one": the counter only rises again once a trial
+            // SETTLES, so sends that start while one is in flight pass too — a
+            // broadcast's concurrent batch probes a recovering provider with as
+            // many sends as it has in flight. Bounded and self-correcting (the
+            // first failure to land re-opens), and a shared in-flight gate would
+            // serialise every send through this middleware to get it.
+            state.failures = CIRCUIT_THRESHOLD - 1;
+        }
+
+        const result = await next(context);
+
+        if (result.success) {
+            state.failures = 0;
+        } else if (!isPermanentFailure(result.error)) {
+            state.failures += 1;
+
+            if (state.failures >= CIRCUIT_THRESHOLD) {
+                state.openedAt = Date.now();
+            }
+        }
+
+        return result;
+    };
+};
+
 /** Options for {@link routingPushProvider}. */
 export interface RoutingPushOptions {
     /**
@@ -287,6 +395,37 @@ export interface ResolvedProviders {
     webPush?: WebPushConfig;
 }
 
+/** Options for {@link attachResilience}. */
+export interface ResilienceOptions {
+    /**
+     * Retry backoff base, in ms (default 250 — the engine's own). Only a TEST
+     * double passes anything else: a mock provider that fails on purpose would
+     * otherwise spend the real ~2 s of backoff per recipient to prove which
+     * results are retried, which is the one thing the delay says nothing about.
+     */
+    retryBaseDelay?: number;
+}
+
+/**
+ * Attach the engine's resilience middleware — retry with backoff, then a circuit
+ * breaker to shed load when a push service is down.
+ *
+ * Exported so a TEST engine is wired by this function rather than by a copy of
+ * it. `buildEngine` is the only production caller; a double that assembles a bare
+ * `createNotification(...)` exercises none of this, which is how a broadcast could
+ * spend four POSTs and two seconds on a subscription already known to be dead and
+ * nothing noticed.
+ */
+export const attachResilience = (engine: Notification, options: ResilienceOptions = {}): Notification =>
+    engine
+        // `shouldRetry` is the difference between "the push service hiccuped" and
+        // "this device is gone". Without it every 410/404 cost the full retry
+        // budget — four POSTs and ~2.2 s of backoff each — against an endpoint the
+        // very next line of the facade deletes, and those attempts were what fed
+        // the breaker below.
+        .use(retryMiddleware({ baseDelay: options.retryBaseDelay, shouldRetry: (error) => !isPermanentFailure(error) }))
+        .use(perProviderCircuitBreaker());
+
 /**
  * Assemble the `@visulima/notification` engine from resolved channel configs and
  * attach the reused retry + circuit-breaker middleware. Only edge-safe channels
@@ -315,11 +454,5 @@ export const buildEngine = (resolved: ResolvedProviders): Notification => {
         providers.webhook = resolved.webhook;
     }
 
-    const engine = createNotification(providers);
-
-    // Reuse the engine's own resilience middleware (Phase 3): retry with backoff,
-    // then a circuit breaker to shed load when a push service is down.
-    engine.use(retryMiddleware()).use(circuitBreakerMiddleware());
-
-    return engine;
+    return attachResilience(createNotification(providers));
 };

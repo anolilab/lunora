@@ -5,6 +5,8 @@ description: "Deterministic, schema-driven seeding: realistic fake data generate
 
 `@lunora/seed` fills a Lunora database with realistic fake data derived from your `defineSchema`. It reads every table, maps each column to a generator (field-name aware: a `string` column named `email` becomes an email, `firstName` a first name), inserts foreign-key parents before their children, and lets you override any value.
 
+Generated addresses always sit on the RFC 2606 reserved domain `example.com`, which accepts no mail — a seeded row can never turn into real email to a real stranger when a welcome job, a digest or an auth verification runs over it. Override the column when you need a domain of your own.
+
 Generation is deterministic. Generation is deterministic in `seed` alone for every column except the time-valued ones: a `number` column named like a timestamp (`createdAt`, `expiresAt`, …) is generated relative to the wall clock, so two runs with the same `seed` differ unless you also pin `now` (`--now` on the CLI). Ids are unaffected. Pin the `(seed, now)` pair and a plan is byte-identical across runs and machines. It is built on a vendored, input-hashed generator (a rebuilt [`copycat`](https://github.com/supabase-community/copycat)) over [`@faker-js/faker`](https://fakerjs.dev).
 
 ## Install

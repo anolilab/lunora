@@ -40,12 +40,33 @@ export const toQueuedPayload = (options: SendOptions): QueuedSend => {
  * to a configured `Mailer.send()`. Use this inside your Worker's `queue()`
  * handler.
  *
+ * DEDUPE IS THE CONSUMER'S JOB, and this helper does not do it. The payload's
+ * `idempotencyKey` was minted once at enqueue time so it survives redelivery, but
+ * nothing downstream reads it: no transport forwards it to the provider (Resend
+ * dedupes on an `Idempotency-Key` REQUEST header, which the provider client offers
+ * no hook for — its `headers` field becomes message headers in the body). A
+ * consumer that only acks is correct for the failure the ack covers and sends a
+ * duplicate for the one it does not: the provider accepted the message and the
+ * worker died before acking.
+ *
+ * The recipe below NARROWS that window; it does not close it, and nothing on
+ * this path can. The mark is written after the provider accepted the message, so
+ * a crash in between still redelivers and resends, and a KV read is eventually
+ * consistent — a redelivery seconds later can miss a mark that was written.
+ * Delivery is at-least-once end to end. An app that must not double-send needs a
+ * strongly-consistent mark taken BEFORE the send (a Durable Object or D1 row
+ * claimed by this key, released on failure), and even then the send-then-crash
+ * window is only ever traded for a send-that-may-not-have-happened one.
+ *
  * ```ts
  * export default {
  *   queue: async (batch, env) => {
  *     const mailer = createMailer({ apiKey: env.RESEND_API_KEY, from: "..." });
  *     for (const message of batch.messages) {
+ *       const { idempotencyKey } = message.body;
+ *       if (await env.SENT.get(idempotencyKey)) { message.ack(); continue; }
  *       await consumeQueuedSend(mailer, message.body);
+ *       await env.SENT.put(idempotencyKey, "1", { expirationTtl: 86_400 });
  *       message.ack();
  *     }
  *   },

@@ -270,7 +270,7 @@ const startChannelRun = async (
 
     // An absent or empty id gives no dedup key. Otherwise hash the RAW id: the
     // hex digest is always instance-id-safe and fixed-length (`<channel>-` + 16
-    // chars, well under Cloudflare's 64-char limit) while keeping the whole id
+    // chars, well under Cloudflare's 100-character cap) while keeping the whole id
     // significant, where sanitize-then-truncate discarded everything past the
     // cutoff. FNV-1a is a checksum, not a cryptographic hash — an attacker who
     // can choose a delivery id can find a collision — so the integrity of this

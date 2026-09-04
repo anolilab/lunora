@@ -103,8 +103,22 @@ const raiseNonRetryable = (message: string, cause: unknown, NativeNonRetryableEr
     return convertNonRetryableError(nonRetryable, NativeNonRetryableError);
 };
 
-/** Matches Cloudflare Workflows' "instance already exists" rejection (hoisted). */
-const DUPLICATE_INSTANCE = /already[\s-]?exists/iu;
+/**
+ * Matches Cloudflare Workflows' "instance already exists" rejection (hoisted).
+ *
+ * Deliberately separator-agnostic. The local harness cannot pin the exact
+ * production text — miniflare's `WorkflowBinding.create` never rejects a
+ * duplicate id at all (it calls `stub.init(...)` unconditionally and
+ * `Engine.init` returns early for an instance that already has metadata), so
+ * the attach branch below is unreachable LOCALLY: in Node and under
+ * `wrangler dev`/workerd alike. Production Workflows does reject it, which is
+ * the whole reason `createOrAttach` exists — so this is a gap in what the
+ * harness can prove, never evidence that the branch is dead code. That makes
+ * the *shape* of the message the only thing we can defend, and a
+ * `already_exists` / `already-exists` spelling must not read as a transient
+ * failure and cost the caller its whole retry budget.
+ */
+const DUPLICATE_INSTANCE = /already[\s_-]?exists/iu;
 
 /**
  * Whether a `WorkflowBinding.create()` rejection is a duplicate-instance-id

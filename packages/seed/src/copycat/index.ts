@@ -36,6 +36,22 @@ const resolveCount = (input: unknown, range: Range): number => {
     return seeded(["__count__", input], () => faker.number.int({ max, min }));
 };
 
+/**
+ * Domain every generated address is built on.
+ *
+ * Faker's default is one of `gmail.com` / `hotmail.com` / `yahoo.com`, so seeded
+ * rows carried DELIVERABLE addresses belonging to real strangers: seed a staging
+ * database (or `lunora seed --prod`), let any user-driven mail flow run — a welcome
+ * job, a digest, an `@lunora/auth` verification on a seeded account — and the app
+ * mails them from its own verified domain. `example.com` is reserved by RFC 2606
+ * for exactly this, and accepts no mail.
+ *
+ * No opt-out knob: a caller who genuinely wants a specific domain overrides the
+ * column, which is what every README and docs example already does
+ * (`users: { email: ({ index }) => ... }`).
+ */
+const RESERVED_EMAIL_DOMAIN = "example.com";
+
 /** Character-class probes for {@link copycat.scramble}, hoisted to avoid per-call recompilation. */
 const LOWER_ALPHA = /[a-z]/;
 const UPPER_ALPHA = /[A-Z]/;
@@ -55,7 +71,7 @@ const copycat = {
     },
 
     email(input: unknown): string {
-        return seeded(input, () => faker.internet.email().toLowerCase());
+        return seeded(input, () => faker.internet.email({ provider: RESERVED_EMAIL_DOMAIN }).toLowerCase());
     },
 
     firstName(input: unknown): string {

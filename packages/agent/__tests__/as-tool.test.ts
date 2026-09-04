@@ -21,6 +21,17 @@ const DEPTH_EXCEEDED = /delegation depth/u;
 const TURN_CAP_PATTERN = /Sub-agent "research" hit its turn cap \(maxTurns\)/u;
 
 /**
+ * The Workflows engine's own instance-id check, mirrored so the double rejects
+ * what `binding.create` rejects: at most 100 characters (tested FIRST) matching
+ * `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`, in which `:` is not allowed. A double that
+ * accepts any string is why a sub-agent id carrying a `:` looked fine here and
+ * failed on every attempt in production.
+ */
+const ENGINE_INSTANCE_ID_PATTERN = /^\w[\w-]*$/u;
+
+const engineRejectsInstanceId = (id: unknown): boolean => typeof id !== "string" || id.length > 100 || !ENGINE_INSTANCE_ID_PATTERN.test(id);
+
+/**
  * A mock `AGENT_<NAME>` Workflow binding: `create` records the params + id, and
  * `get(id)` returns an instance whose `status()` walks a scripted sequence
  * (models a run progressing to a terminal state) and whose thread the caller
@@ -43,6 +54,11 @@ const mockAgentBinding = (statuses: ReadonlyArray<string>, output?: unknown): Ag
     return {
         created,
         create: async (options) => {
+            if (engineRejectsInstanceId(options?.id)) {
+                // The engine's exact rejection: `throw new WorkflowError("Workflow instance has invalid id")`.
+                throw new Error("Workflow instance has invalid id");
+            }
+
             created.push({ id: options?.id, params: options?.params });
 
             return { id: options?.id ?? "generated-id" };
@@ -115,9 +131,31 @@ describe(agentAsTool, () => {
 
         expect(output).toBe("the answer");
         expect(binding.created).toHaveLength(1);
-        // Derived from the parent's threadKey + toolCallId — same inputs replay identically.
-        expect(binding.created[0]?.id).toBe("sub-research-call_9");
+        // Derived from the parent's threadKey + toolCallId — same inputs replay
+        // identically. The call id is hashed into the instance id (the thread key
+        // keeps it raw), so no caller's id shape can make it unacceptable to `create`.
+        expect(binding.created[0]?.id).toBe("sub-research-97062c995ebfee41");
         expect(binding.created[0]?.params).toStrictEqual({ depth: 1, input: "find X", threadKey: "thread-1::sub::research::call_9" });
+    });
+
+    it("starts the child under an id the engine accepts when the caller is codeTool", async () => {
+        const binding = mockAgentBinding(["complete"]);
+        const { run } = runWithChildThread([{ content: "the answer", role: "assistant", seq: 3 }]);
+
+        // `codeTool` hands each script step a per-step tool-call id built as
+        // `${context.toolCallId}:${step.id}` (pinned by code-tool.test.ts's
+        // `toolCallId: "call_1:a"`), and its `tools` map takes any `AnyAgentTool`
+        // — `agentAsTool`'s result included. Spliced straight into the instance
+        // id, that colon is rejected by `create`; the rejection is not a
+        // duplicate, so it rethrows, the enclosing `step.do` burns its retries,
+        // and `codeTool` + `asTool` never worked together at all.
+        const tool = agentAsTool({ description: "Delegate research.", name: "research", wait: immediate });
+        const output = await tool.execute({ prompt: "find X" }, context({ AGENT_RESEARCH: binding }, run, { toolCallId: "call_9:fetch" }));
+
+        expect(output).toBe("the answer");
+        expect(binding.created[0]?.id).toStrictEqual(expect.stringMatching(ENGINE_INSTANCE_ID_PATTERN));
+        // The thread key is not an instance id and keeps carrying the raw call id.
+        expect(binding.created[0]?.params).toStrictEqual({ depth: 1, input: "find X", threadKey: "thread-1::sub::research::call_9:fetch" });
     });
 
     it("polls the child run's status until it reaches a terminal state", async () => {
@@ -216,7 +254,7 @@ describe(agentAsTool, () => {
 
         expect(result.stopped).toBe("final");
         expect(journal.invoked).toStrictEqual(["llm:turn:0", "tool:research:call_9", "llm:turn:1"]);
-        expect(binding.created[0]?.id).toBe("sub-research-call_9");
+        expect(binding.created[0]?.id).toBe("sub-research-97062c995ebfee41");
 
         const toolRow = [...runtime.messages.values()].find((message) => message.role === "tool" && message.toolName === "research");
 

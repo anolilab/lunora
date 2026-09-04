@@ -30,6 +30,7 @@ import { decodeGlobalRow, runD1GlobalTableMigrations } from "./d1-ctx-db";
 // helper is a security-relevant injection-defense primitive that must have a
 // single definition, not byte-identical copies that can drift.
 import { quoteIdentifier } from "./dialect";
+import { TRACKING_TABLE_NAME } from "./migration-runner";
 
 /** A table plus its current row count. */
 interface GlobalTableInfo {
@@ -124,8 +125,11 @@ const clamp = (value: number, min: number, max: number): number => Math.min(Math
  * companions (`__agg_`/`__rank_`/`__fts_` infixes, the `__cdc_log`, and the
  * `__lunora_*` migration bookkeeping). Everything else — the schema's `.global()`
  * tables and any external/auth tables — is fair game.
+ *
+ * The migration-tracking table is spelled from {@link TRACKING_TABLE_NAME}
+ * rather than hard-coded, so renaming it there cannot leave it browsable here.
  */
-const INTERNAL_TABLE = /^sqlite_|^_cf_|^d1_|^__cdc|^__lunora_|__agg_|__rank_|__fts_/u;
+const INTERNAL_TABLE = new RegExp(`^sqlite_|^_cf_|^d1_|^__cdc|^__lunora_|^${TRACKING_TABLE_NAME}$|__agg_|__rank_|__fts_`, "u");
 
 const isInternalTable = (name: string): boolean => INTERNAL_TABLE.test(name);
 

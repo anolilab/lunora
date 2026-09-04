@@ -301,16 +301,10 @@ const proxyCheckPlugin: () => Plugin;
 
 Re-exported from `@lunora/config` — signature tracked at its source.
 
-### `remoteBindingsCleanupPlugin` (const)
+### `remoteBindingsPlugin` (const)
 
 ```ts
-const remoteBindingsCleanupPlugin: (cleanup: () => void) => Plugin;
-```
-
-### `remoteBindingsConfigPlugin` (const)
-
-```ts
-const remoteBindingsConfigPlugin: (options: CloudflarePluginOptions | undefined, plan: ViteRemotePlan) => Plugin;
+const remoteBindingsPlugin: (options: CloudflarePluginOptions | undefined, planOptions: PlanViteRemoteOptions) => Plugin;
 ```
 
 ### `resolveOverlayOption` (const)

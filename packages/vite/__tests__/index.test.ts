@@ -19,6 +19,21 @@ export const schema = defineSchema({
 });
 `;
 
+/** The same schema plus a `.global()` table, which implies the D1 binding Lunora provisions itself. */
+const SCHEMA_WITH_GLOBAL = `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    messages: defineTable({
+        channelId: v.id("channels"),
+        text: v.string(),
+    }).shardBy("channelId"),
+
+    users: defineTable({
+        email: v.string(),
+    }).global(),
+});
+`;
+
 const VALID_WRANGLER = `{
     "name": "lunora-app",
     "compatibility_date": "2026-04-07",
@@ -88,6 +103,33 @@ describe("index", () => {
             const names = plugins.map((plugin) => plugin.name);
 
             expect(names).not.toContain("lunora:wrangler-validator");
+        });
+
+        it("provisions the bindings the schema implies even when validateWrangler is false", async () => {
+            expect.assertions(2);
+
+            // Provisioning is not validation: `@cloudflare/vite-plugin` parses
+            // `wrangler.jsonc` in its own `config` hook and builds the miniflare
+            // worker from that parsed object, so a binding written later never
+            // reaches the worker that boots. Registering the reconcile with the
+            // validator meant `validateWrangler: false` — an option whose name
+            // promises only that checks are skipped — brought back the exact
+            // missing-`env.DB` boot this fixed.
+            writeFileSync(join(workdir, "lunora", "schema.ts"), SCHEMA_WITH_GLOBAL, "utf8");
+
+            const plugins = lunora({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false });
+
+            expect(plugins.map((plugin) => plugin.name)).toContain("lunora:bindings-provision");
+
+            for (const plugin of plugins) {
+                const hook = plugin.config;
+                const run = typeof hook === "function" ? hook : hook?.handler;
+
+                // eslint-disable-next-line no-await-in-loop -- Vite runs `config` hooks in registration order, one at a time
+                await run?.call({} as never, {} as never, { command: "serve", mode: "development" } as never);
+            }
+
+            expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toMatch(/d1_databases/u);
         });
 
         it("includes the overlay plugin when overlay is true", async () => {

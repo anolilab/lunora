@@ -36,6 +36,8 @@
 
 `@lunora/seed` populates a Lunora database with realistic, production-like fake data derived from your `defineSchema`. It introspects every table, maps each field to a generator (field-name aware — a `string` column called `email` becomes an email address, `firstName` a first name, and so on), resolves foreign keys by inserting parent tables before their children, and lets you override any value.
 
+Generated addresses always sit on the RFC 2606 reserved domain `example.com`, which accepts no mail — a seeded row can never turn into real email to a real stranger when a welcome job, a digest or an auth verification runs over it. Override the column when you need a domain of your own.
+
 Generation is **deterministic**: it is built on a vendored, input-hashed generator (a rebuilt [`copycat`](https://github.com/supabase-community/copycat)) layered over [`@faker-js/faker`](https://fakerjs.dev). Generation is deterministic in `seed` alone for every column except the time-valued ones: a `number` column named like a timestamp (`createdAt`, `expiresAt`, …) is generated relative to the wall clock, so two runs with the same `seed` differ unless you also pin `now` (`--now` on the CLI). Ids are unaffected. Pin the `(seed, now)` pair and a plan is byte-identical across runs and machines.
 
 Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.

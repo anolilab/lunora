@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import { isDuplicateInstanceError } from "@lunora/workflow";
 import { jsonSchema } from "ai";
 
+import { fnv1a64Hex } from "../../../shared/fnv1a";
 import { agentBindingName } from "./naming";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
 import isPositiveInteger from "./positive-integer";
@@ -186,8 +187,23 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
         // Derived, replay-stable identifiers: the same parent step re-running
         // (only on failure — a completed step is memoized) reuses the same child
         // run instead of starting a second one.
+        //
+        // `childInstanceId` must satisfy Cloudflare's instance-id grammar —
+        // `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`, at most 100 characters, NO `:` — which
+        // `create` rejects deterministically, and not as a duplicate, so the
+        // rejection rethrows and the enclosing `step.do` burns its retries.
+        //
+        // The `toolCallId` is therefore hashed rather than spliced in: it is not
+        // always the provider's own alphanumeric call id. `codeTool` gives each
+        // script step `${context.toolCallId}:${step.id}` and its `tools` map
+        // takes any `AnyAgentTool`, so `codeTool({ research: agent.asTool() })`
+        // produced `sub-research-call_abc:fetch` and could never start a child.
+        // The digest is fixed-length too, which leaves the export name as the
+        // only variable part of the 100-character budget. It keeps the raw id
+        // out of the instance id only — `childThreadKey` is not an instance id
+        // and stays readable.
         const childThreadKey = `${context.threadKey}::sub::${name}::${context.toolCallId}`;
-        const childInstanceId = `sub-${name}-${context.toolCallId}`;
+        const childInstanceId = `sub-${name}-${fnv1a64Hex(context.toolCallId)}`;
         // The child thread inherits the PARENT's verified owner. Created without
         // one it was ownerless, so `agents:agentThread`/`agentMessages` admitted
         // any caller who knew the (derivable) key — a sub-thread of an owned

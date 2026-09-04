@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { isBareIdentifier } from "../../../../shared/bare-identifier";
 import type { StoredSubscription, SubscriptionFilter, SubscriptionKind, SubscriptionStatus, SubscriptionStore } from "../types";
-import { legacyIdFor } from "./normalize";
+import { claimRefusal, legacyIdFor } from "./normalize";
 
 /**
  * The minimal structural slice of Cloudflare's `D1Database` this store uses. A
@@ -154,11 +154,21 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
         // fresh registration (which carries no status) can't wipe the last known
         // delivery outcome — `markStatus` stays their only writer. They are still in
         // the INSERT column list so a brand-new row seeds them.
+        //
+        // The `DO UPDATE`'s own WHERE is the ownership predicate (see
+        // `SubscriptionStore.put`): the update lands only on a row that is unowned or
+        // already this user's. Unqualified `user_id` there is the CONFLICTING (stored)
+        // row — qualified with the table name so it cannot read as the incoming value —
+        // and `user_id = ?7` is never true for a NULL `?7`, so an anonymous register
+        // cannot strip an owner either. One statement, not a get-then-write: between a
+        // read that checks the owner and the upsert that acts on it, another
+        // registration can replace the row.
         await database
             .prepare(
                 `INSERT INTO ${table} (id, kind, endpoint, p256dh, auth, token, user_id, metadata, created_at, last_seen_at, last_status, last_error) ` +
                     "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) " +
-                    "ON CONFLICT(id) DO UPDATE SET kind = ?2, endpoint = ?3, p256dh = ?4, auth = ?5, token = ?6, user_id = ?7, metadata = ?8, last_seen_at = ?10",
+                    "ON CONFLICT(id) DO UPDATE SET kind = ?2, endpoint = ?3, p256dh = ?4, auth = ?5, token = ?6, user_id = ?7, metadata = ?8, last_seen_at = ?10 " +
+                    `WHERE ${table}.user_id IS NULL OR ${table}.user_id = ?7`,
             )
             .bind(
                 subscription.id,
@@ -184,24 +194,50 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
             )
             .run();
 
+        // Read back the ACTUAL stored row (not the incoming `subscription`, whose
+        // `createdAt` is `Date.now()` and disagrees with the preserved value on a
+        // re-register) so the caller sees the truthful record — matching the memory
+        // store. A read-back rather than `RETURNING *` keeps the fake D1 slice simple
+        // and works on any D1-like binding.
+        const stored = await get(subscription.id);
+
+        // A refused upsert is silent in SQL — the row is simply not updated — so the
+        // read-back is also how the refusal is detected: the only way the stored owner
+        // can differ from the one just written is the `DO UPDATE`'s WHERE having
+        // rejected it. Throw rather than return the row: it is someone else's, and
+        // `register` hands its return value (delivery keys included) back to the caller.
+        const refusal = claimRefusal(stored, subscription);
+
+        if (refusal !== undefined) {
+            throw refusal;
+        }
+
         // Evict the SAME device's legacy-prefix row (pre-`wp2_`/`fcm2_` 32-bit id).
         // Its PK differs from the canonical id, so the upsert above never touched it;
         // leaving it would make `broadcast` (no id filter) deliver to this device
         // twice forever. Idempotent — a no-op when the legacy row was never present.
         // The `!== subscription.id` guard keeps a (rare) put of a legacy-id row from
         // deleting the very row it just wrote.
+        //
+        // Owner-scoped for the same reason the upsert is: the legacy row is a
+        // DIFFERENT primary key that the guarded upsert never sees, so an unscoped
+        // delete here re-opened the whole hole one row over — register the victim's
+        // endpoint under your own id and their (still-live) legacy row is removed.
+        // The predicate is the CLAIM one (unowned, or already this user's), not
+        // `deleteOwned`'s exact-match one: a device that registered anonymously under
+        // the old scheme and signs in under the new one must still lose its legacy
+        // row, or it is broadcast to twice forever.
         const legacyId = legacyIdFor(subscription);
 
         if (legacyId !== undefined && legacyId !== subscription.id) {
-            await database.prepare(`DELETE FROM ${table} WHERE id = ?1`).bind(legacyId).run();
-        }
+            const owner = subscription.userId ?? null;
 
-        // Return the ACTUAL stored row (not the incoming `subscription`, whose
-        // `createdAt` is `Date.now()` and disagrees with the preserved value on a
-        // re-register) so the caller sees the truthful record — matching the memory
-        // store. A read-back rather than `RETURNING *` keeps the fake D1 slice simple
-        // and works on any D1-like binding.
-        const stored = await get(subscription.id);
+            await (
+                owner === null
+                    ? database.prepare(`DELETE FROM ${table} WHERE id = ?1 AND user_id IS NULL`).bind(legacyId)
+                    : database.prepare(`DELETE FROM ${table} WHERE id = ?1 AND (user_id IS NULL OR user_id = ?2)`).bind(legacyId, owner)
+            ).run();
+        }
 
         return stored ?? subscription;
     };

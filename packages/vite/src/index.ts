@@ -6,6 +6,7 @@ import errorOverlayPlugin from "@visulima/vite-overlay";
 import type { Plugin } from "vite";
 
 import agentRulesHintPlugin from "./agent-rules-hint-plugin";
+import bindingsProvisionPlugin from "./bindings-provision-plugin";
 import { codegenPlugin } from "./codegen-plugin";
 import containerLogsPlugin from "./container-logs-plugin";
 import devStatePlugin from "./dev-state-plugin";
@@ -14,7 +15,7 @@ import { frameworkComposePlugin } from "./framework-compose-plugin";
 import { createPluginContext, frameworkDetectPlugin } from "./framework-detect-plugin";
 import logStreamPlugin from "./log-stream-plugin";
 import { proxyCheckPlugin } from "./proxy-check-plugin";
-import { planViteRemoteBindings, remoteBindingsCleanupPlugin, remoteBindingsConfigPlugin } from "./remote-bindings-plugin";
+import { remoteBindingsPlugin } from "./remote-bindings-plugin";
 import { lunoraSolutionFinders } from "./solution-finders";
 import { studioPlugin } from "./studio-plugin";
 import type { CloudflarePluginOptions, LunoraPluginOptions, LunoraPlugins, OverlayPluginOptions, ResolvedLunoraPluginOptions } from "./types";
@@ -149,6 +150,12 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         // Cloudflare plugin says nothing about who composes the worker.
         frameworkComposePlugin(resolved, context),
         devVariablesPlugin(resolved),
+        // Writes the bindings the code implies into `wrangler.jsonc` from its
+        // `config` hook — before `@cloudflare/vite-plugin` parses that file and
+        // before `remoteBindingsPlugin` copies it. Unconditional: provisioning is
+        // not validation, and gating it on `validateWrangler` took the write back
+        // out of `config` for anyone who turned the CHECKS off.
+        bindingsProvisionPlugin(resolved),
         codegenPlugin(resolved),
         logStreamPlugin(),
         // Registers the running dev server in `.lunora/dev.json` so
@@ -180,26 +187,22 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     // that declares none never imports `dockerode` either way.
     plugins.push(containerLogsPlugin(resolved));
 
-    // Honor remote-binding dev (`LUNORA_REMOTE` / `lunora.json` `remote`) on the
-    // `vite dev` path too, exactly like `lunora dev`: materialize a temp wrangler
-    // config with `"remote": true` on each eligible binding. DO shards stay local.
-    const remotePlan = planViteRemoteBindings({ projectRoot: resolved.projectRoot });
-
-    if (remotePlan.enabled && remotePlan.configPath !== undefined) {
-        // Register a cleanup that unlinks the temp config when the dev server closes.
-        plugins.push(remoteBindingsCleanupPlugin(remotePlan.cleanup));
-    }
-
     // The Cloudflare plugin Lunora adds, or `undefined` on the BYO path — where
-    // the same plugin reports the materialized config instead of injecting it.
+    // the remote plugin reports the materialized config instead of injecting it.
     const cloudflareOptions = resolved.cloudflare === false ? undefined : { ...resolved.cloudflare };
 
-    if (remotePlan.enabled) {
-        // Injects `configPath` at hook time (serve only) by mutating
-        // `cloudflareOptions` in place before the cloudflare plugin reads it —
-        // the resolved `serve`/`build` command is unknown at this factory-time call.
-        plugins.push(remoteBindingsConfigPlugin(cloudflareOptions, remotePlan));
-    }
+    // Honor remote-binding dev (`LUNORA_REMOTE` / `lunora.json` `remote`) on the
+    // `vite dev` path too, exactly like `lunora dev`: materialize a temp wrangler
+    // config with `"remote": true` on each eligible binding (DO shards stay local)
+    // and inject it as the cloudflare plugin's `configPath`.
+    //
+    // Registered AFTER `bindingsProvisionPlugin` on purpose: both are
+    // `enforce: "pre"`, so this plugin's `config` hook runs after that one has
+    // provisioned the inferred bindings into `wrangler.jsonc` — and the temp
+    // config is a copy of that file. Materializing any earlier copies it a
+    // binding short. That is also why the provisioning plugin cannot be gated on
+    // `validateWrangler`: this copy would go a binding short whenever it was off.
+    plugins.push(remoteBindingsPlugin(cloudflareOptions, { projectRoot: resolved.projectRoot }));
 
     if (cloudflareOptions !== undefined) {
         // Wrap the Cloudflare plugins' startup hooks so a Worker-entry evaluation
@@ -249,7 +252,7 @@ export { default as LUNORA_API_UPDATED_EVENT } from "./hmr-events";
 export { default as logStreamPlugin } from "./log-stream-plugin";
 export { checkLunoraProxy, proxyCheckPlugin } from "./proxy-check-plugin";
 export type { PlanViteRemoteOptions, ViteRemotePlan } from "./remote-bindings-plugin";
-export { planViteRemoteBindings, remoteBindingsCleanupPlugin, remoteBindingsConfigPlugin, withRemoteBindings } from "./remote-bindings-plugin";
+export { planViteRemoteBindings, remoteBindingsPlugin, withRemoteBindings } from "./remote-bindings-plugin";
 // The error→solution rule table itself lives in `@lunora/codegen` (shared with
 // the standalone `lunora dev` CLI); `@lunora/vite` only wraps it as an overlay
 // finder. Import `findLunoraSolution` / `LUNORA_SOLUTION_RULES` from `@lunora/codegen`.
