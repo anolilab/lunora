@@ -33,6 +33,29 @@ export const shouldOpenSubscription = (fromInjectionContext: boolean): boolean =
 };
 
 /**
+ * The deferred form of {@link runOutsideAngular}: resolve the zone escape NOW
+ * (in the injection context) and apply it LATER. `inject(NgZone)` only works
+ * while the primitive body is running, so a primitive that registers its
+ * listeners asynchronously — `voiceAgent` opens its socket and its capture graph
+ * inside `startCall`, after an `await` — cannot call `runOutsideAngular` at the
+ * point it needs it.
+ *
+ * Worth the escape specifically there: a voice call's socket delivers a binary
+ * audio frame per synthesized chunk and the capture graph reports an input level
+ * roughly twelve times a second, so leaving them inside the zone is an app-wide
+ * change-detection pass at audio rate for the whole call.
+ */
+export const outsideAngularRunner = (fromInjectionContext: boolean): (<T>(task: () => T) => T) => {
+    const zone = fromInjectionContext ? inject(NgZone, { optional: true }) : undefined;
+
+    if (!zone) {
+        return <T>(task: () => T): T => task();
+    }
+
+    return <T>(task: () => T): T => zone.runOutsideAngular(task);
+};
+
+/**
  * Run `register` outside Angular's zone when a `NgZone` is available, so timers /
  * DOM listeners it sets up (and the callbacks they later fire) do not schedule an
  * app-wide change-detection pass. Signal writes still notify their consumers
@@ -44,11 +67,7 @@ export const shouldOpenSubscription = (fromInjectionContext: boolean): boolean =
  * from DI. Falls back to a direct call otherwise (a call made with an explicit
  * `destroyRef` outside DI, or a zoneless app with no `NgZone`).
  */
-export const runOutsideAngular = <T>(fromInjectionContext: boolean, register: () => T): T => {
-    const zone = fromInjectionContext ? inject(NgZone, { optional: true }) : undefined;
-
-    return zone ? zone.runOutsideAngular(register) : register();
-};
+export const runOutsideAngular = <T>(fromInjectionContext: boolean, register: () => T): T => outsideAngularRunner(fromInjectionContext)(register);
 
 /**
  * Wire the reactive-args form of a primitive: re-run `open` whenever the tracked
