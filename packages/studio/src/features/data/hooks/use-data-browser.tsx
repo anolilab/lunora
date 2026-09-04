@@ -1009,15 +1009,25 @@ const useDataBrowser = ({
 
         let written = 0;
 
+        // react-doctor-disable-next-line react-hooks-js/todo -- React Compiler cannot lower a `try` with a `finalizer`; the `finally` is load-bearing here (a partial destructive write is already committed server-side on BOTH exits, so the grid must refresh under the message either way) and folding it into the two arms would duplicate it
         try {
             const drained = await drainBulkOp({
                 args,
                 maxBatches: MAX_BULK_BATCHES,
                 openCursor,
-                query: async (batchArgs) => (await client.query(reference, batchArgs, callOptions(debouncedShard))) as BulkRowOpResult,
+                // Counted HERE rather than from the result: a batch's rows are on disk
+                // the moment its call resolves, and the drain's own accumulator dies
+                // with the throw. Counting at the transport is what makes the failure
+                // path's "at least N" a real lower bound instead of a constant 0.
+                query: async (batchArgs) => {
+                    const result = (await client.query(reference, batchArgs, callOptions(debouncedShard))) as BulkRowOpResult;
+
+                    written += result.count;
+
+                    return result;
+                },
             });
 
-            written = drained.written;
             bulkResume.current = drained.cursor === undefined ? null : { after: drained.cursor, key: resumeKey };
 
             if (drained.outcome === "cap-hit") {

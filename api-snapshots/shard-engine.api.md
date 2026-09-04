@@ -1471,7 +1471,7 @@ class OwnerRelay extends RelayLink {
     protected onDetach(index: number): void;
     protected onWhisperFrame(message: RelayFrame): Promise<void>;
     protected onShapeSubscribe(message: RelayShapeSubscribe): RelayShapeSeed;
-    protected onShapePoke(): number;
+    protected onShapePoke(): RelayPokeDelivery;
     protected bindingName(): string | undefined;
 }
 ```
@@ -2060,7 +2060,16 @@ class RelayMember extends RelayLink {
     protected onWhisperFrame(): Promise<void>;
     protected onShapeSubscribe(): RelayShapeSeed;
     protected onShapeUnsubscribe(): void;
-    protected onShapePoke(poke: RelayShapePoke): number;
+    protected onShapePoke(poke: RelayShapePoke): RelayPokeDelivery;
+}
+```
+
+### `RelayPokeDelivery` (interface)
+
+```ts
+interface RelayPokeDelivery {
+    delivered: number;
+    matched: number;
 }
 ```
 
@@ -2613,6 +2622,7 @@ interface ShardSocketLike {
 ```ts
 interface SocketAttachment {
     admin?: boolean;
+    adminBinding?: string;
     clientId?: string;
     connected?: boolean;
     connectionId?: string;

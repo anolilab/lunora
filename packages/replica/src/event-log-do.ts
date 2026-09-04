@@ -13,7 +13,8 @@
  * | POST   | `/append`               | Insert events, return assigned seqs  |
  * | GET    | `/since?seq=N&limit=M`  | ONE bounded page of `seq >= N`       |
  * | GET    | `/size`                 | Number of stored events              |
- * | GET    | `/state`                | Full event log state (for recovery)  |
+ * | GET    | `/state`                | Whole log in one body; 413 when over |
+ * |        |                         | the entry count or payload budget    |
  */
 
 import type { EventLogEntry } from "./event-log";
@@ -50,8 +51,8 @@ const isIdempotencyConflictError = (error: unknown): error is Error => error ins
  * insertion order at ANY nesting depth. Arrays keep their order — only
  * object keys are sorted.
  *
- * Keys sort by UTF-16 code unit, NOT `localeCompare`, for the same reason
- * `canonicalizeForHash` in `apply-diff.ts` does (REPLICA-05): `localeCompare`
+ * Keys sort by UTF-16 code unit, NOT `localeCompare`, for the same reason the
+ * derived-id encoding in `apply-diff.ts` does (REPLICA-05): `localeCompare`
  * resolves against the runtime's default locale and ICU version, so it is not a
  * stable ordering across machines. Here that is an idempotency hazard rather
  * than a replication one — this feeds {@link fingerprintBatch}, which binds a
@@ -148,6 +149,34 @@ const DEFAULT_PAGE_SIZE = 500;
 const MAX_PAGE_SIZE = 1000;
 
 /**
+ * Largest serialized payload one `/append` event may carry, measured in UTF-16
+ * code units of the JSON string that is stored in the `payload` column — the
+ * same units the read budget below is spent in, so the two can never disagree
+ * about the size of the same event.
+ *
+ * An entry COUNT does not bound a response body: the count limits above were
+ * satisfied by a log of a few enormous events that still serialised to far more
+ * than a 128 MB isolate can hold. Neither read route could return such a log,
+ * and nothing stopped it being written.
+ *
+ * The value is what makes the reads safe, not just correct. A read decides
+ * against at most `MAX_PAGE_SIZE + 1` raw rows, so this cap times that count is
+ * the largest string volume either handler can pull before refusing — ~32 MB
+ * here, well inside an isolate. Raising it raises that product.
+ */
+const MAX_EVENT_PAYLOAD_CHARS = 32_768;
+
+/**
+ * Stored-payload budget for ONE response body, in {@link MAX_EVENT_PAYLOAD_CHARS}'s
+ * units. `/state` refuses past it; `/since` shortens the page and reports it as
+ * truncated, which its `truncated`/`cursor` contract already covers.
+ *
+ * Far above the per-event cap on purpose: an event the log accepted must always
+ * fit in a response, or it would be stored and then permanently unreadable.
+ */
+const MAX_RESPONSE_PAYLOAD_CHARS = 4_194_304;
+
+/**
  * `GET /since` body — ONE page of the log.
  *
  * `truncated` is `true` when the page stopped at the limit rather than at the
@@ -197,20 +226,54 @@ const toArray = (cursor: SqlCursor): SqlRow[] => {
     return [];
 };
 
+/**
+ * Map one raw SQL row into the public EventLogEntry shape.
+ *
+ * Kept apart from {@link rowsToEntries} because parsing is the expensive half:
+ * a handler that has to decide whether a body is affordable must weigh the raw
+ * rows FIRST and parse only what it will return.
+ */
+const rowToEntry = (row: SqlRow): EventLogEntry => {
+    return {
+        seq: row.seq,
+        type: row.type,
+        payload: JSON.parse(row.payload) as unknown,
+        timestamp: row.timestamp,
+        clientId: row.client_id ?? undefined,
+        sessionId: row.session_id ?? undefined,
+        parentSeqNum: row.parent_seq ?? undefined,
+    };
+};
+
 /** Map raw SQL cursor rows into the public EventLogEntry shape. */
-const rowsToEntries = (cursor: SqlCursor): EventLogEntry[] => {
-    const rows = toArray(cursor);
-    return rows.map((row) => {
-        return {
-            seq: row.seq,
-            type: row.type,
-            payload: JSON.parse(row.payload) as unknown,
-            timestamp: row.timestamp,
-            clientId: row.client_id ?? undefined,
-            sessionId: row.session_id ?? undefined,
-            parentSeqNum: row.parent_seq ?? undefined,
-        };
-    });
+const rowsToEntries = (cursor: SqlCursor): EventLogEntry[] => toArray(cursor).map((row) => rowToEntry(row));
+
+/** Total stored-payload size of `rows`, in {@link MAX_RESPONSE_PAYLOAD_CHARS}'s units. */
+const payloadChars = (rows: ReadonlyArray<SqlRow>): number => rows.reduce((total, row) => total + row.payload.length, 0);
+
+/**
+ * How many leading rows of `rows` one response body may carry: at most `limit`,
+ * and no more payload than {@link MAX_RESPONSE_PAYLOAD_CHARS}.
+ *
+ * The first row always counts even when it alone exceeds the budget. A page of
+ * zero entries would advance no cursor, so a caller walking the log would spin
+ * on it forever; returning the one oversized row lets the walk continue. New
+ * events cannot reach that state — {@link MAX_EVENT_PAYLOAD_CHARS} is checked on
+ * append — but rows written before that limit existed can.
+ */
+const rowsWithinBudget = (rows: ReadonlyArray<SqlRow>, limit: number): number => {
+    const ceiling = Math.min(rows.length, limit);
+    let used = 0;
+
+    for (let index = 0; index < ceiling; index += 1) {
+        used += (rows[index] as SqlRow).payload.length;
+
+        if (used > MAX_RESPONSE_PAYLOAD_CHARS && index > 0) {
+            return index;
+        }
+    }
+
+    return ceiling;
 };
 
 // ── DO Class ───────────────────────────────────────────────────────────
@@ -426,6 +489,21 @@ export class EventLogDO {
             return "events[].parentSeqNum must be a non-negative integer";
         }
 
+        if (eventRecord.payload === undefined) {
+            // An absent `payload` has no JSON encoding, and the column is
+            // NOT NULL — without this it reached SQLite as `undefined` and came
+            // back as an unexplained 500.
+            return "events[].payload is required";
+        }
+
+        // Last, because it is the only check that serialises anything. The body
+        // came from `request.json()`, so this cannot throw on a cycle, and it is
+        // the exact string `#insertEvent` will store — the same measure the read
+        // budget is spent in, which is what keeps an accepted event readable.
+        if (JSON.stringify(eventRecord.payload).length > MAX_EVENT_PAYLOAD_CHARS) {
+            return `events[].payload must serialise to at most ${String(MAX_EVENT_PAYLOAD_CHARS)} characters`;
+        }
+
         return undefined;
     }
 
@@ -462,9 +540,13 @@ export class EventLogDO {
             limit + 1, // One extra row: its presence is what `truncated` reports.
         ) as SqlCursor;
 
-        const rows = rowsToEntries(cursor);
-        const truncated = rows.length > limit;
-        const entries = truncated ? rows.slice(0, limit) : rows;
+        const rows = toArray(cursor);
+        // Two bounds, whichever comes first: the caller's `limit` and the body
+        // budget. `/state`'s 413 names this route, so it must not carry the same
+        // unbounded body — a short page is what `truncated`/`cursor` are for.
+        const pageSize = rowsWithinBudget(rows, limit);
+        const truncated = pageSize < rows.length;
+        const entries = rows.slice(0, pageSize).map((row) => rowToEntry(row));
         const last = entries.at(-1);
 
         const response: SinceResponse = truncated && last !== undefined ? { entries, truncated: true, cursor: last.seq + 1 } : { entries, truncated: false };
@@ -483,14 +565,45 @@ export class EventLogDO {
         return json({ count });
     }
 
-    /** GET /state — return the full event log state. */
+    /**
+     * GET /state — the whole event log in one body, for a caller that wants it
+     * as a single atom.
+     *
+     * Refuses past {@link MAX_PAGE_SIZE} entries or {@link MAX_RESPONSE_PAYLOAD_CHARS}
+     * of stored payload rather than building the body. The read is unpaged by
+     * definition, so it hits exactly what `#handleSince` was bounded to stop —
+     * every row materialised and `Response.json` serialising all of them inside
+     * a 128 MB isolate — and growth alone eventually reaches it on a route the
+     * class docblock lists "for recovery".
+     *
+     * BOTH bounds are needed and both are decided on the RAW rows, before a
+     * single payload is parsed: the count refuses a long log, the byte budget
+     * refuses a short one carrying big events (exactly 1000 valid entries passed
+     * the count check and built the body anyway). One extra row is read so the
+     * count refusal costs nothing extra. The error names `/since`, which answers
+     * the same question in bounded pages.
+     */
     #handleState(): Response {
         const { sql } = this.state.storage;
 
-        const cursor = sql.exec("SELECT seq, type, payload, timestamp, client_id, session_id, parent_seq FROM events ORDER BY seq ASC") as SqlCursor;
+        const cursor = sql.exec(
+            "SELECT seq, type, payload, timestamp, client_id, session_id, parent_seq FROM events ORDER BY seq ASC LIMIT ?",
+            MAX_PAGE_SIZE + 1,
+        ) as SqlCursor;
 
-        const entries = rowsToEntries(cursor);
+        const rows = toArray(cursor);
+        const tooLarge = rows.length > MAX_PAGE_SIZE || payloadChars(rows) > MAX_RESPONSE_PAYLOAD_CHARS;
 
+        if (tooLarge) {
+            return errorResponse(
+                413,
+                "PAYLOAD_TOO_LARGE",
+                `the log is larger than /state can return in one body (over ${String(MAX_PAGE_SIZE)} entries, or over ` +
+                    `${String(MAX_RESPONSE_PAYLOAD_CHARS)} characters of payload) — walk /since?seq=0 with its truncated/cursor pages instead`,
+            );
+        }
+
+        const entries = rows.map((row) => rowToEntry(row));
         const nextSeq = (entries.at(-1)?.seq ?? -1) + 1;
 
         return json({ entries, nextSeq });

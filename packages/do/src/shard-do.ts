@@ -240,7 +240,7 @@ import { LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
-import { isEnvFlagEnabled, verifyWsAdminToken } from "../../../shared/ws-admin-token";
+import { adminSocketBinding, isEnvFlagEnabled, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import {
     batchedTableLookup,
     readAdminAuditLog,
@@ -1779,13 +1779,26 @@ abstract class ShardDO {
 
     /**
      * The runtime's Durable Object namespace binding name (e.g. `"SHARD"`),
-     * forwarded as `x-lunora-shard-binding` on every request so a DO can address
-     * its siblings (`this.env[binding].getByName(...)`) for the relay hub. Absent
-     * in single-DO mode / the unit harness — when absent, the relay tier is inert
-     * and whispers stay shard-local (no behavior change). In-memory; re-learned per
-     * request.
+     * learned from `x-lunora-shard-binding` so a DO can address its siblings
+     * (`this.env[binding].getByName(...)`) for the relay hub. Absent in single-DO
+     * mode / the unit harness — when absent, the relay tier is inert and whispers
+     * stay shard-local (no behavior change).
+     *
+     * NOT sent on every inbound request: the worker stamps it on the WebSocket
+     * upgrade and on a replica-routed RPC, and a sibling DO stamps it on the
+     * relay/replica POSTs — the owner `/rpc` path does not. So this field is
+     * "whatever the last request that carried one said", which is why it is kept
+     * across requests rather than re-read per request, and why `OwnerRelay`
+     * persists the learned value in SQLite instead of trusting it to be live.
      */
     private shardBinding: string | undefined;
+
+    /**
+     * Memoised {@link ShardDO.currentAdminBinding} result, keyed by the token it
+     * was derived from so a rotation within one isolate re-derives rather than
+     * serving the old fingerprint.
+     */
+    private adminBindingMemo: { binding: Promise<string>; token: string } | undefined;
 
     /**
      * The auto-elastic fan-out relay collaborator (plan 075) — an {@link OwnerRelay}
@@ -4186,6 +4199,17 @@ abstract class ShardDO {
 
         for (const ws of sockets) {
             const attachment = this.readAttachment(ws);
+
+            // Same outbound token-expiry rule every other fan-out applies: a
+            // socket whose credential lapsed must not keep receiving its user's
+            // rows. This path is subclass-driven (see the README's `broadcast`
+            // hook), so nothing upstream of it has already checked.
+            if (isIdentityExpired(attachment.expiresAt)) {
+                this.dropExpiredSocket(ws);
+
+                continue;
+            }
+
             // `Object.keys`, not `Object.entries`: this runs once per socket for
             // every mutation, and `entries` allocates a pair array per socket
             // before any subscription has been tested — so sockets that match
@@ -5460,10 +5484,12 @@ abstract class ShardDO {
 
             // Admin introspection subscriptions read shard internals (raw rows,
             // metrics, logs), so they are gated by the same `LUNORA_ADMIN_TOKEN`
-            // as the HTTP admin RPCs — recorded on the socket at upgrade. A
-            // socket that only cleared the user-subscription gate must never be
-            // able to read admin data by naming a reserved functionPath.
-            if (isAdmin && this.readAttachment(ws).admin !== true) {
+            // as the HTTP admin RPCs — recorded on the socket at upgrade and
+            // re-derived from `env` here, so a rotation revokes the socket rather
+            // than only the HTTP plane. A socket that only cleared the
+            // user-subscription gate must never be able to read admin data by
+            // naming a reserved functionPath.
+            if (isAdmin && !(await this.attachmentAdminAuthorized(this.readAttachment(ws)))) {
                 trySendFrame(ws, JSON.stringify({ id: envelope.id, message: "admin subscription requires admin authorization", type: "error" }));
 
                 return;
@@ -5710,8 +5736,10 @@ abstract class ShardDO {
         const url = new URL(request.url);
 
         // Learn the DO namespace binding the runtime routes through, so this DO can
-        // address its siblings for the relay hub (plan 075 Phase 2). Sent on every
-        // forwarded request; kept across requests once known.
+        // address its siblings for the relay hub (plan 075 Phase 2). Only SOME
+        // inbound requests carry it (the WS upgrade, a replica-routed RPC, and a
+        // sibling DO's relay/replica POST — not the owner `/rpc` path), so it is
+        // kept across requests once known rather than expected on each one.
         //
         // An EMPTY header is treated as "not supplied", not as a value. A sibling
         // POST stamps `shardBinding() ?? ""` (see `relay-hub.ts`), so a peer that
@@ -7860,12 +7888,25 @@ abstract class ShardDO {
      * so pinning the fields around the call makes the dispatched function observe the
      * chosen identity without threading it through the generated signature.
      *
-     * The single caller is {@link handleRunAs} (pins a forged user — the dev
-     * "Run as identity" tool), which runs synchronously on the request thread
-     * with no intervening concurrent dispatch. Subscriptions deliberately do NOT
-     * use this primitive: they run in deferred/interleaved contexts where
-     * mutating the shared field would race a concurrent RPC, so they thread an
-     * explicit {@link SubscriptionIdentity} into `executeSubscription` instead.
+     * Two callers, and they do NOT share a safety argument.
+     *
+     * {@link handleRunAs} (pins a forged user — the dev "Run as identity" tool)
+     * runs synchronously on the request thread with no intervening concurrent
+     * dispatch, so the shared field is uncontended for its whole window.
+     *
+     * {@link dispatchLifecycle} runs from `webSocketClose` (a hibernation close
+     * handler that carries no request of its own) and from the `connect`
+     * envelope — exactly the deferred/interleaved contexts where a concurrent
+     * `/rpc` CAN interleave. What keeps it correct today is downstream, not here:
+     * the generated `buildCtx` reads `getCurrentUserId`/`getCurrentIdentity`
+     * synchronously when it constructs the ctx, and the `/rpc` tail re-pins the
+     * request scope after its own await. A hook path that read the field back
+     * after an await would observe the other dispatch's identity, and the
+     * `finally` here would then restore values captured before that interleaving.
+     *
+     * Subscriptions deliberately do NOT use this primitive at all: they thread an
+     * explicit {@link SubscriptionIdentity} into `executeSubscription` by value,
+     * which is the pattern to reach for when a new deferred caller appears.
      */
     private async withRequestIdentity<R>(userId: string | undefined, identity: Record<string, unknown> | undefined, run: () => Promise<R> | R): Promise<R> {
         const previousUserId = this.currentRequestUserId;
@@ -8980,6 +9021,26 @@ abstract class ShardDO {
 
         const cancellers = socketMap(this.streamCancellers, ws);
 
+        // One live stream per `id`, refused rather than silently replacing the
+        // incumbent. `id` is client-chosen (straight off the frame) and the cap
+        // below reads `cancellers.size`, so re-sending one id used to defeat the
+        // cap outright: N pumps ran under a single map entry, the second `set`
+        // orphaned the first `AbortController` (so neither `unsubscribe` nor
+        // `webSocketClose` could reach it), and whichever pump finished first
+        // deleted the entry its siblings were still cancelled through.
+        if (cancellers.has(id)) {
+            trySendFrame(
+                ws,
+                JSON.stringify({
+                    error: { code: "STREAM_ID_IN_USE", message: `stream id ${JSON.stringify(id)} is already live on this socket` },
+                    id,
+                    type: "error",
+                }),
+            );
+
+            return;
+        }
+
         // Enforce the per-socket in-flight cap before allocating any state
         // for the new stream. A rejected stream never lands in the
         // canceller map, so a flurry of rejections can't push the count
@@ -9011,6 +9072,17 @@ abstract class ShardDO {
         try {
             for await (const chunk of iterable.iterator(controller.signal)) {
                 if (controller.signal.aborted) {
+                    break;
+                }
+
+                // A credential can lapse mid-stream: the inbound check ran once,
+                // on the frame that STARTED this stream, and a pump can outlive
+                // it indefinitely. Tear the iterator down rather than keep
+                // pushing the user's data at an expired socket.
+                if (this.isSocketExpired(ws)) {
+                    this.dropExpiredSocket(ws);
+                    controller.abort();
+
                     break;
                 }
 
@@ -9117,6 +9189,16 @@ abstract class ShardDO {
             chunk: (chunk) => {
                 if (chunk.seq <= delivered) {
                     return true;
+                }
+
+                // Same mid-run expiry rule as the ephemeral pump. `false` is the
+                // sink contract's "this consumer is gone", so the runner drops it
+                // and the transcript keeps producing for whoever else is attached.
+                if (this.isSocketExpired(ws)) {
+                    this.dropExpiredSocket(ws);
+                    detach();
+
+                    return false;
                 }
 
                 delivered = chunk.seq;
@@ -9428,6 +9510,10 @@ abstract class ShardDO {
             // subscription below — both depend only on this socket, and are
             // identical for every subscription on it. See {@link SocketDelivery}.
             const delivery = this.socketDelivery(attachment);
+            // Resolved once per socket per flush for the same reason: an admin
+            // subscription's authorization is REVOCABLE, and the loop below
+            // re-derives `isAdmin` from the function path alone.
+            const adminAuthorized = await this.attachmentAdminAuthorized(attachment);
 
             // `Object.keys` for the same reason as `broadcastDelta` — see there.
             const { subs } = attachment;
@@ -9457,6 +9543,20 @@ abstract class ShardDO {
                 }
 
                 const isAdmin = functionPath.startsWith(ADMIN_FUNCTION_PREFIX);
+
+                // Same drift as the paywall above, on the credential rather than
+                // the price: `isAdmin` is recomputed from the PATH, so without
+                // this an admin subscription registered under a token that has
+                // since been rotated or cleared keeps being re-run and pushed —
+                // arbitrary read-only SQL over the shard — for the life of the
+                // socket. The token is checked at upgrade and never again.
+                if (isAdmin && !adminAuthorized) {
+                    this.unsubscribe(ws, subId);
+                    this.sendSubscriptionError(ws, subId, "FORBIDDEN", "admin authorization for this socket is no longer valid");
+
+                    continue;
+                }
+
                 const memo = this.subMemos.get(ws)?.get(subId);
 
                 if (memoProvesUnchanged(memo, changed, changedKeys)) {
@@ -11336,6 +11436,51 @@ abstract class ShardDO {
     }
 
     /**
+     * Fingerprint of the admin token this DO holds RIGHT NOW, or `undefined`
+     * when none is configured. Memoised per token value: the derivation is an
+     * HMAC and this is consulted once per socket per write flush.
+     */
+    private async currentAdminBinding(): Promise<string | undefined> {
+        const token = (this.env as { LUNORA_ADMIN_TOKEN?: string } | undefined)?.LUNORA_ADMIN_TOKEN;
+
+        if (token === undefined || token.length === 0) {
+            return undefined;
+        }
+
+        if (this.adminBindingMemo?.token !== token) {
+            this.adminBindingMemo = { binding: adminSocketBinding(token), token };
+        }
+
+        return this.adminBindingMemo.binding;
+    }
+
+    /**
+     * Whether `attachment` still carries a LIVE admin authorization.
+     *
+     * The upgrade gate runs once and the socket then lives for hours, so the
+     * stamped `admin` flag alone is an authorization that can never be revoked:
+     * clearing or rotating `LUNORA_ADMIN_TOKEN` shuts the HTTP admin plane on
+     * the next request (`isAdminAuthorized` fails closed) and used to shut
+     * nothing here — a 60-second sub-token bought 60 seconds to OPEN a socket
+     * that then served `runSql`/`readTablePage`/`getLogs` output for its whole
+     * life. Re-deriving the fingerprint from `env` makes rotation a revocation
+     * on this plane too.
+     *
+     * Fails closed on every uncertain input: no configured token, no stamped
+     * binding, or a mismatch. Both sides are server-derived (the client supplies
+     * neither), so an exact comparison is the right one.
+     */
+    private async attachmentAdminAuthorized(attachment: SocketAttachment): Promise<boolean> {
+        if (attachment.admin !== true) {
+            return false;
+        }
+
+        const current = await this.currentAdminBinding();
+
+        return current !== undefined && attachment.adminBinding === current;
+    }
+
+    /**
      * Register the hibernation-safe ping/pong keepalive. The runtime answers a
      * {@link WS_KEEPALIVE_PING} text frame with {@link WS_KEEPALIVE_PONG}
      * WITHOUT waking this Durable Object, keeping idle subscription sockets
@@ -11432,9 +11577,18 @@ abstract class ShardDO {
         const identity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
         const expiresAt = decodeIdentityExpiryHeader(request.headers.get("x-lunora-identity-exp"));
 
+        // Fingerprint of the token that authorized this socket, so a later
+        // rotation of `LUNORA_ADMIN_TOKEN` revokes it rather than leaving a
+        // socket whose one-shot upgrade check can never be re-run. Only for an
+        // admin socket: an ordinary one has nothing to revoke, and the
+        // attachment is a scarce 16 KiB budget.
+        const adminBinding = admin ? await this.currentAdminBinding() : undefined;
+
         // Stamp admin authorization onto the socket at upgrade so later
         // `__lunora_admin__:*` subscribe envelopes (which carry no credential of
-        // their own) can be gated without re-checking a token per message.
+        // their own) can be gated without re-verifying a presented token per
+        // message — `attachmentAdminAuthorized` compares the fingerprint above
+        // instead, so the flag is re-checked but the credential is not replayed.
         //
         // Accepted through `SocketHost`, not `state.acceptWebSocket` directly, so
         // the socket carries the host's accept-time id tag. That tag is what makes
@@ -11449,6 +11603,7 @@ abstract class ShardDO {
             admin,
             connectionId: crypto.randomUUID(),
             subs: {},
+            ...(adminBinding === undefined ? {} : { adminBinding }),
             ...(expiresAt === undefined ? {} : { expiresAt }),
             ...(identity === undefined ? {} : { identity }),
             ...(userId === undefined ? {} : { userId }),
@@ -11614,7 +11769,28 @@ abstract class ShardDO {
         for (const ws of this.runner.sockets()) {
             scanned += 1;
 
-            if (ws === exclude || this.readAttachment(ws).whispers?.includes(topic) !== true) {
+            if (ws === exclude) {
+                continue;
+            }
+
+            const attachment = this.readAttachment(ws);
+
+            if (attachment.whispers?.includes(topic) !== true) {
+                continue;
+            }
+
+            // Enforce token-expiry on THIS outbound path too. It is not
+            // redundant with the other four checks — on the canonical whisper
+            // workload (presence, cursors, typing indicators) none of them ever
+            // runs: `broadcastWhisper` does no SQLite write, so there is no
+            // refresh flush, no shape poke and no global poll, and a passive
+            // receiver sends no inbound frame for `handleWebSocketMessage` to
+            // check. Without this a lapsed socket keeps receiving every whisper
+            // on its joined topics — including the sender's `from` userId — for
+            // the rest of its life.
+            if (isIdentityExpired(attachment.expiresAt)) {
+                this.dropExpiredSocket(ws);
+
                 continue;
             }
 

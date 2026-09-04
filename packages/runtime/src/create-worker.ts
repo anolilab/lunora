@@ -1482,6 +1482,10 @@ interface WorkerOptions {
      * origin worker refuses to dispatch a paid procedure with a config error
      * (`500`) when this is absent, rather than serving it free — the paywall is
      * fail-closed by construction. See {@link X402ChargeGate}.
+     *
+     * The converse also holds: setting this without {@link WorkerOptions.functions}
+     * throws at construction. The `.x402` tags are read off that registry, so a
+     * gate with no registry would paywall nothing.
      */
     x402Charge?: X402ChargeGate;
 }
@@ -1608,6 +1612,37 @@ const STATUS_PATH = "/_lunora/status";
 
 /** True for the admin routes the async `adminGate` may authorize — everything under `/_lunora/admin/` plus `/_lunora/migrate`. */
 const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
+
+/**
+ * The reserved cross-shard relation reader's function-path prefix. Inlined as a
+ * literal rather than imported so the runtime carries no `@lunora/do` dependency.
+ */
+const RELATION_FUNCTION_PREFIX = "__lunora_relation__:";
+
+/**
+ * Refuse a `__lunora_relation__:*` dispatch that is NOT a fan-out.
+ *
+ * SECURITY: the reserved relation reader answers with RAW, RLS-blind rows for
+ * whatever `args.table` names, and the confused-deputy binding that pins
+ * `args.table` to the AUTHORIZED `fanOut.table` lives in `parseEnvelope` and runs
+ * only when a `fanOut` is present. So on a single-shard dispatch `args.table` is
+ * entirely free, and the `authorizeFanOut` gate — the only thing that authorizes
+ * this reader — is never consulted.
+ *
+ * Every surface that turns a function reference into a shard dispatch calls this,
+ * not just the RPC edge: the shard applies NO gate of its own and its comment
+ * names this refusal as the reason ("worker refuses this prefix on a single-shard
+ * envelope, so it's only reachable through the authorizeFanOut-gated fan-out
+ * path"). A surface that skips it is not a weaker check, it is no check.
+ */
+const assertNotReservedRelationPath = (functionPath: string): void => {
+    if (functionPath.startsWith(RELATION_FUNCTION_PREFIX)) {
+        throw new LunoraError("`__lunora_relation__:*` is a fan-out-only reserved RPC and cannot be dispatched to a single shard", {
+            code: "FORBIDDEN",
+            status: 403,
+        });
+    }
+};
 
 /**
  * Narrow an app-supplied authorization verdict to an exact `true`.
@@ -2014,9 +2049,17 @@ const logRpcDebug = (env: unknown, envelope: RpcEnvelope): void => {
  * no `x402Charge` gate configured on the worker, throws here rather than being
  * dispatched free. Extracted from `handleRpc` so the paid-procedure guard
  * doesn't inflate that hot path's cognitive complexity.
+ *
+ * A worker configured with `x402Charge` but no `functions` never reaches this —
+ * {@link assertX402Configurable} refuses to build it (see there for why the
+ * refusal belongs at construction).
  */
 const resolveX402Charge = (envelope: RpcEnvelope, options: WorkerOptions): FunctionRegistryEntry["x402"] => {
-    const x402Tag = options.functions?.[envelope.functionPath]?.x402;
+    if (options.functions === undefined) {
+        return undefined;
+    }
+
+    const x402Tag = options.functions[envelope.functionPath]?.x402;
 
     if (!x402Tag) {
         return undefined;
@@ -2416,10 +2459,34 @@ const detectBindingProbe = (key: string, value: unknown): HealthProbe | undefine
 };
 
 /**
+ * Refuse to build a worker whose paywall cannot see the functions it is meant to
+ * charge for.
+ *
+ * `.x402({ price })` tags live on the `functions` registry, so with no registry
+ * there is nothing to read them off: every paid procedure would dispatch FREE —
+ * no 402, no settlement, no diagnostic — under a docblock promising the paywall
+ * is fail-closed by construction. `defineApp()` always supplies the registry, so
+ * only a hand-rolled `createWorker({ shardDO, x402Charge })` can land here, and
+ * that is a configuration mistake with exactly one honest moment to report it:
+ * when the worker is built. Warning per isolate while paid dispatches sail
+ * through trades a revenue/authorization hole for a log line nobody reads.
+ */
+const assertX402Configurable = (options: WorkerOptions): void => {
+    if (options.x402Charge !== undefined && options.functions === undefined) {
+        throw new LunoraError(
+            "`x402Charge` requires `functions`: paid (.x402) procedures are read from the function registry, so without it every paid procedure would dispatch FREE. Build the worker with `defineApp()` (which supplies the registry) or pass `functions` explicitly.",
+            { code: "MISCONFIGURED", status: 500 },
+        );
+    }
+};
+
+/**
  * Build a Cloudflare Worker entry. Returns an object with `fetch` so it can
  * be re-exported directly as `export default createWorker(...)`.
  */
 const createWorker = (options: WorkerOptions): LunoraWorker => {
+    assertX402Configurable(options);
+
     // Resolved once here rather than per request: the trust policy is fixed for
     // the worker's lifetime, so a dispatch pays a single predicate call.
     const isTrustedUpstream = resolveTraceTrust(options.trustInboundTraceContext);
@@ -2564,6 +2631,36 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // static bearer, OR a grant `handle` recorded from `options.adminGate`.
     const requestIsAdmin = (request: Request): boolean => checkAdminAuth(request, effectiveAdminToken()) || accessAdminGrants.has(request);
 
+    /**
+     * Evaluate `options.adminGate` once for this request and record the grant
+     * `requestIsAdmin` consults. A gate that throws degrades to "no grant" — fail
+     * closed for the gate, open for the static bearer — so a request carrying a
+     * valid admin token is never locked out and the throw never 500s the request.
+     *
+     * Callers decide WHERE it is worth paying for: `applyAdminGate` runs it for
+     * `/_lunora/admin/*` (so the async verification never touches the `/_lunora/rpc`
+     * + `/_lunora/ws` data hot path), and `serveReservedWorkerRpc` runs it for the
+     * two admin RPCs the worker serves at `/_lunora/rpc`, after the envelope has
+     * already named one of them.
+     */
+    const recordAdminGrant = async (request: Request): Promise<void> => {
+        if (options.adminGate === undefined || accessAdminGrants.has(request)) {
+            return;
+        }
+
+        try {
+            // Polarity here is INVERTED — truthy GRANTS admin — so an unnarrowed
+            // verdict is the worst of the three: a gate returning a claims object,
+            // a `Response`, or `{ ok: false }` would unlock every `/_lunora/admin/*`
+            // route. `grants` requires the exact `true`.
+            if (await grants(options.adminGate(request, executionContextByRequest.get(request)))) {
+                accessAdminGrants.add(request);
+            }
+        } catch {
+            // No grant recorded; `requestIsAdmin` still honours the static admin token.
+        }
+    };
+
     // Forward-context for the cross-shard admin orchestrators (migrate / rank /
     // pitr / export / import / …). They authorize fanned-out per-shard RPCs by
     // forwarding the inbound `Authorization` bearer, which an Access-authorized
@@ -2707,6 +2804,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         mutationId?: string,
         forwardedIdentity?: { identity?: string; userId?: string },
     ): Promise<Response> => {
+        // The scheduler-dispatch endpoint takes `functionPath` off a request body and a
+        // cron target is app-authored — neither can legitimately be the reserved
+        // fan-out-only reader, and this path stamps the system flag below.
+        assertNotReservedRelationPath(functionPath);
+
         // `x-lunora-system` marks this as a trusted server-initiated dispatch so the
         // shard may run `internal` functions (scheduled/cron jobs are typically
         // internal). Authorization was already enforced above; this header is set
@@ -3142,15 +3244,23 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return undefined;
         }
 
-        if (envelope.functionPath === GET_AUTH_AUDIT_LOG_OP) {
-            return getAuthAuditLog(request, envelope.args ?? {});
+        if (envelope.functionPath !== GET_AUTH_AUDIT_LOG_OP && envelope.functionPath !== LIST_PUSH_SUBSCRIPTIONS_OP) {
+            return undefined;
         }
 
-        if (envelope.functionPath === LIST_PUSH_SUBSCRIPTIONS_OP) {
-            return listPushSubscriptions(request, envelope.args);
-        }
+        // These two are Studio endpoints served at `/_lunora/rpc`, not under
+        // `/_lunora/admin/*`, so `applyAdminGate` — which is path-scoped, to keep
+        // the async gate off the data hot path — never evaluated `adminGate` for
+        // them and never recorded a grant. `requestIsAdmin` is then the static
+        // bearer alone, so an Access-only deployment (an `adminGate` and no
+        // `LUNORA_ADMIN_TOKEN`) got 403 on the Studio's auth-audit and
+        // notification-device reads while every `/_lunora/admin/*` route worked.
+        // Evaluated HERE rather than by widening `isAdminPath`: it runs only once
+        // the envelope has been parsed and named one of these two reserved paths,
+        // so ordinary RPC traffic still never pays for it.
+        await recordAdminGrant(request);
 
-        return undefined;
+        return envelope.functionPath === GET_AUTH_AUDIT_LOG_OP ? getAuthAuditLog(request, envelope.args ?? {}) : listPushSubscriptions(request, envelope.args);
     };
 
     // The data-movement admin routes (export / sync / connector-sync / apply /
@@ -3479,6 +3589,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             if (typeof functionPath !== "string") {
                 throw new LunoraError("ctx.run*: expected a function reference from the generated `api`", { code: "BAD_REQUEST", status: 400 });
             }
+
+            // This path stamps `x-lunora-system: "1"` below, so an unguarded relation
+            // dispatch here would read raw rows as a TRUSTED caller. The stricter
+            // posture already exists one function over (`buildHttpScheduler`'s
+            // `targetFields` refuses a bare `"ns:fn"` string because an HTTP action
+            // can be reached unauthenticated) — same reasoning, same surface.
+            assertNotReservedRelationPath(functionPath);
 
             const forwarded = shardRpcRequest(
                 functionPath,
@@ -4052,11 +4169,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             throw new LunoraError("RPC envelope cannot set both `shardKey` and `fanOut`", { code: "BAD_REQUEST", status: 400 });
         }
 
-        if (!envelope.fanOut && envelope.functionPath.startsWith("__lunora_relation__:")) {
-            throw new LunoraError("`__lunora_relation__:*` is a fan-out-only reserved RPC and cannot be dispatched to a single shard", {
-                code: "FORBIDDEN",
-                status: 403,
-            });
+        if (!envelope.fanOut) {
+            assertNotReservedRelationPath(envelope.functionPath);
         }
 
         if (envelope.fanOut && !options.queryCoordinator) {
@@ -4481,6 +4595,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 throw new LunoraError("serverQuery: expected a function reference from the generated `api`", { code: "BAD_REQUEST", status: 400 });
             }
 
+            // Fan-out is not reachable here (see the docblock), so this dispatch is
+            // always single-shard — which is exactly the envelope shape the reserved
+            // relation reader must never be reached through. Checked BEFORE
+            // `resolveForwardContext` so a doomed call triggers no identity IO,
+            // mirroring `handleRpc`'s ordering and keeping the byte-identical-result
+            // contract honest (`/_lunora/rpc` answers 403 FORBIDDEN for this input).
+            assertNotReservedRelationPath(functionPath);
+
             // Resolve identity off the SAME inbound request the HTTP path uses, so
             // cookies / bearer / bookmark and the derived `x-lunora-*` headers are
             // byte-identical to `handleRpc`'s. The context is passed explicitly
@@ -4854,29 +4976,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
-    // Cloudflare Access (or any) admin gate: when configured, verify it ONCE for
-    // an admin path and record a grant the per-route sync gates consult via
-    // `requestIsAdmin`. Restricted to `isAdminPath` so the verification never runs
-    // on the `/_lunora/rpc` + `/_lunora/ws` data hot path. A gate that throws
-    // (rather than returning `false`) degrades to "no grant" — fail closed for the
-    // gate, open for the static bearer — so a request carrying a valid admin token
-    // is never locked out, and the throw never 500s the admin request.
+    // The path-scoped half of the Access admin gate: verify {@link recordAdminGrant}
+    // ONCE per `/_lunora/admin/*` request. Restricted to `isAdminPath` so the async
+    // verification never runs on the `/_lunora/rpc` + `/_lunora/ws` data hot path —
+    // the two admin RPCs served AT `/_lunora/rpc` call `recordAdminGrant` themselves,
+    // after the envelope has named one of them.
     const applyAdminGate = async (request: Request, pathname: string): Promise<void> => {
-        if (options.adminGate === undefined || !isAdminPath(pathname)) {
+        if (!isAdminPath(pathname)) {
             return;
         }
 
-        try {
-            // Polarity here is INVERTED — truthy GRANTS admin — so an unnarrowed
-            // verdict is the worst of the three: a gate returning a claims object,
-            // a `Response`, or `{ ok: false }` would unlock every `/_lunora/admin/*`
-            // route. `grants` requires the exact `true`.
-            if (await grants(options.adminGate(request, executionContextByRequest.get(request)))) {
-                accessAdminGrants.add(request);
-            }
-        } catch {
-            // No grant recorded; `requestIsAdmin` still honours the static admin token.
-        }
+        await recordAdminGrant(request);
     };
 
     const handle = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {

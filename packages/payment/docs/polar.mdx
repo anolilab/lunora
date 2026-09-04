@@ -305,6 +305,7 @@ three Standard-Webhooks headers into the shard via `ctx.runAction`, where
 `ctx.payments` and its store exist:
 
 ```ts title="lunora/http.ts"
+import { webhookResponse } from "@lunora/payment";
 import { httpAction, httpRouter } from "lunorash/server";
 import { processPolarWebhook } from "./billing";
 
@@ -315,7 +316,10 @@ app.post(
     httpAction(async (ctx, request) => {
         const body = await request.text();
 
-        return Response.json(
+        // `webhookResponse`, not `Response.json(...)`: only the JSON payload crosses the
+        // `runAction` hop, so building the response by hand collapses the deliberate 500 on an
+        // orphaned (out-of-order) event to a 200 and Polar never redelivers it.
+        return webhookResponse(
             await ctx.runAction(processPolarWebhook, {
                 body,
                 webhookId: request.headers.get("webhook-id") ?? "",

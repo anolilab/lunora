@@ -115,6 +115,7 @@ import type { SqlDialect } from "./dialect";
 import { createPointReadBatcher } from "./point-read-batcher";
 import type { SqlCtxExec } from "./sql-exec";
 import {
+    BACKFILL_BATCH_SIZE,
     columnRefSql,
     createIndexIfNotExists,
     decodeRow,
@@ -721,6 +722,41 @@ const assertReducibleBySql = (definition: SchemaLike["tables"][string], field: s
             `${label}: "${field}" is stored as an order-preserving key, which SQL cannot reduce or group — declare an aggregateIndex covering this (by, field, op) so the maintained companion answers it instead (its running total is a REAL, so it stays exact only while the total is inside 2^53)`,
         );
     }
+};
+
+/**
+ * Whether a column of this validator **could** hold a `bigint` — i.e. whether
+ * `sqliteEncode` may have stored an order-preserving key there rather than a
+ * value SQL can reduce.
+ *
+ * Deliberately wider than {@link assertReducibleBySql}'s test, which stays on the
+ * declared kind because it REFUSES a read. This one only decides whether the
+ * min/max write path reduces in SQL or folds in JS, and over-including costs a
+ * paged scan where under-including writes a confident wrong number. `sqliteEncode`
+ * keys off the RUNTIME type, so a `v.any()` / `v.union()` / `v.from()` column
+ * holding a bigint is stored as a padded key exactly like a declared one; gating
+ * on the declared kind alone is how the shard twin wrote ~1e39 into a companion,
+ * one declaration away.
+ *
+ * The widening only pays off because `sqliteDecode` reverses those columns'
+ * keys too — it did not at first, and the fold then coerced 40 characters of
+ * padding to `undefined` and left the companion holding a stale extreme. Widening
+ * the detector and widening the decoder are one change, not two.
+ *
+ * `mayHoldProjectedValue` in `@lunora/shard-engine`'s `sql-projection.ts` is the
+ * same rule for the DO plane, over `bigint` + `bytes` rather than `bigint` alone.
+ * They belong together — beside the codec pair the two planes already share, in
+ * `sql-projection.ts` — but the widths differ, so merging them is its own change.
+ * @returns `true` when a value in this column may be a `bigint` key
+ */
+const mayHoldBigintKey = (validator: SchemaLike["tables"][string]["shape"][string] | undefined): boolean => {
+    if (validator === undefined) {
+        return false;
+    }
+
+    const kind = effectiveColumnKind(validator);
+
+    return kind === "any" || kind === "bigint" || kind === "from" || kind === "union";
 };
 
 /** Applies {@link assertReducibleBySql} to every field a `groupBy` scan hands to SQL: the `by` keys and the reducer's own field. */
@@ -1495,14 +1531,68 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     };
 
     /**
+     * Reduce one group's extreme in JS, off the decoded rows, for a column
+     * {@link mayHoldBigintKey} matches — through {@link foldAggregateTally}, the
+     * same fold both backfills seed a group with, so a recomputed extreme cannot
+     * disagree with a rebuilt one.
+     *
+     * Pages by keyset on `id` like {@link ensureRankBackfilled} rather than
+     * selecting the group in one statement: the fold reads every surviving row,
+     * and one write against a 200k-row group otherwise put 200k rows in the
+     * isolate — for a predicate most matching columns never need.
+     * @returns the surviving extreme, or `null` when the group has no numeric row
+     */
+    const foldGroupExtreme = async (
+        definition: SchemaLike["tables"][string],
+        tableName: string,
+        index: AggregateIndexDefinitionLike,
+        conditions: SQL[],
+    ): Promise<null | number> => {
+        // Single-group, so the tally key is the empty string and only `value` is
+        // read — the caller pins `__count__` from its own tracked tally.
+        const tallies = new Map<string, AggregateTally>();
+        let cursorId: string | undefined;
+        let hasMore = true;
+
+        while (hasMore) {
+            const seek = cursorId === undefined ? conditions : [...conditions, sql`${sql.identifier("id")} > ${cursorId}`];
+            const pageWhere = seek.length > 0 ? sql` WHERE ${sql.join(seek, sql` AND `)}` : sql``;
+            // `id` rides along only as the keyset cursor; the fold reads just the
+            // reduced column, and `decodeRow` skips whatever the projection left out.
+            // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently sequential: each page's WHERE depends on the prior page's last id.
+            const pageRows = await queryAll(
+                exec,
+                dialect,
+                sql`SELECT ${sql.identifier("id")}, ${columnRefSql(index.field ?? "")} FROM ${sql.identifier(tableName)}${pageWhere} ORDER BY ${sql.identifier("id")} ASC LIMIT ${sql.raw(String(BACKFILL_BATCH_SIZE))}`,
+            );
+
+            for (const decoded of decodeRows(definition, pageRows)) {
+                foldAggregateTally(tallies, "", index, decoded);
+            }
+
+            cursorId = pageRows.at(-1)?.["id"] as string | undefined;
+            hasMore = pageRows.length === BACKFILL_BATCH_SIZE;
+        }
+
+        // eslint-disable-next-line unicorn/no-null -- an extreme-less group stores NULL, matching what both backfills seed
+        return tallies.get("")?.value ?? null;
+    };
+
+    /**
      * Recompute a min/max group's extreme from the source table, scoped to the
      * group's `by`-tuple and the index's static `where`, against the D1 column
      * dialect. Runs AFTER the physical row write, so it sees the post-write
      * source and returns the surviving extreme (`null` when none survives). The
      * caller pins `__count__` from its own tracked tally.
+     *
+     * A column that may hold an order-preserving key goes to
+     * {@link foldGroupExtreme} rather than to `MIN`/`MAX`. Not
+     * `ORDER BY <col> LIMIT 1` either: the key is order-preserving only against
+     * other keys, and SQLite orders every TEXT after every numeric — so on a
+     * mixed `v.any()` column the extreme would be decided by storage class rather
+     * than by magnitude.
      */
     const recomputeExtreme = async (tableName: string, index: AggregateIndexDefinitionLike, document: Record<string, unknown>): Promise<null | number> => {
-        const sqlFunction = aggregateSqlFunction(index.op);
         const field = index.field ?? "";
         const conditions: SQL[] = [];
 
@@ -1520,8 +1610,19 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             conditions.push(value === null ? sql`${columnRefSql(key)} IS NULL` : sql`${columnRefSql(key)} = ${value}`);
         }
 
-        const query = sql`SELECT ${sql.raw(sqlFunction)}(${columnRefSql(field)}) AS ${sql.identifier("value")} FROM ${sql.identifier(tableName)}`;
-        const rows = await queryAll(exec, dialect, conditions.length > 0 ? sql`${query} WHERE ${sql.join(conditions, sql` AND `)}` : query);
+        const whereSql = conditions.length > 0 ? sql` WHERE ${sql.join(conditions, sql` AND `)}` : sql``;
+        const definition = schema.tables[tableName];
+
+        if (definition && mayHoldBigintKey(definition.shape[field])) {
+            return foldGroupExtreme(definition, tableName, index, conditions);
+        }
+
+        const sqlFunction = aggregateSqlFunction(index.op);
+        const rows = await queryAll(
+            exec,
+            dialect,
+            sql`SELECT ${sql.raw(sqlFunction)}(${columnRefSql(field)}) AS ${sql.identifier("value")} FROM ${sql.identifier(tableName)}${whereSql}`,
+        );
 
         return aggregateScalar(rows[0]?.["value"]);
     };
@@ -1771,9 +1872,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
     /**
      * Lazy backfill of a rank companion. Mirrors the aggregate counter twin —
-     * `ensureBackfilled`. TRUNCATE then re-insert; cached per ctx-db. Pages
-     * the source table via keyset cursor on `id` so an unbounded table never
-     * has to fit in a single SELECT.
+     * `ensureBackfilled`. TRUNCATE then re-insert; cached per ctx-db.
+     *
+     * Bounded end to end, not just on the read: the source table is paged by
+     * keyset cursor on `id`, and the tuples that page produces are flushed
+     * before the next one is read, so neither the buffered `SQL` objects nor the
+     * dispatched batch ever grows to the row count.
      */
     const ensureRankBackfilled = async (tableName: string, index: RankIndexDefinitionLike): Promise<boolean> => {
         const cacheKey = `${tableName}::rank::${index.name}`;
@@ -1806,12 +1910,35 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
         const insertColumnList = identifierList(["__id__", "__partition__", ...sortColumns]);
 
-        // Collect the rank tuples during the keyset scan, then insert them
-        // sequentially below (the scan callback can't itself await on the
-        // shared connection).
-        const rankTuples: unknown[][] = [];
+        // One INSERT per source row, flushed a page at a time. The aggregate
+        // twin buffers its whole insert list because that list is `unique(by)`
+        // keys, not rows; a rank tuple is per ROW, so buffering the same way put
+        // the entire table — plus one drizzle `SQL` object per row — in the
+        // isolate and handed the engine an N-statement batch, on a path that
+        // runs lazily inside a request (every first write, and every first
+        // `rank()`/`rankPage()`, against a table with a declared rankIndex).
+        //
+        // `forEachRowPaged` awaits an async `onDoc`, so the flush happens from
+        // inside the walk: the writes go to the companion table while the walk
+        // pages the source, and the peak is one page of tuples either way.
+        let pending: SQL[] = [];
 
-        await forEachRowPaged(exec, dialect, definition, tableName, (document) => {
+        const flush = async (): Promise<void> => {
+            if (pending.length === 0) {
+                return;
+            }
+
+            const batch = pending;
+
+            pending = [];
+
+            // Rows are keyed by distinct `__id__`, so order across a batch
+            // doesn't matter; a `run()`-per-statement loop when the exec has no
+            // `batch` seam.
+            await queryBatch(exec, dialect, batch);
+        };
+
+        await forEachRowPaged(exec, dialect, definition, tableName, async (document) => {
             if (index.where && !matchesRankStaticWhere(document, index.where)) {
                 return;
             }
@@ -1820,15 +1947,16 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent sort-key column must bind `null`, not undefined.
             const sortValues = index.sortBy.map((key) => serializeColumnValue(document[key.field] ?? null));
 
-            rankTuples.push([document["_id"], partitionKey, ...sortValues]);
+            pending.push(
+                sql`INSERT INTO ${sql.identifier(rankTable)} (${insertColumnList}) VALUES (${bindList([document["_id"], partitionKey, ...sortValues])})`,
+            );
+
+            if (pending.length >= BACKFILL_BATCH_SIZE) {
+                await flush();
+            }
         });
 
-        const inserts = rankTuples.map((tuple) => sql`INSERT INTO ${sql.identifier(rankTable)} (${insertColumnList}) VALUES (${bindList(tuple)})`);
-
-        // One round trip for the whole backfill when the exec exposes `batch`
-        // (rows are keyed by distinct `__id__`, so order across them doesn't
-        // matter); a sequential `run()` loop otherwise.
-        await queryBatch(exec, dialect, inserts);
+        await flush();
 
         rankBackfilled.set(cacheKey, true);
 

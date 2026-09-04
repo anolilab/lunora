@@ -143,6 +143,12 @@ export class EventLogDOClient {
 
     /**
      * Return the full log state — all entries plus the next seq number.
+     *
+     * Only for a log small enough to answer as one body: the DO refuses with a
+     * 413 past its page ceiling, since serialising an unbounded log into one
+     * response is what {@link EventLogDOClient.getSince} was bounded to avoid.
+     * A catch-up walks `getSince` instead.
+     * @throws Error when the log is too large to return in one body
      */
     public async getState(): Promise<{ entries: EventLogEntry[]; nextSeq: number }> {
         return this.#get("/state", "getState");

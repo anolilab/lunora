@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SqlCtxExec } from "../src/ctx-db";
 import { createSqlCtxDb, readSqlCdcChanges } from "../src/ctx-db";
 import type { SqlDialect } from "../src/dialect";
+import { BACKFILL_BATCH_SIZE } from "../src/sql-exec";
 
 /**
  * In-package end-to-end coverage for the dialect-blind store core. The concrete
@@ -146,9 +147,29 @@ const col = (kind: string, extra: Record<string, unknown> = {}): ValidatorLike =
     return { _meta: { column: { notNull: true, ...extra } }, kind };
 };
 
-/** An `optional(inner)` column — stays nullable in the DDL; `effectiveColumnKind` unwraps to `inner` for storage affinity/decode. */
+/**
+ * An `optional(inner)` column — stays nullable in the DDL (the DDL builder is
+ * kind-aware); `effectiveColumnKind` unwraps to `inner` for storage
+ * affinity/decode.
+ *
+ * `notNull: true` on BOTH levels is what `v.optional()` actually builds:
+ * `createValidator("optional", parser, { inner })` passes no `column` key, so
+ * the default `{ notNull: true }` applies, and only `.nullable()` ever clears
+ * it. Declaring the fixture nullable made `nullMeansAbsent` return `false` for
+ * every optional column in this suite, so `decodeGlobalRow`'s absent-on-null
+ * branch — the fix for a shipped export/import data-loss bug — was never once
+ * executed by it.
+ */
 const optionalCol = (innerKind: string): ValidatorLike =>
-    ({ _meta: { column: { notNull: false }, inner: { _meta: { column: { notNull: false } }, kind: innerKind } }, kind: "optional" }) as never;
+    ({ _meta: { column: { notNull: true }, inner: { _meta: { column: { notNull: true } }, kind: innerKind } }, kind: "optional" }) as never;
+
+/**
+ * An `optional(inner.nullable())` column — the case where a stored NULL is a
+ * VALUE the column holds rather than an absent field. `.nullable()` is the one
+ * thing that clears `notNull`, and it clears it on the INNER validator.
+ */
+const nullableOptionalCol = (innerKind: string): ValidatorLike =>
+    ({ _meta: { column: { notNull: true }, inner: { _meta: { column: { notNull: false } }, kind: innerKind } }, kind: "optional" }) as never;
 
 const schema: SchemaLike = {
     tables: {
@@ -876,6 +897,78 @@ describe("createSqlCtxDb — aggregate + rank backfills route through batch when
             database.close();
         }
     });
+
+    it("chunks the rank backfill instead of buffering the whole table into one batch", async () => {
+        expect.assertions(3);
+
+        const rowCount = BACKFILL_BATCH_SIZE * 2 + 7;
+        const database = new DatabaseSync(":memory:");
+        const all = (query: string, parameters: ReadonlyArray<unknown>): Record<string, unknown>[] => database.prepare(query).all(...(parameters as never[]));
+
+        const plainExec: SqlCtxExec = {
+            all: (query, parameters) => Promise.resolve(all(query, parameters)),
+            run: (query, parameters) => {
+                all(query, parameters);
+
+                return Promise.resolve();
+            },
+        };
+
+        const batchSizes: number[] = [];
+        const batchingExec: SqlCtxExec = {
+            all: (query, parameters) => Promise.resolve(all(query, parameters)),
+            batch: (statements) => {
+                batchSizes.push(statements.length);
+
+                for (const statement of statements) {
+                    all(statement.sql, statement.params);
+                }
+
+                return Promise.resolve();
+            },
+            run: (query, parameters) => {
+                all(query, parameters);
+
+                return Promise.resolve();
+            },
+        };
+
+        try {
+            // Provision the base + companion tables, then seed the rest of the
+            // rows straight into the physical table — the point is the SIZE of
+            // the backfill, and 1000-odd `insert()` round trips would only make
+            // the test slow.
+            const seeder = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: plainExec, schema: backfillSchema });
+
+            await seeder.insert("notes", { archived: false, priority: 0, slug: "seed" });
+
+            for (let index = 1; index < rowCount; index += 1) {
+                all(`INSERT INTO notes (id, _creationTime, archived, priority, slug) VALUES (?, ?, ?, ?, ?)`, [
+                    `row-${String(index).padStart(6, "0")}`,
+                    1,
+                    0,
+                    index,
+                    `s${String(index)}`,
+                ]);
+            }
+
+            // A fresh ctx-db with an empty backfill cache: its first `rankPage`
+            // rebuilds the rank companion from every row in the table.
+            const rebuilder = createSqlCtxDb({ clock: () => 2, dialect: makeSqliteDialect(), exec: batchingExec, schema: backfillSchema });
+            const page = await rebuilder.rankPage("notes", "byPriority", { take: 3 });
+
+            expect(page.page).toHaveLength(3);
+            // Every tuple still lands…
+            expect(batchSizes.reduce((total, size) => total + size, 0)).toBeGreaterThanOrEqual(rowCount);
+            // …but no single batch carries the whole table. An N-statement batch
+            // (and the N drizzle `SQL` objects behind it) is what the docblock's
+            // "an unbounded table never has to fit in a single SELECT" claim did
+            // not cover.
+            expect(Math.max(...batchSizes)).toBeLessThanOrEqual(BACKFILL_BATCH_SIZE);
+        } finally {
+            database.close();
+        }
+    });
 });
 
 describe("createSqlCtxDb — cross-dialect SQL rendering", () => {
@@ -1566,5 +1659,266 @@ describe("global table companion provisioning", () => {
         await expect(named("metrics__rank_byPriority")).resolves.toBe(true);
         await expect(named("sessions__agg_byArchived")).resolves.toBe(false);
         await expect(named("sessions__rank_byPriority")).resolves.toBe(false);
+    });
+});
+
+/**
+ * A `.global()` table whose min/max aggregate indexes are declared over a
+ * `v.bigint()` column — the shape that sends `recomputeExtreme` down its
+ * reduce-in-SQL branch over a column holding an order-preserving key rather
+ * than a number. Every other `aggregateIndexes` fixture here is `op: "count"`,
+ * which passes SQL no field at all.
+ */
+const bigintExtremeSchema: SchemaLike = {
+    tables: {
+        payments: {
+            aggregateIndexes: [
+                { by: ["tenant"], field: "amount", name: "maxAmount", on: "payments", op: "max" },
+                { by: ["tenant"], field: "amount", name: "minAmount", on: "payments", op: "min" },
+            ],
+            indexes: [],
+            shape: { amount: col("bigint"), tenant: col("string") },
+            shardMode: { kind: "global" },
+        },
+    },
+} as never;
+
+describe("createSqlCtxDb — min/max companion over a bigint column", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("recomputes the surviving extreme from the decoded rows, not by reducing the stored key in SQL", async () => {
+        expect.assertions(4);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: bigintExtremeSchema });
+
+        const lowest = await writer.insert("payments", { amount: 7n, tenant: "a" });
+        const highest = await writer.insert("payments", { amount: 1234n, tenant: "a" });
+
+        await writer.insert("payments", { amount: 42n, tenant: "a" });
+        await writer.insert("payments", { amount: 900n, tenant: "a" });
+        // A second tenant, so a recompute that lost its `by`-scope would be caught too.
+        await writer.insert("payments", { amount: 5n, tenant: "b" });
+
+        // Both extremes are seeded through `coerceAggregateNumber`, so they start right.
+        await expect(writer.aggregate("payments", { op: "min", field: "amount", where: { tenant: "a" } })).resolves.toBe(7);
+
+        // Deleting the row that IS the stored extreme is what forces the recompute.
+        await writer.delete(lowest);
+
+        await expect(writer.aggregate("payments", { op: "min", field: "amount", where: { tenant: "a" } })).resolves.toBe(42);
+
+        await writer.delete(highest);
+
+        await expect(writer.aggregate("payments", { op: "max", field: "amount", where: { tenant: "a" } })).resolves.toBe(900);
+
+        await expect(writer.aggregate("payments", { op: "min", field: "amount", where: { tenant: "b" } })).resolves.toBe(5);
+    });
+});
+
+/** A table with one `v.optional()` and one `v.optional(v.nullable())` column, so the decoder's two NULL meanings are both covered. */
+const optionalSchema: SchemaLike = {
+    tables: {
+        drafts: {
+            indexes: [],
+            shape: {
+                // `v.optional(v.string())` — a stored NULL means the field is ABSENT.
+                note: optionalCol("string"),
+                // `v.optional(v.string().nullable())` — a stored NULL is a value the column holds.
+                subtitle: nullableOptionalCol("string"),
+                title: col("string"),
+            },
+            shardMode: { kind: "global" },
+        },
+    },
+} as never;
+
+describe("createSqlCtxDb — a NULL in an optional column decodes as absent", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("omits an unset v.optional() field instead of reading it back as null, and keeps an explicit null on a nullable one", async () => {
+        expect.assertions(4);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: optionalSchema });
+
+        // An explicit `null` on a `.nullable()` column is a VALUE, not an absent field.
+        const id = await writer.insert("drafts", { subtitle: null, title: "t" });
+        const row = await writer.get(id, "drafts");
+
+        // `optional(string).parse(null)` throws, so decoding an unset optional
+        // column as `null` broke the export/import round trip outright.
+        expect(Object.hasOwn(row as object, "note")).toBe(false);
+        expect(Object.hasOwn(row as object, "subtitle")).toBe(true);
+        expect((row as Record<string, unknown>)["subtitle"]).toBeNull();
+        expect((row as Record<string, unknown>)["title"]).toBe("t");
+    });
+});
+
+/**
+ * The same min/max shape as {@link bigintExtremeSchema}, but over a `v.any()`
+ * column. `sqliteEncode` keys off the RUNTIME type, so this column holds the
+ * same order-preserving key a declared `v.bigint()` one does — which is the
+ * whole reason `mayHoldBigintKey` matches `any`/`union`/`from`. What the
+ * declared fixture cannot catch is the DECODE half: an untyped column's key has
+ * to come back as a `bigint` for the fold to reduce it.
+ */
+const untypedBigintExtremeSchema: SchemaLike = {
+    tables: {
+        payments: {
+            aggregateIndexes: [
+                { by: ["tenant"], field: "amount", name: "maxAmount", on: "payments", op: "max" },
+                { by: ["tenant"], field: "amount", name: "minAmount", on: "payments", op: "min" },
+            ],
+            indexes: [],
+            shape: { amount: col("any"), tenant: col("string") },
+            shardMode: { kind: "global" },
+        },
+    },
+} as never;
+
+describe("createSqlCtxDb — a bigint in an untyped column", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("reads a bigint back out of a v.any() column as a bigint, not as the stored key", async () => {
+        expect.assertions(2);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedBigintExtremeSchema });
+
+        const id = await writer.insert("payments", { amount: 900n, tenant: "a" });
+
+        await expect(writer.get(id)).resolves.toMatchObject({ amount: 900n });
+
+        const negative = await writer.insert("payments", { amount: -900n, tenant: "a" });
+
+        await expect(writer.get(negative)).resolves.toMatchObject({ amount: -900n });
+    });
+
+    it("recomputes both extremes of an untyped column from the decoded bigints", async () => {
+        expect.assertions(4);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedBigintExtremeSchema });
+
+        const lowest = await writer.insert("payments", { amount: 7n, tenant: "a" });
+        const highest = await writer.insert("payments", { amount: 1234n, tenant: "a" });
+
+        await writer.insert("payments", { amount: 42n, tenant: "a" });
+        await writer.insert("payments", { amount: 900n, tenant: "a" });
+
+        // Removing the row that IS the stored extreme is what forces the recompute.
+        await writer.delete(lowest);
+
+        await expect(writer.aggregate("payments", { field: "amount", op: "min", where: { tenant: "a" } })).resolves.toBe(42);
+        await expect(writer.aggregate("payments", { field: "amount", op: "max", where: { tenant: "a" } })).resolves.toBe(1234);
+
+        await writer.delete(highest);
+
+        await expect(writer.aggregate("payments", { field: "amount", op: "max", where: { tenant: "a" } })).resolves.toBe(900);
+        await expect(writer.aggregate("payments", { field: "amount", op: "min", where: { tenant: "a" } })).resolves.toBe(42);
+    });
+
+    /*
+     * The collision the untyped-column decode admits, pinned so a change to this
+     * codec has to argue with it rather than rediscover it.
+     *
+     * `decodeBigintSqlKey` accepts exactly 40 characters: `"0"` or `"1"`, then 39
+     * digits. A *string* of that shape in an untyped column is indistinguishable
+     * from a stored key — a padded account number or a numeric external id can
+     * reach it — and reads back as a `bigint`. Storage genuinely cannot tell them
+     * apart: `sqliteEncode` writes the string verbatim and writes the key by the
+     * same rule, so the two are byte-identical on disk.
+     */
+    it("cannot tell a 40-character digit string in an untyped column from a stored key", async () => {
+        expect.assertions(3);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedBigintExtremeSchema });
+
+        // Exactly the accepted shape: leading "1", then 39 digits.
+        const collides = `1${"0".repeat(36)}900`;
+
+        expect(collides).toHaveLength(40);
+
+        const id = await writer.insert("payments", { amount: collides, tenant: "a" });
+
+        // Reads back as the bigint that shape encodes, NOT as the string written.
+        await expect(writer.get(id)).resolves.toMatchObject({ amount: 900n });
+
+        // One character outside the shape is unambiguous and survives as a string.
+        const safe = await writer.insert("payments", { amount: `2${"0".repeat(36)}900`, tenant: "a" });
+
+        await expect(writer.get(safe)).resolves.toMatchObject({ amount: `2${"0".repeat(36)}900` });
+    });
+});
+
+describe("createSqlCtxDb — recomputing an extreme over a large group", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("pages the fold instead of selecting the whole group into the isolate", async () => {
+        expect.assertions(2);
+
+        let widest = 0;
+        const counting: SqlCtxExec = {
+            all: async (query, parameters) => {
+                const rows = await harness.exec.all(query, parameters);
+
+                widest = Math.max(widest, rows.length);
+
+                return rows;
+            },
+            run: async (query, parameters) => harness.exec.run(query, parameters),
+        };
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: counting, schema: untypedBigintExtremeSchema });
+
+        // One group, comfortably past a single page of the keyset walk.
+        const total = BACKFILL_BATCH_SIZE + 20;
+        let lowest = "";
+
+        for (let index = 0; index < total; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- companion maintenance is per-write and sequential; concurrent inserts would interleave the min/max bump.
+            const id = await writer.insert("payments", { amount: BigInt(index + 1), tenant: "a" });
+
+            if (index === 0) {
+                lowest = id;
+            }
+        }
+
+        widest = 0;
+
+        // Removing the row that IS the stored extreme is what forces the recompute.
+        await writer.delete(lowest);
+
+        await expect(writer.aggregate("payments", { field: "amount", op: "min", where: { tenant: "a" } })).resolves.toBe(2);
+        expect(widest).toBeLessThanOrEqual(BACKFILL_BATCH_SIZE);
     });
 });

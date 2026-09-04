@@ -534,6 +534,34 @@ describe("allow_unauthenticated_shard_access_enabled", () => {
         expect(allowUnauthenticatedShardAccessEnabled.run({ configCalls: calls, schema: gapSchema })).toHaveLength(1);
     });
 
+    // The `lunora()` Vite-plugin callee is the ONLY place a class-A app (the
+    // default Vite path — sveltekit / astro / react-router / tanstack-start) can
+    // set the flag, since it has no worker entry to `.extend()` from. Its feeder
+    // row keeps the config's file extension (`discover/config-calls.ts`'s
+    // `viteConfigCalls`), unlike the `lunora/`-relative paths.
+    it("flags a lunora() Vite-plugin call that sets allowUnauthenticatedShardAccess: true", () => {
+        expect.assertions(3);
+
+        const calls = [
+            configCall({
+                callee: "lunora",
+                file: "vite.config.ts",
+                line: 18,
+                presentKeys: ["allowUnauthenticatedShardAccess"],
+                trueKeys: ["allowUnauthenticatedShardAccess"],
+            }),
+        ];
+        const findings = allowUnauthenticatedShardAccessEnabled.run({ configCalls: calls, schema: schema() });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({
+            cacheKey: "allow_unauthenticated_shard_access_enabled:vite.config.ts:18",
+            level: "WARN",
+            metadata: { callee: "lunora" },
+        });
+        expect(findings[0]?.detail).toContain("`lunora(...)` in vite.config.ts:18");
+    });
+
     it("ignores an .extend() call that only names the key without setting it true, an opaque config, and other callees", () => {
         expect.assertions(1);
 

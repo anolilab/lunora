@@ -24,7 +24,17 @@ const PAYMENT_TRANSITIONS: Record<PaymentState, Partial<Record<PaymentAction, Pa
     authorized: { cancel: "canceled", capture: "captured", fail: "failed" },
     canceled: {},
     captured: { partial_refund: "partially_refunded", refund: "refunded" },
-    failed: {},
+    // NOT terminal. A failed payment is terminal in our ledger only if the provider also treats it
+    // that way, and Stripe does not: a declined PaymentIntent returns to `requires_payment_method`,
+    // so the SAME `pi_` can be confirmed again and reach `succeeded` — or `requires_capture` on a
+    // manual-capture intent, which arrives as `payment_intent.amount_capturable_updated`. Both are
+    // forward transitions at the provider, not out-of-order delivery, so `capture` and `authorize`
+    // are legal exits; rejecting them dropped the confirming webhook with a 200 and left the row
+    // `failed` with `capturedAmount = 0` while the money was actually taken. `fail` self-loops for a
+    // second decline on the same intent (a real event, previously misreported as an illegal
+    // transition). Refunds stay illegal: nothing was captured here, so there is nothing to reverse —
+    // a refund landing on `failed` is the genuine out-of-order case the FSM should reject.
+    failed: { authorize: "authorized", capture: "captured", fail: "failed" },
     // A webhook can land before our local record exists, so "initiated" accepts the same
     // outcomes a fresh intent could reach directly.
     initiated: { authorize: "authorized", cancel: "canceled", capture: "captured", fail: "failed" },
@@ -50,7 +60,7 @@ const SUBSCRIPTION_TRANSITIONS: Record<SubscriptionState, Partial<Record<Subscri
  * `PAYMENT_TERMINAL_STATES` is part of the experimental `@lunora/payment` API and may change without a major version bump.
  * @experimental
  */
-const PAYMENT_TERMINAL_STATES: ReadonlySet<PaymentState> = new Set<PaymentState>(["canceled", "failed", "refunded"]);
+const PAYMENT_TERMINAL_STATES: ReadonlySet<PaymentState> = new Set<PaymentState>(["canceled", "refunded"]);
 
 /**
  * `SUBSCRIPTION_TERMINAL_STATES` is part of the experimental `@lunora/payment` API and may change without a major version bump.

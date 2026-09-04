@@ -571,3 +571,62 @@ describe(subscribeToMirror, () => {
         expect(unsub).toHaveBeenCalledTimes(1);
     });
 });
+
+describe("subscribeToMirror — an un-keyed row", () => {
+    it("upserts one row per distinct content instead of one per frame", () => {
+        expect.assertions(4);
+
+        // The derived key must not vary with the frame's wall clock, so give
+        // every frame a different millisecond — the shape that accumulated a
+        // row per frame.
+        let tick = 1_700_000_000_000;
+        const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+            tick += 1;
+
+            return tick;
+        });
+
+        try {
+            const adapter = createTestAdapter();
+            const mirror = new LocalMirror({ db: adapter });
+
+            let push: ((data: unknown) => void) | undefined;
+            const client: SubscriptionClient = {
+                subscribe(_fn: { __lunoraRef: string }, _args: Record<string, unknown>, cb: (data: unknown) => void) {
+                    push = cb;
+                    return vi.fn<() => void>();
+                },
+            };
+
+            subscribeToMirror(client, mirror, { __lunoraRef: "todos/stats" }, {});
+
+            // An aggregate result: no primary key to diff on, so every frame
+            // re-emits it.
+            for (let frame = 0; frame < 25; frame += 1) {
+                push!([{ open: 3, total: 7 }]);
+            }
+
+            expect(adapter.query("SELECT * FROM fn_todos_stats")).toHaveLength(1);
+
+            // A genuinely different aggregate is a different row — the mirror
+            // cannot tell which un-keyed row it replaced, so it lands beside it.
+            push!([{ open: 2, total: 7 }]);
+
+            expect(adapter.query("SELECT * FROM fn_todos_stats")).toHaveLength(2);
+
+            // …and repeating THAT frame is idempotent too.
+            for (let frame = 0; frame < 25; frame += 1) {
+                push!([{ open: 2, total: 7 }]);
+            }
+
+            expect(adapter.query("SELECT * FROM fn_todos_stats")).toHaveLength(2);
+
+            // A keyed row alongside it still keys on its own primary key.
+            push!([{ id: "a", open: 2, total: 7 }]);
+
+            expect(adapter.query("SELECT * FROM fn_todos_stats WHERE id = ?", ["a"])).toHaveLength(1);
+        } finally {
+            nowSpy.mockRestore();
+        }
+    });
+});

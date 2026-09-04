@@ -46,9 +46,15 @@ export interface SubscriptionClient {
  * hooks subscribed to the mirror.
  *
  * Rows are keyed by the table's primary key (`id` unless the table was
- * registered with another `primaryKey`); a row without one can't be diffed or
- * reconciled on removal, and — because the mirror's key column is `NOT NULL` —
- * will fail the insert.
+ * registered with another `primaryKey`). A row without one still lands — the
+ * apply path derives a key from the ROW's own content — but it cannot be
+ * diffed: it is re-emitted on every frame, and it is never reconciled on
+ * removal because only keyed rows are recorded for the delete pass. Repeating an
+ * identical frame is therefore a no-op upsert, but each distinct content the
+ * un-keyed row ever holds leaves a row behind for the life of the mirror.
+ * **Mirror a query that selects the primary key.** An un-keyed shape (an
+ * aggregate, or a projection that drops `id`) is supported only so that one such
+ * row cannot take the rest of the frame down with it.
  *
  * The mirror table name is derived from the function ref alone (not `args`), so
  * do NOT mirror two subscriptions to the same function with different `args`
@@ -111,8 +117,15 @@ const subscribeToMirror = (
                 // so never deleted). `String()` keys them consistently — 1n and 1
                 // are the same row id, which is what the mirror stores.
                 if (typeof rawId !== "string" && typeof rawId !== "number" && typeof rawId !== "bigint") {
-                    // Un-keyed row: cannot be diffed; let the mirror's NOT NULL
-                    // constraint surface it, as documented above.
+                    // Un-keyed row: cannot be diffed, so it is not recorded in
+                    // `next` and is re-emitted every frame. The apply path
+                    // derives a key from its content, so it lands rather than
+                    // failing the mirror's `PRIMARY KEY NOT NULL` — which rolled
+                    // back the whole frame, every well-keyed row in it included,
+                    // and (since `known` only advances after a successful apply)
+                    // permanently emptied the mirror table. Content-derived means
+                    // the re-emission upserts onto the same row; see the docblock
+                    // for what it still cannot reconcile.
                     changes.push({ type: "insert", data: record });
 
                     continue;

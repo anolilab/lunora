@@ -1,6 +1,9 @@
+import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 
+import { createBetterSqlite3Adapter } from "../src/adapters/better-sqlite3";
 import { applyDiff } from "../src/apply-diff";
+import { applyDiffToDb } from "../src/diff-applier";
 import type { TableDiff } from "../src/table-diff";
 
 /*
@@ -144,25 +147,112 @@ describe("derived id determinism", () => {
         expect(collisions.filter(([, first, current]) => first !== current)).toStrictEqual([]);
     });
 
-    it("keeps the table name and diff id inside the digest", () => {
+    it("keeps the table name — and only the table name — outside the row data", () => {
         expect.hasAssertions();
 
         const data = { name: "alice" };
 
-        // Two diffs differing ONLY in `id` must not derive the same row key —
-        // otherwise the second id-less insert silently overwrites the first.
-        expect(derived(data, "diff-a")).not.toBe(derived(data, "diff-b"));
+        // The diff that CARRIED the row is not part of its identity. It used to
+        // be, and since `subscribeToMirror` stamps each frame with `Date.now()`,
+        // a re-emitted un-keyed row landed under a fresh key every frame.
+        expect(derived(data, "diff-a")).toBe(derived(data, "diff-b"));
 
         // Same for a non-string id arriving from untyped wire JSON.
         const numericA = applyDiff(new Map(), { changes: [{ data, type: "insert" }], id: 5 as never, table: "t", timestamp: 1 });
         const numericB = applyDiff(new Map(), { changes: [{ data, type: "insert" }], id: 7 as never, table: "t", timestamp: 1 });
 
-        expect([...numericA.keys()]).not.toStrictEqual([...numericB.keys()]);
+        expect([...numericA.keys()]).toStrictEqual([...numericB.keys()]);
 
-        // And for a non-string table name.
+        // The table still separates, including as a non-string from wire JSON.
         const tableA = applyDiff(new Map(), { changes: [{ data, type: "insert" }], id: "d", table: 1 as never, timestamp: 1 });
         const tableB = applyDiff(new Map(), { changes: [{ data, type: "insert" }], id: "d", table: 2 as never, timestamp: 1 });
 
         expect([...tableA.keys()]).not.toStrictEqual([...tableB.keys()]);
+    });
+});
+
+/*
+ * Wire-typed leaves. `deriveInsertId` is handed rows that came off the poke
+ * protocol, so `decodeWire` has already turned tagged tokens back into real
+ * `bigint` / `Date` / `Map` / `Set` / `URL` / `ArrayBuffer` / typed-array
+ * values. Hashing the DECODED tree is what these pin: the encoding must keep
+ * apart what the wire keeps apart, and must not throw on a value the wire
+ * carries — a collision lands two unrelated rows on one mirror key, and a
+ * throw inside `applyDiffToDb`'s transaction discards the whole batch.
+ */
+describe("derived ids over decoded wire values", () => {
+    it("separates distinct wire-typed values that a JSON encoding flattens to {}", () => {
+        expect.hasAssertions();
+
+        // None of these has an own enumerable key, so a JSON encoding of the
+        // decoded tree renders every one of them as `{}` — one content hash,
+        // one derived id, and the upsert this derivation exists for lands them
+        // all on the SAME mirror row.
+        const flattened: [label: string, data: Record<string, unknown>][] = [
+            ["date", { v: new Date("2020-01-01T00:00:00.000Z") }],
+            ["later date", { v: new Date("2021-06-05T12:00:00.000Z") }],
+            ["url", { v: new URL("https://example.test/a") }],
+            ["map", { v: new Map([["a", 1]]) }],
+            ["other map", { v: new Map([["b", 2]]) }],
+            ["set", { v: new Set([1, 2]) }],
+            ["8-byte buffer", { v: new ArrayBuffer(8) }],
+            ["16-byte buffer", { v: new ArrayBuffer(16) }],
+            ["empty object", { v: {} }],
+        ];
+
+        const byId = new Map<string, string>();
+
+        for (const [label, data] of flattened) {
+            const id = derived(data);
+
+            byId.set(id, byId.has(id) ? `${byId.get(id) as string} + ${label}` : label);
+        }
+
+        expect([...byId.values()].filter((labels) => labels.includes(" + "))).toStrictEqual([]);
+    });
+
+    it("separates a typed array from the plain object carrying the same indices", () => {
+        expect.assertions(2);
+
+        expect(derived({ v: new Uint8Array([1, 2]) })).not.toBe(derived({ v: { 0: 1, 1: 2 } }));
+        expect(derived({ v: new Uint8Array([1, 2]) })).not.toBe(derived({ v: new Float32Array([1, 2]) }));
+    });
+
+    it("separates the non-finite numbers a JSON encoding collapses onto null", () => {
+        expect.assertions(3);
+
+        expect(derived({ v: Number.NaN })).not.toBe(derived({ v: null }));
+        expect(derived({ v: Infinity })).not.toBe(derived({ v: null }));
+        expect(derived({ v: Infinity })).not.toBe(derived({ v: -Infinity }));
+    });
+
+    it("derives an id for a bigint column instead of throwing", () => {
+        expect.assertions(2);
+
+        // `decodeWire` hands back a real `bigint` for an int64 column. Both apply
+        // paths check only the KEY field for one, so a bigint in any other column
+        // of an un-keyed row reaches the digest.
+        expect(() => derived({ total: 1n })).not.toThrow();
+        expect(derived({ total: 1n })).not.toBe(derived({ total: 1 }));
+    });
+
+    it("lands an un-keyed row on the same key through both apply paths", () => {
+        expect.assertions(2);
+
+        // The in-memory map and the SQLite mirror derive through the SAME
+        // function, so a row that reaches both must land under one key —
+        // otherwise a client holding both would hold the row twice.
+        const data = { at: new Date("2020-01-01T00:00:00.000Z"), label: "aggregate", total: 7n };
+        const diff: TableDiff = { changes: [{ data, type: "insert" }], id: "d", table: "t", timestamp: 1 };
+
+        const database = createBetterSqlite3Adapter(new Database(":memory:"));
+
+        database.exec("CREATE TABLE t (id TEXT PRIMARY KEY NOT NULL, at TEXT, label TEXT, total INTEGER)");
+        applyDiffToDb(database, diff);
+
+        const stored = database.query<{ id: string }>("SELECT id FROM t");
+
+        expect(stored).toHaveLength(1);
+        expect([...applyDiff(new Map(), diff).keys()]).toStrictEqual([stored[0]?.id]);
     });
 });

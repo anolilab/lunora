@@ -348,6 +348,7 @@ the endpoint runs in an `httpAction` and forwards the raw body + signature into 
 shard, where `ctx.payments` and its store exist:
 
 ```ts title="lunora/http.ts"
+import { webhookResponse } from "@lunora/payment";
 import { httpAction, httpRouter } from "lunorash/server";
 import { processWebhook } from "./billing";
 
@@ -359,7 +360,10 @@ app.post(
         const body = await request.text();
         const signature = request.headers.get("creem-signature") ?? "";
 
-        return Response.json(await ctx.runAction(processWebhook, { body, signature }));
+        // `webhookResponse`, not `Response.json(...)`: only the JSON payload crosses the
+        // `runAction` hop, so building the response by hand collapses the deliberate 500 on an
+        // orphaned (out-of-order) event to a 200 and Creem never redelivers it.
+        return webhookResponse(await ctx.runAction(processWebhook, { body, signature }));
     }),
 );
 ```
@@ -394,17 +398,17 @@ deliveries are safe by construction (the event `id` keys an append-only log).
 Creem's top-level event carries `id`, `eventType`, and `object`. The adapter maps
 each `eventType` to a normalized transition:
 
-| Creem `eventType`                                                   | Normalized action                                                                                   |
-| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `checkout.completed`                                                | `payment.captured` (reads the settled `order` amount)                                               |
-| `subscription.active`, `subscription.paid`, `subscription.trialing` | `subscription.active`                                                                               |
-| `subscription.past_due`, `subscription.unpaid`                      | `subscription.past_due` (non-entitling)                                                             |
-| `subscription.paused`                                               | `subscription.paused`                                                                               |
-| `subscription.canceled`, `subscription.expired`                     | `subscription.canceled`                                                                             |
-| `subscription.scheduled_cancel`                                     | `subscription.active` + `cancelAtPeriodEnd: true`                                                   |
-| `subscription.update`                                               | recomputed from the object's `status`                                                               |
-| `refund.created`                                                    | `payment.refunded` (reads `refund_amount`/`refund_currency`, references the original `transaction`) |
-| `dispute.created` (and any future families)                         | `unhandled` (no state transition)                                                                   |
+| Creem `eventType`                                                   | Normalized action                                                                                |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `checkout.completed`                                                | `payment.captured` (reads the settled `order` amount)                                            |
+| `subscription.active`, `subscription.paid`, `subscription.trialing` | `subscription.active`                                                                            |
+| `subscription.past_due`, `subscription.unpaid`                      | `subscription.past_due` (non-entitling)                                                          |
+| `subscription.paused`                                               | `subscription.paused`                                                                            |
+| `subscription.canceled`, `subscription.expired`                     | `subscription.canceled`                                                                          |
+| `subscription.scheduled_cancel`                                     | `subscription.active` + `cancelAtPeriodEnd: true`                                                |
+| `subscription.update`                                               | recomputed from the object's `status`                                                            |
+| `refund.created`                                                    | `payment.refunded` (reads `refund_amount`/`refund_currency`, keys on the refund's `checkout` id) |
+| `dispute.created` (and any future families)                         | `unhandled` (no state transition)                                                                |
 
 <Callout type="info">
     Note Creem's event name is `subscription.update` (no trailing "d"), distinct from Lunora's internal `subscription.updated` action; the adapter handles the

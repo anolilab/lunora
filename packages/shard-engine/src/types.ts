@@ -209,6 +209,16 @@ export interface SocketAttachment {
     admin?: boolean;
 
     /**
+     * Fingerprint of the `LUNORA_ADMIN_TOKEN` that authorized this socket at
+     * upgrade (`shared/ws-admin-token`'s `adminSocketBinding`). Every later
+     * admin read re-derives it from `env` and compares, so rotating or clearing
+     * the master token revokes a live admin socket instead of only closing the
+     * HTTP admin plane. Absent on non-admin sockets, and an absent value is
+     * refused — the gate fails closed.
+     */
+    adminBinding?: string;
+
+    /**
      * Stable per-client id from the `connect` envelope (the same id the client
      * stamps on its custom-mutator pushes). Lets a shape poke echo this client's
      * `__client_watermark` as the poke's `lastMutationId`, so a `@lunora/db`

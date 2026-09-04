@@ -666,11 +666,17 @@ const applyCdcChange = async (writer: DatabaseWriterLike, change: CdcChange): Pr
         // trusted-replay `allowExplicitId` opt-in so `replace` preserves the
         // row's original creation time instead of resetting it to the replay
         // clock (the default mutation path mints a fresh `clock()`).
+        //
+        // `change.table` is passed as `expectedTable` like the delete and insert
+        // above: an unscoped `replace` probes every table on the premise that ids
+        // are unique across them, which `.source()` tables break — `liftSourceId`
+        // sets `_id` to the upstream natural primary key, so an orders update
+        // lands in the users row.
         const fields = { ...document };
 
         delete fields["_id"];
 
-        await writer.replace(change.id, fields, undefined, { allowExplicitId: true });
+        await writer.replace(change.id, fields, change.table, { allowExplicitId: true });
     }
 };
 

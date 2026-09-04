@@ -280,8 +280,9 @@ costs the same as one hitting a single call site.
 | `WARN`  | 10             |
 | `INFO`  | 5              |
 
-A lint may override its own penalty with `Lint.weight`. Those per-procedure
-scores roll into a weighted mean: **public** handlers count double, **internal**
+Severity is the only input — a lint carries no per-lint weight of its own, so
+two rules at the same level cost the same. Those per-procedure scores roll into
+a weighted mean: **public** handlers count double, **internal**
 ones and **queries** count half. Findings that name no procedure (schema shape,
 `wrangler.jsonc` config) land in a **project** bucket weighted against the
 procedure population, so schema debt still moves the grade.
@@ -332,7 +333,7 @@ import { compareToBaseline, parseAdvisorMap } from "@lunora/advisor";
 const baseline = parseAdvisorMap(JSON.parse(await readFile("lunora.advisor.map.json", "utf8")));
 
 if (baseline === undefined) {
-    // Missing, hand-edited, or written by an older MAP_VERSION.
+    // Missing, or shaped in a way this build can't read (hand-edited, truncated).
     throw new Error("advisor baseline is unreadable; regenerate it");
 }
 
@@ -348,8 +349,9 @@ if (diff.regressed) {
 ```
 
 <Callout type="warn">
-    `parseAdvisorMap` returns `undefined` for a missing, malformed, or older-version baseline, and `compareToBaseline` returns `comparable: false` on a version
-    mismatch. Treat both as **"cannot verify"** and fail; reading them as "no regression" silently disables the gate.
+    `parseAdvisorMap` returns `undefined` for a missing or malformed baseline; version policy is `compareToBaseline`'s alone, which returns `comparable: false`
+    on a `MAP_VERSION` mismatch (a baseline from another version parses fine). Treat both as **"cannot verify"** and fail; reading them as "no regression"
+    silently disables the gate.
 </Callout>
 
 The artifact is deterministic apart from its timestamp: pass `generatedAt` to

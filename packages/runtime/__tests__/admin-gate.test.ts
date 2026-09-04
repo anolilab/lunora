@@ -168,3 +168,64 @@ describe("createWorker — adminGate execution context", () => {
         expect(response.status).toBe(403);
     });
 });
+
+/**
+ * The two reserved admin RPCs the WORKER serves itself dispatch at
+ * `/_lunora/rpc`, not under `/_lunora/admin/*`. `applyAdminGate` is scoped to
+ * `isAdminPath` (so the async gate stays off the data hot path), so it recorded no
+ * grant for them and `requestIsAdmin` fell back to the static bearer alone — an
+ * Access-only deployment got 403 on the Studio's auth-audit and
+ * notification-device reads while every `/_lunora/admin/*` route worked.
+ */
+describe("createWorker — adminGate authorizes the worker-served reserved admin RPCs", () => {
+    const rpc = (functionPath: string): Request =>
+        new Request("https://app.example/_lunora/rpc", {
+            body: JSON.stringify({ args: {}, functionPath }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+        });
+
+    it("serves __lunora_admin__:getAuthAuditLog to an Access-only admin (no static token)", async () => {
+        expect.assertions(3);
+
+        const adminGate = vi.fn<() => Promise<boolean>>(async () => true);
+        const worker = createWorker({
+            adminGate,
+            authAuditReader: { read: async () => [] },
+            functions: REGISTRY,
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(rpc("__lunora_admin__:getAuthAuditLog"), {}, fakeContext);
+
+        expect(response.status).toBe(200);
+        expect(adminGate).toHaveBeenCalledTimes(1);
+        await expect(response.json()).resolves.toStrictEqual({ result: { entries: [] } });
+    });
+
+    it("still denies (403) when the gate refuses and no bearer is supplied", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({
+            adminGate: async () => false,
+            authAuditReader: { read: async () => [] },
+            functions: REGISTRY,
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(rpc("__lunora_admin__:getAuthAuditLog"), {}, fakeContext);
+
+        expect(response.status).toBe(403);
+    });
+
+    it("never evaluates adminGate for an ordinary RPC", async () => {
+        expect.assertions(1);
+
+        const adminGate = vi.fn<() => Promise<boolean>>(async () => true);
+        const worker = createWorker({ adminGate, functions: REGISTRY, shardDO: noopNamespace });
+
+        await worker.fetch(rpc("messages:list"), {}, fakeContext);
+
+        expect(adminGate).not.toHaveBeenCalled();
+    });
+});

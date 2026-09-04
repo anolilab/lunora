@@ -99,6 +99,13 @@ without a separate `useState`.
 Returns `{ user, token, setToken(next) }`. Call `setToken(jwt)` after a
 sign-in flow; subsequent RPC calls carry the token automatically.
 
+Resolving the session also keys the client's offline-queue identity on the
+user id rather than the token bytes, so rotating the JWT for the same user
+keeps queued writes and the durable read cache instead of reading as a user
+switch. Between the rotation and the next session resolve, queued writes are
+held rather than replayed — the client cannot yet tell a refresh from an
+account switch.
+
 ## Server Components (Next.js App Router)
 
 Every hook in `@lunora/react` calls `useState`/`useEffect` and owns a live

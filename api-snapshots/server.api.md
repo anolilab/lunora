@@ -751,7 +751,11 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
     output: <V extends Validator>(validator: V) => HttpRouteBuilder<SearchParams, Body, Params, Infer<V>>;
     params: <P extends ArgsValidator>(validators: P) => HttpRouteBuilder<SearchParams, Body, P & Params, Output>;
     searchParams: <S extends ArgsValidator>(validators: S) => HttpRouteBuilder<S & SearchParams, Body, Params, Output>;
-    stream: <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => LunoraRouteHandler;
+    stream: [
+        Output
+    ] extends [
+        undefined
+    ] ? <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => LunoraRouteHandler : (handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<Output, void, void> | AsyncIterable<Output>) => LunoraRouteHandler;
     vary: (value: string) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
 }
 ```

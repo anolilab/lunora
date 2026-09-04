@@ -12,6 +12,7 @@
  * through the injected {@link ScheduledAdminRouteDeps}, so this module imports no
  * runtime values from `create-worker`.
  */
+import { readLooseJsonBody } from "./body-readers";
 import { LunoraError } from "./errors";
 import type { ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 import { resolveShard } from "./resolve-shard";
@@ -73,7 +74,10 @@ const buildScheduledAdminRoutes = (deps: ScheduledAdminRouteDeps): Record<string
             }
 
             const stub = resolveSchedulerStub(request);
-            const body = (await request.json().catch(() => undefined)) as { id?: unknown } | undefined;
+            // Read under the shared byte budget, like every sibling admin route: a
+            // bare `request.json()` drains whatever is sent, so a chunked body slips
+            // the cap the `Content-Length` fast path only loosely enforces.
+            const body = (await readLooseJsonBody(request, label)) as { id?: unknown } | undefined;
 
             if (typeof body?.id !== "string" || body.id === "") {
                 throw new LunoraError(`${label} requires a string \`id\``, { code: "BAD_REQUEST", status: 400 });
@@ -114,7 +118,7 @@ const buildScheduledAdminRoutes = (deps: ScheduledAdminRouteDeps): Record<string
         }
 
         const stub = resolveSchedulerStub(request);
-        const body = (await request.json().catch(() => undefined)) as { id?: unknown; pool?: unknown } | undefined;
+        const body = (await readLooseJsonBody(request, "Scheduled pool-release")) as { id?: unknown; pool?: unknown } | undefined;
 
         if (typeof body?.pool !== "string" || body.pool === "") {
             throw new LunoraError("Scheduled pool-release requires a string `pool`", { code: "BAD_REQUEST", status: 400 });

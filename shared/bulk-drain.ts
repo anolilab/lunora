@@ -71,9 +71,10 @@ export interface BulkDrainResult {
     cursor?: string;
     outcome: BulkDrainOutcome;
     /**
-     * Rows written across the batches that RETURNED. A throw mid-drain leaves the
-     * failing batch's own committed rows uncounted, so treat this as a lower
-     * bound on the failure path.
+     * Rows written across the batches that RETURNED. Only produced on the success
+     * path — a throw mid-drain never returns a result at all, so a caller that
+     * needs a partial count on the failure path accumulates it in its own `query`
+     * (where a batch's rows are on disk the moment the call resolves).
      */
     written: number;
 }
@@ -88,8 +89,9 @@ export interface BulkDrainResult {
  * the next batch as a keyset boundary, silently skipping every matching row
  * below it. One owner, so the two cannot disagree.
  *
- * Throws whatever `query` throws, after the partial `written` count is lost to
- * the caller — which is why the caller reports "at least N".
+ * Throws whatever `query` throws. No result is produced on that path, so a caller
+ * that wants to report how much of a destructive op already landed counts inside
+ * its own `query` rather than waiting for `written`.
  */
 export const drainBulkOp = async (options: BulkDrainOptions): Promise<BulkDrainResult> => {
     const { args, maxBatches, openCursor, query } = options;

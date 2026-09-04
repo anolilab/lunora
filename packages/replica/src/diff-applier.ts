@@ -1,4 +1,5 @@
 import type { SqliteAdapter } from "./adapters/types";
+import { deriveInsertId } from "./apply-diff";
 import type { TableDiff } from "./table-diff";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -92,13 +93,37 @@ const applySingleDiff = (database: SqliteAdapter, diff: TableDiff, pkColumn: str
             }
             case "insert": {
                 const { data } = change;
-                const keys = Object.keys(data);
-                if (keys.length === 0) {
+                if (Object.keys(data).length === 0) {
                     continue;
                 }
 
+                // `RowChange`'s insert variant carries no `id` field, and
+                // `subscribeToMirror` pushes an un-keyed row on purpose for any
+                // result it cannot key (an aggregate, or a projection that does
+                // not select the pk). Without a value the pk column takes no
+                // binding, `LocalMirror` declares it `PRIMARY KEY NOT NULL`, and
+                // the throw discards every well-keyed row in the same
+                // transaction — the whole-batch failure `normalizeBindValue`
+                // exists to stop, arriving through a different column. Worse, it
+                // is permanent: `subscribeToMirror` advances `known` only after a
+                // successful apply, so every later frame re-derives the same
+                // un-keyed insert and the mirror never receives a single row.
+                //
+                // So derive the id the way the in-memory apply path already does
+                // — same function, so the two paths agree on the key a given row
+                // lands under, and a replayed diff upserts instead of
+                // accumulating rows. A derived id is `row-` plus 16 hex
+                // characters; an application key of that literal shape would
+                // collide with one, so the two must not share a table.
+                const rawId = data[pkColumn];
+                const row =
+                    typeof rawId === "bigint" || typeof rawId === "number" || typeof rawId === "string"
+                        ? data
+                        : { ...data, [pkColumn]: deriveInsertId(diff, data) };
+                const keys = Object.keys(row);
+
                 const sql = `INSERT OR REPLACE INTO ${table} ${colList(keys)} VALUES ${valueList(keys.length)}`;
-                const values = keys.map((k) => normalizeBindValue(data[k]));
+                const values = keys.map((k) => normalizeBindValue(row[k]));
 
                 database.exec(sql, values);
                 break;

@@ -469,7 +469,7 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
     });
 
     it("gates a schema-declared vector index the target has no binding for", () => {
-        expect.assertions(3);
+        expect.assertions(6);
 
         // `ctx.vectors` is emitted off `schema.vectorIndexes`, never off the
         // gated `featureUsage.vectors` — and a `.vectorize()` declaration flips
@@ -482,11 +482,80 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
         expect(result.platformDiagnostics[0]?.message).toContain("vector");
 
-        // And the surface is actually WITHHELD, not merely complained about.
-        // Asserting only the diagnostic is how the sibling `browser` gate came to
-        // be re-enabled downstream without any test noticing: the flag said
-        // "off" while the emitted bytes said otherwise.
+        // And the surface is actually WITHHELD, not merely complained about,
+        // by EVERY emitter that carries it. Asserting only the diagnostic is how
+        // the sibling `browser` gate came to be re-enabled downstream without any
+        // test noticing: the flag said "off" while the emitted bytes said
+        // otherwise. Asserting only ONE of the three emitters is how the shard
+        // kept the whole Vectorize wiring — the import, the `createVectorSyncHook`
+        // write hook and `vectors` on the runtime ctx — on a target with no
+        // vector binding at all, while `server.ts` and `app.ts` correctly
+        // withheld theirs.
         expect(result.generated.server).not.toContain("readonly vectors:");
+        expect(result.generated.app).not.toContain(".vectors(");
+        expect(result.generated.shard).not.toContain("createVectorSyncHook");
+        expect(result.generated.shard).not.toContain("@lunora/bindings/vectors");
+    });
+
+    it("withholds the sharded-vector wiring, down to the ROOT_SHARD_NAME import it reads", () => {
+        expect.assertions(3);
+
+        // A `.shardBy()`'d vectorized table adds a second, separately-gated
+        // fragment: the shard-key namespace scoping, whose `ROOT_SHARD_NAME`
+        // sentinel is imported from `@lunora/do` off its own flag. Gating only
+        // the main wiring leaves that import behind, unused, in a file that
+        // imports nothing else it needs.
+        appendTable(
+            `    docs: defineTable({ body: v.string(), tenantId: v.string() }).shardBy("tenantId").vectorize("body", { dimensions: 768, index: "docs_search", metric: "cosine" }),`,
+        );
+
+        const result = codegen();
+
+        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(result.generated.shard).not.toContain("createVectorSyncHook");
+        expect(result.generated.shard).not.toContain("ROOT_SHARD_NAME");
+    });
+
+    it("does not demand the vector binding package on a target with no vector store", () => {
+        expect.assertions(2);
+
+        // The required-package check is keyed off the schema, so it read the raw
+        // `.vectorize()` count and hard-FAILED codegen unless the project
+        // installed `@lunora/bindings` — for a binding this host does not have,
+        // after the gate had already told the app the feature is unsupported.
+        // The generated output imports nothing from it here, so nothing is
+        // required.
+        // `@lunora/d1` is what the fixture's `.global()` table legitimately needs; the
+        // question here is only whether the vector binding is demanded alongside it.
+        writeFileSync(join(workdir, "package.json"), `{ "name": "gated", "dependencies": { "@lunora/d1": "*" } }`, "utf8");
+        appendTable(`    docs: defineTable({ body: v.string() }).vectorize("body", { dimensions: 768, index: "docs_search", metric: "cosine" }),`);
+
+        const result = codegen();
+
+        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(result.generated.shard).not.toContain("@lunora/bindings/vectors");
+    });
+
+    it("hides the studio's vector browser on a target with no vector store", () => {
+        expect.assertions(3);
+
+        // The studio nav reads `studioFeatures.vectors` out of the emitted shard.
+        // That flag was built from the RAW `.vectorize()` count and the raw
+        // `@lunora/bindings` dependency, both un-gated — so the same build that
+        // withheld `ctx.vectors` from the shard shipped a Vector browser entry
+        // advertising a binding this host does not have. BOTH arms have to fall
+        // to the platform verdict, not just the count: an app depending on
+        // `@lunora/bindings` for `ctx.kv` would otherwise keep the page.
+        writeFileSync(join(workdir, "package.json"), `{ "name": "gated", "dependencies": { "@lunora/bindings": "*", "@lunora/d1": "*" } }`, "utf8");
+        appendTable(`    docs: defineTable({ body: v.string() }).vectorize("body", { dimensions: 768, index: "docs_search", metric: "cosine" }),`);
+
+        const result = codegen();
+
+        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(result.generated.shard).toContain(`"vectors": false`);
+        // The sibling `@lunora/bindings` feature stays on — the verdict is
+        // per-capability, and `keyValueStore` is `emulated` on this target.
+        expect(result.generated.shard).toContain(`"kv": true`);
     });
 
     it("gates ctx.browser reached through @lunora/agent's browserTool exactly as it gates a direct import", () => {

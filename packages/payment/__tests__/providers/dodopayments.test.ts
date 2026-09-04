@@ -357,11 +357,31 @@ describe("dodopayments adapter", () => {
 
         const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
-        const payload = JSON.stringify({ data: { amount: 2500, currency: "USD", payment_id: "pay_1" }, type: "dispute.lost" });
+        // The real wire shape: `GetDispute.amount` is a STRING ("represented as a string to
+        // accommodate precision"), not the number the old fixture used. A `readNumber` here yields
+        // `undefined` → a zero-money reversal on a real chargeback.
+        const payload = JSON.stringify({ data: { amount: "2500", currency: "USD", payment_id: "pay_1" }, type: "dispute.lost" });
         const action = await adapter.parseWebhook({ headers: headersFor("m8", timestamp, sign("m8", timestamp, payload)), payload });
 
         expect(action.type).toBe("payment.refunded");
         expect(action.amount?.minorUnits).toBe(2500n);
+        expect(action.sessionId).toBe("pay_1");
+    });
+
+    it("refuses to scale a non-integer dispute amount rather than guess its unit", async () => {
+        expect.assertions(3);
+
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const payload = JSON.stringify({ data: { amount: "25.00", currency: "USD", payment_id: "pay_1" }, type: "dispute.lost" });
+        const action = await adapter.parseWebhook({ headers: headersFor("m9", timestamp, sign("m9", timestamp, payload)), payload });
+
+        // Reading "25.00" as 25 minor units understates the reversal 100x; reading it as 2500
+        // overstates it 100x if Dodo ever sends integer minor units in that shape. Carry no amount:
+        // `sync.ts` then records a FULL reversal with the money untouched, which is loud and
+        // fail-closed, instead of writing a confidently wrong figure to the ledger.
+        expect(action.type).toBe("payment.refunded");
+        expect(action.amount).toBeUndefined();
         expect(action.sessionId).toBe("pay_1");
     });
 

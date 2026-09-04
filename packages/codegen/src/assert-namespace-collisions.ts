@@ -17,10 +17,19 @@ import sanitizeNamespace from "./paths";
  * The `/index` collapse is part of the same namespace function, so
  * `lunora/foo/index.ts` and `lunora/foo.ts` are caught here too — both are
  * `foo`.
- * @param filePaths every function/mutator file path (relative to the lunora dir, no extension).
+ *
+ * Called once per emitted namespace SPACE, not once per run: `api.*` (functions
+ * + mutators) and `httpStreams.*` (`.stream()` routes) are separate objects, so
+ * a function file and a route file may share a namespace without colliding —
+ * but two route files may not. Checking the streaming routes was missing
+ * entirely, and `renderHttpStreamsRef` groups them by the same `sanitizeNamespace`,
+ * so `feed-a.ts` + `feed_a.ts` emitted the key twice into both the
+ * `HttpStreamsRef` interface (TS2300) and its object literal (TS1117).
+ * @param filePaths every file path contributing to one namespace space (relative to the lunora dir, no extension).
+ * @param surface which emitted namespace space is being checked — names the failure in the diagnostic.
  * @throws when two distinct paths sanitize to one namespace.
  */
-const assertNoNamespaceCollisions = (filePaths: Iterable<string>): void => {
+const assertNoNamespaceCollisions = (filePaths: Iterable<string>, surface: "api" | "http-stream" = "api"): void => {
     const byNamespace = new Map<string, string>();
 
     for (const filePath of filePaths) {
@@ -37,9 +46,14 @@ const assertNoNamespaceCollisions = (filePaths: Iterable<string>): void => {
             // "INTERNAL" is the code every other codegen-time collision uses
             // (`agents:*` / `sandbox:invoke` in `emit.ts`) — the error catalog has
             // no codegen-authoring code, and adding one is `@lunora/errors`' call.
+            const consequence =
+                surface === "api"
+                    ? `the generated api.ts would declare "${namespace}" twice and the dispatch key "${namespace}:<fn>" would be ambiguous`
+                    : `the generated api.ts would declare "${namespace}" twice in HttpStreamsRef and again in the httpStreams object literal`;
+
             throw new LunoraError(
                 "INTERNAL",
-                `@lunora/codegen: "${previous}" and "${filePath}" both map to the api namespace "${namespace}" — the generated api.ts would declare "${namespace}" twice and the dispatch key "${namespace}:<fn>" would be ambiguous. Rename one file so the two differ by more than a non-identifier character (\`-\`, \`.\`, \`/\` and \`_\` all sanitize to \`_\`).`,
+                `@lunora/codegen: "${previous}" and "${filePath}" both map to the ${surface} namespace "${namespace}" — ${consequence}. Rename one file so the two differ by more than a non-identifier character (\`-\`, \`.\`, \`/\` and \`_\` all sanitize to \`_\`).`,
                 { status: 500 },
             );
         }

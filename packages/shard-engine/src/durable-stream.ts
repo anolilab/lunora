@@ -114,6 +114,18 @@ const readStreamRun = (sql: SqlExec, runKey: string): DurableStreamRun | undefin
 };
 
 /**
+ * Drop every chunk under a run key.
+ *
+ * All three reclamation paths — a fresh claim, an explicit delete, and a
+ * terminal whose run row a sweep already took — need exactly this, and each
+ * carried its own copy. The sweep's own delete is deliberately NOT one of them:
+ * it is scoped by a subselect over `__stream_runs` and takes many keys at once.
+ */
+const deleteStreamChunks = (sql: SqlExec, runKey: string): void => {
+    runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(STREAM_CHUNKS_TABLE)} WHERE run_key = ${runKey}`);
+};
+
+/**
  * Claim a run for production. Returns `true` when this caller created the row
  * and therefore owns the producer; `false` when a run already exists, in which
  * case the caller attaches to it instead of starting a second handler.
@@ -127,6 +139,11 @@ const claimStreamRun = (sql: SqlExec, runKey: string, startedAt: number, ttlMs: 
     if (readStreamRun(sql, runKey) !== undefined) {
         return false;
     }
+
+    // A fresh claim is a fresh transcript, so the key must start empty: chunks a
+    // sweep orphaned under it are `INSERT OR IGNORE`d over, silently dropping
+    // this run's own chunks at the colliding seqs.
+    deleteStreamChunks(sql, runKey);
 
     runDrizzle(
         sql,
@@ -146,7 +163,7 @@ const claimStreamRun = (sql: SqlExec, runKey: string, startedAt: number, ttlMs: 
  * to go, or its key stays wedged until the TTL expires.
  */
 const deleteStreamRun = (sql: SqlExec, runKey: string): void => {
-    runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(STREAM_CHUNKS_TABLE)} WHERE run_key = ${runKey}`);
+    deleteStreamChunks(sql, runKey);
     runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(STREAM_RUNS_TABLE)} WHERE run_key = ${runKey}`);
 };
 
@@ -180,8 +197,27 @@ const readStreamChunks = (sql: SqlExec, runKey: string, sinceSeq: number): Durab
             return { dataJson: row.data_json, seq: row.seq };
         });
 
-/** Mark a run finished. `errorCode`/`error` are written only for the `error` status. */
+/**
+ * Mark a run finished. `errorCode`/`error` are written only for the `error`
+ * status.
+ *
+ * A run whose row is already gone gets its chunks dropped instead.
+ * {@link trimStreamRuns} deletes on `startedAt + ttlMs` regardless of status, so
+ * a generator that outlives its procedure's `ttlMs` reaches this terminal under
+ * a key the sweep has already emptied — and everything it appended afterwards is
+ * unreachable by every FUTURE sweep too, because the sweep's chunk delete is
+ * scoped by `run_key IN (SELECT … FROM __stream_runs …)`. Recording the terminal
+ * would resurrect a run past its own retention; reclaiming the chunks is the
+ * honest half, and it is what keeps the next claim under that key from
+ * inheriting them through `appendStreamChunk`'s `INSERT OR IGNORE`.
+ */
 const finishStreamRun = (sql: SqlExec, runKey: string, status: "complete" | "error", lastSeq: number, failure?: { code: string; message: string }): void => {
+    if (readStreamRun(sql, runKey) === undefined) {
+        deleteStreamChunks(sql, runKey);
+
+        return;
+    }
+
     /* eslint-disable unicorn/no-null -- SQL NULL is the value being written: a run that completes must clear its error columns, and `undefined` is not bindable */
     const errorCode = failure?.code ?? null;
     const errorMessage = failure?.message ?? null;

@@ -236,13 +236,14 @@ interface EmitAppOptions {
     hasR2sql: boolean;
     hasScheduler: boolean;
     hasStorage: boolean;
-    hasVectors: boolean;
+    hasVectors?: boolean;
     hasWorkflow: boolean;
     hasX402: boolean;
     identity?: IdentityIR;
     jurisdiction?: JurisdictionIR;
     tableNames: ReadonlyArray<string>;
     useUmbrella: boolean;
+    vectorIndexCount?: number;
     voiceAgents?: ReadonlyArray<{
         bindingName: string;
         exportName: string;
@@ -1180,7 +1181,7 @@ const emitApi: (options: EmitApiOptions) => string;
 ### `emitApp` (const)
 
 ```ts
-const emitApp: (options: EmitAppOptions) => string;
+const emitApp: (rawOptions: EmitAppOptions) => string;
 ```
 
 ### `emitCollections` (const)
@@ -1255,7 +1256,7 @@ const emitServer: ({ agents, containers, env, hasAccessFacade, hasAi, hasAnalyti
 ### `emitShard` (const)
 
 ```ts
-const emitShard: ({ advisories, advisorProcedures, agents, containers, env, flagKeys, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasX402, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, useUmbrella, workflows }: EmitShardOptions) => string;
+const emitShard: ({ advisories, advisorProcedures, agents, containers, env, flagKeys, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasVectors, hasX402, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, useUmbrella, workflows }: EmitShardOptions) => string;
 ```
 
 ### `emitVectors` (const)

@@ -159,12 +159,36 @@ export const effectiveColumnKind = (validator: ValidatorLike): string | undefine
  *   {@link sqliteEncode} keys off the runtime JS type — so a `v.from(z.string())`
  *   column holding `"123"` is stored verbatim, and unconditional parsing would
  *   read it back as the NUMBER 123.
+ *   A `bigint` member decodes too, by SHAPE: {@link sqliteEncode} keys off the
+ *   runtime type, so a bigint here is stored as the same order-preserving key a
+ *   declared `v.bigint()` column gets, and returning that verbatim handed the
+ *   caller 40 characters of padding instead of the value it wrote. See the
+ *   ambiguity this buys, and why the wire marker cannot carry it instead, below.
  *   CAVEAT: a union/any/from member is stored verbatim by {@link sqliteEncode}, so
  *   a legitimate *string* value that itself looks like JSON (`'{"a":1}'`, `'[1,2]'`)
  *   is ambiguous on read and decodes back to the parsed object/array, not the
- *   original string. This is inherent to sharing one TEXT column between a string
- *   and an object member; disambiguating would require a breaking storage-format
- *   change (tagging encoded non-scalars), so it is documented rather than fixed.
+ *   original string. The bigint test admits the same class of ambiguity, narrower
+ *   but real: `decodeBigintSqlKey` accepts EXACTLY 40 characters — `"0"` or `"1"`,
+ *   then 39 digits — and a stored *string* of that shape (a zero-padded account
+ *   number, a numeric external id) is byte-identical on disk to a key and reads
+ *   back as a `bigint`. Pinned by a test in `ctx-db.test.ts` so the trade is
+ *   visible rather than rediscovered.
+ *
+ *   Preferred anyway, because the alternative is not "no ambiguity" but
+ *   guaranteed corruption: WITHOUT the test, every bigint any code writes to an
+ *   untyped column comes back as padding, on every read. The narrow false
+ *   positive costs a specific 40-character digit string its type; the absent test
+ *   cost every such column its value.
+ *
+ *   The unambiguous {@link WIRE_PREFIX} marker cannot carry this instead. It is
+ *   not reached: {@link sqliteEncode} returns at its `bigint` branch first, and it
+ *   takes no `kind`, so it cannot encode an untyped column differently from a
+ *   declared one. It is also `serializeColumnValue`, which builds every WHERE
+ *   binding — a prefixed bigint would never match a row stored as a key, and the
+ *   padded key is order-preserving on purpose (indexes, range predicates, MIN/MAX
+ *   all read it). Two storage forms for one runtime type breaks comparison
+ *   between them. Disambiguating properly means tagging every encoded non-scalar,
+ *   a breaking storage-format change, so it is documented rather than fixed.
  * - everything else (string/number/date/timestamp/id/literal): verbatim.
  */
 export const sqliteDecode = (raw: unknown, kind: string | undefined): unknown => {
@@ -176,12 +200,25 @@ export const sqliteDecode = (raw: unknown, kind: string | undefined): unknown =>
         case "any":
         case "from":
         case "union": {
+            if (typeof raw !== "string") {
+                return raw;
+            }
+
             // The wire marker joins `{`/`[` as a shape this branch must decode —
             // a marked value is not raw JSON, so it would otherwise fall through
             // and be returned as its own storage string.
-            return typeof raw === "string" && (raw.startsWith("{") || raw.startsWith("[") || raw.startsWith(WIRE_PREFIX))
-                ? decodeJsonColumn(raw, tryJsonParse)
-                : raw;
+            if (raw.startsWith("{") || raw.startsWith("[") || raw.startsWith(WIRE_PREFIX)) {
+                return decodeJsonColumn(raw, tryJsonParse);
+            }
+
+            // A bigint in an untyped column is stored as the same
+            // order-preserving key a declared `v.bigint()` one gets, because
+            // {@link sqliteEncode} keys off the RUNTIME type. Without this the
+            // column reads back as 40 characters of padding. The shape test is
+            // narrow, not exact: a stored string of the same 40-character shape
+            // decodes as a bigint too — see the CAVEAT above for why that trade
+            // is the right way round.
+            return decodeBigintSqlKey(raw) ?? raw;
         }
         case "array":
         case "geoPoint":

@@ -1,6 +1,7 @@
 import { bench, describe } from "vitest";
 
-import { applyDiff, applyDiffs, canonicalizeForHash, fnv1a64Hex } from "../src/apply-diff";
+import { stableWireKey } from "../../../shared/wire-key";
+import { applyDiff, applyDiffs, fnv1a64Hex } from "../src/apply-diff";
 import type { TableDiff } from "../src/table-diff";
 import { backlog, baseRows, nestedInsertDiff, nestedPayload, ROW_COUNT } from "./apply-diff.shared";
 
@@ -16,13 +17,12 @@ import { backlog, baseRows, nestedInsertDiff, nestedPayload, ROW_COUNT } from ".
  *    limbs instead of `BigInt`, which allocated a heap object per character.
  *    Benched on its own over a fixed string, so the number backs the "~8x"
  *    claim in `apply-diff.ts` directly.
- * 3. Canonicalization kept its two-pass SHAPE (build a key-sorted copy, hand it
- *    to `JSON.stringify`); only its key ordering changed. Encoding straight to a
- *    string in one pass — no intermediate copy — looks like the obvious win, but
- *    it loses: `JSON.stringify` is a native fast path that JS-side string
- *    building cannot beat. The rejected alternative stays benched so the decision
- *    is re-checkable rather than folklore, and so nobody "optimizes" it back.
- *    Read this pair as current-vs-rejected, not old-vs-new.
+ * 3. Content encoding moved from a key-sorted COPY handed to `JSON.stringify`
+ *    to `stableWireKey`, which encodes the wire form in one pass. The move was
+ *    for correctness, not speed — the copy rendered every `Date`/`Map`/`Set`/
+ *    `URL`/`ArrayBuffer` as `{}` and threw on a `bigint` — so this pair exists
+ *    to keep the cost of that correctness attributable rather than hidden inside
+ *    the end-to-end number in 4.
  * 4. The surviving changes combined, end to end through the public `applyDiff`.
  *
  * Splitting 2 and 3 apart is what surfaced this: measured together they showed
@@ -50,8 +50,8 @@ const applyDiffsBaseline = (current: ReadonlyMap<string, Record<string, unknown>
  *
  * Named for its ordering on purpose — it sorts with `localeCompare`, the
  * locale-dependent ordering REPLICA-05 replaced with code-unit order. Do not
- * reach for this as a canonicalization reference; the shipped one is
- * `canonicalizeForHash`, imported above from `../src/apply-diff`.
+ * reach for this as a canonicalization reference; the shipped encoder is
+ * `stableWireKey`, imported above from `shared/wire-key.ts`.
  */
 const canonicalizeLocaleSortedPreReplica05 = (value: unknown): unknown => {
     if (Array.isArray(value)) {
@@ -94,31 +94,37 @@ const fnv1a64BigintHex = (input: string): string => {
 };
 
 /**
- * REJECTED alternative: encode in one pass straight to a string, no intermediate
- * copy. Measured slower than the two-pass form it would have replaced (see the
- * header) and would have meant re-implementing `JSON.stringify`'s escaping,
- * `undefined` and `toJSON` rules by hand. Kept only as the bench baseline.
+ * Pre-`stableWireKey` encoder: build a code-unit-key-sorted COPY of the value
+ * tree, then hand it to `JSON.stringify`. Correct only for pure JSON — it
+ * rendered every `Date`/`Map`/`Set`/`URL`/`ArrayBuffer` as `{}` (one shared
+ * digest for all of them) and threw on a `bigint`. Kept as the bench baseline so
+ * the cost of the encoder that replaced it stays attributable.
  */
-const canonicalJsonOnePass = (value: unknown): string => {
-    const unencodable = (item: unknown): boolean => item === undefined || typeof item === "function" || typeof item === "symbol";
+const canonicalJsonSortedCopyPreWireKey = (value: unknown): string => {
+    const canonicalize = (item: unknown): unknown => {
+        if (Array.isArray(item)) {
+            return item.map((element) => canonicalize(element));
+        }
 
-    if (Array.isArray(value)) {
-        return `[${value.map((item) => (unencodable(item) ? "null" : canonicalJsonOnePass(item))).join(",")}]`;
-    }
+        if (item !== null && typeof item === "object") {
+            const record = item as Record<string, unknown>;
+            const keys = Object.keys(record);
 
-    if (value !== null && typeof value === "object") {
-        const record = value as Record<string, unknown>;
-        const keys = Object.keys(record);
+            keys.sort();
 
-        keys.sort();
+            const result: Record<string, unknown> = {};
 
-        return `{${keys
-            .filter((key) => !unencodable(record[key]))
-            .map((key) => `${JSON.stringify(key)}:${canonicalJsonOnePass(record[key])}`)
-            .join(",")}}`;
-    }
+            for (const key of keys) {
+                result[key] = canonicalize(record[key]);
+            }
 
-    return JSON.stringify(value);
+            return result;
+        }
+
+        return item;
+    };
+
+    return JSON.stringify(canonicalize(value));
 };
 
 /** Pre-optimization `applyDiff` insert path, over the same 50 id-less inserts. */
@@ -173,12 +179,12 @@ describe("64-bit FNV-1a over one fixed hash input", () => {
 });
 
 describe("canonical encoding of one fixed nested payload", () => {
-    bench("current (canonicalizeForHash + native JSON.stringify)", () => {
-        JSON.stringify(canonicalizeForHash(canonicalInput));
+    bench("current (stableWireKey)", () => {
+        stableWireKey(canonicalInput);
     });
 
-    bench("rejected (one pass straight to a string)", () => {
-        canonicalJsonOnePass(canonicalInput);
+    bench("baseline (key-sorted copy + native JSON.stringify)", () => {
+        canonicalJsonSortedCopyPreWireKey(canonicalInput);
     });
 });
 

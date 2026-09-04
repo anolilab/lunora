@@ -81,8 +81,10 @@ export const lunoraDatabaseToPaymentDatabase = (database: LunoraDatabaseLike): P
  * @experimental
  */
 export const paymentsFromContext = (context: PaymentContextLike, options: PaymentsFromContextOptions): LunoraPayment => {
-    // Normalize any falsy identity (null/undefined/empty string) to `undefined` so a falsy-but-present
-    // principal can never match an empty/orphan `referenceId`.
+    // Narrow `null | string | undefined` to `string | undefined` — this only folds `null` into
+    // `undefined`. It does NOT normalize an empty string: `"" ?? undefined` is `""`. What stops a
+    // blank principal from matching an empty/orphan `referenceId` is the `referenceId.trim() !== ""`
+    // clause in the default authorizer below, so do not drop that clause on the strength of this line.
     const userId = context.auth?.userId ?? undefined;
 
     return createPayment({

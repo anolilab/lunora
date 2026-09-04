@@ -20,8 +20,12 @@ interface RequiredPackage {
  * None of these are umbrella-provided — `lunorash` re-exports only the base
  * packages (server, values, runtime, do, client), so an umbrella project still
  * installs these separately.
+ * @param schema the discovered schema.
+ * @param hasVectors the platform gate's `vectorStore` verdict. `false` means the emitted output
+ * withholds the Vectorize wiring, so the binding package it would have imported is not required
+ * either.
  */
-const requiredPackagesFor = (schema: SchemaIR): RequiredPackage[] => {
+const requiredPackagesFor = (schema: SchemaIR, hasVectors = true): RequiredPackage[] => {
     const required: RequiredPackage[] = [];
     const globalTables = schema.tables.filter((table) => table.shardMode === "global");
 
@@ -39,10 +43,16 @@ const requiredPackagesFor = (schema: SchemaIR): RequiredPackage[] => {
         });
     }
 
-    if (schema.vectorIndexes.length > 0) {
+    // Gated on the platform verdict, not on the raw declaration: when the target
+    // rates `vectorStore` as `unsupported` the shard emitter withholds the
+    // `@lunora/bindings/vectors` import entirely, so demanding the package would
+    // hard-fail the build over an import the generated code does not contain —
+    // for a binding the host does not have, after the gate has already reported
+    // the feature unsupported.
+    if (schema.vectorIndexes.length > 0 && hasVectors) {
         required.push({
             name: "@lunora/bindings",
-            reason: "`.vectorize()` indexes make `_generated/vectors.ts` import `@lunora/bindings/vectors`",
+            reason: "`.vectorize()` indexes make `_generated/shard.ts` import `@lunora/bindings/vectors`",
         });
     }
 
@@ -65,13 +75,16 @@ const requiredPackagesFor = (schema: SchemaIR): RequiredPackage[] => {
  * tell", not "declares nothing" — a project without a root `package.json` (the
  * codegen fixtures, an embedded schema, a tool driving `runCodegen` directly)
  * must not be told every add-on is missing. The check simply does not run.
+ * @param schema the discovered schema.
+ * @param dependencies the project's declared dependencies, or `undefined` when no manifest could be read.
+ * @param hasVectors the platform gate's `vectorStore` verdict — see {@link requiredPackagesFor}.
  */
-const assertRequiredPackages = (schema: SchemaIR, dependencies: ReadonlySet<string> | undefined): void => {
+const assertRequiredPackages = (schema: SchemaIR, dependencies: ReadonlySet<string> | undefined, hasVectors = true): void => {
     if (dependencies === undefined) {
         return;
     }
 
-    const missing = requiredPackagesFor(schema).filter((entry) => !dependencies.has(entry.name));
+    const missing = requiredPackagesFor(schema, hasVectors).filter((entry) => !dependencies.has(entry.name));
 
     if (missing.length === 0) {
         return;

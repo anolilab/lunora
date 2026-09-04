@@ -1873,10 +1873,8 @@ describe("lunoraClient", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
             const persistence = createInMemoryPersistence();
 
-            // A write durably queued by a prior, signed-in session. Its stamp is
-            // a fingerprint that cannot match this fresh, unauthenticated client
-            // (whose current identity is `null`).
-            await persistence.append({ args: { title: "user-a" }, functionPath: "posts:create", identity: "12:userastamp", id: "m1" });
+            // A write durably queued by a prior session signed in as user-a.
+            await persistence.append({ args: { title: "user-a" }, functionPath: "posts:create", identity: "subj:user-a", id: "m1" });
 
             const client = new LunoraClient({
                 fetch: fetchMock,
@@ -1884,6 +1882,11 @@ describe("lunoraClient", () => {
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
             });
+
+            // A genuinely DIFFERENT user is signed in. (Signed-out is not that
+            // case: it is the state of every reload before the app's session
+            // resolves, and holds instead — see the offline-lifecycle suite.)
+            client.setAuthToken("token-b", "user-b");
 
             await flushMicrotasks();
             latestSocket().open();

@@ -159,7 +159,8 @@ interface HttpStreamHandlerOptions<SearchParams extends ArgsValidator, Params ex
  * builder, `.output(validator)` defaults to the `undefined` sentinel — while
  * unset the handler is generic over its own return; once set the handler must
  * return that type and the result is parsed through the validator before
- * serialization. `[Output] extends [undefined]` is tuple-wrapped so a union
+ * serialization. It binds `.stream()` the same way, per yielded chunk.
+ * `[Output] extends [undefined]` is tuple-wrapped so a union
  * `Output` doesn't distribute and the test is for the exact sentinel.
  *
  * The terminal `.handler()` yields a {@link LunoraRouteHandler} — mount it
@@ -193,10 +194,16 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
      * iterator completion the route writes a final `event: complete` frame; on
      * throw, an `event: error` frame is written with `{code, message}` before
      * the stream closes. The chunks are JSON-encoded; `R` is inferred from the
-     * handler's yielded type.
+     * handler's yielded type — unless `.output()` was declared, in which case each
+     * chunk must be that type and is parsed through the validator before the frame
+     * is written (a violation ends the stream with an `event: error` frame).
      * @experimental Reconnect/POST-body/wire-fidelity design questions are still open, so the shape may change.
      */
-    stream: <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => LunoraRouteHandler;
+    stream: [Output] extends [undefined]
+        ? <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => LunoraRouteHandler
+        : (
+              handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<Output, void, void> | AsyncIterable<Output>,
+          ) => LunoraRouteHandler;
 
     /**
      * Attach a `Vary` header to the response so Cloudflare stores separate
@@ -563,7 +570,17 @@ const buildStreamHandler =
                             break;
                         }
 
-                        controller.enqueue(encoder.encode(sseFrame(chunk)));
+                        // `.output()` applies HERE too. SSE was the one result path
+                        // that skipped `applyOutput`, whose own contract is "every
+                        // result-parsing site (RPC, REST, any future transport) must
+                        // route through this helper" — so a `.stream()` route accepted
+                        // an `.output()`, type-checked the handler against it, and then
+                        // discarded it, sending whatever the generator yielded. A
+                        // violating chunk throws out of the pump into the catch below
+                        // and becomes a redacted `event: error` frame, which is the
+                        // same verdict the RPC and REST paths reach for a contract
+                        // breach — a wrong chunk is not a stream that keeps going.
+                        controller.enqueue(encoder.encode(sseFrame(state.output ? applyOutput(state.output, chunk) : chunk)));
                     }
 
                     // Re-check after the loop: a consumer `cancel()` (or a client

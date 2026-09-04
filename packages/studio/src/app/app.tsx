@@ -155,7 +155,14 @@ const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rule
     // token doesn't rebuild the LunoraClient (and tear down its WebSocket +
     // reconnect timers) once per keystroke. The raw `token` still drives the
     // controlled input; the client rebuilds at most once per typing pause.
-    const debouncedToken = useDebounced(token, 300);
+    //
+    // The reset key snaps the mirror on the empty↔non-empty transition, which is
+    // exactly where the gate below flips. The gate reads the RAW token, so without
+    // the snap the shell mounts every panel against a credential-less client for the
+    // full delay after a login — a row of 401s and failed WS subscribes — and drops
+    // the credential a delay late on logout. Editing a token that is already set
+    // stays debounced, which is what the delay is for.
+    const debouncedToken = useDebounced(token, 300, token === "");
 
     // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: this is the LunoraClient — a fresh one per render opens a new WebSocket
     const client = useMemo(() => {

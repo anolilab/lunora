@@ -44,6 +44,9 @@ const NO_SIGNALS = {
     storageColumnCount: 0,
     storageRuleCount: 0,
     vectorIndexCount: 0,
+    // The gate's verdict, not a signal the app raises: `true` is the
+    // no-platform-objection baseline every case below is written against.
+    vectorStoreSupported: true,
     workflowCount: 0,
 };
 
@@ -339,6 +342,7 @@ describe("discover/feature-usage", () => {
                 storageColumnCount: 2,
                 storageRuleCount: 0,
                 vectorIndexCount: 3,
+                vectorStoreSupported: true,
                 workflowCount: 0,
             });
 
