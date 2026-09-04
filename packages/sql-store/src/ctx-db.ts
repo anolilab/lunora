@@ -127,6 +127,7 @@ import {
     queryBatch,
     queryRun,
     serializeColumnValue,
+    serializeDocumentColumn,
     tableColumns,
 } from "./sql-exec";
 import { bigintSqlKey, effectiveColumnKind } from "./value-codec";
@@ -2268,7 +2269,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // Raw (unquoted) column names — the INSERT quotes them via `sql.identifier`.
             columns: ["id", "_creationTime", ...fields],
             // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
-            values: [id, creationTime, ...fields.map((field) => serializeColumnValue(document[field] ?? null))],
+            values: [id, creationTime, ...fields.map((field) => serializeDocumentColumn(definition, field, document[field] ?? null))],
         };
     };
 
@@ -2722,8 +2723,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 // merged row; read scoping (not companion removal) hides it.
                 const merged: Record<string, unknown> = { ...existing, [softField]: clock() };
                 const assignments = sql.join(
-                    // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column binds `null`, matching the patch path.
-                    Object.keys(definition.shape).map((field) => sql`${sql.identifier(field)} = ${serializeColumnValue(merged[field] ?? null)}`),
+                    Object.keys(definition.shape).map(
+                        // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column binds `null`, matching the patch path.
+                        (field) => sql`${sql.identifier(field)} = ${serializeDocumentColumn(definition, field, merged[field] ?? null)}`,
+                    ),
                     sql`, `,
                 );
 
@@ -3213,7 +3216,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const fields = Object.keys(definition.shape);
             const assignments = sql.join(
                 // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
-                fields.map((field) => sql`${sql.identifier(field)} = ${serializeColumnValue(merged[field] ?? null)}`),
+                fields.map((field) => sql`${sql.identifier(field)} = ${serializeDocumentColumn(definition, field, merged[field] ?? null)}`),
                 sql`, `,
             );
 
@@ -3745,7 +3748,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 [
                     sql`${sql.identifier("_creationTime")} = ${creationTime}`,
                     // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
-                    ...fields.map((field) => sql`${sql.identifier(field)} = ${serializeColumnValue(replaced[field] ?? null)}`),
+                    ...fields.map((field) => sql`${sql.identifier(field)} = ${serializeDocumentColumn(definition, field, replaced[field] ?? null)}`),
                 ],
                 sql`, `,
             );
