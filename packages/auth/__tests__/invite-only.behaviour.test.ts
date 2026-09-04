@@ -1,6 +1,7 @@
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createAuthAdmin } from "../src/admin";
 import { createAuth } from "../src/create-auth";
 import { createSignUpInvitation, inviteOnly, listSignUpInvitations, revokeSignUpInvitation } from "../src/invite-only";
 
@@ -9,6 +10,12 @@ import { createSignUpInvitation, inviteOnly, listSignUpInvitations, revokeSignUp
  * on an in-memory adapter — no mocks, so the specs exercise the actual
  * `user.create.before` wiring the plugin installs through `init()`, and the
  * actual `/sign-up/email` route it has to reject.
+ *
+ * Two of these are regressions for gates that only fail in a configuration the
+ * others do not run: `requireEmailVerification` (better-auth answers a 403 from
+ * a create hook with a fabricated success, so the rejection has to be a 400) and
+ * `AuthAdmin.createUser` (mints through the same internal adapter, so it is
+ * gated too).
  */
 
 const SECRET = "x".repeat(32);
@@ -21,16 +28,17 @@ const seedMemoryDatabase = (): Record<string, unknown[]> => {
 
 describe("inviteOnly", () => {
     let database: Record<string, unknown[]>;
-    // `any` to reach plugin-contributed endpoints without re-deriving the generic chain.
+    // The endpoint map is generic over the resolved plugin set; `any` skips re-deriving
+    // that chain for the two members these specs touch (`api.signUpEmail`, `$context`).
     let auth: any;
 
-    /** Build an auth instance over the shared `database`, so a spec can vary the plugin options. */
-    const buildAuth = (options: Parameters<typeof inviteOnly>[0] = {}): any =>
+    /** Build an auth instance over the shared `database`, so a spec can vary the config. */
+    const buildAuth = (pluginOptions: Parameters<typeof inviteOnly>[0] = {}, requireEmailVerification = false): any =>
         createAuth({
             baseURL: "http://localhost",
             database: memoryAdapter(database),
-            emailAndPassword: { enabled: true },
-            plugins: [inviteOnly(options)],
+            emailAndPassword: { enabled: true, requireEmailVerification },
+            plugins: [inviteOnly(pluginOptions)],
             secret: SECRET,
         });
 
@@ -40,8 +48,9 @@ describe("inviteOnly", () => {
         database["signUpInvitation"]?.find((row) => (row as { email: string }).email === email) as Record<string, unknown> | undefined;
 
     beforeEach(() => {
-        // Every instance below runs password sign-up without verification, so each
-        // one trips the plugin's warning; the spec asserting it does so explicitly.
+        // Every instance below runs password sign-up without verification unless the
+        // spec says otherwise, so each trips the plugin's warning; the spec asserting
+        // it does so explicitly.
         vi.spyOn(console, "warn").mockImplementation(() => {});
 
         database = seedMemoryDatabase();
@@ -49,11 +58,22 @@ describe("inviteOnly", () => {
     });
 
     afterEach(() => {
+        vi.useRealTimers();
         vi.restoreAllMocks();
     });
 
-    it("lets the first account through uninvited, then refuses every later one", async () => {
+    it("refuses every sign-up while no invitation exists", async () => {
+        expect.assertions(2);
+
+        await expect(signUp("stranger@example.com")).rejects.toThrow(/invite-only/);
+
+        expect(database["user"]).toHaveLength(0);
+    });
+
+    it("admits the first account uninvited only when allowFirstUser is on, and only once", async () => {
         expect.assertions(3);
+
+        auth = buildAuth({ allowFirstUser: true });
 
         await expect(signUp("owner@example.com")).resolves.toBeDefined();
         await expect(signUp("stranger@example.com")).rejects.toThrow(/invite-only/);
@@ -61,52 +81,75 @@ describe("inviteOnly", () => {
         expect(database["user"]).toHaveLength(1);
     });
 
-    it("refuses even the first account when allowFirstUser is off", async () => {
-        expect.assertions(1);
-
-        auth = buildAuth({ allowFirstUser: false });
-
-        await expect(signUp("owner@example.com")).rejects.toThrow(/invite-only/);
-    });
-
-    it("admits an invited address and marks the invitation accepted", async () => {
+    it("admits an invited address and marks the invitation spent", async () => {
         expect.assertions(3);
 
-        await signUp("owner@example.com");
         await createSignUpInvitation(auth, { email: "Ada@Example.com", invitedBy: "owner" });
 
         await expect(signUp("ada@example.com")).resolves.toBeDefined();
 
         // The address is normalized on both sides, so the mixed-case invite matches.
         expect(invitationRow("ada@example.com")?.["acceptedAt"]).toBeInstanceOf(Date);
-        expect(database["user"]).toHaveLength(2);
+        expect(database["user"]).toHaveLength(1);
     });
 
     it("refuses an expired invitation", async () => {
         expect.assertions(1);
 
-        await signUp("owner@example.com");
         await createSignUpInvitation(auth, { email: "ada@example.com", expiresInSeconds: 60 });
 
         vi.useFakeTimers();
         vi.setSystemTime(Date.now() + 61 * 1000);
 
-        try {
-            await expect(signUp("ada@example.com")).rejects.toThrow(/invite-only/);
-        } finally {
-            vi.useRealTimers();
-        }
+        await expect(signUp("ada@example.com")).rejects.toThrow(/invite-only/);
     });
 
     it("refuses a revoked invitation", async () => {
         expect.assertions(2);
 
-        await signUp("owner@example.com");
         await createSignUpInvitation(auth, { email: "ada@example.com" });
         await revokeSignUpInvitation(auth, { email: "ADA@example.com" });
 
         expect(invitationRow("ada@example.com")).toBeUndefined();
         await expect(signUp("ada@example.com")).rejects.toThrow(/invite-only/);
+    });
+
+    it("refuses a spent invitation, so a deleted account does not free the seat", async () => {
+        expect.assertions(1);
+
+        await createSignUpInvitation(auth, { email: "ada@example.com" });
+        await signUp("ada@example.com");
+        database["user"] = [];
+
+        await expect(signUp("ada@example.com")).rejects.toThrow(/invite-only/);
+    });
+
+    /**
+     * The gate rejects with a 400. A 403 is caught by better-auth's sign-up route
+     * and answered with a synthetic user it never persisted, whenever
+     * `requireEmailVerification` (or `autoSignIn: false`) is set — which would make
+     * this plugin silently report success in its own recommended configuration.
+     */
+    it("still rejects — not with a fabricated success — under requireEmailVerification", async () => {
+        expect.assertions(2);
+
+        auth = buildAuth({}, true);
+
+        await expect(signUp("stranger@example.com")).rejects.toThrow(/invite-only/);
+
+        expect(database["user"]).toHaveLength(0);
+    });
+
+    it("gates the trusted admin plane too", async () => {
+        expect.assertions(2);
+
+        const adminApi = createAuthAdmin(auth);
+
+        await expect(adminApi.createUser({ email: "stranger@example.com", name: "Ada" })).rejects.toThrow(/invite-only/);
+
+        await createSignUpInvitation(auth, { email: "ada@example.com" });
+
+        await expect(adminApi.createUser({ email: "ada@example.com", name: "Ada" })).resolves.toBeDefined();
     });
 
     it("re-inviting refreshes the row in place rather than adding a second one", async () => {
@@ -120,25 +163,45 @@ describe("inviteOnly", () => {
         expect(database["signUpInvitation"]).toHaveLength(1);
     });
 
-    it("rejects an input that is not an address", async () => {
+    it("re-inviting a spent address re-opens the seat", async () => {
         expect.assertions(2);
 
-        await expect(createSignUpInvitation(auth, { email: "   " })).rejects.toThrow(/not an email address/);
-        await expect(createSignUpInvitation(auth, { email: "ada@example.com", expiresInSeconds: 0 })).rejects.toThrow(/positive finite integer/);
+        await createSignUpInvitation(auth, { email: "ada@example.com" });
+        await signUp("ada@example.com");
+
+        const reopened = await createSignUpInvitation(auth, { email: "ada@example.com" });
+
+        expect(reopened.acceptedAt).toBeNull();
+        expect(invitationRow("ada@example.com")?.["acceptedAt"]).toBeNull();
     });
 
-    it("lists invitations newest-first, and `pendingOnly` drops the accepted and the expired", async () => {
+    it("rejects an input that is not an address, or a TTL outside the accepted range", async () => {
+        expect.assertions(4);
+
+        await expect(createSignUpInvitation(auth, { email: "   " })).rejects.toThrow(/not an email address/);
+        await expect(createSignUpInvitation(auth, { email: "@" })).rejects.toThrow(/not an email address/);
+        await expect(createSignUpInvitation(auth, { email: "ada@example.com", expiresInSeconds: 0 })).rejects.toThrow(/positive integer/);
+        await expect(createSignUpInvitation(auth, { email: "ada@example.com", expiresInSeconds: 400 * 24 * 60 * 60 })).rejects.toThrow(/positive integer/);
+    });
+
+    it("lists invitations newest-first, and `pendingOnly` drops the spent and the expired", async () => {
         expect.assertions(2);
 
-        await signUp("owner@example.com");
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
         await createSignUpInvitation(auth, { email: "accepted@example.com" });
-        await signUp("accepted@example.com");
+
+        vi.setSystemTime(new Date("2026-01-02T00:00:00Z"));
+        await createSignUpInvitation(auth, { email: "expired@example.com", expiresInSeconds: 60 });
+
+        vi.setSystemTime(new Date("2026-01-03T00:00:00Z"));
         await createSignUpInvitation(auth, { email: "pending@example.com" });
+        await signUp("accepted@example.com");
 
         const all = await listSignUpInvitations(auth);
         const pending = await listSignUpInvitations(auth, { pendingOnly: true });
 
-        expect(all).toHaveLength(2);
+        expect(all.map((row) => row.email)).toStrictEqual(["pending@example.com", "expired@example.com", "accepted@example.com"]);
         expect(pending.map((row) => row.email)).toStrictEqual(["pending@example.com"]);
     });
 

@@ -30,23 +30,46 @@
  * await sendMail(invite.email, `You can now sign up: https://app.example/sign-up?email=${encodeURIComponent(invite.email)}`);
  * ```
  *
- * Leave `emailAndPassword.disableSignUp` **off**: the invitee still uses the
- * ordinary sign-up form, and closing it would leave them nothing to submit. The
- * `?email=` parameter is read by `lunora/auth-ui`'s sign-up prefill.
+ * Nothing signs up before that first invitation exists, including you — see
+ * {@link InviteOnlyOptions.allowFirstUser}. Leave `emailAndPassword.disableSignUp`
+ * **off**: the invitee still uses the ordinary sign-up form, and closing it would
+ * leave them nothing to submit. The `?email=` parameter is read by
+ * `lunora/auth-ui`'s sign-up prefill.
  *
- * # Security — an invitation is keyed by email, and nothing else
+ * # Security — what an invitation is, and what it is not
  *
- * There is no secret token. Whoever signs up first with an invited address gets
- * the seat, so an attacker who *knows* an invited address can take it before its
- * owner does. `requireEmailVerification` is what closes that, which is why
- * {@link inviteOnly} warns when the password provider is on without it. OAuth
- * sign-ups carry a provider-verified address and are safe either way.
+ * An invitation is keyed by email address and nothing else. There is no secret
+ * token, because this gate runs inside `user.create.before`, which is handed the
+ * row about to be written and never the request that asked for it.
  *
- * Accounts created with no email at all (the `anonymous` and `siwe` plugins) are
- * not gated — there is no address to match an invitation against. Installing
- * either alongside this plugin re-opens self-serve sign-up.
+ * So anyone who learns an invited address can spend that seat.
+ * `requireEmailVerification` does **not** close this, and it is worth being exact
+ * about what it does: better-auth's `/sign-up/email` writes the user row first and
+ * mails the verification token afterwards, so an attacker who signs up as the
+ * invited address still creates a real account with their own password, still
+ * burns the invitation, and still leaves the invitee locked out of an address that
+ * is now taken. What verification buys is that the attacker holds no session until
+ * someone clicks the link — and the link lands in the invitee's inbox, where she is
+ * expecting it. Recovery is `AuthAdmin.removeUser` plus a fresh invitation.
+ *
+ * Treat an invited address as semi-secret, prefer providers that verify ownership
+ * before the account is usable, and do not use this where the seat itself is
+ * valuable enough to guess for.
+ *
+ * # What it refuses that you may not expect
+ *
+ * Plugins that mint an account from something other than a real mailbox still
+ * synthesize an address — `anonymous` writes `temp-<id>@<domain>`, `siwe` writes
+ * `<wallet>@<domain>`, `phoneNumber`'s sign-up-on-verification writes a temp
+ * address of its own. None of them can match an invitation, so the gate **rejects**
+ * them once the first account exists. Do not combine those plugins with this one.
+ *
+ * `AuthAdmin.createUser` (`./admin.ts`) mints through the same internal adapter, so
+ * the studio's create-user action is gated too. Issue an invitation first, or call
+ * {@link createSignUpInvitation} from the same operator flow.
  */
 
+import { defineErrorCodes } from "@better-auth/core/utils/error-codes";
 import { LunoraError } from "@lunora/errors";
 import type { BetterAuthOptions, BetterAuthPlugin } from "better-auth";
 import { APIError } from "better-auth/api";
@@ -54,17 +77,34 @@ import { APIError } from "better-auth/api";
 import type { LunoraAuth } from "./create-auth";
 
 /** The model name the invitations table is registered (and migrated) under. */
-const MODEL = "signUpInvitation";
+const INVITATION_MODEL = "signUpInvitation";
 
 /** How long an invitation stays usable when the caller doesn't say (7 days). */
 const DEFAULT_TTL_SECONDS = 7 * 24 * 60 * 60;
 
-/** Hard ceiling on an invitation TTL (1 year), so a huge value can't overflow to an Invalid Date. */
+/** Longest invitation TTL accepted (1 year) — past this a huge value overflows to an Invalid Date. */
 const MAX_TTL_SECONDS = 365 * 24 * 60 * 60;
 
-/** One pending or accepted sign-up invitation. */
+/** Ceiling on {@link listSignUpInvitations}, so the default call cannot read an unbounded table into the isolate. */
+const MAX_LISTED = 500;
+
+/**
+ * Rejection is a **400, not a 403**. better-auth's `/sign-up/email` catches a 403
+ * from `user.create.before` and answers with a fabricated success — a synthetic
+ * user object it never persisted — whenever `requireEmailVerification` or
+ * `autoSignIn: false` is set (`api/routes/sign-up.mjs`, `shouldReturnGenericDuplicateResponse`).
+ * That is deliberate anti-enumeration on their side, and it would silently swallow
+ * this gate in the very configuration the docblock above recommends: the uninvited
+ * caller would be told the account exists. `./email-gate.ts` maps to 400/422/429
+ * for the same reason.
+ */
+const ERROR_CODES = defineErrorCodes({
+    SIGN_UP_INVITE_REQUIRED: "sign-up is invite-only — ask an administrator for an invitation",
+});
+
+/** One pending or spent sign-up invitation. */
 interface SignUpInvitation {
-    /** When the invited address was used to create an account; `null` while pending. */
+    /** When an account was created for this address; `null` while the invitation is unspent. */
     acceptedAt: Date | null;
     createdAt: Date;
     /** The invited address, lowercased — the only thing an invitation is matched on. */
@@ -79,77 +119,54 @@ interface SignUpInvitation {
 interface InviteOnlyOptions {
     /**
      * Let the very first account through uninvited, so a fresh deployment can be
-     * bootstrapped without seeding a row by hand.
+     * bootstrapped without seeding a row.
      *
-     * The check is "the `user` table is empty", which is racy under concurrent
-     * sign-ups — two requests can both observe zero and both get in. It is a
-     * one-shot bootstrap on an empty database, so the window is the gap between
-     * deploying and the owner signing up; set `false` and seed the first
-     * invitation with `createSignUpInvitation` if that window matters.
-     * @default true
+     * **Off by default.** The check is "the `user` table is empty", which two
+     * concurrent sign-ups can both observe, and the window it opens is the gap
+     * between deploying and the owner signing up — whoever finds the URL first
+     * gets an account on a deployment whose whole point is that nobody does. Seed
+     * the first invitation with {@link createSignUpInvitation} instead (a one-off
+     * call at worker init, or an internal mutation you run once).
+     * @default false
      */
     allowFirstUser?: boolean;
 }
 
-/** A `where` clause as better-auth's adapter takes it. */
-interface AdapterWhere {
-    field: string;
-    value: unknown;
-}
-
-/**
- * The slice of better-auth's `DBAdapter` this module uses. Written by hand for
- * the same reason `./ui-config.ts` hand-writes its options shape: the real type
- * is generic over the whole resolved config and is not nameable here, while
- * every member below is stable public API.
- */
-interface InvitationAdapter {
-    count: (input: { model: string }) => Promise<number>;
-    create: <T>(input: { data: Record<string, unknown>; model: string }) => Promise<T>;
-    delete: (input: { model: string; where: AdapterWhere[] }) => Promise<void>;
-    findMany: <T>(input: {
-        limit?: number;
-        model: string;
-        offset?: number;
-        sortBy?: { direction: "asc" | "desc"; field: string };
-        where?: AdapterWhere[];
-    }) => Promise<T[]>;
-    findOne: <T>(input: { model: string; where: AdapterWhere[] }) => Promise<null | T>;
-    update: <T>(input: { model: string; update: Record<string, unknown>; where: AdapterWhere[] }) => Promise<null | T>;
-}
+/** better-auth's resolved adapter, named the way `./admin.ts` names it rather than re-declared structurally. */
+type AuthAdapter = Awaited<LunoraAuth["$context"]>["adapter"];
 
 /** better-auth's `user.create.before` / `.after` hook signatures, derived so an upstream rename fails to compile. */
 type DatabaseHooks = NonNullable<BetterAuthOptions["databaseHooks"]>;
 type UserCreateAfter = NonNullable<NonNullable<NonNullable<DatabaseHooks["user"]>["create"]>["after"]>;
 type UserCreateBefore = NonNullable<NonNullable<NonNullable<DatabaseHooks["user"]>["create"]>["before"]>;
 
+/** A local part, exactly one `@`, and a domain. Kept free of adjacent quantifiers so it cannot backtrack. */
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+$/;
+
 /**
- * A stored timestamp as a number. Adapters hand `date` columns back as `Date`
- * (better-auth's D1/kysely layer parses them), but a raw row from a store that
- * didn't can still be compared rather than silently reading `NaN`.
+ * Enough of an address to be worth storing: {@link EMAIL_SHAPE} plus a dotted
+ * domain. Not RFC 5322 — better-auth validates the address the invitee actually
+ * submits, and this only has to refuse the typos and the empty strings that would
+ * otherwise sit in the table matching nothing.
  */
-const toTime = (value: unknown): number => {
-    if (value instanceof Date) {
-        return value.getTime();
+const looksLikeEmail = (email: string): boolean => {
+    if (!EMAIL_SHAPE.test(email)) {
+        return false;
     }
 
-    if (typeof value === "number") {
-        return value;
-    }
+    const domain = email.slice(email.indexOf("@") + 1);
 
-    return typeof value === "string" ? Date.parse(value) : Number.NaN;
+    return domain.includes(".") && !domain.startsWith(".") && !domain.endsWith(".");
 };
 
-/** Shape a raw adapter row as a {@link SignUpInvitation}. */
+/** Shape a raw adapter row as a {@link SignUpInvitation}. Every adapter this package ships parses `date` columns back to `Date` (`./adapter.ts`, `supportsDates: false`). */
 const toInvitation = (row: Record<string, unknown>): SignUpInvitation => {
-    const acceptedAt = toTime(row["acceptedAt"]);
-
     return {
-        // eslint-disable-next-line unicorn/no-null -- `null` is the stored "still pending" value, not an absent key.
-        acceptedAt: Number.isNaN(acceptedAt) ? null : new Date(acceptedAt),
-        createdAt: new Date(toTime(row["createdAt"])),
+        // eslint-disable-next-line unicorn/no-null -- `null` is the stored "unspent" value, not an absent key.
+        acceptedAt: row["acceptedAt"] instanceof Date ? row["acceptedAt"] : null,
+        createdAt: row["createdAt"] as Date,
         email: String(row["email"]),
-        expiresAt: new Date(toTime(row["expiresAt"])),
+        expiresAt: row["expiresAt"] as Date,
         id: String(row["id"]),
         // eslint-disable-next-line unicorn/no-null -- ditto: the column is nullable.
         invitedBy: typeof row["invitedBy"] === "string" ? row["invitedBy"] : null,
@@ -159,38 +176,35 @@ const toInvitation = (row: Record<string, unknown>): SignUpInvitation => {
 /** The address an invitation is matched on: trimmed and lowercased, as better-auth stores `user.email`. */
 const normalizeEmail = (email: string): string => email.trim().toLowerCase();
 
-/** Read `user.email` off a hook payload, normalized. Absent for the account shapes that have none. */
-const emailOf = (user: unknown): string | undefined => {
-    const value = (user as { email?: unknown } | undefined)?.email;
-
-    if (typeof value !== "string") {
+/** Read `user.email` off a hook payload, normalized. The parameter is structural so both hook signatures pass without a cast. */
+const emailOf = (user: { email?: unknown }): string | undefined => {
+    if (typeof user.email !== "string") {
         return undefined;
     }
 
-    const normalized = normalizeEmail(value);
+    const normalized = normalizeEmail(user.email);
 
     return normalized === "" ? undefined : normalized;
 };
 
-/** The invitation for `email` if one is usable — present, unaccepted, unexpired. */
-const findUsableInvitation = async (adapter: InvitationAdapter, email: string): Promise<Record<string, unknown> | undefined> => {
-    const row = await adapter.findOne<Record<string, unknown>>({ model: MODEL, where: [{ field: "email", value: email }] });
+/** Whether `email` has an invitation that is present, unspent, and unexpired. */
+const hasUsableInvitation = async (adapter: AuthAdapter, email: string): Promise<boolean> => {
+    const row = await adapter.findOne<Record<string, unknown>>({ model: INVITATION_MODEL, where: [{ field: "email", value: email }] });
 
-    // A parseable `acceptedAt` means the invitation has already been used; unset
-    // (however the adapter spells "unset") reads back as `NaN` — same test
-    // `toInvitation` applies to the same column.
-    if (row === null || !Number.isNaN(toTime(row["acceptedAt"]))) {
-        return undefined;
+    if (row === null || row["acceptedAt"] instanceof Date) {
+        return false;
     }
 
-    return toTime(row["expiresAt"]) > Date.now() ? row : undefined;
+    return row["expiresAt"] instanceof Date && row["expiresAt"].getTime() > Date.now();
 };
 
 /**
  * Warn once per auth context when the password provider is on without
- * `requireEmailVerification`, naming the exposure the docblock above describes.
- * Mirrors `./plugins-enterprise.ts`'s `sso()` warning: it does not change the
- * default, it just refuses to let the gap be silent.
+ * `requireEmailVerification`. It does not make an invited address secret (see the
+ * security section above) — it is the difference between an attacker who guesses
+ * one holding a session immediately and holding none until the invitee clicks a
+ * link she was expecting. Mirrors `./plugins-enterprise.ts`'s `sso()` warning: it
+ * does not change the default, it just refuses to let the gap be silent.
  */
 const warnIfVerificationOff = (options: BetterAuthOptions): void => {
     if (options.emailAndPassword?.enabled !== true || options.emailAndPassword.requireEmailVerification === true) {
@@ -201,14 +215,14 @@ const warnIfVerificationOff = (options: BetterAuthOptions): void => {
     console.warn(
         "@lunora/auth: inviteOnly() is installed with password sign-up but without " +
             "`emailAndPassword: { requireEmailVerification: true }`. An invitation is keyed by email address " +
-            "alone, so anyone who learns an invited address can claim that seat before its owner does. " +
-            "Turn verification on, or accept that invited addresses are the only credential.",
+            "alone, so anyone who learns an invited address can sign up as it — and without verification they " +
+            "hold a session the moment they do.",
     );
 };
 
 /**
  * A better-auth server plugin that refuses to create an account for an address
- * with no pending invitation, and the `signUpInvitation` table those live in.
+ * with no unspent invitation, and the `signUpInvitation` table those live in.
  *
  * Issue invitations with {@link createSignUpInvitation}; there is no HTTP
  * endpoint for it on purpose. Who counts as an administrator is your
@@ -221,17 +235,15 @@ const warnIfVerificationOff = (options: BetterAuthOptions): void => {
  * declarations and one that fails in the bundler alone.
  */
 const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
-    const allowFirstUser = options.allowFirstUser ?? true;
+    const allowFirstUser = options.allowFirstUser ?? false;
 
     return {
-        $ERROR_CODES: {
-            SIGN_UP_INVITE_REQUIRED: { code: "SIGN_UP_INVITE_REQUIRED", message: "Sign-up is invite-only." },
-        },
+        $ERROR_CODES: ERROR_CODES,
         id: "lunora-invite-only",
         init: (context) => {
             warnIfVerificationOff(context.options);
 
-            const adapter = context.adapter as unknown as InvitationAdapter;
+            const { adapter } = context;
 
             // The bootstrap check is a `COUNT(*)` over `user`, and it runs on every
             // *uninvited* attempt — an attacker's lever. It can only ever go from
@@ -242,13 +254,7 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
             const before: UserCreateBefore = async (user) => {
                 const email = emailOf(user);
 
-                // No address to match an invitation against (anonymous / siwe).
-                // Documented in this module's docblock rather than guessed at here.
-                if (email === undefined) {
-                    return;
-                }
-
-                if (await findUsableInvitation(adapter, email)) {
+                if (email !== undefined && (await hasUsableInvitation(adapter, email))) {
                     return;
                 }
 
@@ -260,17 +266,14 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
                     mayBootstrap = false;
                 }
 
-                throw new APIError("FORBIDDEN", {
-                    code: "SIGN_UP_INVITE_REQUIRED",
-                    message: "sign-up is invite-only — ask an administrator for an invitation",
-                });
+                throw new APIError("BAD_REQUEST", ERROR_CODES.SIGN_UP_INVITE_REQUIRED);
             };
 
-            // Stamping acceptance in the *after* hook, keyed by email again rather
+            // Spending the invitation in the *after* hook, keyed by email again rather
             // than by carrying state across from `before`, means a failed create
-            // doesn't burn the invitation. It cannot let a second account through:
-            // `user.email` is unique, so the only sign-up that reaches here for an
-            // address is the one that got it.
+            // doesn't burn it. It cannot let a second account through: `user.email` is
+            // unique, so the only sign-up that reaches here for an address is the one
+            // that got it.
             const after: UserCreateAfter = async (user) => {
                 const email = emailOf(user);
 
@@ -278,13 +281,13 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
                     return;
                 }
 
-                await adapter.update({ model: MODEL, update: { acceptedAt: new Date() }, where: [{ field: "email", value: email }] });
+                await adapter.update({ model: INVITATION_MODEL, update: { acceptedAt: new Date() }, where: [{ field: "email", value: email }] });
             };
 
             return { options: { databaseHooks: { user: { create: { after, before } } } } };
         },
         schema: {
-            [MODEL]: {
+            [INVITATION_MODEL]: {
                 fields: {
                     acceptedAt: { required: false, type: "date" },
                     createdAt: { defaultValue: () => new Date(), required: true, type: "date" },
@@ -297,13 +300,6 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
     };
 };
 
-/** Resolve the adapter off a built auth instance. The cast is the one in `inviteOnly`'s `init`, for the same reason. */
-const adapterOf = async (auth: LunoraAuth): Promise<InvitationAdapter> => {
-    const context = await auth.$context;
-
-    return context.adapter as unknown as InvitationAdapter;
-};
-
 /**
  * Invite `email` to sign up, or refresh an existing invitation for it.
  *
@@ -314,77 +310,96 @@ const adapterOf = async (auth: LunoraAuth): Promise<InvitationAdapter> => {
  * This is a trusted server-side call with no authorization of its own; gate it
  * the way you gate any other administrative action. Delivering the invitation is
  * yours too: nothing here sends mail, so the returned row is the whole handoff.
+ *
+ * Nothing prunes the table — a spent or expired row stays until you delete it with
+ * {@link revokeSignUpInvitation}, which is also what keeps it a record of who was
+ * let in.
  */
 const createSignUpInvitation = async (auth: LunoraAuth, input: { email: string; expiresInSeconds?: number; invitedBy?: string }): Promise<SignUpInvitation> => {
     const email = normalizeEmail(input.email);
 
-    if (email === "" || !email.includes("@")) {
-        throw new LunoraError("INVALID_INVITE_EMAIL", `not an email address to invite: ${JSON.stringify(input.email)}`);
+    if (!looksLikeEmail(email)) {
+        throw new LunoraError("VALIDATION_ERROR", `not an email address to invite: ${JSON.stringify(input.email)}`);
     }
 
-    const { expiresInSeconds } = input;
+    const { expiresInSeconds = DEFAULT_TTL_SECONDS } = input;
 
-    if (expiresInSeconds !== undefined && (!Number.isInteger(expiresInSeconds) || expiresInSeconds <= 0)) {
-        throw new LunoraError("INVALID_INVITE_TTL", "expiresInSeconds must be a positive finite integer");
+    if (!Number.isInteger(expiresInSeconds) || expiresInSeconds <= 0 || expiresInSeconds > MAX_TTL_SECONDS) {
+        throw new LunoraError("VALIDATION_ERROR", `expiresInSeconds must be a positive integer no greater than ${String(MAX_TTL_SECONDS)}`);
     }
 
-    const expiresAt = new Date(Date.now() + Math.min(expiresInSeconds ?? DEFAULT_TTL_SECONDS, MAX_TTL_SECONDS) * 1000);
+    const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
     // eslint-disable-next-line unicorn/no-null -- clearing a prior acceptance needs an explicit null; `undefined` would leave the old value.
     const invitedBy = input.invitedBy ?? null;
-    const adapter = await adapterOf(auth);
+    const context = await auth.$context;
+    const where = [{ field: "email", value: email }];
 
-    const existing = await adapter.findOne<Record<string, unknown>>({ model: MODEL, where: [{ field: "email", value: email }] });
+    /** Re-open the existing row. Also the recovery path when a concurrent insert won the unique index. */
+    const refresh = async (): Promise<null | Record<string, unknown>> =>
+        // eslint-disable-next-line unicorn/no-null -- see above.
+        context.adapter.update<Record<string, unknown>>({ model: INVITATION_MODEL, update: { acceptedAt: null, expiresAt, invitedBy }, where });
 
-    if (existing) {
-        const updated = await adapter.update<Record<string, unknown>>({
-            model: MODEL,
-            // eslint-disable-next-line unicorn/no-null -- see above.
-            update: { acceptedAt: null, expiresAt, invitedBy },
-            where: [{ field: "email", value: email }],
-        });
+    if (await context.adapter.findOne({ model: INVITATION_MODEL, where })) {
+        const updated = await refresh();
 
-        // Some adapters answer an update with `null` rather than the new row.
-        return toInvitation(updated ?? { ...existing, acceptedAt: undefined, expiresAt, invitedBy });
+        if (updated) {
+            return toInvitation(updated);
+        }
     }
 
-    return toInvitation(await adapter.create<Record<string, unknown>>({ data: { createdAt: new Date(), email, expiresAt, invitedBy }, model: MODEL }));
+    try {
+        return toInvitation(
+            await context.adapter.create<Record<string, unknown>>({ data: { createdAt: new Date(), email, expiresAt, invitedBy }, model: INVITATION_MODEL }),
+        );
+    } catch (error) {
+        // `email` is unique, so a concurrent invite for the same new address loses
+        // this insert with a backend-specific constraint error. Re-open the row the
+        // winner wrote rather than surfacing that; if there is no such row the
+        // insert failed for some other reason and the original error is the honest one.
+        const updated = await refresh();
+
+        if (updated === null) {
+            throw error;
+        }
+
+        return toInvitation(updated);
+    }
 };
 
 /**
- * Every invitation, newest first. `pendingOnly` drops the accepted and the
- * expired, which is the list an operator usually wants; the unfiltered form
- * doubles as the record of who was let in.
+ * The most recent invitations, newest first, up to a fixed ceiling of
+ * {@link MAX_LISTED}. `pendingOnly` drops the spent and the expired, which is the
+ * list an operator usually wants; the unfiltered form doubles as the record of who
+ * was let in.
+ *
+ * Deliberately not paged. "Pending" is two conditions, one of them a comparison
+ * against `now`, and filtering those after a page would let page 1 come back empty
+ * while pending invitations sat on page 2. An operator list that outgrows the
+ * ceiling wants a query against the `signUpInvitation` table, not an offset.
  */
-const listSignUpInvitations = async (
-    auth: LunoraAuth,
-    options: { limit?: number; offset?: number; pendingOnly?: boolean } = {},
-): Promise<SignUpInvitation[]> => {
-    const adapter = await adapterOf(auth);
+const listSignUpInvitations = async (auth: LunoraAuth, options: { pendingOnly?: boolean } = {}): Promise<SignUpInvitation[]> => {
+    const context = await auth.$context;
 
-    const rows = await adapter.findMany<Record<string, unknown>>({
-        limit: options.limit,
-        model: MODEL,
-        offset: options.offset,
+    const rows = await context.adapter.findMany<Record<string, unknown>>({
+        limit: MAX_LISTED,
+        model: INVITATION_MODEL,
         sortBy: { direction: "desc", field: "createdAt" },
     });
 
     const invitations = rows.map((row) => toInvitation(row));
 
-    // Filtered here rather than in the query: "pending" is two conditions, one of
-    // them a comparison against `now`, and adapter operator support varies by
-    // backend. The page is already bounded by `limit`.
     return options.pendingOnly === true ? invitations.filter((row) => row.acceptedAt === null && row.expiresAt.getTime() > Date.now()) : invitations;
 };
 
 /**
- * Withdraw the invitation for `email`. Deletes the row, so it also forgets an
- * accepted one — the account it created is untouched, and removing that is
+ * Withdraw the invitation for `email`. Deletes the row, so it also forgets a spent
+ * one — the account it created is untouched, and removing that is
  * `AuthAdmin.removeUser`'s job.
  */
 const revokeSignUpInvitation = async (auth: LunoraAuth, input: { email: string }): Promise<void> => {
-    const adapter = await adapterOf(auth);
+    const context = await auth.$context;
 
-    await adapter.delete({ model: MODEL, where: [{ field: "email", value: normalizeEmail(input.email) }] });
+    await context.adapter.delete({ model: INVITATION_MODEL, where: [{ field: "email", value: normalizeEmail(input.email) }] });
 };
 
 export type { InviteOnlyOptions, SignUpInvitation };

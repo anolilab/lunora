@@ -154,7 +154,8 @@ It's better-auth's standard access-control builder, unchanged.
 `inviteOnly()` closes self-serve registration: an account is created only for an
 email address an administrator has invited. It gates **every** path that mints a
 user — `/sign-up/email`, an OAuth callback creating a new account, magic link,
-`admin.createUser` — because it hooks `user.create.before` rather than one route.
+`admin.createUser`, and Lunora's own `AuthAdmin.createUser` — because it hooks
+`user.create.before` rather than one route.
 
 ```ts
 import { createAuth, createSignUpInvitation } from "@lunora/auth";
@@ -168,26 +169,38 @@ export const auth = createAuth({
 });
 ```
 
+Nobody signs up before the first invitation exists, including you — seed it with
+`createSignUpInvitation` from a one-off call at worker init or an internal
+mutation you run once. `inviteOnly({ allowFirstUser: true })` instead admits the
+first account uninvited, at the cost described under
+[bootstrapping](#bootstrapping) below.
+
 Leave `emailAndPassword.disableSignUp` **off**. The invitee still uses the
 ordinary sign-up form; closing it would leave them nothing to submit. The sign-up
 cards in [`@lunora/auth-ui`](/docs/packages/auth-ui) prefill the address from
 `?email=`, so an invitation link can be
 `https://app.example/sign-up?email=ada%40example.com`.
 
+An uninvited attempt is refused with `SIGN_UP_INVITE_REQUIRED` and HTTP **400**.
+That status is deliberate and not a typo: better-auth's sign-up route treats a
+`403` from a create hook as a duplicate-account signal and answers it with a
+fabricated success — a user object it never persisted — whenever
+`requireEmailVerification` or `autoSignIn: false` is set.
+
 ### Issuing invitations
 
 Three server-side helpers, exported from `@lunora/auth`:
 
-| Function                                        | What it does                                                                         |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `createSignUpInvitation(auth, { email, … })`    | Invite an address, or refresh an existing invitation for it. Returns the stored row. |
-| `listSignUpInvitations(auth, { pendingOnly? })` | Every invitation newest-first; `pendingOnly` drops the accepted and the expired.     |
-| `revokeSignUpInvitation(auth, { email })`       | Withdraw it.                                                                         |
+| Function                                        | What it does                                                                                  |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `createSignUpInvitation(auth, { email, … })`    | Invite an address, or refresh an existing invitation for it. Returns the stored row.          |
+| `listSignUpInvitations(auth, { pendingOnly? })` | The 500 most recent invitations, newest first; `pendingOnly` drops the spent and the expired. |
+| `revokeSignUpInvitation(auth, { email })`       | Withdraw it.                                                                                  |
 
 ```ts
 const invite = await createSignUpInvitation(auth, {
     email: "ada@example.com",
-    expiresInSeconds: 3 * 24 * 60 * 60, // default: 7 days
+    expiresInSeconds: 3 * 24 * 60 * 60, // default 7 days, maximum 1 year
     invitedBy: ctx.auth.userId,
 });
 
@@ -202,24 +215,50 @@ sends mail, so the returned row is the whole handoff.
 
 The invitations live in a `signUpInvitation` table the plugin declares, so
 `authTables()`, `compileMigrationsSql`, and the Durable-Object DDL all pick it up
-with nothing further to write.
+with nothing further to write. Nothing prunes it either — a spent or expired row
+stays until you revoke it, which is also what keeps it a record of who was let in.
+`listSignUpInvitations` is capped rather than paged; past 500 rows, query the
+table directly.
 
-### What it does not gate
+### What an invitation is, and what it is not
 
 <Callout type="warn">
-    **An invitation is keyed by email address, and nothing else.** There is no secret token, so whoever signs up first with an invited address gets the seat —
-    an attacker who *knows* an invited address can take it before its owner does. `emailAndPassword.requireEmailVerification` is what closes that, and the
-    plugin warns on startup when password sign-up runs without it. OAuth sign-ups carry a provider-verified address and are safe either way.
+    **An invitation is keyed by email address and nothing else.** There is no secret token — the gate runs inside `user.create.before`, which is handed the row
+    about to be written and never the request that asked for it. So anyone who learns an invited address can spend that seat.
+
+    `requireEmailVerification` does **not** close this. better-auth writes the user row first and mails the verification token afterwards, so an attacker who
+    signs up as the invited address still creates a real account with their own password, still burns the invitation, and still leaves the invitee locked out of
+    an address that is now taken. What verification buys is that the attacker holds no session until someone clicks the link — and the link lands in the
+    invitee's inbox, where she is expecting it. Recovery is `AuthAdmin.removeUser` plus a fresh invitation.
+
+    Treat an invited address as semi-secret, and don't use this where the seat itself is worth guessing for.
+
 </Callout>
 
-Accounts created with **no** email at all (the `anonymous` and `siwe` plugins)
-are not gated — there is no address to match an invitation against. Installing
-either alongside `inviteOnly()` re-opens self-serve sign-up.
+The plugin warns on startup when password sign-up runs without
+`requireEmailVerification`, because that is the difference between an attacker
+who guesses an address holding a session immediately and holding none.
 
-By default the very first account is let through uninvited, so a fresh
-deployment can be bootstrapped without seeding a row by hand. Pass
-`inviteOnly({ allowFirstUser: false })` and seed the first invitation yourself
-if that window matters.
+### What it refuses that you may not expect
+
+Plugins that mint an account from something other than a real mailbox still
+synthesize an address — `anonymous` writes `temp-<id>@<domain>`, `siwe` writes
+`<wallet>@<domain>`, and `phoneNumber`'s sign-up-on-verification writes a temp
+address of its own. None of them can match an invitation, so the gate **rejects**
+those flows. Do not combine those plugins with this one.
+
+Lunora's `AuthAdmin.createUser` — the studio's create-user action — mints through
+the same internal adapter, so it is gated too. Issue an invitation first, or call
+`createSignUpInvitation` from the same operator flow.
+
+### Bootstrapping
+
+`allowFirstUser` is **off** by default. Turning it on admits the first account
+uninvited so a fresh deployment can be bootstrapped without seeding a row, but
+the check is "the `user` table is empty" — two concurrent sign-ups can both
+observe that, and the window it opens is the gap between deploying and the owner
+signing up. On a deployment whose whole point is that strangers do not get
+accounts, seeding the first invitation is the better trade.
 
 ## CAPTCHA / Turnstile
 

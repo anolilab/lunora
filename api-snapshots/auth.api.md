@@ -961,8 +961,6 @@ const handleAuthRequest: (auth: LunoraAuth, request: Request, basePath?: string)
 
 ```ts
 const listSignUpInvitations: (auth: LunoraAuth, options?: {
-    limit?: number;
-    offset?: number;
     pendingOnly?: boolean;
 }) => Promise<SignUpInvitation[]>;
 ```
