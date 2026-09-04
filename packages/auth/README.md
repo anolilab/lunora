@@ -114,6 +114,30 @@ A blocked signup fails with the coded error `EMAIL_DOMAIN_BLOCKED` (HTTP 400); a
 - **Programmatic / non-auth use:** `classifyEmail(email, config)` (sync, pure-data) and `assertEmailAllowed(email, config)` (async; throws the coded error) come from `@lunora/auth/email-guard`, plus `emailGateMiddleware({ email: (ctx) => ctx.args.email })` for a `.use()` gate on your own signup mutations.
 - **Edge-safety:** on workerd, `await loadEmailDomainLists()` once at worker init (the gate helpers do this for you). The optional `mx: true` deliverability check is loaded via a dynamic import so `node:dns` never enters the default bundle — enable it only with `nodejs_compat` (or a DNS-over-HTTPS shim).
 
+### Invite-only sign-up
+
+Close self-serve registration: `inviteOnly()` creates an account only for an address an administrator invited. It hooks `user.create.before`, so it gates every path that mints a user — password sign-up, an OAuth callback creating a new account, magic link, `admin.createUser` — and declares the `signUpInvitation` table it reads, so migrations pick it up on their own.
+
+```ts
+import { createAuth, createSignUpInvitation } from "@lunora/auth";
+import { inviteOnly } from "@lunora/auth/plugins";
+
+const auth = createAuth({
+    secret: env.AUTH_SECRET,
+    database: lunoraD1Adapter(env.DB),
+    emailAndPassword: { enabled: true, requireEmailVerification: true },
+    plugins: [inviteOnly()],
+});
+
+// …from your own admin-authorized code:
+const invite = await createSignUpInvitation(auth, { email: "ada@example.com" });
+```
+
+An uninvited signup fails with the coded error `SIGN_UP_INVITE_REQUIRED` (HTTP 403). Leave `emailAndPassword.disableSignUp` **off** — the invitee still uses the ordinary sign-up form, which `@lunora/auth-ui` prefills from `?email=`. `listSignUpInvitations` and `revokeSignUpInvitation` complete the set; all three are trusted server-side calls with no authorization of their own, so gate them like any other admin action.
+
+- **An invitation is keyed by email and nothing else** — no secret token — so whoever signs up first with an invited address gets the seat. `requireEmailVerification` is what closes that, and the plugin warns on startup when password sign-up runs without it.
+- The first account is let through uninvited so a fresh deployment can be bootstrapped; pass `inviteOnly({ allowFirstUser: false })` to require a seeded invitation even for it.
+
 ### Security / audit trail
 
 Record authentication & security events (sign-in, sign-up, password change, MFA enable/disable, token refresh, session revoke, …) to a durable, queryable audit trail. Install the better-auth `hooks.after` recorder with `authAuditHook` (or compose via `withAuthAudit`), backed by the same D1 database as the auth tables:
