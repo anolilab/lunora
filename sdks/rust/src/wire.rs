@@ -32,6 +32,10 @@ pub const MAX_DEPTH: usize = 64;
 /// Applied only on decode — the untrusted direction.
 pub const MAX_BIGINT_DIGITS: usize = 1024;
 
+/// Largest epoch a `Date` holds (ECMAScript TimeClip). Past this, and for any
+/// non-finite epoch, `new Date(v)` is an Invalid Date.
+pub const MAX_TIME_VALUE: f64 = 8.64e15;
+
 /// Bytes per element for the typed-array views the codec round-trips. A view
 /// whose payload is not a whole number of elements is not a view the reference
 /// can rebuild — `new Float32Array(buffer)` raises a `RangeError` there — so
@@ -431,11 +435,18 @@ fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
             // legitimate-looking date tag.
             let epoch = decode_at(items.get(2).ok_or(WireError::Malformed("date"))?, depth + 1)?;
 
-            if !matches!(epoch, WireValue::Number(_) | WireValue::NaN | WireValue::Infinity | WireValue::NegInfinity) {
-                return Err(WireError::Malformed("date"));
-            }
+            // TimeClip, exactly as `new Date(epoch)` applies it: truncate toward
+            // zero, and turn anything non-finite or past +-8.64e15 into an
+            // Invalid Date. Kept verbatim, an out-of-range epoch re-encoded as a
+            // date tag the reference — whose own `Date` can never hold that
+            // value — refuses to produce.
+            let clipped = match epoch {
+                WireValue::Number(epoch) if epoch.abs() <= MAX_TIME_VALUE => WireValue::Number(epoch.trunc()),
+                WireValue::Number(_) | WireValue::NaN | WireValue::Infinity | WireValue::NegInfinity => WireValue::NaN,
+                _ => return Err(WireError::Malformed("date")),
+            };
 
-            WireValue::Date(Box::new(epoch))
+            WireValue::Date(Box::new(clipped))
         }
         "url" => WireValue::Url(items.get(2).and_then(Value::as_str).ok_or(WireError::Malformed("url"))?.to_string()),
         "map" => {
@@ -479,17 +490,18 @@ fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
             WireValue::Set(raw.iter().map(|item| decode_at(item, depth + 1)).collect::<WireResult<_>>()?)
         }
         "error" => {
-            // The props slot is NOT optional and NOT nullable: the reference
-            // reads it with `Object.keys`, which throws on a null or missing
-            // slot, so quietly substituting an empty map accepted a frame the
-            // reference refuses.
+            // The props slot is NOT optional, NOT nullable and NOT a primitive:
+            // the reference reads it with `Object.keys`, which throws on a null
+            // or missing slot and ENUMERATES a string/number/boolean/array — so
+            // `[TAG,"error","E","m","ab"]` would decode there with the invented
+            // props {0:"a",1:"b"} while quietly substituting an empty map
+            // accepted the same frame here.
             let props = match items.get(4) {
                 Some(Value::Object(fields)) => fields
                     .iter()
                     .map(|(key, item)| Ok((key.clone(), decode_at(item, depth + 1)?)))
                     .collect::<WireResult<Vec<_>>>()?,
-                None | Some(Value::Null) => return Err(WireError::Malformed("error")),
-                Some(_) => Vec::new(),
+                _ => return Err(WireError::Malformed("error")),
             };
 
             WireValue::Error {

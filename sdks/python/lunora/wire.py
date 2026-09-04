@@ -34,6 +34,10 @@ MAX_BIGINT_DIGITS = 1024
 #: changing value — ``WireBigInt`` and its tag exist for that case.
 MAX_EXACT_INTEGER = 2**53 - 1
 
+#: Largest epoch a ``Date`` holds (ECMAScript TimeClip). Past this, and for any
+#: non-finite epoch, ``new Date(v)`` is an Invalid Date.
+MAX_TIME_VALUE = 8.64e15
+
 
 class WireFormatError(ValueError):
     """A wire value this codec refuses: malformed, over-long, or out of range.
@@ -263,7 +267,7 @@ def decode_wire(value: Any, depth: int = 0) -> Any:
                 epoch = decode_wire(_payload(value, "date"), depth + 1)
                 if isinstance(epoch, bool) or not isinstance(epoch, (int, float)):
                     raise WireFormatError("wire-codec: malformed date tag")
-                return WireDate(epoch)
+                return WireDate(_time_clip(epoch))
             if tag == "url":
                 href = _payload(value, "url")
                 if not isinstance(href, str):
@@ -423,6 +427,21 @@ def _decode_bytes(value: list) -> Any:
     return WireBytes(data, ctor)
 
 
+def _time_clip(epoch: float) -> float:
+    """``new Date(epoch).getTime()`` — ECMAScript TimeClip.
+
+    A ``Date`` truncates its argument toward zero, and anything non-finite or
+    past +-8.64e15 becomes an Invalid Date, which the reference re-encodes as
+    ``[TAG,"date",[TAG,"nan"]]``. Keeping the epoch verbatim put a date back on
+    the wire carrying a value the reference's own ``Date`` never holds.
+    """
+
+    if not math.isfinite(epoch) or abs(epoch) > MAX_TIME_VALUE:
+        return math.nan
+
+    return math.trunc(epoch)
+
+
 def _map_key_identity(key: Any) -> str | None:
     """A map key's collapse identity, or ``None`` when it never collapses.
 
@@ -494,15 +513,37 @@ def _format_number(value: Any) -> str:
         return str(value)
     if not math.isfinite(value):  # pragma: no cover - tagged before this is reached
         return "null"
-    if value.is_integer() and abs(value) < 1e21:
-        return str(int(value))
-
     magnitude = abs(value)
+
+    if value.is_integer() and magnitude < 1e21:
+        return _integral(value)
 
     if 1e-6 <= magnitude < 1e21:
         return _trim_zeros(f"{value:.17f}", value)
 
     return _exponential(value)
+
+
+def _integral(value: float) -> str:
+    """Positional spelling of an integral double, ECMAScript-style.
+
+    ECMAScript prints the SHORTEST digit string that reads back as the same
+    double and then zero-pads it, so ``String(2**60)`` is
+    ``1152921504606847000`` — not the exact expansion ``1152921504606846976``
+    that ``int(value)`` (and every other exact converter) produces. It also
+    spells negative zero ``-0``, which every integer conversion flattens.
+    """
+
+    for precision in range(18):
+        candidate = f"{value:.{precision}e}"
+        if float(candidate) == value:
+            mantissa, _, exponent = candidate.partition("e")
+            sign = "-" if mantissa.startswith("-") else ""
+            digits = mantissa.lstrip("-").replace(".", "").rstrip("0") or "0"
+
+            return sign + digits.ljust(int(exponent) + 1, "0")
+
+    return str(int(value))  # pragma: no cover - 17 significant digits always round-trip
 
 
 def _trim_zeros(text: str, value: float) -> str:

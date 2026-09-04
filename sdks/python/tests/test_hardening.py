@@ -9,15 +9,17 @@ the shared list that keeps the suites aligned.
 
 from __future__ import annotations
 
+import http.server
 import json
 import os
 import sys
+import threading
 import unittest
 from typing import ClassVar
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lunora.client import LunoraClient, LunoraError, parse_rpc_response
+from lunora.client import LunoraClient, LunoraError, _urllib_post, parse_rpc_response
 from lunora.wire import (
     MAX_BIGINT_DIGITS,
     MAX_DEPTH,
@@ -155,6 +157,12 @@ class TestEcmaScriptSpellings(unittest.TestCase):
         (1e-21, "1e-21"),
         (1e20, "100000000000000000000"),
         (1e21, "1e+21"),
+        # An integral double past 2**53: ECMAScript prints the shortest
+        # round-tripping digits and zero-pads, so this is NOT the exact
+        # expansion 1152921504606846976 that an int conversion yields.
+        (2.0**60, "1152921504606847000"),
+        # Negative zero keeps its sign; every integer conversion drops it.
+        (-0.0, "-0"),
     ]
 
     def test_format_number_matches_ecmascript(self):
@@ -190,6 +198,63 @@ class TestTransportErrors(unittest.TestCase):
             parse_rpc_response({"message": "bad gateway"}, 502)
 
         self.assertEqual(caught.exception.code, "INTERNAL")
+
+    def test_redirect_does_not_replay_the_bearer_token(self):
+        """A 3xx must not hand the caller's credentials to the redirect target.
+
+        ``urllib``'s default redirect handler copies every header but
+        ``content-*`` onto the new request and follows it to any host, so a
+        challenge page or an open redirect walked off with the bearer token.
+        The reference client's ``fetch`` drops it cross-origin; this poster
+        refuses the redirect outright.
+        """
+
+        received: list[dict] = []
+
+        class Target(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # BaseHTTPRequestHandler's own naming
+                received.append(dict(self.headers))
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"result":null}')
+
+            do_POST = do_GET  # noqa: N815 - BaseHTTPRequestHandler dispatches on the verb
+
+            def log_message(self, *_args):
+                pass
+
+        target = http.server.HTTPServer(("127.0.0.1", 0), Target)
+        redirect_to = f"http://127.0.0.1:{target.server_address[1]}/stolen"
+
+        class Redirector(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # BaseHTTPRequestHandler's own naming
+                self.send_response(302)
+                self.send_header("location", redirect_to)
+                self.end_headers()
+
+            def log_message(self, *_args):
+                pass
+
+        origin = http.server.HTTPServer(("127.0.0.1", 0), Redirector)
+
+        for server in (target, origin):
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+
+        status, parsed = _urllib_post(
+            f"http://127.0.0.1:{origin.server_address[1]}/lunora/rpc",
+            {"authorization": "Bearer s3cret", "content-type": "application/json"},
+            b"{}",
+        )
+
+        self.assertEqual(received, [], "the redirect target must never be contacted")
+        self.assertEqual(status, 302, "a refused redirect surfaces as the non-2xx it is")
+
+        with self.assertRaises(LunoraError):
+            parse_rpc_response(parsed, status)
 
 
 class TestPokeAtomicity(unittest.TestCase):

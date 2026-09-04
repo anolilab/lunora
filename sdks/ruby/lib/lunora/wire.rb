@@ -55,6 +55,10 @@ module Lunora
   # changing value — WireBigInt and its tag exist for that case.
   MAX_EXACT_INTEGER = (2**53) - 1
 
+  # Largest epoch a Date holds (ECMAScript TimeClip). Past this, and for any
+  # non-finite epoch, +new Date(v)+ is an Invalid Date.
+  MAX_TIME_VALUE = 8.64e15
+
   # JavaScript's +undefined+, distinct from JSON null.
   #
   # As an object field it is dropped on encode (matching JSON.stringify); in an
@@ -255,7 +259,20 @@ module Lunora
     epoch = decode_wire(payload(value, "date"), depth + 1)
     raise WireFormatError, "wire-codec: malformed date tag" unless epoch.is_a?(::Numeric)
 
-    WireDate.new(epoch)
+    WireDate.new(time_clip(epoch))
+  end
+
+  # +new Date(epoch).getTime()+ — ECMAScript TimeClip.
+  #
+  # A Date truncates its argument toward zero, and anything non-finite or past
+  # +-8.64e15 becomes an Invalid Date, which the reference re-encodes as a NaN
+  # tag. Keeping the epoch verbatim put a date back on the wire carrying a value
+  # the reference's own Date never holds.
+  def time_clip(epoch)
+    milliseconds = epoch.to_f
+    return ::Float::NAN if milliseconds.nan? || milliseconds.infinite? || milliseconds.abs > MAX_TIME_VALUE
+
+    milliseconds.truncate
   end
 
   def decode_bigint(value)

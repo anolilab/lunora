@@ -53,6 +53,24 @@ const int wireMaxBigIntDigits = 1024;
 /// changing value — `BigInt` and its tag exist for that case.
 const int wireMaxExactInteger = 9007199254740991;
 
+/// Largest epoch a `Date` holds (ECMAScript TimeClip). Past this, and for any
+/// non-finite epoch, `new Date(v)` is an Invalid Date.
+const double wireMaxTimeValue = 8.64e15;
+
+/// `new Date(epoch).getTime()` — ECMAScript TimeClip.
+///
+/// A `Date` truncates its argument toward zero, and anything non-finite or past
+/// ±8.64e15 becomes an Invalid Date, which the reference re-encodes as a NaN
+/// tag. Kept verbatim, the epoch went back on the wire as a date the
+/// reference's own `Date` can never hold.
+double _timeClip(double epoch) {
+  if (!epoch.isFinite || epoch.abs() > wireMaxTimeValue) {
+    return double.nan;
+  }
+
+  return epoch.truncateToDouble();
+}
+
 /// Bytes per element for the typed-array views the codec round-trips. A view
 /// whose payload is not a whole number of elements is not a view the reference
 /// can rebuild — `new Float32Array(buffer)` raises a RangeError there — so
@@ -386,7 +404,7 @@ Object? _decodeTagged(List<Object?> value, int depth) {
       if (epoch is! num) {
         throw const WireFormatException('malformed date tag');
       }
-      return WireDate(epoch.toDouble());
+      return WireDate(_timeClip(epoch.toDouble()));
     case 'url':
       _require(value.length >= 3 && value[2] is String, 'url');
       return WireUrl(value[2] as String);
@@ -526,17 +544,18 @@ String? _mapKeyIdentity(Object? key) {
 Object? _decodeError(List<Object?> value, int depth) {
   _require(value.length >= 4, 'error');
 
-  // The props slot is NOT optional and NOT nullable: the reference reads it with
-  // `Object.keys`, which throws on a null or missing slot, so quietly
-  // substituting an empty map accepted a frame the reference refuses.
+  // The props slot is NOT optional, NOT nullable and NOT a primitive: the
+  // reference reads it with `Object.keys`, which throws on a null or missing
+  // slot and ENUMERATES a string/number/boolean/array — so
+  // `[TAG,"error","E","m","ab"]` would decode there with the invented props
+  // {0:"a",1:"b"} while substituting an empty map accepted the same frame here.
   _require(value.length > 4 && value[4] != null, 'error');
 
-  final props = <String, Object?>{};
   final decoded = decodeWire(value[4], depth + 1);
 
-  if (decoded is Map<String, Object?>) {
-    props.addAll(decoded);
-  }
+  _require(decoded is Map<String, Object?>, 'error');
+
+  final props = <String, Object?>{...decoded! as Map<String, Object?>};
 
   return WireError(
     name: value[2] is String ? value[2] as String : '',

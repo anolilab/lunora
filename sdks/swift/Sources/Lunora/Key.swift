@@ -81,12 +81,34 @@ extension Wire {
     static func formatDouble(_ value: Double) -> String {
         if value.isNaN || value.isInfinite { return "null" }
         if value == value.rounded(.towardZero), abs(value) < 1e21 {
-            return String(format: "%.0f", value)
+            return integral(value)
         }
 
         let magnitude = abs(value)
         if magnitude >= 1e-6, magnitude < 1e21 { return positional(value) }
         return exponential(value)
+    }
+
+    /// Positional spelling of an integral double, ECMAScript-style: the
+    /// SHORTEST digit string that reads back as the same double, zero-padded out
+    /// to the decimal point. `String(2**60)` is "1152921504606847000", not the
+    /// exact expansion "1152921504606846976" that `%.0f` prints.
+    private static func integral(_ value: Double) -> String {
+        for precision in 0...17 {
+            let candidate = String(format: "%.\(precision)e", value)
+            guard Double(candidate) == value else { continue }
+
+            let parts = candidate.split(separator: "e", maxSplits: 1)
+
+            guard parts.count == 2, let exponent = Int(parts[1]) else { break }
+
+            let sign = parts[0].hasPrefix("-") ? "-" : ""
+            let digits = parts[0].filter { $0.isNumber }
+
+            return sign + digits.padding(toLength: max(exponent + 1, digits.count), withPad: "0", startingAt: 0)
+        }
+
+        return String(format: "%.0f", value)
     }
 
     /// Positional rendering at the shortest precision that still parses back to

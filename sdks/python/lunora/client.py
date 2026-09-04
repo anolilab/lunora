@@ -876,14 +876,52 @@ def _percent(value: str) -> str:
     return quote(value, safe="")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse to follow a redirect, so the bearer token is never replayed.
+
+    CPython's default handler copies EVERY request header except ``content-*``
+    onto the redirected request — ``authorization: Bearer ...`` included — and
+    sends it to whatever host the ``Location`` names. The reference client's
+    ``fetch`` drops ``Authorization`` on a cross-origin redirect per the Fetch
+    standard, so a WAF challenge page, a misconfigured proxy or an open
+    redirect on the real endpoint would harvest the caller's token here and
+    nowhere else. An RPC POST has no legitimate 3xx: 301/302/303 also turn the
+    POST into a GET, which would drop the call's own body. Refuse, and let the
+    status surface as the non-2xx it is.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ARG002
+        return None
+
+
+#: Module-level so the handler chain is built once; it holds no per-call state.
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _urllib_post(url: str, headers: dict, body: bytes, timeout: float = DEFAULT_HTTP_TIMEOUT) -> tuple[int, dict]:
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _NO_REDIRECT_OPENER.open(request, timeout=timeout) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:  # error envelopes still carry a JSON body
-        raw = exc.read().decode("utf-8")
-        return exc.code, json.loads(raw) if raw else {"error": {"code": "INTERNAL", "message": str(exc)}}
+        try:
+            raw = exc.read().decode("utf-8", errors="replace")
+        except OSError:
+            # A refused redirect or a proxy's challenge page often closes the
+            # socket with no body — and resets a POST whose body it never read.
+            # The STATUS is what the caller needs; a failed body read must not
+            # replace it with a socket error.
+            raw = ""
+        finally:
+            exc.close()
+
+        try:
+            return exc.code, json.loads(raw) if raw else {"error": {"code": "INTERNAL", "message": str(exc)}}
+        except json.JSONDecodeError:
+            # An HTML error page from a proxy: report the status with an envelope
+            # rather than a decode error the caller cannot tell apart from a
+            # codec failure.
+            return exc.code, {"error": {"code": "INTERNAL", "message": str(exc)}}
     # A timeout raises `socket.timeout` (`TimeoutError` from 3.10+), which is not
     # an `HTTPError` and so is left to propagate — it is not a server response
     # and must not be dressed up as one.

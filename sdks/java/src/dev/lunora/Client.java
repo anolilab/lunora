@@ -100,6 +100,12 @@ public final class Client {
     /** A subscription-scoped error the server pushed. */
     public record SubscriptionError(String code, String message) {}
 
+    /**
+     * The code every port reports for a frame whose payload will not decode. Shared spelling
+     * matters: this reaches the consumer's {@code onError}, which switches on it.
+     */
+    public static final String CODE_INVALID_FRAME = "INVALID_FRAME";
+
     private final String baseUrl;
     private final HttpPoster poster;
 
@@ -852,8 +858,9 @@ public final class Client {
     }
 
     /**
-     * Applies one server frame and returns its type. Unknown types are ignored, per the protocol's
-     * forward-compatibility rule.
+     * Applies one server frame and returns its type — {@code "error"} for a frame whose payload
+     * would not decode, since that one was not delivered. Unknown types are ignored, per the
+     * protocol's forward-compatibility rule.
      */
     @SuppressWarnings("unchecked")
     public String handleFrame(String raw) {
@@ -900,12 +907,17 @@ public final class Client {
                     }
 
                     if (onError != null) {
+                        // Same code and same kind as the other seven ports: a
+                        // consumer switching on error.code() got null from here
+                        // alone, and a frame reported as "data" reads as one that
+                        // was delivered.
                         onError.accept(
                                 new SubscriptionError(
-                                        null, "malformed wire value: " + error.getMessage()));
+                                        CODE_INVALID_FRAME,
+                                        "malformed wire value: " + error.getMessage()));
                     }
 
-                    return kind;
+                    return "error";
                 }
 
                 List<Runnable> deferred = new ArrayList<>();

@@ -123,10 +123,12 @@ private fun overLongBigIntRejected() {
 private fun rejects(value: Any?): Boolean = try {
     Wire.decode(value)
     false
-} catch (error: RuntimeException) {
-    // Wire.decode's own bounds (bigint length, depth) throw its typed
-    // WireFormatException; a nested decoder (Base64 on a malformed bytes tag)
-    // throws its own unwrapped RuntimeException. Both are a rejection.
+} catch (error: WireFormatException) {
+    // ONLY the codec's own type counts. This used to catch RuntimeException,
+    // which was wider than the codec — `decodeBytes` wraps Base64's
+    // IllegalArgumentException — so a regression letting a raw JDK exception
+    // escape `Wire.decode` still read as a rejection, while a caller catching
+    // WireFormatException caught nothing.
     true
 }
 
@@ -287,6 +289,11 @@ private fun formatNumberMatchesEcmaScript() {
         0.0 to "0", 3.0 to "3", 1.5 to "1.5", -2.5 to "-2.5",
         1e-5 to "0.00001", 1e-6 to "0.000001", 1e-7 to "1e-7", 1.5e-7 to "1.5e-7",
         1e-21 to "1e-21", 1e20 to "100000000000000000000", 1e21 to "1e+21",
+        // An integral double past 2^53 keeps ECMAScript's shortest-digits
+        // spelling rather than the exact expansion 1152921504606846976.
+        1.152921504606847e18 to "1152921504606847000",
+        // Negative zero keeps its sign; every integer conversion drops it.
+        -0.0 to "-0",
     )
 
     for ((value, want) in cases) {

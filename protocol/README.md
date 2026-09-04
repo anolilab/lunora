@@ -328,9 +328,13 @@ carried. Every other `4xx` is a refusal of the REQUEST that resending can only
 reproduce, and is terminal for the write: dropping a write the edge refused is the
 lesser harm against replaying it forever.
 
-No golden fixtures, and no case in `conformance-cases.json`: the endpoint is
-optional, so requiring it would fail the seven SDKs that correctly do not
-implement it. `sdks/README.md` records which do.
+The endpoint is optional for a client, but every SDK here implements it, so it
+is held to goldens like the rest: `offlineQueue.batchReplay` in
+[`fixtures/offline-optimistic.json`](./fixtures/offline-optimistic.json) carries
+the calls, the slot outcomes and the normative entry cap, and
+`conformance-cases.json` requires `offline_flush_batches_multiple_writes`,
+`offline_flush_batch_splits_on_payload_too_large` and
+`batch_entry_cap_matches_protocol`. `sdks/README.md` records the per-port state.
 
 ## 5. WebSocket subscription protocol (`GET /_lunora/ws`)
 

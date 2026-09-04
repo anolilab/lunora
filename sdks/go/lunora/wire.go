@@ -465,6 +465,22 @@ func encodeSlice(items []any, depth int) ([]any, error) {
 	return encoded, nil
 }
 
+// maxTimeValue is the largest epoch a Date holds (ECMAScript TimeClip). Past
+// it, and for any non-finite epoch, `new Date(v)` is an Invalid Date.
+const maxTimeValue = 8.64e15
+
+// timeClip is what `new Date(epoch).getTime()` returns: the epoch truncated
+// toward zero, or NaN when it is non-finite or out of range. Keeping the epoch
+// verbatim put a date back on the wire carrying a value the reference's own
+// Date never holds — an out-of-range epoch re-encodes there as a NaN tag.
+func timeClip(epoch float64) float64 {
+	if math.IsNaN(epoch) || math.IsInf(epoch, 0) || math.Abs(epoch) > maxTimeValue {
+		return math.NaN()
+	}
+
+	return math.Trunc(epoch)
+}
+
 // maxExactInteger is the largest integer a float64 represents exactly (2^53-1).
 // JSON numbers are float64, so an integer above this cannot cross the wire as a
 // number without changing value — v.bigint() and its tag exist for that case.
@@ -567,7 +583,7 @@ func decodeTagged(value []any, depth int) (any, error) {
 			return nil, fmt.Errorf("wire-codec: date epoch is %T, want number", epoch)
 		}
 
-		return Date{EpochMs: milliseconds}, nil
+		return Date{EpochMs: timeClip(milliseconds)}, nil
 	case "url":
 		if len(value) < 3 {
 			return nil, fmt.Errorf("wire-codec: malformed url tag")
@@ -730,9 +746,11 @@ func decodeError(value []any, depth int) (any, error) {
 	message, _ := value[3].(string)
 	decoded := Error{Message: message, Name: name, Props: map[string]any{}, Cause: Undefined}
 
-	// The props slot is NOT optional and NOT nullable: the reference reads it with
-	// Object.keys, which throws on a null or missing slot, so quietly substituting
-	// an empty map accepted a frame the reference refuses.
+	// The props slot is NOT optional, NOT nullable and NOT a primitive: the
+	// reference reads it with Object.keys, which throws on a null or missing
+	// slot and ENUMERATES a string/number/boolean/array — so `[TAG,"error",
+	// "E","m","ab"]` would decode with the invented props {0:"a",1:"b"} there
+	// while quietly substituting an empty map accepted the same frame here.
 	if len(value) < 5 || value[4] == nil {
 		return nil, fmt.Errorf("wire-codec: malformed error tag")
 	}
@@ -742,9 +760,12 @@ func decodeError(value []any, depth int) (any, error) {
 		return nil, err
 	}
 
-	if asMap, ok := props.(map[string]any); ok {
-		decoded.Props = asMap
+	asMap, ok := props.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("wire-codec: error props is %T, want an object", props)
 	}
+
+	decoded.Props = asMap
 
 	if len(value) > 5 {
 		cause, err := decodeWire(value[5], depth+1)

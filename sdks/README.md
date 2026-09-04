@@ -501,7 +501,7 @@ Each of these is forced by what these SDKs are rather than chosen:
 | **`submit` is a NEW method; `mutation` is unchanged.** `mutation` stays one direct HTTP round-trip that fails when the deployment is unreachable, because the generated surface calls it and a typed wrapper must keep returning a typed result. `submit` is the write path that survives a dropped socket.                                                            | Changing `mutation`'s contract under the generated code would turn "this write failed" into "this write is queued" for every existing caller.                                                                                                                                                                                                                                                                                                                                                                  |
 | **`submit` returns immediately with a `status` of `committed` or `queued`.** The browser client's `mutation()` returns a promise that stays PENDING until a queued write finally replays; the eventual verdict here arrives through `onSettled` (per write) or `onMutationSettled` (per client).                                                                       | A pending promise is fine in a browser event loop and bad on a goroutine, a Ruby thread or a JVM thread pool. A caller that must not report success early checks `status`.                                                                                                                                                                                                                                                                                                                                     |
 | **The persistence adapter is SYNCHRONOUS** in the seven non-Dart ports. The browser client's is async because IndexedDB is, and Dart's stays async because its IO is.                                                                                                                                                                                                  | A consumer injects whatever it likes — a file, SQLite, a key-value store — and owns its own threading, exactly as it already does for the HTTP poster and the frame sender.                                                                                                                                                                                                                                                                                                                                    |
-| **The identity stamp is an opaque string the CONSUMER sets** (`client.identity`), not a fingerprint derived from an auth token.                                                                                                                                                                                                                                        | These SDKs do not manage auth sessions, and a derived stamp would mean persisting a hash of a bearer token in the consumer's storage. Put a stable, non-secret subject (a user id) there.                                                                                                                                                                                                                                                                                                                      |
+| **The identity stamp is an opaque string the CONSUMER sets** (`client.identity`) in seven ports — Dart is the exception and mirrors the reference, deriving one from `authSubject` or, failing that, from a non-cryptographic digest of the token (`dart/lib/src/transport.dart`).                                                                                     | These SDKs do not manage auth sessions, so a derived stamp would mean persisting a digest of a bearer token in the consumer's storage. Put a stable, non-secret subject (a user id) there — in Dart, `authSubject`, which is what its fallback exists to avoid needing.                                                                                                                                                                                                                                        |
 | **A transient replay failure is classified by code AND by status**: a raw transport error, `SHARD_ERROR`/`SHARD_UNAVAILABLE`, `RATE_LIMITED`/`TOO_MANY_REQUESTS`, any 5xx, and any non-2xx carrying no `{ error }` envelope all re-queue; everything else coded is terminal. One predicate governs the single-call path, a batch slot and a whole-batch outcome alike. | `protocol/README.md` §4.3. A durable write's fate must not depend on how many siblings were queued alongside it, which is exactly what it did: the same envelope-less 502 was transient for a batch and terminal for a lone write. **Behind §4.3 on one half**: an envelope-less **4xx** is a refusal that resending only reproduces, and the spec now settles those terminally rather than parking the outbox head behind them forever. These eight still re-queue every envelope-less non-2xx alike.         |
 | **A rate limit defers the next flush rather than dropping the write.** `FlushReport.retryAfterMs` carries the envelope's `data.retryAfterMs`, clamped to 60 s, and a flush inside that window is a no-op reporting the time remaining.                                                                                                                                 | "Not now" is not "no", and a queue that honours a limiter by discarding loses data for being punctual. The `Retry-After` HEADER is not read: the injected poster surfaces `(status, body)` only — see the capability matrix's note ⁵. The window is also **passive and global**: nothing schedules a re-flush when it elapses (the caller's next flush is what tries again), a refusal carrying no hint sets no window at all, and the one field gates every shard rather than the shard that met the limiter. |
 | **Every fold notifies.** The TypeScript engine suppresses a notification whose folded result is reference-identical to the value already displayed.                                                                                                                                                                                                                    | Reference identity has no portable meaning across eight languages. A consumer sees at most a few redundant callbacks carrying the same value, never a missing one.                                                                                                                                                                                                                                                                                                                                             |
@@ -514,7 +514,7 @@ here.
 
 ### The queue never calls back; it returns what it let go of
 
-In all seven ports, every queue method that lets go of a write — an overflow
+In all eight ports, every queue method that lets go of a write — an overflow
 eviction, a failed precondition, a close — **returns** the discarded entry with a
 coded reason instead of rejecting it in place. The client settles those once it
 has released its lock.
@@ -537,7 +537,7 @@ an eviction dropping a durable write in silence was itself dropping it in silenc
 Every port now has a case asserting that an eviction raised from inside `submit`
 settles exactly once, with the documented code.
 
-The same rule is what makes the rest of the write path safe, so all seven ports
+The same rule is what makes the rest of the write path safe, so all eight ports
 hold to it: **on the write path, nothing you supply runs while the client holds
 its lock.** The optimistic transform is run against a snapshot and its result
 recorded; a queued write's `precondition` is evaluated on a snapshot too; the
@@ -741,7 +741,7 @@ the row as "a case exists and runs under this name", and rely on the assertions
 themselves for the rest.
 
 **The manifest holds a suite to every name in
-`protocol/conformance-cases.json` — 37 of them today; it cannot hold one that ran
+`protocol/conformance-cases.json` — 40 of them today; it cannot hold one that ran
 nothing at all.** Six of these eight test tools exit 0 having collected NO tests
 — `unittest discover` finding no matching module, an empty `test/test_*.rb`
 glob, a Go package with no `_test.go`, `cargo test` and `swift test` with
@@ -798,6 +798,29 @@ against — `protocol/fixtures/*.json` and `protocol/conformance-cases.json` —
 outside the Go module, so the test cache cannot see those files change and replays
 a PASS recorded before the edit. Without it, editing a fixture or the manifest
 leaves the go leg green without having run.
+
+### Two decoder leniencies the fixtures deliberately do not pin
+
+Both are places where a port is STRICTER than the reference, and both are left
+unpinned on purpose — a fixture demanding rejection would assert against the
+reference, and one demanding acceptance would ask six languages to hand-roll a
+decoder whose only new behaviour is accepting malformed input. A conforming
+encoder emits neither shape, so nothing on a conforming wire reaches them.
+Measured, not assumed:
+
+| Input                                          | Accepted by                                   | Refused by                              |
+| ---------------------------------------------- | --------------------------------------------- | --------------------------------------- |
+| unpadded base64 (`AQI`)                        | reference (`atob`), rust, java, kotlin        | go, python, ruby, swift, dart           |
+| base64 with inner whitespace                   | reference (`atob`), rust, go (`\n`/`\r` only) | java, kotlin, python, ruby, swift, dart |
+| a `url` href `new URL` refuses (`"not a url"`) | every port — the href is stored verbatim      | the reference only                      |
+
+The `url` row is the one that can bite in the other direction: a port will put a
+non-canonical href (`HTTPS://EXAMPLE.COM`) on the wire where the reference emits
+`new URL(href).href` (`https://example.com/`), and the runtime decodes with the
+reference codec. Eight native URL types do not agree with WHATWG parsing on
+enough edges to reproduce it — a half-validator would be a NINTH behaviour — so
+the ports carry the href through untouched and a consumer that needs the
+reference's spelling normalises before it constructs the value.
 
 CI runs all eight per PR (`sdk-conformance` in `.github/workflows/test.yml`),
 one language per matrix leg — and each leg invokes **this same script**,

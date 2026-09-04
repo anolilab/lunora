@@ -245,6 +245,29 @@ fn depth_cap_enforced() {
     }
 
     assert!(decode_wire(&nested).is_err());
+
+    // The ENCODE side too, as the Swift and JVM ports assert: a cap that only
+    // guards the inbound direction lets this process build the payload that
+    // crashes the peer.
+    let mut deep = WireValue::String("leaf".to_string());
+
+    for _ in 0..(MAX_DEPTH + 2) {
+        deep = WireValue::Array(vec![deep]);
+    }
+
+    assert!(encode_wire(&deep).is_err());
+
+    // And the boundary, or a cap that regressed to ANY smaller value still
+    // passed the two assertions above: exactly MAX_DEPTH deep must round-trip.
+    let mut deepest = json!("leaf");
+
+    for _ in 0..MAX_DEPTH {
+        deepest = json!([deepest]);
+    }
+
+    let decoded = decode_wire(&deepest).expect("a value nested exactly MAX_DEPTH deep must decode");
+
+    assert_eq!(encode_wire(&decoded).expect("re-encode"), deepest);
 }
 
 fn stable_wire_key_fixtures() {
@@ -280,6 +303,12 @@ fn format_number_matches_ecmascript() {
         (1e-21, "1e-21"),
         (1e20, "100000000000000000000"),
         (1e21, "1e+21"),
+        // An integral double past 2^53: ECMAScript prints the SHORTEST digits
+        // that read back as the same double and zero-pads, so this is not the
+        // exact expansion 1152921504606846976 that `{:.0}` writes.
+        (1.152_921_504_606_847e18, "1152921504606847000"),
+        // Negative zero keeps its sign in a key.
+        (-0.0, "-0"),
     ] {
         assert_eq!(stable_stringify(&json!(value)), want, "formatting {value}");
     }
