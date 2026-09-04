@@ -1,5 +1,5 @@
 import type { StoredSubscription, SubscriptionFilter, SubscriptionStatus, SubscriptionStore } from "../types";
-import { legacyIdFor } from "./normalize";
+import { claimRefusal, legacyIdFor } from "./normalize";
 
 /** Ascending `id` comparator — pairs with the D1 store's `ORDER BY id ASC`. */
 const compareById = (a: StoredSubscription, b: StoredSubscription): number => {
@@ -89,22 +89,35 @@ const memorySubscriptionStore = (): SubscriptionStore => {
             return Promise.resolve();
         },
         put: (subscription: StoredSubscription): Promise<StoredSubscription> => {
-            // Evict the SAME device's legacy-prefix row (pre-`wp2_`/`fcm2_` 32-bit id)
-            // so a device that migrated id schemes isn't held as two rows — otherwise
-            // `broadcast` (no id filter) delivers to it twice. Idempotent for parity
-            // with the D1 store's legacy delete; the `!== subscription.id` guard keeps
-            // a put of a legacy-id row from deleting the very row it just wrote.
-            const legacyId = legacyIdFor(subscription);
+            const existing = map.get(subscription.id);
+            // Ownership first, and before ANY write: a put that would move the row to
+            // a different user is refused outright (see `SubscriptionStore.put`).
+            // Atomic by construction — no `await` between the check and the writes.
+            // Rejected rather than thrown: this arrow is synchronous, and a throw out
+            // of a method typed `Promise<…>` escapes a caller's `.catch`.
+            const refusal = claimRefusal(existing, subscription);
 
-            if (legacyId !== undefined && legacyId !== subscription.id) {
-                map.delete(legacyId);
+            if (refusal !== undefined) {
+                return Promise.reject(refusal);
             }
 
-            const existing = map.get(subscription.id);
             // Preserve the original createdAt on re-register (upsert keeps first-seen time).
             const merged: StoredSubscription = existing === undefined ? subscription : { ...existing, ...subscription, createdAt: existing.createdAt };
 
             map.set(merged.id, merged);
+
+            // Evict the SAME device's legacy-prefix row (pre-`wp2_`/`fcm2_` 32-bit id)
+            // so a device that migrated id schemes isn't held as two rows — otherwise
+            // `broadcast` (no id filter) delivers to it twice. Idempotent for parity
+            // with the D1 store's legacy delete; the `!== subscription.id` guard keeps
+            // a put of a legacy-id row from deleting the very row it just wrote, and
+            // the owner check keeps it from deleting a row this caller does not own.
+            const legacyId = legacyIdFor(subscription);
+            const legacy = legacyId === undefined || legacyId === subscription.id ? undefined : map.get(legacyId);
+
+            if (legacy !== undefined && claimRefusal(legacy, subscription) === undefined) {
+                map.delete(legacy.id);
+            }
 
             return Promise.resolve(merged);
         },

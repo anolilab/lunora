@@ -95,11 +95,19 @@ const shouldCaptureMail = (env: MailEnv): boolean => {
 };
 
 /**
+ * Whether the "capture has nowhere to record" warning has already been emitted in
+ * this isolate. Module-level so a dev loop that sends constantly says it once
+ * instead of once per message — the same shape as the notify facade's one-time
+ * no-store warning.
+ */
+let warnedNoCaptureTarget = false;
+
+/**
  * Build the {@link MailboxSink} that records a captured message into the studio's
  * root-shard inbox via the reserved `recordMail` admin RPC — the same
  * worker→root-shard path the runtime uses for auth events. Best-effort: without
  * the `SHARD` binding or `LUNORA_ADMIN_TOKEN` it returns a sentinel id so a send
- * never fails for lack of somewhere to record.
+ * never fails for lack of somewhere to record — but it says so first (see below).
  */
 const createCaptureSink = (env: MailEnv, rootShard: string = DEFAULT_ROOT_SHARD, jurisdiction?: DurableObjectJurisdiction): MailboxSink => {
     return {
@@ -108,6 +116,21 @@ const createCaptureSink = (env: MailEnv, rootShard: string = DEFAULT_ROOT_SHARD,
             const adminToken = typeof env["LUNORA_ADMIN_TOKEN"] === "string" ? env["LUNORA_ADMIN_TOKEN"] : undefined;
 
             if (binding === undefined || adminToken === undefined) {
+                // Not silent. Capture is selected by a DEV-LOOKING environment
+                // variable (`shouldCaptureMail`), so a deploy that happens to ship
+                // `NODE_ENV=test` or `ENVIRONMENT=local`, or a dev box missing the
+                // admin token, swallows every message — verification links, password
+                // resets and OTPs included — while returning a success-shaped id.
+                // The sibling RPC-failure branch below has always logged; this one
+                // returned the same sentinel with nothing in the tail to explain it.
+                if (!warnedNoCaptureTarget) {
+                    warnedNoCaptureTarget = true;
+                    // eslint-disable-next-line no-console -- one-time misconfiguration warning, mirrors the RPC-failure branch below
+                    console.warn(
+                        "@lunora/mail: capturing mail but there is nowhere to record it — the `SHARD` binding and/or `LUNORA_ADMIN_TOKEN` is missing, so every captured message is discarded. Set both to see mail in the studio inbox, or set LUNORA_MAIL_CAPTURE=0 to deliver for real.",
+                    );
+                }
+
                 return { id: "uncaptured" };
             }
 

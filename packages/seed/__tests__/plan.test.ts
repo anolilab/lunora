@@ -386,8 +386,8 @@ describe("seedPlan — unique columns", () => {
 
         const { rows } = seedPlan(plainSchema, { counts: { users: 2 }, now: 1_700_000_000_000, seed: 7 }).find((entry) => entry.table === "users")!;
 
-        expect(rows[0]).toStrictEqual({ _id: "d84cf143-978e-4b60-9832-481cdfa76ce2", age: 460, email: "bryan79@hotmail.com", name: "Ada Fritsch DVM" });
-        expect(rows[1]).toStrictEqual({ _id: "730f300b-1bf5-4730-9340-429bb785ee9b", age: 509, email: "courtney51@hotmail.com", name: "Griffin Towne" });
+        expect(rows[0]).toStrictEqual({ _id: "d84cf143-978e-4b60-9832-481cdfa76ce2", age: 460, email: "keven95@example.com", name: "Ada Fritsch DVM" });
+        expect(rows[1]).toStrictEqual({ _id: "730f300b-1bf5-4730-9340-429bb785ee9b", age: 509, email: "olga_stamm@example.com", name: "Griffin Towne" });
     });
 
     // The tag budget for an email column is the whole fallback domain, not the

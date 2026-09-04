@@ -5,8 +5,9 @@ import { createNotify } from "../src/notify";
 import { routingPushProvider } from "../src/providers";
 import { d1SubscriptionStore } from "../src/subscriptions/d1-store";
 import { memorySubscriptionStore } from "../src/subscriptions/memory-store";
+import { legacyWebPushId } from "../src/subscriptions/normalize";
 import type { NotifyDefinition, SubscriptionStore } from "../src/types";
-import { fakeD1, mockChatProvider, mockEngine, mockPushProvider, mockThrowingPushProvider } from "./helpers";
+import { fakeD1, FCM_DEAD_TOKEN_ERROR, mockChatProvider, mockEngine, mockPushProvider, mockThrowingPushProvider } from "./helpers";
 
 const baseDefinition = (store: SubscriptionStore, chat = false): NotifyDefinition => {
     return {
@@ -17,11 +18,11 @@ const baseDefinition = (store: SubscriptionStore, chat = false): NotifyDefinitio
     };
 };
 
-const setup = (options?: { chat?: boolean }) => {
+const setup = (options?: { chat?: boolean; concurrency?: number }) => {
     const store = memorySubscriptionStore();
     const push = mockPushProvider();
     const engine = mockEngine({ chat: options?.chat === true ? mockChatProvider() : undefined, push: push.provider });
-    const facade = createNotify(baseDefinition(store, options?.chat), {}, { engine, silent: true });
+    const facade = createNotify(baseDefinition(store, options?.chat), {}, { concurrency: options?.concurrency, engine, silent: true });
 
     return { ...facade, engine, sends: push.sends, store };
 };
@@ -97,6 +98,35 @@ describe("ctx.push lifecycle", () => {
         await expect(store.get(stored.id)).resolves.toBeUndefined();
     });
 
+    it("prunes an FCM device the way FCM actually reports one — a NOT_FOUND message, no code", async () => {
+        expect.hasAssertions();
+
+        // The FCM provider forwards `body.error.message` and drops
+        // `error.details[].errorCode`, so `UNREGISTERED` never reaches us — the
+        // NOT_FOUND prose is the whole signal (see `FCM_DEAD_TOKEN_ERROR`). This
+        // is the pruning the README, the docs and `LunoraPush.broadcast`'s JSDoc
+        // all promise for FCM.
+        const { push, store } = setup();
+        const stored = await push.register({ kind: "fcm", token: "gone-device-token" });
+        const receipt = await push.send(stored.id, { body: "hi" });
+
+        expect(receipt.successful).toBe(false);
+        expect(receipt.successful ? [] : receipt.errorMessages).toContain(FCM_DEAD_TOKEN_ERROR);
+        await expect(store.get(stored.id)).resolves.toBeUndefined();
+    });
+
+    it("counts a dead FCM token as pruned, not failed, in a broadcast", async () => {
+        expect.hasAssertions();
+
+        const { push } = setup();
+
+        await push.register({ kind: "fcm", token: "gone-device-token" });
+
+        const result = await push.broadcast({ body: "hi" });
+
+        expect(result).toMatchObject({ failed: 0, pruned: 1, sent: 0, total: 1 });
+    });
+
     it("throws sending to an unknown subscription id", async () => {
         expect.hasAssertions();
 
@@ -114,6 +144,67 @@ describe("ctx.push lifecycle", () => {
         await push.unregister(stored.id, { userId: "u1" });
 
         await expect(store.get(stored.id)).resolves.toBeUndefined();
+    });
+
+    it("refuses to re-own another user's subscription through register (IDOR, the register half)", async () => {
+        expect.hasAssertions();
+
+        // The mirror image of the `unregister` guard below: the id is derived from
+        // the endpoint, so a caller who can guess or observe a victim's endpoint
+        // could re-register it under their own userId with garbage keys — taking the
+        // device dark (every later send fails encryption, which is not a gone signal,
+        // so it is never pruned either) and handing the attacker `unregister` over it.
+        const { push, store } = setup();
+        const victim = await push.register({ subscription: okSub, userId: "victim" });
+
+        await expect(push.register({ subscription: { endpoint: okSub.endpoint, keys: { auth: "AAAA", p256dh: "AAAA" } }, userId: "attacker" })).rejects.toThrow(
+            /registered to a different user/u,
+        );
+
+        await expect(store.get(victim.id)).resolves.toMatchObject({ keys: okSub.keys, userId: "victim" });
+    });
+
+    it("lets the same owner re-register (a routine service-worker key refresh)", async () => {
+        expect.hasAssertions();
+
+        const { push, store } = setup();
+        const first = await push.register({ subscription: okSub, userId: "u1" });
+
+        await push.register({ subscription: { endpoint: okSub.endpoint, keys: { auth: "a2", p256dh: "p2" } }, userId: "u1" });
+
+        await expect(store.get(first.id)).resolves.toMatchObject({ keys: { auth: "a2", p256dh: "p2" }, userId: "u1" });
+    });
+
+    it("lets an anonymous row be claimed, but not an owned one un-owned", async () => {
+        expect.hasAssertions();
+
+        const { push, store } = setup();
+        const anonymous = await push.register({ subscription: okSub });
+
+        // Unowned → claimable: the device signed in.
+        await push.register({ subscription: okSub, userId: "u1" });
+
+        await expect(store.get(anonymous.id)).resolves.toMatchObject({ userId: "u1" });
+
+        // Owned → an anonymous register must not strip the owner off it.
+        await expect(push.register({ subscription: okSub })).rejects.toThrow(/registered to a different user/u);
+        await expect(store.get(anonymous.id)).resolves.toMatchObject({ userId: "u1" });
+    });
+
+    it("does not let a register delete another user's legacy-id row", async () => {
+        expect.hasAssertions();
+
+        // The legacy (`wp_`) row for the SAME device has a different primary key, so
+        // the guarded upsert never touches it — the migration eviction is a separate
+        // DELETE, and an unscoped one silenced the victim's device just as well.
+        const { push, store } = setup();
+        const legacyId = legacyWebPushId(okSub.endpoint);
+
+        await store.put({ createdAt: 1, endpoint: okSub.endpoint, id: legacyId, keys: okSub.keys, kind: "web-push", lastSeenAt: 1, userId: "victim" });
+
+        await push.register({ subscription: okSub, userId: "attacker" });
+
+        await expect(store.get(legacyId)).resolves.toMatchObject({ userId: "victim" });
     });
 
     it("leaves another user's subscription in place (IDOR: the id is a caller-controlled key)", async () => {
@@ -231,6 +322,64 @@ describe("ctx.push.broadcast", () => {
 
         // gone pruned, ok + failed remain
         await expect(store.list()).resolves.toHaveLength(2);
+    });
+
+    it("spends exactly one POST on a permanently gone subscription", async () => {
+        expect.hasAssertions();
+
+        // A 410 is the facade's cue to DELETE the row. Retrying it three more times
+        // POSTs to an endpoint that is definitionally dead — four requests and the
+        // full backoff per device, on every broadcast, for as long as the device
+        // stays registered (which, before FCM pruning worked, was forever).
+        const { push, sends } = setup();
+
+        await push.register({ subscription: goneSub });
+        await push.broadcast({ body: "hi" });
+
+        expect(sends).toHaveLength(1);
+    });
+
+    it("keeps delivering — and keeps other channels alive — when several devices are dead", async () => {
+        expect.hasAssertions();
+
+        // Two dead devices used to be enough: the engine-wide breaker counted their
+        // retry attempts, opened after five consecutive failures, and then answered
+        // `Circuit open` for EVERY channel in the isolate for 30 s. The second dead
+        // device's own result became `Circuit open` too — not a gone signal, so it
+        // survived the prune and did it all again next time.
+        const { notify, push } = setup({ chat: true, concurrency: 1 });
+
+        for (const index of [1, 2, 3]) {
+            // eslint-disable-next-line no-await-in-loop -- registration order fixes the broadcast order this assertion depends on
+            await push.register({ subscription: { endpoint: `https://push.example/gone-${index.toString()}`, keys: { auth: "a", p256dh: "p" } } });
+        }
+
+        await push.register({ subscription: okSub });
+
+        const result = await push.broadcast({ body: "hi" });
+
+        expect(result).toMatchObject({ failed: 0, pruned: 3, sent: 1, total: 4 });
+        await expect(notify.chat({ text: "still up" })).resolves.toMatchObject({ successful: true });
+    });
+
+    it("still opens a circuit for a provider that is genuinely failing, and only that provider", async () => {
+        expect.hasAssertions();
+
+        // The breaker must keep doing its job for real outages — five consecutive
+        // TRANSIENT failures still shed load — while a sibling channel is untouched.
+        const { notify, push, sends } = setup({ chat: true, concurrency: 1 });
+
+        for (const index of [1, 2, 3, 4, 5, 6]) {
+            // eslint-disable-next-line no-await-in-loop -- registration order fixes the broadcast order this assertion depends on
+            await push.register({ subscription: { endpoint: `https://push.example/fail-${index.toString()}`, keys: { auth: "a", p256dh: "p" } } });
+        }
+
+        const result = await push.broadcast({ body: "hi" }, { limit: 6 });
+
+        expect(result.failed).toBe(6);
+        // 5 devices × 4 attempts trips the breaker; the 6th never reaches the provider.
+        expect(sends.length).toBeLessThan(24);
+        await expect(notify.chat({ text: "still up" })).resolves.toMatchObject({ successful: true });
     });
 
     it("respects a userId filter", async () => {

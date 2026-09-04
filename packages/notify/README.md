@@ -74,6 +74,14 @@ used to probe which endpoints exist. Register with the same `userId` you
 unregister with; devices registered anonymously (`userId` absent) all share the
 one anonymous scope and get no separation from this check.
 
+`register` is scoped the same way, because an unguarded upsert closes only half
+of that: re-registering a victim's endpoint under your own `userId` (with keys of
+your choosing) takes their device dark just as effectively, and hands you
+`unregister` over it. An endpoint already registered to another user is
+**refused** (`FORBIDDEN`) rather than re-owned — unowned rows stay claimable (the
+device signed in), and a device that legitimately changes hands unregisters as
+its current owner first.
+
 ## Send (from an action)
 
 Notification sends are external I/O, so they belong in **actions** (the `notify_send_outside_action` advisor lint enforces this):
@@ -85,7 +93,7 @@ export const announce = action.input({ title: v.string(), body: v.string() }).ac
 });
 ```
 
-`broadcast` reuses the engine's retry + circuit-breaker middleware and prunes subscriptions the push service reports as gone (HTTP 404/410, FCM `UNREGISTERED`). A single targeted send:
+`broadcast` reuses the engine's retry + circuit-breaker middleware and prunes subscriptions the push service reports as gone (Web Push HTTP 404/410; FCM's `NOT_FOUND` answer for a dead token, plus the `UNREGISTERED`/`NotRegistered` codes a legacy transport sends). A single targeted send:
 
 ```ts
 await ctx.push.send(subscriptionId, { title: "Hi", body: "…" });
@@ -179,7 +187,7 @@ client-supplied data, so the facade enforces two boundaries:
 
 Every send is counted onto `ctx.metrics` and failures onto `ctx.log` for you — codegen threads the request's logger/metrics into `ctx.notify` (`createNotify(notifyConfig, env, { log, metrics })`), so there is nothing to wire. Two low-cardinality metric series feed the durable metric history + trend charts:
 
-- **`notify.send`** `{ channel, provider, status }` — attempted sends. `status` is `accepted` (the provider took it), `failed`, or `gone` (endpoint unregistered — 404/410 / FCM `UNREGISTERED` — and pruned). A single send counts 1; a **broadcast aggregates** into one count per `(provider, status)` bucket (value = the bucket's count), not one per recipient — each `ctx.metrics.count` is a durable write.
+- **`notify.send`** `{ channel, provider, status }` — attempted sends. `status` is `accepted` (the provider took it), `failed`, or `gone` (endpoint unregistered — Web Push 404/410, or FCM's `NOT_FOUND` for a dead token — and pruned). A single send counts 1; a **broadcast aggregates** into one count per `(provider, status)` bucket (value = the bucket's count), not one per recipient — each `ctx.metrics.count` is a durable write.
 - **`notify.skipped`** `{ channel, reason }` — a send that reached nobody: `no-subscriptions-matched` (empty broadcast) or `channel-not-configured`.
 
 A **failed** send also emits one `ctx.log.warn` line carrying the error and, for push, the subscription/user ids — trace-correlated to the enclosing action and durably archived. Successes and prunes stay off the log; failure logs stay per-recipient even in a broadcast (they have no durable write).

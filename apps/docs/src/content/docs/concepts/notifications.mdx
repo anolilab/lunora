@@ -108,7 +108,7 @@ Notification sends are external I/O, so they belong in **actions**. The
 `notify_send_outside_action` [advisor lint](/docs/concepts/advisors) enforces
 this. `ctx.push.broadcast` fans out to every stored subscription, reusing the
 engine's retry + circuit-breaker middleware and pruning subscriptions the push
-service reports as gone (HTTP 404/410, FCM `UNREGISTERED`):
+service reports as gone (Web Push 404/410, FCM's `NOT_FOUND` for a dead token):
 
 ```ts
 // lunora/announce.ts

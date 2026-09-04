@@ -89,8 +89,11 @@ type InboundDispatch<TEnv = Record<string, unknown>> = (email: InboundEmail, con
  * Opt-in sender-verification gate. Runs after `parse` and before `dispatch` with
  * the parsed message. Return `false` (or throw) to reject the message before it
  * reaches the privileged dispatch — use it to enforce DKIM/SPF/DMARC via
- * `email.authentication`, an allow-list, etc. Returning `true`/`undefined`
- * proceeds.
+ * `email.authentication`, an allow-list, etc.
+ *
+ * `true` and `undefined` are the ONLY answers that proceed — `undefined` so a
+ * `(): void` hook that rejects by throwing type-checks. Anything else is read as a
+ * rejection: this is the gate whose failure mode would otherwise grant.
  */
 // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- public API: `void` lets a verify hook with no explicit return (`() => {}`) type-check; `undefined` alone wouldn't accept a `(): void` arrow
 type InboundVerify<TEnv = Record<string, unknown>> = (email: InboundEmail, context: InboundDispatchContext<TEnv>) => Promise<boolean | void> | boolean | void;
@@ -230,6 +233,19 @@ const rejectOnError = <TEnv = Record<string, unknown>>(error: unknown, context: 
  * bounces without being handed to `retain` (see `@lunora/agent`'s inbound
  * handler for both cases).
  */
+
+/**
+ * Whether a `verify` hook's answer admits the message — deny by default.
+ *
+ * `true` and `undefined` are the two documented "proceed" answers (`undefined` so
+ * a `(): void` hook that rejects by throwing type-checks). EVERYTHING else — a
+ * `null`, a `0`, an empty string out of a hook that forgot a branch — is a
+ * rejection. Testing only for `=== false` made this the one gate in the package
+ * whose failure mode granted access to the privileged dispatch.
+ */
+// eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- mirrors InboundVerify's public return type, which admits `void` for a no-return hook
+const verifyPassed = (verified: boolean | void): boolean => verified === true || verified === undefined;
+
 const createInboundEmailHandler = <TEnv = Record<string, unknown>>(options: InboundEmailHandlerOptions<TEnv>): InboundEmailHandler<TEnv> => {
     const onError = options.onError ?? rejectOnError;
 
@@ -243,7 +259,7 @@ const createInboundEmailHandler = <TEnv = Record<string, unknown>>(options: Inbo
             if (options.verify) {
                 const verified = await options.verify(parsed, context);
 
-                if (verified === false) {
+                if (!verifyPassed(verified)) {
                     throw new LunoraError("INTERNAL", "@lunora/mail/inbound: sender verification rejected the message");
                 }
             }

@@ -173,7 +173,34 @@ export interface SubscriptionStore {
     list: (filter?: SubscriptionFilter) => Promise<StoredSubscription[]>;
     /** Record the latest delivery outcome for a subscription (best-effort). */
     markStatus: (id: string, status: SubscriptionStatus, error?: string) => Promise<void>;
-    /** Insert or update a subscription (upsert by id). */
+
+    /**
+     * Insert or update a subscription (upsert by id), refusing to move an
+     * existing row to a DIFFERENT owner.
+     *
+     * The ownership predicate is the same one {@link SubscriptionStore.deleteOwned}
+     * carries, and for the same reason: the id is derived from the endpoint or the
+     * FCM token, so it is a **caller-controlled key**. An unguarded upsert let any
+     * caller who could guess or observe another user's endpoint re-register it
+     * under their own `userId` with keys of their choosing — the victim's device
+     * then fails every send (an encryption failure is not a gone signal, so it is
+     * never pruned either) and the attacker can `unregister` it as their own. The
+     * `unregister` guard alone closed exactly half of that (CWE-639).
+     *
+     * A row with no owner is claimable (the device signed in), and a row the caller
+     * already owns is theirs to refresh — that is the routine service-worker
+     * re-registration. Anything else must REJECT (`FORBIDDEN`), not silently
+     * no-op: unlike `unregister` there is nothing safe to return, since a caller
+     * gets the stored record back and it would be someone else's delivery keys.
+     * A shared device that legitimately changes hands is handled by its current
+     * owner calling `unregister` first.
+     *
+     * **The predicate and the write must be ONE operation**, as for `deleteOwned`:
+     * between a read that checks the owner and the write that acts on it, another
+     * registration can replace the row. The D1 store puts the predicate in the
+     * `ON CONFLICT … DO UPDATE`'s own `WHERE`; the in-memory one has no `await`
+     * between the two.
+     */
     put: (subscription: StoredSubscription) => Promise<StoredSubscription>;
 }
 
@@ -221,7 +248,7 @@ export interface BroadcastPageResult {
  *
  * - `accepted` — the provider took the message (a `Receipt.successful` send).
  * - `failed` — a provider error; the log line carries the `error` text.
- * - `gone` — the endpoint is unregistered (404/410, FCM `UNREGISTERED`) and pruned; push-only.
+ * - `gone` — the endpoint is unregistered (Web Push 404/410, FCM's `NOT_FOUND` for a dead token) and pruned; push-only.
  *
  * Web Push and FCM give no delivery/open receipts, so the vocabulary stops at the
  * send attempt: a `delivered`/`opened` status would be a lie for these channels.
@@ -270,16 +297,18 @@ export interface LunoraPush {
     /**
      * Fan-out a push to every stored subscription matching `filter` (default: all).
      * Reuses the engine's retry/circuit-breaker middleware; prunes subscriptions
-     * the push service reports as gone (HTTP 404/410, FCM `UNREGISTERED`). The `to`
+     * the push service reports as gone (Web Push 404/410, FCM's `NOT_FOUND` for a dead token). The `to`
      * target is derived from each subscription, so it is omitted from the payload.
      *
      * Internally walks the audience in bounded pages (via {@link LunoraPush.broadcastPage},
-     * keyset-paginated on the subscription `id`) so a huge audience is never
+     * keyset-paginated on the subscription `id`) so the audience ROWS are never
      * materialized wholesale in the isolate — see `defineNotify`'s
-     * `broadcastPageSize`. This call still processes the WHOLE matched
-     * audience in one request/queue message; use {@link LunoraPush.broadcastPage}
-     * directly (as `runPushBroadcastPage` does) to bound a single queue message
-     * to one page.
+     * `broadcastPageSize`. The returned `outcomes` ARE whole-audience, though: one
+     * `{ id, status }` per recipient accumulates across every page, so this call is
+     * bounded in rows held but not in outcomes reported. It also processes the WHOLE
+     * matched audience in one request/queue message; use {@link LunoraPush.broadcastPage}
+     * directly (as `runPushBroadcastPage` does) to bound a single queue message —
+     * and its result — to one page.
      */
     broadcast: (payload: PushContent, filter?: SubscriptionFilter) => Promise<BroadcastResult>;
 
@@ -308,7 +337,19 @@ export interface LunoraPush {
      * the caller did not already hold and never another device's row.
      */
     list: (filter?: SubscriptionFilter) => Promise<PushSubscriptionDevice[]>;
-    /** Register (upsert) a device subscription and return the stored record (the caller's own row, secrets included). */
+
+    /**
+     * Register (upsert) a device subscription and return the stored record (the
+     * caller's own row, secrets included).
+     *
+     * Owner-scoped, exactly as {@link LunoraPush.unregister} is: registering an
+     * endpoint that is already another user's row is REFUSED (`FORBIDDEN`) rather
+     * than re-owning it. Pass `ctx.auth?.userId` so the check has something to
+     * separate; an app that registers every device anonymously gets no separation
+     * from it (every row is unowned, and unowned rows stay claimable). A device
+     * that legitimately changes hands — one browser profile, two accounts —
+     * unregisters as its current owner first.
+     */
     register: (input: RegisterInput) => Promise<StoredSubscription>;
     /** Send a push to a single stored subscription (by id or record); `to` is derived from it. */
     send: (target: StoredSubscription | string, payload: PushContent) => Promise<Receipt>;

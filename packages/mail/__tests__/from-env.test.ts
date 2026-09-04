@@ -72,9 +72,15 @@ describe("createCaptureSink", () => {
         expect(init.headers.authorization).toBe("Bearer secret");
     });
 
-    it("returns a sentinel id without recording when SHARD or the admin token is absent", async () => {
-        expect.assertions(1);
+    it("says so, once, when there is nowhere to record — never a silent sentinel", async () => {
+        expect.assertions(4);
 
+        // The sibling RPC-failure branch below logs; this one returned the same
+        // `uncaptured` sentinel with nothing in the tail. Capture turns on for any
+        // env var matching dev/local/test, so a deploy that ships `NODE_ENV=test`,
+        // or a dev box with no `LUNORA_ADMIN_TOKEN`, swallowed every verification
+        // link, password reset and OTP without a word.
+        const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
         const sink = createCaptureSink({
             SHARD: {
                 get: () => {
@@ -85,6 +91,16 @@ describe("createCaptureSink", () => {
         });
 
         await expect(sink.record({ subject: "x", to: "a@b.test" })).resolves.toStrictEqual({ id: "uncaptured" });
+        expect(consoleWarn).toHaveBeenCalledTimes(1);
+        expect(consoleWarn.mock.calls[0]?.[0]).toMatch(/LUNORA_ADMIN_TOKEN/u);
+
+        // Once per isolate: a dev loop sends constantly, and one line per send is
+        // noise nobody reads.
+        await sink.record({ subject: "y", to: "a@b.test" });
+
+        expect(consoleWarn).toHaveBeenCalledTimes(1);
+
+        consoleWarn.mockRestore();
     });
 
     it("does NOT report success when the shard RPC fails — logs and returns the sentinel instead", async () => {
