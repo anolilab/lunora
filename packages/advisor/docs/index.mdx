@@ -171,7 +171,7 @@ Storage, AI, containers & payments:
 | `relation_references_unknown_table`          | `ERROR` | A relation pointing at a table that doesn't exist                                                              |
 | `shape_unknown_table`                        | `ERROR` | A shape bound to a table that doesn't exist                                                                    |
 | `workflow_unknown_target`                    | `ERROR` | A workflow call naming a workflow that doesn't exist                                                           |
-| `workflow_duplicate_step_name`               | `ERROR` | A durable step name reused within one workflow (the second call returns the first's cached result)             |
+| `workflow_duplicate_step_name`               | `ERROR` | A durable step name reused across two call sites in one workflow (which cache each gets becomes positional)    |
 | `external_source_on_global`                  | `ERROR` | A table that is both `.source()` and `.global()` (contradictory tiers)                                         |
 | `external_source_incremental_no_delete_path` | `ERROR` | An `incremental` `.source()` table with no `reconcileEveryMs`/`softDeleteColumn`; upstream deletes never apply |
 | `export_sink_misconfigured`                  | `ERROR` | A CDC export sink missing a required config field, so the tap silently drains nothing                          |

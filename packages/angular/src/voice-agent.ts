@@ -2,7 +2,7 @@ import type { Signal } from "@angular/core";
 import { DestroyRef, inject, signal } from "@angular/core";
 import type { FunctionReference, LunoraClient } from "@lunora/client";
 
-import { agentNameFromReference, voiceCloseError, voiceSocketUrl } from "../../../shared/voice-socket";
+import { agentNameFromReference, voiceCloseError, voiceSocketUrl, watchVoiceIdentity } from "../../../shared/voice-socket";
 import { resolveLunoraClient } from "./client";
 import { outsideAngularRunner } from "./platform";
 import type { CreateMicrophone, CreateSpeaker, VoiceAudioFormat, VoiceMicrophone, VoiceSpeaker } from "./voice-audio";
@@ -147,9 +147,20 @@ const DEFAULT_INTERRUPT_CHUNKS = 3;
 /** Mutable per-call connection state, held in a closure so callbacks share one source of truth. */
 interface VoiceConnection {
     audioFormat: VoiceAudioFormat;
+
+    /**
+     * `true` from the moment a turn is committed (`commit` / `text`) until it
+     * completes — the `thinking` half of a turn, which `speaking` does not cover
+     * because that only flips once the first `assistant_delta` lands. Together
+     * they are the mic's `isTurnActive` gate: without the first half, turn
+     * detection kept running through the whole STT+LLM window and ambient noise
+     * fired a second, refused `commit`.
+     */
+    awaitingTurn: boolean;
     microphone: VoiceMicrophone | undefined;
     socket: VoiceSocket;
     speaker: VoiceSpeaker | undefined;
+
     speaking: boolean;
 
     /**
@@ -159,6 +170,9 @@ interface VoiceConnection {
      * on the next `interrupted` / `user_transcript` / `ready` frame.
      */
     suppressAudio: boolean;
+
+    /** Releases the `onAuthTokenChange` watch that ends the call on an identity switch. */
+    unwatchIdentity: (() => void) | undefined;
 }
 
 /**
@@ -233,6 +247,7 @@ const voiceAgent = (options: VoiceAgentOptions): VoiceAgentResult => {
         current = undefined;
 
         if (connection) {
+            connection.unwatchIdentity?.();
             connection.microphone?.stop();
             connection.speaker?.stop();
 
@@ -280,6 +295,7 @@ const voiceAgent = (options: VoiceAgentOptions): VoiceAgentResult => {
             }
             case "assistant_done": {
                 if (connection) {
+                    connection.awaitingTurn = false;
                     connection.speaking = false;
                 }
 
@@ -292,6 +308,7 @@ const voiceAgent = (options: VoiceAgentOptions): VoiceAgentResult => {
                 // A non-fatal turn failure: surface it and return the call to a
                 // usable state rather than leaving it stuck "speaking"/"thinking".
                 if (connection) {
+                    connection.awaitingTurn = false;
                     connection.speaking = false;
                 }
 
@@ -302,6 +319,7 @@ const voiceAgent = (options: VoiceAgentOptions): VoiceAgentResult => {
             }
             case "interrupted": {
                 if (connection) {
+                    connection.awaitingTurn = false;
                     connection.speaking = false;
                     connection.suppressAudio = false;
                 }
@@ -398,10 +416,24 @@ const voiceAgent = (options: VoiceAgentOptions): VoiceAgentResult => {
                 socket,
                 speaker: undefined,
                 speaking: false,
+                awaitingTurn: false,
                 suppressAudio: false,
+                unwatchIdentity: undefined,
             };
 
             current = connection;
+
+            // A voice socket's credential is fixed at the upgrade, so a sign-out
+            // or user switch mid-call would otherwise leave the session running
+            // (and writing its thread) as the previous user.
+            connection.unwatchIdentity = watchVoiceIdentity(client, "voiceAgent", (identityError) => {
+                if (current !== connection) {
+                    return;
+                }
+
+                error.set(identityError);
+                teardown();
+            });
 
             // The injectable `VoiceSocket` exposes only `on*` handler slots (not a
             // real EventTarget), so assign them directly.
@@ -443,7 +475,7 @@ const voiceAgent = (options: VoiceAgentOptions): VoiceAgentResult => {
                 createMicrophone({
                     interruptChunks,
                     interruptThreshold,
-                    isSpeaking: () => current?.speaking ?? false,
+                    isTurnActive: () => (current?.speaking ?? false) || (current?.awaitingTurn ?? false),
                     onAudio: (pcm) => {
                         if (socket.readyState === WS_OPEN) {
                             socket.send(pcm);
@@ -454,6 +486,7 @@ const voiceAgent = (options: VoiceAgentOptions): VoiceAgentResult => {
                         current?.speaker?.interrupt();
 
                         if (current) {
+                            current.awaitingTurn = false;
                             current.speaking = false;
                             // Drop any audio already in flight until the server acks —
                             // cleared on the next `interrupted`/`user_transcript`/`ready`.
@@ -467,6 +500,11 @@ const voiceAgent = (options: VoiceAgentOptions): VoiceAgentResult => {
                     },
                     onSilence: () => {
                         sendFrame({ type: "commit" });
+
+                        if (current) {
+                            current.awaitingTurn = true;
+                        }
+
                         status.set("thinking");
                     },
                     silenceDurationMs,
@@ -518,6 +556,12 @@ const voiceAgent = (options: VoiceAgentOptions): VoiceAgentResult => {
         // Only advance to "thinking" if the frame actually reached an open socket;
         // otherwise the UI would stick in "thinking" with no call.
         if (sendFrame({ text, type: "text" })) {
+            // A typed turn commits just like a spoken one, so park the mic's
+            // silence timer for its duration too.
+            if (current) {
+                current.awaitingTurn = true;
+            }
+
             status.set("thinking");
         }
     };

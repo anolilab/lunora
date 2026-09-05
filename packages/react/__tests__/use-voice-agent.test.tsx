@@ -28,6 +28,9 @@ interface FakeSocket {
     readonly sent: unknown[];
 }
 
+/** The error the primitive raises when the signed-in identity moves mid-call. */
+const IDENTITY_CHANGED = /identity changed during the call/;
+
 const makeVoiceRef = (reference: string): VoiceReference => {
     return { __lunoraRef: reference };
 };
@@ -250,9 +253,21 @@ describe(useVoiceAgent, () => {
         expect(socket().sent).toContainEqual(JSON.stringify({ type: "commit" }));
         expect(result.current.status).toBe("thinking");
 
+        // The committed turn is active from here until it completes, so the mic's
+        // silence timer stays parked. Without this the turn detector keeps
+        // running through the whole STT+LLM window: ambient noise at the 0.01 RMS
+        // silence threshold plus another quiet gap fires a SECOND `commit`, which
+        // the DO refuses with "a turn is already in progress" — and that refusal
+        // returns before `drainAudio`, so the buffered PCM leaks into the next
+        // utterance's transcript.
+        expect(mic().config.isTurnActive()).toBe(true);
+
         act(() => {
             socket().emitServer({ text: "what is the weather", type: "user_transcript" });
         });
+
+        // Still active — `user_transcript` is mid-turn, not the end of one.
+        expect(mic().config.isTurnActive()).toBe(true);
 
         expect(result.current.transcript).toBe("what is the weather");
         expect(result.current.status).toBe("thinking");
@@ -277,6 +292,34 @@ describe(useVoiceAgent, () => {
 
         expect(result.current.status).toBe("listening");
         expect(result.current.interimTranscript).toBe("It is sunny.");
+        // Turn over — the silence timer resumes for the next utterance.
+        expect(mic().config.isTurnActive()).toBe(false);
+    });
+
+    it("un-parks the silence timer when a turn ends without speech (an error frame)", async () => {
+        expect.hasAssertions();
+
+        const { mic, result, socket } = renderVoice();
+
+        await act(async () => {
+            await result.current.startCall();
+        });
+
+        act(() => {
+            socket().emitServer({ audioFormat: "mp3", type: "ready" });
+            mic().config.onSilence();
+        });
+
+        expect(mic().config.isTurnActive()).toBe(true);
+
+        // A turn that fails never emits `assistant_done`. If the flag only
+        // cleared there, the mic would stay parked for the rest of the call and
+        // the user could never take another turn by speaking.
+        act(() => {
+            socket().emitServer({ message: "model unavailable", type: "error" });
+        });
+
+        expect(mic().config.isTurnActive()).toBe(false);
     });
 
     it("streams captured PCM as binary frames and toggles mute", async () => {
@@ -333,6 +376,82 @@ describe(useVoiceAgent, () => {
         expect(socket().sent).toContainEqual(JSON.stringify({ type: "interrupt" }));
         expect(speaker().interrupt).toHaveBeenCalledTimes(1);
         expect(result.current.status).toBe("listening");
+    });
+
+    it("drops audio still in flight after a local barge-in, until the server acks", async () => {
+        expect.hasAssertions();
+
+        const { mic, result, socket, speaker } = renderVoice();
+
+        await act(async () => {
+            await result.current.startCall();
+        });
+
+        act(() => {
+            socket().emitServer({ audioFormat: "mp3", type: "ready" });
+            socket().emitServer({ text: "It is sunny.", type: "assistant_delta" });
+            socket().emitBinary(new Uint8Array([1, 2, 3]));
+        });
+
+        expect(speaker().enqueue).toHaveBeenCalledTimes(1);
+
+        // Local barge-in. The DO has not seen the `interrupt` yet, so audio it
+        // already sent is still arriving; playing it would resurrect the speaker
+        // the user just silenced.
+        act(() => {
+            mic().config.onInterrupt();
+        });
+
+        act(() => {
+            socket().emitBinary(new Uint8Array([4, 5, 6]));
+            socket().emitBinary(new Uint8Array([7, 8, 9]));
+        });
+
+        expect(speaker().enqueue).toHaveBeenCalledTimes(1);
+
+        // The server acks — suppression lifts and the next turn's audio plays.
+        act(() => {
+            socket().emitServer({ type: "interrupted" });
+            socket().emitBinary(new Uint8Array([10, 11, 12]));
+        });
+
+        expect(speaker().enqueue).toHaveBeenCalledTimes(2);
+    });
+
+    it("lifts barge-in suppression on a user_transcript frame too", async () => {
+        expect.hasAssertions();
+
+        const { mic, result, socket, speaker } = renderVoice();
+
+        await act(async () => {
+            await result.current.startCall();
+        });
+
+        act(() => {
+            socket().emitServer({ audioFormat: "mp3", type: "ready" });
+            socket().emitServer({ text: "It is sunny.", type: "assistant_delta" });
+            socket().emitBinary(new Uint8Array([1, 2, 3]));
+        });
+
+        expect(speaker().enqueue).toHaveBeenCalledTimes(1);
+
+        act(() => {
+            mic().config.onInterrupt();
+            socket().emitBinary(new Uint8Array([4, 5, 6]));
+        });
+
+        expect(speaker().enqueue).toHaveBeenCalledTimes(1);
+
+        // A barge-in that the DO answers by transcribing the new utterance never
+        // emits `interrupted`. If suppression only lifted there, every later
+        // frame of the call would be dropped and the agent would go permanently
+        // silent.
+        act(() => {
+            socket().emitServer({ text: "actually, tomorrow", type: "user_transcript" });
+            socket().emitBinary(new Uint8Array([7, 8, 9]));
+        });
+
+        expect(speaker().enqueue).toHaveBeenCalledTimes(2);
     });
 
     it("sends a typed turn and ends the call cleanly", async () => {
@@ -735,5 +854,93 @@ describe(useVoiceAgent, () => {
 
         expect(micStop).toHaveBeenCalledTimes(1);
         expect(socketClose).toHaveBeenCalledTimes(1);
+    });
+
+    // A voice socket's credential is fixed at the upgrade — the browser sends its
+    // cookie once, and on React Native the client's wrapped `WebSocket` injects
+    // the auth header once, at construction. `LunoraClient` bounces its OWN
+    // sockets when the credential changes; nothing bounced this one, so a
+    // sign-out or user switch left the call running (and writing its `agents:*`
+    // thread) under the previous user.
+    describe("identity change during a call", () => {
+        it("ends the call when the signed-in identity changes", async () => {
+            expect.hasAssertions();
+
+            const { client, mic, result, socket, unmount } = renderVoice();
+
+            client.setAuthToken("token-a", "user-a");
+
+            await act(async () => {
+                await result.current.startCall();
+            });
+
+            const micStop = mic().stop;
+            const socketClose = socket().close;
+
+            await act(async () => {
+                client.setAuthToken("token-b", "user-b");
+            });
+
+            expect(result.current.status).toBe("idle");
+            expect(result.current.error?.message).toMatch(IDENTITY_CHANGED);
+            expect(micStop).toHaveBeenCalledTimes(1);
+            expect(socketClose).toHaveBeenCalledTimes(1);
+
+            unmount();
+        });
+
+        it("keeps the call alive through a same-subject token refresh", async () => {
+            expect.hasAssertions();
+
+            const { client, mic, result, socket, unmount } = renderVoice();
+
+            client.setAuthToken("token-a", "user-a");
+
+            await act(async () => {
+                await result.current.startCall();
+            });
+
+            const micStop = mic().stop;
+            const socketClose = socket().close;
+
+            // A routine JWT refresh: new token, same subject. The identity did
+            // not move, so dropping the call here would be the regression.
+            await act(async () => {
+                client.setAuthToken("token-a2", "user-a");
+            });
+
+            expect(result.current.status).not.toBe("idle");
+            expect(result.current.error).toBeUndefined();
+            expect(micStop).not.toHaveBeenCalled();
+            expect(socketClose).not.toHaveBeenCalled();
+
+            unmount();
+        });
+
+        it("releases the identity watch when the call ends", async () => {
+            expect.hasAssertions();
+
+            const { client, result, unmount } = renderVoice();
+
+            client.setAuthToken("token-a", "user-a");
+
+            await act(async () => {
+                await result.current.startCall();
+            });
+
+            act(() => {
+                result.current.endCall();
+            });
+
+            // A watch left registered past teardown would set an error on a call
+            // that no longer exists.
+            await act(async () => {
+                client.setAuthToken("token-b", "user-b");
+            });
+
+            expect(result.current.error).toBeUndefined();
+
+            unmount();
+        });
     });
 });

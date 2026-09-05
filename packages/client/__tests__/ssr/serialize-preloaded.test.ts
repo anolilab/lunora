@@ -53,4 +53,36 @@ describe("serializePreloaded", () => {
         // The escape is transparent to JSON.parse — value survives intact.
         expect(deserializePreloaded<string>(serialized).value).toBe("</script><script>alert(1)</script>");
     });
+
+    it("round-trips a bigint value instead of throwing", () => {
+        expect.assertions(2);
+
+        const preloaded: Preloaded<{ views: bigint }> = {
+            __lunoraPreloaded: true,
+            args: { since: 42n },
+            functionPath: "posts:get",
+            value: { views: 9_007_199_254_740_993n },
+        };
+
+        const restored = deserializePreloaded<{ views: bigint }>(serializePreloaded(preloaded));
+
+        expect(restored.value.views).toBe(9_007_199_254_740_993n);
+        expect((restored.args as { since: bigint }).since).toBe(42n);
+    });
+
+    it("round-trips an ArrayBuffer value instead of degrading it to an index-keyed object", () => {
+        expect.assertions(1);
+
+        const avatar = new Uint8Array([137, 80, 78, 71]).buffer;
+        const preloaded: Preloaded<{ avatar: ArrayBuffer }> = {
+            __lunoraPreloaded: true,
+            args: {},
+            functionPath: "users:get",
+            value: { avatar },
+        };
+
+        const restored = deserializePreloaded<{ avatar: ArrayBuffer }>(serializePreloaded(preloaded));
+
+        expect([...new Uint8Array(restored.value.avatar)]).toStrictEqual([137, 80, 78, 71]);
+    });
 });

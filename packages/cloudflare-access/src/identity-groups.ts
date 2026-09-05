@@ -21,7 +21,7 @@ const isAccessIdentity = (identity: Record<string, unknown>): boolean => {
  * array.
  *
  * It guarantees ONE thing: that the `ctx.access` facade (`context.ts`) and the
- * `accessRoles` default group reader (`roles.ts`) agree on fallback order and
+ * resolver-minted RLS roles (`resolver.ts`) agree on fallback order and
  * filtering, so RLS roles never desync from what `ctx.access.groups` / `hasGroup`
  * report for the same request.
  *
@@ -40,4 +40,45 @@ const readIdentityGroups = (identity: Record<string, unknown>): ReadonlyArray<st
     return Array.isArray(groups) ? groups.filter((group): group is string => typeof group === "string") : undefined;
 };
 
-export { isAccessIdentity, readIdentityGroups };
+/** A group→role(s) lookup table, or a function returning the role(s) for one group. */
+type AccessRoleMap = ((group: string) => string | string[] | undefined) | Record<string, string | string[]>;
+
+/** Resolve one group to its zero-or-more role names through `map`. */
+const rolesForGroup = (group: string, map: AccessRoleMap): ReadonlyArray<string> => {
+    const resolved = typeof map === "function" ? map(group) : map[group];
+
+    if (resolved === undefined) {
+        return [];
+    }
+
+    return Array.isArray(resolved) ? resolved : [resolved];
+};
+
+/**
+ * Map verified IdP groups onto RLS role names, deduplicated in first-seen order.
+ * Returns `undefined` when there is nothing to mint — no map, no groups, or a
+ * map that dropped every one of them — so a caller can leave the `roles` claim
+ * off an identity entirely rather than stamping an empty array.
+ *
+ * No map means NO roles, deliberately: promoting every group name to a role by
+ * default would grant role-gated permissions to deployments that never asked
+ * for them. `(group) => group` opts into the verbatim mapping.
+ */
+const rolesForGroups = (groups: ReadonlyArray<string> | undefined, map: AccessRoleMap | undefined): string[] | undefined => {
+    if (map === undefined || groups === undefined || groups.length === 0) {
+        return undefined;
+    }
+
+    const roles = new Set<string>();
+
+    for (const group of groups) {
+        for (const role of rolesForGroup(group, map)) {
+            roles.add(role);
+        }
+    }
+
+    return roles.size === 0 ? undefined : [...roles];
+};
+
+export type { AccessRoleMap };
+export { isAccessIdentity, readIdentityGroups, rolesForGroups };

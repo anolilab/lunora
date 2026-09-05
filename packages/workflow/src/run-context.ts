@@ -60,6 +60,14 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
     // Deterministic child-id allocator: the handler replays in the same order, so
     // a per-invocation counter yields replay-stable ids and `step.do` memoization
     // re-attaches to the existing children instead of double-spawning.
+    //
+    // Deliberately unbounded: `options.event.instanceId` is the HOST's id, at
+    // whatever length and in whatever alphabet it mints (`@lunora/platform-node`
+    // issues `<definitionId>:<uuid>`), and an explicit id is returned verbatim.
+    // The engine's 100-character ceiling is applied where the id reaches `create`
+    // — `boundInstanceId` in `fan-out.ts` — so both `ctx.parallel` and `ctx.spawn`
+    // fold through one place and neither this allocator nor any other
+    // `nextChildId` implementation has to restate the rule.
     let childCounter = 0;
     const nextChildId = (explicit?: string): string => {
         if (explicit !== undefined) {
