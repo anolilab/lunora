@@ -119,6 +119,11 @@ interface AuthAdmin {
         permission: Record<string, string[]>;
         role: string;
     }) => Promise<Record<string, unknown>>;
+    createSignUpInvitation?: (input: {
+        email: string;
+        expiresInSeconds?: number;
+        invitedBy?: string;
+    }) => Promise<Record<string, unknown>>;
     createTeam?: (input: {
         name: string;
         organizationId: string;
@@ -181,6 +186,10 @@ interface AuthAdmin {
         offset?: number;
         userId?: string;
     }) => Promise<AuthPage<AuthSession>>;
+    listSignUpInvitations?: (options: {
+        limit?: number;
+        offset?: number;
+    }) => Promise<AuthPage<Record<string, unknown>>>;
     listTeamMembers?: (options: {
         limit?: number;
         offset?: number;
@@ -203,6 +212,9 @@ interface AuthAdmin {
     }) => Promise<void>;
     removeUser?: (input: {
         userId: string;
+    }) => Promise<void>;
+    revokeSignUpInvitation?: (input: {
+        email: string;
     }) => Promise<void>;
     revokeUserSession?: (input: {
         sessionId: string;
@@ -257,6 +269,7 @@ interface AuthAdmin {
 interface AuthCapabilities {
     accounts: boolean;
     admin: boolean;
+    inviteOnly: boolean;
     organization: boolean;
     passkey: boolean;
     twoFactor: boolean;

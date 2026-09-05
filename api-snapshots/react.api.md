@@ -703,6 +703,12 @@ interface UseRateLimitResult {
 }
 ```
 
+### `UseSignUpInvitationsOptions` (type)
+
+```ts
+type UseSignUpInvitationsOptions = AdminAuthQueryOptions;
+```
+
 ### `UseStreamOptions` (interface)
 
 ```ts
@@ -1024,6 +1030,12 @@ const useQuery: <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "s
 
 ```ts
 const useRateLimit: (config: RateLimitConfig, options?: UseRateLimitOptions) => UseRateLimitResult;
+```
+
+### `useSignUpInvitations` (const)
+
+```ts
+const useSignUpInvitations: (options?: UseSignUpInvitationsOptions) => AdminAuthListResult<Record<string, unknown>>;
 ```
 
 ### `useStream` (const)
