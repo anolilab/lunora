@@ -119,6 +119,29 @@ describe("wireCodec round-trips", () => {
         expect(decoded.err.detail).toBe(7n);
     });
 
+    it("coerces an Error's non-string name/message so encode cannot emit what decode refuses", () => {
+        expect.assertions(3);
+
+        // Both slots are writable and neither is type-checked by the platform,
+        // and `decodeWire` refuses a non-string in either. Passing them through
+        // produced a frame this codec's own decoder throws on — and a decoder
+        // throw on a subscription frame kills the subscription rather than
+        // surfacing the error. `name` is defined rather than assigned so it
+        // stays non-enumerable, as a real Error's is: a bare assignment makes it
+        // an own enumerable prop, which rides the `ownProps` slot instead and
+        // never reaches the label being tested.
+        const source = new Error("ignored") as Error & { message: unknown };
+
+        Object.defineProperty(source, "name", { configurable: true, value: 5, writable: true });
+        source.message = { a: 1 };
+
+        const encoded = encodeWire(source) as unknown[];
+
+        expect(encoded[2]).toBe("5");
+        expect(encoded[3]).toBe("[object Object]");
+        expect(() => wire(source)).not.toThrow();
+    });
+
     it("restores a custom Error subclass name via the generic Error fallback", () => {
         expect.assertions(3);
 

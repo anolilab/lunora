@@ -327,7 +327,18 @@ const encodeWire = (value: unknown, depth = 0): unknown => {
             }
         }
 
-        const encodedError: unknown[] = [TAG, "error", error.name, error.message, properties];
+        // Coerced, because `decodeWire` now REFUSES a non-string in either slot
+        // and an encoder must not emit a frame its own decoder rejects. Both are
+        // writable and neither is type-checked by the platform:
+        // `error.message = { a: 1 }` leaves `typeof` as `"object"`. The old
+        // decoder tolerated that by accident (`new Error(5)` ToString-coerces),
+        // so the strictness landed on the decode side alone and turned a
+        // malformed-but-survivable error into a decoder throw — which, on a
+        // subscription frame, kills the subscription rather than surfacing the
+        // error. The ports whose labels are statically `String` cannot express
+        // the shape; python and ruby coerce at the same place for the same
+        // reason.
+        const encodedError: unknown[] = [TAG, "error", String(error.name), String(error.message), properties];
 
         // `cause` (from `new Error(msg, { cause })`) is a non-enumerable own prop, so
         // the `Object.keys` loop above misses it — carry it in a positional slot so an

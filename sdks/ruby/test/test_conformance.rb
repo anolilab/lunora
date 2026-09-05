@@ -37,6 +37,18 @@ class TestWireCodec < Minitest::Test
       assert_equal wire_text(expected), wire_text(round_tripped), "wire-text mismatch for #{entry["name"]}"
     end
   end
+
+  # Native construction, not a fixture: a fixture carries wire VALUES, and the
+  # shape here is a WireError whose label slots hold non-strings. decode_wire
+  # refuses those, so an encoder that passed them through emitted a frame its
+  # own decoder rejects — and a decoder raise on a subscription frame kills the
+  # subscription rather than surfacing the error.
+  def test_error_labels_are_coerced_so_encode_stays_decodable
+    encoded = Lunora.encode_wire(Lunora::WireError.new(5, { "a" => 1 }))
+
+    assert_equal "5", encoded[2]
+    assert_equal "5", Lunora.decode_wire(encoded).name
+  end
 end
 
 class TestStableKey < Minitest::Test

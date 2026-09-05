@@ -191,7 +191,10 @@ module Lunora
       props[key.to_s] = encode_wire(item, depth + 1)
     end
 
-    encoded = [TAG, "error", value.name, value.message, props]
+    # Coerced, because decode_wire REFUSES a non-string in either slot and an
+    # encoder must not emit a frame its own decoder rejects. WireError is a
+    # Struct, so nothing stops a caller putting a number there.
+    encoded = [TAG, "error", value.name.to_s, value.message.to_s, props]
     # +cause+ rides a positional slot; absent when unset, keeping the 5-element form.
     # UNDEFINED alone means absent. Gating on nil as well conflated it with an
     # explicitly-null cause, which the reference encodes (it tests

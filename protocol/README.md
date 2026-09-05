@@ -109,8 +109,10 @@ Notes that a port MUST honour:
   `new URL(href).href` produces), since `"HTTPS://EXAMPLE.COM"` survives a port
   unchanged and comes back from the reference as `"https://example.com/"`.
 - **Error** omits `stack` (untrusted-peer redaction). `name` and `message` are
-  both **strings**, type-checked like every other slot — neither coerced nor
-  defaulted to `""`. `ownProps` is an object of the error's own enumerable keys
+  both **strings** on the wire: type-checked on decode like every other slot —
+  neither coerced nor defaulted to `""` — and coerced on ENCODE, because both
+  are writable and unchecked in the dynamic ports and an encoder must never emit
+  a frame its own decoder refuses. `ownProps` is an object of the error's own enumerable keys
   (e.g. a `LunoraError`'s `code`/`data`). A 6th element carries `cause` when
   present.
 - **Depth** is capped at 64 levels (throw beyond). On decode, a `bigint` digit

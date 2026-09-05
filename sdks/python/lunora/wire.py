@@ -231,7 +231,11 @@ def encode_wire(value: Any, depth: int = 0) -> Any:
 
     if isinstance(value, WireError):
         props = {k: encode_wire(v, depth + 1) for k, v in value.props.items() if v is not UNDEFINED}
-        encoded = [TAG, "error", value.name, value.message, props]
+        # Coerced, because ``decode_wire`` REFUSES a non-string in either slot
+        # and an encoder must not emit a frame its own decoder rejects.
+        # ``WireError`` is a plain dataclass, so nothing stops a caller putting a
+        # number there.
+        encoded = [TAG, "error", str(value.name), str(value.message), props]
         if value.cause is not UNDEFINED:
             encoded.append(encode_wire(value.cause, depth + 1))
         return encoded
