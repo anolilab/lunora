@@ -14,6 +14,21 @@ import type { Messages } from "@lingui/core";
  * register it via `createStudioI18n(locale, { en: enMessages, de: deMessages })`.
  */
 const MESSAGE_IDS = [
+    "Send this link to the invitee. It is shown once and cannot be recovered.",
+    "Only invited addresses can create an account. Nothing is emailed — send the invitee the one-time link yourself.",
+    "Showing the most recent invitations. Query the signUpInvitation table directly to see the rest.",
+    "Sign-up invitations",
+    "Only invited addresses can create an account. Nothing is emailed — send the invitee the sign-up link yourself.",
+    "Email address to invite",
+    "ada@example.com",
+    "Invite",
+    "Nobody has been invited yet.",
+    "Email",
+    "Expires",
+    "Invited by",
+    "Accepted",
+    "Expired",
+    "Pending",
     "Reactors",
     "Server-side onQueryChange reactors: what has run, what was suppressed, and what is failing.",
     "Reactor",

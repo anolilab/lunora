@@ -273,6 +273,47 @@ describe(EventSource, () => {
         expect(errors[0]!.entry.seq).toBe(1);
     });
 
+    it("yields replayed entries to a live `events()` generator", async () => {
+        expect.assertions(2);
+
+        const source = new EventSource({ items: [] as string[] }, (state, entry) => ({ items: [...state.items, entry.payload as string] }));
+        const iterator = source.events()[Symbol.asyncIterator]();
+
+        // Park the generator in its "stream future entries" phase first, so the
+        // entries below can only reach it through the live notification — the
+        // one `replayFromLog` never emitted, which made every replayed entry
+        // invisible to a generator the method contract promises to feed.
+        source.applyEvent("ok", "a");
+
+        await expect(iterator.next()).resolves.toMatchObject({ value: { payload: "a" } });
+
+        const log = new EventLog();
+
+        log.append("ok", "b");
+        log.append("ok", "c");
+
+        source.replayFromLog(log);
+
+        const first = await iterator.next();
+        const second = await iterator.next();
+
+        expect([first.value, second.value].map((entry) => entry?.payload)).toStrictEqual(["b", "c"]);
+
+        await iterator.return?.(undefined);
+    });
+
+    it("keeps a replayed entry's own timestamp instead of stamping the replay time", () => {
+        expect.assertions(1);
+
+        const source = new EventSource({ count: 0 }, (state) => ({ count: state.count + 1 }));
+        const log = new EventLog();
+
+        log.append("inc", null, undefined, { timestamp: 111 });
+        source.replayFromLog(log);
+
+        expect(source.log.getSince(0).map((entry) => entry.timestamp)).toStrictEqual([111]);
+    });
+
     it("reset restores initial state without clearing log", () => {
         expect.assertions(4);
 

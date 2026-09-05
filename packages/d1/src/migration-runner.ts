@@ -118,6 +118,12 @@ const assertSingleStatement = (migration: Migration): number | undefined => {
     const isTrigger = CREATE_TRIGGER_RE.test(text.slice(LEADING_TRIVIA_RE.exec(text)?.[0].length ?? 0));
     let inSingle = false;
     let inDouble = false;
+    // SQLite's two other identifier quotings, which it accepts for MySQL and
+    // MS-Access compatibility. Without them a `;` inside `[a;b]` or `` `a;b` ``
+    // read as a statement terminator and the migration was false-rejected as
+    // "more than one SQL statement".
+    let inBracket = false;
+    let inBacktick = false;
     let inLineComment = false;
     let inBlockComment = false;
     let terminatorIndex: number | undefined;
@@ -168,6 +174,27 @@ const assertSingleStatement = (migration: Migration): number | undefined => {
                     index += 1;
                 } else {
                     inDouble = false;
+                }
+            }
+
+            continue;
+        }
+
+        // A bracket-quoted identifier has no escape: it ends at the first `]`.
+        if (inBracket) {
+            if (character === "]") {
+                inBracket = false;
+            }
+
+            continue;
+        }
+
+        if (inBacktick) {
+            if (character === "`") {
+                if (next === "`") {
+                    index += 1;
+                } else {
+                    inBacktick = false;
                 }
             }
 
@@ -233,6 +260,16 @@ const assertSingleStatement = (migration: Migration): number | undefined => {
 
         if (character === '"') {
             inDouble = true;
+            continue;
+        }
+
+        if (character === "[") {
+            inBracket = true;
+            continue;
+        }
+
+        if (character === "`") {
+            inBacktick = true;
             continue;
         }
 

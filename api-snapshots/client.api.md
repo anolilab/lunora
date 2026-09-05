@@ -661,6 +661,18 @@ class LunoraClient {
         offset?: number;
         organizationId: string;
     }): Promise<AuthPage<Record<string, unknown>>>;
+    listAuthSignUpInvitations(options?: {
+        limit?: number;
+        offset?: number;
+    }): Promise<AuthPage<Record<string, unknown>>>;
+    createAuthSignUpInvitation(input: {
+        email: string;
+        expiresInSeconds?: number;
+        invitedBy?: string;
+    }): Promise<Record<string, unknown>>;
+    revokeAuthSignUpInvitation(input: {
+        email: string;
+    }): Promise<void>;
     removeAuthOrgMember(input: {
         memberId: string;
     }): Promise<void>;

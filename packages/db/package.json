@@ -1,6 +1,6 @@
 {
     "name": "@lunora/db",
-    "version": "1.0.0-alpha.80",
+    "version": "1.0.0-alpha.81",
     "description": "TanStack DB binding: typed, live-synced collections and a durable offline outbox over the Lunora client",
     "keywords": [
         "cloudflare",
@@ -69,7 +69,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/client": "1.0.0-alpha.76",
+        "@lunora/client": "1.0.0-alpha.78",
         "@lunora/errors": "1.0.0-alpha.31"
     },
     "devDependencies": {
