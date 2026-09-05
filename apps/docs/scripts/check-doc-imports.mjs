@@ -75,8 +75,12 @@ const NONEXISTENT_API = [
         // `const send = useMutation(fn)` then `send(args)`. The hook returns
         // `{ data, error, isError, mutate, pending, reset, withOptimisticUpdate }`.
         // A destructuring `const { mutate: send } = …` is the correct form and
-        // does not match (`{` is not `\w`).
-        /\b(?:const|let|var)\s+\w+\s*=\s*useMutation\(/,
+        // does not match (`{` is not `\w`) — and neither does the other correct
+        // form, `const m = useMutation(fn)` then `m.mutate(args)`, which is why
+        // the bound name has to be seen CALLED (the backreference) rather than
+        // merely bound. That is also why these run per FENCE, not per line: the
+        // binding and the call are on different lines.
+        /\b(?:const|let|var)\s+(\w+)\s*=\s*useMutation\([\s\S]*?\b\1\s*\(/,
         "`useMutation(fn)` returns `{ mutate, pending, … }` and is not itself callable — write `const { mutate: send } = useMutation(fn)`",
     ],
     [
@@ -95,7 +99,17 @@ const NONEXISTENT_API = [
 // falsifiable independently of what the docs currently say.
 const SELF_CHECK = [
     // [pattern index, must match, must NOT match]
-    [0, ["const send = useMutation(api.x);", "let send = useMutation(api.x);", "var send = useMutation(api.x);"], ["const { mutate: send } = useMutation(api.x);", "const { mutate } = useMutation(api.x);"]],
+    [
+        0,
+        ["const send = useMutation(api.x);\nawait send(args);", "let send = useMutation(api.x);\nsend(args);", "var send = useMutation(api.x);\nsend(args);"],
+        [
+            "const { mutate: send } = useMutation(api.x);\nawait send(args);",
+            "const { mutate } = useMutation(api.x);\nawait mutate(args);",
+            // The non-destructuring form is CORRECT too — the hook's object is
+            // kept and its `mutate` called off it. Flagging this blocks valid docs.
+            "const m = useMutation(api.x);\nawait m.mutate(args);",
+        ],
+    ],
     [1, ['ctx.db.findMany("posts")', "ctx.db.findMany('posts')", "ctx.db.findMany(`posts`)"], ["ctx.db.posts.findMany()", 'ctx.db.query("posts").collect()']],
 ];
 
@@ -211,23 +225,45 @@ for (const dir of DOC_DIRS) {
     for (const file of walk(dir)) {
         const lines = readFileSync(file, "utf8").split("\n");
         let inTs = false;
+        // A fence is the unit for NONEXISTENT_API: a misuse spans the line that
+        // binds and the line that calls, so a per-line match cannot tell the
+        // wrong form from the right one. Buffered here, checked when it closes.
+        let fenceBody = [];
+        let fenceStart = 0;
+
+        const checkFence = () => {
+            if (fenceBody.length === 0) return;
+
+            const body = fenceBody.join("\n");
+
+            for (const [pattern, correction] of NONEXISTENT_API) {
+                const match = pattern.exec(body);
+
+                if (match) {
+                    const line = fenceStart + body.slice(0, match.index).split("\n").length;
+                    violations.push(`${file.replace(ROOT, "")}:${line}  ${correction}`);
+                }
+            }
+
+            fenceBody = [];
+        };
+
         lines.forEach((line, index) => {
             const fence = line.match(/^```(\w+)/);
             if (fence) {
+                checkFence();
                 inTs = /^(ts|tsx|typescript)$/.test(fence[1]);
+                fenceStart = index + 1;
                 return;
             }
             if (line.startsWith("```")) {
+                checkFence();
                 inTs = false;
                 return;
             }
             if (!inTs) return;
 
-            for (const [pattern, correction] of NONEXISTENT_API) {
-                if (pattern.test(line)) {
-                    violations.push(`${file.replace(ROOT, "")}:${index + 1}  ${correction}`);
-                }
-            }
+            fenceBody.push(line);
 
             const imp = line.match(/import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+["']([^"']+)["']/);
             if (!imp) return;
