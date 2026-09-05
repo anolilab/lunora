@@ -1352,4 +1352,36 @@ describe("lunoraClient — a follower throws only on the surfaces an app calls d
             client.close();
         }
     });
+
+    it("reports a follower's inert subscribeShape through onError instead of failing silently", async () => {
+        expect.assertions(2);
+
+        // The handle a follower gets back is inert by design (shape pokes are
+        // not in the leader→follower broadcast set). Silence there is what hangs
+        // `@lunora/db`'s shape-backed collection in `loading` forever: its
+        // `markReady()` is reachable only from `onRows` or `onError`, and the
+        // inert handle fires neither.
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: {} }));
+        const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: TEST_URL });
+
+        try {
+            const leader = new BroadcastChannel(clientChannel(client));
+
+            leader.postMessage({ tabId: SMALLER_ID, ts: Date.now(), type: "heartbeat" } satisfies RawMessage);
+            await delay(30);
+
+            const errors: SubscriptionError[] = [];
+
+            client.subscribeShape({ name: "todos" }, () => undefined, { onError: (error) => errors.push(error) });
+
+            await delay(10);
+
+            expect(errors).toHaveLength(1);
+            expect(errors[0]?.code).toBe("NOT_IMPLEMENTED");
+
+            leader.close();
+        } finally {
+            client.close();
+        }
+    });
 });
