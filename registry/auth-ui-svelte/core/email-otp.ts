@@ -5,8 +5,9 @@
  * still exposing the same `getState`/`subscribe` contract for the view layer.
  */
 import type { ControllerContext } from "./config";
+import { statusAfterEdit } from "./create-form-controller";
 import { assertOk, mapAuthError } from "./map-error";
-import { resolveAfterSignIn } from "./redirect-to";
+import { postAuthDestination } from "./redirect-to";
 import { createStore } from "./store";
 import type { Controller, FieldState, FlowStatus } from "./types";
 import { email as validateEmail, required } from "./validators";
@@ -48,15 +49,20 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
     });
 
     const setEmail = (value: string): void => {
-        store.update({ email: { ...store.get().email, value }, formError: undefined, status: "idle" });
+        store.update({ email: { ...store.get().email, value }, formError: undefined, status: statusAfterEdit(store.get().status) });
     };
 
     const setCode = (value: string): void => {
-        store.update({ code: { ...store.get().code, value }, formError: undefined, status: "idle" });
+        store.update({ code: { ...store.get().code, value }, formError: undefined, status: statusAfterEdit(store.get().status) });
     };
 
     const sendCode = async (): Promise<void> => {
         const state = store.get();
+
+        if (state.status === "submitting") {
+            return;
+        }
+
         const error = validateEmail(state.email.value, context.localization);
 
         if (error) {
@@ -79,6 +85,11 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
 
     const verify = async (): Promise<void> => {
         const state = store.get();
+
+        if (state.status === "submitting") {
+            return;
+        }
+
         const error = required(state.code.value, context.localization.otpRequired);
 
         if (error) {
@@ -94,7 +105,7 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
 
             store.update({ status: "success" });
             context.onSessionChange?.();
-            context.nav.replace(resolveAfterSignIn(context.redirects.afterSignIn));
+            context.nav.replace(postAuthDestination(context));
         } catch (error_) {
             context.onError?.(error_);
             store.update({ formError: mapAuthError(error_, context.localization, context.localization.twoFactorFailed), status: "error" });

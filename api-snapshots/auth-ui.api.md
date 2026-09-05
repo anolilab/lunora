@@ -232,6 +232,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `AnonymousActions` (interface)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `AnonymousButtonComponent` (class)
 
 ```ts
@@ -239,16 +243,30 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
     changeDetection: ChangeDetectionStrategy.OnPush,
     selector: "lunora-anonymous-button",
     standalone: true,
-    template: ` <button class="lunora-auth-button lunora-auth-button--secondary" type="button" (click)="signIn()">{{ t.anonymousSignIn }}</button> `,
+    template: `
+        <button class="lunora-auth-button lunora-auth-button--secondary" type="button" [disabled]="state().status === 'submitting'" (click)="signIn()">
+            {{ t.anonymousSignIn }}
+        </button>
+    `,
 })
 class AnonymousButtonComponent {
     private readonly context = injectAuthUIContext();
     protected readonly t = this.context().localization;
+    private readonly bridge = controllerSignal(createAnonymousController, { context: this.context });
+    protected readonly state = this.bridge.state;
     protected signIn(): void {
-        void signInAnonymously(this.context());
+        void this.bridge.actions.signIn();
     }
 }
 ```
+
+### `AnonymousController` (type)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `AnonymousState` (interface)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `AppearanceCardComponent` (class)
 
@@ -1388,16 +1406,17 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
                 />
                 <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.forgotPassword }}</lunora-auth-submit-button>
             </form>
-            <lunora-auth-link lunoraAuthCardFooter [href]="signInHref()">{{ t.backToSignIn }}</lunora-auth-link>
+            <lunora-auth-link lunoraAuthCardFooter [href]="signInLink()">{{ t.backToSignIn }}</lunora-auth-link>
         </lunora-auth-card>
     `,
 })
 class ForgotPasswordCardComponent implements OnInit {
     readonly resetPath = input<string>();
-    readonly signInHref = input("/sign-in");
+    readonly signInHref = input<string>();
     private readonly context = injectAuthUIContext();
     private readonly injector = inject(Injector);
     protected readonly t = this.context().localization;
+    protected readonly signInLink = computed(() => this.signInHref() ?? viewHref(this.context(), "signIn"));
     protected state!: Signal<FormState<ForgotPasswordField>>;
     protected actions!: FormActions<ForgotPasswordField>;
     ngOnInit(): void {
@@ -1602,15 +1621,16 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
                         }
                     </lunora-auth-submit-button>
                 </form>
-                <lunora-auth-link lunoraAuthCardFooter [href]="signInHref()">{{ t.backToSignIn }}</lunora-auth-link>
+                <lunora-auth-link lunoraAuthCardFooter [href]="signInLink()">{{ t.backToSignIn }}</lunora-auth-link>
             </lunora-auth-card>
         }
     `,
 })
 class MagicLinkCardComponent {
-    readonly signInHref = input("/sign-in");
+    readonly signInHref = input<string>();
     private readonly context = injectAuthUIContext();
     protected readonly enabled = computed(() => isFlowEnabled(this.context(), "magicLink", "MagicLinkCard"));
+    protected readonly signInLink = computed(() => this.signInHref() ?? viewHref(this.context(), "signIn"));
     protected readonly t = this.context().localization;
     private readonly bridge = controllerSignal(createMagicLinkController, { context: this.context });
     protected readonly state = this.bridge.state;
@@ -2728,7 +2748,7 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
                         (changed)="actions.setField('password', $event)"
                         (blurred)="actions.blur('password')"
                     />
-                    <lunora-auth-link [href]="forgotPasswordHref()">{{ t.forgotPasswordLink }}</lunora-auth-link>
+                    <lunora-auth-link [href]="forgotPasswordLink()">{{ t.forgotPasswordLink }}</lunora-auth-link>
                     <lunora-auth-submit-button [pending]="state().status === 'submitting'">
                         {{ t.signIn }}
                         <!--
@@ -2741,14 +2761,14 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
                 </form>
             }
             @if (signUp()) {
-                <lunora-auth-link lunoraAuthCardFooter [href]="signUpHref()">{{ t.noAccount }}</lunora-auth-link>
+                <lunora-auth-link lunoraAuthCardFooter [href]="signUpLink()">{{ t.noAccount }}</lunora-auth-link>
             }
         </lunora-auth-card>
     `,
 })
 class SignInCardComponent {
-    readonly forgotPasswordHref = input("/forgot-password");
-    readonly signUpHref = input("/sign-up");
+    readonly forgotPasswordHref = input<string>();
+    readonly signUpHref = input<string>();
     private readonly context = injectAuthUIContext();
     protected readonly t = this.context().localization;
     private readonly bridge = controllerSignal(createSignInController, { context: this.context });
@@ -2759,7 +2779,9 @@ class SignInCardComponent {
     protected readonly credentials = computed(() => this.context().credentials);
     protected readonly lastUsed = computed(() => (this.context().plugins.lastLoginMethod ? this.lastLoginMethod() : undefined));
     protected readonly lastUsedEmail = computed(() => this.lastUsed() === LAST_METHOD_EMAIL);
+    protected readonly forgotPasswordLink = computed(() => this.forgotPasswordHref() ?? viewHref(this.context(), "forgotPassword"));
     protected readonly signUp = computed(() => this.context().signUp);
+    protected readonly signUpLink = computed(() => this.signUpHref() ?? viewHref(this.context(), "signUp"));
     protected readonly social = computed(() => this.context().social);
     protected signInSocial(provider: string): void {
         void signInWithSocial(this.context(), provider);
@@ -2862,19 +2884,20 @@ class SignOutButtonComponent {
                     <lunora-auth-password-strength [value]="state().fields.password.value" />
                     <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.signUp }}</lunora-auth-submit-button>
                 </form>
-                <lunora-auth-link lunoraAuthCardFooter [href]="signInHref()">{{ t.haveAccount }}</lunora-auth-link>
+                <lunora-auth-link lunoraAuthCardFooter [href]="signInLink()">{{ t.haveAccount }}</lunora-auth-link>
             </lunora-auth-card>
         }
     `,
 })
 class SignUpCardComponent {
-    readonly signInHref = input("/sign-in");
+    readonly signInHref = input<string>();
     private readonly context = injectAuthUIContext();
     protected readonly t = this.context().localization;
     private readonly bridge = controllerSignal(createSignUpController, { context: this.context });
     protected readonly state = this.bridge.state;
     protected readonly actions = this.bridge.actions;
     protected readonly enabled = computed(() => this.context().signUp);
+    protected readonly signInLink = computed(() => this.signInHref() ?? viewHref(this.context(), "signIn"));
     protected readonly social = computed(() => this.context().social);
     protected signInSocial(provider: string): void {
         void signInWithSocial(this.context(), provider);
@@ -3634,6 +3657,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `ViewName` (type)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `ViewPaths` (interface)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -3695,6 +3722,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `createAdminUsersController` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `createAnonymousController` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -3968,6 +3999,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `postAuthDestination` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `promptOneTap` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -4067,10 +4102,6 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `resolveAfterSignIn` (const)
-
-Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
-
 ### `resolveContext` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -4096,10 +4127,6 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `setCaptchaToken` (const)
-
-Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
-
-### `signInAnonymously` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -4132,6 +4159,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `validatePassword` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `viewHref` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -4265,6 +4296,28 @@ interface AdminUsersOptions {
 
 ```ts
 type AdminUsersState = ResourceState<AuthAdminUser, AdminUsersExtra>;
+```
+
+### `AnonymousActions` (interface)
+
+```ts
+interface AnonymousActions {
+    signIn: () => Promise<void>;
+}
+```
+
+### `AnonymousController` (type)
+
+```ts
+type AnonymousController = Controller<AnonymousState, AnonymousActions>;
+```
+
+### `AnonymousState` (interface)
+
+```ts
+interface AnonymousState {
+    status: FlowStatus;
+}
 ```
 
 ### `AuthAccount` (interface)
@@ -5212,7 +5265,6 @@ const DEFAULT_LOCALIZATION: Localization = {
     profileSaved: "Your profile has been updated.",
     remove: "Remove",
     resetPassword: "Set new password",
-    resetPasswordDone: "Your password has been updated. You can sign in now.",
     resetPasswordOtpDescription: "Enter the code we emailed you, then choose a new password.",
     revoke: "Revoke",
     revokeAccess: "Revoke access",
@@ -5705,7 +5757,6 @@ interface Localization {
     profileSaved: string;
     remove: string;
     resetPassword: string;
-    resetPasswordDone: string;
     resetPasswordOtpDescription: string;
     revoke: string;
     revokeAccess: string;
@@ -6503,11 +6554,18 @@ interface VerifyEmailState {
 }
 ```
 
+### `ViewName` (type)
+
+```ts
+type ViewName = Exclude<keyof ViewPaths, "base">;
+```
+
 ### `ViewPaths` (interface)
 
 ```ts
 interface ViewPaths {
     acceptInvitation?: string;
+    base?: string;
     deviceAuthorization?: string;
     emailOtp?: string;
     forgotPassword?: string;
@@ -6597,7 +6655,7 @@ const createAcceptInvitationController = (context: ControllerContext, options: A
             store.update({ error: mapAuthError(error, context.localization, context.localization.genericError), status: "error" });
         }
     };
-    if (options.autoLoad !== false) {
+    if (options.autoLoad !== false && isBrowser()) {
         void load();
     }
     return {
@@ -6752,6 +6810,36 @@ const createAdminUsersController = (context: ControllerContext, options: AdminUs
 };
 ```
 
+### `createAnonymousController` (const)
+
+```ts
+const createAnonymousController = (context: ControllerContext): AnonymousController => {
+    const store = createStore<AnonymousState>({ status: "idle" });
+    const signIn = async (): Promise<void> => {
+        if (store.get().status === "submitting") {
+            return;
+        }
+        store.update({ status: "submitting" });
+        try {
+            assertOk(await context.authClient.signIn.anonymous());
+            store.update({ status: "success" });
+            context.onSessionChange?.();
+            context.nav.replace(postAuthDestination(context));
+        }
+        catch (error) {
+            store.update({ status: "error" });
+            notifyError(context, error, context.localization.signInFailed);
+        }
+    };
+    return {
+        actions: { signIn },
+        destroy: store.clear,
+        getState: store.get,
+        subscribe: store.subscribe,
+    };
+};
+```
+
 ### `createAuthorizedAppsController` (const)
 
 ```ts
@@ -6846,7 +6934,7 @@ const createBackupCodeSignInController = (context: ControllerContext, options: {
     sessionChanging: true,
     submit: async (values, context_) => {
         assertOk(await context_.authClient.twoFactor.verifyBackupCode({ code: values.code.trim(), trustDevice: options.trustDevice }));
-        return { redirectTo: resolveAfterSignIn(context_.redirects.afterSignIn) };
+        return { redirectTo: postAuthDestination(context_) };
     },
 });
 ```
@@ -7080,13 +7168,16 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
         step: "request",
     });
     const setEmail = (value: string): void => {
-        store.update({ email: { ...store.get().email, value }, formError: undefined, status: "idle" });
+        store.update({ email: { ...store.get().email, value }, formError: undefined, status: statusAfterEdit(store.get().status) });
     };
     const setCode = (value: string): void => {
-        store.update({ code: { ...store.get().code, value }, formError: undefined, status: "idle" });
+        store.update({ code: { ...store.get().code, value }, formError: undefined, status: statusAfterEdit(store.get().status) });
     };
     const sendCode = async (): Promise<void> => {
         const state = store.get();
+        if (state.status === "submitting") {
+            return;
+        }
         const error = validateEmail(state.email.value, context.localization);
         if (error) {
             store.update({ email: { ...state.email, error, touched: true }, status: "error" });
@@ -7104,6 +7195,9 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
     };
     const verify = async (): Promise<void> => {
         const state = store.get();
+        if (state.status === "submitting") {
+            return;
+        }
         const error = required(state.code.value, context.localization.otpRequired);
         if (error) {
             store.update({ code: { ...state.code, error, touched: true }, status: "error" });
@@ -7114,7 +7208,7 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
             assertOk(await context.authClient.signIn.emailOtp({ email: state.email.value.trim(), otp: state.code.value.trim() }));
             store.update({ status: "success" });
             context.onSessionChange?.();
-            context.nav.replace(resolveAfterSignIn(context.redirects.afterSignIn));
+            context.nav.replace(postAuthDestination(context));
         }
         catch (error_) {
             context.onError?.(error_);
@@ -7158,7 +7252,7 @@ const createForgotPasswordController = (context: ControllerContext, options: For
         }
         assertOk(await context_.authClient.forgetPassword({
             email,
-            redirectTo: options.resetPath ?? "/reset-password",
+            redirectTo: options.resetPath ?? viewHref(context_, "resetPassword"),
         }));
         return { successMessage: context_.localization.forgotPasswordSent };
     },
@@ -7199,7 +7293,7 @@ const createFormController = <TField extends string>(context: ControllerContext,
             ...current,
             fields: { ...current.fields, [name]: { ...current.fields[name], error: undefined, value } },
             formError: undefined,
-            status: current.status === "submitting" ? "submitting" : "idle",
+            status: statusAfterEdit(current.status),
             successMessage: undefined,
         });
     };
@@ -7316,7 +7410,7 @@ const createMagicLinkController = (context: ControllerContext): FormController<M
     },
     submit: async (values, context_) => {
         assertOk(await context_.authClient.signIn.magicLink({
-            callbackURL: resolveAfterSignIn(context_.redirects.afterSignIn),
+            callbackURL: postAuthDestination(context_),
             email: values.email.trim(),
         }));
         return { successMessage: context_.localization.magicLinkSent };
@@ -7544,7 +7638,7 @@ const createPhoneResetPasswordController = (context: ControllerContext): FormCon
             otp: values.otp.trim(),
             phoneNumber: values.phoneNumber.trim(),
         }));
-        return { redirectTo: context_.redirects.signIn, successMessage: context_.localization.resetPasswordDone };
+        return { redirectTo: context_.redirects.signIn };
     },
 });
 ```
@@ -7564,7 +7658,7 @@ const createPhoneSignInController = (context: ControllerContext): FormController
         if (response.data?.twoFactorRedirect) {
             return { redirectTo: withRedirectTo(context_.redirects.twoFactor) };
         }
-        return { redirectTo: resolveAfterSignIn(context_.redirects.afterSignIn) };
+        return { redirectTo: postAuthDestination(context_) };
     },
 });
 ```
@@ -7617,7 +7711,7 @@ const createPhoneVerifyController = (context: ControllerContext, options: PhoneV
                     }));
                     context.onSessionChange?.();
                     if (options.updatePhoneNumber !== true) {
-                        context.nav.replace(resolveAfterSignIn(context.redirects.afterSignIn));
+                        context.nav.replace(postAuthDestination(context));
                     }
                     return { status: "success", successMessage: context.localization.phoneVerified };
                 }, context.localization.twoFactorFailed);
@@ -7680,7 +7774,10 @@ const createResendVerificationController = (context: ControllerContext, options:
         }
         : undefined,
     submit: async (values, context_) => {
-        assertOk(await context_.authClient.sendVerificationEmail({ callbackURL: context_.redirects.afterSignIn, email: values.email.trim() }));
+        assertOk(await context_.authClient.sendVerificationEmail({
+            callbackURL: postAuthDestination(context_),
+            email: values.email.trim(),
+        }));
         return { successMessage: context_.localization.verifyEmailSent };
     },
 });
@@ -7702,7 +7799,7 @@ const createResetPasswordController = (context: ControllerContext, options: Rese
             newPassword: values.password,
             token: options.token,
         }));
-        return { redirectTo: context_.redirects.signIn, successMessage: context_.localization.resetPasswordDone };
+        return { redirectTo: context_.redirects.signIn };
     },
 });
 ```
@@ -7728,7 +7825,7 @@ const createResetPasswordOtpController = (context: ControllerContext, options: {
             otp: values.otp.trim(),
             password: values.password,
         }));
-        return { redirectTo: context_.redirects.signIn, successMessage: context_.localization.resetPasswordDone };
+        return { redirectTo: context_.redirects.signIn };
     },
 });
 ```
@@ -7894,14 +7991,14 @@ const createSignInController = (context: ControllerContext): FormController<Sign
     sessionChanging: true,
     submit: async (values, context_) => {
         const response = assertOk(await context_.authClient.signIn.email({
-            callbackURL: context_.redirects.afterSignIn,
+            callbackURL: postAuthDestination(context_),
             email: values.email.trim(),
             password: values.password,
         }));
         if (response.data?.twoFactorRedirect === true) {
             return { redirectTo: withRedirectTo(context_.redirects.twoFactor) };
         }
-        return { redirectTo: resolveAfterSignIn(context_.redirects.afterSignIn) };
+        return { redirectTo: postAuthDestination(context_) };
     },
 });
 ```
@@ -7932,13 +8029,13 @@ const createSignUpController = (context: ControllerContext): FormController<Sign
     submit: async (values, context_) => {
         const inviteToken = queryParameter("invite");
         assertOk(await context_.authClient.signUp.email({
-            callbackURL: context_.redirects.afterSignIn,
+            callbackURL: postAuthDestination(context_),
             email: values.email.trim(),
             ...(inviteToken === undefined ? {} : { inviteToken }),
             name: values.name.trim(),
             password: values.password,
         }));
-        return { redirectTo: resolveAfterSignIn(context_.redirects.afterSignIn) };
+        return { redirectTo: postAuthDestination(context_) };
     },
 });
 ```
@@ -8139,7 +8236,7 @@ const createTwoFactorVerifyController = (context: ControllerContext, options: Tw
     submit: async (values, context_) => {
         const input = { code: values.code.trim(), trustDevice: options.trustDevice };
         assertOk(options.method === "otp" ? await context_.authClient.twoFactor.verifyOtp(input) : await context_.authClient.twoFactor.verifyTotp(input));
-        return { redirectTo: resolveAfterSignIn(context_.redirects.afterSignIn) };
+        return { redirectTo: postAuthDestination(context_) };
     },
 });
 ```
@@ -8254,7 +8351,7 @@ const createUsernameSignInController = (context: ControllerContext): FormControl
         if (response.data?.twoFactorRedirect) {
             return { redirectTo: withRedirectTo(context_.redirects.twoFactor) };
         }
-        return { redirectTo: resolveAfterSignIn(context_.redirects.afterSignIn) };
+        return { redirectTo: postAuthDestination(context_) };
     },
 });
 ```
@@ -8281,14 +8378,14 @@ const createVerifyEmailController = (context: ControllerContext, options: Verify
             }
             store.update({ status: "success" });
             context.onSessionChange?.();
-            context.nav.replace(resolveAfterSignIn(context.redirects.afterSignIn));
+            context.nav.replace(postAuthDestination(context));
         }
         catch (error) {
             context.onError?.(error);
             store.update({ error: mapAuthError(error, context.localization, context.localization.verifyEmailFailed), status: "error" });
         }
     };
-    if (options.autoVerify !== false) {
+    if (options.autoVerify !== false && isBrowser()) {
         void verify();
     }
     return {
@@ -8555,12 +8652,18 @@ const passwordScore = (requirements: ReadonlyArray<PasswordRequirement>): number
 };
 ```
 
+### `postAuthDestination` (const)
+
+```ts
+const postAuthDestination = (context: Pick<ControllerContext, "redirects">): string => resolveAfterSignIn(context.redirects.afterSignIn);
+```
+
 ### `promptOneTap` (const)
 
 ```ts
 const promptOneTap = async (context: ControllerContext): Promise<void> => {
     try {
-        await context.authClient.oneTap({ callbackURL: resolveAfterSignIn(context.redirects.afterSignIn) });
+        await context.authClient.oneTap({ callbackURL: postAuthDestination(context) });
         context.onSessionChange?.();
     }
     catch (error) {
@@ -8764,16 +8867,11 @@ const resetToasts = (): void => {
 };
 ```
 
-### `resolveAfterSignIn` (const)
-
-```ts
-const resolveAfterSignIn = (fallback: string): string => readRedirectTo() ?? fallback;
-```
-
 ### `resolveContext` (const)
 
 ```ts
 const resolveContext = (config: AuthUIConfig, discovered?: DiscoveredConfig): ControllerContext => {
+    const viewPaths = resolveViewPaths(config.viewPaths);
     return {
         authClient: config.authClient as AuthClient,
         avatar: { maxSize: config.avatar?.maxSize ?? DEFAULT_AVATAR_MAX_SIZE, upload: config.avatar?.upload },
@@ -8782,7 +8880,7 @@ const resolveContext = (config: AuthUIConfig, discovered?: DiscoveredConfig): Co
         forgotPasswordMethod: config.forgotPassword?.method ?? "link",
         localization: resolveLocalization(config.localization),
         nav: config.nav,
-        onError: config.onError,
+        onError: guardCallback(config.onError),
         onSessionChange: config.onSessionChange,
         organization: {
             allowUserToCreate: discovered?.organization?.allowUserToCreate ?? true,
@@ -8795,11 +8893,11 @@ const resolveContext = (config: AuthUIConfig, discovered?: DiscoveredConfig): Co
         },
         password: config.password ?? {},
         plugins: resolvePlugins(config.authClient, config.plugins, discovered),
-        redirects: resolveRedirects(config.redirects),
+        redirects: resolveRedirects(viewPaths, config.redirects),
         signUp: discovered?.signUp ?? true,
         social: config.social ?? discovered?.socialProviders ?? [],
         themeVariables: resolveThemeVariables(config.theme),
-        viewPaths: resolveViewPaths(config.viewPaths),
+        viewPaths,
     };
 };
 ```
@@ -8872,27 +8970,12 @@ const setCaptchaToken = (token: string | undefined): void => {
 };
 ```
 
-### `signInAnonymously` (const)
-
-```ts
-const signInAnonymously = async (context: ControllerContext): Promise<void> => {
-    try {
-        assertOk(await context.authClient.signIn.anonymous());
-        context.onSessionChange?.();
-        context.nav.replace(resolveAfterSignIn(context.redirects.afterSignIn));
-    }
-    catch (error) {
-        notifyError(context, error, context.localization.signInFailed);
-    }
-};
-```
-
 ### `signInWithSocial` (const)
 
 ```ts
 const signInWithSocial = async (context: ControllerContext, provider: string): Promise<void> => {
     try {
-        assertOk(await context.authClient.signIn.social({ callbackURL: resolveAfterSignIn(context.redirects.afterSignIn), provider }));
+        assertOk(await context.authClient.signIn.social({ callbackURL: postAuthDestination(context), provider }));
     }
     catch (error) {
         notifyError(context, error, context.localization.signInFailed);
@@ -9004,6 +9087,12 @@ const validatePassword = (value: string, localization: Localization, policy: Pas
 };
 ```
 
+### `viewHref` (const)
+
+```ts
+const viewHref = (context: Pick<ControllerContext, "viewPaths">, view: ViewName): string => `${context.viewPaths.base}/${context.viewPaths[view]}`;
+```
+
 ### `withRedirectTo` (const)
 
 ```ts
@@ -9096,11 +9185,23 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `AnonymousActions` (interface)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `AnonymousButton` (unknown)
 
 ```ts
 AnonymousButton
 ```
+
+### `AnonymousController` (type)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `AnonymousState` (interface)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `AppearanceCard` (unknown)
 
@@ -10186,6 +10287,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `ViewName` (type)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `ViewPaths` (interface)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -10211,6 +10316,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `createAdminUsersController` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `createAnonymousController` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -10454,6 +10563,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `postAuthDestination` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `promptOneTap` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -10502,10 +10615,6 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `resolveAfterSignIn` (const)
-
-Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
-
 ### `resolveContext` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -10531,10 +10640,6 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `setCaptchaToken` (const)
-
-Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
-
-### `signInAnonymously` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -10603,6 +10708,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `validatePassword` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `viewHref` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -10690,11 +10799,23 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `AnonymousActions` (interface)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `AnonymousButton` (unknown)
 
 ```ts
 AnonymousButton
 ```
+
+### `AnonymousController` (type)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `AnonymousState` (interface)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `AppearanceCard` (unknown)
 
@@ -11786,6 +11907,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `ViewName` (type)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `ViewPaths` (interface)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -11811,6 +11936,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `createAdminUsersController` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `createAnonymousController` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -12075,6 +12204,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `postAuthDestination` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `promptOneTap` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -12123,10 +12256,6 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `resolveAfterSignIn` (const)
-
-Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
-
 ### `resolveContext` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -12152,10 +12281,6 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `setCaptchaToken` (const)
-
-Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
-
-### `signInAnonymously` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -12206,6 +12331,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `validatePassword` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `viewHref` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -12293,11 +12422,23 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `AnonymousActions` (interface)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `AnonymousButton` (unknown)
 
 ```ts
 AnonymousButton
 ```
+
+### `AnonymousController` (type)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `AnonymousState` (interface)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `AppearanceCard` (unknown)
 
@@ -13389,6 +13530,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `ViewName` (type)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `ViewPaths` (interface)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -13414,6 +13559,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `createAdminUsersController` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `createAnonymousController` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -13680,6 +13829,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `postAuthDestination` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `promptOneTap` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -13728,10 +13881,6 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `resolveAfterSignIn` (const)
-
-Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
-
 ### `resolveContext` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -13757,10 +13906,6 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `setCaptchaToken` (const)
-
-Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
-
-### `signInAnonymously` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -13811,6 +13956,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `validatePassword` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `viewHref` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -13888,9 +14037,21 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `AnonymousActions` (interface)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `AnonymousButton` (const+type)
 
 Re-exported from `svelte` — signature tracked at its source.
+
+### `AnonymousController` (type)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `AnonymousState` (interface)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `AppearanceCard` (const+type)
 
@@ -14772,6 +14933,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `ViewName` (type)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `ViewPaths` (interface)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -14817,6 +14982,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `createAdminUsersController` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `createAnonymousController` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -15060,6 +15229,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `postAuthDestination` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `promptOneTap` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -15108,10 +15281,6 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `resolveAfterSignIn` (const)
-
-Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
-
 ### `resolveContext` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -15146,10 +15315,6 @@ const setAuthUIContext = (value: AuthUISvelteContext): AuthUISvelteContext => {
 ```
 
 ### `setCaptchaToken` (const)
-
-Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
-
-### `signInAnonymously` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -15200,6 +15365,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `validatePassword` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `viewHref` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -15287,11 +15456,23 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `AnonymousActions` (interface)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `AnonymousButton` (unknown)
 
 ```ts
 default as AnonymousButton
 ```
+
+### `AnonymousController` (type)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `AnonymousState` (interface)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `AppearanceCard` (unknown)
 
@@ -16284,6 +16465,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `ViewName` (type)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `ViewPaths` (interface)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -16309,6 +16494,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `createAdminUsersController` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `createAnonymousController` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -16567,6 +16756,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
+### `postAuthDestination` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
 ### `promptOneTap` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -16625,10 +16818,6 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `resolveAfterSignIn` (const)
-
-Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
-
 ### `resolveContext` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
@@ -16654,10 +16843,6 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `setCaptchaToken` (const)
-
-Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
-
-### `signInAnonymously` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
@@ -16746,6 +16931,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 ### `validatePassword` (const)
+
+Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+### `viewHref` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 

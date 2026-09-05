@@ -1,5 +1,6 @@
 <script lang="ts">
     import { onMount } from "svelte";
+    import { viewHref } from "../core/config";
     import { isFlowEnabled } from "../core/flow-gate";
     import { LAST_METHOD_MAGIC_LINK, readLastLoginMethod } from "../core/last-login-method";
     import { createMagicLinkController } from "../core/magic-link";
@@ -11,9 +12,15 @@
     import FormBanner from "./FormBanner.svelte";
     import SubmitButton from "./SubmitButton.svelte";
 
-    let { signInHref = "/sign-in" }: { signInHref?: string } = $props();
+    let {
+        signInHref,
+    }: {
+        /** Defaults to the configured sign-in route; see `viewPaths.base`. */
+        signInHref?: string;
+    } = $props();
 
     const context = useAuthUI();
+    const signInLink = $derived(signInHref ?? viewHref(context, "signIn"));
     const t = context.localization;
     const enabled = isFlowEnabled(context, "magicLink", "MagicLinkCard");
     const { actions, state: form } = controllerStore(createMagicLinkController);
@@ -48,7 +55,7 @@
             </SubmitButton>
         </form>
         {#snippet footer()}
-            <AuthLink href={signInHref}>{t.backToSignIn}</AuthLink>
+            <AuthLink href={signInLink}>{t.backToSignIn}</AuthLink>
         {/snippet}
     </AuthCard>
 {/if}
