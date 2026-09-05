@@ -20,7 +20,7 @@ import type { UptimeProbe } from "./probe";
 import { nextConsecutiveFailures, probeDeployment } from "./probe";
 
 /** A live deployment the sweep probes. */
-interface LiveDeploymentRow {
+interface ProbeTargetRow {
     _id: string;
     organizationId: string;
     url?: string;
@@ -130,7 +130,7 @@ const mapPooled = async <T, R>(items: ReadonlyArray<T>, concurrency: number, fun
 };
 
 /** Record one probe result as a `uptimeChecks` row. */
-const recordCheck = (database: ControlPlaneDatabase, deployment: LiveDeploymentRow, result: UptimeProbe, now: number): Promise<unknown> =>
+const recordCheck = (database: ControlPlaneDatabase, deployment: ProbeTargetRow, result: UptimeProbe, now: number): Promise<unknown> =>
     database.insert("uptimeChecks", {
         createdAt: now,
         deploymentId: deployment._id,
@@ -144,7 +144,7 @@ const recordCheck = (database: ControlPlaneDatabase, deployment: LiveDeploymentR
 /** Advance (or seed) a deployment's consecutive-failure state to `failures`. */
 const advanceState = (
     database: ControlPlaneDatabase,
-    deployment: LiveDeploymentRow,
+    deployment: ProbeTargetRow,
     prior: UptimeStateRow | undefined,
     failures: number,
     ok: boolean,
@@ -167,8 +167,8 @@ export const runUptimeSweep = async (database: ControlPlaneDatabase, options: Up
 
     // Drained: past one page the remaining live deployments were simply never
     // probed, so uptime silently reported nothing rather than reporting down.
-    const deploymentRows = await drainTable<LiveDeploymentRow>(database, "deployments", { where: { status: "live" } });
-    const withUrl = deploymentRows.filter((row): row is LiveDeploymentRow & { url: string } => typeof row.url === "string" && row.url !== "");
+    const deploymentRows = await drainTable<ProbeTargetRow>(database, "deployments", { where: { status: "live" } });
+    const withUrl = deploymentRows.filter((row): row is ProbeTargetRow & { url: string } => typeof row.url === "string" && row.url !== "");
 
     // SSRF gate: a deployment's URL is set by any org member (deployments.updateStatus,
     // no role restriction), and the control plane `fetch`es it from a privileged
