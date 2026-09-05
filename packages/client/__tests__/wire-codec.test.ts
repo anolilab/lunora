@@ -130,10 +130,13 @@ describe("wireCodec round-trips", () => {
         // stays non-enumerable, as a real Error's is: a bare assignment makes it
         // an own enumerable prop, which rides the `ownProps` slot instead and
         // never reaches the label being tested.
-        const source = new Error("ignored") as Error & { message: unknown };
+        const source = new Error("ignored");
 
         Object.defineProperty(source, "name", { configurable: true, value: 5, writable: true });
-        source.message = { a: 1 };
+        // Cast at the assignment: `Error["message"]` is `string`, so an
+        // intersection with `{ message: unknown }` still narrows back to
+        // `string` and the whole point of the test will not compile.
+        (source as unknown as { message: unknown }).message = { a: 1 };
 
         const encoded = encodeWire(source) as unknown[];
 
