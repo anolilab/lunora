@@ -15,7 +15,10 @@
  * Three layers, cheapest first.
  *
  * Byte-equality against `lunora/_generated`: any drift in the generated
- * delta-sync code shows up as a diff a reviewer reads.
+ * delta-sync code shows up as a diff a reviewer reads. That claim only holds
+ * because the regeneration workdir resolves types the way a real app does — see
+ * `makeFixtureWorkdir`, which is what stopped the golden from recording
+ * `unknown` for every inferred return type.
  *
  * Named assertions on the CDC threading, so a regression reports the defect
  * rather than "snapshot differs".
@@ -29,8 +32,7 @@
  * `import schema from "../schema.js"`, which only resolves from inside the app
  * tree it was written for.
  */
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -38,7 +40,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runCodegen } from "../src/index";
 import type { createShardDO } from "./fixtures/delta-sync/lunora/_generated/shard";
-import { copyFixtureApp, GOLDEN_OUTPUTS } from "./golden-fixtures";
+import { GOLDEN_OUTPUTS, makeFixtureWorkdir } from "./golden-fixtures";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "fixtures", "delta-sync");
@@ -58,8 +60,7 @@ let workdir: string;
 
 describe("delta-sync fixture", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "lunora-delta-sync-"));
-        copyFixtureApp(fixtureRoot, workdir);
+        workdir = makeFixtureWorkdir(fixtureRoot);
     });
 
     afterEach(() => {

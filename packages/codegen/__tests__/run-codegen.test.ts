@@ -1179,6 +1179,52 @@ export default crons;
             expect(result.generated.shard).toContain('"vectors": false');
         });
 
+        it("wires the vector introspector on exactly the condition studioFeatures.vectors gates the nav on", () => {
+            expect.assertions(6);
+
+            // A visible tab with no backend: `studioFeatures.vectors` was true for
+            // every vector-indexed app (and for any app merely depending on
+            // `@lunora/bindings`), while `defineApp().build()` wired no
+            // `vectorIntrospector` at all — so the Vectors page and the home
+            // screen's "Vectorize Indexes" card both answered 400
+            // `VECTORS_NOT_CONFIGURED`. The two must move together.
+            writeFileSync(
+                join(workdir, "package.json"),
+                `{ "name": "vectorish", "dependencies": { "@lunora/bindings": "*", "@lunora/d1": "*", "@lunora/storage": "*" } }`,
+                "utf8",
+            );
+
+            const withoutIndex = runCodegen({ lint: false, projectRoot: workdir });
+
+            // A bare `@lunora/bindings` dependency (installed for `ctx.kv` /
+            // `ctx.images`) declares no index, so there is no registry to serve and
+            // the tab stays hidden rather than failing open into an error.
+            expect(withoutIndex.generated.shard).toContain('"vectors": false');
+            expect(withoutIndex.generated.app).not.toContain("vectorIntrospector");
+            expect(withoutIndex.generated.shard).toContain('"kv": true');
+
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    docs: defineTable({ body: v.string() }).vectorize("body", { dimensions: 768, index: "docs_search", metric: "cosine" }),
+});
+
+export default schema;
+`,
+                "utf8",
+            );
+
+            const withIndex = runCodegen({ lint: false, projectRoot: workdir });
+
+            expect(withIndex.generated.shard).toContain('"vectors": true');
+            expect(withIndex.generated.app).toContain("options.vectorIntrospector = createVectorAdminIntrospector({");
+            // The index map is the app's own `.vectors(...)` selector, not a re-scan
+            // of `env` — an arbitrary binding name still resolves to its logical index.
+            expect(withIndex.generated.app).toContain("indexes: this.shardExtras.vectors(env as unknown as Record<string, unknown>),");
+        });
+
         it("does not emit a seed client for a project that doesn't depend on @lunora/seed", () => {
             expect.assertions(1);
 

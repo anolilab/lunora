@@ -1,18 +1,15 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runCodegen } from "../src/index";
-import { copyFixtureApp, GOLDEN_FIXTURES, GOLDEN_OUTPUTS } from "./golden-fixtures";
+import { GOLDEN_FIXTURES, GOLDEN_OUTPUTS, makeFixtureWorkdir } from "./golden-fixtures";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
 for (const [fixture, goldenDirectory] of GOLDEN_FIXTURES) {
     const fixtureRoot = join(here, "fixtures", fixture);
-    const workdir = mkdtempSync(join(tmpdir(), "lunora-capture-"));
-
-    copyFixtureApp(fixtureRoot, workdir);
+    const workdir = makeFixtureWorkdir(fixtureRoot);
 
     // `lint: false` keeps `LUNORA_ADVISORIES` empty in the captured fixture so the
     // snapshot stays decoupled from advisor behaviour — matches the snapshot test.
@@ -24,6 +21,10 @@ for (const [fixture, goldenDirectory] of GOLDEN_FIXTURES) {
     for (const [file, key] of GOLDEN_OUTPUTS) {
         writeFileSync(join(expectedDirectory, file), result.generated[key], "utf8");
     }
+
+    // The workdir lives under `__tests__/fixtures` (see `makeFixtureWorkdir`), so
+    // leaving it behind would show up as an untracked tree in the repo.
+    rmSync(workdir, { force: true, recursive: true });
 
     // eslint-disable-next-line no-console
     console.log("Wrote expected fixtures to", expectedDirectory);

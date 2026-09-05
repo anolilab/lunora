@@ -157,6 +157,15 @@ const buildAccessImports = (hasAccess: boolean, hasAuth: boolean): string[] =>
 const buildKvImports = (hasKvIntrospector: boolean): string[] =>
     hasKvIntrospector ? [`import { createKvIntrospectorFromEnv } from "@lunora/bindings/kv";`] : [];
 
+/**
+ * Vector-browser import — the admin introspector factory backing
+ * `createWorker({ vectorIntrospector })`. Its companion is the generated
+ * `LUNORA_VECTOR_INDEXES` registry (Vectorize cannot enumerate indexes at
+ * runtime, which is why `_generated/vectors.ts` exists at all), imported with
+ * the other relative `_generated` modules below.
+ */
+const buildVectorImports = (hasVectors: boolean): string[] => (hasVectors ? [`import { createVectorAdminIntrospector } from "@lunora/bindings/vectors";`] : []);
+
 /** `@lunora/d1` imports for a D1-backed `.global()` app — the store factory, the admin/introspection helpers, and the retrying exec. */
 const buildGlobalImports = (hasGlobal: boolean): string[] =>
     hasGlobal
@@ -253,6 +262,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
               ]
             : []),
         ...buildKvImports(hasKvIntrospector),
+        ...buildVectorImports(options.hasVectors === true),
         ...(hasScheduler
             ? [`import type { DurableObjectNamespaceLike } from "@lunora/scheduler";`, `import { createScheduler } from "@lunora/scheduler";`]
             : []),
@@ -282,6 +292,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         ...(wantsOpenApi ? [`import { openApiSpec } from "./openapi.js";`] : []),
         ...(wantsOpenRpc ? [`import { openRpcSpec } from "./openrpc.js";`] : []),
         `import { createShardDO } from "./shard.js";`,
+        ...(options.hasVectors === true ? [`import { LUNORA_VECTOR_INDEXES } from "./vectors.js";`] : []),
     ];
 };
 
@@ -735,6 +746,28 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
     // with no manual `createKvIntrospector` call. A deployment with no KV binding
     // yields an empty namespace list rather than crashing.
     ...(options.hasKvIntrospector ? [`        options.kvIntrospector = createKvIntrospectorFromEnv(env);`] : []),
+    // The studio's Vectorize browser, on the SAME flag that emits the `.vectors()`
+    // builder and that `studioFeatures.vectors` gates the nav tab on — so a visible
+    // Vectors tab always has a working backend, never the reverse. Without this the
+    // page and the home-screen "Vectorize Indexes" card both call
+    // `/_lunora/admin/vector/indexes` and get 400 `VECTORS_NOT_CONFIGURED`.
+    //
+    // The index map is the app's OWN `.vectors(...)` selector — the same
+    // `name → binding` mapping the DO uses — rather than a re-scan of `env`, so an
+    // arbitrary binding name resolves to its logical index without guessing.
+    // Embedders live on the schema's `.vectorize()` options and are not reachable
+    // from here, so `queryIndex` is withheld and similarity search reports
+    // `VECTOR_QUERY_UNSUPPORTED`; listing indexes and their live stats works.
+    ...(options.hasVectors === true
+        ? [
+              `        if (this.shardExtras.vectors) {
+            options.vectorIntrospector = createVectorAdminIntrospector({
+                indexes: this.shardExtras.vectors(env as unknown as Record<string, unknown>),
+                registry: LUNORA_VECTOR_INDEXES,
+            });
+        }`,
+          ]
+        : []),
     // The studio's Notifications page reads the app's registered `@lunora/notify`
     // device subscriptions through the SAME store the handlers register into. The
     // store is built from `env` via `lunora/notify.ts`'s `defineNotify({ store })`;

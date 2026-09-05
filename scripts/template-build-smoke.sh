@@ -737,6 +737,61 @@ assert_no_registry_lunora() {
 }
 
 # ---------------------------------------------------------------------------
+# Helper: a hand-built worker entry must forward every handler build() composes.
+# ---------------------------------------------------------------------------
+# `defineApp().build()` composes `fetch` AND `scheduled`, plus `queue` when the
+# project declares a `defineQueue` and `email` when it declares `.onEmail(...)`.
+# An entry that re-wraps the composed app in its own `export default { fetch }`
+# silently drops the rest — and `lunora deploy`/`prepare` write the discovered
+# crons into `wrangler.jsonc` regardless, so a user who adds `lunora/crons.ts`
+# gets a provisioned trigger and a Worker with no `scheduled()` export.
+# Cloudflare fires it into nothing: no error, no invocation.
+#
+# Nothing else in this repo can see that. It compiles, it deploys, the binding
+# table is right, and only a wall-clock wait proves the cron never ran. Every
+# template that exports `app` wholesale (`export default app`) is fine by
+# construction; this only checks the ones that hand-build the object.
+assert_entry_forwards_handlers() {
+    local scaffold_dir="$1"
+
+    node -e "
+const fs = require('fs');
+const path = require('path');
+
+const root = process.argv[1];
+const offenders = [];
+
+const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (entry.name === 'node_modules' || entry.name === '_generated' || entry.name.startsWith('.')) continue;
+
+        const full = path.join(dir, entry.name);
+
+        if (entry.isDirectory()) { walk(full); continue; }
+        if (!/\.(ts|tsx|js|mjs)\$/.test(entry.name)) continue;
+
+        const source = fs.readFileSync(full, 'utf8');
+
+        // Only a hand-built default export that delegates to the composed app.
+        // \`export default app\` forwards everything already.
+        if (!source.includes('export default {') || !source.includes('app.fetch(')) continue;
+
+        const missing = ['scheduled', 'queue', 'email'].filter((name) => !source.includes('app.' + name));
+
+        if (missing.length > 0) offenders.push(path.relative(root, full) + ' → drops ' + missing.join(', '));
+    }
+};
+
+walk(root);
+
+if (offenders.length > 0) {
+    console.log(offenders.join('\n'));
+    process.exit(1);
+}
+" "$scaffold_dir" 2>&1
+}
+
+# ---------------------------------------------------------------------------
 # Helper: inject @lunora/* overrides into a scaffold directory.
 # ---------------------------------------------------------------------------
 inject_overrides() {
@@ -836,6 +891,20 @@ for tname in "${TEMPLATES[@]}"; do
         echo "  FAIL: {{name}} placeholder survived scaffolding in $tname"
         grep -rlF '{{name}}' "$scaffold_dir" --exclude-dir=node_modules | sed "s|$scaffold_dir/|    |"
         FAIL+=("$tname(scaffold:placeholder)")
+        continue
+    fi
+
+    # A hand-built `export default { fetch }` compiles and deploys while every
+    # other handler the builder composed is unreachable — checked on the source,
+    # before the install, because nothing downstream can observe it.
+    if ! entry_gaps="$(assert_entry_forwards_handlers "$scaffold_dir")"; then
+        echo "  FAIL: $tname's worker entry re-wraps the composed app but forwards only some handlers:"
+        echo "$entry_gaps" | sed 's/^/    /'
+        echo "        \`.build()\` composes scheduled (always), queue (with a defineQueue) and email (with"
+        echo "        .onEmail). \`lunora deploy\` provisions the matching triggers from the same discovery,"
+        echo "        so a dropped handler is a trigger firing into nothing. Forward them, or"
+        echo "        \`export default app\` when the entry has no pre-worker routing of its own."
+        FAIL+=("$tname(entry-handlers)")
         continue
     fi
 
