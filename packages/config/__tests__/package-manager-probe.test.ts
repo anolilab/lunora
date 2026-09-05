@@ -8,10 +8,14 @@ import type { spawnSync as SpawnSync } from "node:child_process";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const spawnSync = vi.fn<typeof SpawnSync>(() => ({ status: 0 }) as ReturnType<typeof SpawnSync>);
+const spawnSync = vi.fn<(...args: ReadonlyArray<unknown>) => ReturnType<typeof SpawnSync>>(() => ({ status: 0 }) as ReturnType<typeof SpawnSync>);
 
-vi.mock(import("node:child_process"), () => {
-    return { spawnSync };
+vi.mock(import("node:child_process"), async (importOriginal) => {
+    // Spread the real module: the factory has to satisfy the whole module shape,
+    // and other consumers of `node:child_process` in this graph must keep working.
+    // `vi.fn<typeof spawnSync>` collapses that four-overload signature to its last
+    // member, so the double needs one cast at this seam — never over the assertions.
+    return { ...(await importOriginal()), spawnSync: spawnSync as unknown as typeof SpawnSync };
 });
 
 const { detectInstalledManagers } = await import("../src/package-manager");
