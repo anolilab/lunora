@@ -1,3 +1,283 @@
+## @lunora/d1 [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.108...@lunora/d1@1.0.0-alpha.109) (2026-09-05)
+
+### ⚠ BREAKING CHANGES
+
+* **data:** `LocalMirror`'s `onChange` callback receives a `"diff" | "clear"`
+reason argument. A zero-argument callback is unaffected.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(replica): let a replay reach the log's own readers
+
+`events()` promises to yield every entry "continuing with every future
+applyEvent / replayFromLog call", but it streams off `state-changed` and
+`replayFromLog` emitted only `replay-error`/`ready`. Its phase-1 catch-up loop
+exits once, so every entry a replay appended was invisible to a generator
+already running. Each replayed entry now emits `state-changed`, the same
+notification `applyEvent` emits for the same reason.
+
+The same append also dropped the source entry's `timestamp`, so `EventLog#append`
+stamped `Date.now()` and a replay rewrote history to the moment it ran — forty
+lines below `applyEvent`, which pins the timestamp deliberately (REPLICA-07) so a
+timestamp-dependent reducer stays reproducible. It is pinned on both paths now.
+
+`EventLog#append` discarded an `InputEvent`'s own required `timestamp` the same
+way, while `commitAll` has always preserved it; and `getFrom(fromSeq, 0)`
+returned `{ entries: [], hasMore: true }`, which spins a paginating caller on a
+page it can never advance past — `limit` is now validated like `maxEntries` and
+`truncateBelow`'s floor.
+
+Also corrects `TableDiff.id`'s docblock: it describes a `deriveInsertId`
+derivation `apply-diff.ts` deliberately no longer does (hashing the diff id into
+a row key is what grew the mirror by a row a second).
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(shard-engine): page and rank past a NULL sort column
+
+A rank sort column genuinely holds NULL — `syncRankIndexEntry` writes
+`record[field] ?? null`, so a document simply missing the field is a NULL in
+`__sort_k<i>__` — and `col > NULL` / `col < NULL` are both UNKNOWN. The
+lexicographic seek used NULL-safe `IS` for the prefix equalities but a bare
+comparator at the pivot, so:
+
+- the `rankPage` that first reached the NULL group came back EMPTY, with
+  `isDone: false` on the page before it, and pagination stopped there; and
+- `rank()` returned a confident position counted against a partial set, next to
+  a correct total.
+
+Four sites had the same shape (the DO writer's seek and its `countRankBefore`,
+and the SQL store's twins of both). All four now go through one
+`rankPivotConditionSql`, which is the treatment `pivotCondition` already applies
+to the row-store's keyset seek: a NULL pivot resolves to "every non-null row" or
+"no row" depending on which side is sought, and a non-null pivot picks up the
+NULL group with an `IS NULL` arm when the ordering puts it there. A branch that
+cannot match is dropped rather than emitted as an always-false disjunct.
+
+The SQL store's rank `ORDER BY` also named no NULL placement, so on Postgres
+(NULLS LAST ascending) the NULL group sat opposite where the seek assumes it is.
+It now states the placement for the sort columns the way `compileOrderBySql`
+already does for every other read.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(sql-store): round-trip a scalar in an untyped column
+
+`v.any()`, `v.union()` and `v.from()` all store as TEXT — SQLite affinity TEXT,
+Postgres TEXT, MySQL LONGTEXT — and `sqliteEncode` keys off the runtime type, so
+a number or boolean written to one was COERCED by the engine on the way in: 42
+landed as the text `42.0`, `true` (encoded 1) as `1.0`. The decode had no
+declared type to reverse that with, so the caller read back a string. The
+codec's own docblock claimed a scalar member "round-trips through SQLite's
+native column type"; it cannot, and the unit test that pinned the claim called
+`sqliteDecode` with a JS value that had never been bound to a column.
+
+`sqliteEncode` now takes the column's kind and writes a number or boolean in
+those three kinds in the marked, self-describing form the composites already
+use, which `sqliteDecode` reverses by the marker alone. Strings, bigints and
+composites keep the storage form they had: the WHERE path binds through the same
+function without a kind, and changing them would stop existing equality filters
+matching. Equality on an untyped numeric column did not match before this either
+(a stored `42.0` never equalled a bound `42`), so nothing regresses.
+
+The kind reaches the encoder only where the caller knows which column it is
+filling — insert, upsert's soft-delete update, patch, replace — through
+`serializeDocumentColumn`. `serializeColumnValue` stays kind-blind because it
+also binds every WHERE comparison and the rank companion's sort keys, where both
+sides of a comparison have to agree byte for byte.
+
+The regression test writes and reads through a real column; asserting on
+`sqliteDecode` alone is what let this ship.
+
+`api-snapshots/sql-store.api.md` records this widening together with the
+`SqlDialect.columnType` one from the MySQL `.unique()` fix that follows, so the
+snapshot lands with that commit rather than being written twice.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(hyperdrive): index a .unique() column whole on mysql
+
+InnoDB cannot index a LONGTEXT without a key prefix, `indexKeyPrefix` supplies
+191, and the synthesized `.unique()` index went through the same `indexRef` as
+every other index — so the constraint enforced uniqueness of the first 191
+CHARACTERS. Two distinct 200-character values sharing that prefix raised
+ER_DUP_ENTRY, which `mapWriteError` surfaced as "unique constraint violation":
+a rejected write with a correct-looking error, on MySQL only, where D1 and
+Postgres both accept it.
+
+A `.unique()` character column is now declared `VARCHAR(768)` (768 × 4 bytes
+under utf8mb4 is exactly InnoDB's 3072-byte single-column key limit), bytes
+`VARBINARY(768)`, and the synthesized index takes no prefix. A value past the
+bound is a loud write error rather than a wrong conflict. The numeric kinds and
+bigint's `VARCHAR(64)` key were already indexable whole and are unchanged, as
+are SQLite and Postgres, which index text of any length.
+
+Pre-existing MySQL tables keep the type they were created with — the same caveat
+the column collation carries, and for the same reason: `CREATE TABLE IF NOT
+EXISTS` does not reshape one. Converting is
+`ALTER TABLE <t> MODIFY <col> VARCHAR(768) COLLATE utf8mb4_0900_bin`.
+* **data:** `SqlDialect.columnType` takes an optional second argument
+`{ unique?: boolean }`. A dialect implementing the one-argument signature still
+satisfies it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* security(hyperdrive): reject a vector filter shape json cannot represent
+
+The containment-filter guard exists because a filter this store cannot honour
+must be an ERROR rather than a silent drop, and its own docblock names the case
+it then failed to catch. The walk recursed through `Object.entries`, which is
+`[]` for a `Map`, a `Set`, a `Date` or a class instance — so it inspected
+nothing and rejected nothing, while `JSON.stringify` turned the value into `{}`.
+`metadata @> '{"tenant":{}}'::jsonb` is satisfied by every row that has metadata
+at all: a filter that fails OPEN, across tenants.
+
+At the top level it was worse. `Object.keys(someMap).length` is 0, so the
+`length > 0` gates skipped both the guard and the containment clause, and the
+query went out with no filter on it whatsoever.
+
+Both are now rejected by prototype — the only test that can see a shape whose
+own enumerable entries are not its contents — and the guard runs on any filter
+that is present rather than on one with countable keys.
+* **data:** a `Date` in a metadata filter is now rejected along with `Map`,
+`Set` and class instances. Pre-compute it into an equality-shaped metadata field.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* security(d1): decode a studio table as global only when it is
+
+The database browser branched on `schema.tables[table] !== undefined` — whether
+the schema declares that NAME — with no `shardMode` check, in six places. But
+only a `.global()` table lives in D1, so a same-named `.shardBy()`/root table
+describes a Durable Object's storage, not the D1 table being read. A schema
+declaring a shard-local `user` alongside better-auth's D1 `user` sent every read
+of the D1 table down the schema branch: it was decoded as a `.global()` row, so
+the `password|secret|token|hash|salt|credential` redaction never ran, and the
+same wrong branch simultaneously disabled the two guards that exist BECAUSE
+redaction is imperfect — the eq-filter equality oracle and the facet's masked
+bucket. Every site now goes through one `globalTableDefinition`, the test the
+admin export/import path already applies.
+
+Two ordering defects in the same reader:
+
+- the page read was `LIMIT ? OFFSET ?` with no ORDER BY, so which rows a page
+  contains was up to the plan and two identical requests could disagree — a row
+  could appear on two pages or on none. It now orders by the table's `id` (every
+  `.global()` table has a TEXT primary key), or `rowid` for an external table
+  without one. The shard browser keyset-paginates for the same reason.
+- the facet's `ORDER BY count DESC` had no tiebreaker, so which equally-frequent
+  values land in the top-N — and whether the result reports `truncated` — was
+  planner-dependent. It now breaks ties on the value.
+
+Also corrects the D1 dialect's docblock, which described `bigint` as "serialized
+as a decimal string" where the shared encoder writes the order-preserving
+40-character key. Both sibling dialects describe it correctly, and this module is
+what the `lunora migrate generate` emitter reads for the physical column form.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(shard-engine): give the wide-where case more than one condition
+
+`Object.fromEntries(Array.from({ length: 200 }, () => ["title", "kept"]))` is
+`{ title: "kept" }` — an object literal holds each key once. The only
+behavioural case in the expression-depth-cap suite therefore ran ONE condition
+while claiming 200, and passed identically with `compileWhereSql`'s halving-pair
+nesting deleted.
+
+It now builds distinct fields. 90 of them, not 200, because the two caps meet
+here: one equality binds one parameter and the bound-parameter ceiling the suite
+above pins is 100, so a genuinely-200-term `where` is rejected before it can be
+executed at all. The structural `widestChain` assertions still cover the full
+200 — those were never vacuous, and they are what discriminates against an
+un-nested implementation; a flat 90-term AND is well under stock SQLite's
+expression-depth limit, so this case cannot.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(d1): teach the migration lexer sqlite's other identifier quotings
+
+The single-statement check models `'…'`, `"…"`, `--` and `/* */`, but not
+SQLite's `[…]` or `` `…` `` — both of which it accepts for MS-Access and MySQL
+compatibility. A `;` inside either read as the statement terminator, so a
+perfectly valid migration was rejected with "contains more than one SQL
+statement". Bracket quoting has no escape (it ends at the first `]`); backtick
+doubles to escape, like the other two.
+
+Two adjacent inconsistencies in the same class:
+
+- `buildMysqlExec.all` returned mysql2's result verbatim, where mysql2 hands
+  back a `ResultSetHeader` rather than a row array for a statement that returns
+  no rows. The sibling `fromMysql2` normalises that to `[]`; two adapters over
+  one driver disagreeing about the same shape is how a caller ends up indexing
+  into a non-array. Unreachable today.
+- `advanceClientWatermark`'s module docblock said the watermark advances "in the
+  same transaction" as the writes, while the function's own docblock forty lines
+  down says it is NOT atomic with them. Both paths exist (`shard-do.ts`); the
+  module doc was the over-broad one and now names which is which.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(sql-store,d1,replica): close the review gaps in the round-26 data fixes
+
+Five review findings, each verified against the code before it was acted on.
+
+A UNIQUE index declared in `definition.indexes` never got the treatment a
+`.unique()` column got. `indexRef` consulted only the validator's own flag, so a
+declared unique index on a plain text field kept `LONGTEXT` and a `(191)` key
+prefix — enforcing uniqueness of the first 191 characters, which is the same
+false `ER_DUP_ENTRY` the column flag was fixed for, reachable through the other
+producer. Both producers now feed one `fullValueIndexedFields` set that decides
+the column type and the prefix together.
+
+A COMPOSITE unique index cannot be handled that way: InnoDB caps a key at 3072
+bytes, so bounding two columns to 768 characters each overflows it. Those are now
+refused at migration time rather than silently prefixed, because a prefixed
+composite UNIQUE constrains something other than what was declared.
+
+The studio page reader chose its ORDER BY column with a test that conflated the
+two table kinds. `resolveColumns` returns DISPLAY names for a `.global()` table
+(`_id`, whose physical column is `id`) and PHYSICAL names for an external one, so
+an external table carrying a literal `_id` column ordered by an `id` it does not
+have. External tables are asked for their own primary key instead, which also
+covers `WITHOUT ROWID` — those have no `rowid` to fall back on.
+
+`subscribeToMirror` could lose a clear. `applyDiff` fans out to every `onChange`
+listener, and one of them may call `clearData()` while this listener is mid-frame;
+the assignment at the end of the callback then restored the map the clear had just
+reset, so the next identical frame reported no changes over an emptied table. The
+frame now captures a clear generation and publishes only if it still holds.
+
+Two docblocks corrected: `mergeDiffs` promised that distinct child sequences mint
+distinct ids, which an optional `id`, a shared `timestamp` fallback and a 64-bit
+digest all defeat; and the watermark contract cited
+`commitMutationBookkeeping(…, { strict })`, which takes no such argument — it
+calls `advanceClientMutationWatermark({ strict: true })`. Also dropped an
+edit-history sentence that described a previous wording rather than the contract.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **data:** stop the mirror, rank pagination and three adapters returning wrong answers ([#604](https://github.com/anolilab/lunora/issues/604)) ([fb4a70c](https://github.com/anolilab/lunora/commit/fb4a70cd55131f72d2f5e3b8431d8396cdb8ee5a))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.56
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.109
+* **@lunora/do:** upgraded to 1.0.0-alpha.118
+
 ## @lunora/d1 [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.107...@lunora/d1@1.0.0-alpha.108) (2026-09-04)
 
 ### ⚠ BREAKING CHANGES
