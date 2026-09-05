@@ -10,33 +10,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { useClientQuery } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
 import { fireAndForget, formatTimestamp } from "../../lib/internal";
+import type { InvitationRow } from "./invitation-status";
+import { invitationStatus } from "./invitation-status";
 
 /** How many invitations to pull — the admin plane's own ceiling, so this asks for everything it will give. */
 const INVITATION_LIMIT = 500;
-
-/** One invitation row as the admin plane returns it — timestamps are epoch-ms. */
-interface InvitationRow {
-    acceptedAt?: null | number;
-    createdAt?: null | number;
-    email?: null | string;
-    expiresAt?: null | number;
-    id: string;
-    invitedBy?: null | string;
-}
-
-/**
- * The three states a row can be in. Derived here rather than asked of the
- * server: "pending" is `acceptedAt === null && expiresAt > now`, and filtering
- * that server-side after a page would let page 1 come back empty while pending
- * invitations sat on page 2.
- */
-const statusOf = (row: InvitationRow): "expired" | "pending" | "spent" => {
-    if (typeof row.acceptedAt === "number") {
-        return "spent";
-    }
-
-    return typeof row.expiresAt === "number" && row.expiresAt <= Date.now() ? "expired" : "pending";
-};
 
 /**
  * Sign-up invitations — the operator surface for the `inviteOnly` plugin, which
@@ -58,6 +36,7 @@ const SignUpInvitationsPanel = (): ReactElement => {
     // operator can copy the link, and never re-fetchable — the server keeps only
     // a hash.
     const [issuedLink, setIssuedLink] = useState<null | string>(null);
+    const [copied, setCopied] = useState(false);
 
     const invitationsQuery = useClientQuery(["lunora-auth-sign-up-invitations", INVITATION_LIMIT], () =>
         client.listAuthSignUpInvitations({ limit: INVITATION_LIMIT }),
@@ -86,6 +65,7 @@ const SignUpInvitationsPanel = (): ReactElement => {
                             ? null
                             : `${globalThis.location.origin}/sign-up?email=${encodeURIComponent(address)}&invite=${encodeURIComponent(token)}`,
                     );
+                    setCopied(false);
                     setEmail("");
                     invitationsQuery.refetch();
                 } catch (error_) {
@@ -96,9 +76,26 @@ const SignUpInvitationsPanel = (): ReactElement => {
     };
 
     const onCopyLink = (): void => {
-        if (issuedLink !== null) {
-            fireAndForget(globalThis.navigator.clipboard.writeText(issuedLink));
+        // Mirrors `apply-index-button.tsx`: a studio served over a LAN IP is not a
+        // secure context, so `navigator.clipboard` is undefined there, and even
+        // where it exists the write can be denied. `copied` is therefore only set
+        // in the success branch — the link stays selectable in the field either
+        // way, and claiming a copy that did not happen is how an operator loses a
+        // token they cannot get back.
+        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only clipboard; guarded by the "navigator" in globalThis check
+        const clipboard: Clipboard | undefined = "navigator" in globalThis ? globalThis.navigator.clipboard : undefined;
+
+        if (issuedLink === null || clipboard === undefined) {
+            return;
         }
+
+        fireAndForget(
+            clipboard.writeText(issuedLink).then((): boolean => {
+                setCopied(true);
+
+                return true;
+            }),
+        );
     };
 
     const onRevoke = (address: string): void => {
@@ -150,7 +147,7 @@ const SignUpInvitationsPanel = (): ReactElement => {
                         <div className="flex gap-2">
                             <Input data-testid="sign-up-invitation-link" readOnly value={issuedLink} />
                             <Button data-testid="sign-up-invitation-copy" onClick={onCopyLink} type="button">
-                                {t("Copy")}
+                                {copied ? t("Copied") : t("Copy")}
                             </Button>
                         </div>
                     </CardContent>
@@ -186,7 +183,7 @@ const SignUpInvitationsPanel = (): ReactElement => {
                             </TableHeader>
                             <TableBody>
                                 {rows.map((row) => {
-                                    const status = statusOf(row);
+                                    const status = invitationStatus(row, Date.now());
                                     const address = row.email ?? "";
 
                                     return (
