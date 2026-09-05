@@ -157,6 +157,33 @@ const buildAccessImports = (hasAccess: boolean, hasAuth: boolean): string[] =>
 const buildKvImports = (hasKvIntrospector: boolean): string[] =>
     hasKvIntrospector ? [`import { createKvIntrospectorFromEnv } from "@lunora/bindings/kv";`] : [];
 
+/**
+ * `@lunora/d1` imports for a D1-backed `.global()` app. `runD1GlobalTableMigrations`
+ * comes along only when the app also has auth: it provisions the schema's global
+ * tables ahead of the first auth request, which reads them with raw SQL rather
+ * than through the ORM facade that would otherwise have created them.
+ */
+const buildGlobalImports = (hasGlobal: boolean, hasAuth: boolean): string[] => {
+    if (!hasGlobal) {
+        return [];
+    }
+
+    const values = [
+        "applyCdcChanges",
+        "createD1CtxDb",
+        "exportGlobalRows",
+        "facetGlobalColumn",
+        "importGlobalRows",
+        "listGlobalTables",
+        "readD1CdcChanges",
+        "readGlobalTablePage",
+        "retryingExec",
+        ...(hasAuth ? ["runD1GlobalTableMigrations"] : []),
+    ];
+
+    return [`import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";`, `import { ${values.join(", ")} } from "@lunora/d1";`];
+};
+
 /** `lunora/notify.ts` default-export import — the `defineNotify(...)` config the worker reads its subscription store off (`createWorker({ notifySubscriptionStore })`). */
 const buildNotifyImports = (hasNotify: boolean): string[] => (hasNotify ? [`import notifyConfig from "../notify.js";`] : []);
 
@@ -235,12 +262,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
               ]
             : []),
         ...buildAccessImports(hasAccess, hasAuth),
-        ...(hasGlobal
-            ? [
-                  `import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";`,
-                  `import { applyCdcChanges, createD1CtxDb, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";`,
-              ]
-            : []),
+        ...buildGlobalImports(hasGlobal, hasAuth),
         ...(hasHyperdriveGlobal
             ? [
                   `import type { HyperdriveEngine } from "@lunora/hyperdrive/global";`,
@@ -581,6 +603,14 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
                               // poll's changed-tables fast path is unreachable.
                               cdc: request?.cdc ?? false,
                               exec: buildExec(database, request?.bookmark, request?.onBookmark),
+                              // This writer is rebuilt per request (it carries the
+                              // caller's identity and bookmark), so without a scope the
+                              // \`CREATE TABLE/INDEX IF NOT EXISTS\` sweep — one round
+                              // trip per global table and index — would run again on
+                              // every request's first \`.global()\` access. The binding
+                              // lives as long as the isolate and identifies the
+                              // database, so it makes the sweep once-per-isolate.
+                              provisionScope: database,
                               schema: schema as unknown as D1CtxDbOptions["schema"],
                           });
                       },
@@ -613,6 +643,10 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
                               cdc: request?.cdc ?? false,
                               engine: this.hyperdriveGlobalDeclaration?.engine as HyperdriveEngine,
                               exec,
+                              // See the D1 twin: the writer is per-request, so the
+                              // provisioning sweep is memoised against the connection
+                              // instead of repeating on every request.
+                              provisionScope: exec,
                               schema: schema as unknown as SqlCtxDbOptions["schema"],
                           });
                       },
@@ -1280,6 +1314,23 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
 
     // The auth lazy-init dance is woven through `build()` and `buildWorkerOptions`.
     const authState = hasAuth ? `        let auth: LunoraAuth | null = null;\n` : "";
+    // `.global()` tables are created lazily by the ORM facade, on first access
+    // through `ctx.db.<table>`. The auth store issues raw SQL and never goes
+    // through it, so on a database that has never served an ORM read the FIRST
+    // `/api/auth/*` request 500s (`no such table: rateLimit` — better-auth's
+    // durable limiter runs ahead of every handler) and it cannot self-heal: the
+    // failing path is the one that would have done the creating. Provision from
+    // `schema.ts` once per isolate, so the tables keep a single owner.
+    const globalAuthSchemaBlock =
+        hasAuth && options.hasGlobal
+            ? `            const globalDatabase = this.globalDeclaration?.d1(env);
+
+            if (globalDatabase) {
+                await runD1GlobalTableMigrations(buildExec(globalDatabase), schema as unknown as D1CtxDbOptions["schema"]);
+            }
+
+`
+            : "";
     const ensureAuthBlock = hasAuth
         ? `
         const ensureAuth = async (env: Env): Promise<void> => {
@@ -1296,10 +1347,13 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
                 return;
             }
 
-            auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
-            // Apply the better-auth schema lazily on first request (raw-D1 Kysely
+${globalAuthSchemaBlock}            // Apply the better-auth schema lazily on first request (raw-D1 Kysely
             // migrator). For production run the migrate command ahead of deploy.
             await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
+            // Assigned last: a failed provisioning must not leave the isolate
+            // serving auth against a schema-less database for the rest of its life
+            // (the early return above skips everything once this is non-null).
+            auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
         };
 `
         : "";

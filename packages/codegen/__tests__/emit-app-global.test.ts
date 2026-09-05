@@ -178,3 +178,56 @@ describe("emitApp — admin export/sync/apply wiring (.global())", () => {
         expect(output).not.toContain("applyGlobals");
     });
 });
+
+// Issue #600: `.global()` tables are created lazily by the ORM facade, on first
+// access through `ctx.db.<table>`. The auth store issues raw SQL and never goes
+// through it, so on a database that has never served an ORM read the FIRST
+// `/api/auth/*` request 500s with `no such table: rateLimit` — and cannot
+// self-heal, because the failing path is the one that would have created them.
+describe("emitApp — auth on a fresh `.global()` database", () => {
+    it("provisions the schema's global tables before the first auth request", () => {
+        expect.assertions(3);
+
+        const output = emitApp({ ...baseOptions, hasAuth: true, hasGlobal: true });
+
+        expect(output).toContain("const globalDatabase = this.globalDeclaration?.d1(env);");
+        expect(output).toContain('await runD1GlobalTableMigrations(buildExec(globalDatabase), schema as unknown as D1CtxDbOptions["schema"]);');
+        expect(output).toContain(', runD1GlobalTableMigrations } from "@lunora/d1";');
+    });
+
+    it("does not import the migration helper into an app with no auth", () => {
+        expect.assertions(1);
+
+        expect(emitApp({ ...baseOptions, hasGlobal: true })).not.toContain("runD1GlobalTableMigrations");
+    });
+
+    it("assigns `auth` only after provisioning succeeds, so a failure is retried", () => {
+        // `ensureAuth` returns early once `auth` is non-null. Assigning it first
+        // would leave a failed provisioning permanently un-retried, and the
+        // isolate serving auth against a schema-less database.
+        expect.assertions(1);
+
+        const output = emitApp({ ...baseOptions, hasAuth: true, hasGlobal: true });
+        const migration = output.indexOf("await ensureMigrated(createAuth(");
+        const assignment = output.indexOf("auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(");
+
+        expect(migration).toBeLessThan(assignment);
+    });
+});
+
+// Issue #601: the writer is rebuilt per request (it carries the caller's
+// identity and D1 bookmark), so a per-instance provisioning memo re-runs the
+// whole CREATE-IF-NOT-EXISTS sweep on every request's first `.global()` access.
+describe("emitApp — per-isolate provisioning scope", () => {
+    it("scopes the D1 writer's provisioning to the binding", () => {
+        expect.assertions(1);
+
+        expect(emitApp({ ...baseOptions, hasGlobal: true })).toContain("provisionScope: database,");
+    });
+
+    it("scopes the Hyperdrive writer's provisioning to the connection", () => {
+        expect.assertions(1);
+
+        expect(emitApp({ ...baseOptions, hasHyperdriveGlobal: true })).toContain("provisionScope: exec,");
+    });
+});

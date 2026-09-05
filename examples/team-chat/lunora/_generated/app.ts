@@ -4,8 +4,8 @@
 import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
-import { applyCdcChanges, createD1CtxDb, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
-import type { R2BucketLike, R2S3Credentials, Storage } from "@lunora/storage";
+import { applyCdcChanges, createD1CtxDb, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec, runD1GlobalTableMigrations } from "@lunora/d1";
+import type { R2BucketLike, Storage } from "@lunora/storage";
 import { createBucketStorage, createStorage } from "@lunora/storage";
 import type { AdminTableResolver, ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
 import { createCrossShardRelationCapabilities, createWorker, resolveLogArchiveFromEnv } from "lunorash/runtime";
@@ -27,8 +27,6 @@ interface StorageDeclaration<Env> {
     buckets?: Record<string, Selector<Env, R2BucketLike>>;
     /** Public base URL signed/public object URLs resolve against. */
     publicBaseUrl?: Selector<Env, string>;
-    /** R2 S3-API credentials (`{ accountId, accessKeyId, secretAccessKey, bucket, jurisdiction? }`) enabling `ctx.storage.getPresignedUrl` — native S3 presigned URLs that hit R2 directly, bypassing the worker. Omit to use only the worker-signed `getSignedUrl` path. */
-    s3?: Selector<Env, R2S3Credentials>;
     /** HMAC secret for signed URLs. */
     signingSecret?: Selector<Env, string>;
 }
@@ -73,7 +71,6 @@ class AppBuilder<Env extends object> {
     private adminToken?: Selector<Env, string>;
     private authDeclaration?: AuthDeclaration<Env>;
     private cdcEnabled = false;
-    private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;
     private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];
     private globalDeclaration?: GlobalDeclaration<Env>;
     private httpRouterApp?: HttpRouterLike;
@@ -99,17 +96,6 @@ class AppBuilder<Env extends object> {
      */
     public cdc(enabled = true): this {
         this.cdcEnabled = enabled;
-
-        return this;
-    }
-
-    /**
-     * Enable the per-shard reactive query cache: query results are memoized by `(functionPath, args, identity)` and invalidated by the ctx-db write hooks BEFORE the subscription broadcast, so a subscriber re-running its query always observes the post-write state.
-     *
-     * Off by default (every dispatch re-runs its handler). Pass an options object to tune the caps: `maxEntries` (default 1000) and `maxBytes` (default 4 MiB); either accepts `Number.POSITIVE_INFINITY` to disable that cap.
-     */
-    public reactiveCache(config: boolean | { maxBytes?: number; maxEntries?: number } = true): this {
-        this.reactiveCacheConfig = config;
 
         return this;
     }
@@ -196,7 +182,6 @@ class AppBuilder<Env extends object> {
     private assemble(): ComposedApp {
         const ShardDO = createShardDO({
             cdc: this.cdcEnabled,
-            reactiveCache: this.reactiveCacheConfig,
             ...(this.globalDeclaration
                 ? {
                       d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string | null }) => {
@@ -222,6 +207,14 @@ class AppBuilder<Env extends object> {
                               // poll's changed-tables fast path is unreachable.
                               cdc: request?.cdc ?? false,
                               exec: buildExec(database, request?.bookmark, request?.onBookmark),
+                              // This writer is rebuilt per request (it carries the
+                              // caller's identity and bookmark), so without a scope the
+                              // `CREATE TABLE/INDEX IF NOT EXISTS` sweep — one round
+                              // trip per global table and index — would run again on
+                              // every request's first `.global()` access. The binding
+                              // lives as long as the isolate and identifies the
+                              // database, so it makes the sweep once-per-isolate.
+                              provisionScope: database,
                               schema: schema as unknown as D1CtxDbOptions["schema"],
                           });
                       },
@@ -250,10 +243,19 @@ class AppBuilder<Env extends object> {
                 return;
             }
 
-            auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
+            const globalDatabase = this.globalDeclaration?.d1(env);
+
+            if (globalDatabase) {
+                await runD1GlobalTableMigrations(buildExec(globalDatabase), schema as unknown as D1CtxDbOptions["schema"]);
+            }
+
             // Apply the better-auth schema lazily on first request (raw-D1 Kysely
             // migrator). For production run the migrate command ahead of deploy.
             await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
+            // Assigned last: a failed provisioning must not leave the isolate
+            // serving auth against a schema-less database for the rest of its life
+            // (the early return above skips everything once this is non-null).
+            auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
         };
 
         const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => auth));
@@ -288,25 +290,6 @@ class AppBuilder<Env extends object> {
         return composed;
     }
 
-    /**
-     * One bucket's `Storage`, signing under the name it is registered as.
-     *
-     * `bucketName` is bound into every signed URL's HMAC canonical, so a bucket
-     * that signs as the default's name lets a URL minted for one bucket verify
-     * against another sharing the secret — and multi-bucket verification fails
-     * outright. Hence `"default"` for the bare `ctx.storage` bucket and the
-     * `buckets` key for every other.
-     */
-    private makeStorage(env: Env, declaration: StorageDeclaration<Env>, bucket: R2BucketLike, bucketName: string): Storage {
-        return createStorage({
-            bucket,
-            bucketName,
-            publicBaseUrl: declaration.publicBaseUrl?.(env),
-            s3: declaration.s3?.(env),
-            signingSecret: declaration.signingSecret?.(env),
-        });
-    }
-
     /** Resolve the storage capability (single or multi-bucket) for the DO side. */
     private resolveStorage(env: Env): Storage | undefined {
         const declaration = this.storageDeclaration;
@@ -321,18 +304,20 @@ class AppBuilder<Env extends object> {
             return undefined;
         }
 
+        const make = (bucket: R2BucketLike): Storage =>
+            createStorage({ bucket, publicBaseUrl: declaration.publicBaseUrl?.(env), signingSecret: declaration.signingSecret?.(env) });
         const extraEntries = Object.entries(declaration.buckets ?? {})
             .map(([name, selector]) => [name, selector(env)] as const)
             .filter((entry): entry is [string, R2BucketLike] => Boolean(entry[1]));
 
         if (extraEntries.length === 0) {
-            return this.makeStorage(env, declaration, defaultBucket, "default");
+            return make(defaultBucket);
         }
 
-        const map: Record<string, Storage> = { default: this.makeStorage(env, declaration, defaultBucket, "default") };
+        const map: Record<string, Storage> = { default: make(defaultBucket) };
 
         for (const [name, bucket] of extraEntries) {
-            map[name] = this.makeStorage(env, declaration, bucket, name);
+            map[name] = make(bucket);
         }
 
         return createBucketStorage(map, { default: "default" });
@@ -352,18 +337,20 @@ class AppBuilder<Env extends object> {
             return {};
         }
 
+        const make = (bucket: R2BucketLike): Storage =>
+            createStorage({ bucket, publicBaseUrl: declaration.publicBaseUrl?.(env), signingSecret: declaration.signingSecret?.(env) });
         // Held separately from the map so `pick`'s fallback is a plain binding:
         // under `noUncheckedIndexedAccess` a `Record<string, Storage>` lookup —
         // including `buckets.default` — widens to `Storage | undefined`, which
         // would not satisfy `pick`'s declared `Storage` return.
-        const fallbackStorage = this.makeStorage(env, declaration, defaultBucket, "default");
+        const fallbackStorage = make(defaultBucket);
         const buckets: Record<string, Storage> = { default: fallbackStorage };
 
         for (const [name, selector] of Object.entries(declaration.buckets ?? {})) {
             const bucket = selector(env);
 
             if (bucket) {
-                buckets[name] = this.makeStorage(env, declaration, bucket, name);
+                buckets[name] = make(bucket);
             }
         }
 
@@ -398,12 +385,11 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
-        options.listSchemaTables = () => ["profiles", "channels", "messages", "presence", "ratelimit_buckets"];
-
         if (this.globalDeclaration) {
             const database = this.globalDeclaration.d1(env);
 
             if (database) {
+                options.d1 = database;
                 options.globalIntrospector = buildGlobalIntrospector(database);
                 // `resolveTableSharding`/`importGlobals` wire the admin bulk-import
                 // endpoint: without the former, EVERY row (including a `.global()`
@@ -477,37 +463,7 @@ class AppBuilder<Env extends object> {
 
                 const session = await auth.api.getSession({ headers: (request as Request).headers });
 
-                if (!session?.user?.id) {
-                    return null;
-                }
-
-                // `role` rides along so `rls(policies, { roles })` and `auth.can(...)`
-                // work on this wiring without a hand-written resolver. better-auth's
-                // `admin()` plugin owns that column (comma-joined for multiple roles)
-                // and only an administrator can write it; it is absent when the plugin
-                // is off, which reads as no roles.
-                //
-                // `expiresAtMs` is the socket credential expiry the runtime forwards
-                // as `x-lunora-identity-exp`. Without it the DO's expiry check never
-                // fires, so a signed-out, banned or lapsed user keeps streaming their
-                // RLS-scoped rows over an already-open WebSocket while every HTTP call
-                // is anonymous. better-auth hands back a `Date`; anything else means
-                // the adapter did not hydrate it, and omitting beats guessing.
-                const expiresAt = session.session.expiresAt;
-                // `email` and `name` are the claims `ctx.auth.getIdentity()` is
-                // documented to carry ("email, name, roles, custom claims"). Without
-                // them the documented `me` query — `identity?.email` — resolves
-                // `undefined` on the built-in wiring. Empty strings are dropped so an
-                // absent claim reads as absent rather than as "".
-                const user = session.user as { email?: unknown; name?: unknown; role?: unknown };
-
-                return {
-                    ...(typeof user.email === "string" && user.email.length > 0 ? { email: user.email } : {}),
-                    ...(expiresAt instanceof Date ? { expiresAtMs: expiresAt.getTime() } : {}),
-                    ...(typeof user.name === "string" && user.name.length > 0 ? { name: user.name } : {}),
-                    role: user.role,
-                    userId: session.user.id,
-                };
+                return session?.user?.id ? { userId: session.user.id } : null;
             };
             const authInstance = getAuth();
 
@@ -555,19 +511,6 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
                 .prepare(sql)
                 .bind(...parameters)
                 .all<Record<string, unknown>>();
-
-            // `all` carries writes, not just reads: D1 runs
-            // `UPDATE/DELETE … RETURNING` through it exactly like `.run()`, and
-            // that is precisely what `@lunora/sql-store` issues for its
-            // optimistic-concurrency compare-and-swap — so `patch`, `replace`
-            // and `delete` all land here and nowhere else. Without this the
-            // bookmark those writes produced was never reported, and the next
-            // read could pin a replica that has not seen them: read-your-writes
-            // lost on the exact path the bookmark exists for. Reporting it after
-            // a plain `SELECT` too is harmless and correct — the session's
-            // bookmark only ever moves forward, and `setOutboundBookmark` takes
-            // the last value.
-            onBookmark?.(session?.getBookmark() ?? undefined);
 
             return result.results;
         },

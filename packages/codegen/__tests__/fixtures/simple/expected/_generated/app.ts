@@ -182,6 +182,14 @@ class AppBuilder<Env extends object> {
                               // poll's changed-tables fast path is unreachable.
                               cdc: request?.cdc ?? false,
                               exec: buildExec(database, request?.bookmark, request?.onBookmark),
+                              // This writer is rebuilt per request (it carries the
+                              // caller's identity and bookmark), so without a scope the
+                              // `CREATE TABLE/INDEX IF NOT EXISTS` sweep — one round
+                              // trip per global table and index — would run again on
+                              // every request's first `.global()` access. The binding
+                              // lives as long as the isolate and identifies the
+                              // database, so it makes the sweep once-per-isolate.
+                              provisionScope: database,
                               schema: schema as unknown as D1CtxDbOptions["schema"],
                           });
                       },
