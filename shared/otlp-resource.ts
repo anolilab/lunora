@@ -28,19 +28,6 @@ import type { OtlpResourceAttributes } from "./otlp";
  */
 type ResourceEnvReader = (key: string) => string | undefined;
 
-/**
- * Build a reader over a bindings-style bag. Non-string and empty values read as
- * absent, so a binding object (which holds KV namespaces, secrets stores and
- * other non-string values alongside plain vars) yields only real strings.
- */
-const readerFromRecord =
-    (environment: Record<string, unknown> | undefined): ResourceEnvReader =>
-    (key) => {
-        const value = environment?.[key];
-
-        return typeof value === "string" && value.length > 0 ? value : undefined;
-    };
-
 /** Read a string property off a loosely-typed object (e.g. `request.cf`). */
 const stringProperty = (object: unknown, key: string): string | undefined => {
     if (typeof object !== "object" || object === null) {
@@ -51,6 +38,30 @@ const stringProperty = (object: unknown, key: string): string | undefined => {
 
     return typeof value === "string" && value.length > 0 ? value : undefined;
 };
+
+/**
+ * Build a reader over a bindings-style bag. Non-string and empty values read as
+ * absent, so a binding object (which holds KV namespaces, secrets stores and
+ * other non-string values alongside plain vars) yields only real strings.
+ *
+ * With ONE exception, because the value we most want is behind it: a Cloudflare
+ * `version_metadata` binding is an OBJECT (`{ id, tag, timestamp }`), not a
+ * string, so a strict string reader made `CF_VERSION_METADATA` unreadable —
+ * `service.version` auto-detection could never fire for the platform it was
+ * written for. A version-shaped object resolves to its human `tag` when the
+ * deployment set one, else the version `id`.
+ */
+const readerFromRecord =
+    (environment: Record<string, unknown> | undefined): ResourceEnvReader =>
+    (key) => {
+        const value = environment?.[key];
+
+        if (typeof value === "string") {
+            return value.length > 0 ? value : undefined;
+        }
+
+        return stringProperty(value, "tag") ?? stringProperty(value, "id");
+    };
 
 /**
  * Service identity every host can report: `service.version` from the usual

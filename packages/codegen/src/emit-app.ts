@@ -221,6 +221,12 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         "WorkerOptions",
     ];
 
+    if (hasQueue) {
+        // The queue consumer's fourth argument — the trigger's own trace, forwarded
+        // so a handler's `ctx.run` dispatches join it.
+        runtimeTypeImports.push("TriggerTrace");
+    }
+
     if (hasGlobal) {
         runtimeTypeImports.push("GlobalIntrospector", "AdminTableResolver");
     }
@@ -896,7 +902,7 @@ const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
     // Queues log via the root shard's `recordQueueMessage` admin RPC.
     ...(options.hasQueue
         ? [
-              `            queue: (batch: unknown, queueEnv: unknown, _context: ExecutionContextLike): Promise<void> =>`,
+              `            queue: (batch: unknown, queueEnv: unknown, _context: ExecutionContextLike, trigger: TriggerTrace): Promise<void> =>`,
               `                dispatchQueueBatch(batch as Parameters<typeof dispatchQueueBatch>[0], LUNORA_QUEUE_REGISTRY, {`,
               `                    capture: shouldCaptureQueue(queueEnv as Record<string, unknown>)`,
               `                        ? createQueueCaptureSink(queueEnv as Record<string, unknown>${
@@ -904,6 +910,9 @@ const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
               })`,
               `                        : undefined,`,
               `                    env: queueEnv as Record<string, unknown>,`,
+              // The consumer's `ctx.run` joins the queue invocation's trace instead
+              // of minting a fresh one per dispatched function.
+              `                    traceparent: trigger.traceparent,`,
               `                }),`,
           ]
         : []),

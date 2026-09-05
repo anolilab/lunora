@@ -15,6 +15,8 @@ interface RunContextOptions {
     env: Record<string, unknown>;
     exportName: string;
     fetchImpl?: typeof fetch;
+    /** The consumer invocation's `traceparent`, so `ctx.run` joins the queue's trace. */
+    traceparent?: string;
 }
 
 /** Assemble the {@link QueueRunContext} passed to a `defineQueue` handler. */
@@ -22,7 +24,12 @@ const createQueueRunContext = (options: RunContextOptions): QueueRunContext => {
     return {
         env: options.env,
         log: createDispatchLogger(`[queue:${options.exportName}]`),
-        run: createDispatchRunner({ env: options.env, fetchImpl: options.fetchImpl, label: "@lunora/queue" }),
+        run: createDispatchRunner({
+            env: options.env,
+            fetchImpl: options.fetchImpl,
+            label: "@lunora/queue",
+            ...(options.traceparent === undefined ? {} : { traceparent: options.traceparent }),
+        }),
     };
 };
 

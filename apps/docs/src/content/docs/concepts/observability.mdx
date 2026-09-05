@@ -112,7 +112,7 @@ it on each call.
 otlpSink({
     endpoint: env.LUNORA_OTLP_ENDPOINT,
     serviceName: "checkout-api", // service.name
-    serviceVersion: env.CF_VERSION_METADATA, // service.version
+    serviceVersion: env.CF_VERSION_METADATA?.id, // service.version — the binding is `{ id, tag, timestamp }`, not a string
     serviceNamespace: "storefront", // service.namespace — when several services share a name
     deploymentEnvironment: "production", // deployment.environment
     resourceAttributes: { "service.instance.id": env.INSTANCE_ID }, // anything else
@@ -123,8 +123,9 @@ otlpSink({
 above it, so it can also override one.
 
 **Auto-detection** is opt-in with `detectResources: true`. The worker then reads
-`service.version` (from `SERVICE_VERSION` / `CF_VERSION_METADATA` /
-`VERCEL_GIT_COMMIT_SHA` / `GITHUB_SHA` / `COMMIT_SHA`), `deployment.environment`
+`service.version` (from `SERVICE_VERSION` / `CF_VERSION_METADATA` — the
+`version_metadata` binding's `tag`, else its `id` — / `VERCEL_GIT_COMMIT_SHA` /
+`GITHUB_SHA` / `COMMIT_SHA`), `deployment.environment`
 (`DEPLOYMENT_ENVIRONMENT` / `ENVIRONMENT` / `NODE_ENV`), and `cloud.provider` /
 `cloud.region` (the Cloudflare colo the request landed in). A value it cannot
 determine is omitted rather than guessed, and anything you set explicitly always

@@ -47,6 +47,17 @@ export interface SentryTelemetryOptions extends CommonOptions {
  * structural metadata (model, provider, tool name) unless `recordInputs` is
  * set, in which case prompts / tool arguments are attached too.
  *
+ * The tool span is driven by the agent LOOP, not by `ai`: Lunora exposes tools
+ * schema-only so the SDK never executes one (see `telemetry/tool-execution.ts`).
+ *
+ * **A model-call span here ends when the provider call returns.** The host span
+ * has to WRAP `execute()` — that is what establishes the parent context nested
+ * provider work attaches to — and on a streamed turn `execute()` resolves at
+ * first byte. So a streamed call's Sentry span measures time-to-first-byte, not
+ * the whole generation, and carries no token usage. Use `otlpTelemetry` (which
+ * closes on the SDK's model-call-end event) when the streamed duration and usage
+ * are what you need.
+ *
  * The app owns Sentry initialization; pass the namespace in as `Sentry`.
  * @experimental
  */

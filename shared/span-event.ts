@@ -121,7 +121,48 @@ export interface SpanHandle {
      * `@opentelemetry/api` bridge parenting a third-party library's spans — to
      * reach around the API for it.
      */
-    spanContext: () => { spanId: string; traceId: string };
+    spanContext: () => SpanContextIds;
+}
+
+/**
+ * The W3C identity of one span, plus the trace's settled sampling verdict.
+ *
+ * `sampled` is the propagated head decision (absent means "no verdict reached
+ * this tier", which every consumer reads as keep). It rides alongside the ids
+ * because everything that needs the ids to announce this span downstream — a
+ * hand-built `traceparent`, the `@opentelemetry/api` bridge's `SpanContext` —
+ * needs the flag in the same breath, and announcing `sampled` on a trace that
+ * was sampled OUT is what leaves a collector holding the middle of a trace.
+ */
+export interface SpanContextIds {
+    /** The trace's settled W3C `sampled` verdict; absent when none was propagated. */
+    sampled?: boolean;
+    /** This span's id (16-hex). */
+    spanId: string;
+    /** The trace this span belongs to (32-hex). */
+    traceId: string;
+}
+
+/**
+ * Caller-supplied ids for one `ctx.trace` span, passed as the tracer's fourth
+ * argument.
+ *
+ * For adapters that must hand a span's identity to somebody else BEFORE the span
+ * body runs — the `@opentelemetry/api` bridge returns a `SpanContext`
+ * synchronously from `startSpan`, and a library builds a `traceparent` from it —
+ * so the id the adapter published is the id that reaches the collector rather
+ * than a phantom. `parentSpanId` overrides the enclosing span for the same
+ * reason: an adapter that tracks its own parent/child structure (OTel's
+ * `Context`) can express it without an ambient span stack.
+ *
+ * Not part of the ordinary `ctx.trace(name, fn, attributes)` call — a handler
+ * never mints its own ids.
+ */
+export interface SpanIdentity {
+    /** Parent to this span id instead of the enclosing `ctx.trace` / dispatch span. */
+    parentSpanId?: string;
+    /** Record the span under this id (16-hex) instead of a freshly minted one. */
+    spanId?: string;
 }
 
 /** Options accepted by `ctx.trace(name, fn, options)` beyond the plain attribute bag. */

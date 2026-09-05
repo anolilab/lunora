@@ -5252,7 +5252,10 @@ abstract class ShardDO {
 
             // Raw `recordException` stacktraces/messages in dev only — matches
             // `makeTracer`'s `captureRaw` posture for the wide event's collector.
-            entry.collector ??= createSpanCollector({ spanId: anchor.rootSpanId, traceId: anchor.traceId }, isDevEnvironment(this.env));
+            entry.collector ??= createSpanCollector(
+                { ...(anchor.sampled === undefined ? {} : { sampled: anchor.sampled }), spanId: anchor.rootSpanId, traceId: anchor.traceId },
+                isDevEnvironment(this.env),
+            );
             this.dispatchSpans.set(spanKey, entry);
 
             return entry.collector;
@@ -5266,7 +5269,11 @@ abstract class ShardDO {
             // anchor, not from anything the handler recorded. Reading the dispatch's
             // trace id must not itself count as "this dispatch produced a wide event".
             spanContext: () => {
-                return { spanId: anchor.rootSpanId, traceId: anchor.traceId };
+                // `sampled` rides along so anything that ANNOUNCES this dispatch
+                // downstream from the ids alone — a hand-built `traceparent`, the
+                // `@opentelemetry/api` bridge's `SpanContext` — carries the settled
+                // verdict instead of claiming SAMPLED on a trace that was dropped.
+                return { ...(anchor.sampled === undefined ? {} : { sampled: anchor.sampled }), spanId: anchor.rootSpanId, traceId: anchor.traceId };
             },
             addLink: (link) => {
                 collector().handle.addLink(link);

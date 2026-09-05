@@ -49,6 +49,16 @@ export interface BraintrustTelemetryOptions extends CommonOptions {
  * are logged only when `recordInputs` is set; generated text / tool results
  * only when `recordOutputs` is set. `onError` opens a span and logs the error.
  *
+ * The tool span is driven by the agent LOOP, not by `ai`: Lunora exposes tools
+ * schema-only so the SDK never executes one (see `telemetry/tool-execution.ts`).
+ *
+ * **A model-call span here ends when the provider call returns.** The traced span
+ * has to WRAP `execute()` so nested work is parented under it, and on a streamed
+ * turn `execute()` resolves at first byte — so a streamed call's span measures
+ * time-to-first-byte and logs the stream handle rather than the generation. Use
+ * `otlpTelemetry` (which closes on the SDK's model-call-end event) when the
+ * streamed duration and token usage are what you need.
+ *
  * The app owns Braintrust initialization; pass the logger in as `logger`.
  * @experimental
  */

@@ -19,6 +19,24 @@ describe("shared/otlp-resource", () => {
             expect(read("EMPTY")).toBeUndefined();
         });
 
+        it("unwraps a Cloudflare version_metadata binding, preferring its tag", () => {
+            expect.assertions(3);
+
+            // The binding is an OBJECT, so a strict string reader made
+            // `CF_VERSION_METADATA` unreadable — `service.version` auto-detection
+            // could never fire on the platform it was written for.
+            const tagged = readerFromRecord({ CF_VERSION_METADATA: { id: "8ee9-4b4d", tag: "v1.4.0", timestamp: "2026-01-01T00:00:00Z" } });
+
+            expect(tagged("CF_VERSION_METADATA")).toBe("v1.4.0");
+
+            // A deployment that set no tag still has a version id.
+            const untagged = readerFromRecord({ CF_VERSION_METADATA: { id: "8ee9-4b4d", tag: "", timestamp: "2026-01-01T00:00:00Z" } });
+
+            expect(untagged("CF_VERSION_METADATA")).toBe("8ee9-4b4d");
+
+            expect(detectServiceResource(tagged)["service.version"]).toBe("v1.4.0");
+        });
+
         it("tolerates an absent environment", () => {
             expect.assertions(1);
 

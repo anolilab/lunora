@@ -108,30 +108,44 @@ export interface OtlpTelemetryOptions extends CommonOptions {
  * An OTLP-over-HTTP telemetry integration for `@lunora/agent`.
  *
  * The OTLP counterpart to the `sentryTelemetry` / `braintrustTelemetry` bridges:
- * it wraps each language-model call and tool execution in an OTLP **span**
+ * it records each language-model call and each tool execution as an OTLP **span**
  * (`gen_ai.*` semantic-convention attributes — model, provider, token usage,
  * tool name) and ships it to a collector, so agent generations land in the same
  * trace store as the rest of an app's telemetry (the Lunora Cloud, or any OTel
  * collector). Plug it into `defineAgent({ telemetry: { isEnabled: true,
  * integrations: [otlpTelemetry({ endpoint, token })] } })`.
  *
- * Emitting inside the turn's execution wrapper means one span per **real** turn:
- * the agent loop memoizes each `step.do('llm:turn:N')`, so a Workflow replay
- * returns the cached result without re-invoking `execute`, and no duplicate span
- * is emitted. Privacy-safe by default — `recordInputs`/`recordOutputs` both
- * default `false`, so no prompt or generated text leaves the worker without an
- * explicit opt-in; only structural metadata + token counts are recorded.
+ * **A model-call span closes when the CALL ends, not when `execute()` resolves.**
+ * On a streamed turn `execute()` resolves the instant `doStream` hands back the
+ * stream — before a single token, before any usage, and before any mid-stream
+ * failure. Closing the span there reported every voice and workflow-streamed turn
+ * as a ~1 ms, zero-token, always-OK call. So the span opens in
+ * `executeLanguageModelCall` (which also owns the failure path, since a rejected
+ * provider call produces no end event) and closes on `onLanguageModelCallEnd`,
+ * which the SDK fires once the response is normalized — after the stream's
+ * `finish` part, where the duration and the token usage actually live.
+ * `onError` / `onAbort` close whatever is still open, so a stream that dies or is
+ * barged in on reports a failure instead of a phantom success.
+ *
+ * **Tool spans come from the agent loop.** Lunora exposes tools to the model
+ * schema-only, so `ai` never runs one and never fires its tool telemetry; the
+ * loop calls `executeTool` itself from the durable step where the tool really
+ * runs (see `telemetry/tool-execution.ts`).
+ *
+ * One span per REAL execution: the agent loop memoizes each `step.do(...)`, so a
+ * Workflow replay returns the cached result without re-invoking the wrapped work
+ * and no duplicate span is emitted. Privacy-safe by default —
+ * `recordInputs`/`recordOutputs` both default `false`, so no prompt or generated
+ * text leaves the worker without an explicit opt-in; only structural metadata +
+ * token counts are recorded.
  *
  * Each export is fire-and-forget (registered with `waitUntil` when supplied);
  * every rejection is swallowed so a flaky collector never surfaces to the run.
  *
- * Two deliberate differences from the SDK-backed bridges, which delegate to a
- * host tracer. First, no `onError`: a failed call already emits a span with
- * `status.code === 2`, so the failure is on the trace and there is no host client
- * to also notify. Second, flat not nested: every span gets `traceId` (shared when
- * `traceId` is set) but no `parentSpanId`, so model-call and tool spans are
- * siblings under the run rather than a tree — OTLP has no ambient span context to
- * parent to here.
+ * One deliberate difference from the SDK-backed bridges, which delegate to a host
+ * tracer: flat, not nested. Every span gets `traceId` (shared when `traceId` is
+ * set) but no `parentSpanId`, so model-call and tool spans are siblings under the
+ * run rather than a tree — OTLP has no ambient span context to parent to here.
  * @param options `endpoint` (+ optional `token`/`headers`/`serviceName`),
  * `traceId` to group a run's spans, `waitUntil`, and the `recordInputs`/
  * `recordOutputs` privacy flags.
@@ -182,76 +196,215 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
         }
     };
 
+    /** One model call in flight, from its start until whichever terminal event fires first. */
+    interface InFlightCall {
+        messages: unknown;
+        modelId: unknown;
+        provider: unknown;
+        /** The value `execute()` resolved with; the only carrier of the gateway's `cf-aig-*` headers. */
+        result: unknown;
+        startTs: number;
+    }
+
+    /**
+     * Model calls in flight, keyed by the SDK's `callId`. An entry is created when
+     * the call starts and REMOVED by whichever terminal event fires first, so each
+     * span is emitted exactly once and the map cannot grow across a long run.
+     */
+    const inFlight = new Map<string, InFlightCall>();
+
+    /**
+     * Emit the span for one model call and forget it. A `callId` that is no longer
+     * in flight has already been reported (an error span followed by a late end
+     * event) and is dropped rather than double-counted.
+     */
+    const closeCall = (callId: string, ok: boolean, message: string | undefined, event: unknown): void => {
+        const call = inFlight.get(callId);
+
+        if (call === undefined) {
+            return;
+        }
+
+        inFlight.delete(callId);
+
+        const { messages, modelId, provider, result, startTs } = call;
+        const attributes: OtlpAttribute[] = [];
+
+        pushAttribute(attributes, "gen_ai.operation.name", "chat");
+        pushAttribute(attributes, "gen_ai.request.model", modelId);
+        pushAttribute(attributes, "gen_ai.system", provider);
+        // Session/thread grouping — absent unless a conversation id was set,
+        // so a run with no session id emits exactly as before.
+        pushAttribute(attributes, "gen_ai.conversation.id", conversationId);
+
+        // Usage comes off the END EVENT, which the SDK fires once the response has
+        // been normalized. On a stream that is after its `finish` part; the value
+        // `execute()` resolves with carries no usage at all, because it resolves the
+        // moment `doStream` hands the stream back.
+        const usage = summarizeUsage(readField(event, "usage") ?? readField(result, "usage"));
+
+        if (usage) {
+            pushAttribute(attributes, "gen_ai.usage.input_tokens", usage.inputTokens);
+            pushAttribute(attributes, "gen_ai.usage.output_tokens", usage.outputTokens);
+            pushAttribute(attributes, "gen_ai.usage.total_tokens", usage.totalTokens);
+        }
+
+        // Cloudflare AI Gateway telemetry — additive, only present when the
+        // call was routed through a gateway (LUNORA_AI_GATEWAY_*). `pushAttribute`
+        // skips the nullish fields, so a direct-provider call emits none of these.
+        // The end event carries `providerMetadata`; the resolved call value is the
+        // fallback, because only it carries the `cf-aig-*` response headers.
+        const gateway = summarizeGatewayTelemetry(event) ?? summarizeGatewayTelemetry(result);
+
+        if (gateway) {
+            pushAttribute(attributes, "gen_ai.response.cached", gateway.cached);
+            pushAttribute(attributes, "cf.aig.log_id", gateway.logId);
+        }
+
+        // A provider-reported cost always wins; without a gateway the cost
+        // is derived from token usage and the price table, so spend stays
+        // visible off Cloudflare too. The two are never conflated — the
+        // source is stamped alongside, exactly as the RAG embed span does.
+        const reportedCost = gateway?.cost;
+        const cost =
+            reportedCost ??
+            (typeof modelId === "string" ? estimateModelCost(modelId, { inputTokens: usage?.inputTokens, outputTokens: usage?.outputTokens }) : undefined);
+
+        if (cost !== undefined) {
+            pushAttribute(attributes, "gen_ai.usage.cost", cost);
+            pushAttribute(attributes, "lunora.usage.cost.source", reportedCost === undefined ? "estimated" : "provider");
+        }
+
+        if (recordInputs) {
+            pushAttribute(attributes, "gen_ai.prompt", messages);
+        }
+
+        if (recordOutputs) {
+            pushAttribute(attributes, "gen_ai.completion", contentText(readField(event, "content") ?? readField(result, "content")));
+        }
+
+        emitSpan(typeof modelId === "string" ? `chat ${modelId}` : "language_model_call", startTs, ok, message, attributes);
+    };
+
+    /** Open a call's entry unless one already exists (both entry points may fire). */
+    const openCall = (callId: string, source: unknown): void => {
+        if (inFlight.has(callId)) {
+            return;
+        }
+
+        inFlight.set(callId, {
+            messages: readField(source, "messages"),
+            modelId: readField(source, "modelId"),
+            provider: readField(source, "provider"),
+            result: undefined,
+            startTs: Date.now(),
+        });
+    };
+
+    /** Close every still-open call with the same failure — see `onAbort` / `onError`. */
+    const failOpenCalls = (message: string): void => {
+        // A Map iterator tolerates deletion of the entry it just yielded, which is
+        // exactly what `closeCall` does.
+        for (const callId of inFlight.keys()) {
+            closeCall(callId, false, message, undefined);
+        }
+    };
+
+    /**
+     * Close a call that is still open when the SDK reports the step, or the whole
+     * operation, finished.
+     *
+     * A provider that reports a mid-stream failure the protocol way — an in-band
+     * `{ type: "error" }` part — never produces a model-call-end event, so this is
+     * the only signal that the call is over, and `finishReason: "error"` is the
+     * only thing that says it failed. A no-op once `onLanguageModelCallEnd` has
+     * already closed the call. A provider whose stream REJECTS outright dispatches
+     * no telemetry callback at all in ai@7.0.59, so such a call reports no span
+     * rather than a false success.
+     */
+    const closeFromLifecycle = (event: unknown): void => {
+        const callId = readField(event, "callId");
+
+        if (typeof callId !== "string" || !inFlight.has(callId)) {
+            return;
+        }
+
+        // `finishReason` is the unified string on the lifecycle events, but the
+        // provider protocol's own shape is `{ unified, raw }` — read both so a
+        // failure is never rounded up to a success by an event shape.
+        const finishReason = readField(event, "finishReason");
+        const failed = finishReason === "error" || readField(finishReason, "unified") === "error";
+
+        closeCall(callId, !failed, failed ? "the model call ended with an error" : undefined, event);
+    };
+
     return {
-        executeLanguageModelCall: (options_) => {
-            const startTs = Date.now();
-            const modelId = readField(options_, "modelId");
+        executeLanguageModelCall: async (options_) => {
+            const { callId } = options_;
 
-            // Return the original promise unchanged (so the exact `PromiseLike<T>`
-            // the caller expects flows through); a detached observer emits the span
-            // once the call settles. Its `onRejected` handles the rejection in this
-            // chain — no unhandled rejection — while the returned promise still
-            // rejects for the caller.
-            const promise = options_.execute();
+            openCall(callId, options_);
 
-            const emit = (ok: boolean, message: string | undefined, result: unknown): void => {
-                const attributes: OtlpAttribute[] = [];
+            try {
+                // Awaited rather than returned untouched so the resolved value is on
+                // the entry BEFORE `onLanguageModelCallEnd` fires — the gateway's
+                // `cf-aig-*` response headers live on it and nowhere else. The value
+                // and any rejection pass through unchanged.
+                const result = await options_.execute();
+                const call = inFlight.get(callId);
 
-                pushAttribute(attributes, "gen_ai.operation.name", "chat");
-                pushAttribute(attributes, "gen_ai.request.model", modelId);
-                pushAttribute(attributes, "gen_ai.system", readField(options_, "provider"));
-                // Session/thread grouping — absent unless a conversation id was set,
-                // so a run with no session id emits exactly as before.
-                pushAttribute(attributes, "gen_ai.conversation.id", conversationId);
-
-                const usage = summarizeUsage(readField(result, "usage"));
-
-                if (usage) {
-                    pushAttribute(attributes, "gen_ai.usage.input_tokens", usage.inputTokens);
-                    pushAttribute(attributes, "gen_ai.usage.output_tokens", usage.outputTokens);
-                    pushAttribute(attributes, "gen_ai.usage.total_tokens", usage.totalTokens);
+                if (call !== undefined) {
+                    call.result = result;
                 }
 
-                // Cloudflare AI Gateway telemetry — additive, only present when the
-                // call was routed through a gateway (LUNORA_AI_GATEWAY_*). `pushAttribute`
-                // skips the nullish fields, so a direct-provider call emits none of these.
-                const gateway = summarizeGatewayTelemetry(result);
+                return result;
+            } catch (error) {
+                // The provider call itself failed, so this IS the end of the span and
+                // no end event will follow.
+                closeCall(callId, false, error instanceof Error ? error.message : String(error), undefined);
 
-                if (gateway) {
-                    pushAttribute(attributes, "gen_ai.response.cached", gateway.cached);
-                    pushAttribute(attributes, "cf.aig.log_id", gateway.logId);
-                }
+                throw error;
+            }
+        },
+        onAbort: () => {
+            // A barge-in or cancelled stream produces neither an end event nor a
+            // rejection from `execute()`, which already resolved at first byte.
+            failOpenCalls("aborted");
+        },
+        onEnd: (event: unknown) => {
+            closeFromLifecycle(event);
+        },
+        onError: (event: unknown) => {
+            // An unrecoverable failure AFTER `execute()` resolved (ai@7 dispatches
+            // `{ callId, error }`). Without this the call would be reported as the
+            // ~1 ms success `execute()`'s early resolution implied.
+            const raw = readField(event, "error") ?? event;
 
-                // A provider-reported cost always wins; without a gateway the cost
-                // is derived from token usage and the price table, so spend stays
-                // visible off Cloudflare too. The two are never conflated — the
-                // source is stamped alongside, exactly as the RAG embed span does.
-                const reportedCost = gateway?.cost;
-                const cost =
-                    reportedCost ??
-                    (typeof modelId === "string"
-                        ? estimateModelCost(modelId, { inputTokens: usage?.inputTokens, outputTokens: usage?.outputTokens })
-                        : undefined);
+            failOpenCalls(raw instanceof Error ? raw.message : String(raw));
+        },
+        onLanguageModelCallEnd: (event: unknown) => {
+            const callId = readField(event, "callId");
 
-                if (cost !== undefined) {
-                    pushAttribute(attributes, "gen_ai.usage.cost", cost);
-                    pushAttribute(attributes, "lunora.usage.cost.source", reportedCost === undefined ? "estimated" : "provider");
-                }
+            if (typeof callId !== "string") {
+                return;
+            }
 
-                if (recordInputs) {
-                    pushAttribute(attributes, "gen_ai.prompt", readField(options_, "messages"));
-                }
+            // Fired after the response has been normalized and parsed — for a stream
+            // that is after its `finish` part, so this is the first moment the call's
+            // real duration AND its token usage are both known.
+            closeCall(callId, true, undefined, event);
+        },
+        onLanguageModelCallStart: (event: unknown) => {
+            const callId = readField(event, "callId");
 
-                if (recordOutputs) {
-                    pushAttribute(attributes, "gen_ai.completion", contentText(readField(result, "content")));
-                }
-
-                emitSpan(typeof modelId === "string" ? `chat ${modelId}` : "language_model_call", startTs, ok, message, attributes);
-            };
-
-            observeSettled(promise, emit);
-
-            return promise;
+            // `executeLanguageModelCall` normally opens the entry; this is the
+            // backstop for a host that dispatches the lifecycle events without the
+            // execution wrapper, so a call is never reported with no start time.
+            if (typeof callId === "string") {
+                openCall(callId, event);
+            }
+        },
+        onStepEnd: (event: unknown) => {
+            closeFromLifecycle(event);
         },
         executeTool: (options_) => {
             const startTs = Date.now();
