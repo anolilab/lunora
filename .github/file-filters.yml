@@ -66,6 +66,13 @@ api_surface:
 frontend_lintable:
     - "**/*.[tj]{s,sx}"
     - "**/*.{cts,mts,cjs,mjs}"
+    # eslint (`packages/auth-ui/eslint.config.js`), `lint:types` (vue-tsc /
+    # svelte-check) and prettier (prettier-plugin-svelte, and `vis.config.ts`
+    # formats md/mdx) all cover these, so a PR touching only them must not skip
+    # the three jobs that check them.
+    - "**/*.{vue,svelte,astro}"
+    - "**/*.{css,html}"
+    - "**/*.{md,mdx}"
     - "**/tsconfig*.json"
     - "**/package.json"
     # A project.json decides whether eslint runs a project at all — an nx-shaped
