@@ -957,7 +957,7 @@ toggleButton.addEventListener("click", () => {
 // Live demo: the message count of a demo channel re-renders on every delta.
 const count = document.querySelector<HTMLSpanElement>("#lw-count")!;
 
-client.onUpdate(api.messages.list, { channelId: "channel:demo" }, (result) => {
+client.subscribe(api.messages.list, { channelId: "channel:demo" }, (result) => {
     count.textContent = String(result.messages.length);
 });
 `;

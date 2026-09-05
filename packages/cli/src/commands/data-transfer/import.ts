@@ -18,7 +18,7 @@ import { createImportBatcher } from "./import-batcher";
 import { createRowTransformer } from "./import-rows";
 import type { ImportSource, ImportSourceName } from "./import-source";
 import { readConvexExport, resolveImportSource } from "./import-source";
-import { checkRowParity, reportStorageOutcome, reportUntransferredPaths } from "./import-verify";
+import { checkRowParity, reportStorageOutcome, reportUntransferredPaths, UNRESOLVED_REPORT_LIMIT } from "./import-verify";
 import type { StreamingFetchLike } from "./shared";
 import { IMPORT_ENDPOINT_PATH } from "./shared";
 import { readFirestoreExport } from "./sources/firebase";
@@ -117,10 +117,16 @@ interface ImportSummary {
     inserted: Record<string, number>;
     received: number;
     storage?: {
+        /** Up to {@link UNRESOLVED_REPORT_LIMIT} distinct references — a sample, not the whole set. See `ambiguousTotal`. */
         ambiguous: StorageRemapReport["ambiguous"];
+        /** How many DISTINCT `(table, column, storageId)` references were ambiguous. */
+        ambiguousTotal: number;
         blobs: number;
         rewritten: number;
+        /** Up to {@link UNRESOLVED_REPORT_LIMIT} distinct references — a sample, not the whole set. See `unmigratedTotal`. */
         unmigrated: StorageRemapReport["unmigrated"];
+        /** How many DISTINCT `(table, column, storageId)` references resolved to no migrated blob. */
+        unmigratedTotal: number;
     };
     warnings?: string[];
 }
@@ -216,9 +222,22 @@ const buildImportBody = (totals: ImportTotals, storageIdMap: Map<string, string>
         ...(totals.failed.length > 0 ? { failed: totals.failed } : {}),
         inserted: totals.inserted,
         received: totals.received,
+        // A SAMPLE plus the totals, never the whole arrays: an unmapped 200k-row
+        // import produced tens of thousands of distinct references and pushed a
+        // multi-megabyte blob through one `logger.info`, burying the summary the
+        // display cap exists to protect. The `*Total` fields carry the real counts.
         ...(storageIdMap === undefined
             ? {}
-            : { storage: { ambiguous: report.ambiguous, blobs: storageIdMap.size, rewritten: report.rewritten, unmigrated: report.unmigrated } }),
+            : {
+                  storage: {
+                      ambiguous: report.ambiguous.slice(0, UNRESOLVED_REPORT_LIMIT),
+                      ambiguousTotal: report.ambiguous.length,
+                      blobs: storageIdMap.size,
+                      rewritten: report.rewritten,
+                      unmigrated: report.unmigrated.slice(0, UNRESOLVED_REPORT_LIMIT),
+                      unmigratedTotal: report.unmigrated.length,
+                  },
+              }),
         ...(totals.warnings.length > 0 ? { warnings: totals.warnings } : {}),
     };
 };
@@ -539,13 +558,23 @@ const runStoragePhase = async (
         const transferredPaths = await runForeignStorageTransfer(context, source, options, cwd);
 
         return transferredPaths === undefined ? undefined : { transferredPaths };
-    } catch {
-        // The transfer already reported which object failed and that the
-        // checkpoint is saved. Rows are deliberately NOT imported after a
-        // partial transfer: every path column would point at an object that is
-        // not there yet, which is the dangling reference the files-first
-        // ordering exists to prevent.
-        options.logger.error("no rows were imported — fix the transfer and re-run; it will resume where it stopped");
+    } catch (error: unknown) {
+        // The error is REPORTED, not discarded. Only one throw site inside the
+        // transfer logs before rethrowing (the per-object failure); every other
+        // reachable one — a bucket list refused because the anon key was supplied
+        // instead of the service-role key, an unreachable project URL — arrived
+        // here silently and the whole output became one fixed line, destroying the
+        // diagnostic that named the cause.
+        options.logger.error(`storage transfer failed: ${error instanceof Error ? error.message : String(error)}`);
+
+        // Rows are deliberately NOT imported after a partial transfer: every path
+        // column would point at an object that is not there yet, which is the
+        // dangling reference the files-first ordering exists to prevent.
+        //
+        // The re-run advice does not promise a checkpoint: a failure before the
+        // first object moved has none to resume from, and the old wording told the
+        // operator to expect one anyway.
+        options.logger.error("no rows were imported — fix the error above and re-run; objects that did transfer are checkpointed and will be skipped");
 
         return undefined;
     }

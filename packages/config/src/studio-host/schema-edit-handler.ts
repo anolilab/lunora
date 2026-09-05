@@ -19,14 +19,13 @@
 import { existsSync, readFileSync } from "node:fs";
 
 import type { CodegenOptions } from "@lunora/codegen";
-import { CodegenDiagnosticError, runCodegen } from "@lunora/codegen";
 
 import join from "../path";
 import type { ApplyFailureReason, SchemaEdit } from "../schema-edit/mutate";
 import { applyAdditiveEdit, classifyEdit } from "../schema-edit/mutate";
 import type { ParseSchemaResult, SchemaTable } from "../schema-edit/parse";
 import { parseSchema } from "../schema-edit/parse";
-import { studioCodegenOptions } from "./codegen-options";
+import { runStudioCodegen } from "./codegen-options";
 import writeFileAtomic from "./write-atomic";
 
 /**
@@ -146,17 +145,14 @@ const handlePost = (request: SchemaEditRequest, schemaPath: string): SchemaEditR
 
     writeFileAtomic(schemaPath, applied.text);
 
-    // Re-run codegen so the generated types + DO shape follow the new source.
-    let diagnostics: ReadonlyArray<string> = [];
+    // Re-run codegen so the generated types + DO shape follow the new source —
+    // unless the codegen switch is off, which `runStudioCodegen` owns.
+    let diagnostics: ReadonlyArray<string>;
 
     try {
-        runCodegen(studioCodegenOptions(request));
+        diagnostics = runStudioCodegen(request);
     } catch (error: unknown) {
-        if (error instanceof CodegenDiagnosticError) {
-            diagnostics = [error.message];
-        } else {
-            return { body: { error: error instanceof Error ? error.message : String(error), ok: false }, status: 500 };
-        }
+        return { body: { error: error instanceof Error ? error.message : String(error), ok: false }, status: 500 };
     }
 
     const parsed = parseSchema(applied.text);

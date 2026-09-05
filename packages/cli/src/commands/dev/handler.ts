@@ -1103,6 +1103,10 @@ const startStudioBestEffort = async (
 
     try {
         return await (options.startStudio ?? startStudioServer)({
+            // The studio's schema-edit / policy-scaffold endpoints regenerate
+            // in-process, so they need the SAME apiSpec this run's own codegen uses
+            // — codegen deletes the spec file its mode does not name.
+            apiSpec: options.apiSpec,
             cwd,
             logger: {
                 warnOnce: (message) => {
@@ -1395,6 +1399,30 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     }
 };
 
+/**
+ * The three negatable `lunora dev` booleans, mapped from parsed cerebro options
+ * onto {@link DevCommandOptions}.
+ *
+ * cerebro parses `--no-codegen` / `--no-studio` / `--no-worker` as the negation
+ * of the positive boolean (the runtime key drops the `no-` prefix), so a passed
+ * flag arrives as `false` and an absent one as `undefined` — which every reader
+ * treats as "on" via `!== false`.
+ *
+ * All three map here, in one place returning the whole slice, because this is
+ * exactly what went wrong: the mapping was written per flag and `worker` was
+ * never added, so `--no-worker` was declared, documented and forwarded to the
+ * daemon while the foreground path always spawned `wrangler dev` anyway — and
+ * the documented monorepo recipe died with `EADDRINUSE`. A slice-shaped mapper
+ * makes a missing key a type error rather than a silent no-op.
+ */
+const negatableDevFlags = (options: Pick<DevOptions, "codegen" | "studio" | "worker">): Pick<DevCommandOptions, "codegen" | "studio" | "worker"> => {
+    return {
+        codegen: options.codegen === false ? false : undefined,
+        studio: options.studio === false ? false : undefined,
+        worker: options.worker === false ? false : undefined,
+    };
+};
+
 /** `lunora dev` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ argument, cwd, logger, options }) => {
     const json = options.json === true;
@@ -1449,19 +1477,15 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
 
     return runDevCommand({
         apiSpec: parseApiSpec(options.apiSpec),
-        // cerebro parses `--no-codegen`/`--no-studio` as the negation of the
-        // `codegen`/`studio` booleans (runtime key drops the `no-` prefix), so a
-        // passed flag arrives as `false`, absent as `true` (the option default).
-        codegen: options.codegen === false ? false : undefined,
         cwd,
         emitBindings: options.emitBindings,
         jsonLogs,
         logger,
         port: options.port,
         remote,
-        studio: options.studio === false ? false : undefined,
         target: options.target,
         workerPort: options.workerPort,
+        ...negatableDevFlags(options),
     });
 });
 
@@ -1471,4 +1495,4 @@ export type { DevCommandOptions, DevCommandPlan, DevRemotePlan, WorkerProcess, W
 // planning surface (`planDevCommand` and friends) stays importable from one module.
 export type { DevFlavor } from "./lifecycle";
 export { detectDevFlavor } from "./lifecycle";
-export { defaultWorkerSpawner, planDevCommand, resolveWorkerPort, runDevCommand };
+export { defaultWorkerSpawner, negatableDevFlags, planDevCommand, resolveWorkerPort, runDevCommand };

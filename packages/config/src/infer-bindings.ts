@@ -85,6 +85,11 @@ const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
 // pipelines binding hint. So detect the `ctx.pipelines` access directly,
 // mirroring the codegen feature probe.
 const CTX_PIPELINES_PATTERN = /\bctx\s*\.\s*pipelines\b/;
+// R2 SQL is the same shape as pipelines: `@lunora/bindings/r2sql` is codegen-wired
+// onto ActionCtx, so apps reach it as `ctx.r2sql` and never import the subpath.
+// Its three `R2_SQL_*` secrets had neither a flag nor a registry entry, so
+// `ctx.r2sql` failed silently on the deployed worker.
+const CTX_R2SQL_PATTERN = /\bctx\s*\.\s*r2sql\b/;
 const TYPE_ONLY_IMPORT_PATTERN = /^\s*import\s+type\b/;
 
 /**
@@ -199,12 +204,20 @@ const CAPABILITY_SOURCES = {
     usesImages: { pattern: /\bfrom\s+["']@lunora\/bindings\/images["']/, source: "@lunora/bindings/images" },
     usesKv: { pattern: /\bfrom\s+["']@lunora\/bindings\/kv["']/, source: "@lunora/bindings/kv" },
     usesMail: { pattern: /\bfrom\s+["']@lunora\/mail["']/, source: "@lunora/mail" },
+    // No Cloudflare binding of its own — like `@lunora/mail`, this exists so the
+    // package's declared secrets (the VAPID trio + the two FCM keys) reach
+    // `.dev.vars.example` and the missing-secret pre-flight. `packageNamesFromBindings`
+    // can only emit a source named here, so without this entry those five were
+    // declared and consumed by nothing.
+    usesNotify: { pattern: /\bfrom\s+["']@lunora\/notify["']/, source: "@lunora/notify" },
     usesPayment: { pattern: /\bfrom\s+["']@lunora\/payment["']/, source: "@lunora/payment" },
     // Keyed off the `ctx.pipelines` access (not an import) — see CTX_PIPELINES_PATTERN.
     // Pipelines is codegen-wired onto ActionCtx, so apps reach it via `ctx.pipelines`
     // rather than importing `@lunora/bindings/pipelines`; `source` names that subpath
     // for the hint message.
     usesPipelines: { pattern: CTX_PIPELINES_PATTERN, source: "@lunora/bindings/pipelines" },
+    // Keyed off the `ctx.r2sql` access, not an import — see CTX_R2SQL_PATTERN.
+    usesR2sql: { pattern: CTX_R2SQL_PATTERN, source: "@lunora/bindings/r2sql" },
     usesScheduler: { pattern: /\bfrom\s+["']@lunora\/scheduler["']/, source: "@lunora/scheduler" },
     usesStorage: { pattern: /\bfrom\s+["']@lunora\/storage["']/, source: "@lunora/storage" },
     // x402 rails are opt-in add-on subpaths (not part of the `lunorash` umbrella),
@@ -428,6 +441,7 @@ const capabilitiesFromSource = (code: string): Capabilities => {
         needsD1: ENV_DB_PATTERN.test(code),
         usesAi: ENV_AI_PATTERN.test(code),
         usesPipelines: CTX_PIPELINES_PATTERN.test(code),
+        usesR2sql: CTX_R2SQL_PATTERN.test(code),
     });
 };
 

@@ -30,7 +30,17 @@ type PackageManagerProbe = (manager: PackageManager) => boolean;
 
 const isManagerInstalled: PackageManagerProbe = (manager) => {
     try {
-        return spawnSync(manager, ["--version"], { stdio: "ignore", timeout: 5000 }).status === 0;
+        // `shell` on Windows is not optional: the package managers are `.cmd`
+        // shims that `spawnSync` cannot start directly since Node's
+        // CVE-2024-27980 hardening, so without it every probe threw and the catch
+        // reported `false` — `detectInstalledManagers()` was always `[]`, which
+        // silently skipped `init`'s install prompt and made `detectPackageManager`
+        // throw for a fresh directory. The same fix, for the same reason, is
+        // spelled out in `./post-codegen-hook` and the CLI's `util/spawn`.
+        //
+        // `manager` is one of four literals from INSTALL_PREFERENCE, never
+        // user-supplied, so the shell carries nothing to quote.
+        return spawnSync(manager, ["--version"], { shell: process.platform === "win32", stdio: "ignore", timeout: 5000 }).status === 0;
     } catch {
         return false;
     }

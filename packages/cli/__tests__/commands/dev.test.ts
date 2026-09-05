@@ -6,7 +6,7 @@ import { readDevServerState, writeDevServerState } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DevCommandOptions } from "../../src/commands/dev/handler";
-import { defaultWorkerSpawner, detectDevFlavor, planDevCommand, resolveWorkerPort, runDevCommand } from "../../src/commands/dev/handler";
+import { defaultWorkerSpawner, detectDevFlavor, negatableDevFlags, planDevCommand, resolveWorkerPort, runDevCommand } from "../../src/commands/dev/handler";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {
@@ -86,6 +86,27 @@ describe("lunora dev", () => {
             expect.assertions(1);
 
             expect(planDevCommand({ cwd: workdir, logger: silentLogger() }).workerEnabled).toBe(true);
+        });
+
+        it("maps every negatable flag off the parsed options, --no-worker included", () => {
+            expect.assertions(2);
+
+            // The command mapped `codegen` and `studio` and silently omitted
+            // `worker`, so `--no-worker` — declared, documented and forwarded to the
+            // daemon — was inert on the foreground path: `lunora dev` spawned its own
+            // `wrangler dev` and the externally-owned one died with EADDRINUSE.
+            expect(negatableDevFlags({ codegen: false, studio: undefined, worker: false })).toStrictEqual({
+                codegen: false,
+                studio: undefined,
+                worker: false,
+            });
+
+            // An absent flag stays `undefined` — every reader treats that as "on".
+            expect(negatableDevFlags({ codegen: undefined, studio: undefined, worker: undefined })).toStrictEqual({
+                codegen: undefined,
+                studio: undefined,
+                worker: undefined,
+            });
         });
 
         it("adds a framework redirect hint (wrangler plan unchanged) in a Vite project", () => {

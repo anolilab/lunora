@@ -1,8 +1,10 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
+import type { CodegenResult } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
 
+import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import { renderCodegenHint } from "../../util/codegen-error";
@@ -41,6 +43,13 @@ interface VerifyCommandOptions {
     logger: Logger;
     /** Injectable subprocess runner for the tsc step; defaults to the real spawner. */
     spawner?: Spawner;
+
+    /**
+     * Fail on ERROR-level codegen advisories. `undefined` leaves the CI-vs-local
+     * default (`resolveStrictAdvisories`) in charge, exactly as for `codegen`,
+     * `prepare`, `build` and `deploy`.
+     */
+    strictAdvisories?: boolean;
 
     /**
      * Deploy target the drift gate's snapshot is emitted for. Defaults to
@@ -106,6 +115,29 @@ const probeHealthIfRequested = async (options: VerifyCommandOptions, logger: Log
     }
 
     return probe.error;
+};
+
+/**
+ * The blocking-advisory error for this run, or `undefined` when nothing blocks.
+ *
+ * ERROR-level advisories mean the call throws at runtime, and `verify` is the
+ * documented pre-deploy gate — it already runs the other two gates a codegen run
+ * produces (the platform diagnostics and the schema-drift gate). Nothing read
+ * `codegen.advisories`, so verify went green on exactly the projects `prepare`
+ * and `deploy` refuse. Same opt-out and same CI-on/local-off default as every
+ * other caller (`resolveStrictAdvisories`).
+ */
+const blockingAdvisoryError = (advisories: CodegenResult["advisories"], options: VerifyCommandOptions): string | undefined => {
+    const { errorAdvisories, names, shouldBlock } = evaluateAdvisoryGate(advisories, resolveStrictAdvisories(options));
+
+    if (!shouldBlock) {
+        return undefined;
+    }
+
+    return (
+        `${errorAdvisories.length.toString()} ERROR-level ${errorAdvisories.length === 1 ? "advisory" : "advisories"} (${names.join(", ")}). ` +
+        `Pass --no-strict-advisories to downgrade this to a warning and continue.`
+    );
 };
 
 /** Log the collected errors/warnings and build the command result. */
@@ -201,6 +233,12 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
         errors.push(...platform.errors);
         warnings.push(...platform.warnings);
 
+        const advisoryError = blockingAdvisoryError(codegen.advisories, options);
+
+        if (advisoryError !== undefined) {
+            errors.push(advisoryError);
+        }
+
         const gate = runSchemaDriftGate({ allowDrift: options.allowSchemaDrift === true, codegen, command: "verify", logger, readOnly: true });
 
         if (gate.blocked) {
@@ -250,6 +288,7 @@ const execute: CommandHandler<VerifyOptions> = defineHandler<VerifyOptions>(asyn
         format: options.format,
         healthUrl: options.healthUrl,
         logger,
+        strictAdvisories: options.strictAdvisories,
         target: options.target,
         // `--no-typecheck` is declared as a `no-*` option but cerebro exposes it
         // under the negated `typecheck` key (false when passed, true when absent).
