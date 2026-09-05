@@ -161,6 +161,36 @@ describe("discover/workflows", () => {
         expect(discoverWorkflows(newProject(), workdir)[0]?.steps).toEqual([{ line: 7, method: "do", name: "seed" }]);
     });
 
+    it("omits the framework-minted step names of ctx.runStep and ctx.waitForEvent", () => {
+        expect.assertions(1);
+
+        // The documented scope boundary of the advisor's duplicate-step-name lint,
+        // made executable. `ctx.runStep(stepDef)` resolves its durable step name to
+        // `options?.name ?? step.name` and `ctx.waitForEvent(eventDef)` to
+        // `options?.name ?? \`event:\${event.type}\``, both from a definition in
+        // another file — the receiver here is `ctx`, not `.step`, so neither
+        // reaches the feeder and neither can reach the lint. That is affordable
+        // rather than a hole: the engine caches a step under its name AND its
+        // occurrence number within the run, so a repeated wait gets occurrence 2
+        // and genuinely waits instead of replaying the first payload.
+        writeWorkflows(`
+            import { defineWorkflow } from "@lunora/workflow";
+            import { chargeStep } from "./steps";
+            import { orderApproved } from "./events";
+
+            export const approvals = defineWorkflow({
+                handler: async (ctx) => {
+                    await ctx.step.do("open", () => undefined);
+                    await ctx.waitForEvent(orderApproved);
+                    await ctx.runStep(chargeStep, {});
+                    await ctx.waitForEvent(orderApproved);
+                },
+            });
+        `);
+
+        expect(discoverWorkflows(newProject(), workdir)[0]?.steps).toEqual([{ line: 8, method: "do", name: "open" }]);
+    });
+
     it("ignores non-defineWorkflow exports and unexported definitions", () => {
         expect.assertions(1);
 
