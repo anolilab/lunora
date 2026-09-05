@@ -688,6 +688,24 @@ interface ShapeMemo {
      * opens is always empty.
      */
     delivered?: number;
+
+    /**
+     * This shape computed rows that were never handed to the socket — the send
+     * threw mid-poke, or the resolve/diff itself threw before one could be built.
+     * `cursor` is left where it was in that case, so the range is still owed.
+     *
+     * It exists because leaving `cursor` alone is not enough on its own: the very
+     * next flush on an UNRELATED table finds the shape absent from `changed` and
+     * force-advances `cursor` straight past the owed range, while `delivered`
+     * stays behind — so the re-poke never happens AND the poke after it stamps a
+     * `baseCheckpoint` the client agrees with, passing its gap check over a view
+     * that is permanently missing rows. While this is set,
+     * {@link ShardDO.collectShapePokeParts} diffs the shape unconditionally
+     * instead, the op-log equivalent of the `.global()` poll loop's
+     * `tick.requestResync()`. Cleared by {@link ShardDO.recordShapeMemo}, i.e. by
+     * any advance — a delivered poke, or a diff that came back genuinely empty.
+     */
+    owed?: boolean;
 }
 
 /**
@@ -5784,9 +5802,12 @@ abstract class ShardDO {
 
         // Reserved admin-introspection RPCs are intercepted before user
         // dispatch — they read raw SQLite directly rather than running a
-        // registered function, and carry their own bearer-token gate.
+        // registered function, and carry their own bearer-token gate. Run under
+        // their own request scope: this branch returns before `beginDispatch`, so
+        // without it the admin plane inherits whatever a concurrent `/rpc` left on
+        // `this`. See {@link ShardDO.withAdminRequestScope}.
         if (payload.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-            return this.handleAdminRpc(request, payload.functionPath, payload.args ?? {});
+            return await this.withAdminRequestScope(async () => await this.handleAdminRpc(request, payload.functionPath, payload.args ?? {}));
         }
 
         // Stash the inbound D1 bookmark and identity headers for the
@@ -7610,6 +7631,10 @@ abstract class ShardDO {
      * overwritten here for the duration of the dispatch and restored after, so
      * the forge can't leak into a later request. The target path is validated to
      * be a non-admin function, so it can't be used to re-enter the admin plane.
+     * And the dispatch runs under the admin plane's own request scope
+     * ({@link ShardDO.withAdminRequestScope}) — the identity is the only thing
+     * forged here, never the system flag or the mutation-replay fields, which
+     * would otherwise be whatever a concurrent `/rpc` happened to leave behind.
      *
      * Callers: the studio surfaces it behind a loopback-dev gate (`runAsIdentity`),
      * and `lunora run --as` dispatches through it from the CLI. That gate was
@@ -7878,6 +7903,56 @@ abstract class ShardDO {
         const result = await this.evaluateFlags(context);
 
         return adminResponse(result);
+    }
+
+    /**
+     * Run the admin plane's `run()` under its OWN per-request scope, restoring
+     * whatever was there on the way out.
+     *
+     * The admin branch of `fetch` returns before `beginDispatch`, so every field
+     * that call would have stamped is left holding the last `/rpc`'s values. Two
+     * of them are load-bearing. `currentRequestSystem` is the flag the generated
+     * `handleRpc` gates `internal` functions on (`registered.visibility ===
+     * "internal" && !this.isSystemDispatch()`), and `runAs` dispatches straight
+     * through that gate — so an `x-lunora-system: 1` request that is parked on an
+     * await while an admin call arrives lends it the system bit. The replay fields
+     * (`currentRequestMutationId` / `currentRequestClientId` / `currentMutatorClass`)
+     * are the other: `commitMutationBookkeeping` reads them off `this`, so a
+     * mutation dispatched through `runAs` could commit a dedup row and advance a
+     * client watermark under the parked request's identity.
+     *
+     * Restoring rather than clearing on exit is deliberate: an admin call is a
+     * guest on a thread another dispatch may own, and clearing would take that
+     * dispatch's scope with it. (The `/rpc` tail re-pins its own scope after every
+     * await regardless — see `captureRequestScope`'s call site.)
+     *
+     * The gate is the admin bearer token either way, which already permits
+     * `runSql`/`writeRow`/`clearTable`; this closes a gate that does not hold, not
+     * a path past the trust boundary.
+     */
+    private async withAdminRequestScope<R>(run: () => Promise<R>): Promise<R> {
+        const previousScope = this.captureRequestScope();
+        const previousIdentity = this.currentRequestIdentity;
+        const previousBookkeeping = this.mutationBookkeeping;
+
+        this.currentRequestBookmark = undefined;
+        this.currentResponseBookmark = undefined;
+        this.currentRequestUserId = undefined;
+        this.currentRequestIdentity = undefined;
+        this.currentRequestClientId = undefined;
+        this.currentRequestClientSeq = undefined;
+        this.currentRequestMutationId = undefined;
+        this.currentMutatorClass = undefined;
+        this.mutationBookkeeping = undefined;
+        this.currentRequestSystem = false;
+
+        try {
+            return await run();
+        } finally {
+            this.restoreRequestScope(previousScope);
+            this.currentRequestIdentity = previousIdentity;
+            this.mutationBookkeeping = previousBookkeeping;
+        }
     }
 
     /**
@@ -9978,9 +10053,10 @@ abstract class ShardDO {
      * {@link ShardDO.refreshSubscriptions}, called alongside it from
      * {@link ShardDO.flushChangedTables}. For each socket (bounded fan-out, same
      * concurrency + `awaitWsDrain` backpressure as the subscription path) it
-     * resolves each shape under the socket's identity, diffs only the shapes
-     * whose table changed in `(memoCursor, frameCursor]`, and emits one poke
-     * carrying a part per changed shape. No-op when no socket holds a shape.
+     * resolves each shape under the socket's identity, diffs the shapes whose
+     * table changed in `(memoCursor, frameCursor]` — plus any still owing rows an
+     * earlier flush failed to deliver — and emits one poke carrying a part per
+     * changed shape. No-op when no socket holds a shape.
      */
     private async pokeShapeSubscribers(changed: Set<string>, frameCursor: number | undefined, frameEpoch: string | undefined): Promise<void> {
         const sockets = [...this.runner.sockets()];
@@ -10045,6 +10121,14 @@ abstract class ShardDO {
                 // advance only after the poke lands; a failed send leaves their memos
                 // so the next flush re-emits the rows.
                 if (parts.length > 0) {
+                    // Marked owed BEFORE the send, not after a failure: `awaitWsDrain`
+                    // and `sendPoke` can both throw out to the socket-level catch
+                    // below, and a shape that owes rows must not be left looking
+                    // settled on the way out. `recordShapeMemo` clears it on delivery.
+                    for (const subId of partAdvanced) {
+                        this.markShapeOwed(ws, subId);
+                    }
+
                     await awaitWsDrain(ws);
 
                     if (this.sendPoke(ws, parts, checkpoint, frameEpoch, undefined)) {
@@ -10160,10 +10244,16 @@ abstract class ShardDO {
      * the results into the poke parts to send and the per-shape memo advances. A
      * `.global()` shape (driven by the alarm poll loop, not this flush) and a shape
      * whose table didn't change are skipped; a shape whose resolve/diff throws is
-     * counted and logged via `recordSubscriptionRefreshError` (DO-01) and skipped
-     * with its memo unadvanced so a later flush retries. Empty diffs advance
+     * counted and logged via `recordSubscriptionRefreshError` (DO-01) and marked
+     * owed with its memo unadvanced so a later flush retries. Empty diffs advance
      * unconditionally; part-bearing shapes advance only once the caller confirms
      * the poke was delivered.
+     *
+     * A shape that owes rows — or whose memo this wake has not established at all
+     * — is diffed even when its table is absent from `changed`. That is the op-log
+     * counterpart of `tick.requestResync()` on the `.global()` poll path, and
+     * without it an undelivered range is skipped rather than retried; see
+     * {@link ShapeMemo.owed}.
      */
     private collectShapePokeParts(
         ws: ShardSocketLike,
@@ -10202,7 +10292,21 @@ abstract class ShardDO {
                 // with no error, no metric, and nothing to grep. Every flush
                 // advances every shape now, so a cursor lags only by the flushes
                 // that genuinely could not settle.
-                if (!changed.has(resolved.table)) {
+                // …with one exception, and it is the whole reason this is a
+                // condition rather than a plain `changed.has`. "Empty WITHOUT
+                // reading the log" only holds while the memo is known to cover
+                // everything before this flush. It does not when the shape still
+                // owes rows a previous flush computed but never delivered
+                // ({@link ShapeMemo.owed}), and it cannot be known at all when
+                // there is no in-memory memo yet — a hibernation eviction drops
+                // `owed` with the rest of the map, and the durable cursor alone
+                // cannot say whether the wake before it settled. Either way, take
+                // one unconditional diff pass instead of advancing: a re-scan of a
+                // range the client already has costs a probe, while skipping one it
+                // does not is a silently incomplete view for the life of the socket.
+                const memo = this.shapeMemos.get(ws)?.get(subId);
+
+                if (memo !== undefined && memo.owed !== true && !changed.has(resolved.table)) {
                     emptyAdvanced.push(subId);
 
                     continue;
@@ -10231,6 +10335,15 @@ abstract class ShardDO {
                 // `metrics.subscriptionRefreshErrors` and the structured
                 // telemetry event — not just the socket-level failures that
                 // escape this loop entirely.
+                //
+                // Marked owed for the same reason a failed send is: the memo did
+                // not advance, so the range this pass gave up on is unscanned, and
+                // the next flush on another table would otherwise advance straight
+                // over it. A shape that keeps throwing now retries every flush
+                // rather than only the ones touching its table — louder, but a
+                // shape that cannot resolve is already an error on every flush that
+                // does touch it.
+                this.markShapeOwed(ws, subId);
                 this.recordSubscriptionRefreshError(`${ADMIN_FUNCTION_PREFIX}pokeShapeSubscribers`, error, { subId });
             }
         }
@@ -11003,6 +11116,12 @@ abstract class ShardDO {
      * handed to the socket, `false` when a send threw mid-poke (the socket closed)
      * — callers must NOT advance their shape baselines on a `false` so the client
      * re-receives the rows on its next flush/reconnect instead of losing them.
+     *
+     * A `false` can leave a `pokeStart` on the wire with no `pokeEnd` behind it
+     * (the throw is per frame). That is safe by construction on the client: parts
+     * are buffered and applied only at `pokeEnd`, so an abandoned poke leaves the
+     * view untouched, and `handlePokeStart` evicts the oldest buffer once the map
+     * exceeds its cap — the abandoned ones are always the oldest.
      */
     private sendPoke(
         ws: ShardSocketLike,
@@ -11081,6 +11200,9 @@ abstract class ShardDO {
         // See {@link ShapeMemo.delivered}.
         const delivered = carriedRows ? cursor : memos.get(subId)?.delivered;
 
+        // The replacement drops `owed` (see {@link ShapeMemo.owed}), which is the
+        // point: both callers advance `cursor` past the range that was owed, either
+        // by delivering it or by finding it genuinely empty.
         memos.set(subId, { cursor, ...(delivered === undefined ? {} : { delivered }) });
         // A fan-out passes `pending` so one flush upserts every socket's baseline
         // instead of each poke issuing its own statement. Everything else writes
@@ -11091,6 +11213,24 @@ abstract class ShardDO {
             this.saveShapePokeCursor(connectionId, subId, cursor);
         } else if (connectionId !== "") {
             options.pending.push({ connectionId, cursor, subId });
+        }
+    }
+
+    /**
+     * Flag a shape as owing rows it computed but never delivered, so the next
+     * flush diffs it unconditionally instead of force-advancing its cursor past
+     * the range. See {@link ShapeMemo.owed}.
+     *
+     * Deliberately does NOT create a memo entry when there is none: a missing
+     * entry already forces the same unconditional pass in
+     * {@link ShardDO.collectShapePokeParts}, and inventing a cursor here would be
+     * guessing at a baseline the durable row can answer for real.
+     */
+    private markShapeOwed(ws: ShardSocketLike, subId: string): void {
+        const memo = this.shapeMemos.get(ws)?.get(subId);
+
+        if (memo !== undefined) {
+            memo.owed = true;
         }
     }
 
