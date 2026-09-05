@@ -786,7 +786,9 @@ const walk = (dir) => {
         if (entry.isDirectory()) { walk(full); continue; }
         if (!/\.(ts|tsx|js|mjs)\$/.test(entry.name)) continue;
 
-        const source = fs.readFileSync(full, 'utf8');
+        // Strip comments first: this is a text match, so a handler named only in
+        // prose ('forwards app.queue too') would otherwise satisfy it.
+        const source = fs.readFileSync(full, 'utf8').replace(/\\/\\*[\\s\\S]*?\\*\\//g, '').replace(/\\/\\/.*$/gm, '');
 
         // Only a hand-built default export that delegates to the composed worker.
         // \`export default app\` forwards everything already. The delegate's name
