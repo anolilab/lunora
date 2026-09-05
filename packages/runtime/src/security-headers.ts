@@ -183,6 +183,10 @@ const DEFAULT_CORS_HEADERS = [
     "X-Lunora-Client-Seq",
     "X-Lunora-Min-Seq",
     "X-Lunora-Mutation-Id",
+    // The REST surface's documented header form of `?shardKey=` (`rest-routes.ts`
+    // reads it). Omitted, a browser SPA on an allowlisted origin that picked the
+    // header over the query parameter was blocked at preflight.
+    "X-Lunora-Shard-Key",
 ];
 
 const DEFAULT_CORS_METHODS = ["DELETE", "GET", "HEAD", "PATCH", "POST", "PUT"];

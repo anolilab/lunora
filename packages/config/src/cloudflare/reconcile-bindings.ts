@@ -190,12 +190,25 @@ interface ReconcileStep {
  * present so a wired-up project starts the dev server clean. Self-describing
  * bindings (browser/images/analytics) are auto-written instead; see reconcile.
  */
+/** The one Pipelines binding name codegen resolves — `emitPipelinesFragments`'s `env.PIPELINES` fallback, which has no `defineApp` override. */
+const PIPELINES_BINDING = "PIPELINES";
+
 const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: WranglerShape): string[] => {
     // A Flagship binding-mode provider needs a matching `flagship[]` entry; the
     // warning keys on the *binding name* (an app can wire several Flagship apps),
     // not array length, and carries the specific name + app_id remediation.
     const flagshipBindingMissing =
         inferred.flagshipBinding !== undefined && !(parsed?.flagship ?? []).some((entry) => entry.binding === inferred.flagshipBinding);
+
+    // Keyed on the binding NAME for the same reason Flagship is, and one more:
+    // codegen resolves ONE fixed name (`config.pipelines?.(env) ?? env.PIPELINES`)
+    // and `pipelines` has no `defineApp` override to point elsewhere. So a
+    // `{ "binding": "EVENTS" }` entry satisfies the array-length test and the
+    // wrangler validator while `ctx.pipelines.send()` still throws at runtime —
+    // with nothing before that ever naming PIPELINES. The KV and Hyperdrive
+    // rules above stay on length: those bindings are passed to `createKv()` /
+    // the Hyperdrive client by the app, so any name the app chose is correct.
+    const pipelinesBindingMissing = inferred.usesPipelines && !(parsed?.pipelines ?? []).some((entry) => entry.binding === PIPELINES_BINDING);
 
     const rules: ReadonlyArray<[boolean, string]> = [
         [
@@ -207,8 +220,8 @@ const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: Wrangle
             "@lunora/hyperdrive is used but no hyperdrive binding exists; run 'wrangler hyperdrive create' and add a 'hyperdrive' binding ({ binding, id }) — the id can't be auto-provisioned.",
         ],
         [
-            inferred.usesPipelines && (parsed?.pipelines?.length ?? 0) === 0,
-            "ctx.pipelines is used but no pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, pipeline }) — the pipeline resource can't be auto-provisioned.",
+            pipelinesBindingMissing,
+            `ctx.pipelines is used but no "${PIPELINES_BINDING}" pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding: "${PIPELINES_BINDING}", pipeline }) — codegen resolves this one name, and the pipeline resource can't be auto-provisioned.`,
         ],
         [
             flagshipBindingMissing,

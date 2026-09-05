@@ -1148,7 +1148,9 @@ const runCodegenStep = async (
         if (shouldBlock) {
             const message =
                 `${errorAdvisories.length.toString()} ERROR-level ${errorAdvisories.length === 1 ? "advisory" : "advisories"} (${names.join(", ")}). ` +
-                `Pass --no-strict-advisories to downgrade this to a warning and deploy anyway.`;
+                // Command-neutral: this pipeline is reached from `deploy`, `prepare`
+                // AND `build`, and all three now register the flag it names.
+                `Pass --no-strict-advisories to downgrade this to a warning and continue.`;
 
             logger.error(message);
 

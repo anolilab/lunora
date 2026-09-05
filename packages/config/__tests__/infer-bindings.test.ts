@@ -6,7 +6,7 @@ import { discoverSandboxUsage } from "@lunora/codegen";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { inferLunoraBindings } from "../src/infer-bindings";
+import { inferLunoraBindings, packageNamesFromBindings } from "../src/infer-bindings";
 
 const SCHEMA_WITH_GLOBAL = `import { defineSchema, defineTable, v } from "@lunora/server";
 
@@ -174,6 +174,27 @@ describe("inferLunoraBindings", () => {
         const result = await inferLunoraBindings({ projectRoot: root });
 
         expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+    });
+
+    it("binds a class the entry also names in a type-only IMPORT", async () => {
+        expect.assertions(1);
+
+        // `import { type ShardDO, createShardDO }` is the ordinary way to reach
+        // the generated class's type. The old detector was a whole-file
+        // `/\btype\s+ShardDO\b/` with no `export` anchor, so that import read as
+        // a type-only EXPORT and reconcile refused the SHARD binding — after
+        // which `wrangler-validator` failed the deploy telling the user "your
+        // dev server auto-reconciles this on startup", which is precisely what
+        // it had just declined to do.
+        write("wrangler.jsonc", WRANGLER);
+        write(
+            "src/server/index.ts",
+            `import type { ShardDO } from "../../lunora/_generated/shard.js";\nimport { type SchedulerDO, createShardDO } from "../../lunora/_generated/shard.js";\n\nexport const ShardDO = createShardDO({});\nexport const SchedulerDO = createShardDO({});\n\nexport default { fetch() { return new Response("ok"); } };\n`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding).toSorted((a, b) => a.localeCompare(b))).toEqual(["SCHEDULER", "SHARD"]);
     });
 
     it("infers D1 from an env.DB access even without a global schema", async () => {
@@ -731,6 +752,39 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         // No extra Cloudflare binding — mail secret lives in .dev.vars only.
         expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
         expect(result.signals.some((signal) => signal.includes("RESEND_API_KEY"))).toBe(true);
+    });
+
+    it("infers notify from a @lunora/notify import so its VAPID/FCM secrets reach the pre-flights", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/notify.ts", `import { defineNotify, webPushFromEnv } from "@lunora/notify";\nexport default defineNotify({ webPush: webPushFromEnv });`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        // `packageNamesFromBindings` is the ONLY producer feeding `requiredSecrets`,
+        // and it can only emit a CAPABILITY_SOURCES source — so with no notify entry
+        // the five secrets declared in `package-secrets-registry.ts` reached nothing:
+        // not `.dev.vars.example`, not the missing-secret pre-flight. Web Push then
+        // failed silently on the deployed worker.
+        expect(result.usesNotify).toBe(true);
+        expect(packageNamesFromBindings(result)).toContain("@lunora/notify");
+    });
+
+    it("infers r2sql from a ctx.r2sql access so its R2_SQL_* secrets reach the pre-flights", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        // `ctx.r2sql` is codegen-wired onto ActionCtx (nothing imports the subpath),
+        // exactly like `ctx.pipelines` — so the signal is the access, not an import.
+        write("lunora/reports.ts", `export const handler = (ctx) => ctx.r2sql.query("select 1");`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesR2sql).toBe(true);
+        expect(packageNamesFromBindings(result)).toContain("@lunora/bindings/r2sql");
     });
 
     it("does not infer mail for a project that does not import @lunora/mail", async () => {

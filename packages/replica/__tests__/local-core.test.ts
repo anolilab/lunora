@@ -261,6 +261,30 @@ describe(EventLog, () => {
         expect(page3.hasMore).toBe(false);
     });
 
+    it("getFrom rejects a limit that cannot make progress", () => {
+        expect.assertions(3);
+
+        const log = new EventLog();
+
+        log.append("a", null);
+
+        // `{ entries: [], hasMore: true }` is what these used to return, which
+        // spins a paginating caller on a page it can never advance past.
+        expect(() => log.getFrom(0, 0)).toThrow(RangeError);
+        expect(() => log.getFrom(0, -1)).toThrow(RangeError);
+        expect(() => log.getFrom(0, Number.NaN)).toThrow(RangeError);
+    });
+
+    it("append keeps an InputEvent's own timestamp", () => {
+        expect.assertions(1);
+
+        const log = new EventLog();
+
+        log.append({ payload: { n: 1 }, timestamp: 111, type: "a" });
+
+        expect(log.getSince(0)[0]?.timestamp).toBe(111);
+    });
+
     it("getFrom returns empty when fromSeq is beyond end", () => {
         expect.assertions(2);
 

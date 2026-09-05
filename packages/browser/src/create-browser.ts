@@ -362,8 +362,11 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
          * assets are legitimate and network-unreachable, so they pass), and it must
          * NOT do a per-request DNS lookup (a DoH query per sub-resource would be a
          * DoS footgun). It mirrors validateUrl's allowlist + `isPrivateHost` arms
-         * only. Returns `true` when the request should be aborted (fail-closed on an
-         * unparseable/private/off-allowlist http(s) host), `false` to continue.
+         * only — including the `allowPrivateTargets` gate on the latter, without
+         * which the route handler refuses the very sub-resources of the internal
+         * page it was registered to render. Returns `true` when the request should
+         * be aborted (fail-closed on an unparseable/private/off-allowlist http(s)
+         * host), `false` to continue.
          */
         const isBlockedSubresource = (rawUrl: string): boolean => {
             let parsed: URL;
@@ -371,7 +374,11 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
             try {
                 parsed = new URL(rawUrl);
             } catch {
-                return false;
+                // Fail closed, as the navigation sibling does. Playwright hands
+                // back an absolute URL so this is unreachable in practice, but
+                // the two guards must not diverge on the answer to "I could not
+                // tell what this is".
+                return true;
             }
 
             // Non-http(s) schemes (data:/blob:/about:) can't reach a network host.
@@ -387,7 +394,15 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
                 }
             }
 
-            return isPrivateHost(parsed.hostname);
+            // Gated on `allowPrivateTargets`, exactly as validateUrl's arm is.
+            // Ungated, the documented Tunnel config —
+            // `{ allowPrivateTargets: true, allowedHosts: ["dashboard.internal"] }`
+            // — navigated to the internal page successfully and then aborted
+            // every stylesheet, script and image the page loaded from that same
+            // allowlisted host, silently returning an unstyled render. The
+            // allowlist arm above is NOT relaxed by the flag, so an off-list
+            // private host (the metadata endpoint) is still refused.
+            return !allowPrivateTargets && isPrivateHost(parsed.hostname);
         };
 
         return withBrowser(async (browser) => {

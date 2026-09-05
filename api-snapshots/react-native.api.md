@@ -371,6 +371,10 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
+### `UseSignUpInvitationsOptions` (type)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
 ### `UseStreamOptions` (interface)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
@@ -580,6 +584,10 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `useRateLimit` (const)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
+### `useSignUpInvitations` (const)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 

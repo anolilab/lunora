@@ -525,3 +525,7 @@ export const createAuth = (options: LunoraAuthOptions): LunoraAuth => {
 
     return betterAuth(resolveAuthOptions(options));
 };
+
+// Re-exported for `audit-hooks.ts`, whose client-IP resolver must apply the same
+// gate — the two must not disagree about who a request came from.
+export { onCloudflareEdge };

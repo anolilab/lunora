@@ -7,6 +7,7 @@ interface MockClientHooks {
     asClient: LunoraClient;
     close: ReturnType<typeof vi.fn>;
     connectionStatus: ReturnType<typeof vi.fn>;
+    currentIdentity: ReturnType<typeof vi.fn>;
 
     /**
      * Manually push a value to active subscribers for `ref`. When `predicate` is
@@ -65,7 +66,18 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         };
     });
     const authListeners = new Set<(token: string | null) => void>();
-    const setAuthTokenFunction = vi.fn<(token: string | null) => void>((token: string | null) => {
+    // Mirrors the real client's identity fingerprint: the SUBJECT when one was
+    // supplied, else the token itself. A same-subject JWT refresh therefore
+    // changes the token (firing the listeners) without moving the identity —
+    // exactly the distinction consumers of `currentIdentity()` branch on.
+    let authSubject: string | null | undefined;
+    const setAuthTokenFunction = vi.fn<(token: string | null, subject?: string | null) => void>((token: string | null, subject?: string | null) => {
+        if (subject !== undefined) {
+            authSubject = subject;
+        } else if (token === null) {
+            authSubject = undefined;
+        }
+
         if (authToken === token) {
             return;
         }
@@ -77,6 +89,7 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         }
     });
     const getAuthTokenFunction = vi.fn<() => string | null>(() => authToken);
+    const currentIdentityFunction = vi.fn<() => string | null>(() => authSubject ?? authToken);
     const onAuthTokenChangeFunction = vi.fn<(listener: (token: string | null) => void) => Unsubscribe>(
         (listener: (token: string | null) => void): Unsubscribe => {
             authListeners.add(listener);
@@ -143,14 +156,19 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         action: actionFunction,
         close: closeFunction,
         connectionStatus: connectionStatusFunction,
+        currentIdentity: currentIdentityFunction,
         getAuthToken: getAuthTokenFunction,
         getCurrentUser: getCurrentUserFunction,
         mutation: mutationFunction,
         onAuthTokenChange: onAuthTokenChangeFunction,
         onConnectionStatus: onConnectionStatusFunction,
+        // The PUBLIC getter the hooks read (`client.isReady`), not the private
+        // `readyResolved` field behind it — this object is a plain literal cast
+        // to `LunoraClient`, so naming the backing field left every consumer
+        // reading `undefined` and the hydrated branch permanently untaken.
+        isReady: true,
         peekHydratedQuery: () => undefined,
         query: queryFunction,
-        readyResolved: true,
         setAuthToken: setAuthTokenFunction,
         setConnectionContext: setConnectionContextFunction,
         subscribe: subscribeFunction,
@@ -163,6 +181,7 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         asClient,
         close: closeFunction,
         connectionStatus: connectionStatusFunction,
+        currentIdentity: currentIdentityFunction,
         emit,
         emitError,
         getAuthToken: getAuthTokenFunction,

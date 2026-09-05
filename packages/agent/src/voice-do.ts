@@ -384,6 +384,17 @@ class VoiceSessionDO {
         if (this.controllers.has(attachment.connectionId)) {
             // A turn is already in flight — the client must `interrupt` before the
             // next utterance. Drop the overlapping trigger rather than interleave.
+            //
+            // Drop its AUDIO too, on a refused `commit`. The buffer holds whatever
+            // was captured since the in-flight turn was committed; leaving it
+            // means the next accepted `commit` drains it as a prefix and the
+            // transcript carries speech from a turn this socket explicitly
+            // refused. Nothing will ever transcribe it, so the only question is
+            // whether it corrupts the NEXT utterance.
+            if (frame.type === "commit") {
+                this.drainAudio(attachment.connectionId);
+            }
+
             this.send(ws, { message: "a turn is already in progress — send an interrupt before the next utterance", type: "error" });
 
             return;

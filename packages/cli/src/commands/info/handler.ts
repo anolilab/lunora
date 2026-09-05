@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import type { SchemaIR } from "@lunora/codegen";
 import { discoverSchema } from "@lunora/codegen";
@@ -9,7 +9,7 @@ import { findWranglerFile } from "@lunora/config/cloudflare";
 import { parse as parseJsonc } from "jsonc-parser";
 import { Project } from "ts-morph";
 
-import { deriveBindingManifest } from "../../util/binding-manifest-file";
+import { deriveBindingManifest, writeBindingManifestFile } from "../../util/binding-manifest-file";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
@@ -270,6 +270,25 @@ const renderText = (snapshot: InfoSnapshot, logger: Logger): void => {
  */
 const renderBindings = (options: { cwd: string; json: boolean; logger: Logger; out?: string }): { code: number } => {
     const { cwd, json, logger, out } = options;
+
+    // `--out` goes through the SAME writer `build --emit-bindings` and `lunora dev`
+    // use rather than re-deriving and re-serialising here. The hand-rolled copy
+    // returned before the under-provisioning warning both siblings emit, so the
+    // one caller most likely to be a machine — an IaC program consuming the
+    // manifest — was the only one never told which wrangler sections it does not
+    // model.
+    if (out !== undefined) {
+        const { error } = writeBindingManifestFile({ destination: out, logger, projectRoot: cwd });
+
+        if (error !== undefined) {
+            logger.error(error);
+
+            return { code: 1 };
+        }
+
+        return { code: 0 };
+    }
+
     const { error, manifest } = deriveBindingManifest(cwd);
 
     if (manifest === undefined) {
@@ -278,16 +297,6 @@ const renderBindings = (options: { cwd: string; json: boolean; logger: Logger; o
         logger.error(error ?? "could not derive the binding manifest");
 
         return { code: 1 };
-    }
-
-    if (out !== undefined) {
-        const target = isAbsolute(out) ? out : resolve(cwd, out);
-
-        mkdirSync(dirname(target), { recursive: true });
-        writeFileSync(target, `${JSON.stringify(manifest, undefined, 2)}\n`, "utf8");
-        logger.success(`binding manifest written to ${target}`);
-
-        return { code: 0 };
     }
 
     if (json) {

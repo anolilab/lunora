@@ -209,6 +209,25 @@ export const ERROR_CATALOG = {
      */
     ADMIN_FORBIDDEN: { status: 403, title: "Admin access forbidden" },
     ADMIN_TOKEN_NOT_CONFIGURED: { status: 400, title: "Admin token not configured" },
+
+    /**
+     * Deliberately NOT `internal`, unlike its 500 neighbours: the message is
+     * fixed configuration guidance that names no table, path or identifier, and
+     * redacting it to "Internal error" would strip the only thing this code
+     * exists to deliver. It is raised before any query runs, so there is no
+     * backend detail to leak.
+     */
+    AUTH_MIGRATOR_UNSUPPORTED: {
+        hint: [
+            "better-auth migrates only through its Kysely adapter, so `ensureMigrated` / `compileMigrationsSql` need the raw D1 binding as `database` — a custom adapter (`lunoraD1Adapter`, `lunoraAuthAdapter`, `lunoraDoAdapter`) cannot be migrated through, and neither can an absent `database`.",
+            "",
+            "Build a SECOND, migration-only instance over the raw binding — `createAuth({ ...options, database: env.DB })` — and hand that one to `ensureMigrated`. Keep the adapter on the instance that serves requests: the adapter exists to dodge a dev-runner hang in `$context`, which the migration instance never resolves.",
+            "",
+            "To compile the SQL off-platform (`compileMigrationsSql`), diff against an empty local database — `new DatabaseSync(':memory:')` from `node:sqlite` — rather than passing no `database` at all.",
+        ],
+        status: 500,
+        title: "Auth migrator cannot drive the configured database",
+    },
     AUTH_NOT_CONFIGURED: { status: 400, title: "Auth admin not configured" },
     AUTH_OP_NOT_SUPPORTED: { status: 400, title: "Auth admin operation not supported" },
     BACKUP_NOT_CONFIGURED: { status: 500, title: "Scheduled backup not configured" },

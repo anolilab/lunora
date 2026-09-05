@@ -26,6 +26,21 @@ const JOIN_KEYWORDS = {
     right: "RIGHT JOIN",
 } as const;
 
+/**
+ * `AND`-join conditions, wrapping each one in parentheses.
+ *
+ * `AND` binds tighter than `OR`, so a bare ` AND ` join re-parses a fragment
+ * that carries its own `OR` — `.where("a OR b").where("c")` became
+ * `a OR (b AND c)`, a filter that matches rows the caller excluded. The builder
+ * takes conditions as opaque text (a `sql` fragment or a raw string), so it
+ * cannot see the operator and has to bracket unconditionally.
+ *
+ * A single condition renders bare: nothing can rebind it, and the parentheses
+ * would only be noise in the SQL a caller reads back.
+ */
+const conjoin = (conditions: ReadonlyArray<string>): string =>
+    conditions.length > 1 ? conditions.map((condition) => `(${condition})`).join(" AND ") : conditions.join(" AND ");
+
 type JoinKind = keyof typeof JOIN_KEYWORDS;
 
 interface JoinClause {
@@ -117,7 +132,7 @@ export default class SelectBuilder<Row = Record<string, unknown>> implements Que
         return this.addJoin("cross", table);
     }
 
-    /** Add `WHERE` condition(s). Multiple calls (and multiple args) are `AND`-ed. Bind values with the `sql` tag. */
+    /** Add `WHERE` condition(s). Multiple calls (and multiple args) are `AND`-ed, each parenthesised. Bind values with the `sql` tag. */
     public where(...conditions: Condition[]): this {
         this.whereConditions.push(...conditions.map((condition) => toText(condition)));
 
@@ -131,7 +146,7 @@ export default class SelectBuilder<Row = Record<string, unknown>> implements Que
         return this;
     }
 
-    /** Add `HAVING` condition(s) over aggregates; multiple are `AND`-ed. */
+    /** Add `HAVING` condition(s) over aggregates; multiple are `AND`-ed, each parenthesised. */
     public having(...conditions: Condition[]): this {
         this.havingConditions.push(...conditions.map((condition) => toText(condition)));
 
@@ -202,7 +217,7 @@ export default class SelectBuilder<Row = Record<string, unknown>> implements Que
         }
 
         if (this.whereConditions.length > 0) {
-            parts.push(`WHERE ${this.whereConditions.join(" AND ")}`);
+            parts.push(`WHERE ${conjoin(this.whereConditions)}`);
         }
 
         if (this.groupByItems.length > 0) {
@@ -210,7 +225,7 @@ export default class SelectBuilder<Row = Record<string, unknown>> implements Que
         }
 
         if (this.havingConditions.length > 0) {
-            parts.push(`HAVING ${this.havingConditions.join(" AND ")}`);
+            parts.push(`HAVING ${conjoin(this.havingConditions)}`);
         }
 
         if (this.qualifyCondition !== undefined) {

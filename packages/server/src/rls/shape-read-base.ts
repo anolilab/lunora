@@ -163,11 +163,18 @@ const evaluateGroupBaseWhere = (group: ScopedReadPolicies, request: ShapeReadWhe
     // KNOWN DIVERGENCE: the request path takes the union of that claim and any
     // `ctx.auth.roles` an upstream middleware contributed (see `AuthLike`). A
     // shape runs no procedure, so no middleware fires and there is nothing to
-    // union — an app deriving roles in middleware rather than from claims (e.g.
-    // `accessRoles()` mapping Cloudflare Access groups) therefore has those roles
-    // on queries but not on live shapes, and a role-gated policy can resolve
-    // differently for the two. Closing it means moving the mapping onto the
-    // identity, where the shape path can see it, not adding a field here.
+    // union — an app deriving roles in middleware rather than from claims has
+    // those roles on queries but not on live shapes, and a role-gated policy can
+    // resolve differently for the two. The dangerous direction is an inverted
+    // test (`!auth.roles.includes("restricted")`): roles is `[]` here, the
+    // restricting branch never fires, and rows replicate over a subscription
+    // that the equivalent query withholds.
+    //
+    // The only close is to derive the roles ON THE IDENTITY, where this path can
+    // see them — never to add a `roles` field to this request. That is what
+    // `@lunora/cloudflare-access`'s `createAccessResolver({ roles })` does with
+    // the verified Access `groups` claim, and what any custom `resolveIdentity`
+    // gating policies on roles must do too.
     const roles = readIdentityRoles(request.identity);
 
     return computeReadBaseWhere(group.policies, {

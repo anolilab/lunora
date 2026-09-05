@@ -574,9 +574,15 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // procedure, so the `.use(rls(...))` middleware never fires; without
             // this merge its reads would bypass every read policy on the table
             // (rows the caller can't see would replicate). `composeShapeReadWhere`
-            // evaluates the table's read policies under this same trusted ctx —
-            // exactly the request-time path — and fails closed under a
-            // `.rls("required")` schema for a non-`.public()`, policy-less table.
+            // evaluates the table's read policies under this same trusted ctx
+            // and fails closed under a `.rls("required")` schema for a
+            // non-`.public()`, policy-less table.
+            //
+            // It is NOT identical to the request-time path, and must not be
+            // described as such: roles come from the identity's `roles` claim
+            // only, because no middleware runs here to contribute
+            // `ctx.auth.roles`. Derive roles at the identity if a policy gates
+            // on them — see `shape-read-base.ts`.
             const effectiveWhere = composeShapeReadWhere(LUNORA_RLS_READ_REGISTRY, {
                 ctx,
                 identity: identity?.identity ?? null,

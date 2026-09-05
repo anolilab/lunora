@@ -56,6 +56,19 @@ class LunoraSubscriptionRegistry {
     }
 
     /**
+     * Whether any consumer still holds the subscription for `queryKey`.
+     *
+     * Read by {@link file://./use-paginated-core.ts} after its own `detach()`:
+     * that hook owns its cache entries' whole lifecycle (it has no TanStack
+     * observer, so it pins them against gc and removes them by hand), and it
+     * must not remove an entry a sibling hook on the same page range is still
+     * being fed through.
+     */
+    public hasConsumers(queryKey: QueryKey): boolean {
+        return this.entries.has(keyHash(queryKey));
+    }
+
+    /**
      * Attach a consumer to the live subscription for `queryKey`. The first
      * attach opens the underlying WS subscription; subsequent attaches reuse
      * it (refcount-bumped). Returns the detach function — call it exactly once

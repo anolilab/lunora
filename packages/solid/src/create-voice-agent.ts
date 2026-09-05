@@ -2,7 +2,7 @@ import type { FunctionReference } from "@lunora/client";
 import type { Accessor } from "solid-js";
 import { createSignal, onCleanup } from "solid-js";
 
-import { agentNameFromReference, voiceCloseError, voiceSocketUrl } from "../../../shared/voice-socket";
+import { agentNameFromReference, voiceCloseError, voiceSocketUrl, watchVoiceIdentity } from "../../../shared/voice-socket";
 import { useLunora } from "./context";
 import type { MaybeAccessor } from "./create-agent";
 import { resolveMaybe } from "./create-agent";
@@ -122,9 +122,20 @@ const DEFAULT_INTERRUPT_CHUNKS = 3;
 /** Mutable per-call connection state, held in a closure so callbacks share one source of truth. */
 interface VoiceConnection {
     audioFormat: VoiceAudioFormat;
+
+    /**
+     * `true` from the moment a turn is committed (`commit` / `text`) until it
+     * completes — the `thinking` half of a turn, which `speaking` does not cover
+     * because that only flips once the first `assistant_delta` lands. Together
+     * they are the mic's `isTurnActive` gate: without the first half, turn
+     * detection kept running through the whole STT+LLM window and ambient noise
+     * fired a second, refused `commit`.
+     */
+    awaitingTurn: boolean;
     microphone: VoiceMicrophone | undefined;
     socket: VoiceSocket;
     speaker: VoiceSpeaker | undefined;
+
     speaking: boolean;
 
     /**
@@ -134,6 +145,9 @@ interface VoiceConnection {
      * on the next `interrupted` / `user_transcript` / `ready` frame.
      */
     suppressAudio: boolean;
+
+    /** Releases the `onAuthTokenChange` watch that ends the call on an identity switch. */
+    unwatchIdentity: (() => void) | undefined;
 }
 
 /**
@@ -199,6 +213,7 @@ const createVoiceAgent = (options: CreateVoiceAgentOptions): CreateVoiceAgentRes
         current = undefined;
 
         if (connection) {
+            connection.unwatchIdentity?.();
             connection.microphone?.stop();
             connection.speaker?.stop();
 
@@ -246,6 +261,7 @@ const createVoiceAgent = (options: CreateVoiceAgentOptions): CreateVoiceAgentRes
             }
             case "assistant_done": {
                 if (connection) {
+                    connection.awaitingTurn = false;
                     connection.speaking = false;
                 }
 
@@ -258,6 +274,7 @@ const createVoiceAgent = (options: CreateVoiceAgentOptions): CreateVoiceAgentRes
                 // A non-fatal turn failure: surface it and return the call to a
                 // usable state rather than leaving it stuck "speaking"/"thinking".
                 if (connection) {
+                    connection.awaitingTurn = false;
                     connection.speaking = false;
                 }
 
@@ -268,6 +285,7 @@ const createVoiceAgent = (options: CreateVoiceAgentOptions): CreateVoiceAgentRes
             }
             case "interrupted": {
                 if (connection) {
+                    connection.awaitingTurn = false;
                     connection.speaking = false;
                     connection.suppressAudio = false;
                 }
@@ -364,10 +382,24 @@ const createVoiceAgent = (options: CreateVoiceAgentOptions): CreateVoiceAgentRes
                 socket,
                 speaker: undefined,
                 speaking: false,
+                awaitingTurn: false,
                 suppressAudio: false,
+                unwatchIdentity: undefined,
             };
 
             current = connection;
+
+            // A voice socket's credential is fixed at the upgrade, so a sign-out
+            // or user switch mid-call would otherwise leave the session running
+            // (and writing its thread) as the previous user.
+            connection.unwatchIdentity = watchVoiceIdentity(client, "createVoiceAgent", (identityError) => {
+                if (current !== connection) {
+                    return;
+                }
+
+                setError(identityError);
+                teardown();
+            });
 
             // The injectable `VoiceSocket` exposes only `on*` handler slots (not a
             // real EventTarget), so assign them directly.
@@ -408,7 +440,7 @@ const createVoiceAgent = (options: CreateVoiceAgentOptions): CreateVoiceAgentRes
             const microphone = await createMicrophone({
                 interruptChunks,
                 interruptThreshold,
-                isSpeaking: () => current?.speaking ?? false,
+                isTurnActive: () => (current?.speaking ?? false) || (current?.awaitingTurn ?? false),
                 onAudio: (pcm) => {
                     if (socket.readyState === WS_OPEN) {
                         socket.send(pcm);
@@ -419,6 +451,7 @@ const createVoiceAgent = (options: CreateVoiceAgentOptions): CreateVoiceAgentRes
                     current?.speaker?.interrupt();
 
                     if (current) {
+                        current.awaitingTurn = false;
                         current.speaking = false;
                         // Drop any audio already in flight until the server acks —
                         // cleared on the next `interrupted`/`user_transcript`/`ready`.
@@ -432,6 +465,11 @@ const createVoiceAgent = (options: CreateVoiceAgentOptions): CreateVoiceAgentRes
                 },
                 onSilence: () => {
                     sendFrame({ type: "commit" });
+
+                    if (current) {
+                        current.awaitingTurn = true;
+                    }
+
                     setStatus("thinking");
                 },
                 silenceDurationMs,
@@ -482,6 +520,12 @@ const createVoiceAgent = (options: CreateVoiceAgentOptions): CreateVoiceAgentRes
         // Only advance to "thinking" if the frame actually reached an open socket;
         // otherwise the UI would stick in "thinking" with no call.
         if (sendFrame({ text, type: "text" })) {
+            // A typed turn commits just like a spoken one, so park the mic's
+            // silence timer for its duration too.
+            if (current) {
+                current.awaitingTurn = true;
+            }
+
             setStatus("thinking");
         }
     };
