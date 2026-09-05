@@ -8,19 +8,18 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Toolbox } from "@visulima/cerebro";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { runAddCommand as RunAdd, runBuildIndexCommand as RunBuildIndex, runRegistryViewCommand as RunView } from "../../src/commands/registry";
 
 const runAddCommand = vi.fn<typeof RunAdd>(async () => {
-    return { code: 0, items: [] };
+    return { bindings: [], code: 0, deps: [], skipped: [], written: [] };
 });
 const runBuildIndexCommand = vi.fn<typeof RunBuildIndex>(async () => {
-    return { code: 0, items: [] };
+    return { bindings: [], code: 0, deps: [], skipped: [], written: [] };
 });
 const runRegistryViewCommand = vi.fn<typeof RunView>(async () => {
-    return { code: 0, items: [] };
+    return { bindings: [], code: 0, deps: [], skipped: [], written: [] };
 });
 
 vi.mock(import("../../src/commands/registry"), () => {
@@ -38,7 +37,7 @@ const run = async (argument: ReadonlyArray<string>, options: RegistryOptionsLike
         argument: [...argument],
         options,
         process: { cwd: workdir, exit: () => {} },
-    } as unknown as Toolbox<Console, RegistryOptionsLike>);
+    } as unknown as Parameters<typeof execute>[0]);
 };
 
 describe("lunora registry dispatch", () => {
