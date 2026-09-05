@@ -277,6 +277,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `HttpRunners` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `HttpStreamHandlerOptions` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -4988,6 +4992,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `HttpRouteHandlerOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `HttpRunners` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
