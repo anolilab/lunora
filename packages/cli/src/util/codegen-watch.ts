@@ -15,10 +15,13 @@
  * (see {@link CodegenWatcherHandle.close}).
  *
  * The Vite and framework-worker flavors don't reach here — their ongoing
- * regeneration is owned by `@lunora/vite`'s codegen plugin, which runs no hook.
- * Closing that gap means lifting the hook to a shared generate entry point both
- * can call, which is a package move (`post-codegen-hook` depends on the CLI's
- * package-manager detection and spawner), not a line here.
+ * regeneration is owned by `@lunora/vite`'s codegen plugin, which runs the same
+ * hook from its own `buildStart` and watcher, with the same self-retrigger
+ * guard. `runPostCodegenHook` moved to `@lunora/config` so both can call it;
+ * `./post-codegen-hook` is now a re-export of that. So this file is the second
+ * caller of one shared hook, not the only place it runs — running it again on
+ * a Vite project's behalf would execute an arbitrary project script twice per
+ * regeneration.
  */
 import type { FSWatcher } from "node:fs";
 import { existsSync, watch } from "node:fs";

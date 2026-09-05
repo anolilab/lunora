@@ -176,6 +176,27 @@ describe("inferLunoraBindings", () => {
         expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
     });
 
+    it("binds a class the entry also names in a type-only IMPORT", async () => {
+        expect.assertions(1);
+
+        // `import { type ShardDO, createShardDO }` is the ordinary way to reach
+        // the generated class's type. The old detector was a whole-file
+        // `/\btype\s+ShardDO\b/` with no `export` anchor, so that import read as
+        // a type-only EXPORT and reconcile refused the SHARD binding — after
+        // which `wrangler-validator` failed the deploy telling the user "your
+        // dev server auto-reconciles this on startup", which is precisely what
+        // it had just declined to do.
+        write("wrangler.jsonc", WRANGLER);
+        write(
+            "src/server/index.ts",
+            `import type { ShardDO } from "../../lunora/_generated/shard.js";\nimport { type SchedulerDO, createShardDO } from "../../lunora/_generated/shard.js";\n\nexport const ShardDO = createShardDO({});\nexport const SchedulerDO = createShardDO({});\n\nexport default { fetch() { return new Response("ok"); } };\n`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding).toSorted((a, b) => a.localeCompare(b))).toEqual(["SCHEDULER", "SHARD"]);
+    });
+
     it("infers D1 from an env.DB access even without a global schema", async () => {
         expect.assertions(1);
 
