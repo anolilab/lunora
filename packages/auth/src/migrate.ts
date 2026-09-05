@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { getMigrations } from "better-auth/db/migration";
 
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
@@ -5,14 +6,45 @@ import { resolveAuthOptions } from "./create-auth";
 import { isD1Database, withD1IndexIntrospection } from "./d1-index-introspection";
 
 /**
+ * Reject a `database` better-auth's migrator cannot drive, *before* handing it
+ * over. better-auth only migrates through Kysely, and its own guard does not
+ * throw — it calls `process.exit(1)`, which in a Workers isolate kills the whole
+ * worker (every route, not just `/api/auth/*`) after a single 500. An adapter
+ * factory — `lunoraAuthAdapter` / `lunoraD1Adapter` / `lunoraDoAdapter`, or any
+ * other better-auth adapter — is exactly that case: it is a function, never a
+ * Kysely dialect/database.
+ */
+const assertMigratableDatabase = (options: LunoraAuthOptions): void => {
+    if (typeof options.database !== "function") {
+        return;
+    }
+
+    throw new LunoraError(
+        "INTERNAL",
+        "@lunora/auth: better-auth can only migrate through its Kysely adapter, and this auth instance " +
+            "uses a custom adapter (`lunoraAuthAdapter`/`lunoraD1Adapter`/`lunoraDoAdapter`). " +
+            "Provision the schema instead: declare the auth tables in `lunora/schema.ts` as `.global()` " +
+            "tables (Lunora creates them for you), or apply better-auth's own DDL at deploy time with " +
+            "`compileMigrationsSql` + `wrangler d1 execute`. Passing the raw D1 binding as `database` also " +
+            "works for the migration instance only.",
+    );
+};
+
+/**
  * Swap a D1 binding for one that can answer better-auth's index introspection.
  *
  * Only the migration path needs this — `getDatabaseIndexes()` runs inside
  * `getMigrations()` — so request-time queries keep the untouched binding. See
  * `d1-index-introspection.ts` for why D1 rejects the upstream query.
+ *
+ * Both `getMigrations()` callers route through here, so it is also the one place
+ * {@link assertMigratableDatabase} has to run.
  */
-const withD1MigrationSupport = (options: LunoraAuthOptions): LunoraAuthOptions =>
-    isD1Database(options.database) ? { ...options, database: withD1IndexIntrospection(options.database) } : options;
+const withD1MigrationSupport = (options: LunoraAuthOptions): LunoraAuthOptions => {
+    assertMigratableDatabase(options);
+
+    return isD1Database(options.database) ? { ...options, database: withD1IndexIntrospection(options.database) } : options;
+};
 
 /**
  * Single-flight cache of in-flight (and completed) migration runs, keyed by the

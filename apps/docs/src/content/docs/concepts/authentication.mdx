@@ -122,6 +122,15 @@ export default {
 Because the routes are mounted, the browser talks to better-auth directly. Your
 functions never implement sign-in; they only _read_ the resolved `ctx.auth`.
 
+`ensureMigrated` drives better-auth's own migrator, which only speaks Kysely — so
+it needs the raw D1 binding as `database`, as above. Pass a Lunora adapter
+(`lunoraD1Adapter`, `lunoraAuthAdapter`, `lunoraDoAdapter`) and it throws rather
+than migrating. Provision those instead by declaring the auth tables in
+`lunora/schema.ts` as `.global()` tables — Lunora creates them from the schema, so
+they keep a single owner, and `defineApp().auth(...)` does it for you before the
+first auth request. `runD1GlobalTableMigrations(exec, schema)` from `@lunora/d1`
+is the same call if you wire the worker by hand.
+
 ## The client side
 
 On the client, identity is a token carried on the shared `LunoraClient`. After a

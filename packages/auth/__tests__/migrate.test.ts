@@ -13,6 +13,11 @@ const makeMigrations = (runMigrations = vi.fn<() => Promise<void>>(async () => {
     return { compileMigrations: vi.fn<() => Promise<string>>(async () => "SQL"), runMigrations };
 };
 
+/** A better-auth adapter factory — a function, which is precisely what the Kysely migrator cannot drive. */
+const customAdapter = (): { id: string } => {
+    return { id: "lunora" };
+};
+
 describe("ensureMigrated", () => {
     it("single-flights concurrent callers onto one migration run", async () => {
         expect.assertions(2);
@@ -65,9 +70,37 @@ describe("ensureMigrated", () => {
 
         expect(mockGetMigrations).toHaveBeenCalledTimes(2);
     });
+
+    it("throws — and never reaches better-auth's migrator — for a custom adapter", async () => {
+        // better-auth's own guard for a non-kysely `database` calls
+        // `process.exit(1)`, which in a Workers isolate kills every route after a
+        // single 500. Reject before handing it over, with a message naming a
+        // provisioning path that does work.
+        expect.assertions(2);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const options = { database: customAdapter };
+
+        await expect(ensureMigrated({ options })).rejects.toThrow(/only migrate through its Kysely adapter/u);
+
+        expect(mockGetMigrations).not.toHaveBeenCalled();
+    });
 });
 
 describe("compileMigrationsSql", () => {
+    it("throws for a custom adapter instead of exiting the isolate", async () => {
+        expect.assertions(2);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        await expect(compileMigrationsSql({ database: customAdapter })).rejects.toThrow(/only migrate through its Kysely adapter/u);
+
+        expect(mockGetMigrations).not.toHaveBeenCalled();
+    });
+
     it("compiles from the resolved options (so the rateLimit table is included) and returns compileMigrations()'s result", async () => {
         expect.assertions(3);
 
