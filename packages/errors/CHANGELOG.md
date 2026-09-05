@@ -1,3 +1,9 @@
+## @lunora/errors [1.0.0-alpha.32](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.31...@lunora/errors@1.0.0-alpha.32) (2026-09-05)
+
+### Bug Fixes
+
+* **auth,sql-store,codegen:** stop the auth migrator killing the isolate, and the global sweep re-running per request ([#613](https://github.com/anolilab/lunora/issues/613)) ([f170c82](https://github.com/anolilab/lunora/commit/f170c82b07857dad3053660d558a513e484309e8)), closes [#599](https://github.com/anolilab/lunora/issues/599) [#601](https://github.com/anolilab/lunora/issues/601) [#600](https://github.com/anolilab/lunora/issues/600) [#601](https://github.com/anolilab/lunora/issues/601)
+
 ## @lunora/errors [1.0.0-alpha.31](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.30...@lunora/errors@1.0.0-alpha.31) (2026-09-04)
 
 ### ⚠ BREAKING CHANGES
