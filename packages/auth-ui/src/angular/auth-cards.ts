@@ -11,6 +11,7 @@ import { signInAnonymously } from "../core/anonymous";
 import type { BackupCodeSignInField } from "../core/backup-codes";
 import { createBackupCodeSignInController } from "../core/backup-codes";
 import { queryParameter } from "../core/browser-location";
+import { viewHref } from "../core/config";
 import type { EmailOtpActions, EmailOtpState } from "../core/email-otp";
 import { createEmailOtpController } from "../core/email-otp";
 import { isFlowEnabled } from "../core/flow-gate";
@@ -60,19 +61,34 @@ const lastLoginMethodAfterRender = (): WritableSignal<string | undefined> => {
     return method;
 };
 
-/** "Continue as guest", when the `anonymous` plugin is on. */
+/**
+ * "Continue as guest", when the `anonymous` plugin is on.
+ *
+ * Disabled while the call is in flight: `signIn.anonymous` creates an account
+ * every time it is called, so a double-click without this leaves a second,
+ * orphaned anonymous user behind — and the first click gives no feedback that
+ * anything happened, which is what invites the second.
+ */
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
     selector: "lunora-anonymous-button",
     standalone: true,
-    template: ` <button class="lunora-auth-button lunora-auth-button--secondary" type="button" (click)="signIn()">{{ t.anonymousSignIn }}</button> `,
+    template: `
+        <button class="lunora-auth-button lunora-auth-button--secondary" type="button" [disabled]="pending()" (click)="signIn()">
+            {{ t.anonymousSignIn }}
+        </button>
+    `,
 })
 class AnonymousButtonComponent {
     private readonly context = injectAuthUIContext();
     protected readonly t = this.context().localization;
+    protected readonly pending = signal(false);
 
     protected signIn(): void {
-        void signInAnonymously(this.context());
+        this.pending.set(true);
+        void signInAnonymously(this.context()).finally(() => {
+            this.pending.set(false);
+        });
     }
 }
 
@@ -125,7 +141,7 @@ class AnonymousButtonComponent {
                         (changed)="actions.setField('password', $event)"
                         (blurred)="actions.blur('password')"
                     />
-                    <lunora-auth-link [href]="forgotPasswordHref()">{{ t.forgotPasswordLink }}</lunora-auth-link>
+                    <lunora-auth-link [href]="forgotPasswordLink()">{{ t.forgotPasswordLink }}</lunora-auth-link>
                     <lunora-auth-submit-button [pending]="state().status === 'submitting'">
                         {{ t.signIn }}
                         <!--
@@ -138,14 +154,16 @@ class AnonymousButtonComponent {
                 </form>
             }
             @if (signUp()) {
-                <lunora-auth-link lunoraAuthCardFooter [href]="signUpHref()">{{ t.noAccount }}</lunora-auth-link>
+                <lunora-auth-link lunoraAuthCardFooter [href]="signUpLink()">{{ t.noAccount }}</lunora-auth-link>
             }
         </lunora-auth-card>
     `,
 })
 class SignInCardComponent {
-    readonly forgotPasswordHref = input("/forgot-password");
-    readonly signUpHref = input("/sign-up");
+    /** Defaults to the configured forgot-password route; see `viewPaths.base`. */
+    readonly forgotPasswordHref = input<string>();
+    /** Defaults to the configured sign-up route; see `viewPaths.base`. */
+    readonly signUpHref = input<string>();
 
     private readonly context = injectAuthUIContext();
     protected readonly t = this.context().localization;
@@ -164,7 +182,9 @@ class SignInCardComponent {
     protected readonly credentials = computed(() => this.context().credentials);
     protected readonly lastUsed = computed(() => (this.context().plugins.lastLoginMethod ? this.lastLoginMethod() : undefined));
     protected readonly lastUsedEmail = computed(() => this.lastUsed() === LAST_METHOD_EMAIL);
+    protected readonly forgotPasswordLink = computed(() => this.forgotPasswordHref() ?? viewHref(this.context(), "forgotPassword"));
     protected readonly signUp = computed(() => this.context().signUp);
+    protected readonly signUpLink = computed(() => this.signUpHref() ?? viewHref(this.context(), "signUp"));
     protected readonly social = computed(() => this.context().social);
 
     protected signInSocial(provider: string): void {
@@ -236,13 +256,14 @@ class SignInCardComponent {
                     <lunora-auth-password-strength [value]="state().fields.password.value" />
                     <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.signUp }}</lunora-auth-submit-button>
                 </form>
-                <lunora-auth-link lunoraAuthCardFooter [href]="signInHref()">{{ t.haveAccount }}</lunora-auth-link>
+                <lunora-auth-link lunoraAuthCardFooter [href]="signInLink()">{{ t.haveAccount }}</lunora-auth-link>
             </lunora-auth-card>
         }
     `,
 })
 class SignUpCardComponent {
-    readonly signInHref = input("/sign-in");
+    /** Defaults to `redirects.signIn`, itself derived from `viewPaths.base`. */
+    readonly signInHref = input<string>();
 
     private readonly context = injectAuthUIContext();
     protected readonly t = this.context().localization;
@@ -252,6 +273,7 @@ class SignUpCardComponent {
 
     /** Derived, so a discovery answer that closes self-serve sign-up takes effect. */
     protected readonly enabled = computed(() => this.context().signUp);
+    protected readonly signInLink = computed(() => this.signInHref() ?? this.context().redirects.signIn);
     /** Derived, so the provider list follows server discovery. */
     protected readonly social = computed(() => this.context().social);
 
@@ -280,17 +302,20 @@ class SignUpCardComponent {
                 />
                 <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.forgotPassword }}</lunora-auth-submit-button>
             </form>
-            <lunora-auth-link lunoraAuthCardFooter [href]="signInHref()">{{ t.backToSignIn }}</lunora-auth-link>
+            <lunora-auth-link lunoraAuthCardFooter [href]="signInLink()">{{ t.backToSignIn }}</lunora-auth-link>
         </lunora-auth-card>
     `,
 })
 class ForgotPasswordCardComponent implements OnInit {
+    /** Defaults to the configured reset-password route; see `viewPaths.base`. */
     readonly resetPath = input<string>();
-    readonly signInHref = input("/sign-in");
+    /** Defaults to `redirects.signIn`, itself derived from `viewPaths.base`. */
+    readonly signInHref = input<string>();
 
     private readonly context = injectAuthUIContext();
     private readonly injector = inject(Injector);
     protected readonly t = this.context().localization;
+    protected readonly signInLink = computed(() => this.signInHref() ?? this.context().redirects.signIn);
     protected state!: Signal<FormState<ForgotPasswordField>>;
     protected actions!: FormActions<ForgotPasswordField>;
 
@@ -452,16 +477,18 @@ class ResetPasswordOtpCardComponent {
                         }
                     </lunora-auth-submit-button>
                 </form>
-                <lunora-auth-link lunoraAuthCardFooter [href]="signInHref()">{{ t.backToSignIn }}</lunora-auth-link>
+                <lunora-auth-link lunoraAuthCardFooter [href]="signInLink()">{{ t.backToSignIn }}</lunora-auth-link>
             </lunora-auth-card>
         }
     `,
 })
 class MagicLinkCardComponent {
-    readonly signInHref = input("/sign-in");
+    /** Defaults to `redirects.signIn`, itself derived from `viewPaths.base`. */
+    readonly signInHref = input<string>();
 
     private readonly context = injectAuthUIContext();
     protected readonly enabled = computed(() => isFlowEnabled(this.context(), "magicLink", "MagicLinkCard"));
+    protected readonly signInLink = computed(() => this.signInHref() ?? this.context().redirects.signIn);
     protected readonly t = this.context().localization;
     private readonly bridge = controllerSignal(createMagicLinkController, { context: this.context });
     protected readonly state = this.bridge.state;

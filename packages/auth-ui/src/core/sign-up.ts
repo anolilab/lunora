@@ -64,7 +64,7 @@ const createSignUpController = (context: ControllerContext): FormController<Sign
 
             assertOk(
                 await context_.authClient.signUp.email({
-                    callbackURL: context_.redirects.afterSignIn,
+                    callbackURL: resolveAfterSignIn(context_.redirects.afterSignIn),
                     email: values.email.trim(),
                     ...(inviteToken === undefined ? {} : { inviteToken }),
                     name: values.name.trim(),

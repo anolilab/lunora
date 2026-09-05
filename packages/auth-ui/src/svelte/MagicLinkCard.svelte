@@ -11,9 +11,15 @@
     import FormBanner from "./FormBanner.svelte";
     import SubmitButton from "./SubmitButton.svelte";
 
-    let { signInHref = "/sign-in" }: { signInHref?: string } = $props();
+    let {
+        signInHref,
+    }: {
+        /** Defaults to `redirects.signIn`, itself derived from `viewPaths.base`. */
+        signInHref?: string;
+    } = $props();
 
     const context = useAuthUI();
+    const signInLink = $derived(signInHref ?? context.redirects.signIn);
     const t = context.localization;
     const enabled = isFlowEnabled(context, "magicLink", "MagicLinkCard");
     const { actions, state: form } = controllerStore(createMagicLinkController);
@@ -48,7 +54,7 @@
             </SubmitButton>
         </form>
         {#snippet footer()}
-            <AuthLink href={signInHref}>{t.backToSignIn}</AuthLink>
+            <AuthLink href={signInLink}>{t.backToSignIn}</AuthLink>
         {/snippet}
     </AuthCard>
 {/if}

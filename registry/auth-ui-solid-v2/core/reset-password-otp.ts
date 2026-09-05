@@ -39,7 +39,10 @@ const createResetPasswordOtpController = (context: ControllerContext, options: {
                 }),
             );
 
-            return { redirectTo: context_.redirects.signIn, successMessage: context_.localization.resetPasswordDone };
+            // No `successMessage`: `createFormController` navigates as soon as
+            // `redirectTo` is set, so a banner on this card would never paint.
+            // The sign-in screen the user lands on is the confirmation.
+            return { redirectTo: context_.redirects.signIn };
         },
     });
 

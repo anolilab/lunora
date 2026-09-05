@@ -27,7 +27,7 @@ const createSignInController = (context: ControllerContext): FormController<Sign
         submit: async (values, context_) => {
             const response = assertOk(
                 await context_.authClient.signIn.email({
-                    callbackURL: context_.redirects.afterSignIn,
+                    callbackURL: resolveAfterSignIn(context_.redirects.afterSignIn),
                     email: values.email.trim(),
                     password: values.password,
                 }),

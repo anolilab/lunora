@@ -13,6 +13,7 @@
  * has it prefetched by their mail client, should see a confirmation and not an
  * error about a token that did its job.
  */
+import { isBrowser } from "./browser-location";
 import type { ControllerContext } from "./config";
 import { createFormController } from "./create-form-controller";
 import { assertOk, mapAuthError } from "./map-error";
@@ -82,7 +83,12 @@ const createVerifyEmailController = (context: ControllerContext, options: Verify
         }
     };
 
-    if (options.autoVerify !== false) {
+    // `isBrowser`: off the browser the token is unreadable, and reporting that
+    // as "no token" would render the error banner into the SSR markup while the
+    // hydrating client renders "Verifying…". Leaving the store `idle` is what
+    // the views paint as pending, so the two agree and the real verify runs on
+    // the client's first render.
+    if (options.autoVerify !== false && isBrowser()) {
         void verify();
     }
 
@@ -119,7 +125,17 @@ const createResendVerificationController = (context: ControllerContext, options:
                   }
                 : undefined,
         submit: async (values, context_) => {
-            assertOk(await context_.authClient.sendVerificationEmail({ callbackURL: context_.redirects.afterSignIn, email: values.email.trim() }));
+            // `resolveAfterSignIn`, not the raw default: this link is followed
+            // from a mail client, so the current page's `?redirectTo=` is the
+            // only surviving record of where the user was headed. Sending the
+            // default instead drops an invitee back on `/` with the invitation
+            // forgotten — see `redirect-to.ts`.
+            assertOk(
+                await context_.authClient.sendVerificationEmail({
+                    callbackURL: resolveAfterSignIn(context_.redirects.afterSignIn),
+                    email: values.email.trim(),
+                }),
+            );
 
             return { successMessage: context_.localization.verifyEmailSent };
         },

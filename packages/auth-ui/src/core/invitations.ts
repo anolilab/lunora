@@ -10,7 +10,7 @@
  * user has an account, or "accept" is a leap of faith. Accepting still requires
  * a session, so the controller redirects to sign-in and comes back.
  */
-import { currentPath } from "./browser-location";
+import { currentPath, isBrowser } from "./browser-location";
 import type { ControllerContext } from "./config";
 import type { ResourceState } from "./create-resource-controller";
 import { createResourceController } from "./create-resource-controller";
@@ -131,7 +131,11 @@ const createAcceptInvitationController = (context: ControllerContext, options: A
         }
     };
 
-    if (options.autoLoad !== false) {
+    // `isBrowser`: off the browser the invitation id is unreadable, and
+    // reporting that as "invitation missing" would render the error banner into
+    // the SSR markup while the hydrating client renders the skeleton. Leaving
+    // `loading: true` is that skeleton, so the two agree.
+    if (options.autoLoad !== false && isBrowser()) {
         void load();
     }
 
