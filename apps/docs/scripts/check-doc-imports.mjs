@@ -118,14 +118,18 @@ for (const [index, shouldMatch, shouldNotMatch] of SELF_CHECK) {
 
     for (const sample of shouldMatch) {
         if (!pattern.test(sample)) {
-            console.error(`✗ self-check: NONEXISTENT_API[${index}] (${pattern}) no longer matches ${JSON.stringify(sample)} — the pattern was narrowed and now catches nothing.`);
+            console.error(
+                `✗ self-check: NONEXISTENT_API[${index}] (${pattern}) no longer matches ${JSON.stringify(sample)} — the pattern was narrowed and now catches nothing.`,
+            );
             process.exit(1);
         }
     }
 
     for (const sample of shouldNotMatch) {
         if (pattern.test(sample)) {
-            console.error(`✗ self-check: NONEXISTENT_API[${index}] (${pattern}) matches the CORRECT form ${JSON.stringify(sample)} — it would reject valid docs.`);
+            console.error(
+                `✗ self-check: NONEXISTENT_API[${index}] (${pattern}) matches the CORRECT form ${JSON.stringify(sample)} — it would reject valid docs.`,
+            );
             process.exit(1);
         }
     }
