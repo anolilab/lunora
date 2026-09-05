@@ -191,14 +191,19 @@ fn is_absolute_href(href: &str) -> bool {
 /// rather than mere leniency — `"AQJ="` decodes to 01 02 and re-encodes as
 /// `"AQI="`, different bytes than the peer wrote.
 fn base64_decode(text: &str) -> Option<Vec<u8>> {
-    // `atob` removes ASCII whitespace before doing anything else, so a payload
-    // wrapped across lines decodes here too — that leniency IS the reference's.
-    let cleaned: Vec<u8> = text.bytes().filter(|byte| !matches!(byte, b' ' | b'\t' | b'\n' | b'\x0C' | b'\r')).collect();
+    // No whitespace stripping: the canonicity compare at the end of this
+    // function tests the ORIGINAL `text`, so a payload wrapped across lines can
+    // never match a re-encode regardless of what happens here. The reference
+    // rejects it too (`bytes-base64-newline`), and stripping first would only
+    // decode bytes for the compare to throw away.
+    let cleaned: &[u8] = text.as_bytes();
 
     let mut end = cleaned.len();
 
     // Padding is only padding at the end of a whole quantum. An `=` anywhere
-    // else stays in `body` and is rejected by the alphabet match below.
+    // else stays in `body` and is rejected by the alphabet match below. This
+    // loop is load-bearing, not a leniency: without it every correctly padded
+    // payload hits that same rejection.
     if end.is_multiple_of(4) {
         for _ in 0..2 {
             if end > 0 && cleaned[end - 1] == b'=' {
