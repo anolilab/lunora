@@ -1,5 +1,6 @@
 <script lang="ts">
     import { onMount } from "svelte";
+    import { viewHref } from "../core/config";
     import { isFlowEnabled } from "../core/flow-gate";
     import { LAST_METHOD_MAGIC_LINK, readLastLoginMethod } from "../core/last-login-method";
     import { createMagicLinkController } from "../core/magic-link";
@@ -14,12 +15,12 @@
     let {
         signInHref,
     }: {
-        /** Defaults to `redirects.signIn`, itself derived from `viewPaths.base`. */
+        /** Defaults to the configured sign-in route; see `viewPaths.base`. */
         signInHref?: string;
     } = $props();
 
     const context = useAuthUI();
-    const signInLink = $derived(signInHref ?? context.redirects.signIn);
+    const signInLink = $derived(signInHref ?? viewHref(context, "signIn"));
     const t = context.localization;
     const enabled = isFlowEnabled(context, "magicLink", "MagicLinkCard");
     const { actions, state: form } = controllerStore(createMagicLinkController);

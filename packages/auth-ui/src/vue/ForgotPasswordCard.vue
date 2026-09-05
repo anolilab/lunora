@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { viewHref } from "../core/config";
 import { createForgotPasswordController } from "../core/forgot-password";
 import AuthCard from "./AuthCard.vue";
 import AuthLink from "./AuthLink.vue";
@@ -12,12 +13,13 @@ import { useController } from "./use-controller";
 const props = defineProps<{
     /** Defaults to the configured reset-password route; see `viewPaths.base`. */
     resetPath?: string;
-    /** Defaults to `redirects.signIn`, itself derived from `viewPaths.base`. */
+    /** Defaults to the configured sign-in route; see `viewPaths.base`. */
     signInHref?: string;
 }>();
 
-const { localization: t, redirects } = useAuthUI();
-const signInLink = computed(() => props.signInHref ?? redirects.signIn);
+const context = useAuthUI();
+const t = context.localization;
+const signInLink = computed(() => props.signInHref ?? viewHref(context, "signIn"));
 const { actions, state } = useController((context) => createForgotPasswordController(context, { resetPath: props.resetPath }));
 </script>
 

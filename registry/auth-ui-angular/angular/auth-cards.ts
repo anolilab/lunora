@@ -7,7 +7,7 @@
 import type { OnInit, Signal, WritableSignal } from "@angular/core";
 import { afterNextRender, ChangeDetectionStrategy, Component, computed, inject, Injector, input, signal } from "@angular/core";
 
-import { signInAnonymously } from "../core/anonymous";
+import { createAnonymousController } from "../core/anonymous";
 import type { BackupCodeSignInField } from "../core/backup-codes";
 import { createBackupCodeSignInController } from "../core/backup-codes";
 import { queryParameter } from "../core/browser-location";
@@ -62,19 +62,15 @@ const lastLoginMethodAfterRender = (): WritableSignal<string | undefined> => {
 };
 
 /**
- * "Continue as guest", when the `anonymous` plugin is on.
- *
- * Disabled while the call is in flight: `signIn.anonymous` creates an account
- * every time it is called, so a double-click without this leaves a second,
- * orphaned anonymous user behind — and the first click gives no feedback that
- * anything happened, which is what invites the second.
+ * "Continue as guest", when the `anonymous` plugin is on. The in-flight state
+ * (and the double-click guard behind it) belongs to `createAnonymousController`.
  */
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
     selector: "lunora-anonymous-button",
     standalone: true,
     template: `
-        <button class="lunora-auth-button lunora-auth-button--secondary" type="button" [disabled]="pending()" (click)="signIn()">
+        <button class="lunora-auth-button lunora-auth-button--secondary" type="button" [disabled]="state().status === 'submitting'" (click)="signIn()">
             {{ t.anonymousSignIn }}
         </button>
     `,
@@ -82,13 +78,11 @@ const lastLoginMethodAfterRender = (): WritableSignal<string | undefined> => {
 class AnonymousButtonComponent {
     private readonly context = injectAuthUIContext();
     protected readonly t = this.context().localization;
-    protected readonly pending = signal(false);
+    private readonly bridge = controllerSignal(createAnonymousController, { context: this.context });
+    protected readonly state = this.bridge.state;
 
     protected signIn(): void {
-        this.pending.set(true);
-        void signInAnonymously(this.context()).finally(() => {
-            this.pending.set(false);
-        });
+        void this.bridge.actions.signIn();
     }
 }
 
@@ -262,7 +256,7 @@ class SignInCardComponent {
     `,
 })
 class SignUpCardComponent {
-    /** Defaults to `redirects.signIn`, itself derived from `viewPaths.base`. */
+    /** Defaults to the configured sign-in route; see `viewPaths.base`. */
     readonly signInHref = input<string>();
 
     private readonly context = injectAuthUIContext();
@@ -273,7 +267,7 @@ class SignUpCardComponent {
 
     /** Derived, so a discovery answer that closes self-serve sign-up takes effect. */
     protected readonly enabled = computed(() => this.context().signUp);
-    protected readonly signInLink = computed(() => this.signInHref() ?? this.context().redirects.signIn);
+    protected readonly signInLink = computed(() => this.signInHref() ?? viewHref(this.context(), "signIn"));
     /** Derived, so the provider list follows server discovery. */
     protected readonly social = computed(() => this.context().social);
 
@@ -309,13 +303,13 @@ class SignUpCardComponent {
 class ForgotPasswordCardComponent implements OnInit {
     /** Defaults to the configured reset-password route; see `viewPaths.base`. */
     readonly resetPath = input<string>();
-    /** Defaults to `redirects.signIn`, itself derived from `viewPaths.base`. */
+    /** Defaults to the configured sign-in route; see `viewPaths.base`. */
     readonly signInHref = input<string>();
 
     private readonly context = injectAuthUIContext();
     private readonly injector = inject(Injector);
     protected readonly t = this.context().localization;
-    protected readonly signInLink = computed(() => this.signInHref() ?? this.context().redirects.signIn);
+    protected readonly signInLink = computed(() => this.signInHref() ?? viewHref(this.context(), "signIn"));
     protected state!: Signal<FormState<ForgotPasswordField>>;
     protected actions!: FormActions<ForgotPasswordField>;
 
@@ -483,12 +477,12 @@ class ResetPasswordOtpCardComponent {
     `,
 })
 class MagicLinkCardComponent {
-    /** Defaults to `redirects.signIn`, itself derived from `viewPaths.base`. */
+    /** Defaults to the configured sign-in route; see `viewPaths.base`. */
     readonly signInHref = input<string>();
 
     private readonly context = injectAuthUIContext();
     protected readonly enabled = computed(() => isFlowEnabled(this.context(), "magicLink", "MagicLinkCard"));
-    protected readonly signInLink = computed(() => this.signInHref() ?? this.context().redirects.signIn);
+    protected readonly signInLink = computed(() => this.signInHref() ?? viewHref(this.context(), "signIn"));
     protected readonly t = this.context().localization;
     private readonly bridge = controllerSignal(createMagicLinkController, { context: this.context });
     protected readonly state = this.bridge.state;

@@ -1,27 +1,22 @@
 <!--
-    "Continue as guest", when the `anonymous` plugin is on.
-
-    Disabled while the call is in flight: `signIn.anonymous` creates an account
-    every time it is called, so a double-click without this leaves a second,
-    orphaned anonymous user behind — and the first click gives no feedback that
-    anything happened, which is what invites the second.
+    "Continue as guest", when the `anonymous` plugin is on. The in-flight state
+    (and the double-click guard behind it) belongs to `createAnonymousController`.
 -->
 <script lang="ts">
-    import { signInAnonymously } from "../core/anonymous";
+    import { createAnonymousController } from "../core/anonymous";
     import { useAuthUI } from "./context";
+    import { controllerStore } from "./controller-store";
 
     const context = useAuthUI();
-    let pending = $state(false);
+    // `state` is renamed: `$state` is a rune, not a store read.
+    const { actions, state: flow } = controllerStore(createAnonymousController);
 </script>
 
 <button
     class="lunora-auth-button lunora-auth-button--secondary"
-    disabled={pending}
+    disabled={$flow.status === "submitting"}
     onclick={() => {
-        pending = true;
-        void signInAnonymously(context).finally(() => {
-            pending = false;
-        });
+        void actions.signIn();
     }}
     type="button"
 >

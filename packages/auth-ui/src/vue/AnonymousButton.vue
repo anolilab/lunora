@@ -1,27 +1,20 @@
 <script setup lang="ts">
-// "Continue as guest", when the `anonymous` plugin is on.
-//
-// Disabled while the call is in flight: `signIn.anonymous` creates an account
-// every time it is called, so a double-click without this leaves a second,
-// orphaned anonymous user behind — and the first click gives no feedback that
-// anything happened, which is what invites the second.
-import { ref } from "vue";
-import { signInAnonymously } from "../core/anonymous";
+// "Continue as guest", when the `anonymous` plugin is on. The in-flight state
+// (and the double-click guard behind it) belongs to `createAnonymousController`.
+import { createAnonymousController } from "../core/anonymous";
 import { useAuthUI } from "./provider";
+import { useController } from "./use-controller";
 
 const context = useAuthUI();
-const pending = ref(false);
+const { actions, state } = useController(createAnonymousController);
 
 const onSignIn = (): void => {
-    pending.value = true;
-    void signInAnonymously(context).finally(() => {
-        pending.value = false;
-    });
+    void actions.signIn();
 };
 </script>
 
 <template>
-    <button class="lunora-auth-button lunora-auth-button--secondary" type="button" :disabled="pending" @click="onSignIn">
+    <button class="lunora-auth-button lunora-auth-button--secondary" type="button" :disabled="state.status === 'submitting'" @click="onSignIn">
         {{ context.localization.anonymousSignIn }}
     </button>
 </template>

@@ -3,7 +3,7 @@
 import type { ReactElement } from "react";
 import { useState, useSyncExternalStore } from "react";
 
-import { signInAnonymously } from "../core/anonymous";
+import { createAnonymousController } from "../core/anonymous";
 import { createBackupCodeSignInController } from "../core/backup-codes";
 import { queryParameter } from "../core/browser-location";
 import { viewHref } from "../core/config";
@@ -25,26 +25,19 @@ import { useAuthUI } from "./provider";
 import { useController } from "./use-controller";
 
 /**
- * Guest sign-in, when the `anonymous` plugin is on.
- *
- * Disabled while the call is in flight: `signIn.anonymous` creates an account
- * every time it is called, so a double-click without this leaves a second,
- * orphaned anonymous user behind — and the first click gives no feedback that
- * anything happened, which is what invites the second.
+ * Guest sign-in, when the `anonymous` plugin is on. The in-flight state (and the
+ * double-click guard behind it) belongs to `createAnonymousController`.
  */
 const AnonymousButton = (): ReactElement => {
     const context = useAuthUI();
-    const [pending, setPending] = useState(false);
+    const [state, actions] = useController(createAnonymousController);
 
     return (
         <button
             className="lunora-auth-button lunora-auth-button--secondary"
-            disabled={pending}
+            disabled={state.status === "submitting"}
             onClick={() => {
-                setPending(true);
-                void signInAnonymously(context).finally(() => {
-                    setPending(false);
-                });
+                void actions.signIn();
             }}
             type="button"
         >
@@ -107,7 +100,7 @@ const SignInCard = ({ forgotPasswordHref, signUpHref }: SignInCardProps = {}): R
 };
 
 interface SignUpCardProps {
-    /** Defaults to `redirects.signIn`, itself derived from `viewPaths.base`. */
+    /** Defaults to the configured sign-in route; see `viewPaths.base`. */
     signInHref?: string;
 }
 
@@ -125,7 +118,7 @@ const SignUpCard = ({ signInHref }: SignUpCardProps = {}): ReactElement | null =
     }
 
     return (
-        <AuthCard footer={<AuthLink href={signInHref ?? context.redirects.signIn}>{t.haveAccount}</AuthLink>} title={t.signUp}>
+        <AuthCard footer={<AuthLink href={signInHref ?? viewHref(context, "signIn")}>{t.haveAccount}</AuthLink>} title={t.signUp}>
             {/*
              * Social buttons belong on sign-up too — OAuth is a sign-up path, not
              * just a sign-in one, and omitting them here sends new users through a
@@ -154,16 +147,17 @@ const SignUpCard = ({ signInHref }: SignUpCardProps = {}): ReactElement | null =
 interface ForgotPasswordCardProps {
     /** Defaults to the configured reset-password route; see `viewPaths.base`. */
     resetPath?: string;
-    /** Defaults to `redirects.signIn`, itself derived from `viewPaths.base`. */
+    /** Defaults to the configured sign-in route; see `viewPaths.base`. */
     signInHref?: string;
 }
 
 const ForgotPasswordCard = ({ resetPath, signInHref }: ForgotPasswordCardProps = {}): ReactElement => {
-    const { localization: t, redirects } = useAuthUI();
-    const [state, actions] = useController((context) => createForgotPasswordController(context, { resetPath }), [resetPath]);
+    const context = useAuthUI();
+    const t = context.localization;
+    const [state, actions] = useController((context_) => createForgotPasswordController(context_, { resetPath }), [resetPath]);
 
     return (
-        <AuthCard footer={<AuthLink href={signInHref ?? redirects.signIn}>{t.backToSignIn}</AuthLink>} title={t.forgotPassword}>
+        <AuthCard footer={<AuthLink href={signInHref ?? viewHref(context, "signIn")}>{t.backToSignIn}</AuthLink>} title={t.forgotPassword}>
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
@@ -220,7 +214,7 @@ const ResetPasswordOtpCard = (): ReactElement => {
 };
 
 interface MagicLinkCardProps {
-    /** Defaults to `redirects.signIn`, itself derived from `viewPaths.base`. */
+    /** Defaults to the configured sign-in route; see `viewPaths.base`. */
     signInHref?: string;
 }
 
@@ -242,7 +236,7 @@ const MagicLinkCard = ({ signInHref }: MagicLinkCardProps = {}): ReactElement | 
     }
 
     return (
-        <AuthCard footer={<AuthLink href={signInHref ?? context.redirects.signIn}>{t.backToSignIn}</AuthLink>} title={t.magicLink}>
+        <AuthCard footer={<AuthLink href={signInHref ?? viewHref(context, "signIn")}>{t.backToSignIn}</AuthLink>} title={t.magicLink}>
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />

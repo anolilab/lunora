@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { viewHref } from "../core/config";
     import { createSignUpController } from "../core/sign-up";
     import { signInWithSocial } from "../core/social";
     import AuthCard from "./AuthCard.svelte";
@@ -15,12 +16,12 @@
     let {
         signInHref,
     }: {
-        /** Defaults to `redirects.signIn`, itself derived from `viewPaths.base`. */
+        /** Defaults to the configured sign-in route; see `viewPaths.base`. */
         signInHref?: string;
     } = $props();
 
     const context = useAuthUI();
-    const signInLink = $derived(signInHref ?? context.redirects.signIn);
+    const signInLink = $derived(signInHref ?? viewHref(context, "signIn"));
     const t = context.localization;
     const social = context.social;
     const { actions, state: form } = controllerStore(createSignUpController);

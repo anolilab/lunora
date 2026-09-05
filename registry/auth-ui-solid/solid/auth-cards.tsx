@@ -1,7 +1,7 @@
 import type { JSX } from "solid-js";
 import { createSignal, onMount, Show } from "solid-js";
 
-import { signInAnonymously } from "../core/anonymous";
+import { createAnonymousController } from "../core/anonymous";
 import { createBackupCodeSignInController } from "../core/backup-codes";
 import { queryParameter } from "../core/browser-location";
 import { viewHref } from "../core/config";
@@ -22,26 +22,19 @@ import { useAuthUI } from "./provider";
 import { createController } from "./use-controller";
 
 /**
- * Guest sign-in, when the `anonymous` plugin is on.
- *
- * Disabled while the call is in flight: `signIn.anonymous` creates an account
- * every time it is called, so a double-click without this leaves a second,
- * orphaned anonymous user behind — and the first click gives no feedback that
- * anything happened, which is what invites the second.
+ * Guest sign-in, when the `anonymous` plugin is on. The in-flight state (and the
+ * double-click guard behind it) belongs to `createAnonymousController`.
  */
 const AnonymousButton = (): JSX.Element => {
     const context = useAuthUI();
-    const [pending, setPending] = createSignal(false);
+    const [state, actions] = createController(createAnonymousController);
 
     return (
         <button
             class="lunora-auth-button lunora-auth-button--secondary"
-            disabled={pending()}
+            disabled={state.status === "submitting"}
             onClick={() => {
-                setPending(true);
-                void signInAnonymously(context).finally(() => {
-                    setPending(false);
-                });
+                void actions.signIn();
             }}
             type="button"
         >
@@ -114,7 +107,7 @@ const SignInCard = (props: SignInCardProps = {}): JSX.Element => {
 };
 
 interface SignUpCardProps {
-    /** Defaults to `redirects.signIn`, itself derived from `viewPaths.base`. */
+    /** Defaults to the configured sign-in route; see `viewPaths.base`. */
     signInHref?: string;
 }
 
@@ -132,7 +125,7 @@ const SignUpCard = (props: SignUpCardProps = {}): JSX.Element => {
     }
 
     return (
-        <AuthCard footer={<AuthLink href={props.signInHref ?? context.redirects.signIn}>{t.haveAccount}</AuthLink>} title={t.signUp}>
+        <AuthCard footer={<AuthLink href={props.signInHref ?? viewHref(context, "signIn")}>{t.haveAccount}</AuthLink>} title={t.signUp}>
             {/*
              * Social buttons belong on sign-up too — OAuth is a sign-up path, not
              * just a sign-in one, and omitting them here sends new users through a
@@ -163,16 +156,17 @@ const SignUpCard = (props: SignUpCardProps = {}): JSX.Element => {
 interface ForgotPasswordCardProps {
     /** Defaults to the configured reset-password route; see `viewPaths.base`. */
     resetPath?: string;
-    /** Defaults to `redirects.signIn`, itself derived from `viewPaths.base`. */
+    /** Defaults to the configured sign-in route; see `viewPaths.base`. */
     signInHref?: string;
 }
 
 const ForgotPasswordCard = (props: ForgotPasswordCardProps = {}): JSX.Element => {
-    const { localization: t, redirects } = useAuthUI();
-    const [state, actions] = createController((context) => createForgotPasswordController(context, { resetPath: props.resetPath }));
+    const context = useAuthUI();
+    const t = context.localization;
+    const [state, actions] = createController((context_) => createForgotPasswordController(context_, { resetPath: props.resetPath }));
 
     return (
-        <AuthCard footer={<AuthLink href={props.signInHref ?? redirects.signIn}>{t.backToSignIn}</AuthLink>} title={t.forgotPassword}>
+        <AuthCard footer={<AuthLink href={props.signInHref ?? viewHref(context, "signIn")}>{t.backToSignIn}</AuthLink>} title={t.forgotPassword}>
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
@@ -228,7 +222,7 @@ const ResetPasswordOtpCard = (): JSX.Element => {
 };
 
 interface MagicLinkCardProps {
-    /** Defaults to `redirects.signIn`, itself derived from `viewPaths.base`. */
+    /** Defaults to the configured sign-in route; see `viewPaths.base`. */
     signInHref?: string;
 }
 
@@ -251,7 +245,7 @@ const MagicLinkCard = (props: MagicLinkCardProps = {}): JSX.Element => {
     }
 
     return (
-        <AuthCard footer={<AuthLink href={props.signInHref ?? context.redirects.signIn}>{t.backToSignIn}</AuthLink>} title={t.magicLink}>
+        <AuthCard footer={<AuthLink href={props.signInHref ?? viewHref(context, "signIn")}>{t.backToSignIn}</AuthLink>} title={t.magicLink}>
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />

@@ -229,6 +229,7 @@ interface ControllerContext {
     forgotPasswordMethod: "link" | "otp";
     localization: Localization;
     nav: NavAdapter;
+    /** The app's handler, wrapped by {@link guardCallback} — calling it cannot throw. */
     onError?: (error: unknown) => void;
     onSessionChange?: () => void;
     /** Organization sub-features, server-derived when discovery answers. */
@@ -361,6 +362,35 @@ const resolveViewPaths = (viewPaths?: ViewPaths): Required<ViewPaths> => {
 };
 
 /**
+ * Wrap an app-supplied callback so a throw inside it cannot abort the caller.
+ *
+ * Every controller reports a failure with `context.onError?.(error)` on its way
+ * to a terminal state, and most do it *before* the `store.update` that leaves
+ * that state. An app whose handler throws would therefore strand the flow in
+ * `submitting`: the button stays disabled, and the email-OTP request step has no
+ * `back()` to escape with, so the card is dead until a reload. Containing it
+ * here rather than at each of the ~25 call sites keeps the guard un-forgettable
+ * for the next controller.
+ *
+ * The throw is swallowed on purpose: it is a defect in the app's own handler,
+ * and rethrowing it — synchronously or on a later tick — is the wedge this
+ * exists to prevent.
+ */
+const guardCallback = (callback: ((error: unknown) => void) | undefined): ((error: unknown) => void) | undefined => {
+    if (callback === undefined) {
+        return undefined;
+    }
+
+    return (error: unknown): void => {
+        try {
+            callback(error);
+        } catch {
+            // Intentionally empty — see the docblock.
+        }
+    };
+};
+
+/**
  * Normalize a user-facing config into a fully-defaulted controller context.
  *
  * `discovered` is the settled result of `discoverAuthConfig`, or undefined while
@@ -390,7 +420,7 @@ const resolveContext = (config: AuthUIConfig, discovered?: DiscoveredConfig): Co
         forgotPasswordMethod: config.forgotPassword?.method ?? "link",
         localization: resolveLocalization(config.localization),
         nav: config.nav,
-        onError: config.onError,
+        onError: guardCallback(config.onError),
         onSessionChange: config.onSessionChange,
         organization: {
             allowUserToCreate: discovered?.organization?.allowUserToCreate ?? true,

@@ -4,7 +4,7 @@ import type { ControllerContext } from "./config";
 import { createFormController } from "./create-form-controller";
 import { assertOk } from "./map-error";
 import { readFieldPrefill } from "./prefill";
-import { resolveAfterSignIn } from "./redirect-to";
+import { postAuthDestination } from "./redirect-to";
 import type { FormController } from "./types";
 import { email as validateEmail, password as validatePassword, required } from "./validators";
 
@@ -64,7 +64,7 @@ const createSignUpController = (context: ControllerContext): FormController<Sign
 
             assertOk(
                 await context_.authClient.signUp.email({
-                    callbackURL: resolveAfterSignIn(context_.redirects.afterSignIn),
+                    callbackURL: postAuthDestination(context_),
                     email: values.email.trim(),
                     ...(inviteToken === undefined ? {} : { inviteToken }),
                     name: values.name.trim(),
@@ -72,7 +72,7 @@ const createSignUpController = (context: ControllerContext): FormController<Sign
                 }),
             );
 
-            return { redirectTo: resolveAfterSignIn(context_.redirects.afterSignIn) };
+            return { redirectTo: postAuthDestination(context_) };
         },
     });
 

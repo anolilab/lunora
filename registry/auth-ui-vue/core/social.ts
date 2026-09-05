@@ -14,11 +14,11 @@
 import type { ControllerContext } from "./config";
 import { assertOk } from "./map-error";
 import { notifyError } from "./notify-error";
-import { resolveAfterSignIn } from "./redirect-to";
+import { postAuthDestination } from "./redirect-to";
 
 const signInWithSocial = async (context: ControllerContext, provider: string): Promise<void> => {
     try {
-        assertOk(await context.authClient.signIn.social({ callbackURL: resolveAfterSignIn(context.redirects.afterSignIn), provider }));
+        assertOk(await context.authClient.signIn.social({ callbackURL: postAuthDestination(context), provider }));
     } catch (error) {
         // A failed social redirect leaves the user on the same page with no
         // explanation, so this is one of the paths that needs a toast.

@@ -9,7 +9,8 @@ export type { ActiveMemberActions, ActiveMemberController, ActiveMemberState } f
 export { createActiveMemberController } from "./active-member";
 export type { AdminUsersActions, AdminUsersController, AdminUsersOptions, AdminUsersState } from "./admin-users";
 export { createAdminUsersController } from "./admin-users";
-export { signInAnonymously } from "./anonymous";
+export type { AnonymousActions, AnonymousController, AnonymousState } from "./anonymous";
+export { createAnonymousController } from "./anonymous";
 export type { AvatarUploadActions, AvatarUploadController, AvatarUploadState } from "./avatar";
 export { ACCEPT_ATTRIBUTE, ACCEPTED_TYPES, createAvatarUploadController } from "./avatar";
 export type { BackupCodesField, BackupCodesHandle, BackupCodeSignInField } from "./backup-codes";
@@ -98,7 +99,7 @@ export {
 export { lockedPrefill, PREFILLABLE, readFieldPrefill } from "./prefill";
 export type { ProfileField, ProfileOptions } from "./profile";
 export { createProfileController } from "./profile";
-export { isSafeRedirect, readRedirectTo, resolveAfterSignIn, withRedirectTo } from "./redirect-to";
+export { isSafeRedirect, postAuthDestination, readRedirectTo, withRedirectTo } from "./redirect-to";
 export type { ResetPasswordField, ResetPasswordOptions } from "./reset-password";
 export { createResetPasswordController } from "./reset-password";
 export type { ResetPasswordOtpField } from "./reset-password-otp";

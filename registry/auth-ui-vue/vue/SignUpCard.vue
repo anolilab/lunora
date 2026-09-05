@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
+import { viewHref } from "../core/config";
 import { createSignUpController } from "../core/sign-up";
 import { signInWithSocial } from "../core/social";
 import AuthCard from "./AuthCard.vue";
@@ -15,7 +16,7 @@ import SubmitButton from "./SubmitButton.vue";
 import { useController } from "./use-controller";
 
 const props = defineProps<{
-    /** Defaults to `redirects.signIn`, itself derived from `viewPaths.base`. */
+    /** Defaults to the configured sign-in route; see `viewPaths.base`. */
     signInHref?: string;
 }>();
 
@@ -29,7 +30,7 @@ const { actions, state } = useController(createSignUpController);
 // Computed, not read at setup: `setup()` never re-runs, so a gate resolved
 // here would stay frozen on the pre-discovery answer.
 const signUp = computed(() => context.value.signUp);
-const signInLink = computed(() => props.signInHref ?? context.value.redirects.signIn);
+const signInLink = computed(() => props.signInHref ?? viewHref(context.value, "signIn"));
 
 const onSocial = (provider: string): void => {
     void signInWithSocial(context.value, provider);

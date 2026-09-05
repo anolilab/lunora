@@ -5,8 +5,9 @@
  * still exposing the same `getState`/`subscribe` contract for the view layer.
  */
 import type { ControllerContext } from "./config";
+import { statusAfterEdit } from "./create-form-controller";
 import { assertOk, mapAuthError } from "./map-error";
-import { resolveAfterSignIn } from "./redirect-to";
+import { postAuthDestination } from "./redirect-to";
 import { createStore } from "./store";
 import type { Controller, FieldState, FlowStatus } from "./types";
 import { email as validateEmail, required } from "./validators";
@@ -47,22 +48,12 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
         step: "request",
     });
 
-    /*
-     * Typing clears the banner and returns the form to idle — except while a
-     * request is in flight, where "idle" would re-enable the button and let a
-     * second request out. Both guards mirror `createFormController`'s `setField`
-     * and `submit`, and matter more here than there: a second
-     * `sendVerificationOtp` invalidates the code the first one mailed, so a user
-     * correcting a typo mid-request is left holding a code that no longer works.
-     */
-    const editing = (): FlowStatus => (store.get().status === "submitting" ? "submitting" : "idle");
-
     const setEmail = (value: string): void => {
-        store.update({ email: { ...store.get().email, value }, formError: undefined, status: editing() });
+        store.update({ email: { ...store.get().email, value }, formError: undefined, status: statusAfterEdit(store.get().status) });
     };
 
     const setCode = (value: string): void => {
-        store.update({ code: { ...store.get().code, value }, formError: undefined, status: editing() });
+        store.update({ code: { ...store.get().code, value }, formError: undefined, status: statusAfterEdit(store.get().status) });
     };
 
     const sendCode = async (): Promise<void> => {
@@ -114,7 +105,7 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
 
             store.update({ status: "success" });
             context.onSessionChange?.();
-            context.nav.replace(resolveAfterSignIn(context.redirects.afterSignIn));
+            context.nav.replace(postAuthDestination(context));
         } catch (error_) {
             context.onError?.(error_);
             store.update({ formError: mapAuthError(error_, context.localization, context.localization.twoFactorFailed), status: "error" });

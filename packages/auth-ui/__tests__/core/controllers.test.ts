@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AuthClient, AuthResponse, ControllerContext } from "../../src/core";
 import {
     createActiveMemberController,
+    createAnonymousController,
     createEmailOtpController,
     createForgotPasswordController,
     createResendVerificationController,
@@ -512,5 +513,72 @@ describe("errored getSession is an error, not signed-out", () => {
         // swallowed into `{ email: "" }`), and no field is marked seeded.
         expect(onError).toHaveBeenCalledTimes(1);
         expect(controller.getState().fields.email.value).toBe("");
+    });
+});
+
+/**
+ * An app's `onError` is app code, and app code throws. Every controller reports
+ * a failure through it on the way to a terminal status, so a throw that escaped
+ * would leave the flow stuck in `submitting`: the submit button never
+ * re-enables, and the email-OTP request step has no `back()` to escape with.
+ * `resolveContext` therefore contains the callback — the test is here rather
+ * than beside `resolveContext` because the wedge is a controller behaviour.
+ */
+describe("a throwing app onError cannot wedge a flow", () => {
+    const throwingContext = (client: AuthClient): ControllerContext =>
+        resolveContext({
+            authClient: client,
+            nav: { navigate: vi.fn(), replace: vi.fn() },
+            onError: () => {
+                throw new Error("the app's own handler is broken");
+            },
+        });
+
+    it("leaves the email-OTP request step in error, not submitting", async () => {
+        const client = stubClient({ emailOtp: { sendVerificationOtp: vi.fn(() => fail("rate limited")) } });
+        const controller = createEmailOtpController(throwingContext(client));
+
+        controller.actions.setEmail("ada@example.com");
+        await controller.actions.sendCode();
+
+        expect(controller.getState().status).toBe("error");
+        expect(controller.getState().formError).toBe("rate limited");
+
+        // And the step is still submittable — the wedge this guards against was
+        // a permanently disabled button on a step with no way back.
+        await controller.actions.sendCode();
+
+        expect(client.emailOtp.sendVerificationOtp as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(2);
+    });
+
+    it("leaves a form controller in error, not submitting", async () => {
+        const controller = createSignInController(throwingContext(stubClient({ signIn: { email: vi.fn(() => fail("bad credentials")) } })));
+
+        controller.actions.setField("email", "a@b.co");
+        controller.actions.setField("password", "hunter222");
+        await controller.actions.submit();
+
+        expect(controller.getState().status).toBe("error");
+    });
+});
+
+describe(createAnonymousController, () => {
+    it("refuses a second sign-in while the first is in flight, so a double-click makes one user", async () => {
+        const anonymous = vi.fn(() => new Promise<never>(() => {}));
+        const controller = createAnonymousController(makeContext(stubClient({ signIn: { anonymous } })).context);
+
+        void controller.actions.signIn();
+        void controller.actions.signIn();
+
+        expect(controller.getState().status).toBe("submitting");
+        expect(anonymous).toHaveBeenCalledTimes(1);
+    });
+
+    it("returns to a terminal status when the call fails, so the button re-enables", async () => {
+        const controller = createAnonymousController(makeContext(stubClient({ signIn: { anonymous: vi.fn(() => fail("anonymous is off")) } })).context);
+
+        await controller.actions.signIn();
+
+        expect(controller.getState().status).toBe("error");
     });
 });

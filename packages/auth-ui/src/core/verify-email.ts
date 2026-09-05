@@ -17,7 +17,7 @@ import { isBrowser } from "./browser-location";
 import type { ControllerContext } from "./config";
 import { createFormController } from "./create-form-controller";
 import { assertOk, mapAuthError } from "./map-error";
-import { resolveAfterSignIn } from "./redirect-to";
+import { postAuthDestination } from "./redirect-to";
 import { createStore } from "./store";
 import type { Controller, FlowStatus, FormController } from "./types";
 import { email as emailValidator } from "./validators";
@@ -76,7 +76,7 @@ const createVerifyEmailController = (context: ControllerContext, options: Verify
 
             store.update({ status: "success" });
             context.onSessionChange?.();
-            context.nav.replace(resolveAfterSignIn(context.redirects.afterSignIn));
+            context.nav.replace(postAuthDestination(context));
         } catch (error) {
             context.onError?.(error);
             store.update({ error: mapAuthError(error, context.localization, context.localization.verifyEmailFailed), status: "error" });
@@ -125,14 +125,14 @@ const createResendVerificationController = (context: ControllerContext, options:
                   }
                 : undefined,
         submit: async (values, context_) => {
-            // `resolveAfterSignIn`, not the raw default: this link is followed
+            // `postAuthDestination`, not the raw field: this link is followed
             // from a mail client, so the current page's `?redirectTo=` is the
             // only surviving record of where the user was headed. Sending the
             // default instead drops an invitee back on `/` with the invitation
             // forgotten — see `redirect-to.ts`.
             assertOk(
                 await context_.authClient.sendVerificationEmail({
-                    callbackURL: resolveAfterSignIn(context_.redirects.afterSignIn),
+                    callbackURL: postAuthDestination(context_),
                     email: values.email.trim(),
                 }),
             );
