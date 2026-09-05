@@ -1,3 +1,23 @@
+## @lunora/platform-node [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.48...@lunora/platform-node@1.0.0-alpha.49) (2026-09-05)
+
+### Bug Fixes
+
+* **auth,sql-store,codegen:** stop the auth migrator killing the isolate, and the global sweep re-running per request ([#613](https://github.com/anolilab/lunora/issues/613)) ([f170c82](https://github.com/anolilab/lunora/commit/f170c82b07857dad3053660d558a513e484309e8)), closes [#599](https://github.com/anolilab/lunora/issues/599) [#601](https://github.com/anolilab/lunora/issues/601) [#600](https://github.com/anolilab/lunora/issues/600) [#601](https://github.com/anolilab/lunora/issues/601)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.109
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+* **@lunora/queue:** upgraded to 1.0.0-alpha.46
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.109
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.46
+* **@lunora/do:** upgraded to 1.0.0-alpha.118
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.33
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.94
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.56
+* **@lunora/storage:** upgraded to 1.0.0-alpha.51
+
 ## @lunora/platform-node [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.47...@lunora/platform-node@1.0.0-alpha.48) (2026-09-04)
 
 

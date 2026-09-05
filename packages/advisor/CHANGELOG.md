@@ -1,3 +1,16 @@
+## @lunora/advisor [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.109...@lunora/advisor@1.0.0-alpha.110) (2026-09-05)
+
+### Bug Fixes
+
+* **scheduler,workflow:** give a scheduled workflow an idempotency key ([#605](https://github.com/anolilab/lunora/issues/605)) ([0f3afb4](https://github.com/anolilab/lunora/commit/0f3afb44a005861c5b06b4be0cca4576ec0ce7e8))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+* **@lunora/server:** upgraded to 1.0.0-alpha.103
+* **@lunora/values:** upgraded to 1.0.0-alpha.40
+
 ## @lunora/advisor [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.108...@lunora/advisor@1.0.0-alpha.109) (2026-09-04)
 
 ### ⚠ BREAKING CHANGES

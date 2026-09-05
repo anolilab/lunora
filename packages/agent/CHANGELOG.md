@@ -1,3 +1,20 @@
+## @lunora/agent [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.88...@lunora/agent@1.0.0-alpha.89) (2026-09-05)
+
+### Bug Fixes
+
+* **client,react:** encode SSR payloads and stop three surfaces silently blanking ([#607](https://github.com/anolilab/lunora/issues/607)) ([a17366a](https://github.com/anolilab/lunora/commit/a17366a43ca0ea2a69f05912d68a678a0450c270))
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.73
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+* **@lunora/mail:** upgraded to 1.0.0-alpha.64
+* **@lunora/server:** upgraded to 1.0.0-alpha.103
+* **@lunora/values:** upgraded to 1.0.0-alpha.40
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.46
+* **@lunora/container:** upgraded to 1.0.0-alpha.45
+
 ## @lunora/agent [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.87...@lunora/agent@1.0.0-alpha.88) (2026-09-04)
 
 ### ⚠ BREAKING CHANGES

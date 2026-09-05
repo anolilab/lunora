@@ -1,3 +1,27 @@
+## @lunora/bindings [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.49...@lunora/bindings@1.0.0-alpha.50) (2026-09-05)
+
+### ⚠ BREAKING CHANGES
+
+* **codegen:** `@lunora/config` no longer exports `ResourceGraph`,
+`NamedResource`, `ShardNamespaceResource`, `ProvisionResult` or `DriverContext`,
+and `DeployDriver` is now `{ id, name, toolchain? }` — `infer` and `provision`
+are gone. `@lunora/bindings/images` no longer exports `DrawOverlay`, and
+`TransformOptions` has no `draw` key.
+
+
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **codegen:** gate on the context binding, not the identifier text ([#609](https://github.com/anolilab/lunora/issues/609)) ([c0bc210](https://github.com/anolilab/lunora/commit/c0bc2105833a32d44b71fec7e05ff503ac94d86d))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+
 ## @lunora/bindings [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.48...@lunora/bindings@1.0.0-alpha.49) (2026-09-04)
 
 ### ⚠ BREAKING CHANGES

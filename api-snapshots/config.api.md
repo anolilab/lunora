@@ -589,8 +589,10 @@ interface InferredBindings {
     usesImages: boolean;
     usesKv: boolean;
     usesMail: boolean;
+    usesNotify: boolean;
     usesPayment: boolean;
     usesPipelines: boolean;
+    usesR2sql: boolean;
     usesScheduler: boolean;
     usesStorage: boolean;
     usesX402Charge: boolean;

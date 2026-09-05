@@ -1,3 +1,154 @@
+## @lunora/codegen [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.157...@lunora/codegen@1.0.0-alpha.158) (2026-09-05)
+
+### ⚠ BREAKING CHANGES
+
+* **codegen:** `@lunora/config` no longer exports `ResourceGraph`,
+`NamedResource`, `ShardNamespaceResource`, `ProvisionResult` or `DriverContext`,
+and `DeployDriver` is now `{ id, name, toolchain? }` — `infer` and `provision`
+are gone. `@lunora/bindings/images` no longer exports `DrawOverlay`, and
+`TransformOptions` has no `draw` key.
+
+
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>
+* **cli:** `requiredPackagesFor` / `assertRequiredPackages` take a signals
+object in place of the trailing `hasVectors` boolean. `ImportSummary.storage`
+carries capped `ambiguous`/`unmigrated` samples plus new `ambiguousTotal` /
+`unmigratedTotal` counts. `InferredBindings` gains `usesNotify` and `usesR2sql`.
+`OfferDeps.resolveAuthUiItem` may now return `undefined`, which callers must read
+as a refusal. `verify` and `build` accept `--strict-advisories` /
+`--no-strict-advisories`, and `verify` now fails on ERROR-level advisories under
+the same CI-on/local-off default as every other caller.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(cli): escape the NUL key separator and type the registry dispatch mocks
+
+The storage-remap dedup key used a raw NUL byte as its separator, which makes git
+treat the file as binary — invisible in diff, blame and review — and fails the
+`no-nul-bytes` postinstall gate, which turns every CI job red in its setup step
+while naming the cause in none of them. `\\u0000` is byte-identical at runtime.
+
+The new registry-dispatch test's mocks returned `{ code, items }` where all three
+runners return `AddCommandResult` (`bindings`/`code`/`deps`/`skipped`/`written`),
+and its toolbox cast named a wider options type than `execute` accepts. Neither
+surfaced earlier because the branch's verification skipped `lint:types`.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+* **ratelimit,auth:** `accessRoles()` and the `@lunora/cloudflare-access/roles` subpath are removed. Use
+`createAccessResolver({ roles })` instead. `AccessRoleMap` now exports from the package root.
+
+Corrects the three places that told a reader the two paths agree: the emit.ts comment claiming
+`composeShapeReadWhere` is "exactly the request-time path", the package docs, and the RLS concept
+page. The golden `_generated/shard.ts` fixture is regenerated for the emitted comment.
+
+Second fix in the same resolver: a platform identity carrying no usable id suppressed the
+configured JWT fallback. `??` falls through on nullish only, and `readPlatformIdentity` returns an
+object for any non-null object result, `{}` included — so a caller presenting a valid
+Cf-Access-Jwt-Assertion resolved anonymous with nothing verified and `onError` never firing. The
+resolver now falls through whenever the platform identity yields no identity, and stays fail-closed
+when neither path does. That trigger was reasoned from the code rather than observed — whether
+Cloudflare ever returns such an identity is unverified — so the fix is deliberately defensive.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(ratelimit): stop a reserve stranding a key and misreporting retry
+
+Three defects on the reserve path, all reachable through the public API and through
+`token-budget.ts`, which clamps an oversized charge to capacity and reserves it.
+
+A fixed window granted exactly one period's `rate` however many periods had elapsed, while the
+rejection path persists nothing. A debt of at least `rate` therefore re-projected against that same
+lone grant on every later call and the key stayed denied forever, told "retry next window" every
+window. The projection now grants one `rate` per elapsed window, the way the token bucket refills
+per elapsed millisecond; the existing capacity cap still bounds the result. The old test reserved 2
+against rate 5 — a debt smaller than `rate`, which is the case that recovers — so it passed
+throughout, and now covers a debt of a full `rate`.
+
+The deny-list was stored verbatim while the incoming key was checked both normalized and raw, under
+a comment claiming either form worked. Only a byte-exact repeat of the stored string matched: with
+a trim+lowercase normalizer, `denyList: ["Abuse@Example.com"]` admitted a request keyed
+`abuse@example.com` that consumed from the same storage bucket, so a banned caller shed the ban by
+lower-casing their own email. Entries are now stored in both forms at construction.
+
+A sliding-window reserve derived its `retryAfter` from the pre-reserve count while persisting
+`currentCount + count`, so the time it reported was still denied when it arrived and the caller
+burned a rejected attempt — a re-queued durable write wakes on that hint verbatim. It is now
+derived from the count the call actually stores. The old assertion pinned 1200 under the title
+"reports when the pressure clears"; the true clear time is 1334, and the test now re-evaluates at
+the reported time to prove it is honoured.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(auth): trust cf-connecting-ip only behind Cloudflare
+
+`resolveIp` in the audit hooks returned `cf-connecting-ip` before consulting `trustProxyHeaders`,
+though that option's own docblock promises the opposite: "Defaults to false: off Cloudflare, with
+no trusted proxy configured, the audit record's ip is omitted rather than populated from a
+spoofable header."
+
+Off Cloudflare nothing overwrites that header, so an attacker setting it per request owned the `ip`
+on every sign-in, password-reset and mfa-disable row they generated — rows Studio surfaces through
+`getAuthAuditLog`. Forensic impact only: nothing enforces on the audit ip.
+
+It now applies the same `onCloudflareEdge()` gate that `create-auth.ts`'s
+`defaultIpAddressHeaders` already applies, so this package's two client-IP resolvers cannot
+disagree about who a request came from. `onCloudflareEdge` moves from a file-private const to a
+named export of `create-auth.ts`; it is not re-exported from the package index, so the public API
+is unchanged.
+
+The existing cases asserting `cf-connecting-ip` did not say which runtime they ran on and passed
+under Node's `navigator.userAgent`; they now stub the Cloudflare one explicitly, alongside two new
+cases for the off-Cloudflare behaviour.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(runtime): key IP-less REST callers and 403 a deny-list hit
+
+`createRestRateLimit` charged its limit with no key at all when `cf-connecting-ip` was absent,
+putting every such caller in that limit's UNKEYED bucket — the same one a deliberately-global
+charge of the name uses — so one anonymous caller could drain an app-wide limit. This is the
+caller-pooling `@lunora/ratelimit`'s own middleware refuses outright. They now share a named
+`no-trusted-ip` bucket, which keeps the blast radius to the IP-less callers themselves and makes
+the pooling visible in storage; pass `options.key` to key them properly.
+
+A deny-list hit carries `retryAfter: Infinity` and was mapped to 429 with the header
+`Retry-After: Infinity`, inviting a client to keep retrying a denial that never clears. It now
+answers 403 FORBIDDEN with no Retry-After, matching what both `@lunora/ratelimit` entry points
+produce. `RateLimiterLike` gains the optional `reason` the limiter already returns.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **auth,sql-store,codegen:** stop the auth migrator killing the isolate, and the global sweep re-running per request ([#613](https://github.com/anolilab/lunora/issues/613)) ([f170c82](https://github.com/anolilab/lunora/commit/f170c82b07857dad3053660d558a513e484309e8)), closes [#599](https://github.com/anolilab/lunora/issues/599) [#601](https://github.com/anolilab/lunora/issues/601) [#600](https://github.com/anolilab/lunora/issues/600) [#601](https://github.com/anolilab/lunora/issues/601)
+* **cli:** make migrate fail loudly, and close thirteen more command defects ([#608](https://github.com/anolilab/lunora/issues/608)) ([1eb481f](https://github.com/anolilab/lunora/commit/1eb481f96ba00a00975e250212e5198f3065d658))
+* **codegen:** gate on the context binding, not the identifier text ([#609](https://github.com/anolilab/lunora/issues/609)) ([c0bc210](https://github.com/anolilab/lunora/commit/c0bc2105833a32d44b71fec7e05ff503ac94d86d))
+* **ratelimit,auth:** unstick a bricked limiter and close the deny-list bypass ([#606](https://github.com/anolilab/lunora/issues/606)) ([fd7d6ad](https://github.com/anolilab/lunora/commit/fd7d6ad78e0b02d76c8e9a4f6807c4b95dda88ac))
+* **scheduler,workflow:** give a scheduled workflow an idempotency key ([#605](https://github.com/anolilab/lunora/issues/605)) ([0f3afb4](https://github.com/anolilab/lunora/commit/0f3afb44a005861c5b06b4be0cca4576ec0ce7e8))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.110
+* **@lunora/agent:** upgraded to 1.0.0-alpha.89
+* **@lunora/container:** upgraded to 1.0.0-alpha.45
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+* **@lunora/queue:** upgraded to 1.0.0-alpha.46
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.52
+* **@lunora/values:** upgraded to 1.0.0-alpha.40
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.46
+* **@lunora/do:** upgraded to 1.0.0-alpha.118
+* **@lunora/server:** upgraded to 1.0.0-alpha.103
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.56
+
 ## @lunora/codegen [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.156...@lunora/codegen@1.0.0-alpha.157) (2026-09-04)
 
 
