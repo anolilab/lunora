@@ -125,7 +125,7 @@ interface UseAgentChatOptions {
     /**
      * Called when the live history or thread subscription reports an error (a
      * session expiry, an RLS denial). Without it — and without reading `error` —
-     * such a failure is invisible and `messages` / `status` freeze.
+     * such a failure is invisible and `messages` / `status` are cleared until a later frame arrives.
      */
     onError?: SubscriptionErrorCallback;
 

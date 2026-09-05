@@ -41,7 +41,7 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
     /**
      * Called when the `listPresent` subscription reports an error (a session
      * expiry, an RLS denial). Without it — and without reading `error` — such a
-     * failure is invisible and `present` freezes at its last value.
+     * failure is invisible and `present` is cleared until a later frame arrives.
      */
     onError?: SubscriptionErrorCallback;
 

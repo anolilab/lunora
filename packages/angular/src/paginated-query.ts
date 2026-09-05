@@ -391,7 +391,12 @@ const useReactivePaginatedCore = <F extends FunctionReference>(
             active()?.loadMore(numberItems);
         },
         pageResults: computed(() => active()?.pageResults() ?? []),
-        skipped: computed(() => active()?.skipped() ?? false),
+        // No core exists during SSR, where the platform gate above refuses to attach. Falling back to `false` there while `status` falls back to
+        // `"LoadingFirstPage"` made both public pagination APIs report
+        // `isLoading === true` for a getter that resolves to `"skip"` — the exact
+        // spinner-forever this branch fixes for the attached case. Read the getter
+        // instead; it is the same source `attachReactiveArgs` would have used.
+        skipped: computed(() => active()?.skipped() ?? baseArgs() === "skip"),
         status: computed(() => active()?.status() ?? "LoadingFirstPage"),
     };
 };

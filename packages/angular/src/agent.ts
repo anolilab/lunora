@@ -146,7 +146,7 @@ interface AgentOptions {
     /**
      * Called when the live thread subscription reports an error (a session
      * expiry, an RLS denial). Without it — and without reading `error` — such a
-     * failure is invisible and `thread` / `status` freeze at their last values.
+     * failure is invisible and `thread` / `status` are cleared until a later frame arrives.
      */
     onError?: SubscriptionErrorCallback;
 

@@ -82,6 +82,24 @@ describe("ssr platform gating", () => {
         expect(status()).toBe("LoadingFirstPage");
     });
 
+    it("paginatedQuery reports a reactive `skip` as skipped on the server platform", () => {
+        // No core is attached during SSR, so `skipped` fell back to `false` while
+        // `status` fell back to "LoadingFirstPage" — and `isLoading` is
+        // `!skipped && status === "LoadingFirstPage"`, so a getter resolving to
+        // "skip" showed a spinner that never resolves. The fallback now reads the
+        // getter, the same source the attached path would have used.
+        const fake = createFakeClient();
+
+        const { isLoading, status } = runInInjectionContext(makeInjector(fake, "server"), () =>
+            paginatedQuery(listRef, () => "skip" as const, { initialNumItems: 5 }),
+        );
+
+        expect(fake.subscriptions).toHaveLength(0);
+        expect(status()).toBe("LoadingFirstPage");
+        // The user-visible symptom: a spinner that never resolves.
+        expect(isLoading()).toBe(false);
+    });
+
     it("presence starts no network side effects on the server platform", () => {
         const fake = createFakeClient();
 
