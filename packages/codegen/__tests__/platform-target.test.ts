@@ -527,7 +527,7 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         // required.
         // `@lunora/d1` is what the fixture's `.global()` table legitimately needs; the
         // question here is only whether the vector binding is demanded alongside it.
-        writeFileSync(join(workdir, "package.json"), `{ "name": "gated", "dependencies": { "@lunora/d1": "*" } }`, "utf8");
+        writeFileSync(join(workdir, "package.json"), `{ "name": "gated", "dependencies": { "@lunora/d1": "*", "@lunora/storage": "*" } }`, "utf8");
         appendTable(`    docs: defineTable({ body: v.string() }).vectorize("body", { dimensions: 768, index: "docs_search", metric: "cosine" }),`);
 
         const result = codegen();
@@ -546,7 +546,11 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         // advertising a binding this host does not have. BOTH arms have to fall
         // to the platform verdict, not just the count: an app depending on
         // `@lunora/bindings` for `ctx.kv` would otherwise keep the page.
-        writeFileSync(join(workdir, "package.json"), `{ "name": "gated", "dependencies": { "@lunora/bindings": "*", "@lunora/d1": "*" } }`, "utf8");
+        writeFileSync(
+            join(workdir, "package.json"),
+            `{ "name": "gated", "dependencies": { "@lunora/bindings": "*", "@lunora/d1": "*", "@lunora/storage": "*" } }`,
+            "utf8",
+        );
         appendTable(`    docs: defineTable({ body: v.string() }).vectorize("body", { dimensions: 768, index: "docs_search", metric: "cosine" }),`);
 
         const result = codegen();

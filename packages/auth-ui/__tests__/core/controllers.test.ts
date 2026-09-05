@@ -147,6 +147,50 @@ describe(createSignUpController, () => {
         expect(client.signUp.email as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
     });
 
+    /**
+     * `@lunora/auth`'s `inviteOnly` plugin gates `/sign-up/email` on the token in
+     * the invitation link. If this stops being forwarded, every invited user is
+     * refused with a message about an invalid invitation — and nothing else in
+     * either package would notice.
+     */
+    it("forwards the invitation token from ?invite=, and omits it when absent", async () => {
+        const INVITE_TOKEN = "tok_123";
+        const client = stubClient();
+        const { context } = makeContext(client);
+
+        const submitOnce = async (): Promise<Record<string, unknown>> => {
+            const controller = createSignUpController(context);
+
+            controller.actions.setField("name", "Ada");
+            controller.actions.setField("email", "a@b.co");
+            controller.actions.setField("password", "secret1234");
+            await controller.actions.submit();
+
+            const email = client.signUp.email as ReturnType<typeof vi.fn>;
+
+            return email.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+        };
+
+        const original = globalThis.location;
+
+        try {
+            Object.defineProperty(globalThis, "location", {
+                configurable: true,
+                value: new URL(`https://app.example/sign-up?email=a%40b.co&invite=${INVITE_TOKEN}`),
+            });
+
+            await expect(submitOnce()).resolves.toMatchObject({ inviteToken: INVITE_TOKEN });
+
+            Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("https://app.example/sign-up") });
+
+            // A deployment without the plugin must submit exactly the body it
+            // always did, not an explicit `undefined`.
+            await expect(submitOnce()).resolves.not.toHaveProperty("inviteToken");
+        } finally {
+            Object.defineProperty(globalThis, "location", { configurable: true, value: original });
+        }
+    });
+
     it("creates an account and redirects", async () => {
         const client = stubClient();
         const { context, nav } = makeContext(client);

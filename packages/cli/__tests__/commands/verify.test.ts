@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -92,6 +92,53 @@ describe("lunora verify", () => {
             expect(recorded.successes.join("\n")).toContain("valid");
             // Dry-run must not have created the _generated/ directory.
             expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
+        });
+
+        describe("eRROR-level codegen advisories", () => {
+            /** An index over a column the table never declares — a canonical ERROR advisory. */
+            const addBogusIndexToSchema = (): void => {
+                const schemaPath = join(workdir, "lunora", "schema.ts");
+                const schema = readFileSync(schemaPath, "utf8");
+                const patched = schema.replace(
+                    `.searchIndex("by_text", { field: "text", filterFields: ["channelId"] }),`,
+                    `.searchIndex("by_text", { field: "text", filterFields: ["channelId"] })\n        .index("by_bogus", ["doesNotExist"]),`,
+                );
+
+                expect(patched).not.toBe(schema);
+
+                writeFileSync(schemaPath, patched, "utf8");
+            };
+
+            it("blocks under --strict-advisories, so verify does not pass what prepare and deploy reject", async () => {
+                expect.assertions(3);
+
+                // `verify` already runs the OTHER two gates codegen produces (the
+                // platform diagnostics and the schema drift gate) and nothing read
+                // `codegen.advisories` — so the documented pre-deploy gate went green
+                // on the exact projects `prepare`/`deploy` refuse. An ERROR advisory
+                // means the call throws at runtime, which is what verify exists to
+                // catch before a deploy does.
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                addBogusIndexToSchema();
+
+                const { logger } = recordingLogger();
+                const result = await runVerifyCommand({ cwd: workdir, logger, strictAdvisories: true, typecheck: false });
+
+                expect(result.code).toBe(1);
+                expect(result.errors.join("\n")).toContain("ERROR-level");
+            });
+
+            it("passes the same project under --no-strict-advisories, the opt-out it now accepts", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                addBogusIndexToSchema();
+
+                const { logger } = recordingLogger();
+                const result = await runVerifyCommand({ cwd: workdir, logger, strictAdvisories: false, typecheck: false });
+
+                expect(result.code).toBe(0);
+            });
         });
 
         it("fails on a platform diagnostic — the target it just resolved cannot serve the app", async () => {

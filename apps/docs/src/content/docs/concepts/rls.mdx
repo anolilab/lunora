@@ -68,9 +68,7 @@ const documentPolicies = definePolicies([
       wiring that claim is forwarded for you; a hand-written `resolveIdentity`
       has to include it.
     - `ctx.auth.roles` set by an upstream middleware, for providers whose
-      envelope carries something other than roles —
-      [`accessRoles()`](/docs/packages/cloudflare-access) maps Cloudflare Access
-      `groups` onto role labels this way.
+      envelope carries something other than roles.
 
     Empty when neither is present, and `auth.can(...)` then fails closed.
 
@@ -84,6 +82,19 @@ const documentPolicies = definePolicies([
 - `row`: present only on **write** policies; the candidate document on
   `insert`, the pre-write row on `update`/`delete`.
 - `ctx`: the full procedure context the middleware closed over.
+
+:::caution[A middleware's roles do not reach live shapes]
+Only the identity claim is read on both paths. `ctx.auth.roles` written by a
+middleware reaches queries, mutations and actions, but a **live shape runs no
+procedure** — so no middleware fires and the role list is empty there. A policy
+that restricts on a role (`!auth.roles.includes("restricted")`) then never takes
+its restricting branch on the shape path, and rows replicate over a subscription
+that the equivalent query withholds.
+
+Derive roles at the identity, where both paths see them.
+[`createAccessResolver`](/docs/packages/cloudflare-access)'s `roles` option maps
+Cloudflare Access `groups` onto role labels this way.
+:::
 
 ## Permissions and roles
 

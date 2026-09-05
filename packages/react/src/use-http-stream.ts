@@ -4,7 +4,7 @@ import type { HttpStreamArgsOf, HttpStreamChunkOf, HttpStreamRef } from "@lunora
 import { useEffect, useReducer, useRef } from "react";
 
 import { useLunora } from "./lunora-provider";
-import { stableStringify } from "./query-key";
+import { stableWireKey } from "./query-key";
 import type { StreamAction, StreamState, UseStreamStatus } from "./stream-state";
 import { consumeStream, streamReducer } from "./stream-state";
 
@@ -54,7 +54,7 @@ const useHttpStream = <Ref extends HttpStreamRef>(
     const [state, dispatch] = useReducer<StreamState<Chunk>, [StreamAction<Chunk>]>(streamReducer<Chunk>, { chunks: [], error: undefined, status: "idle" });
 
     const skipped = args === "skip";
-    const serialized = skipped ? "skip" : stableStringify(args);
+    const serialized = skipped ? "skip" : stableWireKey(args);
 
     // Stash the live cancel handle so unmount + manual cancel call into the
     // same function. The reducer doesn't own it because cancel is a side

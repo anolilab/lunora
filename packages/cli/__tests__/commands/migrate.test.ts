@@ -582,7 +582,11 @@ export const backfillReadBy = defineMigration({
         async (url, init) => {
             calls.push({ body: init?.body ? (JSON.parse(init.body) as CapturedCall["body"]) : ({} as CapturedCall["body"]), headers: init?.headers, url });
 
-            return { json: response.json, ok: response.ok, status: response.status, text: async () => "" };
+            // Serialised from the SAME body the double declares: `runMigrateDataCommand`
+            // reads the response through `readAndLogBody`, which calls `text()`, so a
+            // double answering only `json()` made every assertion run against an empty
+            // body — which is how the roll-up exit code went untested.
+            return { json: response.json, ok: response.ok, status: response.status, text: async () => JSON.stringify(await response.json()) };
         };
 
     const okResponse = (body?: unknown): { json: () => Promise<unknown>; ok: boolean; status: number } => {
@@ -880,6 +884,56 @@ export const backfillReadBy = defineMigration({
 
             expect(result.code).toBe(0);
             expect(calls).toHaveLength(1);
+        });
+
+        it("exits non-zero when the roll-up body reports every shard failed under a 200", async () => {
+            expect.assertions(1);
+
+            // `/_lunora/migrate` answers 200 unconditionally and folds the per-shard
+            // outcomes into the BODY, so `Response.ok` is `true` for a migration that
+            // ran nowhere — the same 207-shaped trap `import` documents.
+            const result = await runMigrateDataCommand({
+                cwd: workdir,
+                fetchImpl: captureFetch(
+                    [],
+                    okResponse({
+                        changed: 0,
+                        failed: 3,
+                        ok: 0,
+                        processed: 0,
+                        shards: [
+                            { error: { message: "boom", timedOut: false }, shardKey: "a" },
+                            { error: { message: "boom", timedOut: false }, shardKey: "b" },
+                            { error: { message: "boom", timedOut: true }, shardKey: "c" },
+                        ],
+                        status: "failed",
+                    }),
+                ),
+                id: "backfill-read-by",
+                logger: silentLogger(),
+                subcommand: "up",
+                token: "s3cret",
+            });
+
+            expect(result.code).toBe(1);
+        });
+
+        it("exits non-zero when a reached shard reports the migration itself failed", async () => {
+            expect.assertions(1);
+
+            const result = await runMigrateDataCommand({
+                cwd: workdir,
+                fetchImpl: captureFetch(
+                    [],
+                    okResponse({ changed: 0, failed: 0, ok: 1, processed: 10, shards: [{ result: { status: "failed" }, shardKey: "a" }], status: "failed" }),
+                ),
+                id: "backfill-read-by",
+                logger: silentLogger(),
+                subcommand: "up",
+                token: "s3cret",
+            });
+
+            expect(result.code).toBe(1);
         });
 
         it("returns non-zero on an HTTP error response", async () => {

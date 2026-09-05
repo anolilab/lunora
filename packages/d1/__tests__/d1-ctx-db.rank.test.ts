@@ -36,7 +36,9 @@ const makeSchema = (...indexes: RankIndexDefinitionLike[]): SchemaLike => {
                 shape: {
                     archived: col("boolean"),
                     channelId: col("string"),
-                    score: col("number"),
+                    // Nullable: an unscored row is what puts a NULL in the rank
+                    // companion's sort column.
+                    score: { _meta: { column: { notNull: false } }, kind: "number" },
                 },
             },
         },
@@ -142,6 +144,91 @@ describe("d1 rankIndex parity", () => {
 
         expect(page.page.map((document_) => document_["_id"])).toEqual(["m2", "m3", "m1"]);
         expect(page.isDone).toBe(true);
+    });
+
+    // The D1 twin of `@lunora/shard-engine`'s nullable-sort-column suite. A rank
+    // sort column genuinely holds NULL (`serializeColumnValue(row[field] ?? null)`),
+    // and `col < NULL` / `col > NULL` are UNKNOWN, so a bare comparator at the
+    // seek pivot dropped every row from the page that first reached the NULL
+    // group and made `rank()` answer against a partial count.
+    describe("a nullable sort column", () => {
+        // 5 scored rows and 7 unscored, paged 4 at a time: the NULL group spans
+        // two page boundaries, so a seek that cannot resume from inside it loses
+        // rows a smaller fixture would never miss.
+        const seedWithNulls = async (writer: DatabaseWriterLike): Promise<void> => {
+            for (let index = 0; index < 5; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- sequential ordered inserts into the same DB
+                await writer.insert("messages", { _id: `s${String(index)}`, archived: false, channelId: "c1", score: index * 10 }, { allowExplicitId: true });
+            }
+
+            for (let index = 0; index < 7; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- sequential ordered inserts into the same DB
+                await writer.insert(
+                    "messages",
+                    // An unscored row IS a NULL sort column — the case under test.
+                    { _id: `n${String(index)}`, archived: false, channelId: "c1", score: null },
+                    { allowExplicitId: true },
+                );
+            }
+        };
+
+        const drain = async (writer: DatabaseWriterLike, index: string): Promise<string[]> => {
+            const ids: string[] = [];
+            let cursor: null | string | undefined;
+
+            for (let page = 0; page < 10; page += 1) {
+                // eslint-disable-next-line no-await-in-loop -- pagination is inherently sequential
+                const result = await writer.rankPage("messages", index, { cursor, take: 4 });
+
+                ids.push(...result.page.map((document_) => document_["_id"] as string));
+
+                if (result.isDone) {
+                    return ids;
+                }
+
+                cursor = result.continueCursor;
+            }
+
+            throw new Error("rankPage never reported isDone");
+        };
+
+        it("pages through the NULL group descending without losing a row", async () => {
+            expect.assertions(2);
+
+            const writer = await setupWriter(makeSchema(byScoreDesc));
+
+            await seedWithNulls(writer);
+
+            const ids = await drain(writer, "leaderboard");
+
+            expect(ids).toStrictEqual(["s4", "s3", "s2", "s1", "s0", "n0", "n1", "n2", "n3", "n4", "n5", "n6"]);
+            expect(new Set(ids).size).toBe(12);
+        });
+
+        it("pages through the NULL group ascending without losing a row", async () => {
+            expect.assertions(2);
+
+            const writer = await setupWriter(makeSchema({ name: "byScore", on: "messages", sortBy: [{ direction: "asc", field: "score" }] }));
+
+            await seedWithNulls(writer);
+
+            const ids = await drain(writer, "byScore");
+
+            expect(ids).toStrictEqual(["n0", "n1", "n2", "n3", "n4", "n5", "n6", "s0", "s1", "s2", "s3", "s4"]);
+            expect(new Set(ids).size).toBe(12);
+        });
+
+        it("ranks a NULL-valued row where the ordering actually puts it", async () => {
+            expect.assertions(3);
+
+            const writer = await setupWriter(makeSchema(byScoreDesc));
+
+            await seedWithNulls(writer);
+
+            await expect(writer.rank("messages", "leaderboard", { row: "s4" })).resolves.toStrictEqual({ position: 1, total: 12 });
+            await expect(writer.rank("messages", "leaderboard", { row: "n0" })).resolves.toStrictEqual({ position: 6, total: 12 });
+            await expect(writer.rank("messages", "leaderboard", { row: "n6" })).resolves.toStrictEqual({ position: 12, total: 12 });
+        });
     });
 
     it("rankPage scoped by partition `where`", async () => {

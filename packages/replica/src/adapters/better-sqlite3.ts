@@ -1,3 +1,4 @@
+import { narrowSafeIntegers } from "./int64";
 import type { SqliteAdapter } from "./types";
 
 /**
@@ -21,6 +22,7 @@ export const createBetterSqlite3Adapter = (database: {
         all: (params?: unknown[]) => unknown[];
         get: (params?: unknown[]) => unknown;
         run: (params?: unknown[]) => { lastInsertRowid: number | bigint };
+        safeIntegers: (toggle?: boolean) => unknown;
     };
     transaction: (function_: () => void) => () => void;
 }): SqliteAdapter => {
@@ -35,9 +37,15 @@ export const createBetterSqlite3Adapter = (database: {
 
         query<T = Record<string, unknown>>(sql: string, params?: ReadonlyArray<unknown>): T[] {
             const stmt = database.prepare(sql);
+
+            // Decode INTEGER columns as `bigint` rather than through a double —
+            // see `./int64`. `narrowSafeIntegers` puts an ordinary integer back
+            // to a `number`, so only a real int64 stays wide.
+            stmt.safeIntegers(true);
+
             const rows = params && params.length > 0 ? stmt.all([...params]) : stmt.all();
 
-            return rows as T[];
+            return narrowSafeIntegers<T>(rows as Record<string, unknown>[]);
         },
 
         transaction(function_: () => void): void {

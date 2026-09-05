@@ -113,13 +113,13 @@ const dispatchWithEnv = (worker: ReturnType<typeof createWorker>, body: Record<s
     );
 
 describe("createWorker — scheduled workflow/agent dispatch", () => {
-    it("starts a fresh instance of the workflow binding with the job args as params", async () => {
+    it("starts an instance of the workflow binding with the job args as params", async () => {
         expect.assertions(3);
 
-        const created: { params?: Record<string, unknown> }[] = [];
+        const created: { id?: string; params?: Record<string, unknown> }[] = [];
         const env = {
             AGENT_SUPPORT: {
-                create: async (options: { params?: Record<string, unknown> }) => {
+                create: async (options: { id?: string; params?: Record<string, unknown> }) => {
                     created.push(options);
 
                     return { id: "wf-1" };
@@ -132,10 +132,83 @@ describe("createWorker — scheduled workflow/agent dispatch", () => {
         const response = await dispatchWithEnv(worker, { args: { prompt: "digest" }, id: "job-3", workflow: "AGENT_SUPPORT" }, env);
 
         expect(response.status).toBe(200);
-        // The binding is `create()`d with the scheduled args as its `params`.
-        expect(created).toStrictEqual([{ params: { prompt: "digest" } }]);
+        // The binding is `create()`d with the scheduled args as its `params`, under
+        // the record id as its instance id.
+        expect(created).toStrictEqual([{ id: "job-3", params: { prompt: "digest" } }]);
         // This job carries no `pool`, so there is no slot to release.
         expect(sched.calls.some((call) => call.path === "/complete")).toBe(false);
+    });
+
+    it("passes the scheduler record id as the workflow instance id so a re-fire is idempotent", async () => {
+        expect.assertions(2);
+
+        // The SchedulerDO's retry loop is at-least-once: a DO eviction, an edge
+        // 502 or a transport blip after the origin already started the workflow
+        // makes `dispatch()` report failure, `recordRetry` re-arms, and the SAME
+        // record fires again — up to MAX_RETRY_ATTEMPTS times. Without an
+        // instance id Cloudflare mints a fresh random one every call, so each
+        // re-fire runs a second full pipeline. The record id is already on the
+        // wire and already constrained to a safe key segment, which is exactly
+        // what `create({ id })` accepts.
+        const created: { id?: string; params?: Record<string, unknown> }[] = [];
+        const env = {
+            AGENT_SUPPORT: {
+                create: async (options: { id?: string; params?: Record<string, unknown> }) => {
+                    created.push(options);
+
+                    return { id: options.id ?? "wf-1" };
+                },
+            },
+        };
+        const sched = schedulerSpy();
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: sched.namespace, shardDO: okShard() });
+
+        const response = await dispatchWithEnv(worker, { args: { prompt: "digest" }, id: "job-idem", workflow: "AGENT_SUPPORT" }, env);
+
+        expect(response.status).toBe(200);
+        expect(created).toStrictEqual([{ id: "job-idem", params: { prompt: "digest" } }]);
+    });
+
+    it("treats a duplicate-instance rejection as a successful dispatch and still releases the pool slot", async () => {
+        expect.assertions(3);
+
+        // The re-fire itself: the first attempt's create landed, so the second
+        // one is rejected with "already exists". That is the idempotency signal,
+        // not a failure — reporting it as a 500 would send the record back
+        // through `recordRetry` and leave its pool slot held.
+        const env = {
+            AGENT_SUPPORT: {
+                create: async (): Promise<never> => {
+                    throw new Error('instance with id "job-idem" already exists');
+                },
+            },
+        };
+        const sched = schedulerSpy();
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: sched.namespace, shardDO: okShard() });
+
+        const response = await dispatchWithEnv(worker, { args: {}, id: "job-idem", instanceName: "tenant-a", pool: "digests", workflow: "AGENT_SUPPORT" }, env);
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toStrictEqual({ ok: true });
+        expect(sched.calls.filter((call) => call.path === "/complete")).toHaveLength(1);
+    });
+
+    it("still fails a non-duplicate create rejection so the record stays retryable", async () => {
+        expect.assertions(1);
+
+        const env = {
+            AGENT_SUPPORT: {
+                create: async (): Promise<never> => {
+                    throw new Error("Workflows service unavailable");
+                },
+            },
+        };
+        const sched = schedulerSpy();
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: sched.namespace, shardDO: okShard() });
+
+        const response = await dispatchWithEnv(worker, { args: {}, id: "job-boom", workflow: "AGENT_SUPPORT" }, env);
+
+        expect(response.status).toBe(500);
     });
 
     it("releases the workpool slot of a POOLED workflow job", async () => {
@@ -224,10 +297,10 @@ describe("createWorker — scheduled workflow/agent dispatch", () => {
     it("starts an ordinary scheduled workflow unaffected by the branch-marker guard", async () => {
         expect.assertions(2);
 
-        const created: { params?: Record<string, unknown> }[] = [];
+        const created: { id?: string; params?: Record<string, unknown> }[] = [];
         const env = {
             AGENT_SUPPORT: {
-                create: async (options: { params?: Record<string, unknown> }) => {
+                create: async (options: { id?: string; params?: Record<string, unknown> }) => {
                     created.push(options);
 
                     return { id: "wf-1" };
@@ -240,6 +313,6 @@ describe("createWorker — scheduled workflow/agent dispatch", () => {
         const response = await dispatchWithEnv(worker, { args: { prompt: "digest" }, id: "job-6", workflow: "AGENT_SUPPORT" }, env);
 
         expect(response.status).toBe(200);
-        expect(created).toStrictEqual([{ params: { prompt: "digest" } }]);
+        expect(created).toStrictEqual([{ id: "job-6", params: { prompt: "digest" } }]);
     });
 });

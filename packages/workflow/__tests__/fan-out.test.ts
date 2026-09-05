@@ -124,9 +124,18 @@ const makeLog = (): { debug: ReturnType<typeof vi.fn>; error: ReturnType<typeof 
     };
 };
 
-/** Build fan-out deps over a single shared binding double, with a deterministic id counter. */
+/**
+ * Build fan-out deps over a single shared binding double, with a deterministic id
+ * counter.
+ *
+ * `parentId` mirrors the run context's own allocator exactly — it returns an
+ * explicit id verbatim and otherwise appends `-c<n>` with NO ceiling of its own —
+ * so a long host-issued parent produces the same over-long derived child here as it
+ * does in production.
+ */
 const makeDeps = (
     step: WorkflowStepLike,
+    parentId = "parent-1",
 ): {
     create: Mock<(options?: { id?: string; params?: Record<string, unknown> }) => Promise<WorkflowInstanceLike>>;
     deps: FanOutDeps;
@@ -140,13 +149,13 @@ const makeDeps = (
         create,
         deps: {
             env: {},
-            instanceId: "parent-1",
+            instanceId: parentId,
             nextChildId: (explicit?: string) => {
                 if (explicit !== undefined) {
                     return explicit;
                 }
 
-                const id = `parent-1-c${String(counter)}`;
+                const id = `${parentId}-c${String(counter)}`;
                 counter += 1;
 
                 return id;
@@ -376,7 +385,7 @@ describe("createParallel", () => {
         //
         // The parent here is a SHORT synthetic id, so this case only exercises the
         // character class. The engine checks length first and the ids are
-        // caller-controlled up to that ceiling — see the near-ceiling case below.
+        // caller-controlled up to that ceiling — see the two over-ceiling cases below.
         const step = makeStep([okOutcome({ a: 1 }), okOutcome({ b: 2 }), errorOutcome(new Error("boom"))]);
         const { create, deps } = makeDeps(step);
 
@@ -390,6 +399,63 @@ describe("createParallel", () => {
 
         expect(ids).toHaveLength(5);
         expect(ids.filter((id) => engineRejectsInstanceId(id))).toStrictEqual([]);
+    });
+
+    it("spawns branches of a 98-character parent, whose derived `-c<n>` ids overflow the ceiling", async () => {
+        expect.assertions(4);
+
+        // The fold was applied to the compensation id but not to the CHILD id it
+        // derives from. The run context's allocator appends `-c<n>` with no ceiling
+        // of its own, so a 98-character host-issued parent (the id shapes hosts
+        // actually mint run long) yields a 101-character child. The
+        // engine checks length FIRST, so `create` rejects it outright — and the
+        // spawn `Promise.all` sits OUTSIDE `createParallel`'s try, so that
+        // rejection is not a `BranchJoinFailure`: the whole group-saga rollback is
+        // skipped and the raw engine error surfaces instead.
+        const parentId = `p${"0".repeat(97)}`;
+        const step = makeStep([okOutcome({ a: 1 }), okOutcome({ b: 2 })]);
+        const { create, deps } = makeDeps(step, parentId);
+
+        const results = await createParallel(deps)([branch("first", { x: 1 }), branch("second")]);
+
+        expect(results).toStrictEqual([{ a: 1 }, { b: 2 }]);
+
+        const ids = create.mock.calls.map((call) => call[0]?.id);
+
+        expect(ids).toHaveLength(2);
+        expect(ids.filter((id) => engineRejectsInstanceId(id))).toStrictEqual([]);
+        // Folded, not truncated: siblings of one over-long parent stay distinct, or
+        // both branches share a spawn step name and one silently never runs.
+        expect(new Set(ids).size).toBe(2);
+    });
+
+    it("folds an over-long explicit `branch(…, { id })` and still compensates it", async () => {
+        expect.assertions(4);
+
+        // The other half of the same gap: `nextChildId` returns an explicit id
+        // VERBATIM, with no length check at all, so a caller-supplied 150-character
+        // branch id reaches `create` as-is. Its rollback is unreachable for the
+        // same reason — and on a saga that took payment, that unrun rollback is the
+        // refund.
+        const longId = `b${"9".repeat(149)}`;
+        const step = makeStep([okOutcome({ paid: true }), errorOutcome(new Error("boom"))]);
+        const { create, deps } = makeDeps(step);
+        const log = makeLog();
+
+        await createParallel({ ...deps, log: log as unknown as FanOutDeps["log"] })([
+            branch("charge", undefined, { compensateWith: "refund", id: longId }),
+            branch("second"),
+        ]).catch(() => undefined);
+
+        const ids = create.mock.calls.map((call) => call[0]?.id);
+
+        // charge, second, and charge's rollback.
+        expect(ids).toHaveLength(3);
+        expect(ids.filter((id) => engineRejectsInstanceId(id))).toStrictEqual([]);
+        expect(ids.filter((id) => String(id).endsWith("-compensate"))).toHaveLength(1);
+        // A swallowed create rejection leaves the group failing exactly as it does
+        // here, with only this log to show for it.
+        expect(log.error).not.toHaveBeenCalled();
     });
 
     it("compensates a branch whose own id sits just under the engine's 100-character ceiling", async () => {
@@ -623,6 +689,25 @@ describe("createSpawn", () => {
         expect(create).toHaveBeenCalledWith({ id: "parent-1-c0", params: { y: 2 } });
         expect(get).toHaveBeenCalledWith("parent-1-c0");
         expect(instance.id).toBe("parent-1-c0");
+    });
+
+    it("folds an over-long child id and returns the handle for the id it actually created", async () => {
+        expect.assertions(3);
+
+        // `ctx.spawn` shares the same allocator, so it shares the same gap. The
+        // handle must address the FOLDED id — a `get()` on the unfolded one points
+        // at an instance that was never created.
+        const longId = `s${"7".repeat(149)}`;
+        const step = makeStep();
+        const { create, deps, get } = makeDeps(step);
+
+        const instance = await createSpawn(deps)("child", { y: 2 }, { id: longId });
+
+        const created = create.mock.calls[0]?.[0]?.id;
+
+        expect(engineRejectsInstanceId(created)).toBe(false);
+        expect(get).toHaveBeenCalledWith(created);
+        expect(instance.id).toBe(created);
     });
 
     it("rejects a caller-supplied reserved branch marker without touching the step API", async () => {

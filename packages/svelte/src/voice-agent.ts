@@ -2,7 +2,7 @@ import type { FunctionReference, LunoraClient } from "@lunora/client";
 import type { Readable } from "svelte/store";
 import { get, writable } from "svelte/store";
 
-import { agentNameFromReference, voiceCloseError, voiceSocketUrl } from "../../../shared/voice-socket";
+import { agentNameFromReference, voiceCloseError, voiceSocketUrl, watchVoiceIdentity } from "../../../shared/voice-socket";
 import { isClient } from "./agent";
 import { getLunoraClient } from "./context";
 import type { CreateMicrophone, CreateSpeaker, VoiceAudioFormat, VoiceMicrophone, VoiceSpeaker } from "./voice-audio";
@@ -121,9 +121,20 @@ const DEFAULT_INTERRUPT_CHUNKS = 3;
 /** Mutable per-call connection state, held in a closure so callbacks share one source of truth. */
 interface VoiceConnection {
     audioFormat: VoiceAudioFormat;
+
+    /**
+     * `true` from the moment a turn is committed (`commit` / `text`) until it
+     * completes — the `thinking` half of a turn, which `speaking` does not cover
+     * because that only flips once the first `assistant_delta` lands. Together
+     * they are the mic's `isTurnActive` gate: without the first half, turn
+     * detection kept running through the whole STT+LLM window and ambient noise
+     * fired a second, refused `commit`.
+     */
+    awaitingTurn: boolean;
     microphone: VoiceMicrophone | undefined;
     socket: VoiceSocket;
     speaker: VoiceSpeaker | undefined;
+
     speaking: boolean;
 
     /**
@@ -133,6 +144,9 @@ interface VoiceConnection {
      * on the next `interrupted` / `user_transcript` / `ready` frame.
      */
     suppressAudio: boolean;
+
+    /** Releases the `onAuthTokenChange` watch that ends the call on an identity switch. */
+    unwatchIdentity: (() => void) | undefined;
 }
 
 const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions): VoiceAgentHandle => {
@@ -180,6 +194,7 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
         current = undefined;
 
         if (connection) {
+            connection.unwatchIdentity?.();
             connection.microphone?.stop();
             connection.speaker?.stop();
 
@@ -227,6 +242,7 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
             }
             case "assistant_done": {
                 if (connection) {
+                    connection.awaitingTurn = false;
                     connection.speaking = false;
                 }
 
@@ -239,6 +255,7 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
                 // A non-fatal turn failure: surface it and return the call to a
                 // usable state rather than leaving it stuck "speaking"/"thinking".
                 if (connection) {
+                    connection.awaitingTurn = false;
                     connection.speaking = false;
                 }
 
@@ -249,6 +266,7 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
             }
             case "interrupted": {
                 if (connection) {
+                    connection.awaitingTurn = false;
                     connection.speaking = false;
                     connection.suppressAudio = false;
                 }
@@ -340,10 +358,24 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
                 socket,
                 speaker: undefined,
                 speaking: false,
+                awaitingTurn: false,
                 suppressAudio: false,
+                unwatchIdentity: undefined,
             };
 
             current = connection;
+
+            // A voice socket's credential is fixed at the upgrade, so a sign-out
+            // or user switch mid-call would otherwise leave the session running
+            // (and writing its thread) as the previous user.
+            connection.unwatchIdentity = watchVoiceIdentity(client, "voiceAgent", (identityError) => {
+                if (current !== connection) {
+                    return;
+                }
+
+                errorStore.set(identityError);
+                teardown();
+            });
 
             // The injectable `VoiceSocket` exposes only `on*` handler slots (not a
             // real EventTarget), so assign them directly.
@@ -384,7 +416,7 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
             const microphone = await createMicrophone({
                 interruptChunks,
                 interruptThreshold,
-                isSpeaking: () => current?.speaking ?? false,
+                isTurnActive: () => (current?.speaking ?? false) || (current?.awaitingTurn ?? false),
                 onAudio: (pcm) => {
                     if (socket.readyState === WS_OPEN) {
                         socket.send(pcm);
@@ -395,6 +427,7 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
                     current?.speaker?.interrupt();
 
                     if (current) {
+                        current.awaitingTurn = false;
                         current.speaking = false;
                         // Drop any audio already in flight until the server acks —
                         // cleared on the next `interrupted`/`user_transcript`/`ready`.
@@ -408,6 +441,11 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
                 },
                 onSilence: () => {
                     sendFrame({ type: "commit" });
+
+                    if (current) {
+                        current.awaitingTurn = true;
+                    }
+
                     statusStore.set("thinking");
                 },
                 silenceDurationMs,
@@ -458,6 +496,12 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
         // Only advance to "thinking" if the frame actually reached an open socket;
         // otherwise the UI would stick in "thinking" with no call.
         if (sendFrame({ text, type: "text" })) {
+            // A typed turn commits just like a spoken one, so park the mic's
+            // silence timer for its duration too.
+            if (current) {
+                current.awaitingTurn = true;
+            }
+
             statusStore.set("thinking");
         }
     };

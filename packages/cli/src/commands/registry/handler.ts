@@ -30,7 +30,20 @@ const execute: CommandHandler<RegistryOptions> = defineHandler<RegistryOptions>(
     }
 
     if (subcommand === "list") {
-        return runAddCommand({ cwd, from: options.from, json: options.json === true, list: true, logger, names: [], ref: options.ref, source: options.source });
+        // Forwarded, like `add` and `view` do: `sourceGateError` is one message and
+        // one rule across all three, and dropping the override here made `list` the
+        // only subcommand that refused a custom `--source` with no way to accept it.
+        return runAddCommand({
+            allowUnsafeSource: options.allowUnsafeSource === true,
+            cwd,
+            from: options.from,
+            json: options.json === true,
+            list: true,
+            logger,
+            names: [],
+            ref: options.ref,
+            source: options.source,
+        });
     }
 
     if (subcommand === "view") {
