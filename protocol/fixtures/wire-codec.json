@@ -125,6 +125,7 @@
         },
         { "name": "date-epoch-negative-zero", "encoded": ["$lunora.wire$", "date", -0.0], "reencoded": ["$lunora.wire$", "date", 0] },
         { "name": "url", "encoded": ["$lunora.wire$", "url", "https://example.com/"] },
+        { "name": "url-scheme-punctuation", "encoded": ["$lunora.wire$", "url", "a+b-c.1:x"] },
         { "name": "nan", "encoded": ["$lunora.wire$", "nan"] },
         { "name": "inf", "encoded": ["$lunora.wire$", "inf"] },
         { "name": "-inf", "encoded": ["$lunora.wire$", "-inf"] },
@@ -358,6 +359,9 @@
         { "name": "error-message-null", "encoded": ["$lunora.wire$", "error", "Error", null, {}] },
         { "name": "url-href-relative", "encoded": ["$lunora.wire$", "url", "not a url"] },
         { "name": "url-href-empty", "encoded": ["$lunora.wire$", "url", ""] },
-        { "name": "url-href-scheme-relative", "encoded": ["$lunora.wire$", "url", "//example.com/x"] }
+        { "name": "url-href-scheme-relative", "encoded": ["$lunora.wire$", "url", "//example.com/x"] },
+        { "name": "url-href-scheme-empty", "encoded": ["$lunora.wire$", "url", ":x"] },
+        { "name": "url-href-scheme-digit-initial", "encoded": ["$lunora.wire$", "url", "1http:x"] },
+        { "name": "url-href-scheme-non-ascii", "encoded": ["$lunora.wire$", "url", "\u00e9:x"] }
     ]
 }
