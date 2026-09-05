@@ -138,15 +138,34 @@ const toListObject = (object: R2ObjectLike): R2ObjectLike => {
 };
 
 /**
- * Wrap a byte stream so the upload aborts once more than `maxSize` bytes have
- * flowed through. A `ReadableStream`'s length isn't known synchronously, so a
- * counting `TransformStream` is the only way to bound a streaming upload —
- * without it R2 would happily accept (or, for an unknown-length stream, silently
- * truncate) a body larger than the caller intended. A non-byte chunk (no
- * `byteLength`) can't be measured, so it aborts the stream rather than flowing
- * through uncounted — otherwise it would silently defeat the `maxSize` bound.
+ * Read a byte stream into a sized body, refusing it at the first chunk that
+ * pushes it past `maxSize`.
+ *
+ * R2 accepts a `ReadableStream` only when it can read the length up front — a
+ * request/response body, or the readable half of a `FixedLengthStream`. A
+ * counting `TransformStream` is neither, so handing R2 the wrapped stream (what
+ * this guard used to do) failed EVERY streamed upload carrying a `maxSize` with
+ * "Provided readable stream must have a known length": the documented
+ * `upload(key, request.body, { maxSize })` could never succeed.
+ *
+ * A `FixedLengthStream` is no answer either — it needs the exact byte count up
+ * front, and `upload()` is handed a stream, not a length. The unknown-length
+ * stream is precisely the case the cap exists to bound, so the counted bytes are
+ * collected here into a `Blob`, which carries the length R2 needs. Reading stops
+ * at the chunk that crosses the cap (the counter errors the stream, and the
+ * `Response` drain rejects with it), so nothing oversized is buffered whole and
+ * nothing reaches the bucket.
+ *
+ * `maxSize` is therefore also the memory ceiling for a streamed body. For
+ * objects too large to hold in a Worker, stream WITHOUT a `maxSize` (R2 then
+ * reads the body's own length) or use `createMultipartUpload` /
+ * `createUploadHandler`, neither of which buffers the whole object.
+ *
+ * A non-byte chunk (no `byteLength`) can't be measured, so it errors the stream
+ * rather than flowing through uncounted — otherwise it would silently defeat the
+ * `maxSize` bound.
  */
-const enforceStreamMaxSize = (stream: ReadableStream, maxSize: number): ReadableStream => {
+const collectStreamWithinMaxSize = async (stream: ReadableStream, maxSize: number): Promise<Blob> => {
     let seen = 0;
 
     const byteLengthOf = (chunk: unknown): number | undefined => {
@@ -164,7 +183,7 @@ const enforceStreamMaxSize = (stream: ReadableStream, maxSize: number): Readable
             const length = byteLengthOf(chunk);
 
             if (length === undefined) {
-                controller.error(new Error("@lunora/storage: stream chunk is not a byte chunk; cannot enforce maxSize"));
+                controller.error(new LunoraError("VALIDATION_ERROR", "@lunora/storage: stream chunk is not a byte chunk; cannot enforce maxSize"));
 
                 return;
             }
@@ -172,7 +191,7 @@ const enforceStreamMaxSize = (stream: ReadableStream, maxSize: number): Readable
             seen += length;
 
             if (seen > maxSize) {
-                controller.error(new Error(`@lunora/storage: stream body exceeds maxSize (> ${String(maxSize)} bytes)`));
+                controller.error(new LunoraError("PAYLOAD_TOO_LARGE", `@lunora/storage: stream body exceeds maxSize (> ${String(maxSize)} bytes)`));
 
                 return;
             }
@@ -181,7 +200,7 @@ const enforceStreamMaxSize = (stream: ReadableStream, maxSize: number): Readable
         },
     });
 
-    return stream.pipeThrough(counter);
+    return await new Response(stream.pipeThrough(counter)).blob();
 };
 
 /** Shared encoder for measuring UTF-8 byte length (not UTF-16 `String.length`). */
@@ -309,10 +328,9 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
         assertContentTypeAllowed(uploadOptions);
 
         // `maxSize` enforcement. ArrayBuffer/Blob lengths are known up front and
-        // rejected before the upload starts; a ReadableStream's length isn't, so
-        // it's piped through a byte counter that aborts mid-stream once the limit
-        // is exceeded (also closing R2's silent-truncation gap for unbounded
-        // streams).
+        // rejected before the upload starts; a ReadableStream's isn't, so it is
+        // collected under the cap and handed to R2 as a sized body — see
+        // {@link collectStreamWithinMaxSize} for why it can't stay a stream.
         let putBody: UploadBody = body;
 
         if (typeof uploadOptions.maxSize === "number") {
@@ -329,7 +347,7 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
             }
 
             if (body instanceof ReadableStream) {
-                putBody = enforceStreamMaxSize(body, uploadOptions.maxSize);
+                putBody = await collectStreamWithinMaxSize(body, uploadOptions.maxSize);
             }
         }
 
@@ -406,7 +424,18 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
 
         const requested = listOptions.limit ?? DEFAULT_LIST_LIMIT;
         const limit = Math.min(Math.max(1, Math.floor(requested)), MAX_LIST_LIMIT);
-        const result = await options.bucket.list({ cursor: listOptions.cursor, delimiter: listOptions.delimiter, limit, prefix });
+        const result = await options.bucket.list({
+            cursor: listOptions.cursor,
+            delimiter: listOptions.delimiter,
+            // Under `r2_list_honor_include` (every compat date since 2022-08-04)
+            // R2 omits both metadata bags from list entries unless the call asks
+            // for them. `toListObject` copies them either way, so without this a
+            // real bucket returned `httpMetadata: {}` / `customMetadata: {}` for
+            // every entry while `head()` on the same key returned them in full.
+            include: ["customMetadata", "httpMetadata"],
+            limit,
+            prefix,
+        });
 
         // With a delimiter, R2 puts the rolled-up "folders" in `delimitedPrefixes`
         // and leaves them OUT of `objects` — dropping them made

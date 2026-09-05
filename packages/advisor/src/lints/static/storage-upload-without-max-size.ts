@@ -9,11 +9,11 @@ const UPLOAD_METHODS = new Set(["store", "upload"]);
  * `maxSize`.
  *
  * `@lunora/storage`'s `upload`/`store` accept a `maxSize` byte ceiling that
- * rejects an oversized `ArrayBuffer`/`Blob` up front, and pipes a
- * `ReadableStream` through a counting `TransformStream` that aborts once the
- * limit is exceeded — without it, a caller can push an unbounded body through
- * the Worker straight into R2, exhausting storage/billing (and, for a
- * streamed body, worker CPU/time) with no cap.
+ * rejects an oversized `ArrayBuffer`/`Blob` up front, and reads a
+ * `ReadableStream` only as far as the cap before refusing it — without it, a
+ * caller can push an unbounded body through the Worker straight into R2,
+ * exhausting storage/billing (and, for a streamed body, worker CPU/time) with
+ * no cap.
  *
  * Runs only when the codegen feeder supplies storage-upload evidence
  * (`context.storageUploads`); a runtime caller flags nothing. Skips calls
@@ -29,7 +29,7 @@ const storageUploadWithoutMaxSize: Lint = {
     level: "WARN",
     name: "storage_upload_without_max_size",
     remediation:
-        "Pass a `maxSize` (bytes) to `ctx.storage.upload`/`store` sized to the largest legitimate object the app accepts. `ArrayBuffer`/`Blob` bodies are rejected up front when oversized; a `ReadableStream` body is aborted mid-transfer once the limit is exceeded.",
+        "Pass a `maxSize` (bytes) to `ctx.storage.upload`/`store` sized to the largest legitimate object the app accepts. `ArrayBuffer`/`Blob` bodies are rejected up front when oversized; a `ReadableStream` body is read only as far as the cap and refused once it is exceeded, so nothing oversized reaches the bucket.",
     run: (context) => {
         if (context.storageUploads === undefined) {
             return [];

@@ -471,22 +471,47 @@ const matchesOrderedOperators = (documentValue: unknown, operators: Record<strin
 };
 
 /**
+ * SQL NULL, as a document sees it: an explicit `null` and an absent column are
+ * the same missing value (what the `isNull` operator has always treated them as).
+ */
+const isSqlNull = (value: unknown): boolean => value === null || value === undefined;
+
+/**
+ * Read an `in`/`notIn` operand as a list, refusing anything else.
+ *
+ * Mirrors the SQL compiler's `compileInList`, which throws for exactly this
+ * reason: a scalar there compiled to `1 = 1` and dropped the restriction. The JS
+ * evaluator's `notIn` used to do the same silently — a policy written to keep
+ * `admin` rows out admitted one on WRITE — while the same predicate on a SQL
+ * read raised `BAD_REQUEST`. Refused rather than widened to a one-element list,
+ * so a caller never gets a predicate whose meaning depends on a coercion they
+ * did not ask for.
+ */
+const operandList = (field: string, operator: "in" | "notIn", value: unknown): ReadonlyArray<unknown> => {
+    if (!Array.isArray(value)) {
+        throw new LunoraError("BAD_REQUEST", `\`${operator}\` on "${field}" expects an array of values, received ${value === null ? "null" : typeof value}`);
+    }
+
+    return value as ReadonlyArray<unknown>;
+};
+
+/**
  * Evaluate the membership + text comparators (`in`/`notIn`/`contains`/`isNull`)
  * of an operator bag. Returns `true` when the value satisfies all present ones.
  */
-const matchesMembershipOperators = (documentValue: unknown, operators: Record<string, unknown>): boolean => {
-    if ("in" in operators) {
-        const list = operators["in"];
-
-        if (!Array.isArray(list) || !list.includes(documentValue)) {
-            return false;
-        }
+const matchesMembershipOperators = (field: string, documentValue: unknown, operators: Record<string, unknown>): boolean => {
+    if ("in" in operators && !operandList(field, "in", operators["in"]).includes(documentValue)) {
+        return false;
     }
 
     if ("notIn" in operators) {
-        const list = operators["notIn"];
+        const list = operandList(field, "notIn", operators["notIn"]);
 
-        if (Array.isArray(list) && list.includes(documentValue)) {
+        // Three-valued logic, verified against SQLite: `x NOT IN (…)` is UNKNOWN
+        // — so the row is excluded — whenever `x` is NULL or the list holds a
+        // NULL and `x` matched nothing. An EMPTY list is the exception: it
+        // compiles to `1 = 1`, which admits a NULL cell like any other.
+        if (list.length > 0 && (isSqlNull(documentValue) || list.includes(documentValue) || list.some((item) => isSqlNull(item)))) {
             return false;
         }
     }
@@ -502,7 +527,38 @@ const matchesMembershipOperators = (documentValue: unknown, operators: Record<st
     if ("isNull" in operators) {
         const expectsNull = operators["isNull"] === true;
 
-        if (expectsNull !== (documentValue === null || documentValue === undefined)) {
+        if (expectsNull !== isSqlNull(documentValue)) {
+            return false;
+        }
+    }
+
+    return true;
+};
+
+/**
+ * Evaluate the equality comparators (`eq`/`ne`) of an operator bag under SQL's
+ * three-valued logic, which the SQL compiler's `compileComparator` renders
+ * directly.
+ *
+ * A `null` operand folds to `IS NULL` / `IS NOT NULL` — the only shape that
+ * matches (or excludes) a NULL cell at all. Against any other operand a NULL
+ * cell yields UNKNOWN and is therefore EXCLUDED; a plain `!==` admitted it
+ * instead, which on a write policy meant a row whose column was NULL passed a
+ * check the same predicate failed as SQL.
+ */
+const matchesEqualityOperators = (documentValue: unknown, operators: Record<string, unknown>): boolean => {
+    if ("eq" in operators) {
+        const operand = operators["eq"];
+
+        if (operand === null ? !isSqlNull(documentValue) : documentValue !== operand) {
+            return false;
+        }
+    }
+
+    if ("ne" in operators) {
+        const operand = operators["ne"];
+
+        if (operand === null ? isSqlNull(documentValue) : isSqlNull(documentValue) || documentValue === operand) {
             return false;
         }
     }
@@ -512,21 +568,17 @@ const matchesMembershipOperators = (documentValue: unknown, operators: Record<st
 
 /**
  * Evaluate an operator bag (`{ eq, ne, in, … }`) against a single document
- * value. Mirrors the SQL compiler's operator set; SQL NULL semantics gate the
- * ordered comparators via {@link isOrderable}. Returns `true` when the value
- * satisfies every operator in the bag.
+ * value. Mirrors the SQL compiler's operator set, including its NULL semantics:
+ * the ordered comparators are gated by {@link isOrderable}, `eq`/`ne` by
+ * {@link matchesEqualityOperators}, `in`/`notIn` by
+ * {@link matchesMembershipOperators}. `field` is carried only to name the column
+ * in the error a malformed `in`/`notIn` operand raises. Returns `true` when the
+ * value satisfies every operator in the bag.
  */
-const matchesOperators = (documentValue: unknown, operators: Record<string, unknown>): boolean => {
-    if ("eq" in operators && documentValue !== operators["eq"]) {
-        return false;
-    }
-
-    if ("ne" in operators && documentValue === operators["ne"]) {
-        return false;
-    }
-
-    return matchesMembershipOperators(documentValue, operators) && matchesOrderedOperators(documentValue, operators);
-};
+const matchesOperators = (field: string, documentValue: unknown, operators: Record<string, unknown>): boolean =>
+    matchesEqualityOperators(documentValue, operators) &&
+    matchesMembershipOperators(field, documentValue, operators) &&
+    matchesOrderedOperators(documentValue, operators);
 
 /**
  * Evaluate one `AND`/`OR`/`NOT` combinator clause. `recurse` is the top-level
@@ -603,7 +655,7 @@ const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boo
         const documentValue = document[key];
 
         if (isOperatorBag(value)) {
-            if (!matchesOperators(documentValue, value)) {
+            if (!matchesOperators(key, documentValue, value)) {
                 return false;
             }
 
