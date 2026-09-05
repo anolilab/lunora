@@ -18,7 +18,7 @@ import { RELAY_NAME_INFIX, relayName } from "../../../shared/relay-name";
 import { parseMinSeq, REPLICA_NAME_INFIX, replicaName } from "../../../shared/replica-name";
 import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
-import { encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { isEnvFlagEnabled, mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import { assertArgsObject } from "./assert-args-object";
 import type { AuthAdmin } from "./auth-admin-routes";
@@ -109,6 +109,19 @@ interface HttpActionContext {
     auth: { getIdentity: () => Promise<Record<string, unknown> | null>; userId: null | string };
     cache?: { purge: (options: { purgeEverything?: boolean; tags?: string[] }) => Promise<unknown> };
     fetch: typeof globalThis.fetch;
+
+    /**
+     * The same `run*` trio bound to a named shard, mirroring
+     * `createShardClient(...).forShard(key)`.
+     *
+     * An HTTP action runs in the WORKER, not inside a shard, so — unlike a
+     * query/mutation ctx, whose `run*` is already inside the owning DO — it has
+     * to be told which shard to talk to. `ctx.run*` alone targets the default
+     * shard, which on a `.shardBy(...)` app is the root DO: a webhook that read
+     * `ctx.runQuery(api.messages.list, { channelId })` got the root shard's rows
+     * (usually none) with no error and no way to say otherwise.
+     */
+    forShard: (shardKey: string) => Pick<HttpActionContext, "runAction" | "runMutation" | "runQuery">;
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
@@ -1597,6 +1610,8 @@ const CRON_JOBS_RUN_PATH = "/_lunora/admin/cron-jobs/run";
 const ADMIN_WS_TOKEN_PATH = "/_lunora/admin/ws-token";
 /** Prefix shared by every Studio admin route (`/_lunora/admin/*`). */
 const ADMIN_PATH_PREFIX = "/_lunora/admin/";
+/** Prefix shared by the whole reserved plane the worker owns — everything else on the origin belongs to the app. */
+const RESERVED_PATH_PREFIX = "/_lunora/";
 /** The lone cross-shard admin route that sits outside {@link ADMIN_PATH_PREFIX}. */
 const MIGRATE_PATH = "/_lunora/migrate";
 
@@ -1743,6 +1758,13 @@ const isAuthAttemptPath = (pathname: string, basePath: string): boolean => {
     const suffix = pathname.slice(base.length);
 
     return AUTH_ATTEMPT_SEGMENTS.some((segment) => suffix === segment || suffix.startsWith(`${segment}/`));
+};
+
+/** `true` iff `pathname` is the auth plane's root or nested under it (`/api/auth`, `/api/auth/sign-in/email`). */
+const isUnderAuthBasePath = (pathname: string, basePath: string): boolean => {
+    const base = basePath.endsWith("/") ? basePath.slice(0, -1) : basePath;
+
+    return pathname === base || pathname.startsWith(`${base}/`);
 };
 
 interface ForwardContext {
@@ -3583,60 +3605,83 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const buildHttpActionContext = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<HttpActionContext> => {
         const { claims, headers, userId } = await resolveForwardContext(request, env, publicResolveIdentity);
 
-        const run = async <R>(reference: unknown, args: Record<string, unknown> = {}): Promise<R> => {
-            const functionPath = (reference as { __lunoraRef?: unknown }).__lunoraRef;
+        const sinkContext = buildSinkContext(env, request, (promise) => context.waitUntil?.(promise));
 
-            if (typeof functionPath !== "string") {
-                throw new LunoraError("ctx.run*: expected a function reference from the generated `api`", { code: "BAD_REQUEST", status: 400 });
-            }
+        const runOn =
+            (shardKey: string) =>
+            async <R>(reference: unknown, args: Record<string, unknown> = {}): Promise<R> => {
+                const functionPath = (reference as { __lunoraRef?: unknown }).__lunoraRef;
 
-            // This path stamps `x-lunora-system: "1"` below, so an unguarded relation
-            // dispatch here would read raw rows as a TRUSTED caller. The stricter
-            // posture already exists one function over (`buildHttpScheduler`'s
-            // `targetFields` refuses a bare `"ns:fn"` string because an HTTP action
-            // can be reached unauthenticated) — same reasoning, same surface.
-            assertNotReservedRelationPath(functionPath);
+                if (typeof functionPath !== "string") {
+                    throw new LunoraError("ctx.run*: expected a function reference from the generated `api`", { code: "BAD_REQUEST", status: 400 });
+                }
 
-            const forwarded = shardRpcRequest(
-                functionPath,
-                args,
-                // `x-lunora-system` marks this a trusted server-initiated dispatch, so
-                // the shard will run `internal` functions — exactly as on the
-                // scheduler path above, and for the same reason.
+                // This path stamps `x-lunora-system: "1"` below, so an unguarded relation
+                // dispatch here would read raw rows as a TRUSTED caller. The stricter
+                // posture already exists one function over (`buildHttpScheduler`'s
+                // `targetFields` refuses a bare `"ns:fn"` string because an HTTP action
+                // can be reached unauthenticated) — same reasoning, same surface.
+                assertNotReservedRelationPath(functionPath);
+
+                // Through the SAME dispatcher the `/_lunora/rpc` and `serverQuery` paths
+                // use, rather than a bare `forwardToShard`: that is what puts this call
+                // in the RPC event stream and under a `traceparent`-parented span, which
+                // a hand-rolled forward silently left out — a webhook route's work was
+                // absent from observability while the docs promised every dispatch is a
+                // span.
                 //
-                // An `httpRouter` handler is app-authored worker code, not a client:
-                // the reference it passes is a literal `internal.foo.bar` from the
-                // app's own source, never a caller-supplied string, and the handler
-                // has already run whatever authorization it requires (the operator
-                // bearer on a cell-register route, a deploy-key lookup on an ingest
-                // route). Without this the route's `ctx.run*` reached the shard as an
-                // ordinary *client* RPC, and `handleRpc` — which refuses internals to
-                // anything lacking this flag — answered FUNCTION_NOT_FOUND, so every
-                // route delegating to an `internal*` function failed with a 500 that
-                // named a function the registry demonstrably contained.
+                // `encodeWire`/`decodeWire` bracket it for the same reason
+                // `createShardClient` does: the shard decodes `args` and answers
+                // `encodeWire(result)`, so an un-bracketed hop handed the handler a
+                // tagged `["$lunora.wire$", "bigint", …]` array where a `bigint`/`Date`/
+                // `Uint8Array` belonged, and threw outright on a `bigint` ARGUMENT
+                // (`JSON.stringify` refuses one). `decodeWire` is identity for pure JSON.
                 //
-                // This widens visibility only. The shard reconstructs identity from
-                // the `x-lunora-*` headers independently of the flag, so the call
-                // still runs under the caller's RLS/ownership context; `headers` is
-                // minted by `resolveForwardContext` from a fixed allowlist that never
-                // copies `x-lunora-system` off the inbound request, so a client cannot
-                // forge it. The external client path (`/_lunora/rpc`, and SSR loaders
-                // that go through it) never passes here and stays gated.
-                { ...headers, "x-lunora-system": "1" },
-            );
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `dispatchSingleShard` is a closure-captured const declared below; this arrow only ever runs per request, long after construction
+                const response = await dispatchSingleShard(
+                    request,
+                    functionPath,
+                    encodeWire(args) as Record<string, unknown>,
+                    shardKey,
+                    // `x-lunora-system` marks this a trusted server-initiated dispatch, so
+                    // the shard will run `internal` functions — exactly as on the
+                    // scheduler path above, and for the same reason.
+                    //
+                    // An `httpRouter` handler is app-authored worker code, not a client:
+                    // the reference it passes is a literal `internal.foo.bar` from the
+                    // app's own source, never a caller-supplied string, and the handler
+                    // has already run whatever authorization it requires (the operator
+                    // bearer on a cell-register route, a deploy-key lookup on an ingest
+                    // route). Without this the route's `ctx.run*` reached the shard as an
+                    // ordinary *client* RPC, and `handleRpc` — which refuses internals to
+                    // anything lacking this flag — answered FUNCTION_NOT_FOUND, so every
+                    // route delegating to an `internal*` function failed with a 500 that
+                    // named a function the registry demonstrably contained.
+                    //
+                    // This widens visibility only. The shard reconstructs identity from
+                    // the `x-lunora-*` headers independently of the flag, so the call
+                    // still runs under the caller's RLS/ownership context; `headers` is
+                    // minted by `resolveForwardContext` from a fixed allowlist that never
+                    // copies `x-lunora-system` off the inbound request, so a client cannot
+                    // forge it. The external client path (`/_lunora/rpc`, and SSR loaders
+                    // that go through it) never passes here and stays gated.
+                    { ...headers, "x-lunora-system": "1" },
+                    sinkContext,
+                );
 
-            const response = await forwardToShard(shardDO, defaultShard, forwarded);
-            const payload: { error?: { code?: string; message?: string }; result?: unknown } = await response.json();
+                const payload: { error?: { code?: string; message?: string }; result?: unknown } = await response.json();
 
-            if (payload.error) {
-                throw new LunoraError(payload.error.message ?? "shard RPC failed", {
-                    code: payload.error.code ?? "INTERNAL",
-                    status: response.status,
-                });
-            }
+                if (payload.error) {
+                    throw new LunoraError(payload.error.message ?? "shard RPC failed", {
+                        code: payload.error.code ?? "INTERNAL",
+                        status: response.status,
+                    });
+                }
 
-            return payload.result as R;
-        };
+                return decodeWire(payload.result) as R;
+            };
+
+        const run = runOn(defaultShard);
 
         return {
             auth: {
@@ -3645,6 +3690,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             },
             cache: context.cache,
             fetch: globalThis.fetch.bind(globalThis),
+            forShard: (shardKey: string) => {
+                const scoped = runOn(shardKey);
+
+                return { runAction: scoped, runMutation: scoped, runQuery: scoped };
+            },
             runAction: run,
             runMutation: run,
             runQuery: run,
@@ -3678,9 +3728,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // self-`fetch` to `/_lunora/rpc`. It resolves identity + runs the
         // per-shard authorization gate identically to `handleRpc`, then
         // dispatches to the owning shard (the worker→DO hop is itself in-process
-        // — not a network self-fetch). `ctx.runQuery`/`runMutation` below keep
-        // the loopback-shaped `run` helper for back-compat; `serverQuery` is the
-        // identity-parity-guaranteed, shard-routable entrypoint for loaders.
+        // — not a network self-fetch). `ctx.run*` now shares that dispatcher; what
+        // still separates them is the authorization gate, which `serverQuery` runs
+        // and `ctx.run*` deliberately does not (it dispatches as `x-lunora-system`
+        // on behalf of app-authored route code). `serverQuery` stays the
+        // identity-parity-guaranteed entrypoint for loaders.
 
         // Error isolation (PLAN4 §1, §2.2): the `httpRouter` is the meta-framework
         // SSR handler, the LOWEST-priority matcher — it only runs after auth,
@@ -5005,7 +5057,20 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // treated as "unknown" (let the request through here) — the real
         // enforcement happens in `readBodyTextWithLimit` / the streaming import
         // reader, which abort with 413 once cumulative bytes exceed the cap.
-        if (request.method === "POST" || request.method === "PUT") {
+        //
+        // Scoped to the planes the FRAMEWORK dispatches — the reserved
+        // `/_lunora/*` surface (what `MAX_BODY_BYTES` documents itself as
+        // capping) and the auth plane it mounts. Unscoped, it also pre-rejected
+        // the app's own `httpRouter` routes: an upload route 413'd a 2 MiB POST
+        // before the router ever ran, while the identical 2 MiB sent chunked
+        // sailed straight through, so on that plane it was neither a cap the app
+        // could rely on nor one it could raise. Whether app routes deserve a body
+        // cap is a separate, deliberate decision; this is not one.
+        const onFrameworkPlane =
+            url.pathname.startsWith(RESERVED_PATH_PREFIX) ||
+            (options.authHandler !== undefined && isUnderAuthBasePath(url.pathname, options.authBasePath ?? DEFAULT_AUTH_BASE_PATH));
+
+        if (onFrameworkPlane && (request.method === "POST" || request.method === "PUT")) {
             const contentLength = Number(request.headers.get("content-length") ?? "");
             // Routes that declare their own larger body budget (the KV value PUT,
             // which reads under `KV_VALUE_MAX_BODY_BYTES` to allow a 25 MiB KV

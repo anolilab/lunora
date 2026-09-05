@@ -333,6 +333,31 @@ describe("handleCorsPreflight", () => {
         expect(exposed).toContain("x-lunora-edge-cache");
     });
 
+    it("admits `x-lunora-shard-key` at preflight, the REST surface's documented header form of `?shardKey=`", () => {
+        expect.hasAssertions();
+
+        // The allowlist has no wildcard, so a name missing from it is dropped from
+        // `access-control-allow-headers` and the browser blocks the WHOLE request —
+        // a SPA on an allowlisted origin that picked the header over the query
+        // parameter never reached the origin at all.
+        const response = handleCorsPreflight(
+            httpsRequest({
+                method: "OPTIONS",
+                headers: {
+                    origin: "https://app.example.com",
+                    "access-control-request-method": "GET",
+                    "access-control-request-headers": "x-lunora-shard-key, content-type",
+                },
+            }),
+            cors,
+        );
+
+        const allowHeaders = (response?.headers.get("access-control-allow-headers") ?? "").toLowerCase();
+
+        expect(allowHeaders).toContain("x-lunora-shard-key");
+        expect(allowHeaders).toContain("content-type");
+    });
+
     it("ignores non-preflight OPTIONS and disabled CORS", () => {
         expect.hasAssertions();
 

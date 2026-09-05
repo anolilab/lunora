@@ -3,8 +3,10 @@ import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { decodeIdentityHeader } from "../../../shared/identity-header";
+import { encodeWire } from "../../../shared/wire-codec";
 import type { ExecutionContextLike, HttpActionContext, HttpRouterLike, Route } from "../src/create-worker";
 import { composeWorker, createLunoraHandler, createWorker } from "../src/create-worker";
+import type { ObservabilityEvent } from "../src/observability";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 interface ShardSpy {
@@ -2037,7 +2039,11 @@ describe("createWorker — HTTP actions", () => {
     it("c.var.lunora.runMutation forwards an RPC envelope to the default shard and unwraps `{ result }`", async () => {
         expect.assertions(6);
 
-        shard.response = Response.json({ result: { id: "m1" } });
+        // Encoded, because that is what `ShardDO` answers (`encodeWire(result)`).
+        // A raw `{ id: "m1" }` here is pure JSON, so it round-trips identically
+        // through the codec and the assertion below would pass whether or not
+        // the worker decodes — which is exactly how the missing decode survived.
+        shard.response = Response.json({ result: encodeWire({ id: "m1" }) });
 
         const worker = createWorker({
             httpRouter: honoApp((app) =>
@@ -2056,12 +2062,166 @@ describe("createWorker — HTTP actions", () => {
         expect(res.status).toBe(200);
         await expect(res.json()).resolves.toEqual({ created: { id: "m1" } });
         expect(shard.calls).toHaveLength(1);
+        // The BARE `ctx.run*` targets the default shard on purpose — an HTTP
+        // action runs in the worker, so it has no shard of its own to inherit.
+        // `ctx.forShard(key)` is how a route names another (see below).
         expect(shard.calls[0]!.shardKey).toBe("__root__");
 
         const forwarded: { args: Record<string, unknown>; functionPath: string } = await shard.calls[0]!.request.json();
 
         expect(forwarded.functionPath).toBe("messages:send");
         expect(forwarded.args).toEqual({ body: { text: "hi" } });
+    });
+
+    it("routes `ctx.forShard(key).run*` to that shard, not the default one", async () => {
+        expect.assertions(4);
+
+        // Without this a webhook / REST route on a `.shardBy(...)` app could only
+        // ever reach the root DO — which holds none of a sharded table's rows —
+        // so it read empty and wrote to the wrong shard, silently.
+        shard.response = Response.json({ result: encodeWire([{ id: "msg_1" }]) });
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.get("/channels/:id/messages", async (c) => {
+                    const channelId = c.req.param("id");
+
+                    return Response.json({
+                        messages: await c.var.lunora.forShard(channelId).runQuery({ __lunoraRef: "messages:list" }, { channelId }),
+                    });
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/channels/tenant-42/messages"), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        await expect(res.json()).resolves.toEqual({ messages: [{ id: "msg_1" }] });
+        expect(shard.calls).toHaveLength(1);
+        expect(shard.calls[0]!.shardKey).toBe("tenant-42");
+    });
+
+    it("encodes `ctx.run*` args and decodes its result, so bigint / Date / bytes survive the shard hop", async () => {
+        expect.assertions(5);
+
+        // `ShardDO` answers `encodeWire(result)` and decodes the `args` it is sent
+        // (`shard-do.ts`), exactly as `createShardClient` assumes. Skipping either
+        // half handed the handler a tagged `["$lunora.wire$", …]` array where a
+        // `bigint`/`Date` belonged, and threw outright on a bigint ARGUMENT —
+        // `JSON.stringify` refuses one.
+        shard.response = Response.json({ result: encodeWire({ at: new Date(0), balance: 42n, blob: new Uint8Array([1, 2, 3]) }) });
+
+        let observed: { at: unknown; balance: unknown; blob: unknown } | undefined;
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/settle", async (c) => {
+                    observed = await c.var.lunora.runMutation({ __lunoraRef: "ledger:settle" }, { amount: 5n });
+
+                    return new Response("ok", { status: 200 });
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/settle", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+
+        const forwarded: { args: Record<string, unknown> } = await shard.calls[0]!.request.json();
+
+        // Byte-identical to what `createShardClient` puts on the wire.
+        expect(forwarded.args).toEqual({ amount: ["$lunora.wire$", "bigint", "5"] });
+        expect(observed?.balance).toBe(42n);
+        expect(observed?.at).toStrictEqual(new Date(0));
+        expect(observed?.blob).toStrictEqual(new Uint8Array([1, 2, 3]));
+    });
+
+    it("puts a `ctx.run*` dispatch on the RPC event stream and under a traceparent", async () => {
+        expect.assertions(4);
+
+        // Every other origin dispatch goes through `dispatchSingleShard`; a route's
+        // `ctx.run*` used to call `forwardToShard` bare, so a webhook's work was
+        // invisible in the RPC event stream and its shard span was unparented.
+        const events: ObservabilityEvent[] = [];
+
+        shard.response = Response.json({ result: encodeWire({ accepted: true }) });
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/hook", async (c) => {
+                    await c.var.lunora.runMutation({ __lunoraRef: "webhooks:ingest" }, {});
+
+                    return new Response("ok", { status: 200 });
+                }),
+            ),
+            observability: {
+                onRpc: (event) => {
+                    events.push(event);
+                },
+            },
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/hook", { method: "POST" }), {}, fakeContext);
+
+        const rpcEvent = events.find((event) => event.functionPath === "webhooks:ingest");
+
+        expect(rpcEvent).toBeDefined();
+        expect(rpcEvent?.ok).toBe(true);
+        expect(rpcEvent?.shardKey).toBe("__root__");
+        expect(shard.calls[0]!.request.headers.get("traceparent")).toMatch(/^00-[\da-f]{32}-[\da-f]{16}-\d{2}$/);
+    });
+
+    it("does not pre-reject an app route's declared body length — the app owns that plane's budget", async () => {
+        expect.assertions(3);
+
+        // The `Content-Length` fast-path is scoped to the planes the framework
+        // dispatches. Applied to `httpRouter` too it was neither a cap the app
+        // could rely on (the same bytes sent chunked reached the router untouched)
+        // nor one it could raise, and it 413'd before the router ever ran.
+        let received = 0;
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/upload", async (c) => {
+                    const uploaded = await c.req.arrayBuffer();
+
+                    received = uploaded.byteLength;
+
+                    return Response.json({ bytes: received });
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const body = new Uint8Array(2 * 1024 * 1024);
+        const res = await worker.fetch(
+            new Request("https://app.example/upload", { body, headers: { "content-length": String(body.byteLength) }, method: "POST" }),
+            {},
+            fakeContext,
+        );
+
+        expect(res.status).toBe(200);
+        await expect(res.json()).resolves.toEqual({ bytes: body.byteLength });
+        expect(received).toBe(body.byteLength);
+    });
+
+    it("still pre-rejects an oversized declared body on the reserved `/_lunora/*` plane", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace });
+
+        // The pre-check reads `content-length` only, so no body is needed to trip it.
+        const res = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", { headers: { "content-length": String(2 * 1024 * 1024) }, method: "POST" }),
+            {},
+            fakeContext,
+        );
+
+        expect(res.status).toBe(413);
+        expect(shard.calls).toHaveLength(0);
     });
 
     it("marks a route's `ctx.run*` as a trusted system dispatch, so `internal` functions are reachable", async () => {
