@@ -421,7 +421,51 @@ describe("createDispatchRunner wire bracketing", () => {
         )) as { code?: unknown; message?: unknown };
 
         expect(error.code).toBe("INTERNAL");
-        expect(error.message).toMatch(/@lunora\/workflow: function dispatch returned a JSON body that is not an object \(200\)/);
+        expect(error.message).toMatch(/@lunora\/workflow: function dispatch returned a JSON body that is not a \{ result \} envelope \(200\)/);
+    });
+
+    // `typeof [] === "object"`, so the object guard alone let a bare JSON array
+    // and an `{}` through to `decodeWire(undefined)` — resolving `undefined` as
+    // "the function returned nothing" for a body that is not a shard envelope at
+    // all. The shard emits `{"result":["$lunora.wire$","undefined"]}` for a
+    // genuine `undefined` return, never an absent key, so requiring the key is
+    // free.
+    it.each([
+        ["a JSON array", "[1,2,3]"],
+        ["an object with no `result` key", '{"commitCursor":42}'],
+    ])("throws INTERNAL for %s rather than resolving undefined", async (_label: string, body: string) => {
+        expect.assertions(2);
+
+        const run = createDispatchRunner({ env: ENV, fetchImpl: async () => new Response(body, { status: 200 }), label: "@lunora/workflow" });
+
+        const error = (await run(REF).then(
+            () => undefined,
+            (error_: unknown) => error_,
+        )) as { code?: unknown; message?: unknown };
+
+        expect(error.code).toBe("INTERNAL");
+        expect(error.message).toMatch(/@lunora\/workflow: function dispatch returned a JSON body that is not a \{ result \} envelope \(200\)/);
+    });
+
+    // A genuine `undefined` return still resolves — the key is present, tagged.
+    it("resolves undefined for the shard's tagged-undefined envelope", async () => {
+        expect.assertions(1);
+
+        const run = createDispatchRunner({ env: ENV, fetchImpl: async () => shardEnvelope(undefined), label: "@lunora/queue" });
+
+        await expect(run(REF)).resolves.toBeUndefined();
+    });
+
+    // `encodeWire` rejects any non-plain object, where `JSON.stringify` swallowed
+    // it into `{}`. The bare codec TypeError names only the offending type, so an
+    // operator reading a failed dispatch's log line cannot tell which call carried
+    // it — the label and the function path are the whole point.
+    it("labels an unencodable argument with the package and the function path", async () => {
+        expect.assertions(1);
+
+        const run = createDispatchRunner({ env: ENV, fetchImpl: async () => shardEnvelope(undefined), label: "@lunora/queue" });
+
+        await expect(run(REF, { pattern: /nope/u })).rejects.toThrow(/@lunora\/queue: cannot encode args for 'messages:send' — /);
     });
 });
 

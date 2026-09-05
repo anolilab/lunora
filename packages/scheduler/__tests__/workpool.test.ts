@@ -527,6 +527,16 @@ describe("createWorkpool", () => {
         expect(calls[0]?.body.args).toStrictEqual(encodeWire(args));
     });
 
+    // Same unattributable-TypeError problem as `ctx.scheduler.runAt`; same label.
+    it("labels an unencodable argument with the pool surface and the function path", async () => {
+        expect.assertions(1);
+
+        const { namespace } = fakeNamespace();
+        const pool = createWorkpool({ maxConcurrency: 1, namespace, originUrl: "https://app.test" });
+
+        await expect(pool.enqueue(fnRef, { pattern: /nope/u })).rejects.toThrow(/workpool\.enqueue: cannot encode args for 'stripe\.sync' — /);
+    });
+
     it("rejects a negative delayMs", async () => {
         expect.assertions(1);
 

@@ -301,6 +301,21 @@ describe("createScheduler", () => {
         await expect(scheduler.get("a")).resolves.toStrictEqual({ ...records[0], args });
     });
 
+    // `encodeWire` rejects any non-plain object, where `JSON.stringify` used to
+    // swallow it into `{}`. The codec's own message names the offending type and
+    // nothing else, so a job that failed to schedule at 03:00 left a log line that
+    // could not be traced to the call that carried the argument.
+    it("labels an unencodable argument with the scheduler surface and the function path", async () => {
+        expect.assertions(1);
+
+        const { namespace } = fakeNamespace();
+        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+
+        await expect(scheduler.runAt(Date.now() + 1000, fnRef, { pattern: /nope/u })).rejects.toThrow(
+            /ctx\.scheduler\.runAt: cannot encode args for 'messages\.send' — /,
+        );
+    });
+
     it("throws when SchedulerDO returns a non-2xx response", async () => {
         expect.assertions(1);
 

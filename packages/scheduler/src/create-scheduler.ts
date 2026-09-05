@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { collectPages } from "../../../shared/collect-pages";
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeArgsOrThrow } from "../../../shared/wire-codec";
 import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { CronTarget, LunoraSchedulerOptions, RunOptions, Scheduler, ScheduleRecord, ScheduleTargetArgs } from "./types";
 import { isWorkflowReference } from "./types";
@@ -9,11 +9,23 @@ import assertScheduleDelay from "./validate-delay";
 import assertScheduleInstant from "./validate-instant";
 
 /**
- * Undo `runAt`'s `encodeWire(args)` on a record read back out of the DO, so
- * `list()` / `get()` — and the `_scheduled_functions` system table they back —
- * answer the same `bigint`/`Date`/`Uint8Array` the caller scheduled rather than
- * the tagged wire form. Identity for pure-JSON args, so a record written before
- * the encode landed reads back unchanged.
+ * Name a schedule target for an error message: a workflow/agent binding, a
+ * function reference's path, or the bare `"ns:fn"` string the loosely-typed
+ * `ctx.scheduler` surface still accepts.
+ */
+const targetLabel = (target: CronTarget): string => {
+    if (typeof (target as unknown) === "string") {
+        return target as unknown as string;
+    }
+
+    return (isWorkflowReference(target) ? target.binding : target.__lunoraRef) ?? "<unknown>";
+};
+
+/**
+ * Undo `runAt`'s encode on a record read back out of the DO, so `list()` /
+ * `get()` — and the `_scheduled_functions` system table they back — answer the
+ * same value the caller scheduled rather than the tagged wire form. Identity for
+ * pure-JSON args, so a record written before the encode landed reads unchanged.
  */
 const decodeRecordArgs = (record: ScheduleRecord): ScheduleRecord => {
     return { ...record, args: decodeWire(record.args) as Record<string, unknown> };
@@ -52,17 +64,13 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
         // instance. `maxConcurrency` only means anything for a pooled job, so it
         // rides along only when `pool` is set (mirroring `createWorkpool`).
         const base = {
-            // Wire-encoded for the same reason `ctx.run`'s dispatch runner encodes
-            // its args: these are stored verbatim by the SchedulerDO and POSTed
-            // verbatim to `/_lunora/scheduler/dispatch` on fire, where the shard
-            // decodes on the way out — the shard for a function target, and
-            // `handleSchedulerDispatch`'s workflow branch before `create({ params })`
-            // for a workflow one. Both targets share this envelope, so both decodes
-            // have to exist; see `create-dispatch-runner.ts` for why the hop needs
-            // bracketing at all. `list`/`get` decode it back below, so the read
-            // surface still answers what was scheduled. Identity for pure-JSON args,
-            // so an already-stored record is unaffected.
-            args: encodeWire(args),
+            // Wire-encoded, and decoded again by `decodeRecordArgs` on the way
+            // back out — see `create-dispatch-runner.ts` for why the hop needs
+            // bracketing. The record is stored verbatim and POSTed verbatim to
+            // `/_lunora/scheduler/dispatch` on fire, where the decode is the
+            // shard's for a function target and `handleSchedulerDispatch`'s
+            // workflow branch (before `create({ params })`) for a workflow one.
+            args: encodeArgsOrThrow("ctx.scheduler.runAt", targetLabel(target), args),
             // Pre-minted id, when the caller decided it before the call could be
             // made (see `RunOptions.id`). Absent for an ordinary schedule, and the
             // DO mints one.

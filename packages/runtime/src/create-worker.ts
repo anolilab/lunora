@@ -19,7 +19,7 @@ import { RELAY_NAME_INFIX, relayName } from "../../../shared/relay-name";
 import { parseMinSeq, REPLICA_NAME_INFIX, replicaName } from "../../../shared/replica-name";
 import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeArgsOrThrow, encodeWire } from "../../../shared/wire-codec";
 import { isEnvFlagEnabled, mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import { assertArgsObject } from "./assert-args-object";
 import type { AuthAdmin } from "./auth-admin-routes";
@@ -3186,13 +3186,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // hold a slot, and returning before the release below wedged the pool for
         // good at the default `maxConcurrency: 1`.
         if (typeof candidate.workflow === "string" && candidate.workflow.length > 0) {
-            // `ctx.scheduler.runAt` stores `encodeWire(args)`, and the two dispatch
-            // targets decode in different places: a function target's args are
-            // decoded by the shard (`ShardDO`'s `decodeWire(payload.args)`), but a
-            // workflow target never reaches the shard — it goes straight to
-            // `create({ params })`. Decoding here is what keeps the two symmetric;
-            // without it a scheduled workflow's `event.payload` carried the raw
-            // `["$lunora.wire$", …]` tuples.
+            // A workflow target never reaches the shard — it goes straight to
+            // `create({ params })` — so this is where its half of the scheduler's
+            // encode is undone. Without it a scheduled workflow's `event.payload`
+            // carried the raw tagged tuples while a function target's did not.
             await startWorkflowInstance(candidate.workflow, decodeWire(args) as Record<string, unknown>, env, "scheduled workflow", recordId);
 
             await releasePoolSlot(candidate);
@@ -3528,7 +3525,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     /**
      * `ctx.scheduler` for an HTTP action — a thin RPC wrapper over the scheduler
      * DO, mirroring what `@lunora/scheduler`'s `createScheduler` does from a
-     * shard.
+     * shard. The two write to and read from the SAME records, so they must agree
+     * on the envelope: both wire-encode `args` on the way in and decode a record
+     * on the way out (see `create-dispatch-runner.ts` for why the hop needs
+     * bracketing).
      *
      * The scheduler DO takes its callback origin from `env.LUNORA_ORIGIN_URL`
      * at both schedule and fire time — deliberately, so a request cannot steer
@@ -3536,6 +3536,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * nothing origin-shaped is sent from here.
      */
     const buildHttpScheduler = (namespace: ShardNamespaceLike): SchedulerContext => {
+        /** Undo `schedule`'s encode on a record read back out of the DO — the mirror of `@lunora/scheduler`'s `decodeRecordArgs`. Identity for pure-JSON args. */
+        const decodeRecordArgs = (record: Record<string, unknown>): Record<string, unknown> =>
+            "args" in record ? { ...record, args: decodeWire(record["args"]) } : record;
+
         const instanceName = options.schedulerInstanceName ?? "default";
         const stub = (): ResolvedShard => resolveShard(namespace, instanceName);
 
@@ -3603,23 +3607,41 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
          * `@lunora/scheduler`'s `createScheduler.list()` — the shard-side client
          * of the same route — also uses, so the two cannot drift apart.
          */
-        const listAll = async (): Promise<Record<string, unknown>[]> =>
-            await collectPages<Record<string, unknown>>(async (cursor) =>
+        const listAll = async (): Promise<Record<string, unknown>[]> => {
+            const records = await collectPages<Record<string, unknown>>(async (cursor) =>
                 call<{ cursor?: string; records?: Record<string, unknown>[]; truncated?: boolean }>(
                     cursor === undefined ? "/list" : `/list?cursor=${encodeURIComponent(cursor)}`,
                     { method: "GET" },
                 ),
             );
 
+            return records.map((record) => decodeRecordArgs(record));
+        };
+
         const schedule = async (scheduledFor: number, target: unknown, args: Record<string, unknown> = {}): Promise<string> => {
-            const { id } = await post<{ id: string }>("/schedule", { args, scheduledFor, ...targetFields(target) });
+            const fields = targetFields(target);
+
+            const { id } = await post<{ id: string }>("/schedule", {
+                args: encodeArgsOrThrow("ctx.scheduler", String(fields["functionPath"] ?? fields["workflow"]), args),
+                scheduledFor,
+                ...fields,
+            });
 
             return id;
         };
 
         return {
             cancel: async (id) => await post<{ cancelled: boolean }>("/cancel", { id }),
-            get: async (id) => await call<Record<string, unknown> | null>(`/get?id=${encodeURIComponent(id)}`, { method: "GET" }),
+            // The DO answers `{ record }` — or `{}` for an id that matched
+            // nothing — never the bare record, so handing its body back broke the
+            // declared `Record<string, unknown> | null` and gave a caller
+            // `{ record: … }` where `createScheduler.get()` gives the record.
+            get: async (id) => {
+                const body = await call<{ record?: Record<string, unknown> }>(`/get?id=${encodeURIComponent(id)}`, { method: "GET" });
+
+                // eslint-disable-next-line unicorn/no-null -- public contract returns `Record<string, unknown> | null`, mirroring `createScheduler.get`
+                return body.record === undefined ? null : decodeRecordArgs(body.record);
+            },
             list: listAll,
             runAfter: async (delayMs, target, args) => {
                 // `@lunora/scheduler`'s `assertScheduleDelay`, restated: this
@@ -3677,12 +3699,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 // absent from observability while the docs promised every dispatch is a
                 // span.
                 //
-                // `encodeWire`/`decodeWire` bracket it for the same reason
-                // `createShardClient` does: the shard decodes `args` and answers
-                // `encodeWire(result)`, so an un-bracketed hop handed the handler a
-                // tagged `["$lunora.wire$", "bigint", …]` array where a `bigint`/`Date`/
-                // `Uint8Array` belonged, and threw outright on a `bigint` ARGUMENT
-                // (`JSON.stringify` refuses one). `decodeWire` is identity for pure JSON.
+                // Wire-bracketed in both directions, as every dispatch hop is; see
+                // `create-dispatch-runner.ts`.
                 //
                 // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `dispatchSingleShard` is a closure-captured const declared below; this arrow only ever runs per request, long after construction
                 const response = await dispatchSingleShard(

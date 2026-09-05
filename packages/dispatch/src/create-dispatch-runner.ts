@@ -12,7 +12,7 @@ import { isLunoraError, LunoraError } from "@lunora/errors";
 
 import { abortDeadline } from "../../../shared/abort-deadline";
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeArgsOrThrow } from "../../../shared/wire-codec";
 import type { ArgsOf, DispatchRunFunction, FunctionReference, RunFunctionOptions } from "./types";
 
 /** The reserved worker endpoint that re-dispatches a server-initiated function call to its shard. */
@@ -203,13 +203,11 @@ interface DispatchRunnerOptions {
 
 /**
  * Build a {@link DispatchRunFunction} that invokes a Lunora function by POSTing
- * to `/_lunora/scheduler/dispatch` with the admin bearer. `args` are
- * `encodeWire`d on the way out (the shard `decodeWire`s them) and the shard's
- * `{ result }` envelope is unwrapped and `decodeWire`d on the way back, so a
- * `bigint`/`Date`/`Uint8Array`/`NaN` survives the hop in either direction; an
+ * to `/_lunora/scheduler/dispatch` with the admin bearer. The hop is
+ * wire-bracketed in both directions (see the `encodeArgsOrThrow` call below); an
  * empty body resolves to `undefined`. A non-ok response is rethrown as a
- * {@link LunoraError} carrying
- * the dispatch endpoint's original `code`/`status`/`data` (so consumers can map
+ * {@link LunoraError} carrying the dispatch endpoint's original
+ * `code`/`status`/`data` (so consumers can map
  * a deterministic 4xx to a non-retryable failure); an unparseable error body
  * falls back to `INTERNAL`. A non-empty body that is not valid JSON is a
  * malformed response (e.g. an intermediary's HTML error page) and throws an
@@ -307,13 +305,18 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
                     // path, so a per-MESSAGE id reused across a handler's several
                     // calls would make the second call return the first's cached
                     // result. `JSON.stringify` omits the key when unset.
-                    // `encodeWire` for the same reason `createShardClient` and the
-                    // `httpAction` path do it: the shard `decodeWire`s `payload.args`,
-                    // so an un-encoded hop delivered a `Date` as an ISO string and a
-                    // `Uint8Array` as `{"0":1,…}`, and threw outright on a `bigint`
-                    // (`JSON.stringify` refuses one). Identity for pure-JSON args.
+                    //
+                    // CANONICAL NOTE on wire-bracketing a dispatch hop — the
+                    // scheduler, the workpool and `ctx.scheduler` on an httpAction
+                    // point here rather than restate it. Plain JSON cannot carry a
+                    // `bigint` (`JSON.stringify` throws), and it flattens a
+                    // `Uint8Array` to `{"0":1,…}` and a `Date` to an ISO string. The
+                    // far end — `ShardDO` — `decodeWire`s `payload.args` and answers
+                    // `encodeWire(result)`, so BOTH ends of the hop must be bracketed
+                    // or the two halves disagree. `encodeWire`/`decodeWire` are
+                    // identity for pure-JSON values, so nothing else changes.
                     body: JSON.stringify({
-                        args: encodeWire(args ?? {}),
+                        args: encodeArgsOrThrow(label, function_.__lunoraRef, args ?? {}),
                         functionPath: function_.__lunoraRef,
                         id: runOptions.dedupId,
                         shardKey: runOptions.shardKey,
@@ -364,28 +367,28 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
                 });
             }
 
-            // `JSON.parse` resolves `null` for the body `null` and a scalar for `4`
-            // or `"ok"` — reading `.result` off the first throws a bare `TypeError`
-            // that escapes as neither a dispatch failure nor a timeout, and off the
-            // second silently reads `undefined` as the "return value". Neither is a
-            // shard envelope, so say so (mirrors `@lunora/client`'s service caller).
-            if (parsed === null || typeof parsed !== "object") {
+            // The shard answers an ENVELOPE — `{ result }`, or `{ commitCursor,
+            // result }` / `{ lastMutationId, result }` for a mutation (built by the
+            // shard's `buildDispatchResponse`) — never the bare return value, which
+            // is why an unwrapped `parsed` handed every `ctx.run` caller
+            // `{ result: … }` where a workflow's `order.status` belonged.
+            //
+            // Insist on the envelope SHAPE before reading it: `null` and a bare
+            // scalar are not objects, `typeof [] === "object"` lets an array past,
+            // and an object missing the key reads `undefined` as "returned
+            // nothing". Requiring `result` costs nothing — a genuine `undefined`
+            // return is emitted as `{"result":["$lunora.wire$","undefined"]}`, with
+            // the key always present.
+            if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed) || !("result" in parsed)) {
                 throw new LunoraError(
                     "INTERNAL",
-                    `${label}: function dispatch returned a JSON body that is not an object (${String(response.status)}): ${text}`,
+                    `${label}: function dispatch returned a JSON body that is not a { result } envelope (${String(response.status)}): ${text}`,
                     {
                         status: response.status,
                     },
                 );
             }
 
-            // The shard answers an ENVELOPE — `{ result }`, or `{ commitCursor,
-            // result }` / `{ lastMutationId, result }` for a mutation (built by the
-            // shard's `buildDispatchResponse`) — whose `result` is already
-            // `encodeWire`d. Unwrap and decode, exactly as `createShardClient` and
-            // `@lunora/client`'s service caller do: returning the parsed body handed
-            // every `ctx.run` caller `{ result: … }` where the function's return
-            // value belonged, so a workflow's `order.status` read `undefined`.
             return decodeWire((parsed as { result?: unknown }).result);
         } finally {
             deadline.dispose();
