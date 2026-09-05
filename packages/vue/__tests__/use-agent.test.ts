@@ -190,4 +190,32 @@ describe(useAgent, () => {
 
         scope.stop();
     });
+
+    // A session expiry or RLS denial on the thread/history subscription used to be
+    // dropped: `status` simply froze with nothing to read and no handler to call.
+    // Matches React's `useAgent` / `useAgentChat` error channel.
+    it("surfaces a thread subscription error on `error` and through `onError`", () => {
+        expect.hasAssertions();
+
+        const fake = createFakeClient();
+        const seen: { code?: string; message: string }[] = [];
+        const scope = effectScope();
+        const agent = scope.run(() =>
+            fake.provide((): UseAgentResult =>
+                useAgent({
+                    api: buildApi(),
+                    onError: (subscriptionError) => seen.push(subscriptionError),
+                    run: makeRef(RUN_REF) as FunctionReference<"mutation">,
+                    threadKey: "t1",
+                }),
+            ),
+        )!;
+
+        fake.subscribeCalls[0]?.options.onError?.({ code: "FORBIDDEN", message: "denied" });
+
+        expect(agent.error.value?.message).toBe("denied");
+        expect(seen).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
+
+        scope.stop();
+    });
 });

@@ -1,4 +1,4 @@
-import type { FunctionReference } from "@lunora/client";
+import type { FunctionReference, SubscriptionErrorCallback } from "@lunora/client";
 import type { ComputedRef, MaybeRefOrGetter, Ref } from "vue";
 import { computed, toValue } from "vue";
 
@@ -59,6 +59,13 @@ interface UseAgentOptions {
     cancel?: FunctionReference<"mutation">;
 
     /**
+     * Called when the live thread subscription reports an error (a session
+     * expiry, an RLS denial). Without it — and without reading `error` — such a
+     * failure is invisible and `thread` / `status` freeze at their last values.
+     */
+    onError?: SubscriptionErrorCallback;
+
+    /**
      * The app mutation that starts (or continues) a run — a thin wrapper over
      * `ctx.agents.<name>.run(...)`. Called with `{ threadKey, input }` merged with
      * {@link UseAgentOptions.runArgs} and the per-call args.
@@ -76,6 +83,8 @@ interface UseAgentResult {
      * no-op when no `cancel` mutation was supplied or no run is in flight.
      */
     cancel: () => Promise<void>;
+    /** The live thread subscription's last error, or `undefined`. */
+    error: Ref<Error | undefined>;
     /** `true` while a `run` invocation is in flight. */
     pending: Readonly<Ref<boolean>>;
     /** Start (or continue) a run with a user message; extra args merge over `runArgs`. */
@@ -107,13 +116,17 @@ const NO_MUTATION_REF: FunctionReference<"mutation"> = { __lunoraRef: "" };
  * key re-subscribes to the new thread.
  */
 const useAgent = (options: UseAgentOptions): UseAgentResult => {
-    const { api, cancel: cancelReference, run: runReference, runArgs, threadKey } = options;
+    const { api, cancel: cancelReference, onError, run: runReference, runArgs, threadKey } = options;
 
     const runMutation = useMutation(runReference);
     const cancelMutation = useMutation(cancelReference ?? NO_MUTATION_REF);
-    const { data: threadData } = useSubscription(api.agents.agentThread, () => {
-        return { key: toValue(threadKey) };
-    });
+    const { data: threadData, error } = useSubscription(
+        api.agents.agentThread,
+        () => {
+            return { key: toValue(threadKey) };
+        },
+        { onError },
+    );
 
     const thread = computed(() => threadData.value as unknown as AgentThreadRecord | undefined);
     const status = computed(() => thread.value?.status);
@@ -133,7 +146,7 @@ const useAgent = (options: UseAgentOptions): UseAgentResult => {
         await cancelMutation.mutate({ instanceId, threadKey: toValue(threadKey) });
     };
 
-    return { cancel, pending: runMutation.pending, run, status, thread };
+    return { cancel, error, pending: runMutation.pending, run, status, thread };
 };
 
 export type { AgentThreadRecord, AgentThreadStatus, UseAgentApi, UseAgentOptions, UseAgentResult };

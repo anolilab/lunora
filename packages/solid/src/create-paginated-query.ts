@@ -421,7 +421,12 @@ const createPaginatedQuery = <F extends FunctionReference>(
 
     const results = createMemo<PageItemOf<F>[]>(() => pageResults().flatMap((page) => page?.page ?? []));
 
-    const isLoading = createMemo<boolean>(() => status() === "LoadingFirstPage" || status() === "LoadingMore");
+    // A skipped feed reports `status === "LoadingFirstPage"` (it has no first page
+    // and never will), so `isLoading` must not derive from `status` alone — it
+    // would spin forever behind an auth/route gate. Matches React's `!skipped &&`.
+    const skipped = createMemo<boolean>(() => (typeof args === "function" ? args() : args) === "skip");
+
+    const isLoading = createMemo<boolean>(() => !skipped() && (status() === "LoadingFirstPage" || status() === "LoadingMore"));
 
     return { error, isLoading, loadMore, results, status };
 };
@@ -444,9 +449,12 @@ const createInfiniteQuery = <F extends FunctionReference>(
 
     const pages = createMemo<PageItemOf<F>[][]>(() => pageResults().flatMap((page) => (page ? [page.page] : [])));
 
-    const isLoading = createMemo<boolean>(() => status() === "LoadingFirstPage");
+    // See `createPaginatedQuery` for why `skipped` gates these — React's `!skipped &&`.
+    const skipped = createMemo<boolean>(() => (typeof args === "function" ? args() : args) === "skip");
+
+    const isLoading = createMemo<boolean>(() => !skipped() && status() === "LoadingFirstPage");
     const hasNextPage = createMemo<boolean>(() => status() === "CanLoadMore");
-    const isFetchingNextPage = createMemo<boolean>(() => status() === "LoadingMore");
+    const isFetchingNextPage = createMemo<boolean>(() => !skipped() && status() === "LoadingMore");
 
     const fetchNextPage = (numberItems?: number): void => {
         loadMore(numberItems ?? initialNumItems);

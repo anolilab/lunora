@@ -1,6 +1,6 @@
-import type { Signal } from "@angular/core";
-import { computed, DestroyRef, inject, signal } from "@angular/core";
-import type { FunctionReference, LunoraClient, OptimisticMessage } from "@lunora/client";
+import type { DestroyRef, Signal } from "@angular/core";
+import { computed, signal } from "@angular/core";
+import type { FunctionReference, LunoraClient, OptimisticMessage, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 import { maxSeq, reconcileOptimistic } from "@lunora/client";
 
 import type { AgentChatMessage, AgentLiveEvent, AgentThreadRecord, AgentThreadStatus, AgentTokenDelta } from "./agent";
@@ -71,6 +71,13 @@ interface AgentChatOptions {
     limit?: number;
 
     /**
+     * Called when the live history or thread subscription reports an error (a
+     * session expiry, an RLS denial). Without it — and without reading `error` —
+     * such a failure is invisible and `messages` / `status` freeze.
+     */
+    onError?: SubscriptionErrorCallback;
+
+    /**
      * The app mutation that starts (or continues) a run — a thin wrapper over
      * `ctx.agents.<name>.run(...)`. Called with `{ threadKey, input }` merged with
      * {@link AgentChatOptions.sendArgs} and the per-call args.
@@ -102,6 +109,8 @@ interface AgentChatResult {
      * no-op when no `cancel` mutation was supplied or no run is in flight.
      */
     cancel: () => Promise<void>;
+    /** The history or thread subscription's last error, or `undefined`. */
+    error: Signal<SubscriptionError | undefined>;
     /** Durable thread history (oldest first) plus any un-acknowledged optimistic user turns. */
     messages: Signal<ReadonlyArray<AgentChatMessage>>;
     /** Reject a paused human-in-the-loop tool call (optionally with a reason). */
@@ -147,14 +156,22 @@ const NO_STREAM_REF: AgentTokenStreamReference = { __lunoraRef: "" };
  * @experimental
  */
 const agentChat = (options: AgentChatOptions): AgentChatResult => {
-    const { api, cancel: cancelReference, limit, send: sendReference, sendArgs, stream: streamReference, threadKey } = options;
+    const { api, cancel: cancelReference, limit, onError, send: sendReference, sendArgs, stream: streamReference, threadKey } = options;
 
     const client = resolveLunoraClient(options.client);
-    const destroyRef = options.destroyRef ?? inject(DestroyRef);
+    // Forward the caller's `destroyRef` verbatim (`undefined` when they are in an
+    // injection context) rather than a resolved one: each child primitive then
+    // injects its own and keeps its SSR platform gate, because an explicitly
+    // passed `destroyRef` marks a manual-lifetime caller that drives the socket
+    // itself and bypasses that gate (see `shouldOpenSubscription`).
+    const { destroyRef } = options;
 
     const messagesArguments = limit === undefined ? { key: threadKey } : { key: threadKey, limit };
-    const { data: history } = subscription(api.agents.agentMessages, messagesArguments, { client, destroyRef });
-    const { data: threadData } = subscription(api.agents.agentThread, { key: threadKey }, { client, destroyRef });
+    const { data: history, error: historyError } = subscription(api.agents.agentMessages, messagesArguments, { client, destroyRef, onError });
+    const { data: threadData, error: threadError } = subscription(api.agents.agentThread, { key: threadKey }, { client, destroyRef, onError });
+    // Named for the return key it feeds; `error` itself is taken by the `catch`
+    // binding in `send` below.
+    const subscriptionError = computed(() => historyError() ?? threadError());
 
     // The token stream is optional: with no reference we pass the sentinel + "skip"
     // so the stream primitive never opens a stream (and `streamingText` stays empty).
@@ -271,7 +288,7 @@ const agentChat = (options: AgentChatOptions): AgentChatResult => {
         await client.mutation(cancelReference, { instanceId, threadKey });
     };
 
-    return { approve, cancel, messages, reject, send, status, streamingText };
+    return { approve, cancel, error: subscriptionError, messages, reject, send, status, streamingText };
 };
 
 export type { AgentChatApi, AgentChatOptions, AgentChatResult, AgentTokenStreamReference };

@@ -1,6 +1,6 @@
-import type { Signal } from "@angular/core";
-import { computed, DestroyRef, inject, signal } from "@angular/core";
-import type { FunctionReference, LunoraClient } from "@lunora/client";
+import type { DestroyRef, Signal } from "@angular/core";
+import { computed, signal } from "@angular/core";
+import type { FunctionReference, LunoraClient, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 
 import { resolveLunoraClient } from "./client";
 import { subscription } from "./subscription";
@@ -144,6 +144,13 @@ interface AgentOptions {
     destroyRef?: DestroyRef;
 
     /**
+     * Called when the live thread subscription reports an error (a session
+     * expiry, an RLS denial). Without it — and without reading `error` — such a
+     * failure is invisible and `thread` / `status` freeze at their last values.
+     */
+    onError?: SubscriptionErrorCallback;
+
+    /**
      * The app mutation that starts (or continues) a run — a thin wrapper over
      * `ctx.agents.<name>.run(...)`. Called with `{ threadKey, input }` merged with
      * {@link AgentOptions.runArgs} and the per-call args.
@@ -165,6 +172,8 @@ interface AgentResult {
      * no-op when no `cancel` mutation was supplied or no run is in flight.
      */
     cancel: () => Promise<void>;
+    /** The live thread subscription's last error, or `undefined`. */
+    error: Signal<SubscriptionError | undefined>;
     /** `true` while a `run` invocation is in flight. */
     pending: Signal<boolean>;
     /** Start (or continue) a run with a user message; extra args merge over `runArgs`. */
@@ -191,12 +200,16 @@ interface AgentResult {
  * @experimental
  */
 const agent = (options: AgentOptions): AgentResult => {
-    const { api, cancel: cancelReference, run: runReference, runArgs, threadKey } = options;
+    const { api, cancel: cancelReference, onError, run: runReference, runArgs, threadKey } = options;
 
     const client = resolveLunoraClient(options.client);
-    const destroyRef = options.destroyRef ?? inject(DestroyRef);
 
-    const { data: threadData } = subscription(api.agents.agentThread, { key: threadKey }, { client, destroyRef });
+    // Forward the caller's `destroyRef` verbatim (`undefined` when they are in an
+    // injection context) rather than a resolved one: each child primitive then
+    // injects its own and keeps its SSR platform gate, because an explicitly
+    // passed `destroyRef` marks a manual-lifetime caller that drives the socket
+    // itself and bypasses that gate (see `shouldOpenSubscription`).
+    const { data: threadData, error } = subscription(api.agents.agentThread, { key: threadKey }, { client, destroyRef: options.destroyRef, onError });
 
     const thread = computed(() => threadData() as unknown as AgentThreadRecord | undefined);
     const status = computed(() => thread()?.status);
@@ -224,7 +237,7 @@ const agent = (options: AgentOptions): AgentResult => {
         await client.mutation(cancelReference, { instanceId, threadKey });
     };
 
-    return { cancel, pending: pending.asReadonly(), run, status, thread };
+    return { cancel, error, pending: pending.asReadonly(), run, status, thread };
 };
 
 export type {

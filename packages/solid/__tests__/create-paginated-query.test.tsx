@@ -100,11 +100,13 @@ describe("createPaginatedQuery (Solid)", () => {
     it("skip short-circuits to LoadingFirstPage", async () => {
         const fake = createFakeClient();
         let capturedStatus: (() => string) | undefined;
+        let capturedIsLoading: (() => boolean) | undefined;
 
         render(
             () => {
-                const { status } = createPaginatedQuery(fn, "skip", { initialNumItems: NUM_ITEMS });
+                const { isLoading, status } = createPaginatedQuery(fn, "skip", { initialNumItems: NUM_ITEMS });
                 capturedStatus = status;
+                capturedIsLoading = isLoading;
 
                 return <pre>{status()}</pre>;
             },
@@ -115,6 +117,9 @@ describe("createPaginatedQuery (Solid)", () => {
 
         expect(capturedStatus!()).toBe("LoadingFirstPage");
         expect(fake.subscriptions).toHaveLength(0);
+        // `status` alone is "LoadingFirstPage" for a skipped feed, so a spinner
+        // bound to `isLoading` would never stop — React's `!skipped` contract.
+        expect(capturedIsLoading!()).toBe(false);
     });
 
     it("last page reports Exhausted", async () => {

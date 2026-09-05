@@ -332,4 +332,32 @@ describe(useAgentChat, () => {
 
         scope.stop();
     });
+
+    // A session expiry or RLS denial on the history/thread subscriptions used to be
+    // dropped: `messages` / `status` simply froze with nothing to read and no
+    // handler to call. Matches React's `useAgentChat` error channel.
+    it("surfaces a history subscription error on `error` and through `onError`", () => {
+        expect.hasAssertions();
+
+        const fake = createFakeClient();
+        const seen: { code?: string; message: string }[] = [];
+        const scope = effectScope();
+        const chat = scope.run(() =>
+            fake.provide((): UseAgentChatResult =>
+                useAgentChat({
+                    api: buildApi(),
+                    onError: (subscriptionError) => seen.push(subscriptionError),
+                    send: makeRef(SEND_REF) as FunctionReference<"mutation">,
+                    threadKey: "t1",
+                }),
+            ),
+        )!;
+
+        fake.subscribeCalls.find((call) => call.functionPath === MESSAGES_REF)?.options.onError?.({ code: "FORBIDDEN", message: "denied" });
+
+        expect(chat.error.value?.message).toBe("denied");
+        expect(seen).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
+
+        scope.stop();
+    });
 });

@@ -19,7 +19,13 @@ const createPresenceFakeClient = () => {
     type Callback = (value: unknown) => void;
 
     const mutationCalls: { args: unknown; functionPath: string }[] = [];
-    const subscribeCalls: { args: unknown; callback: Callback; functionPath: string; unsubscribed: boolean }[] = [];
+    const subscribeCalls: {
+        args: unknown;
+        callback: Callback;
+        functionPath: string;
+        onError?: (error: { code?: string; message: string }) => void;
+        unsubscribed: boolean;
+    }[] = [];
     const setConnectionContextCalls: unknown[] = [];
 
     // Refcounted connection-context model mirroring the real client: holders keyed
@@ -78,11 +84,17 @@ const createPresenceFakeClient = () => {
         setConnectionContext: (context: Record<string, unknown> | undefined) => {
             setConnectionContextCalls.push(context);
         },
-        subscribe: (function_: FunctionReference, args: Record<string, unknown>, callback: Callback) => {
+        subscribe: (
+            function_: FunctionReference,
+            args: Record<string, unknown>,
+            callback: Callback,
+            options?: { onError?: (error: { code?: string; message: string }) => void },
+        ) => {
             const call = {
                 args,
                 callback,
                 functionPath: function_["__lunoraRef"],
+                onError: options?.onError,
                 unsubscribed: false,
             };
 
@@ -354,5 +366,39 @@ describe("presence (Svelte)", () => {
         expect(() => {
             handle.teardown();
         }).not.toThrow();
+    });
+
+    // An RLS denial or a session expiry on the `listPresent` subscription used to be
+    // dropped on the floor: `present` simply froze at its last value with nothing to
+    // read and no handler to call. Matches React's `usePresence` error channel.
+    it("surfaces a listPresent subscription error on `error` and through `onError`", async () => {
+        const fake = createPresenceFakeClient();
+        const seen: { code?: string; message: string }[] = [];
+
+        const handle = presence(fake.client, "room-1", {
+            heartbeat: HEARTBEAT,
+            listPresent: LIST_PRESENT,
+            onError: (subscriptionError) => seen.push(subscriptionError),
+            sessionId: "sess-fixed",
+        });
+
+        const stopPresent = handle.present.subscribe(() => undefined);
+        const stopError = handle.error.subscribe(() => undefined);
+
+        await flushAsync();
+
+        const call = fake.subscribeCalls[0]!;
+
+        call.callback([{ sessionId: "sess-fixed" }]);
+        call.onError?.({ code: "FORBIDDEN", message: "denied" });
+
+        expect(get(handle.error)?.message).toBe("denied");
+        expect(seen).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
+        // The last good value is retained — the error is additive, not a reset.
+        expect(get(handle.present)).toStrictEqual([{ sessionId: "sess-fixed" }]);
+
+        stopError();
+        stopPresent();
+        handle.teardown();
     });
 });

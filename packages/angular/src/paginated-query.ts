@@ -43,6 +43,8 @@ interface PaginatedCore<F extends FunctionReference> {
     error: Signal<SubscriptionError | undefined>;
     loadMore: (numberItems: number) => void;
     pageResults: Signal<(PaginationResult<PageItemOf<F>> | undefined)[]>;
+    /** Whether the currently-resolved base args are the `"skip"` sentinel. */
+    skipped: Signal<boolean>;
     status: Signal<PaginationStatus>;
 }
 
@@ -330,7 +332,7 @@ const usePaginatedCore = <F extends FunctionReference>(
         doRebuildPageResults();
     };
 
-    return { error, loadMore, pageResults, status };
+    return { error, loadMore, pageResults, skipped: computed(() => baseArgs === "skip"), status };
 };
 
 /**
@@ -389,6 +391,7 @@ const useReactivePaginatedCore = <F extends FunctionReference>(
             active()?.loadMore(numberItems);
         },
         pageResults: computed(() => active()?.pageResults() ?? []),
+        skipped: computed(() => active()?.skipped() ?? false),
         status: computed(() => active()?.status() ?? "LoadingFirstPage"),
     };
 };
@@ -509,10 +512,13 @@ export const paginatedQuery = <F extends FunctionReference>(
 
     const results = computed<PageItemOf<F>[]>(() => core.pageResults().flatMap((result) => result?.page ?? []));
 
+    // A skipped feed reports `status === "LoadingFirstPage"` (it has no first page
+    // and never will), so `isLoading` must not derive from `status` alone — it
+    // would spin forever behind an auth/route gate. Matches React's `!skipped &&`.
     const isLoading = computed<boolean>(() => {
         const statusValue = core.status();
 
-        return statusValue === "LoadingFirstPage" || statusValue === "LoadingMore";
+        return !core.skipped() && (statusValue === "LoadingFirstPage" || statusValue === "LoadingMore");
     });
 
     return {
@@ -550,9 +556,10 @@ export const infiniteQuery = <F extends FunctionReference>(
 
     const pages = computed<PageItemOf<F>[][]>(() => core.pageResults().flatMap((page) => (page ? [page.page] : [])));
 
-    const isLoading = computed<boolean>(() => core.status() === "LoadingFirstPage");
+    // See `paginatedQuery` for why `skipped` gates these — React's `!skipped &&`.
+    const isLoading = computed<boolean>(() => !core.skipped() && core.status() === "LoadingFirstPage");
     const hasNextPage = computed<boolean>(() => core.status() === "CanLoadMore");
-    const isFetchingNextPage = computed<boolean>(() => core.status() === "LoadingMore");
+    const isFetchingNextPage = computed<boolean>(() => !core.skipped() && core.status() === "LoadingMore");
 
     const fetchNextPage = (numberItems?: number): void => {
         core.loadMore(numberItems ?? initialNumItems);

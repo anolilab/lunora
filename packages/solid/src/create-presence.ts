@@ -1,4 +1,4 @@
-import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
+import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 import { createSignal } from "solid-js";
 
 import { randomSessionId } from "../../../shared/random-session-id";
@@ -37,6 +37,13 @@ interface CreatePresenceOptions<H extends HeartbeatReference, L extends ListPres
     listPresent: L;
 
     /**
+     * Called when the `listPresent` subscription reports an error (a session
+     * expiry, an RLS denial). Without it — and without reading `error` — such a
+     * failure is invisible and `present` freezes at its last value.
+     */
+    onError?: SubscriptionErrorCallback;
+
+    /**
      * Stable id for this presence row. Defaults to a fresh per-mount id.
      * Pass a user/connection id to control deduping across tabs.
      */
@@ -46,6 +53,8 @@ interface CreatePresenceOptions<H extends HeartbeatReference, L extends ListPres
 }
 
 interface CreatePresenceResult<L extends ListPresentReference> {
+    /** The `listPresent` subscription's last error, or `undefined`. */
+    error: () => SubscriptionError | undefined;
     /** The present members for the room. `undefined` until the first push. */
     present: () => ReturnOf<L> | undefined;
     /** This mount's session id (generated when not supplied). */
@@ -66,6 +75,7 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
     const sessionId = options.sessionId ?? randomSessionId();
 
     const [present, setPresent] = createSignal<ReturnOf<L> | undefined>(undefined);
+    const [error, setError] = createSignal<SubscriptionError | undefined>(undefined);
 
     // Latest awareness data — updated by `setData`; read at heartbeat time so
     // changing data never resets the interval or closes the subscription.
@@ -117,8 +127,15 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
             { roomId } as ArgsOf<L>,
             (value) => {
                 setPresent(() => value);
+                setError(undefined);
             },
-            { shardKey },
+            {
+                onError: (subscriptionError) => {
+                    setError(subscriptionError);
+                    options.onError?.(subscriptionError);
+                },
+                shardKey,
+            },
         );
 
         return () => {
@@ -133,7 +150,7 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
         };
     });
 
-    return { present, sessionId, setData };
+    return { error, present, sessionId, setData };
 };
 
 export type { CreatePresenceOptions, CreatePresenceResult, HeartbeatReference, ListPresentReference };

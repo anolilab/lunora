@@ -324,4 +324,32 @@ describe(createAgentChat, () => {
 
         await expect(latest?.approve("call-1")).rejects.toThrow("no in-flight run");
     });
+
+    // A session expiry or RLS denial on the history/thread subscriptions used to be
+    // dropped: `messages` / `status` simply froze with nothing to read and no
+    // handler to call. Matches React's `useAgentChat` error channel.
+    it("surfaces a history subscription error on `error` and through `onError`", () => {
+        const fake = createFakeClient();
+        const seen: { code?: string; message: string }[] = [];
+        let latest: CreateAgentChatResult | undefined;
+
+        render(
+            () => {
+                latest = createAgentChat({
+                    api: buildApi(),
+                    onError: (subscriptionError) => seen.push(subscriptionError),
+                    send: makeRef(SEND_REF) as FunctionReference<"mutation">,
+                    threadKey: "t1",
+                });
+
+                return <pre>{String(latest.status())}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        fake.subscriptions.find((sub) => sub.functionPath === MESSAGES_REF)?.error({ code: "FORBIDDEN", message: "denied" });
+
+        expect(latest?.error()?.message).toBe("denied");
+        expect(seen).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
+    });
 });
