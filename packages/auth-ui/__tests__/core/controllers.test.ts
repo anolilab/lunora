@@ -313,6 +313,115 @@ describe(createEmailOtpController, () => {
 
         expect(controller.getState().step).toBe("request");
     });
+
+    /**
+     * The same two guards `createFormController` has, for the same reason. A
+     * second `sendVerificationOtp` invalidates the code the first one mailed, so
+     * a user who corrects a typo while the request is in flight is left holding
+     * a code the server no longer accepts.
+     */
+    it("stays submitting while a request is in flight, and refuses a second one", async () => {
+        const pending = new Promise<never>(() => {});
+        const sendVerificationOtp = vi.fn(() => pending);
+        const { context } = makeContext(stubClient({ emailOtp: { sendVerificationOtp } }));
+        const controller = createEmailOtpController(context);
+
+        controller.actions.setEmail("a@b.co");
+        void controller.actions.sendCode();
+
+        expect(controller.getState().status).toBe("submitting");
+
+        controller.actions.setEmail("a@b.com");
+
+        expect(controller.getState().status).toBe("submitting");
+
+        void controller.actions.sendCode();
+
+        expect(sendVerificationOtp).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses a second verify while the first is in flight", async () => {
+        const pending = new Promise<never>(() => {});
+        const emailOtp = vi.fn(() => pending);
+        const client = stubClient();
+        const { context } = makeContext(stubClient({ signIn: { ...client.signIn, emailOtp } }));
+        const controller = createEmailOtpController(context);
+
+        controller.actions.setEmail("a@b.co");
+        await controller.actions.sendCode();
+        controller.actions.setCode("123456");
+        void controller.actions.verify();
+
+        expect(controller.getState().status).toBe("submitting");
+
+        controller.actions.setCode("1234567");
+        void controller.actions.verify();
+
+        expect(emailOtp).toHaveBeenCalledTimes(1);
+    });
+});
+
+/**
+ * `?redirectTo=` is what carries an invitee from the invitation, through
+ * sign-in, and back. `callbackURL` is the destination better-auth bakes into the
+ * verification mail it sends when `requireEmailVerification` is on — so passing
+ * the raw default there drops the invitation for exactly the users who have to
+ * go via email, while the in-app hop still honours it.
+ */
+describe("callbackURL carries ?redirectTo=", () => {
+    const withRedirectToInUrl = (target: string, body: () => Promise<void>): Promise<void> => {
+        globalThis.history.replaceState(null, "", `/sign-in?redirectTo=${encodeURIComponent(target)}`);
+
+        return body().finally(() => {
+            globalThis.history.replaceState(null, "", "/");
+        });
+    };
+
+    it("sign-in sends the resolved destination", async () => {
+        await withRedirectToInUrl("/accept-invitation?invitationId=inv_1", async () => {
+            const client = stubClient();
+            const { context } = makeContext(client);
+            const controller = createSignInController(context);
+
+            controller.actions.setField("email", "a@b.co");
+            controller.actions.setField("password", "hunter222");
+            await controller.actions.submit();
+
+            expect(client.signIn.email as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+                expect.objectContaining({ callbackURL: "/accept-invitation?invitationId=inv_1" }),
+            );
+        });
+    });
+
+    it("sign-up sends the resolved destination", async () => {
+        await withRedirectToInUrl("/accept-invitation?invitationId=inv_1", async () => {
+            const client = stubClient();
+            const { context } = makeContext(client);
+            const controller = createSignUpController(context);
+
+            controller.actions.setField("email", "a@b.co");
+            controller.actions.setField("name", "Ada");
+            controller.actions.setField("password", "hunter222");
+            await controller.actions.submit();
+
+            expect(client.signUp.email as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+                expect.objectContaining({ callbackURL: "/accept-invitation?invitationId=inv_1" }),
+            );
+        });
+    });
+
+    it("resend verification sends the resolved destination", async () => {
+        await withRedirectToInUrl("/accept-invitation?invitationId=inv_1", async () => {
+            const sendVerificationEmail = vi.fn(() => ok({ status: true }));
+            const client = stubClient({ sendVerificationEmail });
+            const { context } = makeContext(client);
+            const controller = createResendVerificationController(context, { initialEmail: "a@b.co" });
+
+            await controller.actions.submit();
+
+            expect(sendVerificationEmail).toHaveBeenCalledWith(expect.objectContaining({ callbackURL: "/accept-invitation?invitationId=inv_1" }));
+        });
+    });
 });
 
 /**

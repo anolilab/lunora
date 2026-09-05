@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { createForgotPasswordController } from "../core/forgot-password";
 import AuthCard from "./AuthCard.vue";
 import AuthLink from "./AuthLink.vue";
@@ -8,17 +9,15 @@ import { useAuthUI } from "./provider";
 import SubmitButton from "./SubmitButton.vue";
 import { useController } from "./use-controller";
 
-const props = withDefaults(
-    defineProps<{
-        resetPath?: string;
-        signInHref?: string;
-    }>(),
-    {
-        signInHref: "/sign-in",
-    },
-);
+const props = defineProps<{
+    /** Defaults to the configured reset-password route; see `viewPaths.base`. */
+    resetPath?: string;
+    /** Defaults to `redirects.signIn`, itself derived from `viewPaths.base`. */
+    signInHref?: string;
+}>();
 
-const { localization: t } = useAuthUI();
+const { localization: t, redirects } = useAuthUI();
+const signInLink = computed(() => props.signInHref ?? redirects.signIn);
 const { actions, state } = useController((context) => createForgotPasswordController(context, { resetPath: props.resetPath }));
 </script>
 
@@ -30,7 +29,7 @@ const { actions, state } = useController((context) => createForgotPasswordContro
             <SubmitButton :pending="state.status === 'submitting'">{{ t.forgotPassword }}</SubmitButton>
         </form>
         <template #footer>
-            <AuthLink :href="signInHref">{{ t.backToSignIn }}</AuthLink>
+            <AuthLink :href="signInLink">{{ t.backToSignIn }}</AuthLink>
         </template>
     </AuthCard>
 </template>

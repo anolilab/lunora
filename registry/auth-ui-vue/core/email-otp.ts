@@ -47,16 +47,31 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
         step: "request",
     });
 
+    /*
+     * Typing clears the banner and returns the form to idle — except while a
+     * request is in flight, where "idle" would re-enable the button and let a
+     * second request out. Both guards mirror `createFormController`'s `setField`
+     * and `submit`, and matter more here than there: a second
+     * `sendVerificationOtp` invalidates the code the first one mailed, so a user
+     * correcting a typo mid-request is left holding a code that no longer works.
+     */
+    const editing = (): FlowStatus => (store.get().status === "submitting" ? "submitting" : "idle");
+
     const setEmail = (value: string): void => {
-        store.update({ email: { ...store.get().email, value }, formError: undefined, status: "idle" });
+        store.update({ email: { ...store.get().email, value }, formError: undefined, status: editing() });
     };
 
     const setCode = (value: string): void => {
-        store.update({ code: { ...store.get().code, value }, formError: undefined, status: "idle" });
+        store.update({ code: { ...store.get().code, value }, formError: undefined, status: editing() });
     };
 
     const sendCode = async (): Promise<void> => {
         const state = store.get();
+
+        if (state.status === "submitting") {
+            return;
+        }
+
         const error = validateEmail(state.email.value, context.localization);
 
         if (error) {
@@ -79,6 +94,11 @@ const createEmailOtpController = (context: ControllerContext): EmailOtpControlle
 
     const verify = async (): Promise<void> => {
         const state = store.get();
+
+        if (state.status === "submitting") {
+            return;
+        }
+
         const error = required(state.code.value, context.localization.otpRequired);
 
         if (error) {

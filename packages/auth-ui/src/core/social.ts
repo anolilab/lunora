@@ -1,7 +1,12 @@
 /**
  * Social sign-in is a single redirect action, not a form — `signIn.social`
- * hands off to the provider's OAuth page. Rendered only when `config.social` is
- * set (buttons 500 without server-side provider config).
+ * hands off to the provider's OAuth page.
+ *
+ * Which buttons render is `config.social` when the app pins a list, and the
+ * providers the server discloses through `uiConfig()` otherwise (see
+ * `resolveContext`) — so a discovered deployment shows buttons nobody listed.
+ * Either way the provider has to be configured server-side; one that isn't
+ * answers 500 to the redirect.
  *
  * Resolves rather than re-throwing, for the same reason as `signOut`: the ports
  * call it from a click handler with `void`.

@@ -77,23 +77,26 @@ function SignInPage() {
 a plain SPA and wrong for anything with a router, where it means a full page load
 on every sign-in. Pass it.
 
-Social buttons render only for the providers you list in `social`, and only work
-once the matching provider is configured server-side.
+Social buttons render for the providers you list in `social`. Leave it unset and
+the providers your server discloses are used instead — so buttons can appear
+without you listing any. Either way they only work once the matching provider is
+configured server-side.
 
 ### Provider options
 
-| Prop              | What it does                                                                     |
-| ----------------- | -------------------------------------------------------------------------------- |
-| `authClient`      | Your better-auth client, from `lunora/auth-ui/client.ts`. Required.              |
-| `nav` / `Link`    | Router bridge for redirects and internal links.                                  |
-| `redirects`       | `afterSignIn`, `afterSignOut`, and the route hosting your sign-in screen.        |
-| `social`          | OAuth providers to render buttons for, e.g. `["github", "google"]`.              |
-| `basePath`        | Where better-auth is mounted. Defaults to `/api/auth`.                           |
-| `localization`    | Partial overrides for every string the cards render.                             |
-| `onSessionChange` | Fires after any successful auth mutation; refresh your app's session state here. |
-| `onError`         | Observes failures; the card still shows the error itself.                        |
-| `plugins`         | Force an optional flow on or off; detected from your client by default.          |
-| `theme`           | Retint the cards from config; see [Making them yours](#making-them-yours).       |
+| Prop              | What it does                                                                                                                                                        |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `authClient`      | Your better-auth client, from `lunora/auth-ui/client.ts`. Required.                                                                                                 |
+| `nav` / `Link`    | Router bridge for redirects and internal links.                                                                                                                     |
+| `redirects`       | `afterSignIn`, `afterSignOut`, `signIn`, and `twoFactor` — where a user with a second factor is sent after a correct password. The last two default to `viewPaths`. |
+| `social`          | OAuth providers to render buttons for, e.g. `["github", "google"]`.                                                                                                 |
+| `basePath`        | Where better-auth is mounted. Defaults to `/api/auth`.                                                                                                              |
+| `localization`    | Partial overrides for every string the cards render.                                                                                                                |
+| `onSessionChange` | Fires after any successful auth mutation; refresh your app's session state here.                                                                                    |
+| `onError`         | Observes failures; the card still shows the error itself.                                                                                                           |
+| `plugins`         | Force an optional flow on or off; detected from your client by default.                                                                                             |
+| `viewPaths`       | Where the auth screens live: `base` (the route they hang off) plus the segment for each.                                                                            |
+| `theme`           | Retint the cards from config; see [Making them yours](#making-them-yours).                                                                                          |
 
 `onSessionChange` matters more than it looks. A same-origin cookie sign-in
 changes no token, so `useAuth` has nothing to react to. Wire this to whatever
@@ -152,10 +155,24 @@ screen on a single route:
 
 ```tsx
 // e.g. /auth/:view — sign-in, sign-up, forgot-password, magic-link, …
-<AuthView view={params.view} />
+<AuthUIProvider authClient={authClient} nav={nav} viewPaths={{ base: "/auth" }}>
+    <AuthView view={params.view} />
+</AuthUIProvider>
 ```
 
-The segments are yours to rename through the provider's `viewPaths`. An
+`viewPaths.base` is the route you mounted it on, and it is not optional here.
+Everything that points at another auth screen derives from it: the sign-up and
+forgot-password links on the sign-in card, the sign-in link on the others, the
+reset link `ForgotPasswordCard` mails, `redirects.signIn`, and
+`redirects.twoFactor` — where a correct password sends a user with a second
+factor. Leave it unset on a nested mount and those all point at root-level
+routes that do not exist, which a 2FA user meets as a 404.
+
+It defaults to `""`, which is right when each card has its own top-level route
+(`/sign-in`, `/sign-up`, …).
+
+The segments are yours to rename too — `viewPaths={{ base: "/auth", twoFactor:
+"mfa" }}` puts the second-factor screen on `/auth/mfa` and sends users there. An
 unrecognized segment falls back to the sign-in card rather than rendering
 nothing.
 

@@ -12,6 +12,7 @@
  * inferred from the installed plugins because both can be configured at once.
  */
 import type { ControllerContext } from "./config";
+import { viewHref } from "./config";
 import { createFormController } from "./create-form-controller";
 import { assertOk } from "./map-error";
 import type { FormController } from "./types";
@@ -20,7 +21,11 @@ import { email as validateEmail } from "./validators";
 type ForgotPasswordField = "email";
 
 interface ForgotPasswordOptions {
-    /** The route hosting the reset-password screen the emailed link points at. */
+    /**
+     * The route hosting the reset-password screen the emailed link points at.
+     * Defaults to the configured one (`viewPaths.base` + `viewPaths.resetPassword`),
+     * so a card mounted inside `<AuthView>` mails a link that resolves.
+     */
     resetPath?: string;
 }
 
@@ -42,7 +47,7 @@ const createForgotPasswordController = (context: ControllerContext, options: For
             assertOk(
                 await context_.authClient.forgetPassword({
                     email,
-                    redirectTo: options.resetPath ?? "/reset-password",
+                    redirectTo: options.resetPath ?? viewHref(context_, "resetPassword"),
                 }),
             );
 
