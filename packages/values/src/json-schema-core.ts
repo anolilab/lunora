@@ -102,13 +102,24 @@ const jsonSchemaFromNode = <TNode>(node: TNode, reader: SchemaNodeReader<TNode>)
                 return { items: inner === undefined ? {} : jsonSchemaFromNode(inner, reader), type: "array" };
             }
             case "bigint": {
-                // A DECIMAL STRING, not a JSON number. The parser accepts only a
-                // real `bigint`, so `type: "integer"` advertised the one JSON
-                // form it refuses — and truncated past 2^53 besides. Everywhere
-                // else a bigint already rides as its decimal string (the wire
-                // codec's tagged payload, `v.literal(5n)`'s `const`), so this is
-                // the same treatment `bytes` gets: name the JSON carrier, not
-                // the decoded JS type.
+                // A DECIMAL STRING, not a JSON number. `type: "integer"`
+                // advertised the one JSON form the parser definitely refuses,
+                // and truncated past 2^53 besides.
+                //
+                // Read this the way `bytes` and `date` above and below are
+                // read: it names the PAYLOAD's form, not a body that validates
+                // end to end. The actual RPC carrier is the wire codec's tagged
+                // array — `["$lunora.wire$", "bigint", "5"]`, decoded by
+                // `decodeWire` before the parser sees it — so a bare `"5"` no
+                // more satisfies `v.bigint()` than a bare `5` did. `bytes`
+                // (`contentEncoding: "base64"`) and `date` (`type: "integer"`)
+                // describe their decoded payloads the same way; a schema that
+                // described the tagged array instead would have to change all
+                // three, and nothing consumes a tuple schema here today.
+                //
+                // What this buys is the decimal string being the spelling a
+                // bigint actually travels as, everywhere it is written down —
+                // the tagged payload's third slot, `v.literal(5n)`'s `const`.
                 return { format: "int64", type: "string" };
             }
             case "boolean": {

@@ -229,7 +229,16 @@ export const ERROR_CATALOG = {
      * already have.
      */
     PROVIDER_ERROR: { status: 502, title: "Payment provider error" },
-    /** Webhook rejections, addressed to the provider posting the hook; the messages are fixed and name no internal state. */
+    /**
+     * Webhook rejections, addressed to the provider posting the hook, so NOT
+     * `internal`. Five of the six mint sites are fixed strings ("no matching
+     * signature", "missing creem-signature header"). The sixth,
+     * `providers/stripe.ts`, passes the Stripe SDK's own verification message
+     * through — "No signatures found matching…", "Timestamp outside the
+     * tolerance zone" — which still describes the REQUEST the poster sent, not
+     * this server's state. Keep that true of anything added here: an upstream
+     * message is only safe to forward while it is about the caller's input.
+     */
     WEBHOOK_EVENT_ID_MISSING: { status: 400, title: "Webhook event id missing" },
     WEBHOOK_SIGNATURE_INVALID: { status: 400, title: "Webhook signature invalid" },
     WEBHOOK_TIMESTAMP_INVALID: { status: 400, title: "Webhook timestamp outside tolerance" },
