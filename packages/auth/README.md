@@ -57,20 +57,25 @@ pnpm add @lunora/auth
 ```ts
 import { createAuth, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 
-const auth = createAuth({
-    secret: env.AUTH_SECRET,
-    // Prefer lunoraD1Adapter over passing raw env.DB — the raw binding makes
-    // better-auth resolve its Kysely adapter via a dynamic import that hangs
-    // under @cloudflare/vite-plugin's dev runner.
-    database: lunoraD1Adapter(env.DB),
-    emailAndPassword: { enabled: true },
-});
+const options = { secret: env.AUTH_SECRET, emailAndPassword: { enabled: true } };
+
+// Prefer lunoraD1Adapter over passing raw env.DB — the raw binding makes
+// better-auth resolve its Kysely adapter via a dynamic import that hangs
+// under @cloudflare/vite-plugin's dev runner.
+const auth = createAuth({ ...options, database: lunoraD1Adapter(env.DB) });
+
+// A SECOND instance, over the RAW binding, only for migrating: better-auth
+// migrates through its Kysely adapter alone and throws on lunoraD1Adapter. Build
+// it once and keep it — `ensureMigrated` single-flights on the options object it
+// is handed, so a `createAuth({...})` built inside `fetch` is a fresh key every
+// request and the migration re-runs on each one.
+const migrationAuth = createAuth({ ...options, database: env.DB });
 
 // In your Worker's fetch handler, route /api/auth/* to better-auth and fall
 // through to the Lunora worker for everything else:
 export default {
     async fetch(request, env, ctx) {
-        await ensureMigrated(auth); // idempotent schema sync; dev/small deploys
+        await ensureMigrated(migrationAuth); // idempotent schema sync; dev/small deploys
 
         const authResponse = await handleAuthRequest(auth, request);
         if (authResponse) return authResponse;

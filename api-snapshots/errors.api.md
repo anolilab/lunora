@@ -248,6 +248,17 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Admin token not configured";
     };
+    readonly AUTH_MIGRATOR_UNSUPPORTED: {
+        readonly hint: readonly [
+            "better-auth migrates only through its Kysely adapter, so `ensureMigrated` / `compileMigrationsSql` need the raw D1 binding as `database` — a custom adapter (`lunoraD1Adapter`, `lunoraAuthAdapter`, `lunoraDoAdapter`) cannot be migrated through, and neither can an absent `database`.",
+            "",
+            "Build a SECOND, migration-only instance over the raw binding — `createAuth({ ...options, database: env.DB })` — and hand that one to `ensureMigrated`. Keep the adapter on the instance that serves requests: the adapter exists to dodge a dev-runner hang in `$context`, which the migration instance never resolves.",
+            "",
+            "To compile the SQL off-platform (`compileMigrationsSql`), diff against an empty local database — `new DatabaseSync(':memory:')` from `node:sqlite` — rather than passing no `database` at all."
+        ];
+        readonly status: 500;
+        readonly title: "Auth migrator cannot drive the configured database";
+    };
     readonly AUTH_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Auth admin not configured";

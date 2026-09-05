@@ -295,6 +295,42 @@ interface SqlCtxDbOptions {
     maxRelationKeys?: number;
 
     /**
+     * Object identifying the database this store provisions, so the one-shot
+     * `CREATE TABLE/INDEX IF NOT EXISTS` sweep is shared by every ctx-db built
+     * against it instead of repeating per instance.
+     *
+     * Hosts build a ctx-db **per request** (the writer captures the caller's
+     * identity and D1 bookmark), so without this the sweep — one round trip per
+     * global table plus one per index — runs again on the first `.global()`
+     * access of every request. On a 50-table schema that is ~1s in `lunora dev`
+     * and a real latency floor in production.
+     *
+     * WHAT TO PASS: something that outlives the request AND names one database
+     * (and one configuration). The D1 binding off `env` and the declaration
+     * object a host builds once both qualify; the result of a per-request
+     * factory does not — it keys the memo on a fresh object every time and
+     * shares nothing (which is silent, and looks exactly like not passing it).
+     *
+     * INVARIANT, unenforced: one scope ⇒ one `schema`, `dialect` and `cdc`. The
+     * memoised run closes over the FIRST writer's, so a later writer sharing a
+     * scope with `cdc: true` behind one with `cdc: false` never gets
+     * `__cdc_log`. Hosts pass app-level constants for all three, which is why
+     * this is a note rather than a composite key.
+     *
+     * Two behaviours change with a shared memo, both benign and both worth
+     * knowing: the DDL runs in the FIRST writer's D1 session, so a later
+     * session's first read is no longer implicitly pinned behind a write of its
+     * own (on a replicated binding that can mean one transient stale read on a
+     * freshly-provisioned database); and a database reset out from under a live
+     * isolate is no longer healed by the next request, since the entry lives as
+     * long as the scope does.
+     *
+     * Omit it and the memo stays per ctx-db — slower, never wrong, and what the
+     * tests want (they pair a fresh database with a reused schema object).
+     */
+    provisionScope?: object;
+
+    /**
      * Scheduler exposed to global-table trigger handlers as `ctx.scheduler`.
      * Absent it, `ctx.scheduler` is a stub that throws on use — pass one when
      * triggers on `.global()` tables need to enqueue follow-up work.
@@ -1243,6 +1279,14 @@ const mapWriteError = (dialect: SqlDialect, error: unknown, table: string): neve
     throw error;
 };
 
+/**
+ * The provisioning sweep in flight (or completed) for a given
+ * {@link SqlCtxDbOptions.provisionScope}, so per-request ctx-dbs built against
+ * the same database share one run. Weak so a scope that goes out of scope takes
+ * its entry with it; a rejected run is evicted so the next call retries.
+ */
+const provisioningByScope = new WeakMap<object, Promise<void>>();
+
 const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     const { crossShardCounter, crossShardReader, exec, maxRelationKeys, schema } = options;
 
@@ -1386,12 +1430,28 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     // once per ctx-db, lazily, before any path that can touch a companion. The
     // cached value is the resolving `Promise` so concurrent first-callers share
     // the single round-trip rather than racing duplicate DDL (mirrors the
-    // dialect's fts5 flag). CREATE IF NOT EXISTS is idempotent, so running it
-    // once per instance is cheap.
-    let migratedPromise: Promise<void> | undefined;
+    // dialect's fts5 flag).
+    //
+    // "Once per ctx-db" is only cheap when the ctx-db outlives the request — and
+    // it does not: hosts build one per request so the writer can carry the
+    // caller's identity and bookmark. `provisionScope` lifts the memo onto the
+    // database it provisions ({@link SqlCtxDbOptions.provisionScope}), which is
+    // what makes the sweep once-per-isolate rather than once-per-request.
+    //
+    // A caller that passes no scope gets a private one. That is not a special
+    // case in disguise: the entry then lives exactly as long as this closure
+    // holds the key, which IS a per-ctx-db memo — same lifetime as the `let` it
+    // replaces, one mechanism instead of two.
+    const provisionScope = options.provisionScope ?? {};
 
     const ensureMigrated = async (): Promise<void> => {
-        migratedPromise ??= (async (): Promise<void> => {
+        const cached = provisioningByScope.get(provisionScope);
+
+        if (cached) {
+            return cached;
+        }
+
+        const run = (async (): Promise<void> => {
             // Base `.global()` tables first — the companion migrations below and
             // every read/write path assume they exist.
             await runSqlGlobalTableMigrations(exec, schema, dialect);
@@ -1408,13 +1468,18 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         })().catch((error: unknown) => {
             // Don't cache a rejection — a transient DDL failure (e.g. a dropped
             // connection) would otherwise poison every later call on this
-            // ctx-db. Clear the cache so the next call retries the idempotent
+            // scope. Clear the cache so the next call retries the idempotent
             // CREATE-IF-NOT-EXISTS migrations.
-            migratedPromise = undefined;
+            provisioningByScope.delete(provisionScope);
             throw error;
         });
 
-        return migratedPromise;
+        // Recorded synchronously (the IIFE above has only run to its first
+        // await), so concurrent first-callers single-flight onto this run — and
+        // so the `delete` above can never drop a fresher entry than its own.
+        provisioningByScope.set(provisionScope, run);
+
+        return run;
     };
 
     /**

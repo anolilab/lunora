@@ -550,20 +550,34 @@ transport that has them:
 
 ## Migrations
 
-`ensureMigrated(auth)` does a schema diff and applies missing DDL on the
-configured database, which is fine for dev and small deployments:
+`ensureMigrated` does a schema diff and applies missing DDL, which is fine for
+dev and small deployments. It drives better-auth's own migrator, which speaks
+**only** Kysely — so it takes the raw D1 binding as `database` and throws
+(`AUTH_MIGRATOR_UNSUPPORTED`) on `lunoraD1Adapter`. Build a second,
+migration-only instance for it; the adapter stays on the one serving requests:
 
 ```ts
 // src/server/index.ts
-import { ensureMigrated, handleAuthRequest } from "@lunora/auth";
+import { createAuth, ensureMigrated, handleAuthRequest } from "@lunora/auth";
 
 import { buildAuth } from "../../lunora/auth.js";
+
+// Per isolate, not per request: better-auth's migrator emits a bare
+// `CREATE TABLE`, so two concurrent runs against a fresh database leave the
+// loser with `table user already exists`. Holding the PROMISE (not a boolean)
+// is what makes concurrent cold requests share one run; clearing it on failure
+// is what lets a transient error retry.
+let migrated: Promise<void> | null = null;
 
 export default {
     async fetch(request, env, ctx) {
         const auth = buildAuth(env);
 
-        await ensureMigrated(auth); // idempotent, cached per options
+        migrated ??= ensureMigrated(createAuth({ ...authOptions, database: env.DB, secret: env.AUTH_SECRET })).catch((error) => {
+            migrated = null;
+            throw error;
+        });
+        await migrated;
 
         const authResponse = await handleAuthRequest(auth, request);
         if (authResponse) return authResponse;
@@ -575,11 +589,16 @@ export default {
 
 For production, prefer pre-applying the schema at deploy time:
 
+`compileMigrationsSql` still needs a database to diff against — better-auth
+introspects it to decide what is missing. Point it at an empty local SQLite and
+you get the full schema, with no Cloudflare binding involved:
+
 ```bash
 node -e "
-import('@lunora/auth').then(async ({ compileMigrationsSql }) => {
+import('node:sqlite').then(async ({ DatabaseSync }) => {
+    const { compileMigrationsSql } = await import('@lunora/auth');
     const sql = await compileMigrationsSql({
-        database: undefined, // schema-only, no live DB
+        database: new DatabaseSync(':memory:'), // empty ⇒ emits the whole schema
         secret: 'placeholder',
         plugins: [/* same list as runtime */],
     });
