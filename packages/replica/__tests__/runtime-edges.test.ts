@@ -317,6 +317,7 @@ const mirrorDouble = (primaryKey: string = "id"): MirrorDouble => {
         applyDiff: (diff: TableDiff) => {
             applied.push(diff);
         },
+        onChange: () => () => undefined,
         primaryKeyOf: () => primaryKey,
         registerTable: (name: string) => {
             registered.push(name);
@@ -547,6 +548,7 @@ describe(subscribeToMirror, () => {
 
                 applied.push(diff);
             },
+            onChange: () => () => undefined,
             primaryKeyOf: () => "id",
             registerTable: () => undefined,
         } as unknown as LocalMirror;

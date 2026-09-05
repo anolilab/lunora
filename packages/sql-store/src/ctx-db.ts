@@ -85,6 +85,7 @@ import {
     NotFoundError,
     NotUniqueError,
     RANK_TIEBREAK,
+    rankPivotConditionSql,
     rankTableName,
     readAggregateValue,
     relationHooks,
@@ -126,6 +127,7 @@ import {
     queryBatch,
     queryRun,
     serializeColumnValue,
+    serializeDocumentColumn,
     tableColumns,
 } from "./sql-exec";
 import { bigintSqlKey, effectiveColumnKind } from "./value-codec";
@@ -577,26 +579,38 @@ const buildRankBeforeBranches = (
     sortColumns: ReadonlyArray<string>,
     own: Record<string, unknown>,
     rowId: string,
-): SQL | undefined => {
+): SQL => {
     const branches: SQL[] = [];
 
     for (let pivot = 0; pivot < sortColumns.length + 1; pivot += 1) {
+        const column = sortColumns[pivot];
+        const sortKey = index.sortBy[pivot];
+        // Each pivot's comparison comes from the shared `rankPivotConditionSql`,
+        // which owns the NULL cases: `col < NULL` is UNKNOWN, and NULL rows sort
+        // ahead of a non-null pivot ascending, so a bare comparator both
+        // under-counts and mis-reads a NULL-valued row's own position. The
+        // `__id__` tiebreak closes the tuple and is never NULL.
+        const isSortPivot = pivot < sortColumns.length && column !== undefined && sortKey !== undefined;
+        const direction = sortKey?.direction === "desc" ? "desc" : "asc";
+        const pivotCondition = isSortPivot ? rankPivotConditionSql(column, own[column], direction, false) : sql`${sql.identifier(RANK_TIEBREAK)} < ${rowId}`;
+
+        if (pivotCondition === undefined) {
+            continue;
+        }
+
         const conditions: SQL[] = sortColumns
             .slice(0, pivot)
             .map((prefixColumn) => nullSafeEqualsSql(engine, sql`${sql.identifier(prefixColumn)}`, own[prefixColumn]));
-        const column = sortColumns[pivot];
-        const sortKey = index.sortBy[pivot];
 
-        if (pivot < sortColumns.length && column !== undefined && sortKey !== undefined) {
-            conditions.push(sql`${sql.identifier(column)} ${sql.raw(sortKey.direction === "desc" ? ">" : "<")} ${own[column]}`);
-        } else {
-            conditions.push(sql`${sql.identifier(RANK_TIEBREAK)} < ${rowId}`);
-        }
+        conditions.push(pivotCondition);
 
         branches.push(andBranch(conditions));
     }
 
-    return branches.length > 0 ? sql.join(branches, sql` OR `) : undefined;
+    // Never `undefined`: an absent clause counts the WHOLE partition, and "every
+    // pivot was a NULL at the start of its ordering" means nothing sorts before
+    // this row at all.
+    return branches.length > 0 ? sql.join(branches, sql` OR `) : sql`1 = 0`;
 };
 
 /**
@@ -618,6 +632,14 @@ const buildRankCursorSeek = (
     const branches: SQL[] = [];
 
     for (const [pivot, col] of columns.entries()) {
+        // Shared with the DO twin — see `rankPivotConditionSql` for why a bare
+        // `>`/`<` at the pivot drops every row once a sort column holds NULL.
+        const pivotCondition = rankPivotConditionSql(col.column, decoded[pivot], col.direction, true);
+
+        if (pivotCondition === undefined) {
+            continue;
+        }
+
         const conditions: SQL[] = [];
 
         for (let prefix = 0; prefix < pivot; prefix += 1) {
@@ -630,8 +652,14 @@ const buildRankCursorSeek = (
             conditions.push(nullSafeEqualsSql(engine, sql`${sql.identifier(prefixCol.column)}`, decoded[prefix]));
         }
 
-        conditions.push(sql`${sql.identifier(col.column)} ${sql.raw(col.direction === "desc" ? "<" : ">")} ${decoded[pivot]}`);
+        conditions.push(pivotCondition);
         branches.push(andBranch(conditions));
+    }
+
+    if (branches.length === 0) {
+        // The cursor sits at the end of the ordering on every pivot: no row
+        // resumes after it.
+        return sql`(1 = 0)`;
     }
 
     return sql`(${sql.join(branches, sql` OR `)})`;
@@ -640,8 +668,17 @@ const buildRankCursorSeek = (
 /**
  * The rankPage column tuple in sort order: `[partition, ...sortColumns, id]`.
  * Partition and id sort ascending; each sort column follows its index direction.
+ *
+ * `nullable` marks the columns the seek has to place NULLs for: `__partition__`
+ * is the canonical-JSON key tuple and `__id__` is store-minted, so only the
+ * `__sort_k<i>__` columns can hold one (`syncRankIndexEntry` writes
+ * `record[field] ?? null`). It drives the ORDER BY's `NULLS FIRST/LAST` — the
+ * seek assumes SQLite's placement, which Postgres does not share.
  */
-const rankPageColumns = (index: RankIndexDefinitionLike, sortColumns: ReadonlyArray<string>): { column: string; direction: "asc" | "desc" }[] => {
+const rankPageColumns = (
+    index: RankIndexDefinitionLike,
+    sortColumns: ReadonlyArray<string>,
+): { column: string; direction: "asc" | "desc"; nullable: boolean }[] => {
     // A rank index with no sort columns degenerates the cursor tuple to
     // `[__partition__, RANK_TIEBREAK]`, which lets `buildRankCursorSeek` silently
     // mismatch and return a wrong/empty page. The schema builder already requires
@@ -651,13 +688,13 @@ const rankPageColumns = (index: RankIndexDefinitionLike, sortColumns: ReadonlyAr
         throw new LunoraError("INTERNAL", `rankIndex "${index.name}" requires at least one "sortBy" column for stable pagination`);
     }
 
-    const columns: { column: string; direction: "asc" | "desc" }[] = [{ column: "__partition__", direction: "asc" }];
+    const columns: { column: string; direction: "asc" | "desc"; nullable: boolean }[] = [{ column: "__partition__", direction: "asc", nullable: false }];
 
     for (const [i, sortKey] of index.sortBy.entries()) {
-        columns.push({ column: sortColumns[i] ?? sortColumnName(i), direction: sortKey.direction });
+        columns.push({ column: sortColumns[i] ?? sortColumnName(i), direction: sortKey.direction, nullable: true });
     }
 
-    columns.push({ column: RANK_TIEBREAK, direction: "asc" });
+    columns.push({ column: RANK_TIEBREAK, direction: "asc", nullable: false });
 
     return columns;
 };
@@ -2297,7 +2334,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // Raw (unquoted) column names — the INSERT quotes them via `sql.identifier`.
             columns: ["id", "_creationTime", ...fields],
             // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
-            values: [id, creationTime, ...fields.map((field) => serializeColumnValue(document[field] ?? null))],
+            values: [id, creationTime, ...fields.map((field) => serializeDocumentColumn(definition, field, document[field] ?? null))],
         };
     };
 
@@ -2751,8 +2788,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 // merged row; read scoping (not companion removal) hides it.
                 const merged: Record<string, unknown> = { ...existing, [softField]: clock() };
                 const assignments = sql.join(
-                    // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column binds `null`, matching the patch path.
-                    Object.keys(definition.shape).map((field) => sql`${sql.identifier(field)} = ${serializeColumnValue(merged[field] ?? null)}`),
+                    Object.keys(definition.shape).map(
+                        // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column binds `null`, matching the patch path.
+                        (field) => sql`${sql.identifier(field)} = ${serializeDocumentColumn(definition, field, merged[field] ?? null)}`,
+                    ),
                     sql`, `,
                 );
 
@@ -3242,7 +3281,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const fields = Object.keys(definition.shape);
             const assignments = sql.join(
                 // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
-                fields.map((field) => sql`${sql.identifier(field)} = ${serializeColumnValue(merged[field] ?? null)}`),
+                fields.map((field) => sql`${sql.identifier(field)} = ${serializeDocumentColumn(definition, field, merged[field] ?? null)}`),
                 sql`, `,
             );
 
@@ -3604,7 +3643,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const beforeRows = await queryAll(
                 exec,
                 dialect,
-                sql`SELECT COUNT(*) AS c FROM ${sql.identifier(rankTable)} WHERE ${sql.identifier("__partition__")} = ${partitionKey}${beforeClause ? sql` AND (${beforeClause})` : sql``}`,
+                sql`SELECT COUNT(*) AS c FROM ${sql.identifier(rankTable)} WHERE ${sql.identifier("__partition__")} = ${partitionKey} AND (${beforeClause})`,
             );
             const totalRows = await queryAll(
                 exec,
@@ -3655,7 +3694,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // ascending except the sort columns, which follow their index.
             const rankColumns = rankPageColumns(index, sortColumns);
             const orderBy = sql.join(
-                rankColumns.map((col) => sql`${sql.identifier(col.column)} ${sql.raw(col.direction === "desc" ? "DESC" : "ASC")}`),
+                rankColumns.map(
+                    (col) =>
+                        sql`${sql.identifier(col.column)} ${sql.raw(`${col.direction === "desc" ? "DESC" : "ASC"}${nullsPlacement(dialect, { direction: col.direction, nullable: col.nullable })}`)}`,
+                ),
                 sql`, `,
             );
 
@@ -3771,7 +3813,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 [
                     sql`${sql.identifier("_creationTime")} = ${creationTime}`,
                     // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
-                    ...fields.map((field) => sql`${sql.identifier(field)} = ${serializeColumnValue(replaced[field] ?? null)}`),
+                    ...fields.map((field) => sql`${sql.identifier(field)} = ${serializeDocumentColumn(definition, field, replaced[field] ?? null)}`),
                 ],
                 sql`, `,
             );
