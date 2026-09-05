@@ -1,3 +1,9 @@
+## @lunora/do [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.118...@lunora/do@1.0.0-alpha.119) (2026-09-05)
+
+### Bug Fixes
+
+* **config,runtime:** repair alpha's typecheck, lint and tests after the audit merges ([#614](https://github.com/anolilab/lunora/issues/614)) ([91c89bc](https://github.com/anolilab/lunora/commit/91c89bcd9a86e719b2b946dfddb5d2ac114b065b))
+
 ## @lunora/do [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.117...@lunora/do@1.0.0-alpha.118) (2026-09-05)
 
 ### ⚠ BREAKING CHANGES
