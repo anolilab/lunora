@@ -12,13 +12,23 @@ import type { ActionCtx as ActionContext, ArgsValidator, InferArgs } from "./typ
 /** HTTP verbs the typed {@link httpRoute} builder can bind to. */
 type HttpMethod = "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PUT";
 
+/** The `run*` trio, shared between {@link HttpActionCtx} itself and its `forShard(key)` view. */
+type HttpRunners = Pick<ActionContext, "runAction" | "runMutation" | "runQuery">;
+
 /**
  * Context handed to an HTTP action handler. A narrower view of {@link ActionContext}:
  * HTTP actions run in the worker (the "action runtime"), separate from the
  * transactional store, so there is no direct `db` / `vectors` surface — reach the
- * data layer through `runQuery` / `runMutation` / `runAction`, which forward to
- * the owning shard. `db`'s absence is principled: an HTTP handler is not
+ * data layer through `runQuery` / `runMutation` / `runAction`, which forward an
+ * RPC to a shard. `db`'s absence is principled: an HTTP handler is not
  * transactional.
+ *
+ * WHICH shard is the handler's to choose. A query/mutation ctx is already inside
+ * the owning DO, so its `ctx.run*` has nowhere else to go; an HTTP action runs in
+ * the worker, one hop away from every shard, so the bare `ctx.run*` targets the
+ * DEFAULT shard and {@link HttpActionCtx.forShard} names any other. On a
+ * `.shardBy(...)` app that distinction is the whole ballgame — the default shard
+ * is the root DO, which holds none of a sharded table's rows.
  *
  * `scheduler` and `storage` ARE present, because neither needs the shard — the
  * scheduler talks to the scheduler DO, and R2 is a worker binding an HTTP
@@ -37,6 +47,19 @@ type HttpMethod = "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PU
  */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
 type HttpActionCtx = {
+    /**
+     * The same `run*` trio bound to `shardKey`, mirroring
+     * `createShardClient(...).forShard(key)`:
+     *
+     * ```ts
+     * const rows = await ctx.forShard(channelId).runQuery(api.messages.list, { channelId });
+     * ```
+     *
+     * Without it a webhook / REST route on a `.shardBy(...)` app could only reach
+     * the default (root) shard, so it read an empty table and wrote to the wrong
+     * DO — silently, with no way to say otherwise.
+     */
+    readonly forShard: (shardKey: string) => HttpRunners;
     readonly scheduler?: ActionContext["scheduler"];
     readonly storage?: ActionContext["storage"];
 
@@ -55,7 +78,8 @@ type HttpActionCtx = {
      * its absence made them silently no-op rather than fail.
      */
     readonly waitUntil?: (promise: Promise<unknown>) => void;
-} & Pick<ActionContext, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery">;
+} & HttpRunners &
+    Pick<ActionContext, "auth" | "cache" | "fetch">;
 
 /** A raw handler wrapped by {@link httpAction}. Receives the raw request, returns the raw response. */
 type HttpActionHandler = (context: HttpActionCtx, request: Request) => Promise<Response> | Response;
@@ -561,6 +585,19 @@ const buildStreamHandler =
                 request.signal.removeEventListener("abort", onAbort);
                 ac.abort();
             },
+            // KNOWN CEILING — no backpressure. The whole user iterator is driven
+            // inside `start()`, enqueueing every chunk without consulting
+            // `controller.desiredSize`, so a generator that yields faster than the
+            // client reads buffers the difference in worker memory. Cancel IS
+            // honored (see `cancel()` above and the `ac.signal` check below), so
+            // nothing keeps running past a disconnect — this is a memory ceiling on
+            // a live stream, not a leak.
+            //
+            // Deliberately left: draining on demand means hoisting the iterator and
+            // pulling one chunk per `pull()`, which rewrites the abort / terminal-
+            // frame / error-frame ordering this block already carries a scar from
+            // (see the post-loop re-check). Do it when a real stream is observed
+            // outrunning its reader; the surface is `@experimental` until then.
             async start(controller) {
                 try {
                     const iterator = userHandler({ ctx: context, params, request, searchParams, signal: ac.signal });
@@ -703,6 +740,7 @@ export type {
     HttpRouteBuilder,
     HttpRouteFactory,
     HttpRouteHandlerOptions,
+    HttpRunners,
     HttpStreamHandlerOptions,
     LunoraHttpApp,
     LunoraHttpEnv,

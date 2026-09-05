@@ -71,6 +71,50 @@ describe("wranglerToAlchemy", () => {
         expect(source).not.toContain("POSTS_SEARCH");
     });
 
+    it("reports every binding kind it cannot model, not just the ones with a top-level array", () => {
+        expect.assertions(1);
+
+        // `queues.consumers`, `services`, `secrets_store_secrets`, `send_email`,
+        // `assets`, `flagship` and `tail_consumers` were all absent from the
+        // report while being just as dropped as `vectorize` — so a translated
+        // deploy lost the queue consumer, the service binding and the secret
+        // store with nothing in the build saying why. Lunora writes every one of
+        // these into `wrangler.jsonc` itself.
+        const { unsupported } = wranglerToAlchemy({
+            ...BASE,
+            assets: { directory: "./public" },
+            flagship: [{ app_id: "app-abc", binding: "FLAGS" }],
+            queues: { consumers: [{ queue: "jobs" }], producers: [{ binding: "JOBS", queue: "jobs" }] },
+            secrets_store_secrets: [{ binding: "WALLET_KEY", secret_name: "wallet", store_id: "store-1" }],
+            send_email: [{ name: "MAILER" }],
+            services: [{ binding: "AUTH", service: "auth-worker" }],
+            tail_consumers: [{ service: "logs-worker" }],
+        } as WranglerConfigShape);
+
+        expect(unsupported.toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+            "assets",
+            "flagship",
+            "queues.consumers",
+            "secrets_store_secrets",
+            "send_email",
+            "services",
+            "tail_consumers",
+        ]);
+    });
+
+    it("preserves a var's JSON type instead of stringifying it", () => {
+        expect.assertions(3);
+
+        // `literal(String(value))` turned `"MAX": 5` into the string `"5"`, so
+        // the deployed worker read a number var as text — a silent type change
+        // under a translation whose whole promise is fidelity.
+        const { source } = wranglerToAlchemy({ ...BASE, vars: { DEBUG: false, LIMITS: { soft: 1 }, MAX: 5 } });
+
+        expect(source).toContain("MAX: 5,");
+        expect(source).toContain("DEBUG: false,");
+        expect(source).toContain(`LIMITS: {"soft":1},`);
+    });
+
     it("skips a Durable Object implemented by another worker", () => {
         expect.assertions(2);
 

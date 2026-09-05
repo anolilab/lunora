@@ -80,7 +80,11 @@ describe("lunora prepare", () => {
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
             writeFileSync(
                 join(workdir, "package.json"),
-                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0" }, name: "app", scripts: { postcodegen: "node ./patch.mjs" } }),
+                JSON.stringify({
+                    dependencies: { "@lunora/d1": "1.0.0", "@lunora/storage": "1.0.0" },
+                    name: "app",
+                    scripts: { postcodegen: "node ./patch.mjs" },
+                }),
                 "utf8",
             );
 
@@ -105,7 +109,7 @@ describe("lunora prepare", () => {
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
             writeFileSync(
                 join(workdir, "package.json"),
-                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0" }, name: "app", scripts: { postcodegen: "exit 1" } }),
+                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0", "@lunora/storage": "1.0.0" }, name: "app", scripts: { postcodegen: "exit 1" } }),
                 "utf8",
             );
 
@@ -123,7 +127,7 @@ describe("lunora prepare", () => {
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
             writeFileSync(
                 join(workdir, "package.json"),
-                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0" }, name: "app", scripts: { build: "tsc" } }),
+                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0", "@lunora/storage": "1.0.0" }, name: "app", scripts: { build: "tsc" } }),
                 "utf8",
             );
 

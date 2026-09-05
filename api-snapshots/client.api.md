@@ -661,6 +661,18 @@ class LunoraClient {
         offset?: number;
         organizationId: string;
     }): Promise<AuthPage<Record<string, unknown>>>;
+    listAuthSignUpInvitations(options?: {
+        limit?: number;
+        offset?: number;
+    }): Promise<AuthPage<Record<string, unknown>>>;
+    createAuthSignUpInvitation(input: {
+        email: string;
+        expiresInSeconds?: number;
+        invitedBy?: string;
+    }): Promise<Record<string, unknown>>;
+    revokeAuthSignUpInvitation(input: {
+        email: string;
+    }): Promise<void>;
     removeAuthOrgMember(input: {
         memberId: string;
     }): Promise<void>;
@@ -1342,10 +1354,7 @@ interface SubscriptionState {
     readonly args: Record<string, unknown>;
     readonly argsKey: string;
     readonly callbacks: Set<SubscriptionCallback>;
-    readonly checkpointCallbacks: Set<(watermark: {
-        checkpoint?: number;
-        mutationId?: number;
-    }) => void>;
+    readonly checkpointCallbacks: Set<(watermark: SyncWatermark) => void>;
     readonly errorCallbacks: Set<SubscriptionErrorCallback>;
     readonly fn: FunctionReference;
     readonly id: string;
@@ -1376,6 +1385,7 @@ interface SwToClientMessage {
 interface SyncWatermark {
     checkpoint?: number;
     mutationId?: number;
+    rowsFollow?: boolean;
 }
 ```
 

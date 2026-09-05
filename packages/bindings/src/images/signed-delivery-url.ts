@@ -50,11 +50,11 @@ const trimTrailingSlashes = (value: string): string => {
  *
  * Without this the encoding is ambiguous, and the signature binds the ambiguous
  * string — so a value carrying them decodes to a transform the signer never
- * authorised. A `background` (or `gravity`, or `draw`) fed from user input and
- * set to `blue&width=10000` minted a URL whose verified transform really did
- * request a 10000px render, under a signature that checks out. The same
- * ambiguity truncated legitimate values from the other side: a `draw` overlay
- * URL carrying `?v=2&width=64` had its JSON cut at the `&`.
+ * authorised. A `background` (or `gravity`) fed from user input and set to
+ * `blue&width=10000` minted a URL whose verified transform really did request a
+ * 10000px render, under a signature that checks out. The same ambiguity
+ * truncated legitimate values from the other side: a JSON-valued `gravity`
+ * carrying an escaped separator had its JSON cut at the `&`.
  *
  * `%` itself is deliberately NOT escaped, so a percent-encoded value that works
  * today (`background=%23ff0000`) keeps canonicalizing byte-for-byte and its
@@ -87,7 +87,7 @@ const serializeTransform = (transform: TransformOptions | undefined): string => 
 };
 
 /** The value encodings `serializeTransform` can emit for a `TransformOptions` key. */
-type TransformValueKind = "json" | "number" | "string" | "string-or-json";
+type TransformValueKind = "number" | "string" | "string-or-json";
 
 /**
  * Per-key value kind for {@link parseSignedTransform}, derived from the
@@ -101,7 +101,6 @@ const TRANSFORM_KEY_KINDS = {
     blur: "number",
     brightness: "number",
     contrast: "number",
-    draw: "json",
     fit: "string",
     flip: "string",
     gamma: "number",
@@ -178,8 +177,8 @@ export const parseSignedTransform = (t: string): TransformOptions => {
     // separators inside every value, so each `&` here really does start a new
     // entry and each entry holds exactly one `=`. The read side used to guess
     // instead — treating an `&` as a separator only when a known key followed —
-    // which split a `draw` URL's `?v=2&width=64` straight down the middle and
-    // could never have told an injected key from a legitimate one anyway.
+    // which split a JSON value carrying an escaped `&` straight down the middle
+    // and could never have told an injected key from a legitimate one anyway.
     for (const part of t.split("&")) {
         const eq = part.indexOf("=");
 

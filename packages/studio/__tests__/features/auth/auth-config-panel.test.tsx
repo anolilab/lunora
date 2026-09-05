@@ -8,7 +8,7 @@ import AuthConfigPanel from "../../../src/features/auth/auth-config-panel";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
-const CAPABILITIES: AuthCapabilities = { accounts: true, admin: true, organization: true, passkey: true, twoFactor: false };
+const CAPABILITIES: AuthCapabilities = { accounts: true, admin: true, inviteOnly: false, organization: true, passkey: true, twoFactor: false };
 
 const CONFIG: AuthConfigInfo = {
     capabilities: CAPABILITIES,

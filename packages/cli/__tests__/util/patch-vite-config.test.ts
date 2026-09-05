@@ -202,6 +202,29 @@ describe("patchViteConfig", () => {
         });
     });
 
+    describe("no-op paths", () => {
+        it("reports changed: false with a reason when `plugins` is not an array literal", () => {
+            expect.assertions(3);
+
+            // A shared plugin list — the shape the splice cannot handle. It bailed
+            // with a bare `return` and the caller still got `changed: true` over
+            // untouched `code`, so `init` wrote the file back and reported the Vite
+            // config patched while the project got no `lunora()` at all. The
+            // docblock has always promised `changed: false` for ANY no-op path.
+            const source = `import { defineConfig } from "vite";
+import plugins from "./vite-plugins";
+
+export default defineConfig({ plugins });
+`;
+
+            const result = patchViteConfig(source);
+
+            expect(result.changed).toBe(false);
+            expect(result.code).toBe(source);
+            expect(result.reason).toContain("not an array literal");
+        });
+    });
+
     describe("output correctness", () => {
         it("produces valid-looking TypeScript (contains export default)", () => {
             expect.assertions(1);

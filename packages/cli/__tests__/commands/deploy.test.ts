@@ -1218,7 +1218,11 @@ export const backfillNames = defineMigration({
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
                 writeFileSync(
                     join(workdir, "package.json"),
-                    JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0" }, name: "app", scripts: { postcodegen: "node ./patch.mjs" } }),
+                    JSON.stringify({
+                        dependencies: { "@lunora/d1": "1.0.0", "@lunora/storage": "1.0.0" },
+                        name: "app",
+                        scripts: { postcodegen: "node ./patch.mjs" },
+                    }),
                     "utf8",
                 );
 
@@ -1773,7 +1777,11 @@ export const backfillNames = defineMigration({
                 // The manifest must also declare the fixture's add-ons: this schema has
                 // `.global()` tables, and codegen's required-package gate reads a manifest
                 // that exists as authoritative ("declares nothing"), not as "cannot tell".
-                writeFileSync(join(workdir, "package.json"), `{ "dependencies": { "@lunora/d1": "*" }, "packageManager": "npm@10.9.0" }\n`, "utf8");
+                writeFileSync(
+                    join(workdir, "package.json"),
+                    `{ "dependencies": { "@lunora/d1": "*", "@lunora/storage": "*" }, "packageManager": "npm@10.9.0" }\n`,
+                    "utf8",
+                );
 
                 const { calls, spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();

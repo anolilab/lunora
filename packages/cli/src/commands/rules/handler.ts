@@ -236,5 +236,5 @@ const execute: CommandHandler<RulesOptions> = defineHandler<RulesOptions>(({ arg
     return { code: 1 };
 });
 
-export { execute, resolveBundledSkillsDirectory, runRulesCheck, runRulesInstall };
+export { execute, listBundledSkills, resolveBundledSkillsDirectory, runRulesCheck, runRulesInstall };
 export type { RunRulesOptions, RunRulesResult };

@@ -93,6 +93,10 @@ export const createFakeClient = (initialStatus: ConnectionStatus = "idle"): Fake
     let actionThrow: Error | undefined;
     let status = initialStatus;
     let authToken: string | null = null;
+    // Identity FINGERPRINT: the subject when one was supplied, else the token —
+    // mirrors the real client, so a same-subject JWT refresh fires the token
+    // listeners without moving `currentIdentity()`.
+    let authSubject: string | null | undefined;
     let currentUser: User | null = null;
 
     const client = {
@@ -114,6 +118,7 @@ export const createFakeClient = (initialStatus: ConnectionStatus = "idle"): Fake
             };
         },
         connectionStatus: (): ConnectionStatus => status,
+        currentIdentity: (): string | null => authSubject ?? authToken,
         getAuthToken: () => authToken,
         getCurrentUser: () => Promise.resolve(currentUser),
         mutation: (function_: FunctionReference, args: unknown, options: unknown) => {
@@ -147,8 +152,22 @@ export const createFakeClient = (initialStatus: ConnectionStatus = "idle"): Fake
                 }
             };
         },
-        setAuthToken: (token: string | null) => {
+        setAuthToken: (token: string | null, subject?: string | null) => {
+            if (subject !== undefined) {
+                authSubject = subject;
+            } else if (token === null) {
+                authSubject = undefined;
+            }
+
+            if (authToken === token) {
+                return;
+            }
+
             authToken = token;
+
+            for (const listener of tokenListeners) {
+                listener();
+            }
         },
         stream: (
             function_: FunctionReference<"stream">,

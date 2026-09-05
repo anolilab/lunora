@@ -177,4 +177,80 @@ describe("useQuery", () => {
             expect(screen.getByTestId("display").textContent).toBe("42");
         });
     });
+
+    // The hydration gate (`client.isReady` / `client.whenReady()`), which every
+    // other test in this file runs past because the mock reports ready. Both
+    // branches are asserted here so removing the gate from `use-query.ts` fails
+    // the suite rather than passing it.
+    describe("hydration gate", () => {
+        it("holds the fetch until whenReady() resolves when the client is not ready yet", async () => {
+            expect.hasAssertions();
+
+            const mock = createMockClient(() => {
+                return { count: 1 };
+            });
+
+            let releaseHydration = (): void => undefined;
+            const hydration = new Promise<void>((resolve) => {
+                releaseHydration = resolve;
+            });
+
+            // `hydrateOnStart`: the durable read cache is still loading, so
+            // `isReady` is false until `whenReady()` settles.
+            // Spread through a record view: `asClient` is a plain object literal
+            // cast to `LunoraClient`, so spreading it loses no prototype — but
+            // the cast makes it read as a class instance to the linter.
+            const pending = {
+                ...(mock.asClient as unknown as Record<string, unknown>),
+                isReady: false,
+                whenReady: async () => hydration,
+            } as unknown as typeof mock.asClient;
+
+            render(
+                <LunoraProvider client={pending}>
+                    <Display />
+                </LunoraProvider>,
+            );
+
+            // Nothing may hit the wire while hydration is outstanding — a fetch
+            // here is exactly the undefined-flash-then-cached-value the gate exists
+            // to prevent.
+            await act(async () => undefined);
+
+            expect(mock.query).not.toHaveBeenCalled();
+
+            await act(async () => {
+                releaseHydration();
+                await hydration;
+            });
+
+            await waitFor(() => {
+                expect(mock.query).toHaveBeenCalledTimes(1);
+            });
+        });
+
+        it("seeds the first render from the durable read cache once the client reports ready", () => {
+            expect.hasAssertions();
+
+            const mock = createMockClient(() => {
+                return { count: 1 };
+            });
+            const seeded = {
+                ...(mock.asClient as unknown as Record<string, unknown>),
+                peekHydratedQuery: () => {
+                    return { count: 99 };
+                },
+            } as unknown as typeof mock.asClient;
+
+            render(
+                <LunoraProvider client={seeded}>
+                    <Display />
+                </LunoraProvider>,
+            );
+
+            // `initialData: cachedData` — no "loading" frame before the socket
+            // round-trip. Unreachable while `isReady` reads `undefined`.
+            expect(screen.getByTestId("display").textContent).toBe(JSON.stringify({ count: 99 }));
+        });
+    });
 });

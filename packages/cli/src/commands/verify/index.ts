@@ -25,6 +25,20 @@ const verifyCommand: Command = {
             name: "health-url",
             type: String,
         },
+        // `verify` runs the same ERROR-advisory gate `codegen`/`prepare`/`deploy`
+        // do, so it takes the same opt-out. Both halves declared explicitly, for
+        // the reason spelled out on `--typecheck` below and in `codegen/index.ts`.
+        {
+            description: "Fail verification on ERROR-level codegen advisories even locally (the gate already defaults to on in CI)",
+            name: "strict-advisories",
+            type: Boolean,
+        },
+        {
+            description:
+                "Don't fail verification on ERROR-level codegen advisories (the gate defaults to on in CI, off locally). Never downgrades platform diagnostics.",
+            name: "no-strict-advisories",
+            type: Boolean,
+        },
         // Both halves declared explicitly: a `no-*`-only declaration makes cerebro
         // synthesize `--typecheck` by cloning this description verbatim, so
         // `--help` advertised the positive flag as "Skip the TypeScript type-check step".
@@ -45,6 +59,7 @@ export type VerifyOptions = CreateOptions<{
     "api-spec": string | undefined;
     format: string | undefined;
     "health-url": string | undefined;
+    "strict-advisories": boolean | undefined;
     target: string | undefined;
     typecheck: boolean | undefined;
 }>;

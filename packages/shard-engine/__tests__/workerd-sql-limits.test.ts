@@ -492,21 +492,34 @@ describe("expression-depth cap", () => {
         const harness = createSqliteExec();
 
         try {
-            const schema = schemaWith(1);
+            // DISTINCT fields, not N copies of one key: an object literal holds
+            // each key once, so `Array.from({length: 200}, () => ["title", …])`
+            // collapsed to a single condition and this case ran one term where
+            // it claimed to run 200.
+            //
+            // 90, not 200, because the two caps meet here: one equality binds one
+            // parameter, and the bound-parameter ceiling the suite above pins is
+            // 100, so a genuinely-200-term `where` is rejected before it can be
+            // executed at all. The structural assertions on `compileWide` still
+            // cover the full 200.
+            const fields = Array.from({ length: 90 }, (_unused, index) => `f${String(index)}`);
+            const schema: SchemaLike = {
+                tables: { t0: { indexes: [], shape: Object.fromEntries(fields.map((field) => [field, { kind: "string" }])) } },
+            };
 
             runShardMigrations(harness.sql, schema);
 
             const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
 
-            await writer.insert("t0", { title: "kept" });
+            await writer.insert("t0", Object.fromEntries(fields.map((field) => [field, "kept"])));
 
-            // 200 AND'd conditions the row satisfies, then one it does not.
-            const satisfied = Object.fromEntries(Array.from({ length: 200 }, () => ["title", "kept"]));
+            // Every one of them AND'd and satisfied, then one that is not.
+            const satisfied = Object.fromEntries(fields.map((field) => [field, "kept"]));
             const rows = await writer.findMany("t0", { where: satisfied });
 
             expect(rows.page).toHaveLength(1);
 
-            const contradicted = await writer.findMany("t0", { where: { ...satisfied, title: "absent" } });
+            const contradicted = await writer.findMany("t0", { where: { ...satisfied, f0: "absent" } });
 
             expect(contradicted.page).toHaveLength(0);
         } finally {

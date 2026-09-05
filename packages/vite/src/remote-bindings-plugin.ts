@@ -134,8 +134,11 @@ const withRemoteBindings = (options: CloudflarePluginOptions, plan: ViteRemotePl
  *
  * The materialization: the temp config is a COPY of `wrangler.jsonc`, and
  * Lunora provisions the bindings the project's code implies from
- * `wranglerValidatorPlugin`'s own `config` hook — earlier in this same phase,
- * since both are `enforce: "pre"` and that plugin is registered first. Copying
+ * `bindingsProvisionPlugin`'s own `config` hook — earlier in this same phase,
+ * since both are `enforce: "pre"` and that plugin is registered first. (It is a
+ * plugin of its own, registered unconditionally, precisely so this copy is not a
+ * binding short whenever `validateWrangler` is off — `wranglerValidatorPlugin`
+ * only validates, and is registered after this one.) Copying
  * the file at factory time therefore snapshotted it BEFORE that write, and the
  * dev worker booted against a config missing the binding Lunora had just added:
  * a `vite dev` that logged `inferred bindings → AI (Workers AI)`, passed

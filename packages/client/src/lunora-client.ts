@@ -38,7 +38,7 @@ import {
 import createSnapshotPrecondition from "./snapshot-precondition";
 import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
-import type { SubscriptionCallback, SubscriptionError, SubscriptionErrorCallback, SubscriptionState } from "./subscription";
+import type { SubscriptionCallback, SubscriptionError, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
 import { SubscriptionRegistry } from "./subscription";
 import type {
     ArgsOf,
@@ -237,6 +237,9 @@ const AUTH_ORG_INVITATIONS_PATH = "/_lunora/admin/auth/organizations/invitations
 const AUTH_REMOVE_MEMBER_PATH = "/_lunora/admin/auth/organizations/members/remove";
 const AUTH_CANCEL_INVITATION_PATH = "/_lunora/admin/auth/organizations/invitations/cancel";
 const AUTH_CONFIG_PATH = "/_lunora/admin/auth/config";
+const AUTH_SIGN_UP_INVITATIONS_PATH = "/_lunora/admin/auth/sign-up-invitations";
+const AUTH_CREATE_SIGN_UP_INVITATION_PATH = "/_lunora/admin/auth/sign-up-invitations/create";
+const AUTH_REVOKE_SIGN_UP_INVITATION_PATH = "/_lunora/admin/auth/sign-up-invitations/revoke";
 const AUTH_CREATE_ORG_PATH = "/_lunora/admin/auth/organizations/create";
 const AUTH_UPDATE_ORG_PATH = "/_lunora/admin/auth/organizations/update";
 const AUTH_REMOVE_ORG_PATH = "/_lunora/admin/auth/organizations/remove";
@@ -663,18 +666,6 @@ const sendOn = (conn: ShardConnection, message: ClientMessage): boolean => {
 
 /** Callback a shape subscription invokes with its materialized rowset on every applied poke. */
 type ShapeCallback = (rows: Record<string, unknown>[]) => void;
-
-/**
- * The high-water marks a shape poke has now synced to the client: `checkpoint`
- * is the op-log cursor and `mutationId` the highest custom-mutator id the server
- * echoed for this client. A `@lunora/db` collection feeds these into its
- * checkpoint registry to drop optimistic overlays once the server's authoritative
- * rows have landed.
- */
-interface SyncWatermark {
-    checkpoint?: number;
-    mutationId?: number;
-}
 
 /**
  * One live shape subscription's client state — the partial-replication parallel
@@ -3448,6 +3439,28 @@ class LunoraClient {
         return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
     }
 
+    /**
+     * List sign-up invitations, newest first (requires the `inviteOnly` plugin).
+     * Unfiltered: a row is pending when `acceptedAt` is null and `expiresAt` is in
+     * the future, and the caller labels it — filtering server-side after the page
+     * would let page 1 come back empty while pending rows sat on page 2.
+     */
+    public async listAuthSignUpInvitations(options: { limit?: number; offset?: number } = {}): Promise<AuthPage<Record<string, unknown>>> {
+        const path = withQuery(AUTH_SIGN_UP_INVITATIONS_PATH, { limit: options.limit, offset: options.offset });
+
+        return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
+    }
+
+    /** Invite an address to sign up, or refresh an existing invitation for it. */
+    public async createAuthSignUpInvitation(input: { email: string; expiresInSeconds?: number; invitedBy?: string }): Promise<Record<string, unknown>> {
+        return (await this.adminFetch(AUTH_CREATE_SIGN_UP_INVITATION_PATH, "POST", input)) as Record<string, unknown>;
+    }
+
+    /** Withdraw a sign-up invitation. Not retroactive — an account already created keeps existing. */
+    public async revokeAuthSignUpInvitation(input: { email: string }): Promise<void> {
+        await this.adminFetch(AUTH_REVOKE_SIGN_UP_INVITATION_PATH, "POST", input);
+    }
+
     /** Remove a member from an organization. */
     public async removeAuthOrgMember(input: { memberId: string }): Promise<void> {
         await this.adminFetch(AUTH_REMOVE_MEMBER_PATH, "POST", input);
@@ -3720,8 +3733,12 @@ class LunoraClient {
      *
      * Not available on a `crossTabSync` FOLLOWER tab: shape pokes are not part of
      * the leader→follower broadcast set, so a follower's shape could never
-     * resolve. Throws `NOT_IMPLEMENTED` there — see
-     * {@link LunoraClientOptions.crossTabSync}.
+     * resolve. The returned handle is inert there, and `options.onError` is
+     * invoked with `NOT_IMPLEMENTED` — see
+     * {@link LunoraClientOptions.crossTabSync}. Reporting rather than throwing is
+     * deliberate: `@lunora/db`'s shape-backed `createCollection` calls this from
+     * its sync path, where a throw takes the collection out entirely, while
+     * `onError` is the seam it already routes to `markReady()`.
      */
     public subscribeShape(
         shape: { args?: Record<string, unknown>; name: string },
@@ -3735,7 +3752,28 @@ class LunoraClient {
         // `createCollection` calls this from its sync path, so a throw takes out
         // the collection rather than degrading it. The leader broadcasts nothing
         // for shapes, so a follower's handle can only ever be inert.
+        //
+        // But inert must not mean SILENT. `onRows` is a subscriber's only route
+        // out of "loading" (`@lunora/db` reaches `writer.markReady()` from
+        // `onRows` and `onError`, nowhere else), so a handle that fires neither
+        // hangs a shape-backed collection in a permanent spinner with no rows
+        // and no error. Report the reason instead — asynchronously, so a caller
+        // that registers state off the return value has finished doing so.
         if (this.followsAnotherTab()) {
+            const { onError } = options;
+
+            if (onError !== undefined) {
+                queueMicrotask((): void => {
+                    onError({
+                        code: "NOT_IMPLEMENTED",
+                        message:
+                            `LunoraClient: \`subscribeShape\` is unavailable on a cross-tab follower tab. ` +
+                            `The \`crossTabSync\` channel only carries data from the leader tab outward and shape pokes are not part of that broadcast set, ` +
+                            `so this subscription could never resolve. Turn off \`crossTabSync\`, or use a \`list\`-backed collection, which IS relayed.`,
+                    });
+                });
+            }
+
             return () => undefined;
         }
 
@@ -4082,8 +4120,10 @@ class LunoraClient {
      * `(fn, args, shardKey)` — that is the documented shape of the option, not a
      * defect.
      *
-     * `stream()` reaches the same outcome by a different route: it fails the
-     * handle it returns rather than throwing at the call. See
+     * `subscribeShape` and `stream()` reach the same outcome by a different
+     * route: they fail the handle they return rather than throwing at the call,
+     * because both are driven from a sync/render path where a throw destroys the
+     * caller instead of degrading it. See
      * {@link LunoraClientOptions.crossTabSync} for what the option does and does
      * not cover.
      */
@@ -6375,7 +6415,10 @@ class LunoraClient {
             state.lastMutationId = Math.max(state.lastMutationId ?? 0, message.lastMutationId);
 
             for (const onCheckpoint of state.checkpointCallbacks) {
-                onCheckpoint({ checkpoint: state.serverCursor, mutationId: state.lastMutationId });
+                // The one call site that sets `rowsFollow`: `notifySubscription`
+                // below drives this same frame's rowset callback, so this
+                // watermark genuinely describes rows that are about to land.
+                onCheckpoint({ checkpoint: state.serverCursor, mutationId: state.lastMutationId, rowsFollow: true });
             }
         }
 
@@ -7559,5 +7602,6 @@ export type {
     LunoraClientError,
     MutationCallOptions,
     MutationSettledEvent,
-    SyncWatermark,
 };
+
+export { type SyncWatermark } from "./subscription";

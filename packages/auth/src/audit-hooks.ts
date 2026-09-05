@@ -14,6 +14,7 @@ import { createAuthMiddleware } from "better-auth/api";
 
 import type { AppendAuthAuditEntry, AppendAuthAuditOptions, AuthAuditEvent, AuthAuditOutcome } from "./audit";
 import { appendAuthAuditEntry } from "./audit";
+import { onCloudflareEdge } from "./create-auth";
 import type { SqlExecutor } from "./sql-store";
 
 /** Configuration for {@link authAuditHook}. */
@@ -159,19 +160,27 @@ const header = (context: AuditHookContext, name: string): string | undefined => 
 };
 
 /**
- * Resolve the client IP: `cf-connecting-ip` when present (edge-set on Cloudflare,
- * unspoofable — see `packages/runtime/src/create-worker.ts`'s `clientIp` comment,
- * the rule this mirrors). Otherwise `undefined`, unless the caller has opted into
- * `trustProxyHeaders`, in which case the leftmost `x-forwarded-for` entry is used.
- * No other proxy header is consulted — none is more trustworthy than
- * `x-forwarded-for`, and an attacker-chosen IP in an audit row is worse than a
- * missing one.
+ * Resolve the client IP: `cf-connecting-ip` when present **and running on
+ * Cloudflare**, where the edge sets it itself and a client cannot influence it.
+ * Otherwise `undefined`, unless the caller has opted into `trustProxyHeaders`,
+ * in which case the leftmost `x-forwarded-for` entry is used. No other proxy
+ * header is consulted — none is more trustworthy than `x-forwarded-for`, and an
+ * attacker-chosen IP in an audit row is worse than a missing one.
+ *
+ * The {@link onCloudflareEdge} gate is the same one `create-auth.ts`'s
+ * `defaultIpAddressHeaders` applies, deliberately: off Cloudflare (the Node
+ * host, a bare container) nothing overwrites `cf-connecting-ip`, so it is a
+ * header like any other. Reading it there lets an attacker set the `ip` on every
+ * sign-in / password-reset / mfa-disable row they generate — and this package's
+ * two IP resolvers must not disagree about who a request came from.
  */
 const resolveIp = (context: AuditHookContext, trustProxyHeaders: boolean | undefined): string | undefined => {
-    const cfConnectingIp = header(context, "cf-connecting-ip");
+    if (onCloudflareEdge()) {
+        const cfConnectingIp = header(context, "cf-connecting-ip");
 
-    if (cfConnectingIp !== undefined) {
-        return cfConnectingIp;
+        if (cfConnectingIp !== undefined) {
+            return cfConnectingIp;
+        }
     }
 
     if (trustProxyHeaders !== true) {

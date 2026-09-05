@@ -36,6 +36,7 @@ export type {
     HttpRouteBuilder,
     HttpRouteFactory,
     HttpRouteHandlerOptions,
+    HttpRunners,
     HttpStreamHandlerOptions,
     LunoraHttpApp,
     LunoraHttpEnv,
