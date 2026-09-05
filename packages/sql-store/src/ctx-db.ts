@@ -295,6 +295,24 @@ interface SqlCtxDbOptions {
     maxRelationKeys?: number;
 
     /**
+     * Object identifying the database this store provisions, so the one-shot
+     * `CREATE TABLE/INDEX IF NOT EXISTS` sweep is shared by every ctx-db built
+     * against it instead of repeating per instance.
+     *
+     * Hosts build a ctx-db **per request** (the writer captures the caller's
+     * identity and D1 bookmark), so without this the sweep — one round trip per
+     * global table plus one per index — runs again on the first `.global()`
+     * access of every request. On a 50-table schema that is ~1s in `lunora dev`
+     * and a real latency floor in production.
+     *
+     * Pass something that lives as long as the isolate AND identifies the
+     * database — the D1 binding, or a long-lived exec. Omit it and the memo
+     * stays per ctx-db (the safe default for tests, which pair a fresh database
+     * with a reused schema object).
+     */
+    provisionScope?: object;
+
+    /**
      * Scheduler exposed to global-table trigger handlers as `ctx.scheduler`.
      * Absent it, `ctx.scheduler` is a stub that throws on use — pass one when
      * triggers on `.global()` tables need to enqueue follow-up work.
@@ -1243,6 +1261,14 @@ const mapWriteError = (dialect: SqlDialect, error: unknown, table: string): neve
     throw error;
 };
 
+/**
+ * The provisioning sweep in flight (or completed) for a given
+ * {@link SqlCtxDbOptions.provisionScope}, so per-request ctx-dbs built against
+ * the same database share one run. Weak so a scope that goes out of scope takes
+ * its entry with it; a rejected run is evicted so the next call retries.
+ */
+const provisioningByScope = new WeakMap<object, Promise<void>>();
+
 const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     const { crossShardCounter, crossShardReader, exec, maxRelationKeys, schema } = options;
 
@@ -1386,12 +1412,36 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     // once per ctx-db, lazily, before any path that can touch a companion. The
     // cached value is the resolving `Promise` so concurrent first-callers share
     // the single round-trip rather than racing duplicate DDL (mirrors the
-    // dialect's fts5 flag). CREATE IF NOT EXISTS is idempotent, so running it
-    // once per instance is cheap.
+    // dialect's fts5 flag).
+    //
+    // "Once per ctx-db" is only cheap when the ctx-db outlives the request — and
+    // it does not: hosts build one per request so the writer can carry the
+    // caller's identity and bookmark. `provisionScope` lifts the memo onto the
+    // database it provisions ({@link SqlCtxDbOptions.provisionScope}), which is
+    // what makes the sweep once-per-isolate rather than once-per-request.
     let migratedPromise: Promise<void> | undefined;
+    const { provisionScope } = options;
+
+    const readMemo = (): Promise<void> | undefined => (provisionScope ? provisioningByScope.get(provisionScope) : migratedPromise);
+
+    const writeMemo = (run: Promise<void> | undefined): void => {
+        if (!provisionScope) {
+            migratedPromise = run;
+        } else if (run) {
+            provisioningByScope.set(provisionScope, run);
+        } else {
+            provisioningByScope.delete(provisionScope);
+        }
+    };
 
     const ensureMigrated = async (): Promise<void> => {
-        migratedPromise ??= (async (): Promise<void> => {
+        const cached = readMemo();
+
+        if (cached) {
+            return cached;
+        }
+
+        const run = (async (): Promise<void> => {
             // Base `.global()` tables first — the companion migrations below and
             // every read/write path assume they exist.
             await runSqlGlobalTableMigrations(exec, schema, dialect);
@@ -1410,11 +1460,15 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // connection) would otherwise poison every later call on this
             // ctx-db. Clear the cache so the next call retries the idempotent
             // CREATE-IF-NOT-EXISTS migrations.
-            migratedPromise = undefined;
+            writeMemo(undefined);
             throw error;
         });
 
-        return migratedPromise;
+        // Recorded synchronously (the IIFE above has only run to its first
+        // await), so concurrent first-callers single-flight onto this run.
+        writeMemo(run);
+
+        return run;
     };
 
     /**

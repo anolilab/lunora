@@ -1922,3 +1922,97 @@ describe("createSqlCtxDb — recomputing an extreme over a large group", () => {
         expect(widest).toBeLessThanOrEqual(BACKFILL_BATCH_SIZE);
     });
 });
+
+describe("createSqlCtxDb — provisionScope", () => {
+    /** A recording exec that answers every read with no rows, so only the DDL is interesting. */
+    const countingExec = (): { createTableCount: () => number; exec: SqlCtxExec } => {
+        const statements: string[] = [];
+
+        return {
+            createTableCount: () => statements.filter((statement) => /^create table/iu.test(statement)).length,
+            exec: {
+                all: (query) => {
+                    statements.push(query);
+
+                    return Promise.resolve([]);
+                },
+                run: (query) => {
+                    statements.push(query);
+
+                    return Promise.resolve();
+                },
+            },
+        };
+    };
+
+    it("re-runs the CREATE-IF-NOT-EXISTS sweep for every writer when no scope is given", async () => {
+        // The per-instance memo is the historical behaviour, and it is what tests
+        // rely on: they pair a fresh database with a reused schema object.
+        expect.assertions(1);
+
+        const { createTableCount, exec } = countingExec();
+
+        await createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec, schema }).findMany("notes", {});
+
+        const perWriter = createTableCount();
+
+        await createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec, schema }).findMany("notes", {});
+
+        expect(createTableCount()).toBe(perWriter * 2);
+    });
+
+    it("runs the sweep once across writers that share a scope", async () => {
+        // Hosts build a writer per request (it carries the caller's identity and
+        // D1 bookmark), so without a shared scope the whole sweep — one round trip
+        // per global table and index — repeats on every request's first
+        // `.global()` access. ~1s per request on a 50-table schema in `lunora dev`.
+        expect.assertions(2);
+
+        const { createTableCount, exec } = countingExec();
+        const provisionScope = {};
+
+        await createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec, provisionScope, schema }).findMany("notes", {});
+
+        const first = createTableCount();
+
+        expect(first).toBeGreaterThan(0);
+
+        await createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec, provisionScope, schema }).findMany("notes", {});
+
+        expect(createTableCount()).toBe(first);
+    });
+
+    it("evicts a failed sweep from the scope so the next writer retries", async () => {
+        expect.assertions(2);
+
+        let failNext = true;
+        const statements: string[] = [];
+        const exec: SqlCtxExec = {
+            all: (query) => {
+                statements.push(query);
+
+                return Promise.resolve([]);
+            },
+            run: (query) => {
+                if (failNext) {
+                    failNext = false;
+
+                    return Promise.reject(new Error("connection dropped"));
+                }
+
+                statements.push(query);
+
+                return Promise.resolve();
+            },
+        };
+        const provisionScope = {};
+
+        await expect(createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec, provisionScope, schema }).findMany("notes", {})).rejects.toThrow(
+            "connection dropped",
+        );
+
+        await createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec, provisionScope, schema }).findMany("notes", {});
+
+        expect(statements.filter((statement) => /^create table/iu.test(statement)).length).toBeGreaterThan(0);
+    });
+});
