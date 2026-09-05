@@ -87,10 +87,22 @@ const SCHEMA_VERSION_META_KEY = "schema_version";
  * mirror with a numeric primary key sorted and range-filtered it
  * lexicographically (`ORDER BY id` put 10 before 9, `WHERE id > 5` compared
  * strings), so older mirrors re-seed once on next open.
+ *
+ * Version 4: a column with no observed non-null value is declared with NO type
+ * at all instead of falling back to `TEXT`. The affinity is inferred once, at
+ * CREATE, and never revisited — so a numeric column whose first frame carried
+ * `null` was pinned to `TEXT` forever and coerced every later number to text
+ * (`ORDER BY n` put 10 before 5, `WHERE n > 6` matched nothing). A typeless
+ * column has BLOB affinity: SQLite stores what it is given without coercion, so
+ * the numbers that arrive later compare and sort as numbers with no migration.
  */
-const MIRROR_SCHEMA_VERSION = 3;
+const MIRROR_SCHEMA_VERSION = 4;
 
-/** SQLite column type affinity declared for a mirrored table's column. */
+/**
+ * SQLite column type affinity declared for a mirrored table's column, or
+ * `undefined` for a column whose affinity is not known yet (declared typeless —
+ * see {@link MIRROR_SCHEMA_VERSION} version 4).
+ */
 type ColumnAffinity = "INTEGER" | "REAL" | "TEXT";
 
 /**
@@ -119,6 +131,25 @@ const inferColumnAffinity = (value: unknown): ColumnAffinity => {
 };
 
 /**
+ * The declared type for a column definition: the inferred affinity, or the
+ * empty string for a column whose affinity is not known yet. A typeless column
+ * has BLOB affinity — SQLite coerces nothing into it — which is the only
+ * declaration that stays correct whatever the first non-null value turns out to
+ * be, and is why an all-null column is left undeclared rather than guessed.
+ */
+const columnTypeSql = (affinity: ColumnAffinity | undefined): string => affinity ?? "";
+
+/**
+ * Why the mirror changed: `"diff"` for the rows an {@link LocalMirror.applyDiff}
+ * wrote, `"clear"` for the wholesale {@link LocalMirror.clearData} sweep.
+ *
+ * A subscriber that caches what it believes the mirror holds has to tell the two
+ * apart: `"diff"` reports a change it usually made itself, while `"clear"` means
+ * every row it was tracking is gone regardless of who wrote it.
+ */
+type MirrorChangeReason = "clear" | "diff";
+
+/**
  * Local SQLite mirror that maintains a client-side replica of server
  * tables by applying {@link TableDiff} deltas.
  *
@@ -142,7 +173,7 @@ const inferColumnAffinity = (value: unknown): ColumnAffinity => {
  * );
  * ```
  */
-type ChangeSubscriber = () => void;
+type ChangeSubscriber = (reason: MirrorChangeReason) => void;
 
 /**
  * `LocalMirror` is part of the experimental `@lunora/replica` API and may change without a major version bump.
@@ -259,7 +290,7 @@ class LocalMirror {
         applyDiffToDatabase(this.#db, diff, this.primaryKeyOf(diff.table));
 
         this.#eventLog.append("table-diff", diff, [diff]);
-        this.#notifyChange();
+        this.#notifyChange("diff");
     }
 
     /**
@@ -304,16 +335,16 @@ class LocalMirror {
             }
         });
 
-        this.#notifyChange();
+        this.#notifyChange("clear");
     }
 
     /** Bump {@link LocalMirror.version} and notify `onChange` subscribers (e.g. React hook subscriptions). */
-    #notifyChange(): void {
+    #notifyChange(reason: MirrorChangeReason): void {
         this.#version += 1;
 
         for (const listener of this.#changeListeners) {
             try {
-                listener();
+                listener(reason);
             } catch {
                 // Listener threw — keep notifying others.
             }
@@ -436,7 +467,8 @@ class LocalMirror {
      * Infer the affinity to declare for each of `columns` from the first
      * non-null value observed for that column, in diff order. A column that
      * never carries a non-null value (e.g. every change so far set it to
-     * `null`) is left unmapped — callers fall back to `TEXT`.
+     * `null`) is left unmapped — callers declare it typeless (see
+     * {@link columnTypeSql}).
      * @param diff The table diff whose changes are scanned.
      * @param pk The primary-key column to skip (already declared separately).
      * @param columns The column names to resolve an affinity for.
@@ -471,10 +503,10 @@ class LocalMirror {
      * Infer the affinity to declare for the primary-key column from the
      * first non-null id observed in the diff (`data[pk]` on insert/update,
      * `change.id` on delete/update). A diff that never carries an id (e.g.
-     * empty data) falls back to `TEXT` — same first-observed-value trade-off
+     * empty data) leaves it typeless — same first-observed-value trade-off
      * as {@link LocalMirror.#inferColumnAffinities}.
      */
-    static #inferPkAffinity(diff: TableDiff, pk: string): ColumnAffinity {
+    static #inferPkAffinity(diff: TableDiff, pk: string): ColumnAffinity | undefined {
         for (const change of diff.changes) {
             const value: unknown = change.type === "delete" ? change.id : change.data[pk];
 
@@ -488,7 +520,7 @@ class LocalMirror {
             }
         }
 
-        return "TEXT";
+        return undefined;
     }
 
     /**
@@ -518,10 +550,10 @@ class LocalMirror {
             // affinity (so ORDER BY/comparisons stay numeric) while still
             // accepting a heterogeneous id.
             const pkAffinity = LocalMirror.#inferPkAffinity(diff, pk);
-            let columnDefs = `${escapeIdentifier_(pk)} ${pkAffinity === "INTEGER" ? "INT" : pkAffinity} PRIMARY KEY NOT NULL`;
+            let columnDefs = `${escapeIdentifier_(pk)} ${pkAffinity === "INTEGER" ? "INT" : columnTypeSql(pkAffinity)} PRIMARY KEY NOT NULL`;
 
             for (const key of requiredColumns) {
-                columnDefs += `, ${escapeIdentifier_(key)} ${affinities.get(key) ?? "TEXT"}`;
+                columnDefs += `, ${escapeIdentifier_(key)} ${columnTypeSql(affinities.get(key))}`;
             }
 
             this.#db.exec(`CREATE TABLE IF NOT EXISTS ${escapeIdentifier_(diff.table)} (${columnDefs})`);
@@ -531,7 +563,7 @@ class LocalMirror {
 
             for (const key of requiredColumns) {
                 if (!existingColumns.has(key)) {
-                    this.#db.exec(`ALTER TABLE ${escapeIdentifier_(diff.table)} ADD COLUMN ${escapeIdentifier_(key)} ${affinities.get(key) ?? "TEXT"}`);
+                    this.#db.exec(`ALTER TABLE ${escapeIdentifier_(diff.table)} ADD COLUMN ${escapeIdentifier_(key)} ${columnTypeSql(affinities.get(key))}`);
                 }
             }
         }

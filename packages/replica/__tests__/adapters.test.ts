@@ -7,6 +7,7 @@ import { createSqliteWasmAdapter } from "../src/adapters/sqlite-wasm";
 import { createSqlJsAdapter } from "../src/adapters/sqljs";
 import type { SqliteAdapter } from "../src/adapters/types";
 import { LocalMirror } from "../src/local-mirror";
+import { subscribeToMirror } from "../src/subscribe-mirror";
 import { createTableDiff } from "../src/table-diff";
 
 // ── Real-engine fixtures ────────────────────────────────────────────────
@@ -70,7 +71,12 @@ const makeSqliteWasm = (): SqliteAdapter => {
         },
         exec: (sql, options) => {
             if (options?.returnValue === "resultRows" && options.rowMode === "object") {
-                return toRowObjects(engine.exec(sql, options.bind));
+                // `useBigInt` stands in for the real driver's `bigIntEnabled`:
+                // both decode an INTEGER column through a 64-bit path instead of
+                // a double. sql.js widens every integer where the real driver
+                // widens only the out-of-range ones, which the adapter's own
+                // narrowing reconciles either way.
+                return toRowObjects(engine.exec(sql, options.bind, { useBigInt: true }));
             }
 
             engine.run(sql, options?.bind);
@@ -747,6 +753,125 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
 
             expect(m2.query<{ id: string; points: number }>("SELECT id, points FROM scores")).toStrictEqual([{ id: "1", points: 9 }]);
         });
+    });
+});
+
+// ── Regressions the adapter/mirror contract has to keep ─────────────────
+
+describe.each(engines)("int64 round-trip (%s)", (_name, makeAdapter) => {
+    // `local-mirror.ts` declares a `bigint` column INTEGER and `diff-applier.ts`
+    // binds a `bigint` straight through, so a value past 2^53 is a first-class
+    // path into every adapter. A driver decoding it through a double loses the
+    // low bits — silently, and for a primary key too, so the row goes missing.
+    const beyondDouble = 9_007_199_254_740_993n;
+
+    it("reads an INTEGER past 2^53 back exactly, and still matches it by equality", () => {
+        expect.assertions(2);
+
+        const database = makeAdapter();
+
+        database.exec("CREATE TABLE big (id INT PRIMARY KEY NOT NULL, n INTEGER)");
+        database.exec("INSERT INTO big (id, n) VALUES (?, ?)", [beyondDouble, beyondDouble]);
+
+        expect(database.query<{ n: bigint }>("SELECT n FROM big")).toStrictEqual([{ n: beyondDouble }]);
+        expect(database.query("SELECT id FROM big WHERE id = ?", [beyondDouble])).toHaveLength(1);
+    });
+
+    it("keeps an ordinary integer a `number`", () => {
+        expect.assertions(1);
+
+        const database = makeAdapter();
+
+        database.exec("CREATE TABLE small (id TEXT PRIMARY KEY NOT NULL, n INTEGER)");
+        database.exec("INSERT INTO small (id, n) VALUES (?, ?)", ["a", 5]);
+
+        expect(database.query<{ c: number; n: number }>("SELECT n, COUNT(*) AS c FROM small")).toStrictEqual([{ c: 1, n: 5 }]);
+    });
+});
+
+describe.each(engines)("column affinity when the first observed value is null (%s)", (_name, makeAdapter) => {
+    // The affinity is inferred once, at CREATE. A column whose first frame
+    // carried `null` used to fall back to TEXT and stayed TEXT forever, so every
+    // later number was coerced to text: `ORDER BY` compared "10" < "5" and a
+    // range predicate compared strings.
+    const seedThenNumbers = (mirror: LocalMirror): void => {
+        mirror.applyDiff(createTableDiff("readings", [{ data: { id: "a", n: null }, type: "insert" }]));
+        mirror.applyDiff(
+            createTableDiff("readings", [
+                { data: { id: "b", n: 5 }, type: "insert" },
+                { data: { id: "c", n: 10 }, type: "insert" },
+            ]),
+        );
+    };
+
+    it("orders the later numbers numerically", () => {
+        expect.assertions(1);
+
+        const mirror = new LocalMirror({ db: makeAdapter() });
+
+        seedThenNumbers(mirror);
+
+        expect(mirror.query<{ id: string }>("SELECT id FROM readings WHERE n IS NOT NULL ORDER BY n ASC")).toStrictEqual([{ id: "b" }, { id: "c" }]);
+    });
+
+    it("answers a range predicate numerically", () => {
+        expect.assertions(1);
+
+        const mirror = new LocalMirror({ db: makeAdapter() });
+
+        seedThenNumbers(mirror);
+
+        expect(mirror.query<{ id: string }>("SELECT id FROM readings WHERE n > 6")).toStrictEqual([{ id: "c" }]);
+    });
+
+    it("does the same for a column added by schema evolution", () => {
+        expect.assertions(1);
+
+        const mirror = new LocalMirror({ db: makeAdapter() });
+
+        mirror.applyDiff(createTableDiff("late", [{ data: { id: "a" }, type: "insert" }]));
+        mirror.applyDiff(createTableDiff("late", [{ data: { id: "b", n: null }, type: "insert" }]));
+        mirror.applyDiff(
+            createTableDiff("late", [
+                { data: { id: "c", n: 5 }, type: "insert" },
+                { data: { id: "d", n: 10 }, type: "insert" },
+            ]),
+        );
+
+        expect(mirror.query<{ id: string }>("SELECT id FROM late WHERE n > 6")).toStrictEqual([{ id: "d" }]);
+    });
+});
+
+describe.each(engines)("subscribeToMirror after clearData (%s)", (_name, makeAdapter) => {
+    it("re-seeds the table when the next frame is identical to the one clearData wiped", () => {
+        expect.assertions(2);
+
+        const mirror = new LocalMirror({ db: makeAdapter() });
+        let push: ((data: unknown) => void) | undefined;
+
+        const client = {
+            subscribe: (_reference: { __lunoraRef: string }, _arguments: Record<string, unknown>, onData: (data: unknown) => void) => {
+                push = onData;
+
+                return () => undefined;
+            },
+        };
+
+        subscribeToMirror(client, mirror, { __lunoraRef: "todos/list" }, {});
+
+        const frame = [{ id: "1", title: "a" }];
+
+        push?.(frame);
+
+        expect(mirror.query("SELECT id, title FROM fn_todos_list")).toStrictEqual([{ id: "1", title: "a" }]);
+
+        mirror.clearData();
+        // The server has nothing new to say, so the next frame is byte-identical
+        // to the last applied one. Without the clear reset it diffed clean and
+        // the table stayed empty until some row's content happened to change.
+        push?.(frame);
+
+        expect(mirror.query("SELECT id, title FROM fn_todos_list")).toStrictEqual([{ id: "1", title: "a" }]);
     });
 });
 

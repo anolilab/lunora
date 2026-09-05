@@ -237,6 +237,9 @@ const AUTH_ORG_INVITATIONS_PATH = "/_lunora/admin/auth/organizations/invitations
 const AUTH_REMOVE_MEMBER_PATH = "/_lunora/admin/auth/organizations/members/remove";
 const AUTH_CANCEL_INVITATION_PATH = "/_lunora/admin/auth/organizations/invitations/cancel";
 const AUTH_CONFIG_PATH = "/_lunora/admin/auth/config";
+const AUTH_SIGN_UP_INVITATIONS_PATH = "/_lunora/admin/auth/sign-up-invitations";
+const AUTH_CREATE_SIGN_UP_INVITATION_PATH = "/_lunora/admin/auth/sign-up-invitations/create";
+const AUTH_REVOKE_SIGN_UP_INVITATION_PATH = "/_lunora/admin/auth/sign-up-invitations/revoke";
 const AUTH_CREATE_ORG_PATH = "/_lunora/admin/auth/organizations/create";
 const AUTH_UPDATE_ORG_PATH = "/_lunora/admin/auth/organizations/update";
 const AUTH_REMOVE_ORG_PATH = "/_lunora/admin/auth/organizations/remove";
@@ -3434,6 +3437,28 @@ class LunoraClient {
         const path = withQuery(AUTH_ORG_INVITATIONS_PATH, { limit: input.limit, offset: input.offset, organizationId: input.organizationId });
 
         return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
+    }
+
+    /**
+     * List sign-up invitations, newest first (requires the `inviteOnly` plugin).
+     * Unfiltered: a row is pending when `acceptedAt` is null and `expiresAt` is in
+     * the future, and the caller labels it — filtering server-side after the page
+     * would let page 1 come back empty while pending rows sat on page 2.
+     */
+    public async listAuthSignUpInvitations(options: { limit?: number; offset?: number } = {}): Promise<AuthPage<Record<string, unknown>>> {
+        const path = withQuery(AUTH_SIGN_UP_INVITATIONS_PATH, { limit: options.limit, offset: options.offset });
+
+        return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
+    }
+
+    /** Invite an address to sign up, or refresh an existing invitation for it. */
+    public async createAuthSignUpInvitation(input: { email: string; expiresInSeconds?: number; invitedBy?: string }): Promise<Record<string, unknown>> {
+        return (await this.adminFetch(AUTH_CREATE_SIGN_UP_INVITATION_PATH, "POST", input)) as Record<string, unknown>;
+    }
+
+    /** Withdraw a sign-up invitation. Not retroactive — an account already created keeps existing. */
+    public async revokeAuthSignUpInvitation(input: { email: string }): Promise<void> {
+        await this.adminFetch(AUTH_REVOKE_SIGN_UP_INVITATION_PATH, "POST", input);
     }
 
     /** Remove a member from an organization. */

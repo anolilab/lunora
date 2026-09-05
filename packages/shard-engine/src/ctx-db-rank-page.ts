@@ -32,7 +32,7 @@ import { SCAN_DEP } from "./dependency-tracker";
 import { runDrizzle } from "./do-exec";
 import { sqliteInList } from "./drizzle";
 import { CURSOR_PREFIX, decodeCursor, toBase64 } from "./query-args";
-import { encodePartitionKey, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
+import { encodePartitionKey, RANK_TIEBREAK, rankPivotConditionSql, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 import type { RankDirection, RankIndexDefinitionLike, RankPageOptions, RankPageRowKey } from "./schema-types";
 
 const DOC_COLUMN = "__doc__";
@@ -92,17 +92,31 @@ const buildRankSeekClause = (
     const branches: SQL[] = [];
 
     for (const [pivot, col] of cols.entries()) {
+        // A NULL pivot with nothing on the wanted side makes the whole branch
+        // unsatisfiable — drop it rather than emit an always-false disjunct.
+        const pivotCondition = rankPivotConditionSql(col.column, decoded[pivot], col.direction, true);
+
+        if (pivotCondition === undefined) {
+            continue;
+        }
+
         const conditions: SQL[] = [];
 
         for (const [prefix, prefixCol] of cols.slice(0, pivot).entries()) {
             conditions.push(dsql`${dsql.identifier(prefixCol.column)} IS ${decoded[prefix]}`);
         }
 
-        conditions.push(dsql`${dsql.identifier(col.column)} ${dsql.raw(col.direction === "desc" ? "<" : ">")} ${decoded[pivot]}`);
+        conditions.push(pivotCondition);
 
         const [firstCondition] = conditions;
 
         branches.push(conditions.length === 1 && firstCondition !== undefined ? firstCondition : dsql`(${dsql.join(conditions, dsql` AND `)})`);
+    }
+
+    if (branches.length === 0) {
+        // Every pivot was a NULL at the end of its ordering: the cursor is the
+        // last row there is, so no row resumes after it.
+        return dsql`(1 = 0)`;
     }
 
     return dsql`(${dsql.join(branches, dsql` OR `)})`;

@@ -103,6 +103,21 @@ describe("mysqlDialect", () => {
         expect(postgresDialect.indexKeyPrefix).toBeUndefined();
     });
 
+    it("bounds a `.unique()` character column so InnoDB indexes it whole", () => {
+        expect.assertions(4);
+
+        // A prefixed UNIQUE index constrains the PREFIX, not the value: two
+        // distinct 200-character emails agreeing on their first 191 characters
+        // raised ER_DUP_ENTRY and surfaced as "unique constraint violation".
+        // VARCHAR(768) is 3072 bytes under utf8mb4 — exactly InnoDB's
+        // single-column key limit — so the index covers the whole value.
+        expect(mysqlDialect.columnType("string", { unique: true })).toBe("VARCHAR(768) COLLATE utf8mb4_0900_bin");
+        expect(mysqlDialect.columnType("bytes", { unique: true })).toBe("VARBINARY(768)");
+        // Already indexable whole — unchanged.
+        expect(mysqlDialect.columnType("number", { unique: true })).toBe("DOUBLE");
+        expect(mysqlDialect.columnType("bigint", { unique: true })).toBe("VARCHAR(64) COLLATE utf8mb4_0900_bin");
+    });
+
     it("keeps a composite [string, string] index within InnoDB's 3072-byte key limit", () => {
         expect.assertions(1);
 

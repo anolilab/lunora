@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { appendAuthAuditEntry, ensureAuthAuditTable, readAuthAuditLog } from "../src/audit";
 import { buildAuditEntry } from "../src/audit-hooks";
@@ -28,6 +28,7 @@ describe("auth audit trail", () => {
 
     afterEach(() => {
         database.close();
+        vi.unstubAllGlobals();
     });
 
     describe("auth audit store — record & query", () => {
@@ -400,6 +401,10 @@ describe("auth audit trail", () => {
         it("extracts actor, IP and User-Agent from the request + fresh session", () => {
             expect.assertions(4);
 
+            // cf-connecting-ip is only trusted on Cloudflare — see the IP
+            // resolution block below.
+            vi.stubGlobal("navigator", { userAgent: "Cloudflare-Workers" });
+
             const entry = buildAuditEntry(
                 {
                     context: { newSession: { user: { email: "ada@example.com", id: "u1" } } },
@@ -450,6 +455,14 @@ describe("auth audit trail", () => {
     // Plan 328: cf-connecting-ip wins when present; x-forwarded-for is only
     // trusted opt-in, and x-real-ip is never recorded, in either mode.
     describe("buildAuditEntry — client IP resolution (plan 328)", () => {
+        // `cf-connecting-ip` is a header the client cannot write only ON
+        // Cloudflare, where the edge overwrites it — workerd stamps this
+        // `navigator.userAgent`, Node does not. Every case that expects the
+        // header to be trusted must therefore say it is on Cloudflare.
+        beforeEach(() => {
+            vi.stubGlobal("navigator", { userAgent: "Cloudflare-Workers" });
+        });
+
         it("records cf-connecting-ip and ignores x-forwarded-for even when both are present and differ", () => {
             expect.assertions(1);
 
@@ -459,6 +472,40 @@ describe("auth audit trail", () => {
             });
 
             expect(entry?.ip).toBe("203.0.113.7");
+        });
+
+        it("omits the IP off Cloudflare, where cf-connecting-ip is client-written", () => {
+            expect.assertions(1);
+
+            vi.stubGlobal("navigator", { userAgent: "Node.js/24" });
+
+            // Nothing overwrites the header here, so it is whatever the caller
+            // typed — an attacker-chosen `ip` on a sign-in row is worse than a
+            // missing one, and the option's docblock promises omission.
+            const entry = buildAuditEntry({
+                headers: new Headers({ "cf-connecting-ip": "203.0.113.7" }),
+                path: "/api/auth/sign-in/email",
+            });
+
+            expect(entry?.ip).toBeUndefined();
+        });
+
+        it("prefers the declared proxy chain over cf-connecting-ip off Cloudflare", () => {
+            expect.assertions(1);
+
+            vi.stubGlobal("navigator", { userAgent: "Node.js/24" });
+
+            // Same ordering `create-auth.ts` applies: off Cloudflare the only
+            // header worth reading is the one a declared proxy rewrote.
+            const entry = buildAuditEntry(
+                {
+                    headers: new Headers({ "cf-connecting-ip": "203.0.113.7", "x-forwarded-for": "198.51.100.9" }),
+                    path: "/api/auth/sign-in/email",
+                },
+                { trustProxyHeaders: true },
+            );
+
+            expect(entry?.ip).toBe("198.51.100.9");
         });
 
         it("omits the IP when cf-connecting-ip is absent and proxy trust is off (default) — the regression test", () => {

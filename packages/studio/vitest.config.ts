@@ -14,6 +14,7 @@ import { getVitestConfig } from "../../tools/get-vitest-config";
 // they touch Storage APIs, so they stay in `component`).
 const unitTestFiles = [
     "__tests__/features/advisors/derive-insights.test.ts",
+    "__tests__/features/auth/invitation-status.test.ts",
     "__tests__/features/advisors/derive-runtime-advisories.test.ts",
     "__tests__/features/api/openapi/json-highlight.test.ts",
     "__tests__/features/containers/fold-container-instances.test.ts",

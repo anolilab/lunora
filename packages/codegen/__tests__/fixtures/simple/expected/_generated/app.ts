@@ -182,6 +182,10 @@ class AppBuilder<Env extends object> {
                               // poll's changed-tables fast path is unreachable.
                               cdc: request?.cdc ?? false,
                               exec: buildExec(database, request?.bookmark, request?.onBookmark),
+                              // The binding outlives this per-request writer, so the
+                              // provisioning sweep runs once per isolate rather than
+                              // once per request. See `SqlCtxDbOptions.provisionScope`.
+                              provisionScope: database,
                               schema: schema as unknown as D1CtxDbOptions["schema"],
                           });
                       },

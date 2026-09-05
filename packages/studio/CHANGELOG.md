@@ -1,3 +1,16 @@
+## @lunora/studio [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.153...@lunora/studio@1.0.0-alpha.154) (2026-09-05)
+
+### Features
+
+* **auth:** put sign-up invitations on the admin plane and in the studio ([#598](https://github.com/anolilab/lunora/issues/598)) ([4e5a38c](https://github.com/anolilab/lunora/commit/4e5a38cb48e5122c682c96dc1bc1c889d1604603)), closes [#602](https://github.com/anolilab/lunora/issues/602)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.78
+* **@lunora/react:** upgraded to 1.0.0-alpha.83
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.93
+
 ## @lunora/studio [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.152...@lunora/studio@1.0.0-alpha.153) (2026-09-04)
 
 

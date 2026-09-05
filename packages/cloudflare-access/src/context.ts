@@ -74,7 +74,7 @@ const facadeFor = (identity: Record<string, unknown>, userId: string | undefined
     const claims = identity["access"] as AccessClaims;
     // Promoted fields may be overridden at the envelope top by a custom `mapClaims`;
     // prefer those, falling back to the verified claim set. `readIdentityGroups`
-    // (shared with `accessRoles`) applies the same promoted-then-nested fallback
+    // (shared with the resolver's role mapping) applies the same promoted-then-nested fallback
     // and string filtering; `?? []` keeps the facade's non-nullable `groups`.
     const groups = readIdentityGroups(identity) ?? [];
 
@@ -114,7 +114,7 @@ const accessFacade = (identity: Record<string, unknown> | null | undefined, user
  * fail closed.
  *
  * It does not gate the request; pair it with `rls(...)` (or
- * `accessRoles(...)` → `rls(...)`) when you need enforcement. It only surfaces
+ * `rls(...)`) when you need enforcement. It only surfaces
  * the identity for branching inside a handler.
  *
  * ```ts

@@ -181,6 +181,55 @@ describe("createWorker — opt-in public REST surface", () => {
         expect(allowed.status).toBe(200);
     });
 
+    it("createRestRateLimit answers a deny-list hit with 403 and no Retry-After", async () => {
+        expect.assertions(3);
+
+        const { namespace } = echoShard();
+        const limiter = {
+            limit: vi.fn<() => Promise<{ ok: boolean; reason?: string; retryAfter: number }>>(async () => {
+                // The shape `@lunora/ratelimit` returns for a deny-list hit: it
+                // never clears, so there is no honest Retry-After to send —
+                // `Math.ceil(Infinity / 1000)` renders the header "Infinity".
+                return { ok: false, reason: "deny", retryAfter: Number.POSITIVE_INFINITY };
+            }),
+        };
+        const worker = createWorker({
+            functions,
+            restRateLimit: createRestRateLimit(limiter, { key: () => "user-1", name: "rest" }),
+            shardDO: namespace,
+        });
+
+        const response = await worker.fetch(new Request("https://app.example/_lunora/rest/messages/list"), {}, fakeContext);
+
+        expect(response.status).toBe(403);
+        expect(response.headers.get("retry-after")).toBeNull();
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "FORBIDDEN" } });
+    });
+
+    it("createRestRateLimit keys IP-less callers to their own shared bucket", async () => {
+        expect.assertions(2);
+
+        const { namespace } = echoShard();
+        const limiter = {
+            limit: vi.fn<() => Promise<{ ok: boolean; retryAfter: number }>>(async () => {
+                return { ok: true, retryAfter: 0 };
+            }),
+        };
+        const worker = createWorker({ functions, restRateLimit: createRestRateLimit(limiter, { name: "rest" }), shardDO: namespace });
+
+        // No `cf-connecting-ip`: charging the limit with no key at all pools
+        // these callers into the limit's UNKEYED bucket — the same one a
+        // deliberately-global charge of "rest" uses — so one anonymous caller
+        // drains the app-wide limit. They get a named bucket of their own.
+        await worker.fetch(new Request("https://app.example/_lunora/rest/messages/list"), {}, fakeContext);
+
+        expect(limiter.limit).toHaveBeenCalledWith("rest", { key: "no-trusted-ip" });
+
+        await worker.fetch(new Request("https://app.example/_lunora/rest/messages/list", { headers: { "cf-connecting-ip": "203.0.113.7" } }), {}, fakeContext);
+
+        expect(limiter.limit).toHaveBeenCalledWith("rest", { key: "203.0.113.7" });
+    });
+
     it("restSurfaceFromRegistry lists exactly the exposed, non-stream procedures", () => {
         expect.assertions(1);
 

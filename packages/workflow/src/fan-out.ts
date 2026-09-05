@@ -55,50 +55,52 @@ const SIGNAL_STEP_PREFIX = "lunora:signal:";
 /** Durable-step name prefix for a completed branch's group-saga compensation spawn. */
 const COMPENSATE_STEP_PREFIX = "lunora:compensate:";
 
+/** `-<16 hex>` — the width the fold below spends on its disambiguating digest. */
+const DIGEST_WIDTH = 17;
+
 /**
- * The child instance id a completed branch's `compensateWith` rollback is spawned
- * under.
+ * The instance id this package hands to `create`: `id` with `suffix` appended,
+ * folded back under the engine's ceiling when the two together overflow it.
  *
- * The suffix is deliberately `[A-Za-z0-9_-]` only. Cloudflare's engine validates
- * an instance id on `create` — at most 100 characters matching
- * `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`, in which `:` is NOT allowed — so a suffix
- * outside that class turns every rollback into a permanent create rejection. This
- * shipped once as `<childId>:compensate` and made the whole group-saga feature
- * inert; `__tests__/fan-out.test.ts` now applies the engine's own check to every
- * id the package mints.
+ * **Every id minted here routes through this**, because the engine's create-time
+ * check is `id.length > 100` FIRST and only then the character pattern. Both halves
+ * of the id are caller-controlled right up to that ceiling — an explicit
+ * `branch(…, { id })` / `ctx.spawn(…, { id })` is taken verbatim by the run
+ * context's allocator, and its derived `<parentId>-c<n>` form appends to a parent id
+ * the host issued at whatever length it likes. So a plain `<parentId>-c<n>` under a
+ * 98-character parent is already 101, and `+ "-compensate"` puts a rollback over the
+ * line at 90. Every one of those is a hard `create` rejection, and neither surfaces
+ * as one. For a CHILD, the spawn `Promise.all` sits outside {@link createParallel}'s
+ * try, so the rejection is not a `BranchJoinFailure` and the group-saga rollback is
+ * skipped entirely. For a ROLLBACK, {@link compensateCompleted} logs it and moves
+ * on, and the completed branch is never rolled back — on a saga that took payment,
+ * that unrun rollback is the refund.
  *
- * Only the SUFFIX is ours to constrain. The parent id these are derived from
- * belongs to the host: `@lunora/platform-node` runs this same orchestrator on
- * `@visulima/workflow`, whose `generateRunId` mints `<definitionId>:<uuid>` and
- * accepts no override. Validating a derived id against Cloudflare's grammar here
- * would refuse ids the running host had just issued.
+ * The fold keeps a digest of the WHOLE input (siblings of one over-long parent stay
+ * distinct rather than truncating to the same head) and keeps `suffix` intact so it
+ * stays readable in a dashboard. Deterministic, so a parent replay re-attaches to
+ * the same instance instead of spawning a second one.
  *
- * The LENGTH half of that check is ours to keep too, and it is the half the engine
- * tests FIRST (`id.length > 100` short-circuits before the pattern). The parent id
- * is not ours to shorten, but the derived one is: a branch id may legitimately run
- * right up to the engine's own 100-character ceiling — an explicit
- * `branch(…, { id })`, or `<parentId>-c<n>` under a long host-issued parent — and
- * `+ "-compensate"` then puts the ROLLBACK over it. That create is rejected,
- * {@link compensateCompleted} logs it and moves on, and the completed branch is
- * never rolled back; on a saga that took payment, the unrun rollback is the refund.
- * So an over-long id is folded back under the ceiling, keeping a hash of the WHOLE
- * child id (siblings stay distinct) and the `-compensate` suffix (it stays readable
- * in a dashboard). Deterministic, so a parent replay re-attaches to the same
- * rollback instance.
+ * The CHARACTER class is deliberately NOT enforced. Only a suffix of ours is ours to
+ * constrain — hence `-compensate` and not the `<childId>:compensate` that shipped
+ * once and made the whole group-saga feature inert, since `:` is outside
+ * `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`. The ids themselves belong to the host:
+ * `@lunora/platform-node` runs this same orchestrator on `@visulima/workflow`, whose
+ * `generateRunId` mints `<definitionId>:<uuid>` and accepts no override, so
+ * validating against Cloudflare's grammar here would refuse ids the running host had
+ * just issued. `__tests__/fan-out.test.ts` applies the engine's own check to every id
+ * this package mints.
  *
  * Step names are a different, far laxer validator (`isValidStepName`: only control
  * characters and >256 characters are rejected), so the `lunora:*` step prefixes
  * above are fine as they are.
  */
-const compensationInstanceId = (childId: string): string => {
-    const id = `${childId}-compensate`;
-
-    if (id.length <= MAX_INSTANCE_ID_LENGTH) {
-        return id;
+const boundInstanceId = (id: string, suffix = ""): string => {
+    if (id.length + suffix.length <= MAX_INSTANCE_ID_LENGTH) {
+        return `${id}${suffix}`;
     }
 
-    // `-<16 hex>-compensate` is 28 characters, so the head keeps the first 72.
-    return `${childId.slice(0, MAX_INSTANCE_ID_LENGTH - 28)}-${fnv1a64Hex(childId)}-compensate`;
+    return `${id.slice(0, MAX_INSTANCE_ID_LENGTH - suffix.length - DIGEST_WIDTH)}-${fnv1a64Hex(id)}${suffix}`;
 };
 
 /**
@@ -137,7 +139,7 @@ interface FanOutDeps {
     instanceId: string;
     /** Optional structured logger — used to surface best-effort failures (e.g. a stranded group-saga compensation) without aborting the flow. */
     log?: WorkflowLogger;
-    /** Allocate the next deterministic child instance id (replay-stable; honors an explicit id). */
+    /** Allocate the next deterministic child instance id (replay-stable; honors an explicit id). Free to return any length — every result is folded through {@link boundInstanceId} before it reaches `create`. */
     nextChildId: (explicit?: string) => string;
     /** The running workflow's own `WORKFLOW_*` binding name — passed to children so they can signal back. */
     parentBinding: string;
@@ -406,7 +408,7 @@ const compensateCompleted = async (
 
             // eslint-disable-next-line no-await-in-loop -- reverse-order group-saga compensation, one durable spawn per completed branch
             await deps.step.do(`${COMPENSATE_STEP_PREFIX}${done.plan.childId}`, async (): Promise<string> => {
-                const compensateId = compensationInstanceId(done.plan.childId);
+                const compensateId = boundInstanceId(done.plan.childId, "-compensate");
                 const compensationParams: BranchCompensationParams = {
                     branch: done.plan.item.workflow,
                     error,
@@ -467,7 +469,7 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
         // order, BEFORE any await — so a parent replay reproduces the exact same
         // ids and re-attaches to the existing children rather than spawning new ones.
         const planned: PlannedBranch[] = branches.map((item, index) => {
-            const childId = deps.nextChildId(item.id);
+            const childId = boundInstanceId(deps.nextChildId(item.id));
 
             return { childId, eventType: `${BRANCH_EVENT_PREFIX}${childId}`, index, item };
         });
@@ -608,7 +610,7 @@ const createSpawn =
             throw new LunoraError("BAD_REQUEST", `@lunora/workflow: params ${BRANCH_MARKER_REJECTION}`);
         }
 
-        const childId = deps.nextChildId(options?.id);
+        const childId = boundInstanceId(deps.nextChildId(options?.id));
 
         await deps.step.do(`${SPAWN_STEP_PREFIX}${childId}`, async (): Promise<string> => {
             const binding = deps.resolveBinding(workflow);

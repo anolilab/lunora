@@ -43,8 +43,31 @@ const WIRE_PREFIX = WIRE_TAG;
 const decodeJsonColumn = (raw: string, parse: (text: string) => unknown): unknown =>
     raw.startsWith(WIRE_PREFIX) ? decodeWire(parse(raw.slice(WIRE_PREFIX.length))) : parse(raw);
 
+/**
+ * Column kinds whose storage type is TEXT on every engine (see
+ * `sqlAffinityForKind` / the Hyperdrive dialects) but whose VALUE can be any JS
+ * scalar, because {@link sqliteEncode} keys off the runtime type.
+ */
+const UNTYPED_KINDS = new Set(["any", "from", "union"]);
+
 /** Map a JS value onto its SQLite storage form — SQLite has no boolean, so true/false → 1/0. */
-export const sqliteEncode = (value: unknown): unknown => {
+export const sqliteEncode = (value: unknown, kind?: string): unknown => {
+    // A number or boolean bound to one of the untyped kinds' TEXT column is
+    // COERCED by the engine — `42` lands as the text `42.0`, `true` (encoded 1)
+    // as `1.0` — and the decode has no type to reverse it with, so the caller
+    // read back a string. Store those two in the marked, self-describing form
+    // the composites already use; `sqliteDecode` reverses it by the marker
+    // alone, so no kind is needed on the way out.
+    //
+    // Strings, bigints and composites keep the storage form they already had:
+    // the WHERE path binds through this same function WITHOUT a kind, so
+    // changing them would stop every existing equality filter from matching.
+    // Equality on an untyped numeric column does not match today either (the
+    // stored `42.0` never equalled a bound `42`), so nothing regresses.
+    if (kind !== undefined && (typeof value === "number" || typeof value === "boolean") && UNTYPED_KINDS.has(kind)) {
+        return WIRE_PREFIX + JSON.stringify(value);
+    }
+
     if (typeof value === "boolean") {
         return value ? 1 : 0;
     }
@@ -152,8 +175,12 @@ export const effectiveColumnKind = (validator: ValidatorLike): string | undefine
  *   belongs here because {@link sqliteEncode} keys off the runtime JS type and
  *   stores the `{ lat, lng }` object as JSON in a TEXT column; without the case
  *   it fell through to `default:` and every client read back the raw JSON text.
- * - `union`/`any`/`from`: parsed back only when the stored string is a JSON
- *   non-scalar (a scalar member round-trips through SQLite's native column type).
+ * - `union`/`any`/`from`: parsed back when the stored string is a JSON
+ *   non-scalar, or when it carries the {@link WIRE_PREFIX} marker.
+ *   A `number` or `boolean` does NOT round-trip through the column's native
+ *   type — all three kinds store as TEXT on every engine, which coerces a bound
+ *   `42` to the text `42.0` — so {@link sqliteEncode} writes those two in the
+ *   marked form and this branch reverses them by the marker alone.
  *   `from` belongs to THIS group, not to `object`/`array`/`record`: an external
  *   Standard Schema can describe a string just as easily as an object, and
  *   {@link sqliteEncode} keys off the runtime JS type — so a `v.from(z.string())`
