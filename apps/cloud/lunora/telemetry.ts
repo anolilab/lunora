@@ -80,6 +80,7 @@ const COUNT_TARGETS = new Set(["incident", "issue"]);
 
 /** Metric-window rule targets the ingest evaluates via `fireMetricRules`. */
 const METRIC_TARGETS = new Set<MetricTarget>(["error_rate", "latency_p95", "llm_cost"]);
+
 /** Recent spans scanned when a metric rule needs its window (bounds the read). */
 const METRIC_SCAN_LIMIT = 2000;
 
