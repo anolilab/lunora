@@ -55,11 +55,13 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
             // Wire-encoded for the same reason `ctx.run`'s dispatch runner encodes
             // its args: these are stored verbatim by the SchedulerDO and POSTed
             // verbatim to `/_lunora/scheduler/dispatch` on fire, where the shard
-            // `decodeWire`s `payload.args`. Un-encoded, `callDO`'s `JSON.stringify`
-            // threw outright on a `bigint` and silently flattened a `Uint8Array` to
-            // `{"0":1,…}` / a `NaN` to `null`. `list`/`get` decode it back below, so
-            // the read surface still answers what was scheduled. Identity for
-            // pure-JSON args, so an already-stored record is unaffected.
+            // decodes on the way out — the shard for a function target, and
+            // `handleSchedulerDispatch`'s workflow branch before `create({ params })`
+            // for a workflow one. Both targets share this envelope, so both decodes
+            // have to exist; see `create-dispatch-runner.ts` for why the hop needs
+            // bracketing at all. `list`/`get` decode it back below, so the read
+            // surface still answers what was scheduled. Identity for pure-JSON args,
+            // so an already-stored record is unaffected.
             args: encodeWire(args),
             // Pre-minted id, when the caller decided it before the call could be
             // made (see `RunOptions.id`). Absent for an ordinary schedule, and the

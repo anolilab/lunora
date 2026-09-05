@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { BRANCH_MARKER_REJECTION } from "../../../shared/branch-marker";
+import { encodeWire } from "../../../shared/wire-codec";
 import type { ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
@@ -137,6 +138,35 @@ describe("createWorker — scheduled workflow/agent dispatch", () => {
         expect(created).toStrictEqual([{ id: "job-3", params: { prompt: "digest" } }]);
         // This job carries no `pool`, so there is no slot to release.
         expect(sched.calls.some((call) => call.path === "/complete")).toBe(false);
+    });
+
+    it("decodes wire-encoded args before handing them to the workflow binding", async () => {
+        expect.assertions(2);
+
+        // `ctx.scheduler.runAt` stores `encodeWire(args)`. A FUNCTION target's args
+        // are decoded by the shard; a workflow target never reaches the shard, so
+        // without a decode here `event.payload` carried the raw tuples — a silent
+        // corruption where the un-encoded version at least threw.
+        const created: { params?: Record<string, unknown> }[] = [];
+        const env = {
+            AGENT_SUPPORT: {
+                create: async (options: { params?: Record<string, unknown> }) => {
+                    created.push(options);
+
+                    return { id: "wf-2" };
+                },
+            },
+        };
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: schedulerSpy().namespace, shardDO: okShard() });
+
+        const response = await dispatchWithEnv(
+            worker,
+            { args: encodeWire({ at: new Date(0), total: 9_007_199_254_740_993n }), id: "job-wire", workflow: "AGENT_SUPPORT" },
+            env,
+        );
+
+        expect(response.status).toBe(200);
+        expect(created[0]?.params).toStrictEqual({ at: new Date(0), total: 9_007_199_254_740_993n });
     });
 
     it("passes the scheduler record id as the workflow instance id so a re-fire is idempotent", async () => {

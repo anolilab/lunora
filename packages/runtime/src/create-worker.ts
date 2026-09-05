@@ -3186,7 +3186,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // hold a slot, and returning before the release below wedged the pool for
         // good at the default `maxConcurrency: 1`.
         if (typeof candidate.workflow === "string" && candidate.workflow.length > 0) {
-            await startWorkflowInstance(candidate.workflow, args, env, "scheduled workflow", recordId);
+            // `ctx.scheduler.runAt` stores `encodeWire(args)`, and the two dispatch
+            // targets decode in different places: a function target's args are
+            // decoded by the shard (`ShardDO`'s `decodeWire(payload.args)`), but a
+            // workflow target never reaches the shard — it goes straight to
+            // `create({ params })`. Decoding here is what keeps the two symmetric;
+            // without it a scheduled workflow's `event.payload` carried the raw
+            // `["$lunora.wire$", …]` tuples.
+            await startWorkflowInstance(candidate.workflow, decodeWire(args) as Record<string, unknown>, env, "scheduled workflow", recordId);
 
             await releasePoolSlot(candidate);
 
