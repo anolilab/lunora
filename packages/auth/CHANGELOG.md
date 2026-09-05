@@ -1,3 +1,9 @@
+## @lunora/auth [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.115...@lunora/auth@1.0.0-alpha.116) (2026-09-04)
+
+### Features
+
+* **auth:** add invite-only sign-up ([#593](https://github.com/anolilab/lunora/issues/593)) ([88699b7](https://github.com/anolilab/lunora/commit/88699b7294756152e06721147483d5fa82912e5d))
+
 ## @lunora/auth [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.114...@lunora/auth@1.0.0-alpha.115) (2026-09-04)
 
 
