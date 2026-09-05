@@ -197,7 +197,7 @@ export const ERROR_CATALOG = {
     R2_SQL_ERROR: { status: 502, title: "R2 SQL API error" },
     WORKFLOWS_REST_ERROR: { status: 502, title: "Cloudflare Workflows REST API error" },
 
-    /**
+    /*
      * `@lunora/payment` codes, minted through `LunoraPaymentError` — a
      * `LunoraError` subclass. They shipped uncatalogued because the
      * registration gate's scanner only matched the literal `new LunoraError(`,

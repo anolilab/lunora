@@ -76,16 +76,46 @@ const NONEXISTENT_API = [
         // `{ data, error, isError, mutate, pending, reset, withOptimisticUpdate }`.
         // A destructuring `const { mutate: send } = …` is the correct form and
         // does not match (`{` is not `\w`).
-        /\bconst\s+\w+\s*=\s*useMutation\(/,
+        /\b(?:const|let|var)\s+\w+\s*=\s*useMutation\(/,
         "`useMutation(fn)` returns `{ mutate, pending, … }` and is not itself callable — write `const { mutate: send } = useMutation(fn)`",
     ],
     [
         // Present on the untyped runtime writer, absent from the generated
         // typed `ctx.db`, so it may run but never type-checks in a user project.
-        /\bctx\.db\.findMany\(\s*["']/,
+        /\bctx\.db\.findMany\(\s*["'`]/,
         '`ctx.db.findMany("table")` is not on the generated `ctx.db` — write `ctx.db.<table>.findMany()` or `ctx.db.query("table").collect()`',
     ],
 ];
+
+// The deny-table's own gate. Every entry here was added because a shipped doc
+// matched it — and once that doc is fixed the pattern matches nothing, forever.
+// From then on a narrowed or broken regex is indistinguishable from a clean
+// repo: the run stays green either way, which is the same failure mode the
+// error-catalog scanner grew a self-check for. These fixtures keep each entry
+// falsifiable independently of what the docs currently say.
+const SELF_CHECK = [
+    // [pattern index, must match, must NOT match]
+    [0, ["const send = useMutation(api.x);", "let send = useMutation(api.x);", "var send = useMutation(api.x);"], ["const { mutate: send } = useMutation(api.x);", "const { mutate } = useMutation(api.x);"]],
+    [1, ['ctx.db.findMany("posts")', "ctx.db.findMany('posts')", "ctx.db.findMany(`posts`)"], ["ctx.db.posts.findMany()", 'ctx.db.query("posts").collect()']],
+];
+
+for (const [index, shouldMatch, shouldNotMatch] of SELF_CHECK) {
+    const [pattern] = NONEXISTENT_API[index];
+
+    for (const sample of shouldMatch) {
+        if (!pattern.test(sample)) {
+            console.error(`✗ self-check: NONEXISTENT_API[${index}] (${pattern}) no longer matches ${JSON.stringify(sample)} — the pattern was narrowed and now catches nothing.`);
+            process.exit(1);
+        }
+    }
+
+    for (const sample of shouldNotMatch) {
+        if (pattern.test(sample)) {
+            console.error(`✗ self-check: NONEXISTENT_API[${index}] (${pattern}) matches the CORRECT form ${JSON.stringify(sample)} — it would reject valid docs.`);
+            process.exit(1);
+        }
+    }
+}
 
 // Umbrella `lunorash/<sub>` re-exports the base packages.
 const UMBRELLA = new Set(["client", "do", "runtime", "server", "values"]);
