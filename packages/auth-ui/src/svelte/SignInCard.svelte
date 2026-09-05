@@ -1,5 +1,6 @@
 <script lang="ts">
     import { onMount } from "svelte";
+    import { viewHref } from "../core/config";
     import { LAST_METHOD_EMAIL, readLastLoginMethod } from "../core/last-login-method";
     import { createSignInController } from "../core/sign-in";
     import { signInWithSocial } from "../core/social";
@@ -15,14 +16,18 @@
     import SubmitButton from "./SubmitButton.svelte";
 
     let {
-        forgotPasswordHref = "/forgot-password",
-        signUpHref = "/sign-up",
+        forgotPasswordHref,
+        signUpHref,
     }: {
+        /** Defaults to the configured forgot-password route; see `viewPaths.base`. */
         forgotPasswordHref?: string;
+        /** Defaults to the configured sign-up route; see `viewPaths.base`. */
         signUpHref?: string;
     } = $props();
 
     const context = useAuthUI();
+    const forgotPasswordLink = $derived(forgotPasswordHref ?? viewHref(context, "forgotPassword"));
+    const signUpLink = $derived(signUpHref ?? viewHref(context, "signUp"));
     const t = context.localization;
     const social = context.social;
     const { actions, state: form } = controllerStore(createSignInController);
@@ -68,7 +73,7 @@
             <FormBanner error={$form.formError} />
             <FormField {actions} autoComplete="email" field="email" fields={$form.fields} label={t.emailLabel} type="email" />
             <FormField {actions} autoComplete="current-password" field="password" fields={$form.fields} label={t.passwordLabel} type="password" />
-            <AuthLink href={forgotPasswordHref}>{t.forgotPasswordLink}</AuthLink>
+            <AuthLink href={forgotPasswordLink}>{t.forgotPasswordLink}</AuthLink>
             <SubmitButton pending={$form.status === "submitting"}>
                 {t.signIn}
                 <!-- better-auth records a password sign-in as "email", so without this the badge is invisible for the most common route there is. -->
@@ -80,7 +85,7 @@
     {/if}
     {#snippet footer()}
         {#if context.signUp}
-            <AuthLink href={signUpHref}>{t.noAccount}</AuthLink>
+            <AuthLink href={signUpLink}>{t.noAccount}</AuthLink>
         {/if}
     {/snippet}
 </AuthCard>

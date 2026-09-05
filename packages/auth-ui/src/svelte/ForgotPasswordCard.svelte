@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { viewHref } from "../core/config";
     import { createForgotPasswordController } from "../core/forgot-password";
     import AuthCard from "./AuthCard.svelte";
     import AuthLink from "./AuthLink.svelte";
@@ -10,13 +11,17 @@
 
     let {
         resetPath,
-        signInHref = "/sign-in",
+        signInHref,
     }: {
+        /** Defaults to the configured reset-password route; see `viewPaths.base`. */
         resetPath?: string;
+        /** Defaults to the configured sign-in route; see `viewPaths.base`. */
         signInHref?: string;
     } = $props();
 
-    const t = useAuthUI().localization;
+    const context = useAuthUI();
+    const t = context.localization;
+    const signInLink = $derived(signInHref ?? viewHref(context, "signIn"));
     // The controller is created once per mount; `resetPath` is read at init.
     const { actions, state: form } = controllerStore((context) => createForgotPasswordController(context, { resetPath }));
 </script>
@@ -35,6 +40,6 @@
         <SubmitButton pending={$form.status === "submitting"}>{t.forgotPassword}</SubmitButton>
     </form>
     {#snippet footer()}
-        <AuthLink href={signInHref}>{t.backToSignIn}</AuthLink>
+        <AuthLink href={signInLink}>{t.backToSignIn}</AuthLink>
     {/snippet}
 </AuthCard>

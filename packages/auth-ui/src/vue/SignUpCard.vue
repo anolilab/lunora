@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
+import { viewHref } from "../core/config";
 import { createSignUpController } from "../core/sign-up";
 import { signInWithSocial } from "../core/social";
 import AuthCard from "./AuthCard.vue";
@@ -14,14 +15,10 @@ import SocialButtons from "./SocialButtons.vue";
 import SubmitButton from "./SubmitButton.vue";
 import { useController } from "./use-controller";
 
-withDefaults(
-    defineProps<{
-        signInHref?: string;
-    }>(),
-    {
-        signInHref: "/sign-in",
-    },
-);
+const props = defineProps<{
+    /** Defaults to the configured sign-in route; see `viewPaths.base`. */
+    signInHref?: string;
+}>();
 
 // The context *ref*: the template unwraps it on every read, so the discovered
 // provider list lands without a remount. See `provider.ts`.
@@ -33,6 +30,7 @@ const { actions, state } = useController(createSignUpController);
 // Computed, not read at setup: `setup()` never re-runs, so a gate resolved
 // here would stay frozen on the pre-discovery answer.
 const signUp = computed(() => context.value.signUp);
+const signInLink = computed(() => props.signInHref ?? viewHref(context.value, "signIn"));
 
 const onSocial = (provider: string): void => {
     void signInWithSocial(context.value, provider);
@@ -58,7 +56,7 @@ const onSocial = (provider: string): void => {
             <SubmitButton :pending="state.status === 'submitting'">{{ t.signUp }}</SubmitButton>
         </form>
         <template #footer>
-            <AuthLink :href="signInHref">{{ t.haveAccount }}</AuthLink>
+            <AuthLink :href="signInLink">{{ t.haveAccount }}</AuthLink>
         </template>
     </AuthCard>
 </template>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { viewHref } from "../core/config";
 import { LAST_METHOD_EMAIL, readLastLoginMethod } from "../core/last-login-method";
 import { createSignInController } from "../core/sign-in";
 import { signInWithSocial } from "../core/social";
@@ -14,18 +15,16 @@ import SocialButtons from "./SocialButtons.vue";
 import SubmitButton from "./SubmitButton.vue";
 import { useController } from "./use-controller";
 
-withDefaults(
-    defineProps<{
-        forgotPasswordHref?: string;
-        signUpHref?: string;
-    }>(),
-    {
-        forgotPasswordHref: "/forgot-password",
-        signUpHref: "/sign-up",
-    },
-);
+const props = defineProps<{
+    /** Defaults to the configured forgot-password route; see `viewPaths.base`. */
+    forgotPasswordHref?: string;
+    /** Defaults to the configured sign-up route; see `viewPaths.base`. */
+    signUpHref?: string;
+}>();
 
 const context = useAuthUIContextRef();
+const forgotPasswordLink = computed(() => props.forgotPasswordHref ?? viewHref(context.value, "forgotPassword"));
+const signUpLink = computed(() => props.signUpHref ?? viewHref(context.value, "signUp"));
 const t = context.value.localization;
 const { actions, state } = useController(createSignInController);
 // Read after mount, not at setup: the server has no cookie, so a render-time
@@ -62,7 +61,7 @@ const onSocial = (provider: string): void => {
             <FormBanner :error="state.formError" />
             <FormField :actions="actions" field="email" :fields="state.fields" :label="t.emailLabel" type="email" autoComplete="email" />
             <FormField :actions="actions" field="password" :fields="state.fields" :label="t.passwordLabel" type="password" autoComplete="current-password" />
-            <AuthLink :href="forgotPasswordHref">{{ t.forgotPasswordLink }}</AuthLink>
+            <AuthLink :href="forgotPasswordLink">{{ t.forgotPasswordLink }}</AuthLink>
             <SubmitButton :pending="state.status === 'submitting'">
                 {{ t.signIn }}
                 <!-- better-auth records a password sign-in as "email", so without this the badge is invisible for the most common route there is. -->
@@ -70,7 +69,7 @@ const onSocial = (provider: string): void => {
             </SubmitButton>
         </form>
         <template v-if="context.signUp" #footer>
-            <AuthLink :href="signUpHref">{{ t.noAccount }}</AuthLink>
+            <AuthLink :href="signUpLink">{{ t.noAccount }}</AuthLink>
         </template>
     </AuthCard>
 </template>
