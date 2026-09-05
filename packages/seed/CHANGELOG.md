@@ -1,3 +1,11 @@
+## @lunora/seed [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/seed@1.0.0-alpha.108...@lunora/seed@1.0.0-alpha.109) (2026-09-05)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.104
+* **@lunora/testing:** upgraded to 1.0.0-alpha.148
+
 ## @lunora/seed [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/seed@1.0.0-alpha.107...@lunora/seed@1.0.0-alpha.108) (2026-09-05)
 
 
