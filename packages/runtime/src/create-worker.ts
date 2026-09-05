@@ -3186,11 +3186,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // hold a slot, and returning before the release below wedged the pool for
         // good at the default `maxConcurrency: 1`.
         if (typeof candidate.workflow === "string" && candidate.workflow.length > 0) {
-            // A workflow target never reaches the shard — it goes straight to
-            // `create({ params })` — so this is where its half of the scheduler's
-            // encode is undone. Without it a scheduled workflow's `event.payload`
-            // carried the raw tagged tuples while a function target's did not.
-            await startWorkflowInstance(candidate.workflow, decodeWire(args) as Record<string, unknown>, env, "scheduled workflow", recordId);
+            // Deliberately NOT decoded here. A function target's args are decoded by
+            // the shard, but a workflow target's become Workflow `params`, which
+            // Cloudflare serialises as JSON into durable storage — so a decoded
+            // `bigint` fails creation outright and a decoded `Date` silently arrives
+            // as a string. The wire form IS JSON-safe, so it travels intact and
+            // `createRunContext` decodes it where the handler reads `params`.
+            await startWorkflowInstance(candidate.workflow, args, env, "scheduled workflow", recordId);
 
             await releasePoolSlot(candidate);
 

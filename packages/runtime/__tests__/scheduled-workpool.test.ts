@@ -140,13 +140,13 @@ describe("createWorker — scheduled workflow/agent dispatch", () => {
         expect(sched.calls.some((call) => call.path === "/complete")).toBe(false);
     });
 
-    it("decodes wire-encoded args before handing them to the workflow binding", async () => {
+    it("hands the workflow binding JSON-safe params, leaving the wire form intact", async () => {
         expect.assertions(2);
 
-        // `ctx.scheduler.runAt` stores `encodeWire(args)`. A FUNCTION target's args
-        // are decoded by the shard; a workflow target never reaches the shard, so
-        // without a decode here `event.payload` carried the raw tuples — a silent
-        // corruption where the un-encoded version at least threw.
+        // Workflow `params` are JSON-serialised into durable storage, so the wire
+        // form has to survive this hop untouched — decoding here would fail
+        // creation on a bigint and flatten a Date to a string. `createRunContext`
+        // decodes it where the handler reads `params`; see the workflow suite.
         const created: { params?: Record<string, unknown> }[] = [];
         const env = {
             AGENT_SUPPORT: {
@@ -166,7 +166,8 @@ describe("createWorker — scheduled workflow/agent dispatch", () => {
         );
 
         expect(response.status).toBe(200);
-        expect(created[0]?.params).toStrictEqual({ at: new Date(0), total: 9_007_199_254_740_993n });
+        // Still the wire form at the boundary — JSON-safe, so `create()` can store it.
+        expect(created[0]?.params).toStrictEqual(encodeWire({ at: new Date(0), total: 9_007_199_254_740_993n }));
     });
 
     it("passes the scheduler record id as the workflow instance id so a re-fire is idempotent", async () => {
