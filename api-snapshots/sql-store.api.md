@@ -29,6 +29,7 @@ interface SqlCtxDbOptions {
     exec: SqlCtxExec;
     idGenerator?: () => string;
     maxRelationKeys?: number;
+    provisionScope?: object;
     scheduler?: SchedulerLike;
     schema: SchemaLike;
 }

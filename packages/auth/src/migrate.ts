@@ -9,24 +9,34 @@ import { isD1Database, withD1IndexIntrospection } from "./d1-index-introspection
  * Reject a `database` better-auth's migrator cannot drive, *before* handing it
  * over. better-auth only migrates through Kysely, and its own guard does not
  * throw — it calls `process.exit(1)`, which in a Workers isolate kills the whole
- * worker (every route, not just `/api/auth/*`) after a single 500. An adapter
- * factory — `lunoraAuthAdapter` / `lunoraD1Adapter` / `lunoraDoAdapter`, or any
- * other better-auth adapter — is exactly that case: it is a function, never a
- * Kysely dialect/database.
+ * worker (every route, not just `/api/auth/*`) after a single 500.
+ *
+ * Two shapes reach that guard, and both are things people actually write. An
+ * **adapter factory** (`lunoraD1Adapter` / `lunoraAuthAdapter` /
+ * `lunoraDoAdapter`, or any other better-auth adapter) is a function, never a
+ * Kysely dialect or database. And **nothing at all** (`database: undefined`) —
+ * which `createKyselyAdapter` answers with `{ kysely: null }` exactly like an
+ * adapter does, verified against better-auth 1.7.1.
+ *
+ * Anything else — a raw D1 binding, a dialect, a `{ db }` / `{ dialect }` pair —
+ * is left for better-auth to resolve, which is the only place that knows the
+ * full list.
  */
 const assertMigratableDatabase = (options: LunoraAuthOptions): void => {
-    if (typeof options.database !== "function") {
+    // Widened to `unknown`: better-auth types `database` as a union whose adapter
+    // arm the linter reads as an error type, so destructuring it as-is trips
+    // `no-unsafe-assignment`. All this guard needs is truthy-and-not-a-function.
+    const { database } = options as { database?: unknown };
+
+    if (database && typeof database !== "function") {
         return;
     }
 
     throw new LunoraError(
-        "INTERNAL",
-        "@lunora/auth: better-auth can only migrate through its Kysely adapter, and this auth instance " +
-            "uses a custom adapter (`lunoraAuthAdapter`/`lunoraD1Adapter`/`lunoraDoAdapter`). " +
-            "Provision the schema instead: declare the auth tables in `lunora/schema.ts` as `.global()` " +
-            "tables (Lunora creates them for you), or apply better-auth's own DDL at deploy time with " +
-            "`compileMigrationsSql` + `wrangler d1 execute`. Passing the raw D1 binding as `database` also " +
-            "works for the migration instance only.",
+        "AUTH_MIGRATOR_UNSUPPORTED",
+        database
+            ? "@lunora/auth: this auth instance's `database` is a custom adapter, which better-auth's migrator cannot drive."
+            : "@lunora/auth: this auth instance has no `database`, so better-auth's migrator has nothing to introspect.",
     );
 };
 
@@ -36,15 +46,9 @@ const assertMigratableDatabase = (options: LunoraAuthOptions): void => {
  * Only the migration path needs this — `getDatabaseIndexes()` runs inside
  * `getMigrations()` — so request-time queries keep the untouched binding. See
  * `d1-index-introspection.ts` for why D1 rejects the upstream query.
- *
- * Both `getMigrations()` callers route through here, so it is also the one place
- * {@link assertMigratableDatabase} has to run.
  */
-const withD1MigrationSupport = (options: LunoraAuthOptions): LunoraAuthOptions => {
-    assertMigratableDatabase(options);
-
-    return isD1Database(options.database) ? { ...options, database: withD1IndexIntrospection(options.database) } : options;
-};
+const withD1MigrationSupport = (options: LunoraAuthOptions): LunoraAuthOptions =>
+    isD1Database(options.database) ? { ...options, database: withD1IndexIntrospection(options.database) } : options;
 
 /**
  * Single-flight cache of in-flight (and completed) migration runs, keyed by the
@@ -78,6 +82,8 @@ const migrating = new WeakMap<object, Promise<void>>();
  */
 export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOptions }): Promise<void> => {
     const { options } = auth;
+
+    assertMigratableDatabase(options);
 
     const inFlight = migrating.get(options);
 
@@ -119,7 +125,11 @@ export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOpt
  * a table the migration never created.
  */
 export const compileMigrationsSql = async (options: LunoraAuthOptions): Promise<string> => {
-    const { compileMigrations } = await getMigrations(withD1MigrationSupport(resolveAuthOptions(options)));
+    const resolved = resolveAuthOptions(options);
+
+    assertMigratableDatabase(resolved);
+
+    const { compileMigrations } = await getMigrations(withD1MigrationSupport(resolved));
 
     return compileMigrations();
 };

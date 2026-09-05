@@ -45,11 +45,15 @@ request and a falsy value otherwise, so you fall through to the Lunora worker fo
 everything else:
 
 ```ts
-import { ensureMigrated, handleAuthRequest } from "@lunora/auth";
+import { createAuth, ensureMigrated, handleAuthRequest } from "@lunora/auth";
 
 export default {
     async fetch(request, env, ctx) {
-        await ensureMigrated(auth);
+        // `ensureMigrated` needs the RAW binding: better-auth migrates only
+        // through its Kysely adapter and throws on `lunoraD1Adapter`. Build a
+        // second, migration-only instance for it — its `$context` is never
+        // resolved, so the dev-runner hang the adapter avoids doesn't apply.
+        await ensureMigrated(createAuth({ ...options, database: env.DB }));
 
         const response = await handleAuthRequest(auth, request);
         if (response) return response;
@@ -58,6 +62,12 @@ export default {
     },
 };
 ```
+
+Guard that call so it runs once per isolate rather than once per request — hold
+the **promise**, not a boolean, and clear it on failure. better-auth's migrator
+emits a bare `CREATE TABLE`, so two concurrent runs against a fresh database
+leave the loser with `table user already exists`. `defineApp().auth(...)` already
+does this for you.
 
 ## Read `ctx.auth` in functions
 

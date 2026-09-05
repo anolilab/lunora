@@ -70,7 +70,10 @@ const auth = createAuth({
 // through to the Lunora worker for everything else:
 export default {
     async fetch(request, env, ctx) {
-        await ensureMigrated(auth); // idempotent schema sync; dev/small deploys
+        // Idempotent schema sync; dev/small deploys. Takes the RAW binding —
+        // better-auth migrates only through its Kysely adapter and throws on
+        // `lunoraD1Adapter`, so the migration instance is a separate one.
+        await ensureMigrated(createAuth({ secret: env.AUTH_SECRET, database: env.DB, emailAndPassword: { enabled: true } }));
 
         const authResponse = await handleAuthRequest(auth, request);
         if (authResponse) return authResponse;

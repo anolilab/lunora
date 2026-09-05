@@ -305,10 +305,28 @@ interface SqlCtxDbOptions {
      * access of every request. On a 50-table schema that is ~1s in `lunora dev`
      * and a real latency floor in production.
      *
-     * Pass something that lives as long as the isolate AND identifies the
-     * database — the D1 binding, or a long-lived exec. Omit it and the memo
-     * stays per ctx-db (the safe default for tests, which pair a fresh database
-     * with a reused schema object).
+     * WHAT TO PASS: something that outlives the request AND names one database
+     * (and one configuration). The D1 binding off `env` and the declaration
+     * object a host builds once both qualify; the result of a per-request
+     * factory does not — it keys the memo on a fresh object every time and
+     * shares nothing (which is silent, and looks exactly like not passing it).
+     *
+     * INVARIANT, unenforced: one scope ⇒ one `schema`, `dialect` and `cdc`. The
+     * memoised run closes over the FIRST writer's, so a later writer sharing a
+     * scope with `cdc: true` behind one with `cdc: false` never gets
+     * `__cdc_log`. Hosts pass app-level constants for all three, which is why
+     * this is a note rather than a composite key.
+     *
+     * Two behaviours change with a shared memo, both benign and both worth
+     * knowing: the DDL runs in the FIRST writer's D1 session, so a later
+     * session's first read is no longer implicitly pinned behind a write of its
+     * own (on a replicated binding that can mean one transient stale read on a
+     * freshly-provisioned database); and a database reset out from under a live
+     * isolate is no longer healed by the next request, since the entry lives as
+     * long as the scope does.
+     *
+     * Omit it and the memo stays per ctx-db — slower, never wrong, and what the
+     * tests want (they pair a fresh database with a reused schema object).
      */
     provisionScope?: object;
 
@@ -1419,23 +1437,15 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     // caller's identity and bookmark. `provisionScope` lifts the memo onto the
     // database it provisions ({@link SqlCtxDbOptions.provisionScope}), which is
     // what makes the sweep once-per-isolate rather than once-per-request.
-    let migratedPromise: Promise<void> | undefined;
-    const { provisionScope } = options;
-
-    const readMemo = (): Promise<void> | undefined => (provisionScope ? provisioningByScope.get(provisionScope) : migratedPromise);
-
-    const writeMemo = (run: Promise<void> | undefined): void => {
-        if (!provisionScope) {
-            migratedPromise = run;
-        } else if (run) {
-            provisioningByScope.set(provisionScope, run);
-        } else {
-            provisioningByScope.delete(provisionScope);
-        }
-    };
+    //
+    // A caller that passes no scope gets a private one. That is not a special
+    // case in disguise: the entry then lives exactly as long as this closure
+    // holds the key, which IS a per-ctx-db memo — same lifetime as the `let` it
+    // replaces, one mechanism instead of two.
+    const provisionScope = options.provisionScope ?? {};
 
     const ensureMigrated = async (): Promise<void> => {
-        const cached = readMemo();
+        const cached = provisioningByScope.get(provisionScope);
 
         if (cached) {
             return cached;
@@ -1458,15 +1468,16 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         })().catch((error: unknown) => {
             // Don't cache a rejection — a transient DDL failure (e.g. a dropped
             // connection) would otherwise poison every later call on this
-            // ctx-db. Clear the cache so the next call retries the idempotent
+            // scope. Clear the cache so the next call retries the idempotent
             // CREATE-IF-NOT-EXISTS migrations.
-            writeMemo(undefined);
+            provisioningByScope.delete(provisionScope);
             throw error;
         });
 
         // Recorded synchronously (the IIFE above has only run to its first
-        // await), so concurrent first-callers single-flight onto this run.
-        writeMemo(run);
+        // await), so concurrent first-callers single-flight onto this run — and
+        // so the `delete` above can never drop a fresher entry than its own.
+        provisioningByScope.set(provisionScope, run);
 
         return run;
     };

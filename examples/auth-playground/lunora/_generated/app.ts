@@ -161,9 +161,10 @@ class AppBuilder<Env extends object> {
         // the same isolate reuses them.
         let worker: LunoraWorker | null = null;
         let auth: LunoraAuth | null = null;
+        let authInit: Promise<void> | null = null;
 
-        const ensureAuth = async (env: Env): Promise<void> => {
-            if (!this.authDeclaration || auth) {
+        const initAuth = async (env: Env): Promise<void> => {
+            if (!this.authDeclaration) {
                 return;
             }
 
@@ -178,12 +179,28 @@ class AppBuilder<Env extends object> {
 
             // Apply the better-auth schema lazily on first request (raw-D1 Kysely
             // migrator). For production run the migrate command ahead of deploy.
+            // The migration instance takes the RAW binding: better-auth migrates
+            // only through Kysely and rejects the adapter the request instance uses.
             await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
-            // Assigned last: a failed provisioning must not leave the isolate
-            // serving auth against a schema-less database for the rest of its life
-            // (the early return above skips everything once this is non-null).
+            // Assigned after the schema exists, never before. Assigning first is
+            // what let a concurrent request see a non-null `auth` and serve
+            // `/api/auth/*` against tables the migrator had not created yet —
+            // `no such table: rateLimit`, from the isolate that was mid-migration.
             auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
         };
+
+        // Single-flighted on the PROMISE, not on `auth`. Every `fetch` awaits this
+        // and the body above is async, so a per-isolate cold start runs it once
+        // rather than once per concurrent request — better-auth's migrator emits a
+        // bare `CREATE TABLE` (no IF NOT EXISTS), so a second concurrent run on a
+        // fresh database fails with `table user already exists` and, because this is
+        // awaited ahead of the router, 500s every route. Evicted on failure so a
+        // transient error retries instead of being replayed forever.
+        const ensureAuth = (env: Env): Promise<void> =>
+            (authInit ??= initAuth(env).catch((error: unknown) => {
+                authInit = null;
+                throw error;
+            }));
 
         const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => auth));
 
