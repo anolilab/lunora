@@ -173,6 +173,7 @@ interface CreateAgentChatOptions {
     api: CreateAgentChatApi;
     cancel?: FunctionReference<"mutation">;
     limit?: number;
+    onError?: SubscriptionErrorCallback;
     send: FunctionReference<"mutation">;
     sendArgs?: Record<string, unknown>;
     stream?: AgentTokenStreamReference;
@@ -186,6 +187,7 @@ interface CreateAgentChatOptions {
 interface CreateAgentChatResult {
     approve: (toolCallId: string, note?: string) => Promise<void>;
     cancel: () => Promise<void>;
+    error: Accessor<Error | undefined>;
     messages: Accessor<ReadonlyArray<AgentChatMessage>>;
     reject: (toolCallId: string, note?: string) => Promise<void>;
     send: (input: string, args?: Record<string, unknown>) => Promise<void>;
@@ -200,6 +202,7 @@ interface CreateAgentChatResult {
 interface CreateAgentOptions {
     api: CreateAgentApi;
     cancel?: FunctionReference<"mutation">;
+    onError?: SubscriptionErrorCallback;
     run: FunctionReference<"mutation">;
     runArgs?: Record<string, unknown>;
     threadKey: MaybeAccessor<string>;
@@ -211,6 +214,7 @@ interface CreateAgentOptions {
 ```ts
 interface CreateAgentResult {
     cancel: () => Promise<void>;
+    error: Accessor<Error | undefined>;
     pending: Accessor<boolean>;
     run: (input: string, args?: Record<string, unknown>) => Promise<void>;
     status: Accessor<AgentThreadStatus | undefined>;
@@ -331,6 +335,7 @@ interface CreatePresenceOptions<H extends HeartbeatReference, L extends ListPres
     heartbeat: H;
     intervalMs?: number;
     listPresent: L;
+    onError?: SubscriptionErrorCallback;
     sessionId?: string;
     shardKey?: string;
 }
@@ -340,6 +345,7 @@ interface CreatePresenceOptions<H extends HeartbeatReference, L extends ListPres
 
 ```ts
 interface CreatePresenceResult<L extends ListPresentReference> {
+    error: () => SubscriptionError | undefined;
     present: () => ReturnOf<L> | undefined;
     sessionId: string;
     setData: (data: Record<string, unknown> | undefined) => void;
@@ -740,6 +746,7 @@ const createStream: <F extends FunctionReference<"stream">>(function_: F, args: 
 
 ```ts
 const createSubscription: <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "skip" | Accessor<ArgsOf<F> | "skip">, options?: {
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }) => CreateSubscriptionResult<ReturnOf<F>>;
 ```

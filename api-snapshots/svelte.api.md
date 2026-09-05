@@ -428,6 +428,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ```ts
 interface PresenceHandle<L extends ListPresentReference> {
+    error: Readable<SubscriptionError | undefined>;
     present: Readable<ReturnOf<L> | undefined>;
     sessionId: string;
     setData: (data: Record<string, unknown> | undefined) => void;
@@ -443,6 +444,7 @@ interface PresenceOptions<H extends HeartbeatReference, L extends ListPresentRef
     heartbeat: H;
     intervalMs?: number;
     listPresent: L;
+    onError?: SubscriptionErrorCallback;
     sessionId?: string;
     shardKey?: string;
 }
