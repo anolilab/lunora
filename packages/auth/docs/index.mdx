@@ -47,13 +47,19 @@ everything else:
 ```ts
 import { createAuth, ensureMigrated, handleAuthRequest } from "@lunora/auth";
 
+// `ensureMigrated` needs the RAW binding: better-auth migrates only through its
+// Kysely adapter and throws on `lunoraD1Adapter`. This second, migration-only
+// instance never resolves its `$context`, so the dev-runner hang the adapter
+// exists to avoid doesn't apply to it.
+//
+// Built ONCE and retained. `ensureMigrated` single-flights on the options object
+// it is handed, so a `createAuth({...})` built inside `fetch` is a fresh key on
+// every request and the migration re-runs on each one.
+const migrationAuth = createAuth({ ...options, database: env.DB });
+
 export default {
     async fetch(request, env, ctx) {
-        // `ensureMigrated` needs the RAW binding: better-auth migrates only
-        // through its Kysely adapter and throws on `lunoraD1Adapter`. Build a
-        // second, migration-only instance for it — its `$context` is never
-        // resolved, so the dev-runner hang the adapter avoids doesn't apply.
-        await ensureMigrated(createAuth({ ...options, database: env.DB }));
+        await ensureMigrated(migrationAuth);
 
         const response = await handleAuthRequest(auth, request);
         if (response) return response;
@@ -63,11 +69,11 @@ export default {
 };
 ```
 
-Guard that call so it runs once per isolate rather than once per request — hold
-the **promise**, not a boolean, and clear it on failure. better-auth's migrator
-emits a bare `CREATE TABLE`, so two concurrent runs against a fresh database
-leave the loser with `table user already exists`. `defineApp().auth(...)` already
-does this for you.
+Retaining that instance is what keeps the migration to once per isolate.
+better-auth's migrator emits a bare `CREATE TABLE`, so two concurrent runs
+against a fresh database leave the loser with `table user already exists` — and
+since this sits ahead of the router, that 500s every route, not just
+`/api/auth/*`. `defineApp().auth(...)` handles it for you.
 
 ## Read `ctx.auth` in functions
 
