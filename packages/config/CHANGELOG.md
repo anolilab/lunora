@@ -1,3 +1,58 @@
+## @lunora/config [1.0.0-alpha.193](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.192...@lunora/config@1.0.0-alpha.193) (2026-09-05)
+
+### ⚠ BREAKING CHANGES
+
+* **codegen:** `@lunora/config` no longer exports `ResourceGraph`,
+`NamedResource`, `ShardNamespaceResource`, `ProvisionResult` or `DriverContext`,
+and `DeployDriver` is now `{ id, name, toolchain? }` — `infer` and `provision`
+are gone. `@lunora/bindings/images` no longer exports `DrawOverlay`, and
+`TransformOptions` has no `draw` key.
+
+
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>
+* **cli:** `requiredPackagesFor` / `assertRequiredPackages` take a signals
+object in place of the trailing `hasVectors` boolean. `ImportSummary.storage`
+carries capped `ambiguous`/`unmigrated` samples plus new `ambiguousTotal` /
+`unmigratedTotal` counts. `InferredBindings` gains `usesNotify` and `usesR2sql`.
+`OfferDeps.resolveAuthUiItem` may now return `undefined`, which callers must read
+as a refusal. `verify` and `build` accept `--strict-advisories` /
+`--no-strict-advisories`, and `verify` now fails on ERROR-level advisories under
+the same CI-on/local-off default as every other caller.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(cli): escape the NUL key separator and type the registry dispatch mocks
+
+The storage-remap dedup key used a raw NUL byte as its separator, which makes git
+treat the file as binary — invisible in diff, blame and review — and fails the
+`no-nul-bytes` postinstall gate, which turns every CI job red in its setup step
+while naming the cause in none of them. `\\u0000` is byte-identical at runtime.
+
+The new registry-dispatch test's mocks returned `{ code, items }` where all three
+runners return `AddCommandResult` (`bindings`/`code`/`deps`/`skipped`/`written`),
+and its toolbox cast named a wider options type than `execute` accepts. Neither
+surfaced earlier because the branch's verification skipped `lint:types`.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **cli:** make migrate fail loudly, and close thirteen more command defects ([#608](https://github.com/anolilab/lunora/issues/608)) ([1eb481f](https://github.com/anolilab/lunora/commit/1eb481f96ba00a00975e250212e5198f3065d658))
+* **codegen:** gate on the context binding, not the identifier text ([#609](https://github.com/anolilab/lunora/issues/609)) ([c0bc210](https://github.com/anolilab/lunora/commit/c0bc2105833a32d44b71fec7e05ff503ac94d86d))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.158
+* **@lunora/container:** upgraded to 1.0.0-alpha.45
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+* **@lunora/seed:** upgraded to 1.0.0-alpha.108
+* **@lunora/studio:** upgraded to 1.0.0-alpha.155
+
 ## @lunora/config [1.0.0-alpha.192](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.191...@lunora/config@1.0.0-alpha.192) (2026-09-05)
 
 
