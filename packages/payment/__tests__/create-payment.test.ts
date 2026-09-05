@@ -983,6 +983,31 @@ describe("createPayment", () => {
         await expect(response.json()).resolves.toEqual({ error: "upstream provider timed out" });
     });
 
+    it("redacts CONFIG_INVALID's message, which names server-side wiring", async () => {
+        expect.assertions(2);
+
+        // `LunoraPaymentError` is a `LunoraError` SUBCLASS, and the catalog gate
+        // that keeps every minted code registered could not see subclass mints —
+        // so all six payment codes were unregistered, and `isInternalCode` treats
+        // an unregistered code as client-safe. This 500 therefore echoed "webhook
+        // secret not configured" (and elsewhere the adapter/provider names) to
+        // whoever POSTed the webhook. Registered `internal: true`, the status
+        // still travels and the message does not.
+        const adapter = fakeAdapter({
+            parseWebhook: async () => {
+                const { LunoraPaymentError } = await import("../src/errors");
+
+                throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
+            },
+        });
+        const payment = createPayment({ adapter, store: new MemoryPaymentStore() });
+
+        const response = await payment.handleWebhook(new Request("https://app.test/payment/webhook", { body: "{}", method: "POST" }));
+
+        expect(response.status).toBe(500);
+        await expect(response.json()).resolves.toEqual({ error: "Internal error" });
+    });
+
     it("masks an unrecognized webhook-parsing throw behind a generic 400 (unchanged, non-LunoraPaymentError branch)", async () => {
         expect.assertions(2);
 

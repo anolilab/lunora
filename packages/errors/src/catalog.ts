@@ -198,6 +198,35 @@ export const ERROR_CATALOG = {
     WORKFLOWS_REST_ERROR: { status: 502, title: "Cloudflare Workflows REST API error" },
 
     /**
+     * `@lunora/payment` codes, minted through `LunoraPaymentError` — a
+     * `LunoraError` subclass. They shipped uncatalogued because the
+     * registration gate's scanner only matched the literal `new LunoraError(`,
+     * so every subclass mint was invisible to it and `isInternalCode` (which
+     * fails OPEN) classed all six as client-safe. `status` mirrors the
+     * package's own `STATUS_BY_CODE`. The remaining payment codes — `FORBIDDEN`,
+     * `INVALID_TRANSITION`, `NOT_FOUND`, `VALIDATION_ERROR` — are the generic
+     * entries above and keep their existing verdicts.
+     */
+
+    /** Server-side payment wiring is wrong or missing (`webhook secret not configured`, a duplicate/absent adapter). A 500 that names internal configuration — redact on the wire. */
+    CONFIG_INVALID: { internal: true, status: 500, title: "Payment configuration invalid" },
+    /** Arithmetic across two currencies. The message names only the two currency codes the caller supplied. */
+    CURRENCY_MISMATCH: { status: 400, title: "Currency mismatch" },
+
+    /**
+     * A payment provider refused or answered unusably. NOT `internal`, matching
+     * the upstream-API 502s above: the messages are fixed capability text
+     * ("<provider> does not support refundPayment") or echo back the malformed
+     * id the CALLER passed in, so none of them reveals state the caller did not
+     * already have.
+     */
+    PROVIDER_ERROR: { status: 502, title: "Payment provider error" },
+    /** Webhook rejections, addressed to the provider posting the hook; the messages are fixed and name no internal state. */
+    WEBHOOK_EVENT_ID_MISSING: { status: 400, title: "Webhook event id missing" },
+    WEBHOOK_SIGNATURE_INVALID: { status: 400, title: "Webhook signature invalid" },
+    WEBHOOK_TIMESTAMP_INVALID: { status: 400, title: "Webhook timestamp outside tolerance" },
+
+    /**
      * Admin-gated `/_lunora/admin/*` and `__lunora_admin__:*` codes. Registered
      * here (plan 230, ERRORS-01) after an audit found them minted with `code:`
      * but never added to the catalog — `isInternalCode` fails OPEN for an
