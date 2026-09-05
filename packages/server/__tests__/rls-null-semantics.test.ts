@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { definePolicies, definePolicy } from "../src/rls/define";
 import { expectPolicy } from "../src/rls/testing";
+import type { WhereInput } from "../src/rls/types";
 import { matchesWhere } from "../src/rls/where-match";
 
 /**
@@ -255,7 +256,9 @@ describe("malformed combinator operands fail closed", () => {
     ])("refuses %s as a NOT operand instead of admitting the row", (_label, operand) => {
         expect.assertions(1);
 
-        expect(matchesWhere({ role: "admin" }, { NOT: operand })).toBe(false);
+        // The cast is the point: these are shapes the type system already refuses,
+        // so the test asks what happens when one reaches the evaluator anyway.
+        expect(matchesWhere({ role: "admin" }, { NOT: operand } as unknown as WhereInput)).toBe(false);
     });
 
     it("still negates a well-formed NOT operand", () => {
