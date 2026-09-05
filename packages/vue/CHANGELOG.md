@@ -1,3 +1,16 @@
+## @lunora/vue [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.113...@lunora/vue@1.0.0-alpha.114) (2026-09-05)
+
+### Bug Fixes
+
+* **client,react:** encode SSR payloads and stop three surfaces silently blanking ([#607](https://github.com/anolilab/lunora/issues/607)) ([a17366a](https://github.com/anolilab/lunora/commit/a17366a43ca0ea2a69f05912d68a678a0450c270))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.79
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.39
+
 ## @lunora/vue [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.112...@lunora/vue@1.0.0-alpha.113) (2026-09-05)
 
 
