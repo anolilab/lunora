@@ -472,11 +472,11 @@ describe("rls — read path", () => {
         expect((database.calls.at(-1)?.args as { baseWhere?: unknown }).baseWhere).toBeUndefined();
     });
 
-    // `@lunora/cloudflare-access`'s `accessRoles()` maps a verified Access `groups`
-    // claim onto role labels and hands them over as `ctx.auth.roles` — the Access
-    // envelope never carries a `roles` claim, so the identity path cannot see
-    // them. Reading only the claim silently drops every such role, and a
-    // role-gated DENY branch that stops firing LEAKS rows.
+    // A middleware may derive roles a provider's envelope does not carry as a
+    // `roles` claim and hand them over as `ctx.auth.roles`. Reading only the
+    // claim on the request path silently drops every such role, and a role-gated
+    // DENY branch that stops firing LEAKS rows. (Live shapes see the claim only
+    // — see the KNOWN DIVERGENCE in `src/rls/shape-read-base.ts`.)
     it("honours roles contributed by an upstream middleware, not just the identity claim", async () => {
         expect.assertions(1);
 
