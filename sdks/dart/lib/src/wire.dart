@@ -322,10 +322,21 @@ Object? _encodeDouble(double value) {
   // formats numbers the ECMAScript way, so both sides agreed on the comparison
   // and disagreed on what `transport.dart` actually sends.
   //
-  // Bounded at 2^53 because past it `jsonEncode` spells a double in exponent
-  // form, matching the reference, and an int would not. A negative zero stays a
-  // double: `stableStringify` spells it as the bare token `-0`, distinct from
-  // `0`, and narrowing to `int` would drop the sign before the key is built.
+  // Bounded at 2^53 because that is the last magnitude a Dart `int` holds
+  // exactly; `int` is 64-bit, so `(1e20).toInt()` saturates at
+  // 9223372036854775807 rather than converting. A negative zero stays a double:
+  // `stableStringify` spells it as the bare token `-0`, distinct from `0`, and
+  // narrowing to `int` would drop the sign before the key is built.
+  //
+  // That leaves a residual gap on `(2^53, 1e21)`, which `number-past-exact-
+  // integer-range` reaches: `jsonEncode(1e20)` is `100000000000000000000.0`
+  // where the reference writes `100000000000000000000`. Exponent form starts at
+  // 1e21, not at 2^53 — measured, not assumed — and from 1e21 up the two agree
+  // again. The residue is a trailing `.0` on a number the receiver re-PARSES,
+  // so it costs a byte and changes no value; closing it would mean replacing
+  // `jsonEncode` in `transport.dart` with a hand-rolled writer, which is a
+  // ninth number formatter to keep in step with ECMAScript. See
+  // `sdks/README.md`, "Deliberately unpinned, and why".
   if (value == value.truncateToDouble() && value.abs() <= 9007199254740992.0 && !(value == 0 && value.isNegative)) {
     return value.toInt();
   }

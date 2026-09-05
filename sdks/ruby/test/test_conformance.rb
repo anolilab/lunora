@@ -31,6 +31,10 @@ class TestWireCodec < Minitest::Test
       expected = entry.key?("reencoded") ? entry["reencoded"] : encoded
 
       assert_equal canonical(expected), canonical(round_tripped), "round-trip mismatch for #{entry["name"]}"
+      # And again as the BYTES the transport sends: a round-trip assertion
+      # measured on a string the transport never sends cannot see the divergence
+      # it exists to catch.
+      assert_equal wire_text(expected), wire_text(round_tripped), "wire-text mismatch for #{entry["name"]}"
     end
   end
 end

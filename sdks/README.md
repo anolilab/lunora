@@ -749,6 +749,43 @@ Where the manifest drives the run, a required name with no dispatch arm fails,
 which is the same guarantee from the other direction: the only way to go green is
 to execute a case under that name.
 
+**`wire_codec_round_trip` asserts twice, and the second assertion is the one
+that measures the wire.** `canonical` routes through `stableStringify`, which
+spells every number the ECMAScript way, so a port that puts `1.0` where the
+reference puts `1` — or a boolean, or a signed zero, where the reference puts a
+number — compares EQUAL through it: the comparison normalises away the very
+difference it exists to measure. Every suite therefore repeats the assertion
+through `wireText`, defined beside `canonical` as the serializer that port's own
+transport puts on the socket:
+
+| Language     | `wireText`                                                     |
+| ------------ | -------------------------------------------------------------- |
+| python       | `json.dumps`                                                   |
+| go           | `json.Marshal` (`canonical` is defined in terms of it there)   |
+| ruby         | `JSON.generate`                                                |
+| rust         | `serde_json::to_string`                                        |
+| swift        | `JSONSerialization` (`.sortedKeys`, since a dict has no order) |
+| java, kotlin | `Json.write`                                                   |
+| dart         | `jsonEncode`                                                   |
+
+Dart's dates went out as `1700000000000.0` under a green suite before that line
+existed. What it compares is the port against ITS OWN parse of the fixture, so it
+catches a codec that changes a value's spelling or type; it is not a comparison
+against the reference's bytes, which no fixture can carry (see below).
+
+**Where it can fail independently, measured.** In python, ruby, rust and dart —
+the four whose language distinguishes an integer from a float and whose writer
+preserves the distinction. Removing rust's integral narrowing turns rust red on
+`wire-text mismatch for number-int` while `round-trip mismatch` stays green;
+removing dart's turns 17 cases red, all 17 on the wire-text line and none on
+`round-trip`. Breaking
+java's `Json.write` number spelling turns nothing red, because java's parser maps
+every JSON number to `Double`, so both sides of the comparison move together; the
+same holds for kotlin, and go is a third case again — `canonical` is defined in
+terms of `wireText` there, so the two lines are one assertion. The line stays in
+all eight anyway: it is the shape a ninth port copies, and a change to any of
+those parsers or writers makes it live.
+
 **What the `covers()` form actually proves is narrower than it looks.** In the
 six ports that record rather than dispatch, `covers("x")` is the first statement
 of the case body — before the fixture is even loaded — so what it evidences is
@@ -861,7 +898,7 @@ Every row below is either pinned by a named case or listed under
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bigint`               | `bigint*`; canonicalised: `bigint-leading-zeros`, `bigint-negative-zero`                                                                                                         | `bigint-payload-number`, `-missing-payload`, `-empty-string`, `-leading-plus`, `-decimal-point`, `-surrounding-space`, `-hex-prefix`, `-non-ascii-digits`; length by `over_long_bigint_rejected`                                                                                                                       |
 | `date`                 | `date`, `date-invalid`, TimeClip by `date-epoch-max`, `-past-max`, `-out-of-range`, `-non-finite`, `-fractional`, `-fractional-negative`, `-negative-fraction`, `-negative-zero` | `date-payload-not-number`, `-string`, `-boolean`, `-object`, `-array`, `-bigint-tag`                                                                                                                                                                                                                                   |
-| `url`                  | `url`                                                                                                                                                                            | `url-href-not-string`, `url-href-missing`, `url-href-relative`, `-empty`, `-scheme-relative`, `-scheme-empty`, `-scheme-digit-initial`, `-scheme-non-ascii`                                                                                                                                                                                                                           |
+| `url`                  | `url`                                                                                                                                                                            | `url-href-not-string`, `url-href-missing`, `url-href-relative`, `-empty`, `-scheme-relative`, `-scheme-empty`, `-scheme-digit-initial`, `-scheme-non-ascii`                                                                                                                                                            |
 | `map`                  | `map`, `map-empty`, `map-duplicate-keys`, `map-duplicate-nonstring-keys`, `map-duplicate-zero-sign-keys`, `map-null-key`, `map-null-value`                                       | `map-payload-not-array`, `-payload-missing`, `-entry-not-array`, `-entry-too-short`, `-entry-too-long`                                                                                                                                                                                                                 |
 | `set`                  | `set`, `set-empty`, `set-duplicate-scalars`, `set-duplicate-nonscalars`, `set-duplicate-zero-signs`                                                                              | `set-payload-not-array`, `-payload-missing`, `-payload-object`                                                                                                                                                                                                                                                         |
 | `arr`                  | `array-sentinel-escape`, `arr-empty-payload`                                                                                                                                     | `arr-payload-not-array`, `-payload-missing`, `-payload-object`                                                                                                                                                                                                                                                         |
@@ -906,8 +943,26 @@ Every row below is either pinned by a named case or listed under
 
 #### Deliberately unpinned, and why
 
-Three rows above resolve to "no case, on purpose". Each is measured, not
+Four rows above resolve to "no case, on purpose". Each is measured, not
 assumed:
+
+- **How a port's transport SPELLS a number in `(2^53, 1e21)`.** `wireText`
+  compares a port against its own parse of the fixture, not against the
+  reference's bytes, and a fixture cannot carry those bytes: an exact-text
+  assertion would also pin whitespace and key order, which no port's default
+  serializer matches (`json.dumps` writes `{"a": 1}`, with the space). So
+  `number-past-exact-integer-range` (`1e20`) reaches the magnitude but the
+  spelling there is unpinned, and measured it differs: `JSON.stringify(1e20)` is
+  `100000000000000000000`, where dart writes `100000000000000000000.0` (its
+  `int` tops out near 9.2e18, so `(1e20).toInt()` saturates rather than
+  converting — the narrowing that fixes dates cannot extend here), swift and
+  python write `1e+20`, and ruby writes `1e+20` and `1700000000000.0` for any
+  float at all. None of it changes a value: a JSON number is re-PARSED by the
+  receiver, never compared as text. The spelling that IS compared as text is the
+  stable subscription key, and that one is pinned across all eight — including
+  `1e20` and `2**60` — by `format_number_matches_ecmascript`. The fixture case
+  earns its place for the other reason: `(2^53, 1e21)` is where every port's
+  integer-narrowing bound lives, and nothing else reached it.
 
 - **A lone surrogate in a stable key.** The reference escapes one (`\ud800`) via
   `JSON.stringify`, but the fixture cannot carry the input: ruby's `JSON.parse`

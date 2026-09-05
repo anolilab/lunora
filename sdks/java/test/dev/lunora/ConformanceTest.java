@@ -146,6 +146,17 @@ public final class ConformanceTest {
         return Key.stableStringify(value);
     }
 
+    /**
+     * Renders a value the way {@link Client} puts it on the socket, with {@link Json#write}.
+     * Separate from {@link #canonical}, which is free to normalise: {@code stableStringify} spells
+     * every number the ECMAScript way, so {@code 1.0} and {@code 1} compare EQUAL through it — the
+     * divergence a round-trip case exists to catch. Dart's dates went out as {@code
+     * 1700000000000.0} for exactly that reason, on a green suite.
+     */
+    private static String wireText(Object value) {
+        return Json.write(value);
+    }
+
     @SuppressWarnings("unchecked")
     private static void wireCodecRoundTrip() throws IOException {
         covers("wire_codec_round_trip");
@@ -167,6 +178,12 @@ public final class ConformanceTest {
             check(
                     canonical(roundTripped).equals(canonical(expected)),
                     "round-trip mismatch for " + testCase.get("name"));
+            // And again as the BYTES the transport sends: a round-trip
+            // assertion measured on a string the transport never sends cannot
+            // see the divergence it exists to catch.
+            check(
+                    wireText(roundTripped).equals(wireText(expected)),
+                    "wire-text mismatch for " + testCase.get("name"));
         }
     }
 

@@ -100,6 +100,7 @@
         { "name": "number-int", "encoded": 42 },
         { "name": "number-float", "encoded": 3.5 },
         { "name": "number-zero", "encoded": 0 },
+        { "name": "number-past-exact-integer-range", "encoded": 1e20 },
         { "name": "empty-object", "encoded": {} },
         { "name": "empty-array", "encoded": [] },
         { "name": "pure-json-object", "encoded": { "a": 1, "b": [true, null, "x"], "c": { "d": 2 } } },
