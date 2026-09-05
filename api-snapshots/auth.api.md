@@ -107,6 +107,11 @@ interface AuthAdmin {
         permission: Record<string, string[]>;
         role: string;
     }) => Promise<AuthOrgRole>;
+    createSignUpInvitation: (input: {
+        email: string;
+        expiresInSeconds?: number;
+        invitedBy?: string;
+    }) => Promise<AuthSignUpInvitation>;
     createTeam: (input: {
         name: string;
         organizationId: string;
@@ -169,6 +174,10 @@ interface AuthAdmin {
         offset?: number;
         userId?: string;
     }) => Promise<AuthPage<AuthAdminSession>>;
+    listSignUpInvitations: (options: {
+        limit?: number;
+        offset?: number;
+    }) => Promise<AuthPage<AuthSignUpInvitation>>;
     listTeamMembers: (options: {
         limit?: number;
         offset?: number;
@@ -191,6 +200,9 @@ interface AuthAdmin {
     }) => Promise<void>;
     removeUser: (input: {
         userId: string;
+    }) => Promise<void>;
+    revokeSignUpInvitation: (input: {
+        email: string;
     }) => Promise<void>;
     revokeUserSession: (input: {
         sessionId: string;
@@ -326,6 +338,7 @@ interface AuthAuditReader {
 interface AuthCapabilities {
     accounts: boolean;
     admin: boolean;
+    inviteOnly: boolean;
     organization: boolean;
     passkey: boolean;
     twoFactor: boolean;
@@ -475,6 +488,21 @@ interface AuthQuery {
 
 ```ts
 type AuthRow = Record<string, unknown>;
+```
+
+### `AuthSignUpInvitation` (interface)
+
+```ts
+interface AuthSignUpInvitation {
+    [key: string]: unknown;
+    acceptedAt?: AuthTimestamp;
+    createdAt?: AuthTimestamp;
+    email?: null | string;
+    expiresAt?: AuthTimestamp;
+    id: string;
+    invitedBy?: null | string;
+    token?: string;
+}
 ```
 
 ### `AuthStore` (interface)
@@ -651,6 +679,14 @@ interface ImpersonationResult {
 ```ts
 interface InviteOnlyOptions {
     allowFirstUser?: boolean;
+}
+```
+
+### `IssuedSignUpInvitation` (interface)
+
+```ts
+interface IssuedSignUpInvitation extends SignUpInvitation {
+    token: string;
 }
 ```
 
@@ -904,7 +940,7 @@ const createSignUpInvitation: (auth: LunoraAuth, input: {
     email: string;
     expiresInSeconds?: number;
     invitedBy?: string;
-}) => Promise<SignUpInvitation>;
+}) => Promise<IssuedSignUpInvitation>;
 ```
 
 ### `createSqlAuthStore` (const)
@@ -991,6 +1027,14 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 ```ts
 const matchesWhere: (row: AuthRow, where: ReadonlyArray<AuthWhereClause>) => boolean;
+```
+
+### `pruneSignUpInvitations` (const)
+
+```ts
+const pruneSignUpInvitations: (auth: LunoraAuth, options?: {
+    limit?: number;
+}) => Promise<number>;
 ```
 
 ### `readAuthAuditLog` (const)
@@ -1182,6 +1226,10 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 ## `@lunora/auth/plugins`
 
 ### `InviteOnlyOptions` (interface)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `IssuedSignUpInvitation` (interface)
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
 

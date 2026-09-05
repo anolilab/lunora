@@ -157,6 +157,15 @@ const buildAccessImports = (hasAccess: boolean, hasAuth: boolean): string[] =>
 const buildKvImports = (hasKvIntrospector: boolean): string[] =>
     hasKvIntrospector ? [`import { createKvIntrospectorFromEnv } from "@lunora/bindings/kv";`] : [];
 
+/** `@lunora/d1` imports for a D1-backed `.global()` app — the store factory, the admin/introspection helpers, and the retrying exec. */
+const buildGlobalImports = (hasGlobal: boolean): string[] =>
+    hasGlobal
+        ? [
+              `import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";`,
+              `import { applyCdcChanges, createD1CtxDb, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";`,
+          ]
+        : [];
+
 /** `lunora/notify.ts` default-export import — the `defineNotify(...)` config the worker reads its subscription store off (`createWorker({ notifySubscriptionStore })`). */
 const buildNotifyImports = (hasNotify: boolean): string[] => (hasNotify ? [`import notifyConfig from "../notify.js";`] : []);
 
@@ -235,12 +244,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
               ]
             : []),
         ...buildAccessImports(hasAccess, hasAuth),
-        ...(hasGlobal
-            ? [
-                  `import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";`,
-                  `import { applyCdcChanges, createD1CtxDb, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";`,
-              ]
-            : []),
+        ...buildGlobalImports(hasGlobal),
         ...(hasHyperdriveGlobal
             ? [
                   `import type { HyperdriveEngine } from "@lunora/hyperdrive/global";`,
@@ -581,6 +585,10 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
                               // poll's changed-tables fast path is unreachable.
                               cdc: request?.cdc ?? false,
                               exec: buildExec(database, request?.bookmark, request?.onBookmark),
+                              // The binding outlives this per-request writer, so the
+                              // provisioning sweep runs once per isolate rather than
+                              // once per request. See \`SqlCtxDbOptions.provisionScope\`.
+                              provisionScope: database,
                               schema: schema as unknown as D1CtxDbOptions["schema"],
                           });
                       },
@@ -594,13 +602,14 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
                 ? {
                       hyperdriveGlobal: (rawEnv: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; userId?: string | null }) => {
                           const env = rawEnv as Env;
-                          const exec = this.hyperdriveGlobalDeclaration?.exec(env) as SqlExec | undefined;
+                          const declaration = this.hyperdriveGlobalDeclaration;
+                          const exec = declaration?.exec(env) as SqlExec | undefined;
 
-                          if (!exec) {
+                          if (!declaration || !exec) {
                               return undefined;
                           }
 
-                          const origin = this.hyperdriveGlobalDeclaration?.origin?.(env);
+                          const origin = declaration.origin?.(env);
                           const crossShard = origin
                               ? createCrossShardRelationCapabilities({ identity: request?.identity, origin, userId: request?.userId ?? undefined })
                               : undefined;
@@ -611,8 +620,14 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
                               auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
                               // See the D1 twin: one \`cdc\` switch, both changelogs.
                               cdc: request?.cdc ?? false,
-                              engine: this.hyperdriveGlobalDeclaration?.engine as HyperdriveEngine,
+                              engine: declaration.engine as HyperdriveEngine,
                               exec,
+                              // The DECLARATION, not \`exec\` — \`exec(env)\` is a user
+                              // callback that builds a fresh client per call, so scoping
+                              // to its result would key the memo on a new object every
+                              // request and never share anything. The declaration is
+                              // built once and names one database.
+                              provisionScope: declaration,
                               schema: schema as unknown as SqlCtxDbOptions["schema"],
                           });
                       },
@@ -1279,11 +1294,11 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
     const workerOptionLines = buildWorkerOptionLines(options);
 
     // The auth lazy-init dance is woven through `build()` and `buildWorkerOptions`.
-    const authState = hasAuth ? `        let auth: LunoraAuth | null = null;\n` : "";
+    const authState = hasAuth ? `        let auth: LunoraAuth | null = null;\n        let authInit: Promise<void> | null = null;\n` : "";
     const ensureAuthBlock = hasAuth
         ? `
-        const ensureAuth = async (env: Env): Promise<void> => {
-            if (!this.authDeclaration || auth) {
+        const initAuth = async (env: Env): Promise<void> => {
+            if (!this.authDeclaration) {
                 return;
             }
 
@@ -1296,11 +1311,30 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
                 return;
             }
 
-            auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
             // Apply the better-auth schema lazily on first request (raw-D1 Kysely
             // migrator). For production run the migrate command ahead of deploy.
+            // The migration instance takes the RAW binding: better-auth migrates
+            // only through Kysely and rejects the adapter the request instance uses.
             await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
+            // Assigned after the schema exists, never before. Assigning first is
+            // what let a concurrent request see a non-null \`auth\` and serve
+            // \`/api/auth/*\` against tables the migrator had not created yet —
+            // \`no such table: rateLimit\`, from the isolate that was mid-migration.
+            auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
         };
+
+        // Single-flighted on the PROMISE, not on \`auth\`. Every \`fetch\` awaits this
+        // and the body above is async, so a per-isolate cold start runs it once
+        // rather than once per concurrent request — better-auth's migrator emits a
+        // bare \`CREATE TABLE\` (no IF NOT EXISTS), so a second concurrent run on a
+        // fresh database fails with \`table user already exists\` and, because this is
+        // awaited ahead of the router, 500s every route. Evicted on failure so a
+        // transient error retries instead of being replayed forever.
+        const ensureAuth = (env: Env): Promise<void> =>
+            (authInit ??= initAuth(env).catch((error: unknown) => {
+                authInit = null;
+                throw error;
+            }));
 `
         : "";
     const ensureAuthCall = hasAuth ? `\n                await ensureAuth(env);` : "";

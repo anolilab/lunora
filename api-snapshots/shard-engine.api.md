@@ -4208,6 +4208,12 @@ const rankKeyFromDocument: (index: RankIndexDefinitionLike, document_: Record<st
 };
 ```
 
+### `rankPivotConditionSql` (const)
+
+```ts
+const rankPivotConditionSql: (column: string, value: unknown, direction: "asc" | "desc", wantLater: boolean) => SQL | undefined;
+```
+
 ### `rankTableName` (const)
 
 ```ts
