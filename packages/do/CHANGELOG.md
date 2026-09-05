@@ -1,3 +1,29 @@
+## @lunora/do [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.117...@lunora/do@1.0.0-alpha.118) (2026-09-05)
+
+### ⚠ BREAKING CHANGES
+
+* **do:** the persisted layout changed and the old `__tables__` snapshot is not
+imported. A deployed registry starts empty and refills as each sharded table's onWrite hook
+re-registers. Importing it instead would mean thousands of writes inside
+`blockConcurrencyWhile`, whose 30-second cap RESETS the Durable Object — an unbootable
+registry in exactly the oversized case this fixes.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **do:** re-deliver rows a failed shape poke owes, and split the shard registry's storage ([#611](https://github.com/anolilab/lunora/issues/611)) ([6f0915e](https://github.com/anolilab/lunora/commit/6f0915ecd85d5bd0aa13cc1a64044ef06eb6a061))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+* **@lunora/observability:** upgraded to 1.0.0-alpha.57
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.33
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.56
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.50
+
 ## @lunora/do [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.116...@lunora/do@1.0.0-alpha.117) (2026-09-04)
 
 ### ⚠ BREAKING CHANGES
