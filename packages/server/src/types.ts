@@ -2270,12 +2270,16 @@ type LunoraTracer = <T>(
  * recorded under the id already announced or every downstream span parents to an
  * id that never reaches the collector. `parentSpanId` lets such an adapter
  * express its own parent/child structure without an ambient span stack.
+ *
+ * Both ids are required: an adapter that has published one has published the
+ * other, and `identity` is itself optional — omitting it, not passing a partial
+ * object, is how a caller says "no adapter involved".
  */
 interface SpanIdentity {
     /** Parent to this span id instead of the enclosing `ctx.trace` / dispatch span. */
-    parentSpanId?: string;
+    parentSpanId: string;
     /** Record the span under this id (16-hex) instead of a freshly minted one. */
-    spanId?: string;
+    spanId: string;
 }
 
 /**

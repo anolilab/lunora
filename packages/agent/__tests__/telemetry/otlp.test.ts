@@ -1,21 +1,10 @@
-import type { Telemetry } from "ai";
 import { generateText, streamText } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { otlpTelemetry } from "../../src/telemetry/otlp";
-
-/**
- * Every model-call case drives the REAL `ai` SDK against a mock model rather
- * than invoking the telemetry hooks by hand.
- *
- * Hand-invoking `executeLanguageModelCall` is what hid the streaming defect for
- * as long as it did: called directly, `execute()` resolves with a finished
- * result and the span looks perfect. Through `streamText`, the SDK resolves the
- * same promise the instant `doStream` hands the stream back — before a token,
- * before any usage, before any mid-stream failure — so a span closed there
- * reported every streamed turn as a ~1 ms, zero-token, always-OK call.
- */
+import type { GenerateResult } from "./model-fixtures";
+import { drain, generatingModel, settle, STOP, streamingModel, usageOf, withTelemetry } from "./model-fixtures";
 
 interface CapturedPost {
     body: { resourceSpans: unknown[] };
@@ -74,98 +63,6 @@ const durationMs = (span: CapturedSpan): number => (Number(span.endTimeUnixNano)
 // `no-secrets` heuristic just sees a high-entropy hex run.
 // eslint-disable-next-line no-secrets/no-secrets -- fake test trace id, not a real secret
 const FIXED_TRACE_ID = "0123456789abcdef0123456789abcdef";
-
-/**
- * The provider-level shapes, read off the mock model's own constructor config
- * rather than imported from the provider package, which is a transitive
- * dependency here and not a declared one.
- */
-type MockConfig = NonNullable<ConstructorParameters<typeof MockLanguageModelV4>[0]>;
-type GenerateResult = Awaited<ReturnType<Extract<MockConfig["doGenerate"], (...arguments_: never) => unknown>>>;
-type StreamResult = Awaited<ReturnType<Extract<MockConfig["doStream"], (...arguments_: never) => unknown>>>;
-type StreamPart = StreamResult["stream"] extends ReadableStream<infer Part> ? Part : never;
-
-/**
- * LanguageModelV4's NESTED token-usage shape, which is what the SDK normalizes
- * from. A provider reports `{ inputTokens: { total } }`, not a flat number — so
- * the flat reader that used to run over the raw resolved value found no usage at
- * all against a real provider.
- */
-const STOP: GenerateResult["finishReason"] = { raw: "stop", unified: "stop" };
-
-const usageOf = (input: number, output: number): GenerateResult["usage"] => {
-    return {
-        inputTokens: { cacheRead: 0, cacheWrite: 0, noCache: input, total: input },
-        outputTokens: { reasoning: 0, text: output, total: output },
-    };
-};
-
-/** Wrap the integration under test in the `telemetry` option `generateText`/`streamText` accept. */
-const withTelemetry = (integration: Telemetry): { integrations: Telemetry[]; isEnabled: true } => {
-    return { integrations: [integration], isEnabled: true };
-};
-
-/** A non-streaming mock model whose `doGenerate` resolves after `delayMs`. */
-const generatingModel = (extra: Partial<GenerateResult> = {}, delayMs = 0): MockLanguageModelV4 =>
-    new MockLanguageModelV4({
-        doGenerate: async (): Promise<GenerateResult> => {
-            if (delayMs > 0) {
-                await new Promise((resolve) => {
-                    setTimeout(resolve, delayMs);
-                });
-            }
-
-            return { content: [{ text: "answer", type: "text" }], finishReason: STOP, usage: usageOf(12, 3), warnings: [], ...extra };
-        },
-    });
-
-/**
- * A streaming mock model that emits `chunks` deltas `gapMs` apart, then either
- * finishes or errors — the shape that separates "the provider call returned" from
- * "the model call is over".
- */
-const streamingModel = (options: { chunks: number; failAfter?: number; gapMs: number }): MockLanguageModelV4 =>
-    new MockLanguageModelV4({
-        doStream: async (): Promise<StreamResult> => {
-            return {
-                stream: new ReadableStream<StreamPart>({
-                    async start(controller) {
-                        controller.enqueue({ type: "stream-start", warnings: [] });
-                        controller.enqueue({ id: "t", type: "text-start" });
-
-                        for (let index = 0; index < options.chunks; index += 1) {
-                            // eslint-disable-next-line no-await-in-loop -- the point is a stream whose parts arrive over time
-                            await new Promise((resolve) => {
-                                setTimeout(resolve, options.gapMs);
-                            });
-
-                            if (options.failAfter !== undefined && index === options.failAfter) {
-                                // The protocol's in-band failure part — how a v4
-                                // provider reports a stream that dies mid-way.
-                                controller.enqueue({ error: new Error("stream died"), type: "error" });
-                                controller.close();
-
-                                return;
-                            }
-
-                            controller.enqueue({ delta: "x", id: "t", type: "text-delta" });
-                        }
-
-                        controller.enqueue({ id: "t", type: "text-end" });
-                        controller.enqueue({ finishReason: STOP, type: "finish", usage: usageOf(12, 3) });
-                        controller.close();
-                    },
-                }),
-            };
-        },
-    });
-
-/** Let the fire-and-forget export settle before reading the captured POSTs. */
-const settle = async (): Promise<void> => {
-    await new Promise((resolve) => {
-        setTimeout(resolve, 20);
-    });
-};
 
 describe(otlpTelemetry, () => {
     afterEach(() => {
@@ -459,5 +356,44 @@ describe(otlpTelemetry, () => {
 
         expect(span.name).toBe("execute_tool lookup");
         expect(attribute(span, "gen_ai.tool.name")).toBe("lookup");
+    });
+
+    it("an abort in one run does not close a concurrent run's span on a SHARED integration", async () => {
+        const calls = captureFetch();
+        // The documented app-wired shape — `defineAgent({ telemetry: { integrations:
+        // [otlpTelemetry(...)] } })` — evaluates once at module scope, so ONE
+        // integration instance (and one in-flight map) is shared by every
+        // concurrent agent run in the isolate.
+        const shared = otlpTelemetry({ endpoint: "https://collector.test" });
+
+        const abortController = new AbortController();
+        const aborted = streamText({
+            abortSignal: abortController.signal,
+            model: streamingModel({ chunks: 20, gapMs: 10 }),
+            prompt: "A",
+            telemetry: withTelemetry(shared),
+        });
+        const healthy = streamText({ model: streamingModel({ chunks: 4, gapMs: 10 }), prompt: "B", telemetry: withTelemetry(shared) });
+
+        await Promise.all([
+            drain(aborted.textStream, (index) => {
+                if (index === 2) {
+                    abortController.abort();
+                }
+            }),
+            drain(healthy.textStream),
+        ]);
+        await settle();
+
+        const spans = calls.map((post) => spanOf(post));
+        const ok = spans.filter((span) => span.status.code === 1);
+        const failed = spans.filter((span) => span.status.code === 2);
+
+        // Closing every open call on abort reported the healthy run as aborted too
+        // and dropped its real span — two failures, no success.
+        expect(failed).toHaveLength(1);
+        expect(ok).toHaveLength(1);
+        // The surviving span is the healthy run's, with its real token usage.
+        expect(attribute(ok[0] as CapturedSpan, "gen_ai.usage.input_tokens")).toBe("12");
     });
 });

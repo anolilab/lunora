@@ -28,6 +28,9 @@ import type { OtlpResourceAttributes } from "./otlp";
  */
 type ResourceEnvReader = (key: string) => string | undefined;
 
+/** The one binding read as an object rather than a string — see {@link readerFromRecord}. */
+const VERSION_METADATA_BINDING = "CF_VERSION_METADATA";
+
 /** Read a string property off a loosely-typed object (e.g. `request.cf`). */
 const stringProperty = (object: unknown, key: string): string | undefined => {
     if (typeof object !== "object" || object === null) {
@@ -50,6 +53,11 @@ const stringProperty = (object: unknown, key: string): string | undefined => {
  * `service.version` auto-detection could never fire for the platform it was
  * written for. A version-shaped object resolves to its human `tag` when the
  * deployment set one, else the version `id`.
+ *
+ * That unwrap is keyed to `CF_VERSION_METADATA` alone, not applied to any
+ * object-valued binding. Generalized, it would export the internal `.id` of
+ * whatever a future probed key happened to name — a Hyperdrive config, a
+ * queue — as a resource attribute on every span.
  */
 const readerFromRecord =
     (environment: Record<string, unknown> | undefined): ResourceEnvReader =>
@@ -58,6 +66,10 @@ const readerFromRecord =
 
         if (typeof value === "string") {
             return value.length > 0 ? value : undefined;
+        }
+
+        if (key !== VERSION_METADATA_BINDING) {
+            return undefined;
         }
 
         return stringProperty(value, "tag") ?? stringProperty(value, "id");

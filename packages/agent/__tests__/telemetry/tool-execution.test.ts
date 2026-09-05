@@ -1,3 +1,4 @@
+import type { Telemetry } from "ai";
 import { describe, expect, it, vi } from "vitest";
 
 import { runAgentLoop } from "../../src/agent-loop";
@@ -158,5 +159,64 @@ describe("agent-loop tool telemetry", () => {
         // The journal replays the memoized step, so the tool never runs again —
         // and neither does its span. One span per REAL execution.
         await expect(runOnce()).resolves.toStrictEqual([]);
+    });
+
+    it.each([
+        ["before the tool runs", true],
+        ["after the tool ran", false],
+    ])("survives a telemetry integration whose executeTool throws %s", async (_label, throwFirst) => {
+        let toolRuns = 0;
+
+        // A host SDK throwing inside `executeTool` runs INSIDE the tool's durable
+        // `step.do`. Left unguarded it becomes the TOOL's failure: the step retries
+        // a tool that already ran, or reports a successful one as failed. The
+        // integration is flow control for nothing.
+        const throwing: Telemetry = {
+            executeTool: async (options_) => {
+                if (throwFirst) {
+                    throw new Error("sentry is down");
+                }
+
+                await options_.execute();
+
+                throw new Error("span.end() blew up");
+            },
+        };
+
+        const agent = defineAgent({
+            instructions: "You are a weather agent.",
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            telemetry: { integrations: [throwing], isEnabled: true },
+            tools: {
+                getWeather: defineAgentTool({
+                    description: "Look up the weather.",
+                    execute: (input: { city: string }) => {
+                        toolRuns += 1;
+
+                        return `sunny in ${input.city}`;
+                    },
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                }),
+            },
+        });
+
+        const result = await runAgentLoop({
+            agent,
+            env: { LUNORA_TEST: true },
+            exportName: "weather",
+            generate: scriptedGenerate([
+                { text: "checking…", toolCalls: [{ id: "call_1", input: { city: "Berlin" }, name: "getWeather" }] },
+                { text: "It is sunny in Berlin.", toolCalls: [] },
+            ]),
+            instanceId: "wf-1",
+            params: { input: "hello", threadKey: "thread-1" },
+            paths: DEFAULT_AGENT_FUNCTION_PATHS,
+            run: memoryRuntime().run,
+            step: new DurableStepJournal(),
+        });
+
+        // Exactly once either way: never skipped, never retried.
+        expect(toolRuns).toBe(1);
+        expect(result.text).toBe("It is sunny in Berlin.");
     });
 });

@@ -5,6 +5,7 @@ import type { OtlpAttribute, OtlpAttributeValue } from "../../../../shared/otlp"
 import { encodeAttribute, mergeHeaders, otlpRandomHex, otlpUnixNano, wrapResourceSpans } from "../../../../shared/otlp";
 import type { CommonOptions } from "./common";
 import { contentText, readField, summarizeGatewayTelemetry, summarizeUsage, toolInputOf, toolNameOf } from "./common";
+import { createInFlightCalls } from "./in-flight-calls";
 
 /** Push one attribute, skipping nullish values and JSON-stringifying non-primitives. */
 const pushAttribute = (attributes: OtlpAttribute[], key: string, value: unknown): void => {
@@ -207,26 +208,13 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
     }
 
     /**
-     * Model calls in flight, keyed by the SDK's `callId`. An entry is created when
-     * the call starts and REMOVED by whichever terminal event fires first, so each
-     * span is emitted exactly once and the map cannot grow across a long run.
+     * Model calls in flight, keyed by the SDK's `callId`; each is closed, and its
+     * span emitted, by whichever terminal event fires first. See
+     * {@link createInFlightCalls} for the lifecycle, the per-`callId` addressing
+     * this integration shares with the other bridges, and the one abandoned-call
+     * path it sweeps.
      */
-    const inFlight = new Map<string, InFlightCall>();
-
-    /**
-     * Emit the span for one model call and forget it. A `callId` that is no longer
-     * in flight has already been reported (an error span followed by a late end
-     * event) and is dropped rather than double-counted.
-     */
-    const closeCall = (callId: string, ok: boolean, message: string | undefined, event: unknown): void => {
-        const call = inFlight.get(callId);
-
-        if (call === undefined) {
-            return;
-        }
-
-        inFlight.delete(callId);
-
+    const calls = createInFlightCalls<InFlightCall>((call, ok, message, event) => {
         const { messages, modelId, provider, result, startTs } = call;
         const attributes: OtlpAttribute[] = [];
 
@@ -284,65 +272,51 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
         }
 
         emitSpan(typeof modelId === "string" ? `chat ${modelId}` : "language_model_call", startTs, ok, message, attributes);
-    };
+    });
 
-    /** Open a call's entry unless one already exists (both entry points may fire). */
-    const openCall = (callId: string, source: unknown): void => {
-        if (inFlight.has(callId)) {
+    /**
+     * Close the call an `onAbort` / `onError` event names, as a failure described
+     * by `raw`. Both events carry the model call's `callId` in ai@7; one that does
+     * not closes nothing, and the entry is swept by age instead of being charged
+     * to an unrelated run.
+     */
+    const closeByCallId = (event: unknown, raw: unknown, fallbackMessage: string): void => {
+        const callId = readField(event, "callId");
+
+        if (typeof callId !== "string") {
             return;
         }
 
-        inFlight.set(callId, {
+        // Only a real message is preferred over the fallback: `String(unknown)`
+        // renders an event object as "[object Object]", which is worse than
+        // saying nothing. A DOMException abort reason IS an Error here.
+        let message = fallbackMessage;
+
+        if (raw instanceof Error) {
+            message = raw.message;
+        } else if (typeof raw === "string" && raw.length > 0) {
+            message = raw;
+        }
+
+        calls.close(callId, false, message, undefined);
+    };
+
+    /** The entry one model call opens with — its start time and request metadata. */
+    const openCall = (source: unknown): InFlightCall => {
+        return {
             messages: readField(source, "messages"),
             modelId: readField(source, "modelId"),
             provider: readField(source, "provider"),
             result: undefined,
             startTs: Date.now(),
-        });
-    };
-
-    /** Close every still-open call with the same failure — see `onAbort` / `onError`. */
-    const failOpenCalls = (message: string): void => {
-        // A Map iterator tolerates deletion of the entry it just yielded, which is
-        // exactly what `closeCall` does.
-        for (const callId of inFlight.keys()) {
-            closeCall(callId, false, message, undefined);
-        }
-    };
-
-    /**
-     * Close a call that is still open when the SDK reports the step, or the whole
-     * operation, finished.
-     *
-     * A provider that reports a mid-stream failure the protocol way — an in-band
-     * `{ type: "error" }` part — never produces a model-call-end event, so this is
-     * the only signal that the call is over, and `finishReason: "error"` is the
-     * only thing that says it failed. A no-op once `onLanguageModelCallEnd` has
-     * already closed the call. A provider whose stream REJECTS outright dispatches
-     * no telemetry callback at all in ai@7.0.59, so such a call reports no span
-     * rather than a false success.
-     */
-    const closeFromLifecycle = (event: unknown): void => {
-        const callId = readField(event, "callId");
-
-        if (typeof callId !== "string" || !inFlight.has(callId)) {
-            return;
-        }
-
-        // `finishReason` is the unified string on the lifecycle events, but the
-        // provider protocol's own shape is `{ unified, raw }` — read both so a
-        // failure is never rounded up to a success by an event shape.
-        const finishReason = readField(event, "finishReason");
-        const failed = finishReason === "error" || readField(finishReason, "unified") === "error";
-
-        closeCall(callId, !failed, failed ? "the model call ended with an error" : undefined, event);
+        };
     };
 
     return {
         executeLanguageModelCall: async (options_) => {
             const { callId } = options_;
 
-            openCall(callId, options_);
+            calls.open(callId, () => openCall(options_));
 
             try {
                 // Awaited rather than returned untouched so the resolved value is on
@@ -350,7 +324,7 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
                 // `cf-aig-*` response headers live on it and nowhere else. The value
                 // and any rejection pass through unchanged.
                 const result = await options_.execute();
-                const call = inFlight.get(callId);
+                const call = calls.get(callId);
 
                 if (call !== undefined) {
                     call.result = result;
@@ -360,26 +334,28 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
             } catch (error) {
                 // The provider call itself failed, so this IS the end of the span and
                 // no end event will follow.
-                closeCall(callId, false, error instanceof Error ? error.message : String(error), undefined);
+                calls.close(callId, false, error instanceof Error ? error.message : String(error), undefined);
 
                 throw error;
             }
         },
-        onAbort: () => {
+        onAbort: (event: unknown) => {
             // A barge-in or cancelled stream produces neither an end event nor a
             // rejection from `execute()`, which already resolved at first byte.
-            failOpenCalls("aborted");
+            // Closed by `callId` — one integration instance is shared by every
+            // concurrent run when the app wires it at module scope, so closing
+            // every open call here would report a sibling run's live generation
+            // as this one's abort.
+            closeByCallId(event, readField(event, "reason"), "aborted");
         },
         onEnd: (event: unknown) => {
-            closeFromLifecycle(event);
+            calls.fromLifecycle(event);
         },
         onError: (event: unknown) => {
             // An unrecoverable failure AFTER `execute()` resolved (ai@7 dispatches
             // `{ callId, error }`). Without this the call would be reported as the
             // ~1 ms success `execute()`'s early resolution implied.
-            const raw = readField(event, "error") ?? event;
-
-            failOpenCalls(raw instanceof Error ? raw.message : String(raw));
+            closeByCallId(event, readField(event, "error"), "the model call failed");
         },
         onLanguageModelCallEnd: (event: unknown) => {
             const callId = readField(event, "callId");
@@ -391,7 +367,7 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
             // Fired after the response has been normalized and parsed — for a stream
             // that is after its `finish` part, so this is the first moment the call's
             // real duration AND its token usage are both known.
-            closeCall(callId, true, undefined, event);
+            calls.close(callId, true, undefined, event);
         },
         onLanguageModelCallStart: (event: unknown) => {
             const callId = readField(event, "callId");
@@ -400,11 +376,11 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
             // backstop for a host that dispatches the lifecycle events without the
             // execution wrapper, so a call is never reported with no start time.
             if (typeof callId === "string") {
-                openCall(callId, event);
+                calls.open(callId, () => openCall(event));
             }
         },
         onStepEnd: (event: unknown) => {
-            closeFromLifecycle(event);
+            calls.fromLifecycle(event);
         },
         executeTool: (options_) => {
             const startTs = Date.now();

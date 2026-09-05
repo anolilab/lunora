@@ -157,12 +157,16 @@ export interface SpanContextIds {
  *
  * Not part of the ordinary `ctx.trace(name, fn, attributes)` call — a handler
  * never mints its own ids.
+ *
+ * Both ids are required: an adapter that has published one has published the
+ * other, and `identity` is itself optional — omitting it, not passing a partial
+ * object, is how a caller says "no adapter involved".
  */
 export interface SpanIdentity {
     /** Parent to this span id instead of the enclosing `ctx.trace` / dispatch span. */
-    parentSpanId?: string;
+    parentSpanId: string;
     /** Record the span under this id (16-hex) instead of a freshly minted one. */
-    spanId?: string;
+    spanId: string;
 }
 
 /** Options accepted by `ctx.trace(name, fn, options)` beyond the plain attribute bag. */

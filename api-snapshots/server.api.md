@@ -2054,8 +2054,8 @@ interface SpanHandle {
 
 ```ts
 interface SpanIdentity {
-    parentSpanId?: string;
-    spanId?: string;
+    parentSpanId: string;
+    spanId: string;
 }
 ```
 

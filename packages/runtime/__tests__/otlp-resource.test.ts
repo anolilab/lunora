@@ -37,6 +37,18 @@ describe("shared/otlp-resource", () => {
             expect(detectServiceResource(tagged)["service.version"]).toBe("v1.4.0");
         });
 
+        it("unwraps ONLY the version binding, never any other object-valued one", () => {
+            expect.assertions(2);
+
+            // Generalized, the `.tag ?? .id` fallback would export the internal id
+            // of whatever a future probed key named — a Hyperdrive config, a queue —
+            // as a resource attribute on every span.
+            const read = readerFromRecord({ ENVIRONMENT: { id: "hyperdrive-9", tag: "prod-ish" }, SERVICE_VERSION: { id: "not-a-version" } });
+
+            expect(read("SERVICE_VERSION")).toBeUndefined();
+            expect(read("ENVIRONMENT")).toBeUndefined();
+        });
+
         it("tolerates an absent environment", () => {
             expect.assertions(1);
 
