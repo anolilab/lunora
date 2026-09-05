@@ -33,12 +33,74 @@ import { BIGINT_KEY_LENGTH, bigintSqlKey, effectiveColumnKind } from "./value-co
  * (`@lunora/d1/dialect`) — the same mapping the `lunora migrate generate` SQL
  * emitter uses, so auto-provisioned and hand-migrated tables stay identical.
  */
-const globalColumnAffinity = (validator: ValidatorLike, dialect: SqlDialect): string =>
-    dialect.columnType(effectiveColumnKind(validator), { unique: validator._meta?.column?.unique === true });
+const globalColumnAffinity = (validator: ValidatorLike, dialect: SqlDialect, indexedInFull = false): string =>
+    dialect.columnType(effectiveColumnKind(validator), { unique: indexedInFull || validator._meta?.column?.unique === true });
+
+/**
+ * Fields whose values a UNIQUE index must cover in FULL, so the column is
+ * declared as a bounded type and its index takes no key prefix.
+ *
+ * Two producers, one contract: a `.unique()` column, and a single-column entry
+ * in `definition.indexes` with `unique: true`. The second was missed when
+ * `.unique()` was bounded — `indexRef` read only the validator's own flag, so a
+ * declared unique index on a plain text field still took `(191)` and enforced
+ * uniqueness of the PREFIX, which is the same false ER_DUP_ENTRY the column
+ * flag was fixed for.
+ *
+ * A COMPOSITE unique index cannot be handled the same way: InnoDB caps a key at
+ * 3072 bytes total, so bounding every column to 768 characters (3072 bytes under
+ * utf8mb4) overflows the moment there are two of them. Those are refused in
+ * {@link assertIndexableUniqueIndexes} rather than silently prefixed, because a
+ * prefixed composite UNIQUE constrains something other than what was declared.
+ */
+const fullValueIndexedFields = (definition: SchemaLike["tables"][string]): ReadonlySet<string> => {
+    const fields = new Set<string>();
+
+    for (const index of definition.indexes) {
+        if (index.unique === true && index.fields.length === 1) {
+            fields.add(index.fields[0] as string);
+        }
+    }
+
+    return fields;
+};
+
+/**
+ * Refuse a composite UNIQUE index on a dialect that can only index a text column
+ * by prefix. Prefixing each column would enforce uniqueness of the prefixes, not
+ * of the values — a silent weakening of the declared constraint, and the exact
+ * defect single-column unique indexes were just fixed for.
+ */
+const assertIndexableUniqueIndexes = (tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): void => {
+    if (dialect.indexKeyPrefix === undefined) {
+        return;
+    }
+
+    for (const index of definition.indexes) {
+        if (index.unique !== true || index.fields.length <= 1) {
+            continue;
+        }
+
+        const prefixed = index.fields.filter((field) => {
+            const validator = definition.shape[field];
+
+            return validator !== undefined && dialect.indexKeyPrefix?.(effectiveColumnKind(validator)) !== undefined;
+        });
+
+        if (prefixed.length > 0) {
+            throw new Error(
+                `${tableName}.${index.name}: a composite unique index cannot cover ${prefixed.join(", ")} in full on this engine ` +
+                    `(its key limit forces a prefix, which would constrain the prefix rather than the value). ` +
+                    `Split it into single-column unique indexes, or store those fields as a bounded type.`,
+            );
+        }
+    }
+};
 
 /** Build the column DDL for a global table as a drizzle `SQL`: framework columns plus a typed column per declared field. */
 const globalTableColumnsDdl = (tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): SQL => {
     const fieldColumns: SQL[] = [];
+    const fullValueFields = fullValueIndexedFields(definition);
 
     for (const [field, validator] of Object.entries(definition.shape)) {
         if (!validator._meta?.column) {
@@ -49,7 +111,7 @@ const globalTableColumnsDdl = (tableName: string, definition: SchemaLike["tables
         // so an insert that omits them can't trip a constraint.
         const notNull = validator._meta.column.notNull && validator.kind !== "optional" ? " NOT NULL" : "";
 
-        fieldColumns.push(sql`${sql.identifier(field)} ${sql.raw(`${globalColumnAffinity(validator, dialect)}${notNull}`)}`);
+        fieldColumns.push(sql`${sql.identifier(field)} ${sql.raw(`${globalColumnAffinity(validator, dialect, fullValueFields.has(field))}${notNull}`)}`);
     }
 
     const frameworkColumns = [
@@ -218,6 +280,10 @@ const dropIndexIfShapeChanged = async (
 
 /** Create a global table's declared secondary indexes and its synthesized `.unique()` column indexes. */
 const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
+    assertIndexableUniqueIndexes(tableName, definition, dialect);
+
+    const fullValueFields = fullValueIndexedFields(definition);
+
     // Index column reference as drizzle SQL, with a key prefix where the engine
     // demands it (MySQL can't index its now-unbounded TEXT string columns without
     // one). Framework columns (id/_creationTime — absent from `shape`) are already
@@ -230,7 +296,7 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
         // prefixed UNIQUE index constrains the PREFIX: two distinct values that
         // agree on their first 191 characters collided as a duplicate.
         const prefix =
-            validator && dialect.indexKeyPrefix && validator._meta?.column?.unique !== true
+            validator && dialect.indexKeyPrefix && validator._meta?.column?.unique !== true && !fullValueFields.has(field)
                 ? dialect.indexKeyPrefix(effectiveColumnKind(validator))
                 : undefined;
 

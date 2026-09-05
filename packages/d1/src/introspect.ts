@@ -336,6 +336,36 @@ const listGlobalTables = async (exec: D1Exec, schema: SchemaLike): Promise<Globa
 };
 
 /**
+ * The column a page is ordered by, so `LIMIT`/`OFFSET` is real pagination.
+ *
+ * The two table kinds name their columns differently and cannot share a test:
+ * {@link resolveColumns} returns DISPLAY names for a `.global()` table (`_id`,
+ * whose physical column is `id`) and PHYSICAL names for an external one. Keying
+ * off `columns.includes("_id")` therefore ordered an external table that happens
+ * to have a literal `_id` column by an `id` it does not have.
+ *
+ * External tables are asked for their own primary key instead, which also covers
+ * `WITHOUT ROWID` — those have no `rowid` to fall back on.
+ */
+const pageOrderKey = async (exec: D1Exec, schema: SchemaLike, table: string, columns: ReadonlyArray<string>): Promise<string> => {
+    if (globalTableDefinition(schema, table) !== undefined) {
+        return quoteIdentifier("id");
+    }
+
+    const info = await exec.all(`PRAGMA table_info(${quoteIdentifier(table)})`, []);
+    const primaryKey = info.filter((column) => Number(column["pk"] ?? 0) > 0);
+
+    if (primaryKey.length === 1) {
+        return quoteIdentifier(String(primaryKey[0]?.["name"]));
+    }
+
+    // A composite key orders by no single column; `rowid` is stable and every
+    // ordinary table has one. A `WITHOUT ROWID` table always declares a primary
+    // key, so it took the branch above.
+    return columns.includes("id") ? quoteIdentifier("id") : "rowid";
+};
+
+/**
  * Read a page of rows from one D1 table. The table is validated against the live
  * browsable-table list before its name is interpolated, so this can't be coerced
  * into reading an internal table or injecting SQL. `limit` is clamped to
@@ -358,10 +388,9 @@ const readGlobalTablePage = async (exec: D1Exec, schema: SchemaLike, options: Re
     // `LIMIT ? OFFSET ?` with no ORDER BY is not pagination: SQLite may return
     // the rows in whatever order the plan produces, and two identical requests
     // are free to disagree — so a row can show up on two pages, or on none. The
-    // shard browser keyset-paginates for the same reason. Every `.global()`
-    // table has a TEXT PRIMARY KEY `id`; an external table without one orders by
-    // `rowid`, which SQLite gives every ordinary table.
-    const orderColumn = columns.includes("_id") || columns.includes("id") ? quoteIdentifier("id") : "rowid";
+    // shard browser keyset-paginates for the same reason. See `pageOrderKey`
+    // for how the ordering column is chosen for each table kind.
+    const orderColumn = await pageOrderKey(exec, schema, table, columns);
     const raw = await exec.all(`SELECT * FROM ${quoted}${whereSql} ORDER BY ${orderColumn} LIMIT ? OFFSET ?`, [...whereParams, limit, offset]);
     // Wire-encode on the way out. `decodeGlobalRow` reverses the storage form,
     // so a `v.bigint()` column is a real `bigint` and a `v.bytes()` column an

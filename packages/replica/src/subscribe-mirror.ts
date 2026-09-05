@@ -97,12 +97,19 @@ const subscribeToMirror = (
     // string compare. `stableWireKey` covers every value a decoded wire row can
     // carry (bigint, Date, bytes, …), which plain JSON would throw on or alias.
     let known = new Map<string, string>();
+    // Bumped by every `clear`. A frame that started before a clear must not
+    // publish its `known` afterwards: `clearData()` can fire from another
+    // `onChange` listener while this one is mid-frame, and the assignment at the
+    // end of the callback would otherwise restore the map the clear just reset,
+    // so the next identical frame reports no changes over an emptied table.
+    let clearGeneration = 0;
 
     // A `clearData()` sweep deletes the rows this frame memory claims are in the
     // mirror. Forget them so the next frame is diffed against an empty table and
     // re-inserts everything, instead of matching `known` and applying nothing.
     const unsubscribeMirror = mirror.onChange((reason) => {
         if (reason === "clear") {
+            clearGeneration += 1;
             known = new Map();
         }
     });
@@ -111,6 +118,11 @@ const subscribeToMirror = (
         functionRef,
         args,
         (data: unknown) => {
+            // Snapshot the clear counter before any work: `applyDiff` below fans
+            // out to every `onChange` listener, and one of them may call
+            // `clearData()`, which resets `known`. Publishing this frame's map
+            // afterwards would undo that.
+            const generation = clearGeneration;
             const next = new Map<string, string>();
             // The row behind each surviving encoding. Filled in the same pass as
             // `next`, so a repeated primary key leaves the LAST row for that key
@@ -184,7 +196,13 @@ const subscribeToMirror = (
             // above — an un-keyed row failing the NOT NULL insert — leaves `known`
             // on the last applied frame, so the deletes this frame owed are
             // re-derived by the next one instead of being orphaned forever.
-            known = next;
+            //
+            // A clear that landed while this frame was applying wins: it emptied
+            // the table, so the next frame has to re-insert everything, which
+            // only happens if `known` stays empty.
+            if (generation === clearGeneration) {
+                known = next;
+            }
         },
         { shardKey },
     );

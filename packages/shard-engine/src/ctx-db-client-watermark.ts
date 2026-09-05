@@ -28,7 +28,7 @@
  * (`commitMutationBookkeeping`, `strict`), so the watermark is durable iff the
  * writes are, and as its own write after they auto-commit on the best-effort
  * one. {@link advanceClientWatermark} spells out why the non-atomic path is
- * still safe; this line used to claim the atomic path unconditionally;
+ * still safe;
  * - `id > watermark + 1` → an out-of-order gap; the batch halts so the client
  * resends from `watermark + 1`.
  *
@@ -83,8 +83,8 @@ const readClientWatermark = (sql: SqlExec, identity: string, clientId: string): 
  * Advance an `(identity, clientId)` pair's watermark to `mutationId`. On the
  * best-effort path this runs as its own write AFTER the mutator's writes
  * auto-commit — NOT atomically with them (the transactional path,
- * `commitMutationBookkeeping(…, { strict })` in `shard-do.ts`, runs it inside
- * the handler's commit instead). The non-atomic case is safe because the gap
+ * `commitMutationBookkeeping` in `shard-do.ts`, calls this with
+ * `{ strict: true }` inside the handler's commit instead). The non-atomic case is safe because the gap
  * self-heals: a crash between the handler commit and this advance leaves the
  * watermark behind, so the client's unacked replay re-classifies as `"next"`,
  * re-runs idempotently (the idempotency row dedups the actual write), and

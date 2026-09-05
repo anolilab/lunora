@@ -115,8 +115,10 @@ const mergeDiffs = (diffs: ReadonlyArray<TableDiff>): TableDiff | null => {
 
     // Derive the merged diff's identity deterministically from its ordered
     // children's identities (each child's `id`, or its `timestamp` as a
-    // fallback): merging the SAME sequence of diffs mints the SAME merged id, a
-    // different sequence a different one. Nothing in this repo reads it — the
+    // fallback): merging the SAME sequence of diffs always mints the SAME merged
+    // id. The converse is NOT promised — `id` is optional and two children can
+    // share a `timestamp`, so distinct sequences can hash the same input, and a
+    // 64-bit digest collides regardless. Nothing in this repo reads it — the
     // apply path keys id-less inserts off row content — so this is a property of
     // the public `id` field for consumers that dedupe on it, not an input to
     // anything downstream.
