@@ -65,11 +65,15 @@ export interface UploadOptions {
 
     /**
      * Maximum body size in bytes. For `ArrayBuffer`/`Blob` sources the length is
-     * known up front and rejected before the upload starts. For a
-     * `ReadableStream` the length isn't known synchronously, so the stream is
-     * piped through a byte counter that aborts the upload once the limit is
-     * exceeded — this also guards against R2 silently accepting/truncating an
-     * unbounded stream.
+     * known up front and rejected before the upload starts.
+     *
+     * A `ReadableStream` has no length to check, and R2 refuses any stream whose
+     * length it cannot read — so a capped stream is READ INTO MEMORY under the
+     * cap and uploaded as a sized body. Nothing reaches the bucket if the body
+     * crosses the limit. `maxSize` is therefore also the memory ceiling for a
+     * streamed upload: for objects too large to hold in a Worker, either omit
+     * `maxSize` (R2 then reads the body's own length and streams it through) or
+     * use `createMultipartUpload` / `createUploadHandler`.
      */
     maxSize?: number;
 

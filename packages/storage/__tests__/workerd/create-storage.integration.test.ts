@@ -89,4 +89,57 @@ describe("createStorage (workerd + Miniflare R2 integration)", () => {
 
         expect(got).toBeNull();
     });
+
+    // R2 refuses any `ReadableStream` whose length it cannot read, so a `maxSize`
+    // that wraps the body in a plain `TransformStream` makes every streaming
+    // upload fail with "Provided readable stream must have a known length".
+    // The unit suite's fake bucket accepts any stream, so only workerd sees it.
+    it("uploads a ReadableStream body under maxSize", async () => {
+        expect.assertions(2);
+
+        const sut = storage();
+
+        await sut.upload("streamed/ok.txt", new Blob([new TextEncoder().encode("streamed body")]).stream(), {
+            contentType: "text/plain",
+            maxSize: 1024,
+        });
+
+        const got = await sut.download("streamed/ok.txt");
+
+        expect(got).not.toBeNull();
+        await expect(got!.text()).resolves.toBe("streamed body");
+    });
+
+    it("rejects a ReadableStream body over maxSize without storing it", async () => {
+        expect.assertions(2);
+
+        const sut = storage();
+
+        await expect(
+            sut.upload("streamed/too-big.txt", new Blob([new TextEncoder().encode("far too many bytes for this cap")]).stream(), { maxSize: 8 }),
+        ).rejects.toThrow(/maxSize/);
+
+        await expect(sut.download("streamed/too-big.txt")).resolves.toBeNull();
+    });
+
+    // R2 omits `httpMetadata`/`customMetadata` from list entries unless the call
+    // asks for them (`r2_list_honor_include`, on for every compat date since
+    // 2022-08-04). The fake bucket returns whatever it stored, so only workerd
+    // shows the empty objects a real bucket sends back.
+    it("list reports httpMetadata and customMetadata for each entry", async () => {
+        expect.assertions(2);
+
+        const sut = storage();
+
+        await sut.upload("meta/one.txt", new TextEncoder().encode("m").buffer, {
+            contentType: "text/plain",
+            customMetadata: { owner: "u1" },
+        });
+
+        const listed = await sut.list("meta/");
+        const entry = listed.objects.find((object) => object.key === "meta/one.txt");
+
+        expect(entry?.httpMetadata?.contentType).toBe("text/plain");
+        expect(entry?.customMetadata).toStrictEqual({ owner: "u1" });
+    });
 });
