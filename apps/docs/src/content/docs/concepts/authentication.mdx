@@ -122,6 +122,28 @@ export default {
 Because the routes are mounted, the browser talks to better-auth directly. Your
 functions never implement sign-in; they only _read_ the resolved `ctx.auth`.
 
+Two things about `ensureMigrated`, both of which bite exactly once:
+
+It drives better-auth's own migrator, which speaks **only** Kysely, so it needs
+the raw D1 binding as `database` — as above. Hand it a Lunora adapter
+(`lunoraD1Adapter`, `lunoraAuthAdapter`, `lunoraDoAdapter`) and it throws
+`AUTH_MIGRATOR_UNSUPPORTED`. Build a second, migration-only instance over the raw
+binding and keep the adapter on the one that serves requests; the adapter exists
+to dodge a dev-runner hang in `$context`, which the migration instance never
+resolves.
+
+And call it **once per isolate**, holding the promise rather than a flag, because
+better-auth emits a bare `CREATE TABLE`: two concurrent runs against a fresh
+database leave the loser with `table user already exists`, and since this sits
+ahead of the router that 500s every route. `defineApp().auth(...)` does both for
+you.
+
+better-auth owns those tables. Don't also declare `user` / `session` / `account`
+/ `verification` / `rateLimit` in `lunora/schema.ts` — two owners for one table
+means Lunora creates it with its own column layout and better-auth then plans an
+`ALTER TABLE … ADD COLUMN … NOT NULL` that SQLite rejects outright. Lunora's
+`.global()` tables are for your data.
+
 ## The client side
 
 On the client, identity is a token carried on the shared `LunoraClient`. After a

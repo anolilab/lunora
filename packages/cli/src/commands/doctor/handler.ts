@@ -34,8 +34,10 @@ const DOCTOR_CODES = [
     "d1-placeholder-id",
     "declared-export-missing",
     "declared-export-ok",
+    "declared-export-unchecked",
     "dev-vars-missing-secret",
     "email-destination-placeholder",
+    "schema-unreadable",
     "vector-metadata-index-required",
     "vector-metadata-unfilterable",
     "version-counter-spread",
@@ -156,7 +158,23 @@ const checkWrangler = (parsed: WranglerConfig | undefined, path: string | undefi
  * wrangler directly — and to name the exact command.
  */
 const checkVectorMetadataIndexes = (cwd: string, findings: Finding[]): void => {
-    const { info } = discoverSchemaInfo(cwd, "lunora");
+    const { error, info } = discoverSchemaInfo(cwd, "lunora");
+
+    // `error` set means the schema is present but could not be parsed — "I could
+    // not look", not "I looked and found nothing". Discarding it and falling
+    // through to `?? []` produced zero findings and exit 0 over a schema that
+    // fails every downstream command, and `runDoctor` has no other schema-parse
+    // check to catch it.
+    if (error !== undefined) {
+        findings.push({
+            code: "schema-unreadable",
+            fix: "Fix the parse error, then re-run `lunora doctor`. `lunora codegen` reports the same failure with the offending source.",
+            level: "fail",
+            message: `lunora/schema.ts could not be parsed, so every schema-derived check was skipped: ${error}`,
+        });
+
+        return;
+    }
 
     for (const declaration of info?.vectorMetadata ?? []) {
         const type = metadataTypeFor(declaration.kind);
@@ -302,8 +320,21 @@ const checkDeclaredExports = async (cwd: string, findings: Finding[]): Promise<v
 
     try {
         inferred = await inferLunoraBindings({ projectRoot: cwd });
-    } catch {
-        return; // inference is best-effort; other checks own the real failures.
+    } catch (error: unknown) {
+        // Best-effort — other checks own the real failures, so this does not fail
+        // the run. It is still SAID: a silent return made a skipped check
+        // indistinguishable from a clean one, which is the same shape of quiet the
+        // check itself looks for. `lunora codegen`'s sibling was fixed for exactly
+        // this reason; doctor, the command whose whole job is to say what it
+        // found, was not.
+        findings.push({
+            code: "declared-export-unchecked",
+            fix: "Make sure the worker entry resolves (see `lunora codegen`), then re-run.",
+            level: "warn",
+            message: `could not check whether declared containers/workflows/agents are re-exported by the worker entry: ${error instanceof Error ? error.message : String(error)}`,
+        });
+
+        return;
     }
 
     const gaps = collectExportGaps(inferred);

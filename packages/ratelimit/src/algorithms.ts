@@ -65,9 +65,9 @@ const projectTokenBucket = (
  * Project a fixed window's stored state forward to `now`: the `{ ts, value }` of
  * the (possibly rolled-over) current window before any consumption. A negative
  * prior `value` is a reserved debt and is carried across the window boundary so
- * the debt is genuinely repaid out of the next grant (matching the token
- * bucket), rather than silently forgiven. Positive leftovers roll over only when
- * an explicit `capacity` is set. Shared by {@link evaluate} and
+ * the debt is genuinely repaid out of the elapsed windows' grants (matching the
+ * token bucket), rather than silently forgiven. Positive leftovers roll over
+ * only when an explicit `capacity` is set. Shared by {@link evaluate} and
  * {@link availableAt}.
  */
 const projectFixedWindow = (config: RateLimitConfig, prior: RateLimitValue | undefined, now: number): { ts: number; value: number } => {
@@ -76,6 +76,7 @@ const projectFixedWindow = (config: RateLimitConfig, prior: RateLimitValue | und
 
     if (!prior || prior.ts < windowStart) {
         let carry = 0;
+        let periods = 1;
 
         // Carry the prior balance forward when it is reserved debt (a negative
         // balance that must survive the boundary and be repaid, never forgiven)
@@ -83,9 +84,20 @@ const projectFixedWindow = (config: RateLimitConfig, prior: RateLimitValue | und
         // `capacity === rate` disables cross-window rollover).
         if (prior && (prior.value < 0 || config.capacity !== undefined)) {
             carry = prior.value;
+            // One grant per ELAPSED window, the way the token bucket refills per
+            // elapsed millisecond — the cap below still bounds the result.
+            //
+            // Granting a single period's rate however long the key sat idle
+            // strands any debt >= `rate` permanently: the rejection path
+            // persists nothing (`value: undefined`), so every later call
+            // re-projects that same stored debt against that same lone grant and
+            // lands back at zero. Two oversized reserves in one window would
+            // then deny a tenant forever while promising "retry next window"
+            // every window.
+            periods = Math.max(1, Math.ceil((windowStart - prior.ts) / config.period));
         }
 
-        return { ts: windowStart, value: Math.min(capacityOf(config), carry + config.rate) };
+        return { ts: windowStart, value: Math.min(capacityOf(config), carry + periods * config.rate) };
     }
 
     return { ts: prior.ts, value: prior.value };
@@ -153,7 +165,8 @@ const tokenBucket = (config: RateLimitConfig, prior: RateLimitValue | undefined,
  * Fixed window: `rate` tokens are granted at the start of each window aligned
  * to `start + n * period`. With an explicit `capacity > rate`, unused tokens
  * roll into the next window up to `capacity`. Reserved debt (a negative balance)
- * is carried across the boundary and repaid out of the next grant.
+ * is carried across the boundary and repaid out of the elapsed windows' grants,
+ * so a debt larger than one window's `rate` still clears.
  */
 const fixedWindow = (config: RateLimitConfig, prior: RateLimitValue | undefined, options: EvaluateOptions): EvaluateResult => {
     const capacity = capacityOf(config);
@@ -194,15 +207,22 @@ const slidingWindow = (config: RateLimitConfig, prior: RateLimitValue | undefine
 
     // Time for the decaying previous-window contribution to make room for `count`,
     // crossing into the next window when the current window alone is already full.
-    const retryAfter = (): number => {
-        const headroomNow = limit - currentCount - options.count;
+    //
+    // `current` is the count that will be in the current window ONCE THIS CALL IS
+    // ACCOUNTED FOR, and must be passed as such: a reserve persists
+    // `currentCount + count`, so deriving its clear time from the pre-reserve
+    // `currentCount` under-reports it — the caller wakes at a time the reserve it
+    // just took still denies, and burns a rejected attempt. A rejection persists
+    // nothing, so there `current` is `currentCount`.
+    const retryAfter = (current: number): number => {
+        const headroomNow = limit - current - options.count;
 
         if (previousCount > 0 && headroomNow >= 0) {
             return Math.ceil(period - elapsed - (headroomNow * period) / previousCount);
         }
 
         const headroomNext = limit - options.count;
-        const intoNext = currentCount > 0 ? Math.max(0, period - (headroomNext * period) / currentCount) : 0;
+        const intoNext = current > 0 ? Math.max(0, period - (headroomNext * period) / current) : 0;
 
         return Math.ceil(period - elapsed + intoNext);
     };
@@ -210,14 +230,14 @@ const slidingWindow = (config: RateLimitConfig, prior: RateLimitValue | undefine
     if (admit || (options.consume && options.reserve && options.count <= limit)) {
         const value: RateLimitValue = { prev: previousCount, ts: windowStart, value: currentCount + options.count };
 
-        return { status: { ok: true, retryAfter: admit ? 0 : retryAfter() }, value: options.consume ? value : undefined };
+        return { status: { ok: true, retryAfter: admit ? 0 : retryAfter(value.value) }, value: options.consume ? value : undefined };
     }
 
     if (options.count > limit) {
         throwCountExceedsCapacity(options.count, limit);
     }
 
-    return { status: { ok: false, reason: "rate", retryAfter: retryAfter() }, value: undefined };
+    return { status: { ok: false, reason: "rate", retryAfter: retryAfter(currentCount) }, value: undefined };
 };
 
 /**

@@ -6,6 +6,7 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { collectPages } from "../../../shared/collect-pages";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
+import { isDuplicateInstanceError } from "../../../shared/duplicate-instance";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
@@ -2868,14 +2869,40 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     /**
-     * Start a fresh durable-workflow instance: resolve `binding` off `env` and
+     * Start a durable-workflow instance: resolve `binding` off `env` and
      * `create()` it with `args` as its `params`. A missing/malformed binding is a
      * hard failure (the job can't run) surfaced as a 500, so the caller's
      * invocation fails rather than silently no-op'ing. Shared by cron-fire
      * ({@link runOneCronJob}) and one-shot scheduler dispatch
      * ({@link handleSchedulerDispatch}); `label` names the caller in the error.
+     *
+     * `instanceId` is the idempotency key, and the two callers answer it
+     * differently on purpose.
+     *
+     * **Scheduler dispatch passes the record id.** That path is at-least-once: a
+     * DO eviction, an edge 502 or a transport blip after this origin already
+     * started the workflow makes `SchedulerDO.dispatch()` report failure, and
+     * `recordRetry` re-fires the SAME record up to `MAX_RETRY_ATTEMPTS` times
+     * (`reindexOrphanedRecords` and `drainRecord`'s swallowed post-success cleanup
+     * re-fire it too). Without an id Cloudflare mints a fresh random instance for
+     * each of those, so one scheduled job runs its whole pipeline up to five times
+     * — while two scheduler docblocks justify the retry loop with "idempotent
+     * dispatch keyed by record id". The record id is already on the wire and
+     * already constrained to a safe key segment by `resolveScheduleId`, which is
+     * exactly what `create({ id })` accepts.
+     *
+     * **The cron path passes nothing.** There is no record id there, every
+     * scheduled fire of an expression is a distinct run, and the admin "Run now"
+     * trigger has to be repeatable on demand — a stable per-job key would make the
+     * second fire a duplicate and silently never run again. Cron has no re-fire
+     * loop to dedupe against, so a fresh instance per fire is the correct
+     * semantics rather than a gap.
+     *
+     * A duplicate-instance rejection is therefore SUCCESS: it is the proof that a
+     * previous attempt's create already landed. Every other rejection propagates,
+     * so the record stays retryable.
      */
-    const startWorkflowInstance = async (binding: string, args: Record<string, unknown>, env: unknown, label: string): Promise<void> => {
+    const startWorkflowInstance = async (binding: string, args: Record<string, unknown>, env: unknown, label: string, instanceId?: string): Promise<void> => {
         const candidate = (env as Record<string, unknown> | null | undefined)?.[binding];
 
         if (!candidate || typeof (candidate as { create?: unknown }).create !== "function") {
@@ -2897,7 +2924,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             });
         }
 
-        await (candidate as WorkflowBindingLike).create({ params: args });
+        try {
+            await (candidate as WorkflowBindingLike).create(instanceId === undefined ? { params: args } : { id: instanceId, params: args });
+        } catch (error: unknown) {
+            if (!isDuplicateInstanceError(error)) {
+                throw error;
+            }
+        }
     };
 
     /**
@@ -3130,9 +3163,22 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         const args = (candidate.args ?? {}) as Record<string, unknown>;
 
-        // A workflow/agent target starts a fresh durable instance (the args become
-        // its `params`) rather than dispatching a function to a shard — the
+        // Forward the scheduler record id as the idempotency key so an at-least-once
+        // re-fire (a retry after the origin response was lost but the side effect
+        // already committed) is deduped rather than double-applying the job. This
+        // makes the scheduler's "idempotent dispatch keyed by record id" contract
+        // actually hold. Derived BEFORE the workflow branch below, which returns:
+        // that branch is exactly the one the scheduler's retry loop re-fires, and
+        // leaving it without an id let one scheduled workflow run its whole
+        // pipeline once per retry attempt.
+        const recordId = typeof candidate.id === "string" && candidate.id.length > 0 ? candidate.id : undefined;
+
+        // A workflow/agent target starts a durable instance (the args become its
+        // `params`) rather than dispatching a function to a shard — the
         // `WORKFLOW_*`/`AGENT_*` binding lives on the runtime's `env`, not the DO.
+        // The record id becomes the INSTANCE id, so a re-fire attaches to the
+        // running instance instead of starting a second one; the function path
+        // below spends the same id as the shard's replay-dedup `mutationId`.
         //
         // It still releases its pool slot. `Scheduler.runAt` accepts a
         // `WorkflowReference` alongside `RunOptions.pool`, and `reservePoolSlot`
@@ -3140,7 +3186,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // hold a slot, and returning before the release below wedged the pool for
         // good at the default `maxConcurrency: 1`.
         if (typeof candidate.workflow === "string" && candidate.workflow.length > 0) {
-            await startWorkflowInstance(candidate.workflow, args, env, "scheduled workflow");
+            await startWorkflowInstance(candidate.workflow, args, env, "scheduled workflow", recordId);
 
             await releasePoolSlot(candidate);
 
@@ -3152,12 +3198,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         const shardKey = typeof candidate.shardKey === "string" && candidate.shardKey.length > 0 ? candidate.shardKey : defaultShard;
-        // Forward the scheduler record id as the idempotency key so an at-least-once
-        // re-fire (a retry after the origin response was lost but the side effect
-        // already committed) is deduped by the DO rather than double-applying the
-        // job. This makes the scheduler's "idempotent dispatch keyed by record id"
-        // contract actually hold.
-        const mutationId = typeof candidate.id === "string" && candidate.id.length > 0 ? candidate.id : undefined;
 
         // A server-initiated dispatch may forward a verified caller identity on the
         // `x-lunora-userid` / `x-lunora-identity` headers (e.g. a voice session
@@ -3166,7 +3206,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // headers pass through to the shard alongside the system flag for RLS.
         const identity = readForwardedIdentity(request);
 
-        const response = await dispatchToShard(candidate.functionPath, args, shardKey, mutationId, identity);
+        const response = await dispatchToShard(candidate.functionPath, args, shardKey, recordId, identity);
 
         // Workpool jobs hold a concurrency slot until the action settles; release
         // it. Best-effort only in that a failure can't fail this dispatch — a

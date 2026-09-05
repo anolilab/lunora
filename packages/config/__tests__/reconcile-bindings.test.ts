@@ -359,6 +359,50 @@ describe("reconcileWranglerBindings", () => {
         expect(readConfig().r2_buckets).toBeUndefined();
     });
 
+    it("keeps warning about pipelines until the binding codegen resolves actually exists", () => {
+        expect.assertions(3);
+
+        // Codegen resolves ONE fixed name — `config.pipelines?.(env) ?? env.PIPELINES`
+        // — and `pipelines` has no `defineApp` override, so a differently-named
+        // entry satisfies the wrangler validator while `ctx.pipelines.send()`
+        // still throws at runtime. Keying the hint on array length silenced it
+        // for exactly that config, and nothing before runtime ever named
+        // PIPELINES.
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "pipelines": [{ "binding": "EVENTS", "pipeline": "events" }],
+}
+`,
+            "utf8",
+        );
+
+        const wrongName = reconcileWranglerBindings(root, baseInferred({ usesPipelines: true }));
+
+        expect(wrongName.warnings.join(" ")).toMatch(/PIPELINES/u);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "pipelines": [{ "binding": "PIPELINES", "pipeline": "events" }],
+}
+`,
+            "utf8",
+        );
+
+        expect(reconcileWranglerBindings(root, baseInferred({ usesPipelines: true })).warnings.join(" ")).not.toMatch(/pipelines binding/u);
+        // The pipeline resource is un-mintable, so nothing is auto-written either way.
+        expect(readConfig().pipelines).toStrictEqual([{ binding: "PIPELINES", pipeline: "events" }]);
+    });
+
     it("warns when Flagship binding mode is used but no flagship binding exists, without writing one", () => {
         expect.assertions(2);
 

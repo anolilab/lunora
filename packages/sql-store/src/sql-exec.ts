@@ -153,7 +153,15 @@ interface SqlCtxExec {
     run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<SqlRunResult | void>;
 }
 
-/** SQLite storage encode for `.global()` column values — the shared `@lunora/sql-store` codec (SQLite has no boolean, so true/false → 1/0). */
+/**
+ * SQLite storage encode for `.global()` column values — the shared
+ * `@lunora/sql-store` codec (SQLite has no boolean, so true/false → 1/0).
+ *
+ * Kind-blind, because it is also what binds every WHERE comparison and the rank
+ * companion's sort keys, where the two sides have to agree byte for byte.
+ * A write that knows which column it is filling uses
+ * {@link serializeDocumentColumn} instead.
+ */
 const serializeColumnValue: (value: unknown) => unknown = sqliteEncode;
 
 /** Structural read of a validator's `.nullable()` flag — `.nullable()` is the one thing that clears `notNull`. */
@@ -212,6 +220,37 @@ const columnKinds = (definition: TableDefinitionLike): [string, string | undefin
 
     return kinds;
 };
+
+/**
+ * `field → effective column kind` for the write path, keyed and memoized like
+ * {@link columnKinds} (which is ordered for the row decode; a write looks one
+ * field up at a time, so it wants a map).
+ */
+const columnKindByFieldCache = new WeakMap<TableDefinitionLike, Map<string, string | undefined>>();
+
+const columnKindOf = (definition: TableDefinitionLike, field: string): string | undefined => {
+    let byField = columnKindByFieldCache.get(definition);
+
+    if (byField === undefined) {
+        byField = new Map(columnKinds(definition).map(([name, kind]) => [name, kind]));
+        columnKindByFieldCache.set(definition, byField);
+    }
+
+    return byField.get(field);
+};
+
+/**
+ * Storage encode for one column of a document being WRITTEN, with the column's
+ * declared kind in hand.
+ *
+ * The inverse of {@link decodeGlobalRow}, and it exists for the same reason:
+ * `v.any()`/`v.union()`/`v.from()` store in a TEXT column whatever their runtime
+ * value happens to be, so a number or boolean was coerced to text on the way in
+ * and had no type to be reversed with on the way out — `42` read back `"42.0"`.
+ * Only a caller that knows the column can encode those unambiguously.
+ */
+const serializeDocumentColumn = (definition: TableDefinitionLike, field: string, value: unknown): unknown =>
+    sqliteEncode(value, columnKindOf(definition, field));
 
 /**
  * Decode a SELECTed row back into a document: `id` → `_id`, `_creationTime`
@@ -340,6 +379,7 @@ export {
     queryBatch,
     queryRun,
     serializeColumnValue,
+    serializeDocumentColumn,
     tableColumns,
 };
 

@@ -50,7 +50,7 @@ import { discoverQueues } from "./discover/queues";
 import { discoverSandboxUsage } from "./discover/sandbox";
 import discoverStorageRulesMetadata from "./discover/storage-rules";
 import { discoverWorkflows } from "./discover/workflows";
-import { emitDataModel, emitServer } from "./emit";
+import { buildStorageColumns, emitDataModel, emitServer } from "./emit";
 import type { AgentIR, ContainerIR, CronJobIR, EnvIR, IdentityIR, QueueIR, SchemaIR, StorageRulesMetadataIR, WorkflowIR } from "./ir";
 import type { PlatformGateResult } from "./platform-target";
 import { gatePlatformFeatures, resolveCodegenTarget } from "./platform-target";
@@ -286,7 +286,15 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // Before either render: a schema needing an uninstalled add-on must fail as an
     // actionable error naming the package, not as a `tsc` failure reported inside
     // a generated file the user did not write.
-    assertRequiredPackages(schema, declaredDependencies, vectorStoreSupported);
+    //
+    // The two signal-driven entries mirror how `run-codegen` builds the app
+    // emitter's `hasScheduler` / `hasStorage` — minus its `dependencies.has(...)`
+    // arm, which is the very question being asked here.
+    assertRequiredPackages(schema, declaredDependencies, {
+        hasVectors: vectorStoreSupported,
+        scheduler: featureUsage.scheduler || crons.length > 0,
+        storage: featureUsage.storage || storageRulesMetadata.rules.length > 0 || Object.keys(buildStorageColumns(schema)).length > 0,
+    });
 
     const hasFlags = existsSync(join(lunoraDirectory, "flags.ts"));
     const hasNotify = existsSync(join(lunoraDirectory, "notify.ts"));

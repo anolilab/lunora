@@ -399,4 +399,84 @@ describe("d1 introspect", () => {
             await expect(facetGlobalColumn(harness.exec, schema, { column: "k", table: "_cf_KV" })).rejects.toMatchObject({ code: "UNKNOWN_TABLE" });
         });
     });
+
+    /**
+     * Only a `.global()` table lives in D1, so a same-named `.shardBy()`/root
+     * table in the schema describes a Durable Object's storage — not the D1
+     * table the browser is reading. Treating that name as "declared" decoded
+     * better-auth's `user` table as a `.global()` row: redaction never ran, and
+     * the two guards that exist because redaction is imperfect (the eq-filter
+     * equality oracle and the facet's masked bucket) went inert at the same time.
+     */
+    describe("a schema table that shadows an external D1 table", () => {
+        // `user` is declared shard-local here — better-auth's real D1 `user`
+        // table is what the browser reads.
+        const shadowing: SchemaLike = {
+            tables: {
+                ...schema.tables,
+                user: { indexes: [], shape: { email: col("string") } },
+            },
+        };
+
+        it("still redacts the external table's sensitive columns", async () => {
+            expect.assertions(3);
+
+            const page = await readGlobalTablePage(harness.exec, shadowing, { table: "user" });
+
+            expect(page.columns).toEqual(["id", "email", "passwordHash"]);
+            expect(page.rows[0]).toEqual({ email: "ada@example.com", id: "u1", passwordHash: "•••" });
+            expect(JSON.stringify(page.rows)).not.toContain("super-secret-hash");
+        });
+
+        it("still refuses an eq filter on a redacted column", async () => {
+            expect.assertions(1);
+
+            await expect(
+                readGlobalTablePage(harness.exec, shadowing, { filters: [{ column: "passwordHash", value: "super-secret-hash" }], table: "user" }),
+            ).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+        });
+
+        it("still collapses a facet over a redacted column to one masked bucket", async () => {
+            expect.assertions(1);
+
+            const facet = await facetGlobalColumn(harness.exec, shadowing, { column: "passwordHash", table: "user" });
+
+            expect(facet.values).toEqual([{ count: 1, value: "•••" }]);
+        });
+    });
+
+    describe("deterministic ordering", () => {
+        it("orders the page read so a row cannot appear on two pages or none", async () => {
+            expect.assertions(3);
+
+            await harness.exec.run(`INSERT INTO "organizations" VALUES ('o3', 3, 'Initech', 1)`, []);
+
+            const first = await readGlobalTablePage(harness.exec, schema, { limit: 2, offset: 0, table: "organizations" });
+            const second = await readGlobalTablePage(harness.exec, schema, { limit: 2, offset: 2, table: "organizations" });
+
+            // `LIMIT/OFFSET` with no ORDER BY leaves the row order to the plan,
+            // so the two pages could overlap or skip. Keyed on the TEXT primary
+            // key, they partition the table.
+            expect(first.rows.map((row) => row["_id"])).toStrictEqual(["o1", "o2"]);
+            expect(second.rows.map((row) => row["_id"])).toStrictEqual(["o3"]);
+            expect(new Set([...first.rows, ...second.rows].map((row) => row["_id"])).size).toBe(3);
+        });
+
+        it("breaks facet count ties on the value, so the top-N cut is stable", async () => {
+            expect.assertions(2);
+
+            // Three distinct values, each seen once: on `count DESC` alone which
+            // two survive a `limit: 2` is up to the planner, and so is whether
+            // the result claims to be truncated.
+            await harness.exec.run(`INSERT INTO "plans" VALUES ('p2', 2, 'pro'), ('p3', 3, 'enterprise')`, []);
+
+            const facet = await facetGlobalColumn(harness.exec, schema, { column: "tier", limit: 2, table: "plans" });
+
+            expect(facet.values).toStrictEqual([
+                { count: 1, value: "enterprise" },
+                { count: 1, value: "free" },
+            ]);
+            expect(facet.truncated).toBe(true);
+        });
+    });
 });

@@ -1,6 +1,8 @@
 import type { CodegenOptions } from "@lunora/codegen";
+import { CodegenDiagnosticError, runCodegen } from "@lunora/codegen";
 
 import { collectWranglerSecretVariables } from "../cloudflare/wrangler-secret-variables";
+import { CODEGEN_ENV, isCodegenDisabled } from "../codegen-env";
 
 /** The request fields a studio endpoint carries that shape its codegen run. */
 interface StudioCodegenRequest {
@@ -35,5 +37,39 @@ const studioCodegenOptions = (request: StudioCodegenRequest): CodegenOptions => 
     };
 };
 
+/**
+ * Regenerate after a studio endpoint wrote the project's source, honouring the
+ * codegen switch. Returns the diagnostics to surface in the response body.
+ *
+ * The gate is here, not in each endpoint, because every studio endpoint that
+ * writes source regenerates through this one function — and the two that existed
+ * both called `runCodegen` unconditionally, so `lunora dev --no-codegen` printed
+ * that `_generated/` is written only by an explicit `lunora codegen` and then one
+ * studio "add column" rewrote the whole tree. `--no-codegen` and
+ * {@link CODEGEN_ENV} are one switch with two spellings (the flag travels as the
+ * variable so it reaches processes that never see argv), so reading the variable
+ * is reading the flag.
+ *
+ * Codegen diagnostics surface in the response rather than failing the write: the
+ * file is already on disk. Any other error is the caller's to turn into a `500`.
+ */
+const runStudioCodegen = (request: StudioCodegenRequest): ReadonlyArray<string> => {
+    if (isCodegenDisabled(process.env[CODEGEN_ENV])) {
+        return [`codegen is off (${CODEGEN_ENV}=0 / \`lunora dev --no-codegen\`) — the source was written but \`_generated/\` was NOT regenerated`];
+    }
+
+    try {
+        runCodegen(studioCodegenOptions(request));
+    } catch (error: unknown) {
+        if (error instanceof CodegenDiagnosticError) {
+            return [error.message];
+        }
+
+        throw error;
+    }
+
+    return [];
+};
+
 export type { StudioCodegenRequest };
-export { studioCodegenOptions };
+export { runStudioCodegen, studioCodegenOptions };

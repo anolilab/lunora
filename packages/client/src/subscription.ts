@@ -5,6 +5,33 @@ import type { FunctionReference } from "./types";
 
 export type SubscriptionCallback = (data: unknown) => void;
 
+/**
+ * The high-water marks a shape poke has now synced to the client: `checkpoint`
+ * is the op-log cursor and `mutationId` the highest custom-mutator id the server
+ * echoed for this client. A `@lunora/db` collection feeds these into its
+ * checkpoint registry to drop optimistic overlays once the server's authoritative
+ * rows have landed.
+ */
+export interface SyncWatermark {
+    checkpoint?: number;
+    mutationId?: number;
+
+    /**
+     * `true` only on the checkpoint a `data`/`delta` frame fires immediately
+     * before that same frame's rowset callback — i.e. the one checkpoint whose
+     * `mutationId` describes rows that are about to arrive.
+     *
+     * A `settled` frame (and a cross-tab `subscription-settled` relay) fires a
+     * checkpoint with NO matching rowset, because the server suppressed a data
+     * frame whose value didn't change. A consumer that stashes `mutationId` for
+     * the next rowset to consume — `@lunora/db`'s `pendingFrameWatermark` — must
+     * not stash those, or the value sits until some later unstamped frame eats
+     * it and the checkpoint gate resolves at a stale watermark instead of
+     * falling back to the RPC-ack compensator.
+     */
+    rowsFollow?: boolean;
+}
+
 /** A subscription-scoped error the server pushed for this subscription id. */
 export interface SubscriptionError {
     /**
@@ -67,7 +94,7 @@ export interface SubscriptionState {
      * `errorCallbacks`) and a `settled` frame fans out to all of them. Plain
      * `useQuery` consumers register nothing, leaving the set empty.
      */
-    readonly checkpointCallbacks: Set<(watermark: { checkpoint?: number; mutationId?: number }) => void>;
+    readonly checkpointCallbacks: Set<(watermark: SyncWatermark) => void>;
     /** Notified when the server rejects this subscription (e.g. admin auth). */
     readonly errorCallbacks: Set<SubscriptionErrorCallback>;
     readonly fn: FunctionReference;

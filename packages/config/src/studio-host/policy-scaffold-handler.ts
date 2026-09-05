@@ -22,13 +22,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, relative } from "node:path";
 
 import type { CodegenOptions } from "@lunora/codegen";
-import { CodegenDiagnosticError, runCodegen } from "@lunora/codegen";
 import { LunoraError } from "@lunora/errors";
 
 import join from "../path";
 import type { DestructivePolicyEdit, PolicyEdit, PolicyScaffoldFailureReason, ScaffoldPolicyEdit, WireRlsEdit } from "../schema-edit/policy-scaffold";
 import { classifyPolicyEdit, resolveServerModule, scaffoldPolicyFile, wireRlsIntoProcedure } from "../schema-edit/policy-scaffold";
-import { studioCodegenOptions } from "./codegen-options";
+import { runStudioCodegen } from "./codegen-options";
 import writeFileAtomic from "./write-atomic";
 
 /**
@@ -89,16 +88,12 @@ const statusForFailure = (reason: PolicyScaffoldFailureReason): number => {
  * is a hard `500`.
  */
 const runCodegenForResponse = (request: PolicyScaffoldRequest, okBody: Record<string, unknown>): PolicyScaffoldResponse => {
-    let diagnostics: ReadonlyArray<string> = [];
+    let diagnostics: ReadonlyArray<string>;
 
     try {
-        runCodegen(studioCodegenOptions(request));
+        diagnostics = runStudioCodegen(request);
     } catch (error: unknown) {
-        if (error instanceof CodegenDiagnosticError) {
-            diagnostics = [error.message];
-        } else {
-            return { body: { error: error instanceof Error ? error.message : String(error), ok: false }, status: 500 };
-        }
+        return { body: { error: error instanceof Error ? error.message : String(error), ok: false }, status: 500 };
     }
 
     return { body: { ...okBody, diagnostics, ok: true }, status: 200 };

@@ -27,9 +27,11 @@ export type SqlAffinity = "BLOB" | "INTEGER" | "REAL" | "TEXT";
  * - `boolean` → INTEGER (stored as 1/0)
  * - `number`/`timestamp`/`date` → REAL (numeric, never coerced to text)
  * - `bytes` → BLOB
- * - everything else → TEXT — string/id/literal, `bigint` (serialized as a
- * decimal string), and object/array/record/union/any (JSON). A numeric affinity
- * would coerce a numeric-looking string and corrupt the decode.
+ * - everything else → TEXT — string/id/literal, `bigint` (the order-preserving
+ * 40-character key `bigintSqlKey` builds: a sign character plus 39 digits, so
+ * text comparison agrees with numeric comparison and an index range scan is
+ * correct), and object/array/record/union/any (JSON). A numeric affinity would
+ * coerce a numeric-looking string and corrupt the decode.
  */
 export const sqlAffinityForKind = (kind: string | undefined): SqlAffinity => {
     switch (kind) {

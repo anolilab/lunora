@@ -111,4 +111,55 @@ const voiceCloseError = (prefix: string, event: unknown): Error | undefined => {
     return new Error(`${prefix}: authentication token expired — refresh the credential and start a new call`);
 };
 
-export { agentNameFromReference, voiceCloseError, voiceSocketUrl };
+/**
+ * The subset of `LunoraClient` {@link watchVoiceIdentity} needs. Structural so
+ * this file stays dependency-free (see the module docblock).
+ */
+interface VoiceIdentitySource {
+    currentIdentity: () => string | null;
+    onAuthTokenChange: (listener: (token: string | null) => void) => () => void;
+}
+
+/**
+ * End a live call when the signed-in identity changes underneath it.
+ *
+ * A voice socket's credential is fixed at the upgrade: the browser sends its
+ * cookie once, and on React Native the client's wrapped `WebSocket` injects the
+ * auth header once, at construction. Nothing re-credentials an already-open
+ * socket. `LunoraClient` handles the equivalent on its own sockets by closing
+ * them so the reconnect carries the new value ({@link file://../packages/client/src/lunora-client.ts}'s
+ * `setWsToken`/`setAuthToken`), but that bounce never reached the voice socket —
+ * so a sign-out or a user switch mid-call left the session running, and still
+ * writing its `agents:*` thread, under the PREVIOUS user's identity.
+ *
+ * Keyed on the client's identity fingerprint, not the raw token: a routine JWT
+ * refresh for the same subject emits a token change and must NOT drop a call in
+ * progress. Only a fingerprint move — sign-out, sign-in, switching users — does.
+ *
+ * There is deliberately no reconnect. The primitive holds per-call state (the
+ * live thread, the microphone, the partial transcript) that belongs to the
+ * identity that opened it; resuming it under a different one would be the bug,
+ * not the fix. The caller tears the call down and surfaces the error, and the
+ * app starts a new call when it wants one.
+ *
+ * Note this is NOT the `?token=` channel the shard socket uses. The voice
+ * upgrade has no `LUNORA_WS_BEARER` gate (`@lunora/runtime`'s
+ * `handleVoiceUpgrade` authorizes per-`threadKey` via `authorizeShard` plus the
+ * resolved identity) and resolves identity from the `authorization`/`cookie`
+ * headers only — a query token would be read by nothing on that path.
+ *
+ * @returns an unsubscribe to call from the primitive's teardown.
+ */
+const watchVoiceIdentity = (client: VoiceIdentitySource, prefix: string, onIdentityChanged: (error: Error) => void): (() => void) => {
+    const opened = client.currentIdentity();
+
+    return client.onAuthTokenChange((): void => {
+        if (client.currentIdentity() === opened) {
+            return;
+        }
+
+        onIdentityChanged(new Error(`${prefix}: the signed-in identity changed during the call — the session was ended; start a new call`));
+    });
+};
+
+export { agentNameFromReference, voiceCloseError, voiceSocketUrl, watchVoiceIdentity };

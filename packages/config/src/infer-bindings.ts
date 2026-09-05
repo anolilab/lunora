@@ -64,19 +64,6 @@ type DurableObjectClass = keyof typeof DURABLE_OBJECT_BINDINGS;
 
 const DURABLE_OBJECT_CLASSES = Object.keys(DURABLE_OBJECT_BINDINGS) as DurableObjectClass[];
 
-/**
- * Matches a *type-only* export of each DO class — `export type ShardDO` or the
- * inline `export { type ShardDO }` form. `es-module-lexer` lists the class name
- * as an export in both cases even though it compiles away, so a candidate name
- * is only treated as a real runtime export when this pattern does NOT match.
- * Without this, a binding would reference a class wrangler can't find at deploy.
- */
-const TYPE_ONLY_EXPORT_PATTERNS: Record<DurableObjectClass, RegExp> = {
-    SchedulerDO: /\btype\s+SchedulerDO\b/,
-    SessionDO: /\btype\s+SessionDO\b/,
-    ShardDO: /\btype\s+ShardDO\b/,
-};
-
 const ENV_DB_PATTERN = /\benv\s*\.\s*DB\b/;
 const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
 // Pipelines ships from `@lunora/bindings/pipelines` but is codegen-wired onto
@@ -85,6 +72,11 @@ const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
 // pipelines binding hint. So detect the `ctx.pipelines` access directly,
 // mirroring the codegen feature probe.
 const CTX_PIPELINES_PATTERN = /\bctx\s*\.\s*pipelines\b/;
+// R2 SQL is the same shape as pipelines: `@lunora/bindings/r2sql` is codegen-wired
+// onto ActionCtx, so apps reach it as `ctx.r2sql` and never import the subpath.
+// Its three `R2_SQL_*` secrets had neither a flag nor a registry entry, so
+// `ctx.r2sql` failed silently on the deployed worker.
+const CTX_R2SQL_PATTERN = /\bctx\s*\.\s*r2sql\b/;
 const TYPE_ONLY_IMPORT_PATTERN = /^\s*import\s+type\b/;
 
 /**
@@ -199,12 +191,20 @@ const CAPABILITY_SOURCES = {
     usesImages: { pattern: /\bfrom\s+["']@lunora\/bindings\/images["']/, source: "@lunora/bindings/images" },
     usesKv: { pattern: /\bfrom\s+["']@lunora\/bindings\/kv["']/, source: "@lunora/bindings/kv" },
     usesMail: { pattern: /\bfrom\s+["']@lunora\/mail["']/, source: "@lunora/mail" },
+    // No Cloudflare binding of its own — like `@lunora/mail`, this exists so the
+    // package's declared secrets (the VAPID trio + the two FCM keys) reach
+    // `.dev.vars.example` and the missing-secret pre-flight. `packageNamesFromBindings`
+    // can only emit a source named here, so without this entry those five were
+    // declared and consumed by nothing.
+    usesNotify: { pattern: /\bfrom\s+["']@lunora\/notify["']/, source: "@lunora/notify" },
     usesPayment: { pattern: /\bfrom\s+["']@lunora\/payment["']/, source: "@lunora/payment" },
     // Keyed off the `ctx.pipelines` access (not an import) — see CTX_PIPELINES_PATTERN.
     // Pipelines is codegen-wired onto ActionCtx, so apps reach it via `ctx.pipelines`
     // rather than importing `@lunora/bindings/pipelines`; `source` names that subpath
     // for the hint message.
     usesPipelines: { pattern: CTX_PIPELINES_PATTERN, source: "@lunora/bindings/pipelines" },
+    // Keyed off the `ctx.r2sql` access, not an import — see CTX_R2SQL_PATTERN.
+    usesR2sql: { pattern: CTX_R2SQL_PATTERN, source: "@lunora/bindings/r2sql" },
     usesScheduler: { pattern: /\bfrom\s+["']@lunora\/scheduler["']/, source: "@lunora/scheduler" },
     usesStorage: { pattern: /\bfrom\s+["']@lunora\/storage["']/, source: "@lunora/storage" },
     // x402 rails are opt-in add-on subpaths (not part of the `lunorash` umbrella),
@@ -428,6 +428,7 @@ const capabilitiesFromSource = (code: string): Capabilities => {
         needsD1: ENV_DB_PATTERN.test(code),
         usesAi: ENV_AI_PATTERN.test(code),
         usesPipelines: CTX_PIPELINES_PATTERN.test(code),
+        usesR2sql: CTX_R2SQL_PATTERN.test(code),
     });
 };
 
@@ -568,39 +569,8 @@ const resolveWorkerEntry = (projectRoot: string): WorkerEntry => {
     return { composed: false };
 };
 
-/**
- * The Durable Object classes the worker entry exports. Uses `es-module-lexer`'s
- * export list so every form is covered (`export const ShardDO`, `export {
- * SchedulerDO } from "./do"`, aliases). These are the only DO classes safe to
- * bind, since wrangler validates that a binding's `class_name` is exported.
- */
-const detectExportedDurableObjects = (entryPath: string): DurableObjectSpec[] => {
-    const code = readFileSync(entryPath, "utf8");
-    let exportedNames: Set<string>;
-
-    try {
-        const [, exports] = lexModule(code);
-
-        exportedNames = new Set(exports.map((entry) => entry.n));
-    } catch {
-        exportedNames = new Set(DURABLE_OBJECT_CLASSES.filter((className) => new RegExp(String.raw`\bexport\b[^\n;]*\b${className}\b`).test(code)));
-    }
-
-    // A candidate counts only when it is exported as a runtime value — an
-    // inline `export { type ShardDO }` lists the name but compiles away, and
-    // binding it would make `wrangler deploy` fail on the missing class.
-    return DURABLE_OBJECT_CLASSES.filter((className) => exportedNames.has(className) && !TYPE_ONLY_EXPORT_PATTERNS[className].test(code)).map((className) => {
-        return {
-            binding: DURABLE_OBJECT_BINDINGS[className],
-            className,
-        };
-    });
-};
-
-/** A discovered definition whose generated class may or may not be exported by the worker entry. */
-interface ClassExportable {
-    className: string;
-}
+/** The inline `type` qualifier immediately before an export entry's local name (`export { type Foo }`). Module-scoped so it compiles once, not per export entry. */
+const INLINE_TYPE_QUALIFIER = /(?:^|[\s,{])type$/u;
 
 /**
  * PRIMARY (lexer-based, per-entry) type-only-export detector. Whether a lexer
@@ -611,14 +581,12 @@ interface ClassExportable {
  * entry's LOCAL name, so we test the source right before `entry.ls` (falling back
  * to `entry.s` when there is no `as` rename). Deciding this PER ENTRY is what keeps
  * a real value export from being suppressed by an unrelated type-only export
- * elsewhere in the entry file.
+ * elsewhere in the entry file — or, as the DO classes used to suffer, by a
+ * type-only IMPORT of the same name somewhere else in the entry.
  *
  * The imprecise whole-file counterpart used only when the lexer can't parse the
  * file is {@link isTypeOnlyExportRegexFallback}.
  */
-/** The inline `type` qualifier immediately before an export entry's local name (`export { type Foo }`). Module-scoped so it compiles once, not per export entry. */
-const INLINE_TYPE_QUALIFIER = /(?:^|[\s,{])type$/u;
-
 const isTypeOnlyExportEntry = (code: string, entry: { readonly ls: number; readonly s: number }): boolean => {
     const localStart = entry.ls >= 0 ? entry.ls : entry.s;
 
@@ -630,9 +598,9 @@ const isTypeOnlyExportEntry = (code: string, entry: { readonly ls: number; reado
  * counterpart to {@link isTypeOnlyExportEntry}, used ONLY when `es-module-lexer`
  * cannot parse a mid-edit file. Matches a *type-only* export of `className` —
  * `export type Foo`, the separate `export type { … Foo … }`, or the inline
- * `export { type Foo }`. Generalizes {@link TYPE_ONLY_EXPORT_PATTERNS} (built for
- * the fixed DO class set) to an arbitrary generated class name. The class name is
- * escaped and every pattern carries the `u` flag. The primary (lexer) path decides
+ * `export { type Foo }`. Every arm is anchored on `export`, so a type-only
+ * IMPORT of the same name is not mistaken for one; the class name is escaped and
+ * every pattern carries the `u` flag. The primary (lexer) path decides
  * type-only-ness per export entry instead — this blind whole-file sweep cannot tell
  * which `export` a repeated name came from, so a value + separate type export of
  * the same name still (conservatively) reads type-only here; acceptable for the
@@ -647,6 +615,52 @@ const isTypeOnlyExportRegexFallback = (code: string, className: string): boolean
         new RegExp(String.raw`\bexport\s+\{[^}]*\btype\s+${name}\b`, "u").test(code)
     );
 };
+
+/**
+ * The Durable Object classes the worker entry exports. Uses `es-module-lexer`'s
+ * export list so every form is covered (`export const ShardDO`, `export {
+ * SchedulerDO } from "./do"`, aliases). These are the only DO classes safe to
+ * bind, since wrangler validates that a binding's `class_name` is exported.
+ *
+ * Type-only-ness is decided by the same two detectors the generated classes use
+ * ({@link isTypeOnlyExportEntry} per lexer entry, {@link isTypeOnlyExportRegexFallback}
+ * when the file will not parse). The core classes used to get a weaker,
+ * unanchored whole-file `\btype\s+ShardDO\b` instead, which an ordinary
+ * `import { type ShardDO, createShardDO }` satisfied — so reconcile refused the
+ * SHARD binding and `wrangler-validator` then failed the deploy telling the user
+ * their dev server auto-reconciles this on startup.
+ */
+const detectExportedDurableObjects = (entryPath: string): DurableObjectSpec[] => {
+    const code = readFileSync(entryPath, "utf8");
+    let exportedNames: Set<string>;
+
+    // A candidate counts only when it is exported as a runtime VALUE — an
+    // inline `export { type ShardDO }` lists the name but compiles away, and
+    // binding it would make `wrangler deploy` fail on the missing class.
+    try {
+        const [, exports] = lexModule(code);
+
+        exportedNames = new Set(exports.filter((entry) => !isTypeOnlyExportEntry(code, entry)).map((entry) => entry.n));
+    } catch {
+        exportedNames = new Set(
+            DURABLE_OBJECT_CLASSES.filter(
+                (className) => new RegExp(String.raw`\bexport\b[^\n;]*\b${className}\b`, "u").test(code) && !isTypeOnlyExportRegexFallback(code, className),
+            ),
+        );
+    }
+
+    return DURABLE_OBJECT_CLASSES.filter((className) => exportedNames.has(className)).map((className) => {
+        return {
+            binding: DURABLE_OBJECT_BINDINGS[className],
+            className,
+        };
+    });
+};
+
+/** A discovered definition whose generated class may or may not be exported by the worker entry. */
+interface ClassExportable {
+    className: string;
+}
 
 /**
  * Whether the worker entry exports each definition's generated class: a named

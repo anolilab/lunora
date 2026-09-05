@@ -692,13 +692,16 @@ describe("lunoraClient", () => {
             // The value changed, so the data callback fires...
             expect(received).toEqual([[{ _id: "m1" }]]);
             // ...and the frame's own watermark ALSO reaches onCheckpoint, same
-            // tail as a `settled` frame.
-            expect(checkpoints).toEqual([{ checkpoint: 10, mutationId: 5 }]);
+            // tail as a `settled` frame — but stamped `rowsFollow`, which a
+            // rowless `settled` frame is not. That flag is what lets `@lunora/db`
+            // stash the watermark for the rowset landing right behind it, without
+            // a settled frame's watermark going stale in the same slot.
+            expect(checkpoints).toEqual([{ checkpoint: 10, mutationId: 5, rowsFollow: true }]);
 
             // A later frame with a LOWER watermark must never move it backwards.
             socket.receive({ cursor: 11, data: [{ _id: "m2" }], epoch: "e1", id: sub.id, lastMutationId: 3, type: "data" });
 
-            expect(checkpoints.at(-1)).toStrictEqual({ checkpoint: 11, mutationId: 5 });
+            expect(checkpoints.at(-1)).toStrictEqual({ checkpoint: 11, mutationId: 5, rowsFollow: true });
 
             client.close();
         });

@@ -672,4 +672,29 @@ describe("voice socket lifecycle", () => {
             "a turn is already in progress — send an interrupt before the next utterance",
         );
     });
+
+    it("drops the buffered audio of a REFUSED commit instead of prefixing it to the next turn", async () => {
+        const instance = new TestVoiceDO(fakeState(), env, agent, "support");
+        const { ws } = createFakeSocket({ connectionId: "c1", threadKey: "t1", turn: 0 });
+
+        // Turn 1: 1024 bytes of speech, committed.
+        await instance.webSocketMessage(ws, new ArrayBuffer(1024));
+
+        const inFlight = instance.webSocketMessage(ws, JSON.stringify({ type: "commit" }));
+
+        // While turn 1 runs, the caller's mic keeps streaming and a spurious
+        // second `commit` arrives (a client whose turn detector never parked).
+        await instance.webSocketMessage(ws, new ArrayBuffer(512));
+        await instance.webSocketMessage(ws, JSON.stringify({ type: "commit" }));
+        await inFlight;
+
+        // Turn 2: a genuine utterance of 256 bytes.
+        await instance.webSocketMessage(ws, new ArrayBuffer(256));
+        await instance.webSocketMessage(ws, JSON.stringify({ type: "commit" }));
+
+        // 256, not 768: the refused commit's 512 bytes were dropped with it,
+        // rather than left in the buffer to prefix the next transcript with
+        // speech from a turn this socket explicitly refused.
+        expect(instance.transcribedPcmLengths).toStrictEqual([1024, 256]);
+    });
 });

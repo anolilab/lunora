@@ -274,7 +274,16 @@ export {
 // part of `@lunora/do`'s frozen surface and it does not re-export them.
 export type { QueueMessageOutcome, QueueMessageRow, RecordQueueMessageInput } from "./queue-catcher";
 export { clearQueueMessages, isLossyBody, QUEUE_TABLE, readQueueMessageById, readQueueMessages, recordQueueMessages } from "./queue-catcher";
-export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankKeyFromDoc, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
+export {
+    encodePartitionKey,
+    matchesRankStaticWhere,
+    RANK_TIEBREAK,
+    rankKeyFromDoc,
+    rankPivotConditionSql,
+    rankTableName,
+    resolveRankPartition,
+    sortColumnName,
+} from "./rank";
 export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
 export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from "./reactive-cache";
 export type { ReactorDispatchResult, ReactorState, ReactorStats } from "./reactor-state";

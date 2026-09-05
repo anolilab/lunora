@@ -68,9 +68,9 @@ interface CapabilityDescriptor {
  * interface templates, so their order here is not output-affecting.
  */
 const CAPABILITY_ROWS = [
-    // The middleware (`accessContext()` / `accessRoles()`) imports the `/context`
-    // and `/roles` subpaths, NOT the bare `@lunora/cloudflare-access` specifier —
-    // so the per-procedure middleware never trips the global `ctx.access` wiring.
+    // The `accessContext()` middleware imports the `/context` subpath, NOT the
+    // bare `@lunora/cloudflare-access` specifier — so the per-procedure
+    // middleware never trips the global `ctx.access` wiring.
     // A handler reading `ctx.access` is the signal that wires it onto every ctx.
     // `access` has a synchronous facade type, so its ctx field stays bespoke in
     // `emit.ts` (no `serverCtxField` here).
