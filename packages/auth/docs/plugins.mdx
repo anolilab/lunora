@@ -196,6 +196,7 @@ Three server-side helpers, exported from `@lunora/auth`:
 | `createSignUpInvitation(auth, { email, … })`    | Invite an address, or refresh an existing invitation for it. Returns the stored row.          |
 | `listSignUpInvitations(auth, { pendingOnly? })` | The 500 most recent invitations, newest first; `pendingOnly` drops the spent and the expired. |
 | `revokeSignUpInvitation(auth, { email })`       | Withdraw it.                                                                                  |
+| `pruneSignUpInvitations(auth)`                  | Delete invitations that expired unused, and report how many. Nothing calls it for you.        |
 
 ```ts
 const invite = await createSignUpInvitation(auth, {
@@ -204,8 +205,16 @@ const invite = await createSignUpInvitation(auth, {
     invitedBy: ctx.auth.userId,
 });
 
-await sendInviteEmail(invite.email, `https://app.example/sign-up?email=${encodeURIComponent(invite.email)}`);
+const link = `https://app.example/sign-up?email=${encodeURIComponent(invite.email)}&invite=${invite.token}`;
+
+await sendInviteEmail(invite.email, link);
 ```
+
+`invite.token` is the **only** time that value exists in the clear — the database
+keeps a SHA-256 of it. A link that was never delivered is reissued (call
+`createSignUpInvitation` again), not looked up, and reissuing invalidates the
+previous one. `@lunora/auth-ui` reads both parameters off the URL and submits the
+token with the form, so an invitee just follows the link.
 
 These are trusted server-side calls with **no authorization of their own** — the
 same trust model as [`createAuthAdmin`](#studio-user-dashboard).
@@ -220,18 +229,74 @@ stays until you revoke it, which is also what keeps it a record of who was let i
 `listSignUpInvitations` is capped rather than paged; past 500 rows, query the
 table directly.
 
+### From the studio
+
+With the plugin installed, the studio's **Users** page grows a **Sign-up
+invitations** section: invite an address, see who is pending / accepted /
+expired and who invited them, and revoke. It is gated on the same
+`capabilities.inviteOnly` flag the rest of the auth panels use, so a deployment
+without the plugin never shows it.
+
+The same three operations sit on the trusted admin plane
+(`AuthAdmin.createSignUpInvitation` / `listSignUpInvitations` /
+`revokeSignUpInvitation`) behind the worker's admin-token gate, and on the client
+as `listAuthSignUpInvitations` / `createAuthSignUpInvitation` /
+`revokeAuthSignUpInvitation`. `@lunora/react` exposes `useSignUpInvitations()`
+for the read. Those hand back timestamps as epoch-ms, like every other admin row;
+the module-level helpers above hand back `Date`s.
+
+Inviting from the studio still sends nothing — delivery is the app's, wherever
+the invitation is issued from.
+
+### Housekeeping
+
+Nothing prunes the table on its own. `pruneSignUpInvitations(auth)` deletes the
+invitations that expired without being used and returns the count. Spent ones
+stay, since they are the record of who was let in, and live ones obviously stay.
+It is bounded per call, so a large backlog takes several passes — put it on a
+cron if you invite at any volume.
+
+### Two checks, because the paths differ
+
+<Callout type="info">
+    An invitation carries a **secret token** — 256 CSPRNG bits, stored only as a SHA-256 — and the sign-up link carries it back as `?invite=`.
+
+    The token is checked on `/sign-up/email` and nowhere else, which is the design rather than an oversight. Every other path that mints an account has already
+    proved the person controls the address before the row is written: an OAuth callback carries a provider-verified email, and magic-link and email-OTP only
+    fire for whoever is holding the mailbox. Password sign-up is the one place where anyone may claim any address.
+
+    So there are two layers. `databaseHooks.user.create.before` is the universal backstop — an unspent, unexpired invitation must exist for the address,
+    whatever created the row. The route hook on `/sign-up/email` additionally requires the token.
+
+</Callout>
+
+Without the token this would be guessable in bulk, and that is not theoretical:
+the common case is inviting a team, where addresses are `first.last@company`. The
+rejection is deliberately uniform for the same reason — a missing token, a wrong
+token, an expired invitation and a never-invited address all answer
+`SIGN_UP_INVITE_INVALID` with one message, so the form cannot be used to sift a
+directory for who is on the list.
+
+What the token does **not** do is make an invitation single-use against a
+simultaneous request, or survive being forwarded. Whoever holds the link can spend
+the seat, so treat it as a bearer credential: send it to the invitee, not to a
+shared inbox. Keep `requireEmailVerification` on — better-auth writes the user row
+before it mails the verification token, so verification is what stops a spent
+invitation from becoming a usable session.
+
+A row with no `tokenHash` — one an OAuth-only deployment never needed, or a
+leftover from before tokens — cannot satisfy password sign-up at all. There is
+nothing to present that matches; re-invite to mint one.
+
 ### What an invitation is, and what it is not
 
 <Callout type="warn">
-    **An invitation is keyed by email address and nothing else.** There is no secret token — the gate runs inside `user.create.before`, which is handed the row
-    about to be written and never the request that asked for it. So anyone who learns an invited address can spend that seat.
+    **The invitation link is a bearer credential.** Anyone holding it can take that seat, so deliver it to the invitee rather than to a shared or forwarded
+    inbox, and reissue rather than resend if you are unsure where a link went.
 
-    `requireEmailVerification` does **not** close this. better-auth writes the user row first and mails the verification token afterwards, so an attacker who
-    signs up as the invited address still creates a real account with their own password, still burns the invitation, and still leaves the invitee locked out of
-    an address that is now taken. What verification buys is that the attacker holds no session until someone clicks the link — and the link lands in the
-    invitee's inbox, where she is expecting it. Recovery is `AuthAdmin.removeUser` plus a fresh invitation.
-
-    Treat an invited address as semi-secret, and don't use this where the seat itself is worth guessing for.
+    `requireEmailVerification` still matters. better-auth writes the user row before it mails the verification token, so whoever spends an invitation creates a
+    real account immediately; verification is what stops that account from holding a session until someone clicks a link delivered to the address itself.
+    Recovery from a mis-sent link is `AuthAdmin.removeUser` plus a fresh invitation.
 
 </Callout>
 

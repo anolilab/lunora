@@ -1,4 +1,5 @@
 /** Sign-up flow: name + email + password against `authClient.signUp.email`. */
+import { queryParameter } from "./browser-location";
 import type { ControllerContext } from "./config";
 import { createFormController } from "./create-form-controller";
 import { assertOk } from "./map-error";
@@ -48,10 +49,24 @@ const createSignUpController = (context: ControllerContext): FormController<Sign
         },
         sessionChanging: true,
         submit: async (values, context_) => {
+            /*
+             * `@lunora/auth`'s `inviteOnly` plugin gates `/sign-up/email` on a
+             * secret token carried by the invitation link as `?invite=`. Read at
+             * submit time rather than seeded through `prefill`: it is not a field
+             * anyone types, it must never be rendered into an input, and a user
+             * editing the form should not be able to change it.
+             *
+             * Sent only when the URL actually carries one, so a deployment
+             * without the plugin submits exactly the body it always did. The
+             * server treats a missing token the same as a wrong one.
+             */
+            const inviteToken = queryParameter("invite");
+
             assertOk(
                 await context_.authClient.signUp.email({
                     callbackURL: context_.redirects.afterSignIn,
                     email: values.email.trim(),
+                    ...(inviteToken === undefined ? {} : { inviteToken }),
                     name: values.name.trim(),
                     password: values.password,
                 }),

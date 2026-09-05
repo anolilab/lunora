@@ -83,8 +83,15 @@ export {
 } from "./upload";
 export type { ActionHook } from "./use-action";
 export { useAction } from "./use-action";
-export type { AdminAuthListResult, UseAuthSessionsOptions, UseAuthUsersOptions, UseImpersonateResult, UseOrganizationsOptions } from "./use-admin-auth";
-export { useAuthSessions, useAuthUsers, useImpersonate, useOrganizations } from "./use-admin-auth";
+export type {
+    AdminAuthListResult,
+    UseAuthSessionsOptions,
+    UseAuthUsersOptions,
+    UseImpersonateResult,
+    UseOrganizationsOptions,
+    UseSignUpInvitationsOptions,
+} from "./use-admin-auth";
+export { useAuthSessions, useAuthUsers, useImpersonate, useOrganizations, useSignUpInvitations } from "./use-admin-auth";
 export type { AgentThreadRecord, AgentThreadStatus, UseAgentApi, UseAgentOptions, UseAgentResult } from "./use-agent";
 export { useAgent } from "./use-agent";
 export type {
