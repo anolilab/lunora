@@ -18,7 +18,7 @@ interface JsonSchema {
  * no runtime metadata — so `constraints`/`isNullable` may be inert there).
  *
  * A reader normalizes a `TNode` to the small set of children/leaves the mapper
- * recurses over. Composite accessors (`inner`/`shape`/`members`/`valueChild`)
+ * recurses over. Composite accessors (`inner`/`shape`/`members`/`keyChild`/`valueChild`)
  * return the same `TNode` type so the mapper can recurse uniformly; leaf concerns
  * that differ between the two sources — how a literal's `const` is computed,
  * whether a `.check()`/`.meta()` constraint fragment exists, whether `.nullable()`
@@ -38,6 +38,13 @@ interface SchemaNodeReader<TNode> {
 
     /** Whether `.nullable()` was applied (runtime: `_meta.column.notNull === false`). */
     isNullable: (node: TNode) => boolean;
+
+    /**
+     * Key-child of a `record` node, mapped to `propertyNames`. May be absent on
+     * the IR side (and on a `v.record(v.string(), …)` whose key validator adds
+     * no constraint beyond `type: "string"` it is merely redundant, not wrong).
+     */
+    keyChild: (node: TNode) => TNode | undefined;
 
     /** Discriminating validator kind. */
     kind: (node: TNode) => ValidatorKind;
@@ -69,10 +76,13 @@ interface SchemaNodeReader<TNode> {
  * so nested objects/arrays/unions/records are fully expanded (never collapsed to
  * one level).
  *
- * `date`/`timestamp` are epoch-millisecond numbers in Lunora (not ISO strings),
- * so they schema as integers; `bigint` schemas as an int64 (JSON has no bigint
- * type, so `format: int64` is the conventional OpenAPI carrier); `bytes` is an
- * `ArrayBuffer`, surfaced as base64 per JSON Schema 2020-12 content encoding.
+ * Each node names the JSON CARRIER, not the decoded JS type — the transport
+ * decodes before the parser sees a value, so describing the JS type would
+ * advertise shapes no JSON body can hold. `date`/`timestamp` are
+ * epoch-millisecond numbers in Lunora (not ISO strings), so they schema as
+ * integers; `bigint` rides as an int64 decimal string, the same carrier the
+ * wire codec and `v.literal(5n)` use; `bytes` is an `ArrayBuffer`, surfaced as
+ * base64 per JSON Schema 2020-12 content encoding.
  *
  * A `.check()`/`.meta()` JSON Schema fragment (when the reader exposes one) is
  * shallow-merged onto the node — constraint keys win on conflict. A `.nullable()`
@@ -92,7 +102,14 @@ const jsonSchemaFromNode = <TNode>(node: TNode, reader: SchemaNodeReader<TNode>)
                 return { items: inner === undefined ? {} : jsonSchemaFromNode(inner, reader), type: "array" };
             }
             case "bigint": {
-                return { format: "int64", type: "integer" };
+                // A DECIMAL STRING, not a JSON number. The parser accepts only a
+                // real `bigint`, so `type: "integer"` advertised the one JSON
+                // form it refuses — and truncated past 2^53 besides. Everywhere
+                // else a bigint already rides as its decimal string (the wire
+                // codec's tagged payload, `v.literal(5n)`'s `const`), so this is
+                // the same treatment `bytes` gets: name the JSON carrier, not
+                // the decoded JS type.
+                return { format: "int64", type: "string" };
             }
             case "boolean": {
                 return { type: "boolean" };
@@ -136,8 +153,17 @@ const jsonSchemaFromNode = <TNode>(node: TNode, reader: SchemaNodeReader<TNode>)
             }
             case "record": {
                 const value = reader.valueChild(node);
+                // The key validator is enforced at runtime (`v.record(v.string().pattern(…), …)`
+                // rejects a non-matching key), so it belongs in the schema as
+                // `propertyNames` — reading only the value child left the spec
+                // unable to express a constraint the server requires.
+                const key = reader.keyChild(node);
 
-                return { additionalProperties: value === undefined ? {} : jsonSchemaFromNode(value, reader), type: "object" };
+                return {
+                    additionalProperties: value === undefined ? {} : jsonSchemaFromNode(value, reader),
+                    ...(key === undefined ? {} : { propertyNames: jsonSchemaFromNode(key, reader) }),
+                    type: "object",
+                };
             }
             case "storage": {
                 return { description: "storage object key", type: "string", "x-lunora-storage": true };
@@ -168,9 +194,37 @@ const jsonSchemaFromNode = <TNode>(node: TNode, reader: SchemaNodeReader<TNode>)
 };
 
 /**
- * Build `{ type: "object", properties, required, additionalProperties: false }`
- * from a node shape. A `v.optional(...)` property is the only thing that drops
- * out of `required`; every other property is required.
+ * True when the parser accepts this node's field ABSENT — the only honest test
+ * for whether a key belongs in `required`.
+ *
+ * `kind === "optional"` used to be the whole test, which put two kinds in
+ * `required` that parse `{}` happily: `v.any()` (its parser returns `undefined`
+ * unchanged) and a `v.union(...)` with an optional or `any` member (the union
+ * tries members, one of which accepts `undefined`). A spec that requires a field
+ * the server does not cannot be satisfied by a generated client.
+ * @returns `true` when an absent value parses.
+ */
+const acceptsAbsent = <TNode>(node: TNode, reader: SchemaNodeReader<TNode>): boolean => {
+    const kind = reader.kind(node);
+
+    if (kind === "any" || kind === "optional") {
+        return true;
+    }
+
+    return kind === "union" && reader.members(node).some((member) => acceptsAbsent(member, reader));
+};
+
+/**
+ * Build `{ type: "object", properties, required }` from a node shape.
+ *
+ * Deliberately NOT `additionalProperties: false`: `v.object` STRIPS an
+ * undeclared key rather than refusing it (only `.output()`'s
+ * `rejectUnknownKeys` mode refuses one, and it is not what this schema
+ * describes), so closing the object had a spec-validating client reject bodies
+ * the server accepts. Absent means allowed, which is what the parser does.
+ *
+ * `required` lists every key whose field cannot be absent — see
+ * {@link acceptsAbsent}.
  */
 const objectSchemaFromNodes = <TNode>(shape: Record<string, TNode>, reader: SchemaNodeReader<TNode>): JsonSchema => {
     const properties: Record<string, JsonSchema> = {};
@@ -179,12 +233,12 @@ const objectSchemaFromNodes = <TNode>(shape: Record<string, TNode>, reader: Sche
     for (const [key, child] of Object.entries(shape)) {
         properties[key] = jsonSchemaFromNode(child, reader);
 
-        if (reader.kind(child) !== "optional") {
+        if (!acceptsAbsent(child, reader)) {
             required.push(key);
         }
     }
 
-    return { additionalProperties: false, properties, required, type: "object" };
+    return { properties, required, type: "object" };
 };
 
 export type { JsonSchema, SchemaNodeReader };
