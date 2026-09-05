@@ -116,37 +116,31 @@ describe("createStorage", () => {
         expect(bucket.puts).toHaveLength(0);
     });
 
-    it("upload() enforces maxSize for a ReadableStream by aborting the wrapped stream when drained", async () => {
-        expect.assertions(3);
+    it("upload() enforces maxSize for a ReadableStream before anything reaches the bucket", async () => {
+        expect.assertions(2);
 
         const bucket = fakeBucket();
         const storage = createStorage({ bucket, bucketName: "default" });
 
-        // A ReadableStream's byte count isn't known synchronously, so the upload
-        // call itself resolves — R2 reads the body afterwards. We hand R2 a
-        // length-counting wrapper that errors past maxSize, closing the
-        // silent-truncation gap. Draining the wrapped body the bucket received
-        // surfaces that error.
+        // The body is read here, under the cap, rather than wrapped and handed to
+        // R2 — R2 refuses any stream whose length it can't read, so a wrapper is
+        // not an option. The upshot for callers is a rejection at the call, and
+        // an oversized body that never reaches the bucket at all.
         const stream = new Blob(["streamed body well over the limit"]).stream();
 
-        await expect(storage.upload("stream.bin", stream, { maxSize: 4 })).resolves.toMatchObject({ key: "stream.bin" });
-        expect(bucket.puts).toHaveLength(1);
-
-        const wrapped = bucket.puts[0]?.body as ReadableStream;
-
-        await expect(new Response(wrapped).arrayBuffer()).rejects.toThrow(/exceeds maxSize/);
+        await expect(storage.upload("stream.bin", stream, { maxSize: 4 })).rejects.toThrow(/exceeds maxSize/);
+        expect(bucket.puts).toHaveLength(0);
     });
 
-    it("upload() aborts a non-byte-chunk ReadableStream so maxSize can't be silently defeated", async () => {
-        expect.assertions(3);
+    it("upload() refuses a non-byte-chunk ReadableStream so maxSize can't be silently defeated", async () => {
+        expect.assertions(2);
 
         const bucket = fakeBucket();
         const storage = createStorage({ bucket, bucketName: "default" });
 
         // A ReadableStream is untyped, so a stream of string chunks reaches the
-        // counter. Its length can't be measured as bytes, so counting it as 0
-        // would let it flow through uncounted and defeat maxSize entirely. The
-        // wrapper now errors the stream when drained instead.
+        // reader. Its length can't be measured as bytes, so counting it as 0
+        // would let it flow through uncounted and defeat maxSize entirely.
         const stream = new ReadableStream({
             start(controller) {
                 controller.enqueue("x".repeat(100));
@@ -154,12 +148,81 @@ describe("createStorage", () => {
             },
         });
 
-        await expect(storage.upload("s.bin", stream, { maxSize: 4 })).resolves.toMatchObject({ key: "s.bin" });
+        await expect(storage.upload("s.bin", stream, { maxSize: 4 })).rejects.toThrow(/not a byte chunk|cannot enforce maxSize/);
+        expect(bucket.puts).toHaveLength(0);
+    });
+
+    it("upload() hands the bucket a sized body for a streamed upload under maxSize", async () => {
+        expect.assertions(2);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket, bucketName: "default" });
+
+        await storage.upload("ok.bin", new Blob(["under the cap"]).stream(), { maxSize: 1024 });
+
+        // Not a `ReadableStream`: R2 rejects one whose length it cannot read.
+        expect(bucket.puts[0]?.body).toBeInstanceOf(Blob);
+        await expect((bucket.puts[0]?.body as Blob).text()).resolves.toBe("under the cap");
+    });
+
+    it("upload() rejects a maxSize that is not a finite, non-negative number", async () => {
+        expect.assertions(4);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket, bucketName: "default" });
+        const body = (): ReadableStream => new Blob(["a streamed body big enough to notice"]).stream();
+
+        // An unset upload-limit env var coerced with `Number(...)` is NaN, and
+        // `seen > NaN` is never true — the cap silently disabled while the body
+        // is still collected whole, i.e. an unbounded in-isolate buffer.
+        await expect(storage.upload("nan.bin", body(), { maxSize: Number.NaN })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        await expect(storage.upload("inf.bin", body(), { maxSize: Number.POSITIVE_INFINITY })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        // The mirror image: `seen > -1` is true on the very first chunk, so a
+        // negative cap refused every upload instead of being reported as the
+        // configuration bug it is.
+        await expect(storage.upload("neg.bin", body(), { maxSize: -1 })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        expect(bucket.puts).toHaveLength(0);
+    });
+
+    it("upload() accepts ArrayBuffer and DataView chunks in a streamed body", async () => {
+        expect.assertions(2);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket, bucketName: "default" });
+        const encoder = new TextEncoder();
+
+        // A ReadableStream may carry any BufferSource shape, and the counter
+        // measures all of them — but a `Response` body only accepts Uint8Array,
+        // so re-enqueuing the original chunk turned a supported shape into a
+        // bare TypeError with no code and no mention of storage.
+        const stream = new ReadableStream({
+            start(controller) {
+                controller.enqueue(encoder.encode("ab").buffer);
+                controller.enqueue(new DataView(encoder.encode("cd").buffer));
+                controller.close();
+            },
+        });
+
+        await storage.upload("mixed.bin", stream, { maxSize: 1024 });
+
+        expect(bucket.puts[0]?.body).toBeInstanceOf(Blob);
+        await expect((bucket.puts[0]?.body as Blob).text()).resolves.toBe("abcd");
+    });
+
+    it("upload() refuses a streamed maxSize above the buffering ceiling but not an in-memory one", async () => {
+        expect.assertions(3);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket, bucketName: "default" });
+
+        await expect(storage.upload("huge.bin", new Blob(["x"]).stream(), { maxSize: 200_000_000 })).rejects.toThrow(/createMultipartUpload/);
+        expect(bucket.puts).toHaveLength(0);
+
+        // The ceiling bounds what this call may BUFFER, so it applies to the
+        // stream path only — a Blob body is already in the caller's memory.
+        await storage.upload("blob.bin", new Blob(["x"]), { maxSize: 200_000_000 });
+
         expect(bucket.puts).toHaveLength(1);
-
-        const wrapped = bucket.puts[0]?.body as ReadableStream;
-
-        await expect(new Response(wrapped).arrayBuffer()).rejects.toThrow(/not a byte chunk|cannot enforce maxSize/);
     });
 
     it("upload() rejects a matching-but-absent contentType when allowedContentTypes is set", async () => {

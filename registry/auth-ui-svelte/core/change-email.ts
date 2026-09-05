@@ -14,6 +14,12 @@ const createChangeEmailController = (context: ControllerContext): FormController
             newEmail: { validate: (value, _values, localization) => validateEmail(value, localization) },
         },
         submit: async (values, context_) => {
+            /*
+             * The raw field, not `postAuthDestination`: the confirmation link is
+             * opened from a mail client, possibly days later and on another
+             * device, so a `?redirectTo=` read off *this* page is stale by then
+             * and would send the confirming user somewhere they never asked for.
+             */
             assertOk(
                 await context_.authClient.changeEmail({
                     callbackURL: context_.redirects.afterSignIn,

@@ -1,9 +1,10 @@
 import type { JSX } from "solid-js";
 import { createSignal, onMount, Show } from "solid-js";
 
-import { signInAnonymously } from "../core/anonymous";
+import { createAnonymousController } from "../core/anonymous";
 import { createBackupCodeSignInController } from "../core/backup-codes";
 import { queryParameter } from "../core/browser-location";
+import { viewHref } from "../core/config";
 import { createEmailOtpController } from "../core/email-otp";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createForgotPasswordController } from "../core/forgot-password";
@@ -20,15 +21,20 @@ import { AuthCard, AuthDivider, AuthLink, Field, FormBanner, PasswordStrength, S
 import { useAuthUI } from "./provider";
 import { createController } from "./use-controller";
 
-/** Guest sign-in, when the `anonymous` plugin is on. */
+/**
+ * Guest sign-in, when the `anonymous` plugin is on. The in-flight state (and the
+ * double-click guard behind it) belongs to `createAnonymousController`.
+ */
 const AnonymousButton = (): JSX.Element => {
     const context = useAuthUI();
+    const [state, actions] = createController(createAnonymousController);
 
     return (
         <button
             class="lunora-auth-button lunora-auth-button--secondary"
+            disabled={state.status === "submitting"}
             onClick={() => {
-                void signInAnonymously(context);
+                void actions.signIn();
             }}
             type="button"
         >
@@ -38,7 +44,9 @@ const AnonymousButton = (): JSX.Element => {
 };
 
 interface SignInCardProps {
+    /** Defaults to the configured forgot-password route; see `viewPaths.base`. */
     forgotPasswordHref?: string;
+    /** Defaults to the configured sign-up route; see `viewPaths.base`. */
     signUpHref?: string;
 }
 
@@ -57,7 +65,10 @@ const SignInCard = (props: SignInCardProps = {}): JSX.Element => {
     const lastUsed = () => (context.plugins.lastLoginMethod ? lastUsedAfterMount() : undefined);
 
     return (
-        <AuthCard footer={context.signUp ? <AuthLink href={props.signUpHref ?? "/sign-up"}>{t.noAccount}</AuthLink> : undefined} title={t.signIn}>
+        <AuthCard
+            footer={context.signUp ? <AuthLink href={props.signUpHref ?? viewHref(context, "signUp")}>{t.noAccount}</AuthLink> : undefined}
+            title={t.signIn}
+        >
             <SocialButtons
                 lastUsed={lastUsed()}
                 onSelect={(provider) => {
@@ -81,7 +92,7 @@ const SignInCard = (props: SignInCardProps = {}): JSX.Element => {
                     <FormBanner error={state.formError} />
                     <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
                     <FormField actions={actions} autoComplete="current-password" field="password" label={t.passwordLabel} state={state} type="password" />
-                    <AuthLink href={props.forgotPasswordHref ?? "/forgot-password"}>{t.forgotPasswordLink}</AuthLink>
+                    <AuthLink href={props.forgotPasswordHref ?? viewHref(context, "forgotPassword")}>{t.forgotPasswordLink}</AuthLink>
                     <SubmitButton pending={state.status === "submitting"}>
                         {t.signIn}
                         {/* better-auth records a password sign-in as "email", so without this the badge is invisible for the most common route there is. */}
@@ -96,6 +107,7 @@ const SignInCard = (props: SignInCardProps = {}): JSX.Element => {
 };
 
 interface SignUpCardProps {
+    /** Defaults to the configured sign-in route; see `viewPaths.base`. */
     signInHref?: string;
 }
 
@@ -113,7 +125,7 @@ const SignUpCard = (props: SignUpCardProps = {}): JSX.Element => {
     }
 
     return (
-        <AuthCard footer={<AuthLink href={props.signInHref ?? "/sign-in"}>{t.haveAccount}</AuthLink>} title={t.signUp}>
+        <AuthCard footer={<AuthLink href={props.signInHref ?? viewHref(context, "signIn")}>{t.haveAccount}</AuthLink>} title={t.signUp}>
             {/*
              * Social buttons belong on sign-up too — OAuth is a sign-up path, not
              * just a sign-in one, and omitting them here sends new users through a
@@ -142,16 +154,19 @@ const SignUpCard = (props: SignUpCardProps = {}): JSX.Element => {
 };
 
 interface ForgotPasswordCardProps {
+    /** Defaults to the configured reset-password route; see `viewPaths.base`. */
     resetPath?: string;
+    /** Defaults to the configured sign-in route; see `viewPaths.base`. */
     signInHref?: string;
 }
 
 const ForgotPasswordCard = (props: ForgotPasswordCardProps = {}): JSX.Element => {
-    const { localization: t } = useAuthUI();
-    const [state, actions] = createController((context) => createForgotPasswordController(context, { resetPath: props.resetPath }));
+    const context = useAuthUI();
+    const t = context.localization;
+    const [state, actions] = createController((context_) => createForgotPasswordController(context_, { resetPath: props.resetPath }));
 
     return (
-        <AuthCard footer={<AuthLink href={props.signInHref ?? "/sign-in"}>{t.backToSignIn}</AuthLink>} title={t.forgotPassword}>
+        <AuthCard footer={<AuthLink href={props.signInHref ?? viewHref(context, "signIn")}>{t.backToSignIn}</AuthLink>} title={t.forgotPassword}>
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
@@ -207,6 +222,7 @@ const ResetPasswordOtpCard = (): JSX.Element => {
 };
 
 interface MagicLinkCardProps {
+    /** Defaults to the configured sign-in route; see `viewPaths.base`. */
     signInHref?: string;
 }
 
@@ -229,7 +245,7 @@ const MagicLinkCard = (props: MagicLinkCardProps = {}): JSX.Element => {
     }
 
     return (
-        <AuthCard footer={<AuthLink href={props.signInHref ?? "/sign-in"}>{t.backToSignIn}</AuthLink>} title={t.magicLink}>
+        <AuthCard footer={<AuthLink href={props.signInHref ?? viewHref(context, "signIn")}>{t.backToSignIn}</AuthLink>} title={t.magicLink}>
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />

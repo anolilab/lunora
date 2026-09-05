@@ -19,6 +19,7 @@
  */
 
 import { queryParameter } from "./browser-location";
+import type { ControllerContext } from "./config";
 
 /**
  * Control characters, which can smuggle a value (a newline, a tab) past a naive
@@ -72,6 +73,25 @@ const readRedirectTo = (parameter = "redirectTo"): string | undefined => {
 const resolveAfterSignIn = (fallback: string): string => readRedirectTo() ?? fallback;
 
 /**
+ * Where a *just-completed sign-in* should land.
+ *
+ * Deliberately a different name from the field it falls back to, because two
+ * things read `redirects.afterSignIn` and they are not interchangeable.
+ *
+ * This one is for a user who arrived at an auth screen — possibly via a bounce
+ * that wrote `?redirectTo=…` — and has now signed in: honour the bounce. Every
+ * sign-in flow uses it.
+ *
+ * The raw field is for sending the user somewhere that has nothing to do with a
+ * sign-in the current URL describes: linking a social account from settings,
+ * leaving an impersonation session, a `callbackURL` an emailed link opens days
+ * later, or the accept-invitation screen that `?redirectTo` points *at*.
+ * Resolving there would honour a parameter meant for a different journey, so
+ * each of those four sites says in a comment that the bare read is deliberate.
+ */
+const postAuthDestination = (context: Pick<ControllerContext, "redirects">): string => resolveAfterSignIn(context.redirects.afterSignIn);
+
+/**
  * Merge `parameters` into `path`'s existing query.
  *
  * Parsed rather than appended: blindly appending a second `?` mangles the URL
@@ -116,4 +136,4 @@ const withRedirectTo = (path: string): string => {
     return mergeQuery(path, { redirectTo: target });
 };
 
-export { isSafeRedirect, mergeQuery, readRedirectTo, resolveAfterSignIn, withRedirectTo };
+export { isSafeRedirect, mergeQuery, postAuthDestination, readRedirectTo, withRedirectTo };

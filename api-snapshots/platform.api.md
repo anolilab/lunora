@@ -397,6 +397,7 @@ interface R2BucketLike {
     list: (options?: {
         cursor?: string;
         delimiter?: string;
+        include?: ("customMetadata" | "httpMetadata")[];
         limit?: number;
         prefix?: string;
         startAfter?: string;

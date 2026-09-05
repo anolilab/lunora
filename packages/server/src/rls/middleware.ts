@@ -44,17 +44,9 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { isRelationPredicate } from "../../../../shared/relation-operators";
-// `isPlainObject` comes from the wire codec rather than being re-declared here.
-// The prototype check it carries is load-bearing: a local `typeof === "object"`
-// variant counted a `Date`, a `Uint8Array` or a `Map` as a plain object, so
-// `isOperatorBag` saw zero own enumerable keys, its `every` was vacuously true,
-// and `matchesOperators` returned true having checked nothing — making
-// `where: { createdAt: someDate }` match EVERY row on the write-decision paths
-// and the JS reader instead of comparing by equality. The codec needs the exact
-// same predicate for the same reason (a class instance has no own enumerable
-// keys and would silently encode to `{}`). `Array.isArray` is subsumed: an
-// array's prototype is `Array.prototype`, not `Object.prototype`.
+// `isPlainObject` comes from the wire codec rather than being re-declared here;
+// its prototype check is what keeps a `Date` or a `Map` from passing as an
+// options bag. See `./where-match` for the full story.
 import { isPlainObject } from "../../../../shared/wire-codec";
 import type { Middleware } from "../builder/types";
 import type { FacadeEntry } from "../facade";
@@ -64,6 +56,7 @@ import type { ShardRankPageResultLike } from "../rank-page-rows-shape";
 import { tagRlsMiddleware } from "./policy-tag";
 import { deny } from "./predicates";
 import type { Permission, Policy, PolicyContext, RlsOptions, Role, WhereInput } from "./types";
+import { containsRelationPredicate, matchesWhere } from "./where-match";
 
 /**
  * Structural mirror of `@lunora/do`'s `QueryArgs` and `CountArgs`. The
@@ -426,196 +419,6 @@ const computeReadBaseWhere = <Context>(policies: ReadonlyArray<Policy<Context>>,
     }
 
     return predicates.length === 1 ? predicates[0] : { OR: predicates };
-};
-
-/** Operator keys the JS evaluator recognises. Mirrors `FieldOperators` from the SQL compiler. */
-const OPERATOR_KEYS = ["contains", "eq", "gt", "gte", "in", "isNull", "lt", "lte", "ne", "notIn"] as const;
-
-/**
- * SQL NULL semantics for ordered comparators: `null`/`undefined` never
- * compares as less-than/greater-than/contains anything. Without this guard JS
- * would silently coerce `null` to `0` and let `null < 5` evaluate truthy —
- * surprising and at odds with the SQL compiler the predicate flows through on
- * reads.
- */
-const isOrderable = (value: unknown): value is bigint | number | string => {
-    const type = typeof value;
-
-    return type === "number" || type === "string" || type === "bigint";
-};
-
-/**
- * Evaluate the ordered comparators (`lt`/`lte`/`gt`/`gte`) of an operator bag.
- * SQL NULL semantics gate every comparison via {@link isOrderable}, so a
- * non-orderable operand (null/undefined/object) fails rather than coercing.
- * Returns `true` when the value satisfies all present ordered comparators.
- */
-const matchesOrderedOperators = (documentValue: unknown, operators: Record<string, unknown>): boolean => {
-    if ("lt" in operators && (!isOrderable(documentValue) || !isOrderable(operators["lt"]) || (documentValue as number) >= (operators["lt"] as number))) {
-        return false;
-    }
-
-    if ("lte" in operators && (!isOrderable(documentValue) || !isOrderable(operators["lte"]) || (documentValue as number) > (operators["lte"] as number))) {
-        return false;
-    }
-
-    if ("gt" in operators && (!isOrderable(documentValue) || !isOrderable(operators["gt"]) || (documentValue as number) <= (operators["gt"] as number))) {
-        return false;
-    }
-
-    if ("gte" in operators && (!isOrderable(documentValue) || !isOrderable(operators["gte"]) || (documentValue as number) < (operators["gte"] as number))) {
-        return false;
-    }
-
-    return true;
-};
-
-/**
- * Evaluate the membership + text comparators (`in`/`notIn`/`contains`/`isNull`)
- * of an operator bag. Returns `true` when the value satisfies all present ones.
- */
-const matchesMembershipOperators = (documentValue: unknown, operators: Record<string, unknown>): boolean => {
-    if ("in" in operators) {
-        const list = operators["in"];
-
-        if (!Array.isArray(list) || !list.includes(documentValue)) {
-            return false;
-        }
-    }
-
-    if ("notIn" in operators) {
-        const list = operators["notIn"];
-
-        if (Array.isArray(list) && list.includes(documentValue)) {
-            return false;
-        }
-    }
-
-    if ("contains" in operators) {
-        const needle = operators["contains"];
-
-        if (typeof documentValue !== "string" || typeof needle !== "string" || !documentValue.includes(needle)) {
-            return false;
-        }
-    }
-
-    if ("isNull" in operators) {
-        const expectsNull = operators["isNull"] === true;
-
-        if (expectsNull !== (documentValue === null || documentValue === undefined)) {
-            return false;
-        }
-    }
-
-    return true;
-};
-
-/**
- * Evaluate an operator bag (`{ eq, ne, in, … }`) against a single document
- * value. Mirrors the SQL compiler's operator set; SQL NULL semantics gate the
- * ordered comparators via {@link isOrderable}. Returns `true` when the value
- * satisfies every operator in the bag.
- */
-const matchesOperators = (documentValue: unknown, operators: Record<string, unknown>): boolean => {
-    if ("eq" in operators && documentValue !== operators["eq"]) {
-        return false;
-    }
-
-    if ("ne" in operators && documentValue === operators["ne"]) {
-        return false;
-    }
-
-    return matchesMembershipOperators(documentValue, operators) && matchesOrderedOperators(documentValue, operators);
-};
-
-/**
- * Evaluate one `AND`/`OR`/`NOT` combinator clause. `recurse` is the top-level
- * {@link matchesWhere} (injected to dodge the mutual-reference ordering), so
- * each branch is itself a full `WhereInput`.
- */
-const matchesCombinator = (
-    document: Record<string, unknown>,
-    key: "AND" | "NOT" | "OR",
-    value: unknown,
-    recurse: (document: Record<string, unknown>, where: WhereInput) => boolean,
-): boolean => {
-    if (key === "AND") {
-        return Array.isArray(value) && value.every((branch) => recurse(document, branch as WhereInput));
-    }
-
-    if (key === "OR") {
-        return Array.isArray(value) && value.some((branch) => recurse(document, branch as WhereInput));
-    }
-
-    return !recurse(document, (value ?? {}) as WhereInput);
-};
-
-const isCombinatorKey = (key: string): key is "AND" | "NOT" | "OR" => key === "AND" || key === "OR" || key === "NOT";
-
-const isOperatorBag = (value: unknown): value is Record<string, unknown> =>
-    isPlainObject(value) && Object.keys(value).every((k) => (OPERATOR_KEYS as ReadonlyArray<string>).includes(k));
-
-/**
- * Does `where` contain a relation-crossing predicate anywhere? The in-memory
- * {@link matchesWhere} evaluator has no `fetcher` and cannot resolve a relation
- * node, so a write policy carrying one must be rejected with a clear error
- * rather than silently denied (a non-relation key holding such a value can't be
- * distinguished from a real relation here, so we treat any relation-shaped node
- * as one — relation operator names don't collide with column-operator names).
- */
-const containsRelationPredicate = (where: WhereInput): boolean =>
-    Object.keys(where).some((key) => {
-        const value = where[key];
-
-        if (isCombinatorKey(key)) {
-            if (key === "NOT") {
-                return containsRelationPredicate((value ?? {}) as WhereInput);
-            }
-
-            return Array.isArray(value) && value.some((branch) => containsRelationPredicate((branch ?? {}) as WhereInput));
-        }
-
-        return isRelationPredicate(value);
-    });
-
-/**
- * JS-side `WhereInput` evaluator. Used by the legacy `query()` wrapper to
- * push read predicates down as `.filter()`, and by {@link evaluateWrite} to
- * gate write policies whose `when` returns a `WhereInput` against the
- * candidate row (insert) or pre-write row (update/delete). Supports the same
- * operator set as the SQL compiler (`eq`, `ne`, `in`, `notIn`, `lt`, `lte`,
- * `gt`, `gte`, `isNull`, `contains`) plus `AND`/`OR`/`NOT` composition. The
- * full compiler stays the single source of truth for SQL-bound predicates;
- * this evaluator is a deliberate parallel for the in-memory path.
- */
-const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boolean => {
-    for (const key of Object.keys(where)) {
-        const value = where[key];
-
-        if (isCombinatorKey(key)) {
-            if (!matchesCombinator(document, key, value, matchesWhere)) {
-                return false;
-            }
-
-            continue;
-        }
-
-        const documentValue = document[key];
-
-        if (isOperatorBag(value)) {
-            if (!matchesOperators(documentValue, value)) {
-                return false;
-            }
-
-            continue;
-        }
-
-        if (documentValue !== value) {
-            return false;
-        }
-    }
-
-    return true;
 };
 
 /**
@@ -1823,15 +1626,10 @@ export type { RlsDatabase };
  * package root does not re-export them.
  * @internal
  */
-export {
-    computeReadBaseWhere,
-    evaluateWrite,
-    indexRolePermissions,
-    isFacadeEntry,
-    matchesWhere,
-    permissionName,
-    readIdentityRoles,
-    resolveCan,
-    resolvePolicyAuth,
-};
+export { computeReadBaseWhere, evaluateWrite, indexRolePermissions, isFacadeEntry, permissionName, readIdentityRoles, resolveCan, resolvePolicyAuth };
 export type { AuthLike };
+
+// `matchesWhere` moved to `./where-match` (the declared JS twin of the SQL
+// compiler); re-exported here so the harness and the sibling middlewares keep a
+// single import site for the primitives.
+export { matchesWhere } from "./where-match";

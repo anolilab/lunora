@@ -318,7 +318,7 @@ describe("redirectTo reaches every sign-in transport", () => {
     it("navigates anonymous sign-in to the on-origin redirectTo", async () => {
         expect.assertions(1);
 
-        const { resolveContext, signInAnonymously } = await import("../../src/core");
+        const { createAnonymousController, resolveContext } = await import("../../src/core");
 
         globalThis.history.pushState({}, "", "/sign-in?redirectTo=%2Finvite%2Fxyz");
 
@@ -329,7 +329,7 @@ describe("redirectTo reaches every sign-in transport", () => {
             redirects: { afterSignIn: "/app" },
         });
 
-        await signInAnonymously(context);
+        await createAnonymousController(context).actions.signIn();
 
         expect(replace).toHaveBeenCalledWith("/invite/xyz");
     });
@@ -365,7 +365,7 @@ describe("redirectTo reaches every sign-in transport", () => {
     it("falls back to the configured default on a client-side door when redirectTo would leave the origin", async () => {
         expect.assertions(1);
 
-        const { resolveContext, signInAnonymously } = await import("../../src/core");
+        const { createAnonymousController, resolveContext } = await import("../../src/core");
 
         const offOrigin = new URLSearchParams({ redirectTo: "https://evil.example" });
 
@@ -378,7 +378,7 @@ describe("redirectTo reaches every sign-in transport", () => {
             redirects: { afterSignIn: "/app" },
         });
 
-        await signInAnonymously(context);
+        await createAnonymousController(context).actions.signIn();
 
         expect(replace).toHaveBeenCalledWith("/app");
     });

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 
+import { viewHref } from "../core/config";
 import { isFlowEnabled } from "../core/flow-gate";
 import { LAST_METHOD_MAGIC_LINK, readLastLoginMethod } from "../core/last-login-method";
 import { createMagicLinkController } from "../core/magic-link";
@@ -12,20 +13,17 @@ import { useAuthUIContextRef } from "./provider";
 import SubmitButton from "./SubmitButton.vue";
 import { useController } from "./use-controller";
 
-withDefaults(
-    defineProps<{
-        signInHref?: string;
-    }>(),
-    {
-        signInHref: "/sign-in",
-    },
-);
+const props = defineProps<{
+    /** Defaults to the configured sign-in route; see `viewPaths.base`. */
+    signInHref?: string;
+}>();
 
 const context = useAuthUIContextRef();
 const t = context.value.localization;
 // Computed, not read at setup: `setup()` never re-runs, so a gate resolved here
 // would stay frozen on the pre-discovery answer. See `provider.ts`.
 const enabled = computed(() => isFlowEnabled(context.value, "magicLink", "MagicLinkCard"));
+const signInLink = computed(() => props.signInHref ?? viewHref(context.value, "signIn"));
 const { actions, state } = useController(createMagicLinkController);
 // Read after mount, not at setup: the server has no cookie, so a render-time
 // read is a hydration mismatch. See `lastLoginMethodStore`.
@@ -49,7 +47,7 @@ const lastUsed = computed(() => (context.value.plugins.lastLoginMethod ? lastUse
             </SubmitButton>
         </form>
         <template #footer>
-            <AuthLink :href="signInHref">{{ t.backToSignIn }}</AuthLink>
+            <AuthLink :href="signInLink">{{ t.backToSignIn }}</AuthLink>
         </template>
     </AuthCard>
 </template>

@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { viewHref } from "../core/config";
     import { createSignUpController } from "../core/sign-up";
     import { signInWithSocial } from "../core/social";
     import AuthCard from "./AuthCard.svelte";
@@ -12,9 +13,15 @@
     import SocialButtons from "./SocialButtons.svelte";
     import SubmitButton from "./SubmitButton.svelte";
 
-    let { signInHref = "/sign-in" }: { signInHref?: string } = $props();
+    let {
+        signInHref,
+    }: {
+        /** Defaults to the configured sign-in route; see `viewPaths.base`. */
+        signInHref?: string;
+    } = $props();
 
     const context = useAuthUI();
+    const signInLink = $derived(signInHref ?? viewHref(context, "signIn"));
     const t = context.localization;
     const social = context.social;
     const { actions, state: form } = controllerStore(createSignUpController);
@@ -58,7 +65,7 @@
             <SubmitButton pending={$form.status === "submitting"}>{t.signUp}</SubmitButton>
         </form>
         {#snippet footer()}
-            <AuthLink href={signInHref}>{t.haveAccount}</AuthLink>
+            <AuthLink href={signInLink}>{t.haveAccount}</AuthLink>
         {/snippet}
     </AuthCard>
 {/if}

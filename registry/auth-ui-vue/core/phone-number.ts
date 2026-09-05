@@ -9,7 +9,7 @@
 import type { ControllerContext } from "./config";
 import { createFormController } from "./create-form-controller";
 import { assertOk, mapAuthError } from "./map-error";
-import { resolveAfterSignIn, withRedirectTo } from "./redirect-to";
+import { postAuthDestination, withRedirectTo } from "./redirect-to";
 import { createStore } from "./store";
 import type { Controller, FlowStatus, FormController } from "./types";
 import { password as passwordValidator, required } from "./validators";
@@ -31,7 +31,7 @@ const createPhoneSignInController = (context: ControllerContext): FormController
                 return { redirectTo: withRedirectTo(context_.redirects.twoFactor) };
             }
 
-            return { redirectTo: resolveAfterSignIn(context_.redirects.afterSignIn) };
+            return { redirectTo: postAuthDestination(context_) };
         },
     });
 
@@ -119,7 +119,7 @@ const createPhoneVerifyController = (context: ControllerContext, options: PhoneV
                     context.onSessionChange?.();
 
                     if (options.updatePhoneNumber !== true) {
-                        context.nav.replace(resolveAfterSignIn(context.redirects.afterSignIn));
+                        context.nav.replace(postAuthDestination(context));
                     }
 
                     return { status: "success", successMessage: context.localization.phoneVerified };
@@ -169,7 +169,10 @@ const createPhoneResetPasswordController = (context: ControllerContext): FormCon
                 }),
             );
 
-            return { redirectTo: context_.redirects.signIn, successMessage: context_.localization.resetPasswordDone };
+            // No `successMessage`: `createFormController` navigates as soon as
+            // `redirectTo` is set, so a banner on this card would never paint.
+            // The sign-in screen the user lands on is the confirmation.
+            return { redirectTo: context_.redirects.signIn };
         },
     });
 
