@@ -229,6 +229,7 @@ export const ERROR_CATALOG = {
      * already have.
      */
     PROVIDER_ERROR: { status: 502, title: "Payment provider error" },
+
     /**
      * Webhook rejections, addressed to the provider posting the hook, so NOT
      * `internal`. Five of the six mint sites are fixed strings ("no matching
