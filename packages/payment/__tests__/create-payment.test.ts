@@ -1312,7 +1312,7 @@ describe("createPayment — attach / check / track", () => {
 
         const payment = createPayment({ adapter: fakeAdapter(), entitlements, store: new MemoryPaymentStore() });
 
-        await expect(payment.check({ referenceId: "user_1" })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+        await expect(payment.check({ referenceId: "user_1" })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     });
 
     it("listBalances resolves every configured feature in one call", async () => {

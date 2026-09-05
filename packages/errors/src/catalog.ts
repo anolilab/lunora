@@ -206,6 +206,14 @@ export const ERROR_CATALOG = {
      * package's own `STATUS_BY_CODE`. The remaining payment codes — `FORBIDDEN`,
      * `INVALID_TRANSITION`, `NOT_FOUND`, `VALIDATION_ERROR` — are the generic
      * entries above and keep their existing verdicts.
+     *
+     * `CONFIG_INVALID` is `internal` because its messages name server wiring
+     * ("webhook secret not configured", a duplicate/absent adapter), and the
+     * caller can do nothing with them. That verdict only holds while the code
+     * is reserved for server configuration: `check()`'s argument-shape guard
+     * used to mint it for "requires a featureId or priceId", which is the
+     * caller's own mistake and now mints `VALIDATION_ERROR` instead. Keep new
+     * caller-fixable failures off this code rather than widening it.
      */
 
     /** Server-side payment wiring is wrong or missing (`webhook secret not configured`, a duplicate/absent adapter). A 500 that names internal configuration — redact on the wire. */
