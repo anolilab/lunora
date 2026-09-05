@@ -1,11 +1,23 @@
 import { LunoraError } from "@lunora/errors";
 
 import { collectPages } from "../../../shared/collect-pages";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { CronTarget, LunoraSchedulerOptions, RunOptions, Scheduler, ScheduleRecord, ScheduleTargetArgs } from "./types";
 import { isWorkflowReference } from "./types";
 import assertScheduleDelay from "./validate-delay";
 import assertScheduleInstant from "./validate-instant";
+
+/**
+ * Undo `runAt`'s `encodeWire(args)` on a record read back out of the DO, so
+ * `list()` / `get()` — and the `_scheduled_functions` system table they back —
+ * answer the same `bigint`/`Date`/`Uint8Array` the caller scheduled rather than
+ * the tagged wire form. Identity for pure-JSON args, so a record written before
+ * the encode landed reads back unchanged.
+ */
+const decodeRecordArgs = (record: ScheduleRecord): ScheduleRecord => {
+    return { ...record, args: decodeWire(record.args) as Record<string, unknown> };
+};
 
 /**
  * Client-side scheduler — forwards `runAfter` / `runAt` / `cancel` calls to a
@@ -40,7 +52,15 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
         // instance. `maxConcurrency` only means anything for a pooled job, so it
         // rides along only when `pool` is set (mirroring `createWorkpool`).
         const base = {
-            args,
+            // Wire-encoded for the same reason `ctx.run`'s dispatch runner encodes
+            // its args: these are stored verbatim by the SchedulerDO and POSTed
+            // verbatim to `/_lunora/scheduler/dispatch` on fire, where the shard
+            // `decodeWire`s `payload.args`. Un-encoded, `callDO`'s `JSON.stringify`
+            // threw outright on a `bigint` and silently flattened a `Uint8Array` to
+            // `{"0":1,…}` / a `NaN` to `null`. `list`/`get` decode it back below, so
+            // the read surface still answers what was scheduled. Identity for
+            // pure-JSON args, so an already-stored record is unaffected.
+            args: encodeWire(args),
             // Pre-minted id, when the caller decided it before the call could be
             // made (see `RunOptions.id`). Absent for an ordinary schedule, and the
             // DO mints one.
@@ -100,13 +120,16 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
      * unbounded duplicates. Paging keeps that promise while each individual
      * response stays bounded.
      */
-    const listAll = async (path: string): Promise<ScheduleRecord[]> =>
-        await collectPages<ScheduleRecord>(async (cursor) =>
+    const listAll = async (path: string): Promise<ScheduleRecord[]> => {
+        const records = await collectPages<ScheduleRecord>(async (cursor) =>
             getDO<{ cursor?: string; records?: ScheduleRecord[]; truncated?: boolean }>(
                 options,
                 cursor === undefined ? path : `${path}?cursor=${encodeURIComponent(cursor)}`,
             ),
         );
+
+        return records.map((record) => decodeRecordArgs(record));
+    };
 
     // The DO's `/list` returns one bounded page of the pending `id:` headers;
     // `listAll` walks them all so callers see every pending job.
@@ -119,7 +142,7 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
         const body = await getDO<{ record?: ScheduleRecord }>(options, `/get?id=${encodeURIComponent(id)}`);
 
         // eslint-disable-next-line unicorn/no-null -- public contract returns `ScheduleRecord | null` (Convex `get` convention), not undefined
-        return body.record ?? null;
+        return body.record === undefined ? null : decodeRecordArgs(body.record);
     };
 
     // The DO's `/dead` returns the records parked by `recordRetry()` after their

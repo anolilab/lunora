@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import createScheduler from "../src/create-scheduler";
 import { createCronTrigger } from "../src/cron";
 import type { DurableObjectNamespaceLike, DurableObjectStubLike, FunctionReference, ScheduleRecord, WorkflowReference } from "../src/types";
@@ -270,6 +271,34 @@ describe("createScheduler", () => {
 
         await expect(scheduler.list()).resolves.toEqual([]);
         await expect(scheduler.get("a")).resolves.toBeNull();
+    });
+
+    it("wire-encodes scheduled args so a bigint/bytes/NaN argument survives to the shard", async () => {
+        expect.assertions(2);
+
+        const { calls, namespace } = fakeNamespace();
+        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const args = { amount: 5n, blob: new Uint8Array([1, 2]), missed: Number.NaN };
+
+        // `callDO` JSON.stringifies this body, so an un-encoded `bigint` throws
+        // outright and a `Uint8Array` degrades to `{"0":1,"1":2}` — the shard
+        // `decodeWire`s `payload.args` at the far end of the dispatch.
+        await scheduler.runAt(Date.now() + 1000, fnRef, args);
+
+        expect(calls[0]!.body.args).toStrictEqual(encodeWire(args));
+        expect(decodeWire(calls[0]!.body.args)).toStrictEqual(args);
+    });
+
+    it("decodes record args back on list()/get() so the read surface matches what was scheduled", async () => {
+        expect.assertions(2);
+
+        const args = { amount: 5n, when: new Date(0) };
+        const records = [{ args: encodeWire(args) as Record<string, unknown>, enqueuedAt: 1, functionPath: "messages.send", id: "a", scheduledFor: 10 }];
+        const { namespace } = fakeNamespace({ "/list": { records } });
+        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+
+        await expect(scheduler.list()).resolves.toStrictEqual([{ ...records[0], args }]);
+        await expect(scheduler.get("a")).resolves.toStrictEqual({ ...records[0], args });
     });
 
     it("throws when SchedulerDO returns a non-2xx response", async () => {

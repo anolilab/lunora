@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import { encodeWire } from "../../../shared/wire-codec";
 import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { ArgsOf, EnqueueOptions, FunctionReference, Workpool, WorkpoolOptions } from "./types";
 import assertScheduleDelay from "./validate-delay";
@@ -53,7 +54,10 @@ const createWorkpool = (options: WorkpoolOptions): Workpool => {
         assertScheduleDelay(delayMs, "workpool.enqueue");
 
         return callDO<{ id: string; scheduledFor: number }>(options, "/schedule", {
-            args,
+            // Wire-encoded on the same hop as `ctx.scheduler.runAt`: the record is
+            // stored verbatim and POSTed verbatim to the dispatch endpoint, where
+            // the shard `decodeWire`s `payload.args`. See `create-scheduler.ts`.
+            args: encodeWire(args),
             functionPath: function_.__lunoraRef,
             instanceName: options.instanceName ?? "default",
             maxConcurrency: options.maxConcurrency,
