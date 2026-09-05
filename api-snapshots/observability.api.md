@@ -109,7 +109,7 @@ interface ContextMetrics {
 ### `ContextTracer` (type)
 
 ```ts
-type ContextTracer = <T>(name: string, function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T, options?: LogFields | SpanOptions) => Promise<T>;
+type ContextTracer = <T>(name: string, function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T, options?: LogFields | SpanOptions, identity?: SpanIdentity) => Promise<T>;
 ```
 
 ### `DEFAULT_EXPLAIN_ISSUE_MODEL` (const)
@@ -821,10 +821,7 @@ interface SpanHandle {
     recordException: (error: unknown) => void;
     setAttribute: (key: string, value: LogFields[string]) => void;
     setAttributes: (fields: LogFields) => void;
-    spanContext: () => {
-        spanId: string;
-        traceId: string;
-    };
+    spanContext: () => SpanContextIds;
 }
 ```
 
@@ -958,10 +955,7 @@ const createMetrics: (deps: MetricsDeps) => ContextMetrics;
 ### `createSpanCollector` (const)
 
 ```ts
-const createSpanCollector: (ids: {
-    spanId: string;
-    traceId: string;
-}, captureRaw?: boolean) => SpanCollector;
+const createSpanCollector: (ids: SpanContextIds, captureRaw?: boolean) => SpanCollector;
 ```
 
 ### `createTracedFetch` (const)
