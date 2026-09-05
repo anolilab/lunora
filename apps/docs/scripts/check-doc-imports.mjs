@@ -1,13 +1,26 @@
 /**
- * Doc snippet import gate.
+ * Doc snippet API gate.
  *
  * Twoslash can't type-check the doc snippets: apps/docs doesn't depend on the
  * @lunora/* packages and the app-local `@/lunora/_generated/*` modules don't
- * exist here, so nothing resolves. This lighter check catches the bug class
- * that actually shipped — importing a symbol from a package that doesn't export
- * it (e.g. `import { query } from "@lunora/server"`, where the builders live in
- * the generated server). It parses every ```ts/```tsx fence across the docs and
- * verifies each named import against the target module's real exports.
+ * exist here, so nothing resolves. This lighter check catches the two bug
+ * classes that actually shipped:
+ *
+ *   1. importing a symbol from a package that doesn't export it (e.g.
+ *      `import { query } from "@lunora/server"`, where the builders live in the
+ *      generated server) — checked against the target module's real exports;
+ *   2. a symbol that IS exported, used with a shape it does not have — see
+ *      {@link NONEXISTENT_API}. Names alone can't see this class, and it is the
+ *      worse of the two: the flagship tutorial taught `useMutation` as a
+ *      callable for as long as the hook has returned an object, so a reader
+ *      following it got `TypeError: send is not a function`.
+ *
+ * It parses every ```ts/```tsx fence across the docs and applies both.
+ *
+ * A deny-table, not a type checker: it holds only shapes that were WRONG in
+ * shipped docs, each with the correct form in its message. Type-checking the
+ * samples for real needs the packages installed here plus synthesized
+ * `_generated` modules — worth doing, but not what this file is.
  *
  * Usage: node scripts/check-doc-imports.mjs   (exit 1 on any violation)
  */
@@ -18,7 +31,9 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const PKGS = join(ROOT, "packages");
 
-const DOC_DIRS = [join(ROOT, "apps/docs/src/content/docs")];
+// `blog/` is in scope for the same reason `docs/` is: its posts carry full
+// runnable snippets, and two of them taught `useMutation` as a callable.
+const DOC_DIRS = [join(ROOT, "apps/docs/src/content/docs"), join(ROOT, "apps/docs/src/content/blog")];
 // Package doc sources (apps/docs/src/content/docs/packages is a generated copy).
 for (const pkg of readdirSync(PKGS)) {
     const d = join(PKGS, pkg, "docs");
@@ -48,6 +63,29 @@ const GENERATED = {
     // codegen emits alongside `api` / `internal` when the project declares them.
     "@/lunora/_generated/api": new Set(["agents", "api", "FunctionReference", "internal", "workflows"]),
 };
+
+/**
+ * Uses of a real export with a shape it does not have, as
+ * `[pattern, what to write instead]`. Add an entry when a doc snippet is found
+ * teaching an API the runtime never had; keep the correction in the message so
+ * the failure is actionable without opening this file.
+ */
+const NONEXISTENT_API = [
+    [
+        // `const send = useMutation(fn)` then `send(args)`. The hook returns
+        // `{ data, error, isError, mutate, pending, reset, withOptimisticUpdate }`.
+        // A destructuring `const { mutate: send } = …` is the correct form and
+        // does not match (`{` is not `\w`).
+        /\bconst\s+\w+\s*=\s*useMutation\(/,
+        "`useMutation(fn)` returns `{ mutate, pending, … }` and is not itself callable — write `const { mutate: send } = useMutation(fn)`",
+    ],
+    [
+        // Present on the untyped runtime writer, absent from the generated
+        // typed `ctx.db`, so it may run but never type-checks in a user project.
+        /\bctx\.db\.findMany\(\s*["']/,
+        '`ctx.db.findMany("table")` is not on the generated `ctx.db` — write `ctx.db.<table>.findMany()` or `ctx.db.query("table").collect()`',
+    ],
+];
 
 // Umbrella `lunorash/<sub>` re-exports the base packages.
 const UMBRELLA = new Set(["client", "do", "runtime", "server", "values"]);
@@ -155,6 +193,12 @@ for (const dir of DOC_DIRS) {
             }
             if (!inTs) return;
 
+            for (const [pattern, correction] of NONEXISTENT_API) {
+                if (pattern.test(line)) {
+                    violations.push(`${file.replace(ROOT, "")}:${index + 1}  ${correction}`);
+                }
+            }
+
             const imp = line.match(/import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+["']([^"']+)["']/);
             if (!imp) return;
 
@@ -177,10 +221,10 @@ for (const dir of DOC_DIRS) {
 }
 
 if (violations.length > 0) {
-    console.error(`✗ ${violations.length} doc import violation(s):\n`);
+    console.error(`✗ ${violations.length} doc snippet violation(s):\n`);
     for (const v of violations) console.error(`  ${v}`);
-    console.error("\nFix the import, or extend GENERATED/SUBPATH_ENTRY in scripts/check-doc-imports.mjs.");
+    console.error("\nFix the snippet, or extend GENERATED/SUBPATH_ENTRY/NONEXISTENT_API in scripts/check-doc-imports.mjs.");
     process.exit(1);
 }
 
-console.log("✓ doc snippet imports check out");
+console.log("✓ doc snippets check out");
