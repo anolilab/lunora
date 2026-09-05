@@ -5802,9 +5802,12 @@ abstract class ShardDO {
 
         // Reserved admin-introspection RPCs are intercepted before user
         // dispatch — they read raw SQLite directly rather than running a
-        // registered function, and carry their own bearer-token gate.
+        // registered function, and carry their own bearer-token gate. Run under
+        // their own request scope: this branch returns before `beginDispatch`, so
+        // without it the admin plane inherits whatever a concurrent `/rpc` left on
+        // `this`. See {@link ShardDO.withAdminRequestScope}.
         if (payload.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-            return this.handleAdminRpc(request, payload.functionPath, payload.args ?? {});
+            return await this.withAdminRequestScope(async () => await this.handleAdminRpc(request, payload.functionPath, payload.args ?? {}));
         }
 
         // Stash the inbound D1 bookmark and identity headers for the
@@ -7628,6 +7631,10 @@ abstract class ShardDO {
      * overwritten here for the duration of the dispatch and restored after, so
      * the forge can't leak into a later request. The target path is validated to
      * be a non-admin function, so it can't be used to re-enter the admin plane.
+     * And the dispatch runs under the admin plane's own request scope
+     * ({@link ShardDO.withAdminRequestScope}) — the identity is the only thing
+     * forged here, never the system flag or the mutation-replay fields, which
+     * would otherwise be whatever a concurrent `/rpc` happened to leave behind.
      *
      * Callers: the studio surfaces it behind a loopback-dev gate (`runAsIdentity`),
      * and `lunora run --as` dispatches through it from the CLI. That gate was
@@ -7896,6 +7903,56 @@ abstract class ShardDO {
         const result = await this.evaluateFlags(context);
 
         return adminResponse(result);
+    }
+
+    /**
+     * Run the admin plane's `run()` under its OWN per-request scope, restoring
+     * whatever was there on the way out.
+     *
+     * The admin branch of `fetch` returns before `beginDispatch`, so every field
+     * that call would have stamped is left holding the last `/rpc`'s values. Two
+     * of them are load-bearing. `currentRequestSystem` is the flag the generated
+     * `handleRpc` gates `internal` functions on (`registered.visibility ===
+     * "internal" && !this.isSystemDispatch()`), and `runAs` dispatches straight
+     * through that gate — so an `x-lunora-system: 1` request that is parked on an
+     * await while an admin call arrives lends it the system bit. The replay fields
+     * (`currentRequestMutationId` / `currentRequestClientId` / `currentMutatorClass`)
+     * are the other: `commitMutationBookkeeping` reads them off `this`, so a
+     * mutation dispatched through `runAs` could commit a dedup row and advance a
+     * client watermark under the parked request's identity.
+     *
+     * Restoring rather than clearing on exit is deliberate: an admin call is a
+     * guest on a thread another dispatch may own, and clearing would take that
+     * dispatch's scope with it. (The `/rpc` tail re-pins its own scope after every
+     * await regardless — see `captureRequestScope`'s call site.)
+     *
+     * The gate is the admin bearer token either way, which already permits
+     * `runSql`/`writeRow`/`clearTable`; this closes a gate that does not hold, not
+     * a path past the trust boundary.
+     */
+    private async withAdminRequestScope<R>(run: () => Promise<R>): Promise<R> {
+        const previousScope = this.captureRequestScope();
+        const previousIdentity = this.currentRequestIdentity;
+        const previousBookkeeping = this.mutationBookkeeping;
+
+        this.currentRequestBookmark = undefined;
+        this.currentResponseBookmark = undefined;
+        this.currentRequestUserId = undefined;
+        this.currentRequestIdentity = undefined;
+        this.currentRequestClientId = undefined;
+        this.currentRequestClientSeq = undefined;
+        this.currentRequestMutationId = undefined;
+        this.currentMutatorClass = undefined;
+        this.mutationBookkeeping = undefined;
+        this.currentRequestSystem = false;
+
+        try {
+            return await run();
+        } finally {
+            this.restoreRequestScope(previousScope);
+            this.currentRequestIdentity = previousIdentity;
+            this.mutationBookkeeping = previousBookkeeping;
+        }
     }
 
     /**
