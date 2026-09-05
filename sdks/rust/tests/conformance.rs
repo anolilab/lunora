@@ -198,10 +198,6 @@ fn malformed_values_rejected() {
 
     assert_eq!(decode_wire(&json!([TAG, "bytes", "AQID"])).expect("decode"), WireValue::Bytes(vec![1, 2, 3]));
 
-    // Whitespace INSIDE a payload is not a rejection: the reference decodes via
-    // `atob`, which strips ASCII whitespace before doing anything else.
-    assert_eq!(decode_wire(&json!([TAG, "bytes", "AQ\nID"])).expect("decode"), WireValue::Bytes(vec![1, 2, 3]));
-
     // A bare [TAG] is NOT malformed: it is the forward-compat shape, and the
     // reference hands it back as an ordinary array.
     assert_eq!(

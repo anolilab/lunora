@@ -857,20 +857,20 @@ Every row below is either pinned by a named case or listed under
 
 **Codec — decode, per tag**
 
-| Tag                    | Accepted, pinned by                                                                                                                      | Refused, pinned by                                                                                                                                                                               |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `bigint`               | `bigint*`; canonicalised: `bigint-leading-zeros`, `bigint-negative-zero`                                                                 | `bigint-payload-number`, `-missing-payload`, `-empty-string`, `-leading-plus`, `-decimal-point`, `-surrounding-space`, `-hex-prefix`, `-non-ascii-digits`; length by `over_long_bigint_rejected` |
-| `date`                 | `date`, `date-invalid`, TimeClip by `date-epoch-max`, `-past-max`, `-out-of-range`, `-non-finite`, `-fractional`, `-fractional-negative` | `date-payload-not-number`, `-string`, `-boolean`, `-object`, `-array`, `-bigint-tag`                                                                                                             |
-| `url`                  | `url`                                                                                                                                    | `url-href-not-string`, `url-href-missing`                                                                                                                                                        |
-| `map`                  | `map`, `map-empty`, `map-duplicate-keys`, `map-duplicate-nonstring-keys`, `map-duplicate-zero-sign-keys`                                 | `map-payload-not-array`, `-payload-missing`, `-entry-not-array`, `-entry-too-short`, `-entry-too-long`                                                                                           |
-| `set`                  | `set`, `set-empty`, `set-duplicate-scalars`, `set-duplicate-nonscalars`, `set-duplicate-zero-signs`                                      | `set-payload-not-array`, `-payload-missing`, `-payload-object`                                                                                                                                   |
-| `arr`                  | `array-sentinel-escape`, `arr-empty-payload`                                                                                             | `arr-payload-not-array`, `-payload-missing`, `-payload-object`                                                                                                                                   |
-| `bytes`                | the ten ctor cases above, `bytes-unknown-ctor`, `bytes-null-ctor`                                                                        | `bytes-payload-not-string`, `-payload-number`, `-outside-alphabet`, `-truncated-quantum`, `-padding-inside`, `-element-misaligned`, `-misaligned-int16`, `-misaligned-float64`                   |
-| `error`                | `error*`, allow-listed ctor by `error-with-props` (`TypeError`)                                                                          | `error-props-not-object`, `-missing-props`, `-string`, `-array`, `-number`, `-boolean`                                                                                                           |
-| `nan` / `inf` / `-inf` | `nan`, `inf`, `-inf`                                                                                                                     | —                                                                                                                                                                                                |
-| `undefined`            | `undefined-in-array`, `undefined-object-field`                                                                                           | —                                                                                                                                                                                                |
-| unknown tag            | `unknown-tag` (decodes as an ordinary array, re-encodes escaped)                                                                         | —                                                                                                                                                                                                |
-| depth                  | `depth_cap_enforced` (manifest)                                                                                                          | same                                                                                                                                                                                             |
+| Tag                    | Accepted, pinned by                                                                                                                                                              | Refused, pinned by                                                                                                                                                                                                                                                                                                     |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bigint`               | `bigint*`; canonicalised: `bigint-leading-zeros`, `bigint-negative-zero`                                                                                                         | `bigint-payload-number`, `-missing-payload`, `-empty-string`, `-leading-plus`, `-decimal-point`, `-surrounding-space`, `-hex-prefix`, `-non-ascii-digits`; length by `over_long_bigint_rejected`                                                                                                                       |
+| `date`                 | `date`, `date-invalid`, TimeClip by `date-epoch-max`, `-past-max`, `-out-of-range`, `-non-finite`, `-fractional`, `-fractional-negative`, `-negative-fraction`, `-negative-zero` | `date-payload-not-number`, `-string`, `-boolean`, `-object`, `-array`, `-bigint-tag`                                                                                                                                                                                                                                   |
+| `url`                  | `url`                                                                                                                                                                            | `url-href-not-string`, `url-href-missing`, `url-href-relative`, `-empty`, `-scheme-relative`                                                                                                                                                                                                                           |
+| `map`                  | `map`, `map-empty`, `map-duplicate-keys`, `map-duplicate-nonstring-keys`, `map-duplicate-zero-sign-keys`, `map-null-key`, `map-null-value`                                       | `map-payload-not-array`, `-payload-missing`, `-entry-not-array`, `-entry-too-short`, `-entry-too-long`                                                                                                                                                                                                                 |
+| `set`                  | `set`, `set-empty`, `set-duplicate-scalars`, `set-duplicate-nonscalars`, `set-duplicate-zero-signs`                                                                              | `set-payload-not-array`, `-payload-missing`, `-payload-object`                                                                                                                                                                                                                                                         |
+| `arr`                  | `array-sentinel-escape`, `arr-empty-payload`                                                                                                                                     | `arr-payload-not-array`, `-payload-missing`, `-payload-object`                                                                                                                                                                                                                                                         |
+| `bytes`                | the ten ctor cases above, `bytes-unknown-ctor`, `bytes-null-ctor`                                                                                                                | `bytes-payload-not-string`, `-payload-number`, `-outside-alphabet`, `-truncated-quantum`, `-padding-inside`, `-element-misaligned`, `-misaligned-int16`, `-misaligned-float64`; canonicity by `bytes-base64-unpadded`, `-newline`, `-whitespace`, `-noncanonical-pad1`, `-noncanonical-pad2`, `-urlsafe`, `-non-ascii` |
+| `error`                | `error*`, allow-listed ctor by `error-with-props` (`TypeError`)                                                                                                                  | `error-props-not-object`, `-missing-props`, `-string`, `-array`, `-number`, `-boolean`; label slots by `error-name-number`, `-name-null`, `error-message-number`, `-message-null`                                                                                                                                      |
+| `nan` / `inf` / `-inf` | `nan`, `inf`, `-inf`                                                                                                                                                             | —                                                                                                                                                                                                                                                                                                                      |
+| `undefined`            | `undefined-in-array`, `undefined-object-field`                                                                                                                                   | —                                                                                                                                                                                                                                                                                                                      |
+| unknown tag            | `unknown-tag` (decodes as an ordinary array, re-encodes escaped)                                                                                                                 | —                                                                                                                                                                                                                                                                                                                      |
+| depth                  | `depth_cap_enforced` (manifest)                                                                                                                                                  | same                                                                                                                                                                                                                                                                                                                   |
 
 **Stable key (`stableStringify ∘ encodeWire`)**
 
@@ -883,7 +883,7 @@ Every row below is either pinned by a named case or listed under
 | `undefined` in an array keys as its tag, not as `null` | `undefined-in-array-arg`                                                                                                     |
 | string escaping matches `JSON.stringify`               | `string-with-quote`, `escape-set-matches-json-stringify`, `string_escaping_matches_json_stringify`                           |
 | number spelling matches `String(v)`                    | `number-exponent-forms`, `format_number_matches_ecmascript`                                                                  |
-| a negative zero keys as `-0`, distinct from `0`        | `negative-zero`                                                                                                              |
+| a negative zero keys as `-0`, distinct from `0`        | `negative-zero`; meeting TimeClip in `date-arg-negative-fraction-epoch`, `date-arg-negative-zero-epoch`                      |
 | empty containers                                       | `empty`, `nested-empty-containers`                                                                                           |
 | wire-typed args tokenise rather than throwing          | `bigint-arg`, `date-arg`, `bytes-arg`, `map-arg-keeps-insertion-order`, `set-arg`, `url-arg`, `error-arg`, `non-finite-args` |
 | the `(functionPath, args, shardKey)` composition       | `empty_shard_key_is_omitted`                                                                                                 |
@@ -906,8 +906,8 @@ Every row below is either pinned by a named case or listed under
 
 #### Deliberately unpinned, and why
 
-Beyond the two decoder leniencies below, four rows above resolve to "no case, on
-purpose". Each is measured, not assumed:
+Three rows above resolve to "no case, on purpose". Each is measured, not
+assumed:
 
 - **A lone surrogate in a stable key.** The reference escapes one (`\ud800`) via
   `JSON.stringify`, but the fixture cannot carry the input: ruby's `JSON.parse`
@@ -916,13 +916,6 @@ purpose". Each is measured, not assumed:
   U+FFFD before the port's key encoder ever sees it. Two of eight cannot express
   it, and the same two refuse the value on a real wire, so it is unreachable
   there rather than mishandled.
-- **`Error` `name` / `message` that are not strings.** The reference is LENIENT
-  and JS-accidentally so: `[TAG,"error",7,"m",{}]` keeps a numeric `name`
-  through `defineProperty`, and `[TAG,"error","Error",7,{}]` ToString-coerces the
-  message to `"7"`. A case demanding rejection would assert against the
-  reference; one demanding acceptance would ask eight languages to reproduce two
-  JS coercions. The sibling slots (`props`, `date` epoch, `bytes` payload, `url`
-  href) are all type-CHECKED and are pinned; these two are the remainder.
 - **`Error` own props carrying `__proto__`.** The decode side handles it (an own
   data property, never the setter), but the ENCODE side's Error branch writes
   `properties[key] = …` with no such guard, so the prop lands on the props
@@ -939,27 +932,39 @@ The `connect-with-caps` and `pageDeltaFrames` goldens stay opt-in, as
 `pageDelta` token never receives such a frame, and running those cases would hold
 it to a merge it correctly does not do.
 
-### Two decoder leniencies the fixtures deliberately do not pin
+### The decoder leniencies, and where they went
 
-Both are places where a port is STRICTER than the reference, and both are left
-unpinned on purpose — a fixture demanding rejection would assert against the
-reference, and one demanding acceptance would ask six languages to hand-roll a
-decoder whose only new behaviour is accepting malformed input. A conforming
-encoder emits neither shape, so nothing on a conforming wire reaches them.
-Measured, not assumed:
+Three of them used to sit here unpinned, on the reasoning that a fixture
+demanding rejection would assert against the reference. They are pinned now,
+because measuring them showed the leniency was not one behaviour but four: the
+eight ports had inherited whatever their language's base64 decoder happened to
+allow and landed 3-accept / 5-reject on an unpadded payload, 2-accept / 6-reject
+on an embedded newline. "Nothing on a conforming wire reaches them" was true and
+beside the point — a decoder's job on a NON-conforming wire is exactly what the
+`bytes` tag exists to define.
 
-| Input                                          | Accepted by                                   | Refused by                              |
-| ---------------------------------------------- | --------------------------------------------- | --------------------------------------- |
-| unpadded base64 (`AQI`)                        | reference (`atob`), rust, java, kotlin        | go, python, ruby, swift, dart           |
-| base64 with inner whitespace                   | reference (`atob`), rust, go (`\n`/`\r` only) | java, kotlin, python, ruby, swift, dart |
-| a `url` href `new URL` refuses (`"not a url"`) | every port — the href is stored verbatim      | the reference only                      |
+- **base64 is canonical, not merely decodable.** A payload must be exactly the
+  string a conforming encoder would have written for those bytes: padded, no
+  embedded whitespace, standard alphabet, and no non-zero trailing bits in a
+  short final quantum. Every implementation enforces it the same one-line way —
+  decode, re-encode, compare — rather than by hand-rolling a validator per
+  language. The reference changed too: `atob` accepted `"AQJ="`, decoded it to
+  the two bytes `01 02` and re-encoded it as `"AQI="`, which is a silent rewrite
+  of the peer's bytes rather than leniency about them.
+- **A `url` href must be ABSOLUTE.** The reference builds a real `URL`, which
+  throws on an unparseable href; all eight ports stored the string verbatim and
+  accepted `"not a url"` — a frame that kills a JS peer's subscription and is
+  waved through everywhere else. The reference is the normative side, and the
+  ports enforce the FLOOR of it (a scheme, per RFC 3986, then the rest), which
+  is what `protocol/README.md` §2.1 states and what the three `url-href-*`
+  rejections pin.
 
-The `url` row is the one that can bite in the other direction: a port will put a
-non-canonical href (`HTTPS://EXAMPLE.COM`) on the wire where the reference emits
+What remains unpinned, and why, is href SPELLING: a port puts a non-canonical
+href (`HTTPS://EXAMPLE.COM`) on the wire where the reference emits
 `new URL(href).href` (`https://example.com/`), and the runtime decodes with the
 reference codec. Eight native URL types do not agree with WHATWG parsing on
-enough edges to reproduce it — a half-validator would be a NINTH behaviour — so
-the ports carry the href through untouched and a consumer that needs the
+enough edges to reproduce that — a half-normaliser would be a NINTH behaviour —
+so the ports carry the href through untouched and a consumer that needs the
 reference's spelling normalises before it constructs the value.
 
 CI runs all eight per PR (`sdk-conformance` in `.github/workflows/test.yml`),

@@ -3,6 +3,8 @@
 /// Part of the conformance suite; `conformance.dart` owns `main()`.
 library;
 
+import 'dart:convert';
+
 import 'package:lunora/lunora.dart';
 
 import 'harness.dart';
@@ -24,7 +26,19 @@ void caseWireCodecRoundTrip() {
     // and carry the expected re-encoding.
     final expected = testCase.containsKey('reencoded') ? testCase['reencoded'] : encoded;
 
-    equals(canonical(encodeWire(decodeWire(encoded))), canonical(expected), 'round-trip mismatch for ${testCase['name']}');
+    final reencoded = encodeWire(decodeWire(encoded));
+
+    equals(canonical(reencoded), canonical(expected), 'round-trip mismatch for ${testCase['name']}');
+
+    // And again as the BYTES the transport sends. `canonical` goes through
+    // `stableStringify`, which formats numbers the ECMAScript way — a string
+    // this port never puts on a socket. `transport.dart` sends
+    // `jsonEncode(buildRpcBody(...))` over `encodeWire` output, and jsonEncode
+    // spells a Dart double `1700000000000.0` where the reference writes
+    // `1700000000000`, so every date on the wire diverged while this case
+    // reported green. A round-trip assertion measured on a string the transport
+    // never sends cannot see the divergence it exists to catch.
+    equals(jsonEncode(reencoded), jsonEncode(expected), 'wire-text mismatch for ${testCase['name']}');
   }
 }
 

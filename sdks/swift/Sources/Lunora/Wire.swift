@@ -49,7 +49,34 @@ public enum Wire {
     static func timeClip(_ epoch: Double) -> Double {
         guard epoch.isFinite, abs(epoch) <= maxTimeValue else { return Double.nan }
 
-        return epoch.rounded(.towardZero)
+        let truncated = epoch.rounded(.towardZero)
+
+        // TimeClip is ToIntegerOrInfinity, not truncation, and the two differ on
+        // exactly one window: an epoch in (-1, 0] gives +0 there and -0 here,
+        // because rounding toward zero keeps the sign of zero. The window is one
+        // value wide, and the stable subscription key spells -0 as the bare
+        // token `-0`, distinct from `0` — so without this a Date built from -0.5
+        // opens a different subscription than the TS client's does.
+        return truncated == 0 ? 0 : truncated
+    }
+
+    /// Whether an href carries a URL scheme, per RFC 3986: an ASCII letter
+    /// followed by letters, digits, `+`, `-` or `.`, then `:`.
+    ///
+    /// The reference builds a real `URL`, which throws on anything unparseable,
+    /// while every port stored the string verbatim and accepted `"not a url"` —
+    /// a frame that kills a JS peer's subscription and is waved through here.
+    /// Reproducing WHATWG URL parsing in eight languages is not on offer (their
+    /// own parsers disagree with it in the deep end), so the contract, and
+    /// `protocol/README.md` §2.1, is the floor of it: an href must be ABSOLUTE.
+    static func isAbsoluteHref(_ href: String) -> Bool {
+        guard let colon = href.firstIndex(of: ":") else { return false }
+
+        let scheme = href[href.startIndex..<colon]
+
+        guard let first = scheme.first, first.isASCII, first.isLetter else { return false }
+
+        return scheme.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "+" || $0 == "-" || $0 == ".") }
     }
 
     /// Bytes per element for the typed-array views the codec round-trips. A view
@@ -309,7 +336,7 @@ extension Wire {
             }
             return WireDate(timeClip(epoch.doubleValue))
         case "url":
-            guard value.count >= 3, let href = value[2] as? String else { throw WireFormatError.malformed("url") }
+            guard value.count >= 3, let href = value[2] as? String, isAbsoluteHref(href) else { throw WireFormatError.malformed("url") }
             return WireURL(href)
         case "map": return try decodeMap(value, depth: depth)
         case "set":
@@ -447,17 +474,34 @@ extension Wire {
         guard let props = (try decode(value[4], depth: depth + 1)) as? [String: Any] else {
             throw WireFormatError.malformed("error")
         }
+        // Both label slots are type-CHECKED, like every other slot. Substituting
+        // "" for a non-string accepted the frame while erasing the error's
+        // identity, and the ports did not even agree on that: two carried the
+        // non-string through verbatim. A slot that must hold a string and does
+        // not is a malformed frame.
+        guard let name = value[2] as? String, let message = value[3] as? String else {
+            throw WireFormatError.malformed("error")
+        }
+
         let cause = value.count > 5 ? try decode(value[5], depth: depth + 1) : nil
         return WireError(
-            name: value[2] as? String ?? "",
-            message: value[3] as? String ?? "",
+            name: name,
+            message: message,
             props: props,
             cause: cause
         )
     }
 
     private static func decodeBytes(_ value: [Any]) throws -> Any {
-        guard value.count >= 3, let encoded = value[2] as? String, let data = Data(base64Encoded: encoded) else {
+        // The payload must be CANONICAL, not merely decodable: exactly the
+        // string a conforming encoder would have written for these bytes.
+        // `Data(base64Encoded:)` ignores the unused low bits of a short final
+        // quantum, so `"AQJ="` decoded to two bytes that re-encode as `"AQI="` —
+        // different bytes than the peer wrote, accepted silently. Re-encoding
+        // and comparing is the whole rule, and the same one line in every port.
+        guard value.count >= 3, let encoded = value[2] as? String, let data = Data(base64Encoded: encoded),
+            data.base64EncodedString() == encoded
+        else {
             throw WireFormatError.malformed("bytes")
         }
 

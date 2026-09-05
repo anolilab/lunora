@@ -5,6 +5,7 @@ tested against)."""
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import unittest
@@ -39,7 +40,17 @@ class TestWireCodecFixtures(unittest.TestCase):
                 # A handful of shapes are legitimately not fixed points — a bare
                 # [TAG] array is escaped on the way out, an `undefined` object
                 # field is dropped — and carry the expected re-encoding.
-                self.assertEqual(encode_wire(decode_wire(encoded)), case.get("reencoded", encoded))
+                #
+                # Compared as canonical JSON TEXT, which is what the wire
+                # carries and what the other seven suites assert on. Comparing
+                # decoded Python objects was weaker than every other port's
+                # assertion: `0 == -0.0` and `True == 1` there, so a codec that
+                # put a signed zero or a boolean back on the wire where the
+                # reference puts a number would have passed this line.
+                self.assertEqual(
+                    json.dumps(encode_wire(decode_wire(encoded)), sort_keys=True),
+                    json.dumps(case.get("reencoded", encoded), sort_keys=True),
+                )
 
 
 class TestStableKeyFixtures(unittest.TestCase):

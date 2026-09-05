@@ -220,7 +220,7 @@ module Lunora
     when "-inf" then -::Float::INFINITY
     when "bigint" then decode_bigint(value)
     when "date" then decode_date(value, depth)
-    when "url" then WireUrl.new(payload_of(value, "url", ::String))
+    when "url" then decode_url(value)
     when "map" then decode_map(value, depth)
     when "set" then decode_set(value, depth)
     when "error" then decode_error(value, depth)
@@ -249,6 +249,21 @@ module Lunora
     raise WireFormatError, "wire-codec: malformed #{tag} tag" unless slot.is_a?(type)
 
     slot
+  end
+
+  # An href must be ABSOLUTE — a scheme, per RFC 3986, then the rest.
+  #
+  # The reference builds a real URL, which throws on anything unparseable, while
+  # every port stored the string verbatim and accepted "not a url" — a frame
+  # that kills a JS peer's subscription and is waved through here. Reproducing
+  # WHATWG URL parsing in eight languages is not on offer (their own parsers
+  # disagree with it in the deep end), so the contract, and protocol/README.md
+  # 2.1, is the floor of it.
+  def decode_url(value)
+    href = payload_of(value, "url", ::String)
+    raise WireFormatError, "wire-codec: malformed url tag" unless href.match?(/\A[A-Za-z][A-Za-z0-9+\-.]*:/)
+
+    WireUrl.new(href)
   end
 
   # Epoch milliseconds, and nothing else. The payload is DECODED first (a nested
@@ -369,17 +384,32 @@ module Lunora
   def decode_error(value, depth)
     raise WireFormatError, "wire-codec: malformed error tag" unless value.length > 4 && value[4].is_a?(::Hash)
 
+    # Both label slots are type-CHECKED, like every other slot. Carrying a
+    # non-string through verbatim (as this port did) or substituting "" for it
+    # (as six others did) are two different wrong answers to a malformed frame.
+    raise WireFormatError, "wire-codec: malformed error tag" unless value[2].is_a?(::String) && value[3].is_a?(::String)
+
     props = decode_wire(value[4], depth + 1)
     cause = value.length > 5 ? decode_wire(value[5], depth + 1) : UNDEFINED
     WireError.new(value[2], value[3], props, cause)
   end
 
   def decode_bytes(value)
+    encoded = payload_of(value, "bytes", ::String)
+
     begin
-      data = Base64.strict_decode64(payload_of(value, "bytes", ::String))
+      data = Base64.strict_decode64(encoded)
     rescue ::ArgumentError => e
       raise WireFormatError, "wire-codec: invalid base64 in bytes tag: #{e.message}"
     end
+
+    # The payload must be CANONICAL, not merely decodable: exactly the string a
+    # conforming encoder would have written for these bytes. Re-encoding and
+    # comparing is the whole rule, and it is the same one line in every port —
+    # which matters more than whether this particular decoder already rejected
+    # each shape, since the next port will inherit its own language's leniency.
+    raise WireFormatError, "wire-codec: bytes payload is not canonical padded base64" unless Base64.strict_encode64(data) == encoded
+
     ctor = value.length > 3 ? value[3] : "Uint8Array"
     # A plain Uint8Array is a binary Ruby String and re-encodes to the
     # 2-element form; every other view keeps its constructor name.

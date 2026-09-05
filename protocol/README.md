@@ -80,12 +80,39 @@ structurally identical tree — a pre-codec peer interops unchanged.
 Notes that a port MUST honour:
 
 - **base64** is standard (padded) base64, as produced by `btoa` /
-  `base64.b64encode`.
+  `base64.b64encode`, and it is **canonical**: on decode, a `bytes` payload must
+  be exactly the string an encoder would have written for those bytes. That is
+  one line in every implementation — decode, re-encode, compare — and nothing
+  weaker will do, because the standard-library decoders are each lenient in a
+  different direction. Concretely, all of these are refused: a length of 1 or 3
+  mod 4 (truncated or unpadded), `=` anywhere but the end, ASCII whitespace
+  anywhere, the base64url alphabet, and a non-zero unused low bit in a short
+  final quantum. That last one is not leniency but a silent rewrite: `"AQJ="`
+  decodes to the two bytes `01 02` and re-encodes as `"AQI="`, so accepting it
+  hands the peer back different bytes than it wrote.
 - **Date** epoch-ms is routed back through the encoder, so an _invalid_ Date
   (`NaN` time) encodes as `[TAG, "date", [TAG, "nan"]]` and round-trips exactly.
-- **Error** omits `stack` (untrusted-peer redaction). `ownProps` is an object of
-  the error's own enumerable keys (e.g. a `LunoraError`'s `code`/`data`). A 6th
-  element carries `cause` when present.
+  The epoch is put through ECMAScript **TimeClip** on decode: `NaN` when
+  non-finite or past ±8.64e15, otherwise `ToIntegerOrInfinity`. That is _not_
+  truncation, and the two differ on exactly one window — an epoch in `(-1, 0]`
+  clips to `+0`, where truncation keeps the sign and yields `-0`. One value
+  wide, and load-bearing: §3's key spells `-0` as its own token, so a port that
+  truncates opens a different subscription than the TS client for the same
+  `Date`.
+- **URL** hrefs must be **absolute** — an RFC 3986 scheme (an ASCII letter, then
+  letters/digits/`+`/`-`/`.`), then `:`, then the rest. The reference builds a
+  real `URL` and so refuses more than that; a port is held to the floor, because
+  no language's URL parser reproduces WHATWG in the deep end and a
+  half-validator would be one more behaviour rather than one fewer. A port
+  carries the href through VERBATIM; it does not normalise. A conforming encoder
+  therefore puts an already-normalised href on the wire (which is what
+  `new URL(href).href` produces), since `"HTTPS://EXAMPLE.COM"` survives a port
+  unchanged and comes back from the reference as `"https://example.com/"`.
+- **Error** omits `stack` (untrusted-peer redaction). `name` and `message` are
+  both **strings**, type-checked like every other slot — neither coerced nor
+  defaulted to `""`. `ownProps` is an object of the error's own enumerable keys
+  (e.g. a `LunoraError`'s `code`/`data`). A 6th element carries `cause` when
+  present.
 - **Depth** is capped at 64 levels (throw beyond). On decode, a `bigint` digit
   string is rejected beyond 1024 digits, and `__proto__` keys are assigned as
   plain data properties (never via the prototype setter).
@@ -152,11 +179,12 @@ authoritative description; this is the summary.
 
 - **`cases[].reencoded`** — the expected re-encoding, for the shapes that are
   legitimately NOT fixed points of `encode(decode(encoded)) == encoded`. There
-  are four: a bare `[TAG]` array, which is escaped on the way back out as
+  are five: a bare `[TAG]` array, which is escaped on the way back out as
   `[TAG, "arr", [TAG]]`; an object field holding the `undefined` tag, which is
   dropped (matching `JSON.stringify`); a `bytes` tag naming an unknown
   typed-array ctor, which decodes to raw bytes and re-encodes without the name;
-  and a `map` carrying a duplicate key, which collapses last-wins. When a case
+  a `map` carrying a duplicate key, which collapses last-wins; and a `date`
+  epoch, which comes back TimeClipped rather than verbatim. When a case
   carries `reencoded` the assertion becomes
   `encode(decode(encoded)) == reencoded`. Without it those shapes were
   untestable, so no port was held to them — and four ports decoded the first two
@@ -164,12 +192,11 @@ authoritative description; this is the summary.
 - **`rejected[]`** — wire values every conforming codec MUST refuse to decode.
   These are data for the same reason the case list is: a rejection each suite
   hard-codes for itself is a rejection only some suites have. The base64 entries
-  are what a lenient hand-rolled decoder lets through — the reference decodes via
-  `atob`, which fails any input whose length is 1 mod 4 once ASCII whitespace is
-  removed, so a truncated or padding-corrupted payload is an error rather than
-  valid-looking short bytes. (Whitespace INSIDE the payload is deliberately not
-  listed: `atob` strips it, so the reference accepts it, and a fixture demanding
-  rejection would be asserting against the reference.)
+  walk every shape of the canonicity rule above; the `url-href-*` entries walk
+  the absolute-href floor; the `error-name-*`/`error-message-*` entries pin the
+  two label slots. Each group started as an unpinned leniency that the nine
+  implementations resolved several different ways, which is what an unpinned
+  leniency always becomes.
 
 Language-native construction checks — a native bigint `7` producing the bigint
 tag, an integer past the exact-`float64` range being refused — live in each SDK's
