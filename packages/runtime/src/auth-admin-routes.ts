@@ -396,6 +396,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         },
         http: "POST",
         method: "revokeSignUpInvitation",
+        returns: "void",
     },
     [`${AUTH_BASE}/config`]: {
         build: () => {

@@ -16,6 +16,7 @@ import type { Messages } from "@lingui/core";
 const MESSAGE_IDS = [
     "Send this link to the invitee. It is shown once and cannot be recovered.",
     "Only invited addresses can create an account. Nothing is emailed — send the invitee the one-time link yourself.",
+    "Showing the most recent invitations. Query the signUpInvitation table directly to see the rest.",
     "Sign-up invitations",
     "Only invited addresses can create an account. Nothing is emailed — send the invitee the sign-up link yourself.",
     "Email address to invite",

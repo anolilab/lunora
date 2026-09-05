@@ -105,6 +105,41 @@ describe("signUpInvitationsPanel", () => {
         expect(screen.getByTestId<HTMLInputElement>("sign-up-invitation-email").value).toBe("nope");
     });
 
+    it("surfaces a failed revoke rather than leaving the row silently in place", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient();
+
+        mock.listAuthSignUpInvitations.mockResolvedValue({ rows: rows().slice(0, 1), total: 1 });
+        mock.revokeAuthSignUpInvitation.mockRejectedValue(new Error("admin token rejected"));
+
+        render(renderPanel(mock));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("sign-up-invitation-pending@example.com").textContent).toContain("pending@example.com");
+        });
+
+        fireEvent.click(screen.getByText("Revoke"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("sign-up-invitations-error").textContent).toContain("admin token rejected");
+        });
+    });
+
+    it("says so when the plane has more invitations than it will hand back", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient();
+
+        mock.listAuthSignUpInvitations.mockResolvedValue({ rows: rows(), total: 900 });
+
+        render(renderPanel(mock));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("sign-up-invitations-truncated").textContent).toContain("most recent");
+        });
+    });
+
     it("revokes by address", async () => {
         expect.assertions(2);
 

@@ -598,6 +598,34 @@ const revokeSignUpInvitation = async (auth: LunoraAuth, input: { email: string }
     await context.adapter.delete({ model: INVITATION_MODEL, where: [{ field: "email", value: normalizeEmail(input.email) }] });
 };
 
+/** Rows read per pass while pruning. Small enough to stay cheap on a scheduled worker, large enough that a backlog drains in few round-trips. */
+const PRUNE_PAGE = 100;
+
+/**
+ * Delete the expired, unspent invitations in `invitations`, up to `budget`, and
+ * report how many went.
+ *
+ * Deletes by `id` rather than by address: an operator re-inviting the same
+ * address between the read and the delete updates that row in place, and matching
+ * on the identifier at least keeps the delete pointed at the row that was
+ * actually inspected. The adapter contract has no conditional delete, so a
+ * re-invite landing inside that window still loses — it is an admin action racing
+ * a cron, and the answer is to re-invite.
+ */
+const deleteDead = async (adapter: AuthAdapter, invitations: SignUpInvitation[], now: number, budget: number): Promise<number> => {
+    const dead = invitations.filter((row) => row.acceptedAt === null && row.expiresAt.getTime() <= now).slice(0, budget);
+
+    for (const invitation of dead) {
+        // Sequential rather than `Promise.all`: this runs on a scheduled worker
+        // against the same store as live sign-ups, and a burst of concurrent
+        // deletes is the wrong thing to spend that budget on.
+        // eslint-disable-next-line no-await-in-loop -- see above.
+        await adapter.delete({ model: INVITATION_MODEL, where: [{ field: "id", value: invitation.id }] });
+    }
+
+    return dead.length;
+};
+
 /**
  * Delete invitations that expired without being used, and report how many went.
  *
@@ -613,25 +641,57 @@ const revokeSignUpInvitation = async (auth: LunoraAuth, input: { email: string }
  * package ships, and a prune job is not where that should be discovered.
  */
 const pruneSignUpInvitations = async (auth: LunoraAuth, options: { limit?: number } = {}): Promise<number> => {
-    const context = await auth.$context;
+    const requested = options.limit ?? MAX_LISTED;
 
-    const rows = await context.adapter.findMany<Record<string, unknown>>({
-        limit: Math.min(options.limit ?? MAX_LISTED, MAX_LISTED),
-        model: INVITATION_MODEL,
-        sortBy: { direction: "asc", field: "createdAt" },
-    });
-
-    const dead = rows.map((row) => toInvitation(row)).filter((row) => row.acceptedAt === null && row.expiresAt.getTime() <= Date.now());
-
-    for (const invitation of dead) {
-        // Sequential rather than `Promise.all`: this runs on a scheduled worker
-        // against the same store as live sign-ups, and a burst of concurrent
-        // deletes is the wrong thing to spend that budget on.
-        // eslint-disable-next-line no-await-in-loop -- see above.
-        await context.adapter.delete({ model: INVITATION_MODEL, where: [{ field: "email", value: invitation.email }] });
+    if (!Number.isInteger(requested) || requested <= 0) {
+        throw new LunoraError("VALIDATION_ERROR", "limit must be a positive integer");
     }
 
-    return dead.length;
+    const budget = Math.min(requested, MAX_LISTED);
+    const context = await auth.$context;
+    const now = Date.now();
+
+    let deleted = 0;
+    let offset = 0;
+
+    // Ordered by expiry rather than creation, which is what makes this terminate
+    // *and* make progress. Every expired row sorts ahead of every live one, so the
+    // first live row means there is nothing left to find — and a table whose
+    // oldest rows are all spent no longer starves the scan the way an
+    // oldest-created-first page did.
+    while (deleted < budget) {
+        // eslint-disable-next-line no-await-in-loop -- pages are walked in order; the early exit below is the bound.
+        const page = await context.adapter.findMany<Record<string, unknown>>({
+            limit: PRUNE_PAGE,
+            model: INVITATION_MODEL,
+            offset,
+            sortBy: { direction: "asc", field: "expiresAt" },
+        });
+
+        if (page.length === 0) {
+            break;
+        }
+
+        const invitations = page.map((row) => toInvitation(row));
+
+        // eslint-disable-next-line no-await-in-loop -- see above.
+        const removed = await deleteDead(context.adapter, invitations, now, budget - deleted);
+
+        deleted += removed;
+
+        // Past the expired ones: everything after this page sorts later still, so
+        // there is nothing left to find.
+        if (invitations.some((row) => row.expiresAt.getTime() > now)) {
+            break;
+        }
+
+        // Only by what survived. Deleting compacts the rows behind it, so
+        // advancing the full page length would step over that many unread rows —
+        // the spent-and-expired ones this pass deliberately kept.
+        offset += page.length - removed;
+    }
+
+    return deleted;
 };
 
 export type { InviteOnlyOptions, IssuedSignUpInvitation, SignUpInvitation };

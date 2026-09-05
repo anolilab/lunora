@@ -47,7 +47,11 @@ describe("inviteOnly", () => {
         auth.api.signUpEmail({ body: { email, inviteToken: token, name: "Ada", password: STRONG_PASSWORD } });
 
     /** Invite an address and hand back the one-time token, the way an operator would. */
-    const invite = async (email: string, expiresInSeconds?: number): Promise<string> => (await createSignUpInvitation(auth, { email, expiresInSeconds })).token;
+    const invite = async (email: string, expiresInSeconds?: number): Promise<string> => {
+        const issued = await createSignUpInvitation(auth, { email, expiresInSeconds });
+
+        return issued.token;
+    };
 
     const invitationRow = (email: string): Record<string, unknown> | undefined =>
         database["signUpInvitation"]?.find((row) => (row as { email: string }).email === email) as Record<string, unknown> | undefined;
@@ -325,6 +329,45 @@ describe("inviteOnly", () => {
         expect(invitationRow("dead@example.com")).toBeUndefined();
     });
 
+    it("keeps pruning past a wall of rows it must not delete", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+
+        // Spent rows are kept for ever and are the *oldest* here, so a page taken
+        // oldest-created-first is filled entirely by rows that must not be deleted
+        // — it reports "0 pruned" on every run while the dead one behind them
+        // never comes into view. Ordering by expiry instead puts the dead row
+        // first, whatever its creation order.
+        for (let index = 0; index < 3; index += 1) {
+            const address = `spent${String(index)}@example.com`;
+
+            // eslint-disable-next-line no-await-in-loop -- distinct rows, and each sign-up spends its own invitation.
+            await signUp(address, await invite(address, 3600));
+        }
+
+        await createSignUpInvitation(auth, { email: "dead@example.com", expiresInSeconds: 60 });
+
+        vi.setSystemTime(Date.now() + 61 * 1000);
+
+        // A budget smaller than the wall of spent rows: the scan has to reach past
+        // them rather than spend the whole page on rows it will keep.
+        const pruned = await pruneSignUpInvitations(auth, { limit: 2 });
+
+        expect(pruned).toBe(1);
+        expect(invitationRow("dead@example.com")).toBeUndefined();
+    });
+
+    it("refuses a limit that is not a positive integer", async () => {
+        expect.assertions(2);
+
+        // `LIMIT -1` is "no limit" in SQLite, so an unchecked negative would read
+        // the whole table — the opposite of what the cap is for.
+        await expect(pruneSignUpInvitations(auth, { limit: -1 })).rejects.toThrow(/positive integer/);
+        await expect(pruneSignUpInvitations(auth, { limit: 1.5 })).rejects.toThrow(/positive integer/);
+    });
+
     it("re-inviting refreshes the row in place rather than adding a second one", async () => {
         expect.assertions(3);
 
@@ -391,11 +434,11 @@ describe("inviteOnly", () => {
         it("returns timestamps as epoch-ms, like every other row the plane hands back", async () => {
             expect.assertions(3);
 
-            const invite = await createAuthAdmin(auth).createSignUpInvitation({ email: "Ada@Example.com", invitedBy: "owner" });
+            const issued = await createAuthAdmin(auth).createSignUpInvitation({ email: "Ada@Example.com", invitedBy: "owner" });
 
-            expect(invite.email).toBe("ada@example.com");
-            expect(typeof invite.expiresAt).toBe("number");
-            expect(invite.acceptedAt ?? null).toBeNull();
+            expect(issued.email).toBe("ada@example.com");
+            expect(typeof issued.expiresAt).toBe("number");
+            expect(issued.acceptedAt ?? null).toBeNull();
         });
 
         it("pages newest-first and reports the unpaginated total", async () => {

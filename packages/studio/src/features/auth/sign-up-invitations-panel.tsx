@@ -11,8 +11,8 @@ import { useClientQuery } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
 import { fireAndForget, formatTimestamp } from "../../lib/internal";
 
-/** How many invitations to pull. The admin plane caps a page at 500 regardless. */
-const INVITATION_LIMIT = 200;
+/** How many invitations to pull — the admin plane's own ceiling, so this asks for everything it will give. */
+const INVITATION_LIMIT = 500;
 
 /** One invitation row as the admin plane returns it — timestamps are epoch-ms. */
 interface InvitationRow {
@@ -64,6 +64,7 @@ const SignUpInvitationsPanel = (): ReactElement => {
     );
 
     const rows = (invitationsQuery.data?.rows ?? null) as InvitationRow[] | null;
+    const total = invitationsQuery.data?.total ?? 0;
 
     const onInvite = (): void => {
         const address = email.trim();
@@ -101,10 +102,18 @@ const SignUpInvitationsPanel = (): ReactElement => {
     };
 
     const onRevoke = (address: string): void => {
+        setError(null);
+
         fireAndForget(
             (async (): Promise<void> => {
-                await client.revokeAuthSignUpInvitation({ email: address });
-                invitationsQuery.refetch();
+                try {
+                    await client.revokeAuthSignUpInvitation({ email: address });
+                    invitationsQuery.refetch();
+                } catch (error_) {
+                    // Without this the row simply stays put and the operator is left
+                    // to guess whether the click registered.
+                    setError(error_ instanceof Error ? error_.message : String(error_));
+                }
             })(),
         );
     };
@@ -155,6 +164,12 @@ const SignUpInvitationsPanel = (): ReactElement => {
             )}
 
             {rows !== null && rows.length === 0 && <EmptyState testId="sign-up-invitations-empty" title={t("Nobody has been invited yet.")} />}
+
+            {rows !== null && total > rows.length && (
+                <p className="text-sm text-muted-foreground" data-testid="sign-up-invitations-truncated">
+                    {t("Showing the most recent invitations. Query the signUpInvitation table directly to see the rest.")}
+                </p>
+            )}
 
             {rows !== null && rows.length > 0 && (
                 <Card>
