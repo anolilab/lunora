@@ -1,6 +1,6 @@
 {
     "name": "@lunora/mcp",
-    "version": "1.0.0-alpha.114",
+    "version": "1.0.0-alpha.115",
     "description": "Model Context Protocol server exposing a Lunora deployment to AI agents",
     "keywords": [
         "ai-agents",
@@ -67,7 +67,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/client": "1.0.0-alpha.79",
+        "@lunora/client": "1.0.0-alpha.80",
         "@lunora/errors": "1.0.0-alpha.32",
         "@lunora/shard-engine": "1.0.0-alpha.56",
         "@modelcontextprotocol/sdk": "catalog:mcp"
