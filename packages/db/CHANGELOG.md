@@ -1,3 +1,15 @@
+## @lunora/db [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.81...@lunora/db@1.0.0-alpha.82) (2026-09-05)
+
+### Bug Fixes
+
+* **client,react:** encode SSR payloads and stop three surfaces silently blanking ([#607](https://github.com/anolilab/lunora/issues/607)) ([a17366a](https://github.com/anolilab/lunora/commit/a17366a43ca0ea2a69f05912d68a678a0450c270))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.79
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+
 ## @lunora/db [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.80...@lunora/db@1.0.0-alpha.81) (2026-09-05)
 
 
