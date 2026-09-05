@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { definePolicies, definePolicy } from "../src/rls/define";
 import { expectPolicy } from "../src/rls/testing";
+import { matchesWhere } from "../src/rls/where-match";
 
 /**
  * The JS `WhereInput` evaluator behind `rls()` (`src/rls/where-match.ts`) must
@@ -237,5 +238,30 @@ describe("rls JS evaluator vs the SQL compiler's NULL semantics", () => {
         // the column satisfies — a strict `!== null` said otherwise.
         expect(write({ role: null }).can("insert", "docs", {})).toBe(true);
         expect(write({ role: null }).can("insert", "docs", { role: "admin" })).toBe(false);
+    });
+});
+
+describe("malformed combinator operands fail closed", () => {
+    // Guard rails, not a fix: `{ NOT: "a" }` recurses into the string, whose
+    // `Object.keys` is ["0"], so it tests a column no document has. Under the old
+    // BOOLEAN evaluator an absent column was FALSE and `NOT` flipped it to a
+    // write-admitting TRUE. Three-valued logic closed that — an absent column is
+    // UNKNOWN, `kleeneNot(UNKNOWN)` is UNKNOWN, and only TRUE admits — so these
+    // pin the property rather than repair it.
+    it.each([
+        ["a string", "a"],
+        ["an array", [{ role: { eq: "admin" } }]],
+        ["a number", 7],
+    ])("refuses %s as a NOT operand instead of admitting the row", (_label, operand) => {
+        expect.assertions(1);
+
+        expect(matchesWhere({ role: "admin" }, { NOT: operand })).toBe(false);
+    });
+
+    it("still negates a well-formed NOT operand", () => {
+        expect.assertions(2);
+
+        expect(matchesWhere({ role: "admin" }, { NOT: { role: { eq: "admin" } } })).toBe(false);
+        expect(matchesWhere({ role: "member" }, { NOT: { role: { eq: "admin" } } })).toBe(true);
     });
 });
