@@ -110,6 +110,42 @@ describe("createStorage (workerd + Miniflare R2 integration)", () => {
         await expect(got!.text()).resolves.toBe("streamed body");
     });
 
+    // A ReadableStream may carry any BufferSource shape. The counter measures
+    // all of them, but the collected body is drained through a `Response`, whose
+    // stream only accepts Uint8Array — so this settles on the real runtime what
+    // was only observed under undici.
+    it("uploads a streamed body whose chunks are ArrayBuffers and DataViews", async () => {
+        expect.assertions(2);
+
+        const sut = storage();
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream({
+            start(controller) {
+                controller.enqueue(encoder.encode("ab").buffer);
+                controller.enqueue(new DataView(encoder.encode("cd").buffer));
+                controller.close();
+            },
+        });
+
+        await sut.upload("streamed/buffers.txt", stream, { contentType: "text/plain", maxSize: 1024 });
+
+        const got = await sut.download("streamed/buffers.txt");
+
+        expect(got).not.toBeNull();
+        await expect(got!.text()).resolves.toBe("abcd");
+    });
+
+    it("rejects a maxSize that is not a finite, non-negative number", async () => {
+        expect.assertions(2);
+
+        const sut = storage();
+
+        await expect(sut.upload("streamed/nan.txt", new Blob(["body"]).stream(), { maxSize: Number.NaN })).rejects.toMatchObject({
+            code: "VALIDATION_ERROR",
+        });
+        await expect(sut.download("streamed/nan.txt")).resolves.toBeNull();
+    });
+
     it("rejects a ReadableStream body over maxSize without storing it", async () => {
         expect.assertions(2);
 

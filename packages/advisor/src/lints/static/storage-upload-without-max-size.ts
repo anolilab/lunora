@@ -15,6 +15,12 @@ const UPLOAD_METHODS = new Set(["store", "upload"]);
  * exhausting storage/billing (and, for a streamed body, worker CPU/time) with
  * no cap.
  *
+ * The remediation deliberately does NOT offer "omit `maxSize`" as the way to
+ * handle a large object, which would be a suggestion to do the thing this lint
+ * fires on. Storage caps `maxSize` on the streaming path at what one isolate can
+ * buffer, so above that the answer is the multipart/presigned path — which is
+ * outside {@link UPLOAD_METHODS} and so is never flagged here.
+ *
  * Runs only when the codegen feeder supplies storage-upload evidence
  * (`context.storageUploads`); a runtime caller flags nothing. Skips calls
  * whose options argument wasn't statically analyzable (a variable, call
@@ -29,7 +35,7 @@ const storageUploadWithoutMaxSize: Lint = {
     level: "WARN",
     name: "storage_upload_without_max_size",
     remediation:
-        "Pass a `maxSize` (bytes) to `ctx.storage.upload`/`store` sized to the largest legitimate object the app accepts. `ArrayBuffer`/`Blob` bodies are rejected up front when oversized; a `ReadableStream` body is read only as far as the cap and refused once it is exceeded, so nothing oversized reaches the bucket.",
+        "Pass a `maxSize` (bytes) to `ctx.storage.upload`/`store` sized to the largest legitimate object the app accepts. `ArrayBuffer`/`Blob` bodies are rejected up front when oversized; a `ReadableStream` body is read only as far as the cap and refused once it is exceeded, so nothing oversized reaches the bucket. A streamed body must be buffered to be capped, so `maxSize` is also the per-request memory ceiling and is itself capped at 16 MiB on that path — if the app legitimately accepts objects larger than that, upload them with `ctx.storage.createMultipartUpload()` or a presigned `createUploadHandler()` (neither is flagged by this lint, and neither holds the whole object) rather than dropping the cap.",
     run: (context) => {
         if (context.storageUploads === undefined) {
             return [];
