@@ -178,3 +178,77 @@ describe("emitApp — admin export/sync/apply wiring (.global())", () => {
         expect(output).not.toContain("applyGlobals");
     });
 });
+
+// Issue #600: on a database that has never been migrated, `/api/auth/*` 500s
+// with `no such table: rateLimit` — better-auth's durable rate limiter runs
+// ahead of every handler. The cause is the cold-start window: `auth` used to be
+// assigned BEFORE `ensureMigrated` resolved, so a concurrent request saw a
+// non-null `auth` and served auth against tables that did not exist yet.
+describe("emitApp — auth cold start", () => {
+    it("assigns `auth` only once the migration has resolved", () => {
+        expect.assertions(1);
+
+        const output = emitApp({ ...baseOptions, hasAuth: true });
+        const migration = output.indexOf("await ensureMigrated(createAuth(");
+        const assignment = output.indexOf("auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(");
+
+        expect(migration).toBeLessThan(assignment);
+    });
+
+    it("single-flights init on the promise, so concurrent cold requests run one migration", () => {
+        // better-auth's migrator emits a bare `CREATE TABLE` (no IF NOT EXISTS),
+        // so a second concurrent run on a fresh database fails with `table user
+        // already exists` — and because `ensureAuth` is awaited ahead of the
+        // router, that 500s every route, not just `/api/auth/*`. Guarding on
+        // `auth` alone cannot do this: the assignment is now behind an `await`.
+        expect.assertions(3);
+
+        const output = emitApp({ ...baseOptions, hasAuth: true });
+
+        expect(output).toContain("let authInit: Promise<void> | null = null;");
+        expect(output).toContain("(authInit ??= initAuth(env).catch((error: unknown) => {");
+        expect(output).toContain("authInit = null;");
+    });
+
+    it("retries after a failed init instead of replaying the rejection forever", () => {
+        expect.assertions(1);
+
+        const output = emitApp({ ...baseOptions, hasAuth: true });
+        const eviction = output.indexOf("authInit = null;");
+        const rethrow = output.indexOf("throw error;", eviction);
+
+        expect(rethrow).toBeGreaterThan(eviction);
+    });
+
+    it("migrates through the raw binding, never the adapter better-auth rejects", () => {
+        expect.assertions(2);
+
+        const output = emitApp({ ...baseOptions, hasAuth: true });
+
+        expect(output).toContain("await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));");
+        expect(output).not.toContain("ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(");
+    });
+});
+
+// Issue #601: the writer is rebuilt per request (it carries the caller's
+// identity and D1 bookmark), so a per-instance provisioning memo re-runs the
+// whole CREATE-IF-NOT-EXISTS sweep on every request's first `.global()` access.
+describe("emitApp — per-isolate provisioning scope", () => {
+    it("scopes the D1 writer's provisioning to the binding", () => {
+        expect.assertions(1);
+
+        expect(emitApp({ ...baseOptions, hasGlobal: true })).toContain("provisionScope: database,");
+    });
+
+    it("scopes the Hyperdrive writer's provisioning to the declaration, not the per-request exec", () => {
+        // `exec(env)` is a user callback that builds a fresh client per call, so
+        // scoping to its result keys the memo on a new object every request and
+        // shares nothing — inert, and indistinguishable from having no scope.
+        expect.assertions(2);
+
+        const output = emitApp({ ...baseOptions, hasHyperdriveGlobal: true });
+
+        expect(output).toContain("provisionScope: declaration,");
+        expect(output).not.toContain("provisionScope: exec,");
+    });
+});

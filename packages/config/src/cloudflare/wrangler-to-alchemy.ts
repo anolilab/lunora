@@ -53,7 +53,8 @@ interface WranglerConfigShape {
     /** `new_sqlite_classes` marks which DO classes get SQLite storage — Alchemy needs that per namespace. */
     migrations?: ReadonlyArray<{ new_classes?: ReadonlyArray<string>; new_sqlite_classes?: ReadonlyArray<string> }>;
     name?: string;
-    queues?: { producers?: ReadonlyArray<{ binding?: string; queue?: string }> };
+    /** Only `producers` translate; a `consumers` entry is dropped and reported as `queues.consumers`. */
+    queues?: { consumers?: ReadonlyArray<{ queue?: string }>; producers?: ReadonlyArray<{ binding?: string; queue?: string }> };
     r2_buckets?: ReadonlyArray<{ binding?: string; bucket_name?: string }>;
     triggers?: { crons?: ReadonlyArray<string> };
     vars?: Readonly<Record<string, unknown>>;
@@ -161,33 +162,60 @@ const collectDurableObjects = (
     }
 };
 
-/** Plain `vars` ride onto the worker as literal bindings. */
+/**
+ * Plain `vars` ride onto the worker as literal bindings.
+ *
+ * `literal(value)`, not `literal(String(value))`: wrangler `vars` are JSON, so a
+ * numeric `"MAX": 5` is a number and stringifying it first shipped the worker a
+ * `"5"` it then compared against a number — a silent type change under a
+ * translation whose whole promise is fidelity.
+ */
 const collectVariables = (config: WranglerConfigShape, bindings: string[]): void => {
     for (const [key, value] of Object.entries(config.vars ?? {})) {
-        bindings.push(bindingEntry(key, literal(String(value))));
+        bindings.push(bindingEntry(key, literal(value)));
     }
 };
 
-/** Bindings this translation does not model yet. Named individually so the message is actionable. */
+/**
+ * Every wrangler field this translation drops, named individually so the message
+ * is actionable.
+ *
+ * The list is the set Lunora itself can write into `wrangler.jsonc` minus the
+ * kinds emitted above — because a field that is dropped AND unreported is the
+ * exact failure `unsupported` exists to prevent, and this list once held only
+ * the fields with a top-level array. `queues` is the awkward one: the producers
+ * ARE emitted, so only a `consumers` entry is dropped, and it is reported under
+ * its own path.
+ */
+const UNSUPPORTED_FIELDS = [
+    "ai",
+    "analytics_engine_datasets",
+    "assets",
+    "browser",
+    "containers",
+    "flagship",
+    "hyperdrive",
+    "images",
+    "pipelines",
+    "secrets_store_secrets",
+    "send_email",
+    "services",
+    "tail_consumers",
+    "vectorize",
+    "workflows",
+] as const;
+
 const collectUnsupported = (config: WranglerConfigShape, unsupported: string[]): void => {
-    // Bindings Lunora can declare in wrangler but this translation does not
-    // model yet. Named individually so the message is actionable.
-    for (const [field, label] of [
-        ["ai", "ai"],
-        ["analytics_engine_datasets", "analytics_engine_datasets"],
-        ["browser", "browser"],
-        ["containers", "containers"],
-        ["hyperdrive", "hyperdrive"],
-        ["images", "images"],
-        ["pipelines", "pipelines"],
-        ["vectorize", "vectorize"],
-        ["workflows", "workflows"],
-    ] as const) {
+    for (const field of UNSUPPORTED_FIELDS) {
         const present = (config as Record<string, unknown>)[field];
 
         if (present !== undefined && (!Array.isArray(present) || present.length > 0)) {
-            unsupported.push(label);
+            unsupported.push(field);
         }
+    }
+
+    if ((config.queues?.consumers?.length ?? 0) > 0) {
+        unsupported.push("queues.consumers");
     }
 };
 

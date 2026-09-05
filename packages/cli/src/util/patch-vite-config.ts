@@ -111,7 +111,7 @@ const addImport = (ms: MagicString, sf: SourceFile): void => {
  * When the array is empty, fills it; otherwise prepends before the first
  * element.
  */
-const patchPluginsArray = (ms: MagicString, configObject: ObjectLiteralExpression): void => {
+const patchPluginsArray = (ms: MagicString, configObject: ObjectLiteralExpression): string | undefined => {
     const pluginsProp = configObject.getProperty("plugins");
 
     if (pluginsProp === undefined) {
@@ -121,35 +121,45 @@ const patchPluginsArray = (ms: MagicString, configObject: ObjectLiteralExpressio
 
         if (properties.length === 0) {
             ms.appendLeft(openBrace, ` plugins: [${LUNORA_CALL}] `);
-        } else {
-            const firstProp = properties[0];
 
-            if (firstProp !== undefined) {
-                ms.appendLeft(firstProp.getStart(), `plugins: [${LUNORA_CALL}],\n    `);
-            }
+            return undefined;
         }
 
-        return;
+        const firstProp = properties[0];
+
+        if (firstProp === undefined) {
+            return "could not locate the start of the Vite config object's first property";
+        }
+
+        ms.appendLeft(firstProp.getStart(), `plugins: [${LUNORA_CALL}],\n    `);
+
+        return undefined;
     }
 
     // Property exists — find its array literal and prepend lunora().
     const arrayLit = pluginsProp.getDescendantsOfKind(SyntaxKind.ArrayLiteralExpression)[0];
 
     if (arrayLit === undefined) {
-        return;
+        return "the Vite config's `plugins` is not an array literal — add `lunora()` to it by hand";
     }
 
     const elements = arrayLit.getElements();
 
     if (elements.length === 0) {
         ms.appendLeft(arrayLit.getStart() + 1, LUNORA_CALL);
-    } else {
-        const firstElement = elements[0];
 
-        if (firstElement !== undefined) {
-            ms.appendLeft(firstElement.getStart(), `${LUNORA_CALL}, `);
-        }
+        return undefined;
     }
+
+    const firstElement = elements[0];
+
+    if (firstElement === undefined) {
+        return "could not locate the first entry of the Vite config's `plugins` array";
+    }
+
+    ms.appendLeft(firstElement.getStart(), `${LUNORA_CALL}, `);
+
+    return undefined;
 };
 
 /**
@@ -177,7 +187,16 @@ const patchViteConfig = (source: string): PatchViteConfigResult => {
         addImport(ms, sf);
     }
 
-    patchPluginsArray(ms, configObject);
+    // The splice can decline (a `plugins` that is not an array literal — a spread,
+    // a helper call, an imported constant). That used to be a bare `return` from
+    // the splice, leaving `changed: true` over a `code` identical to the input:
+    // the caller wrote the file back and reported the config patched, and the
+    // project's dev server then ran with no Lunora plugin at all.
+    const declined = patchPluginsArray(ms, configObject);
+
+    if (declined !== undefined) {
+        return { changed: false, code: source, reason: declined };
+    }
 
     return { changed: true, code: ms.toString() };
 };

@@ -132,6 +132,59 @@ describe("createAccessResolver", () => {
         expect(identity?.userId).toBe("user-7");
     });
 
+    it("mints the mapped roles as an identity claim, where both RLS paths read them", async () => {
+        expect.assertions(2);
+
+        const resolve = createAccessResolver({
+            aud: AUD,
+            keySet: publicKey,
+            roles: { "idp-admins": "admin", "idp-billing": ["billing", "viewer"] },
+            teamDomain: TEAM,
+        });
+        const token = await sign({ groups: ["idp-admins", "idp-billing", "idp-unmapped"], sub: "user-1" });
+
+        const identity = await resolve(requestWithHeader(token));
+
+        // `roles` is the claim `readIdentityRoles` reads — on the request path
+        // AND on the live-shape path, which runs no middleware at all.
+        expect(identity?.roles).toEqual(["admin", "billing", "viewer"]);
+        expect(identity?.groups).toEqual(["idp-admins", "idp-billing", "idp-unmapped"]);
+    });
+
+    it("mints no roles claim when the option is omitted or nothing maps", async () => {
+        expect.assertions(2);
+
+        const unmapped = createAccessResolver({ aud: AUD, keySet: publicKey, teamDomain: TEAM });
+        const dropped = createAccessResolver({ aud: AUD, keySet: publicKey, roles: () => undefined, teamDomain: TEAM });
+        const token = await sign({ groups: ["idp-admins"], sub: "user-1" });
+
+        const withoutOption = await unmapped(requestWithHeader(token));
+        const withDroppedGroups = await dropped(requestWithHeader(token));
+
+        // Granting every group name as a role by default would hand existing
+        // deployments permissions their policies never intended.
+        expect(withoutOption?.roles).toBeUndefined();
+        expect(withDroppedGroups?.roles).toBeUndefined();
+    });
+
+    it("lets mapClaims replace the mapped roles", async () => {
+        expect.assertions(1);
+
+        const resolve = createAccessResolver({
+            aud: AUD,
+            keySet: publicKey,
+            mapClaims: () => {
+                return { roles: ["support"] };
+            },
+            roles: { "idp-admins": "admin" },
+            teamDomain: TEAM,
+        });
+        const token = await sign({ groups: ["idp-admins"], sub: "user-1" });
+        const identity = await resolve(requestWithHeader(token));
+
+        expect(identity?.roles).toEqual(["support"]);
+    });
+
     it("lets mapClaims override the derived userId and add claims", async () => {
         expect.assertions(2);
 

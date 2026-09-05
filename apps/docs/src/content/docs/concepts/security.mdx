@@ -119,8 +119,16 @@ HTTP guard reads.
 
 ### Body cap
 
-Request bodies are capped at 1 MiB before they reach a handler, so an oversized
-upload can't exhaust the worker's memory. This is always on.
+Request bodies on the planes the framework itself dispatches — the reserved
+`/_lunora/*` surface (RPC, REST, admin, import/export) and the `/api/auth/*`
+plane — are capped at 1 MiB before they reach a handler, so an oversized upload
+can't exhaust the worker's memory. This is always on, and a few routes that move
+real bytes declare a larger budget of their own (the Studio's KV value `PUT`, the
+storage object upload).
+
+Your own `httpRouter` routes are **not** capped: the request body is yours to
+read, so the budget is yours to choose. Read it with a limit if the route accepts
+uploads.
 
 ## Auth, cookies, and secrets
 

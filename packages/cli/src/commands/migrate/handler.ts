@@ -599,6 +599,44 @@ const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateD
     return { fetchImpl, requestUrl: `${baseUrl}${MIGRATE_ENDPOINT_PATH}`, table, token };
 };
 
+/**
+ * Why a migration fan-out failed according to its own response BODY, or
+ * `undefined` when it did not.
+ *
+ * `/_lunora/migrate` answers `200` unconditionally: the coordinator folds every
+ * per-shard outcome into the body (`{ status, ok, failed, shards }`) and the
+ * route returns it verbatim. So `Response.ok` is `true` for a migration that
+ * threw on every shard, and reading only the status line reported a clean
+ * success over data nothing touched — with the post-deploy migration step then
+ * advancing the committed `.lunora-schema.json` baseline past a breaking change
+ * whose backfill ran nowhere.
+ *
+ * The identical trap on the identical roll-up shape is documented at the import
+ * command's 207 Multi-Status branch (`../data-transfer/import.ts`).
+ *
+ * Two independent signals, because they mean different things: `failed` counts
+ * shards the fan-out could not reach at all, while `status: "failed"` is the
+ * roll-up over the shards it DID reach. Either one is a failed run.
+ */
+const migrationRollUpFailure = (body: unknown): string | undefined => {
+    if (body === null || typeof body !== "object") {
+        return undefined;
+    }
+
+    const rollUp = body as { failed?: unknown; status?: unknown };
+    const unreachable = typeof rollUp.failed === "number" && rollUp.failed > 0 ? rollUp.failed : 0;
+
+    if (unreachable > 0) {
+        return `${String(unreachable)} shard(s) could not be reached — their rows were NOT migrated (see the per-shard errors above)`;
+    }
+
+    if (rollUp.status === "failed") {
+        return "the migration reported `failed` on at least one shard — see the per-shard results above";
+    }
+
+    return undefined;
+};
+
 /** Build the RPC args payload for a data migration. */
 const buildMigrateArgs = (options: MigrateDataCommandOptions): Record<string, unknown> => {
     const args: Record<string, unknown> = { id: options.id };
@@ -650,8 +688,13 @@ const runMigrateDataCommand = async (options: MigrateDataCommandOptions): Promis
     });
 
     const body = await readAndLogBody(response, options.logger);
+    const rollUpFailure = migrationRollUpFailure(body);
 
-    return { body, code: response.ok ? 0 : 1, requestUrl };
+    if (rollUpFailure !== undefined) {
+        options.logger.error(`migrate ${options.subcommand} "${options.id}": ${rollUpFailure}`);
+    }
+
+    return { body, code: response.ok && rollUpFailure === undefined ? 0 : 1, requestUrl };
 };
 
 interface MigrateToHyperdriveOptions {

@@ -96,7 +96,7 @@ import {
     softDeleteScope,
     tiebreakDirectionFor,
 } from "./query-args";
-import { encodePartitionKey, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
+import { encodePartitionKey, RANK_TIEBREAK, rankPivotConditionSql, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 import type { ReactiveCache } from "./reactive-cache";
 import { UNVOUCHABLE_DEP } from "./read-footprint";
 import type { IndexKeyEntry, KeyRange } from "./read-write-set";
@@ -2104,7 +2104,9 @@ const runGuardedWrite = (sql: SqlExec, table: string, text: string, params: Read
  * (k0 < v0)
  * OR (k0 = v0 AND k1 < v1)
  * OR (k0 = v0 AND k1 = v1 AND __id__ < rowId)
- * where `<` flips to `>` for desc keys.
+ * where `<` flips to `>` for desc keys. Each pivot comparison comes from
+ * {@link rankPivotConditionSql}, which is where the NULL cases live — a sort
+ * column genuinely holds NULL and no comparator reaches either side of one.
  */
 const countRankBefore = (
     sql: SqlExec,
@@ -2118,30 +2120,36 @@ const countRankBefore = (
     const beforeBranches: SQL[] = [];
 
     for (let pivot = 0; pivot < sortColumns.length + 1; pivot += 1) {
+        const column = sortColumns[pivot];
+        const sortKey = sortBy[pivot];
+        // The `__id__` ASC tiebreak closes the tuple; ids are minted by the
+        // store, so that one is never NULL.
+        const direction = sortKey?.direction === "desc" ? "desc" : "asc";
+        const pivotCondition =
+            column === undefined || sortKey === undefined
+                ? dsql`${dsql.identifier(RANK_TIEBREAK)} < ${rowId}`
+                : rankPivotConditionSql(column, serializedSortValues[pivot], direction, false);
+
+        // A NULL pivot with nothing sorting before it makes the whole branch
+        // unsatisfiable — drop it rather than emit an always-false disjunct.
+        if (pivotCondition === undefined) {
+            continue;
+        }
+
         const conditions: SQL[] = [];
 
         for (let prefix = 0; prefix < pivot; prefix += 1) {
             conditions.push(dsql`${dsql.identifier(sortColumns[prefix] as string)} IS ${serializedSortValues[prefix]}`);
         }
 
-        const column = sortColumns[pivot];
-        const sortKey = sortBy[pivot];
-
-        if (column !== undefined && sortKey !== undefined) {
-            const operator = sortKey.direction === "desc" ? ">" : "<";
-
-            conditions.push(dsql`${dsql.identifier(column)} ${dsql.raw(operator)} ${serializedSortValues[pivot]}`);
-        } else {
-            // Final pivot is the `__id__` ASC tiebreak.
-            conditions.push(dsql`${dsql.identifier(RANK_TIEBREAK)} < ${rowId}`);
-        }
+        conditions.push(pivotCondition);
 
         const [firstCondition] = conditions;
 
         beforeBranches.push(conditions.length === 1 && firstCondition !== undefined ? firstCondition : dsql`(${dsql.join(conditions, dsql` AND `)})`);
     }
 
-    const beforeWhere = dsql.join(beforeBranches, dsql` OR `);
+    const beforeWhere = beforeBranches.length > 0 ? dsql.join(beforeBranches, dsql` OR `) : dsql`1 = 0`;
     const beforeRow = runDrizzle<{ c: number }>(
         sql,
         dsql`SELECT COUNT(*) AS c FROM ${dsql.identifier(rankTable)} WHERE ${dsql.identifier("__partition__")} = ${partitionKey} AND (${beforeWhere})`,

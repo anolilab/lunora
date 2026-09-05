@@ -6,6 +6,7 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { collectPages } from "../../../shared/collect-pages";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
+import { isDuplicateInstanceError } from "../../../shared/duplicate-instance";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
@@ -18,7 +19,7 @@ import { RELAY_NAME_INFIX, relayName } from "../../../shared/relay-name";
 import { parseMinSeq, REPLICA_NAME_INFIX, replicaName } from "../../../shared/replica-name";
 import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
-import { encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { isEnvFlagEnabled, mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import { assertArgsObject } from "./assert-args-object";
 import type { AuthAdmin } from "./auth-admin-routes";
@@ -109,6 +110,19 @@ interface HttpActionContext {
     auth: { getIdentity: () => Promise<Record<string, unknown> | null>; userId: null | string };
     cache?: { purge: (options: { purgeEverything?: boolean; tags?: string[] }) => Promise<unknown> };
     fetch: typeof globalThis.fetch;
+
+    /**
+     * The same `run*` trio bound to a named shard, mirroring
+     * `createShardClient(...).forShard(key)`.
+     *
+     * An HTTP action runs in the WORKER, not inside a shard, so — unlike a
+     * query/mutation ctx, whose `run*` is already inside the owning DO — it has
+     * to be told which shard to talk to. `ctx.run*` alone targets the default
+     * shard, which on a `.shardBy(...)` app is the root DO: a webhook that read
+     * `ctx.runQuery(api.messages.list, { channelId })` got the root shard's rows
+     * (usually none) with no error and no way to say otherwise.
+     */
+    forShard: (shardKey: string) => Pick<HttpActionContext, "runAction" | "runMutation" | "runQuery">;
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
@@ -1597,6 +1611,8 @@ const CRON_JOBS_RUN_PATH = "/_lunora/admin/cron-jobs/run";
 const ADMIN_WS_TOKEN_PATH = "/_lunora/admin/ws-token";
 /** Prefix shared by every Studio admin route (`/_lunora/admin/*`). */
 const ADMIN_PATH_PREFIX = "/_lunora/admin/";
+/** Prefix shared by the whole reserved plane the worker owns — everything else on the origin belongs to the app. */
+const RESERVED_PATH_PREFIX = "/_lunora/";
 /** The lone cross-shard admin route that sits outside {@link ADMIN_PATH_PREFIX}. */
 const MIGRATE_PATH = "/_lunora/migrate";
 
@@ -1743,6 +1759,13 @@ const isAuthAttemptPath = (pathname: string, basePath: string): boolean => {
     const suffix = pathname.slice(base.length);
 
     return AUTH_ATTEMPT_SEGMENTS.some((segment) => suffix === segment || suffix.startsWith(`${segment}/`));
+};
+
+/** `true` iff `pathname` is the auth plane's root or nested under it (`/api/auth`, `/api/auth/sign-in/email`). */
+const isUnderAuthBasePath = (pathname: string, basePath: string): boolean => {
+    const base = basePath.endsWith("/") ? basePath.slice(0, -1) : basePath;
+
+    return pathname === base || pathname.startsWith(`${base}/`);
 };
 
 interface ForwardContext {
@@ -2846,14 +2869,40 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     /**
-     * Start a fresh durable-workflow instance: resolve `binding` off `env` and
+     * Start a durable-workflow instance: resolve `binding` off `env` and
      * `create()` it with `args` as its `params`. A missing/malformed binding is a
      * hard failure (the job can't run) surfaced as a 500, so the caller's
      * invocation fails rather than silently no-op'ing. Shared by cron-fire
      * ({@link runOneCronJob}) and one-shot scheduler dispatch
      * ({@link handleSchedulerDispatch}); `label` names the caller in the error.
+     *
+     * `instanceId` is the idempotency key, and the two callers answer it
+     * differently on purpose.
+     *
+     * **Scheduler dispatch passes the record id.** That path is at-least-once: a
+     * DO eviction, an edge 502 or a transport blip after this origin already
+     * started the workflow makes `SchedulerDO.dispatch()` report failure, and
+     * `recordRetry` re-fires the SAME record up to `MAX_RETRY_ATTEMPTS` times
+     * (`reindexOrphanedRecords` and `drainRecord`'s swallowed post-success cleanup
+     * re-fire it too). Without an id Cloudflare mints a fresh random instance for
+     * each of those, so one scheduled job runs its whole pipeline up to five times
+     * — while two scheduler docblocks justify the retry loop with "idempotent
+     * dispatch keyed by record id". The record id is already on the wire and
+     * already constrained to a safe key segment by `resolveScheduleId`, which is
+     * exactly what `create({ id })` accepts.
+     *
+     * **The cron path passes nothing.** There is no record id there, every
+     * scheduled fire of an expression is a distinct run, and the admin "Run now"
+     * trigger has to be repeatable on demand — a stable per-job key would make the
+     * second fire a duplicate and silently never run again. Cron has no re-fire
+     * loop to dedupe against, so a fresh instance per fire is the correct
+     * semantics rather than a gap.
+     *
+     * A duplicate-instance rejection is therefore SUCCESS: it is the proof that a
+     * previous attempt's create already landed. Every other rejection propagates,
+     * so the record stays retryable.
      */
-    const startWorkflowInstance = async (binding: string, args: Record<string, unknown>, env: unknown, label: string): Promise<void> => {
+    const startWorkflowInstance = async (binding: string, args: Record<string, unknown>, env: unknown, label: string, instanceId?: string): Promise<void> => {
         const candidate = (env as Record<string, unknown> | null | undefined)?.[binding];
 
         if (!candidate || typeof (candidate as { create?: unknown }).create !== "function") {
@@ -2875,7 +2924,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             });
         }
 
-        await (candidate as WorkflowBindingLike).create({ params: args });
+        try {
+            await (candidate as WorkflowBindingLike).create(instanceId === undefined ? { params: args } : { id: instanceId, params: args });
+        } catch (error: unknown) {
+            if (!isDuplicateInstanceError(error)) {
+                throw error;
+            }
+        }
     };
 
     /**
@@ -3108,9 +3163,22 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         const args = (candidate.args ?? {}) as Record<string, unknown>;
 
-        // A workflow/agent target starts a fresh durable instance (the args become
-        // its `params`) rather than dispatching a function to a shard — the
+        // Forward the scheduler record id as the idempotency key so an at-least-once
+        // re-fire (a retry after the origin response was lost but the side effect
+        // already committed) is deduped rather than double-applying the job. This
+        // makes the scheduler's "idempotent dispatch keyed by record id" contract
+        // actually hold. Derived BEFORE the workflow branch below, which returns:
+        // that branch is exactly the one the scheduler's retry loop re-fires, and
+        // leaving it without an id let one scheduled workflow run its whole
+        // pipeline once per retry attempt.
+        const recordId = typeof candidate.id === "string" && candidate.id.length > 0 ? candidate.id : undefined;
+
+        // A workflow/agent target starts a durable instance (the args become its
+        // `params`) rather than dispatching a function to a shard — the
         // `WORKFLOW_*`/`AGENT_*` binding lives on the runtime's `env`, not the DO.
+        // The record id becomes the INSTANCE id, so a re-fire attaches to the
+        // running instance instead of starting a second one; the function path
+        // below spends the same id as the shard's replay-dedup `mutationId`.
         //
         // It still releases its pool slot. `Scheduler.runAt` accepts a
         // `WorkflowReference` alongside `RunOptions.pool`, and `reservePoolSlot`
@@ -3118,7 +3186,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // hold a slot, and returning before the release below wedged the pool for
         // good at the default `maxConcurrency: 1`.
         if (typeof candidate.workflow === "string" && candidate.workflow.length > 0) {
-            await startWorkflowInstance(candidate.workflow, args, env, "scheduled workflow");
+            await startWorkflowInstance(candidate.workflow, args, env, "scheduled workflow", recordId);
 
             await releasePoolSlot(candidate);
 
@@ -3130,12 +3198,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         const shardKey = typeof candidate.shardKey === "string" && candidate.shardKey.length > 0 ? candidate.shardKey : defaultShard;
-        // Forward the scheduler record id as the idempotency key so an at-least-once
-        // re-fire (a retry after the origin response was lost but the side effect
-        // already committed) is deduped by the DO rather than double-applying the
-        // job. This makes the scheduler's "idempotent dispatch keyed by record id"
-        // contract actually hold.
-        const mutationId = typeof candidate.id === "string" && candidate.id.length > 0 ? candidate.id : undefined;
 
         // A server-initiated dispatch may forward a verified caller identity on the
         // `x-lunora-userid` / `x-lunora-identity` headers (e.g. a voice session
@@ -3144,7 +3206,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // headers pass through to the shard alongside the system flag for RLS.
         const identity = readForwardedIdentity(request);
 
-        const response = await dispatchToShard(candidate.functionPath, args, shardKey, mutationId, identity);
+        const response = await dispatchToShard(candidate.functionPath, args, shardKey, recordId, identity);
 
         // Workpool jobs hold a concurrency slot until the action settles; release
         // it. Best-effort only in that a failure can't fail this dispatch — a
@@ -3583,60 +3645,83 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const buildHttpActionContext = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<HttpActionContext> => {
         const { claims, headers, userId } = await resolveForwardContext(request, env, publicResolveIdentity);
 
-        const run = async <R>(reference: unknown, args: Record<string, unknown> = {}): Promise<R> => {
-            const functionPath = (reference as { __lunoraRef?: unknown }).__lunoraRef;
+        const sinkContext = buildSinkContext(env, request, (promise) => context.waitUntil?.(promise));
 
-            if (typeof functionPath !== "string") {
-                throw new LunoraError("ctx.run*: expected a function reference from the generated `api`", { code: "BAD_REQUEST", status: 400 });
-            }
+        const runOn =
+            (shardKey: string) =>
+            async <R>(reference: unknown, args: Record<string, unknown> = {}): Promise<R> => {
+                const functionPath = (reference as { __lunoraRef?: unknown }).__lunoraRef;
 
-            // This path stamps `x-lunora-system: "1"` below, so an unguarded relation
-            // dispatch here would read raw rows as a TRUSTED caller. The stricter
-            // posture already exists one function over (`buildHttpScheduler`'s
-            // `targetFields` refuses a bare `"ns:fn"` string because an HTTP action
-            // can be reached unauthenticated) — same reasoning, same surface.
-            assertNotReservedRelationPath(functionPath);
+                if (typeof functionPath !== "string") {
+                    throw new LunoraError("ctx.run*: expected a function reference from the generated `api`", { code: "BAD_REQUEST", status: 400 });
+                }
 
-            const forwarded = shardRpcRequest(
-                functionPath,
-                args,
-                // `x-lunora-system` marks this a trusted server-initiated dispatch, so
-                // the shard will run `internal` functions — exactly as on the
-                // scheduler path above, and for the same reason.
+                // This path stamps `x-lunora-system: "1"` below, so an unguarded relation
+                // dispatch here would read raw rows as a TRUSTED caller. The stricter
+                // posture already exists one function over (`buildHttpScheduler`'s
+                // `targetFields` refuses a bare `"ns:fn"` string because an HTTP action
+                // can be reached unauthenticated) — same reasoning, same surface.
+                assertNotReservedRelationPath(functionPath);
+
+                // Through the SAME dispatcher the `/_lunora/rpc` and `serverQuery` paths
+                // use, rather than a bare `forwardToShard`: that is what puts this call
+                // in the RPC event stream and under a `traceparent`-parented span, which
+                // a hand-rolled forward silently left out — a webhook route's work was
+                // absent from observability while the docs promised every dispatch is a
+                // span.
                 //
-                // An `httpRouter` handler is app-authored worker code, not a client:
-                // the reference it passes is a literal `internal.foo.bar` from the
-                // app's own source, never a caller-supplied string, and the handler
-                // has already run whatever authorization it requires (the operator
-                // bearer on a cell-register route, a deploy-key lookup on an ingest
-                // route). Without this the route's `ctx.run*` reached the shard as an
-                // ordinary *client* RPC, and `handleRpc` — which refuses internals to
-                // anything lacking this flag — answered FUNCTION_NOT_FOUND, so every
-                // route delegating to an `internal*` function failed with a 500 that
-                // named a function the registry demonstrably contained.
+                // `encodeWire`/`decodeWire` bracket it for the same reason
+                // `createShardClient` does: the shard decodes `args` and answers
+                // `encodeWire(result)`, so an un-bracketed hop handed the handler a
+                // tagged `["$lunora.wire$", "bigint", …]` array where a `bigint`/`Date`/
+                // `Uint8Array` belonged, and threw outright on a `bigint` ARGUMENT
+                // (`JSON.stringify` refuses one). `decodeWire` is identity for pure JSON.
                 //
-                // This widens visibility only. The shard reconstructs identity from
-                // the `x-lunora-*` headers independently of the flag, so the call
-                // still runs under the caller's RLS/ownership context; `headers` is
-                // minted by `resolveForwardContext` from a fixed allowlist that never
-                // copies `x-lunora-system` off the inbound request, so a client cannot
-                // forge it. The external client path (`/_lunora/rpc`, and SSR loaders
-                // that go through it) never passes here and stays gated.
-                { ...headers, "x-lunora-system": "1" },
-            );
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `dispatchSingleShard` is a closure-captured const declared below; this arrow only ever runs per request, long after construction
+                const response = await dispatchSingleShard(
+                    request,
+                    functionPath,
+                    encodeWire(args) as Record<string, unknown>,
+                    shardKey,
+                    // `x-lunora-system` marks this a trusted server-initiated dispatch, so
+                    // the shard will run `internal` functions — exactly as on the
+                    // scheduler path above, and for the same reason.
+                    //
+                    // An `httpRouter` handler is app-authored worker code, not a client:
+                    // the reference it passes is a literal `internal.foo.bar` from the
+                    // app's own source, never a caller-supplied string, and the handler
+                    // has already run whatever authorization it requires (the operator
+                    // bearer on a cell-register route, a deploy-key lookup on an ingest
+                    // route). Without this the route's `ctx.run*` reached the shard as an
+                    // ordinary *client* RPC, and `handleRpc` — which refuses internals to
+                    // anything lacking this flag — answered FUNCTION_NOT_FOUND, so every
+                    // route delegating to an `internal*` function failed with a 500 that
+                    // named a function the registry demonstrably contained.
+                    //
+                    // This widens visibility only. The shard reconstructs identity from
+                    // the `x-lunora-*` headers independently of the flag, so the call
+                    // still runs under the caller's RLS/ownership context; `headers` is
+                    // minted by `resolveForwardContext` from a fixed allowlist that never
+                    // copies `x-lunora-system` off the inbound request, so a client cannot
+                    // forge it. The external client path (`/_lunora/rpc`, and SSR loaders
+                    // that go through it) never passes here and stays gated.
+                    { ...headers, "x-lunora-system": "1" },
+                    sinkContext,
+                );
 
-            const response = await forwardToShard(shardDO, defaultShard, forwarded);
-            const payload: { error?: { code?: string; message?: string }; result?: unknown } = await response.json();
+                const payload: { error?: { code?: string; message?: string }; result?: unknown } = await response.json();
 
-            if (payload.error) {
-                throw new LunoraError(payload.error.message ?? "shard RPC failed", {
-                    code: payload.error.code ?? "INTERNAL",
-                    status: response.status,
-                });
-            }
+                if (payload.error) {
+                    throw new LunoraError(payload.error.message ?? "shard RPC failed", {
+                        code: payload.error.code ?? "INTERNAL",
+                        status: response.status,
+                    });
+                }
 
-            return payload.result as R;
-        };
+                return decodeWire(payload.result) as R;
+            };
+
+        const run = runOn(defaultShard);
 
         return {
             auth: {
@@ -3645,6 +3730,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             },
             cache: context.cache,
             fetch: globalThis.fetch.bind(globalThis),
+            forShard: (shardKey: string) => {
+                const scoped = runOn(shardKey);
+
+                return { runAction: scoped, runMutation: scoped, runQuery: scoped };
+            },
             runAction: run,
             runMutation: run,
             runQuery: run,
@@ -3678,9 +3768,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // self-`fetch` to `/_lunora/rpc`. It resolves identity + runs the
         // per-shard authorization gate identically to `handleRpc`, then
         // dispatches to the owning shard (the worker→DO hop is itself in-process
-        // — not a network self-fetch). `ctx.runQuery`/`runMutation` below keep
-        // the loopback-shaped `run` helper for back-compat; `serverQuery` is the
-        // identity-parity-guaranteed, shard-routable entrypoint for loaders.
+        // — not a network self-fetch). `ctx.run*` now shares that dispatcher; what
+        // still separates them is the authorization gate, which `serverQuery` runs
+        // and `ctx.run*` deliberately does not (it dispatches as `x-lunora-system`
+        // on behalf of app-authored route code). `serverQuery` stays the
+        // identity-parity-guaranteed entrypoint for loaders.
 
         // Error isolation (PLAN4 §1, §2.2): the `httpRouter` is the meta-framework
         // SSR handler, the LOWEST-priority matcher — it only runs after auth,
@@ -5005,7 +5097,20 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // treated as "unknown" (let the request through here) — the real
         // enforcement happens in `readBodyTextWithLimit` / the streaming import
         // reader, which abort with 413 once cumulative bytes exceed the cap.
-        if (request.method === "POST" || request.method === "PUT") {
+        //
+        // Scoped to the planes the FRAMEWORK dispatches — the reserved
+        // `/_lunora/*` surface (what `MAX_BODY_BYTES` documents itself as
+        // capping) and the auth plane it mounts. Unscoped, it also pre-rejected
+        // the app's own `httpRouter` routes: an upload route 413'd a 2 MiB POST
+        // before the router ever ran, while the identical 2 MiB sent chunked
+        // sailed straight through, so on that plane it was neither a cap the app
+        // could rely on nor one it could raise. Whether app routes deserve a body
+        // cap is a separate, deliberate decision; this is not one.
+        const onFrameworkPlane =
+            url.pathname.startsWith(RESERVED_PATH_PREFIX) ||
+            (options.authHandler !== undefined && isUnderAuthBasePath(url.pathname, options.authBasePath ?? DEFAULT_AUTH_BASE_PATH));
+
+        if (onFrameworkPlane && (request.method === "POST" || request.method === "PUT")) {
             const contentLength = Number(request.headers.get("content-length") ?? "");
             // Routes that declare their own larger body budget (the KV value PUT,
             // which reads under `KV_VALUE_MAX_BODY_BYTES` to allow a 25 MiB KV

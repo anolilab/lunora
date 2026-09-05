@@ -34,6 +34,7 @@ interface MockClientHooks {
     createAuthOrganization: ReturnType<typeof vi.fn>;
     createAuthOrgRole: ReturnType<typeof vi.fn>;
     createAuthOrgTeam: ReturnType<typeof vi.fn>;
+    createAuthSignUpInvitation: ReturnType<typeof vi.fn>;
     createAuthUser: ReturnType<typeof vi.fn>;
     deleteAuthOrganization: ReturnType<typeof vi.fn>;
     deleteAuthOrgRole: ReturnType<typeof vi.fn>;
@@ -65,6 +66,7 @@ interface MockClientHooks {
     listAuthOrgTeams: ReturnType<typeof vi.fn>;
     listAuthPasskeys: ReturnType<typeof vi.fn>;
     listAuthSessions: ReturnType<typeof vi.fn>;
+    listAuthSignUpInvitations: ReturnType<typeof vi.fn>;
     listAuthUsers: ReturnType<typeof vi.fn>;
     listFunctions: ReturnType<typeof vi.fn>;
     listGlobalTables: ReturnType<typeof vi.fn>;
@@ -85,6 +87,7 @@ interface MockClientHooks {
     removeAuthOrgTeamMember: ReturnType<typeof vi.fn>;
     removeAuthUser: ReturnType<typeof vi.fn>;
     revokeAuthSession: ReturnType<typeof vi.fn>;
+    revokeAuthSignUpInvitation: ReturnType<typeof vi.fn>;
     revokeAuthUserSessions: ReturnType<typeof vi.fn>;
     runCronJob: ReturnType<typeof vi.fn>;
     setAuthOrgMemberRole: ReturnType<typeof vi.fn>;
@@ -287,11 +290,18 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const listAuthOrgInvitations = vi.fn<() => Promise<{ rows: Record<string, unknown>[]; total: number }>>(async () => {
         return { rows: [] as Record<string, unknown>[], total: 0 };
     });
+    const listAuthSignUpInvitations = vi.fn<() => Promise<{ rows: Record<string, unknown>[]; total: number }>>(async () => {
+        return { rows: [] as Record<string, unknown>[], total: 0 };
+    });
+    const createAuthSignUpInvitation = vi.fn<() => Promise<Record<string, unknown>>>(async () => {
+        return {};
+    });
+    const revokeAuthSignUpInvitation = vi.fn<() => Promise<undefined>>(async () => undefined);
     const removeAuthOrgMember = vi.fn<() => Promise<undefined>>(async () => undefined);
     const cancelAuthOrgInvitation = vi.fn<() => Promise<undefined>>(async () => undefined);
     const getAuthConfig = vi.fn<() => Promise<Record<string, unknown>>>(async () => {
         return {
-            capabilities: { accounts: true, admin: true, organization: false, passkey: false, twoFactor: false },
+            capabilities: { accounts: true, admin: true, inviteOnly: false, organization: false, passkey: false, twoFactor: false },
             emailAndPassword: true,
             organization: { enabled: false, roles: false, teams: false },
             plugins: [] as string[],
@@ -425,7 +435,10 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         impersonateAuthUser,
         inviteAuthOrgMember,
         listAuthAccounts,
+        createAuthSignUpInvitation,
         listAuthOrgInvitations,
+        listAuthSignUpInvitations,
+        revokeAuthSignUpInvitation,
         listAuthOrgMembers,
         listAuthOrgRoles,
         listAuthOrgTeamMembers,

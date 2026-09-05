@@ -162,12 +162,15 @@ describe(makeDiffEmit, () => {
         expect(ops).toStrictEqual([]);
     });
 
-    it("does not emit spurious updates for unchanged rows after a sync restart", () => {
-        // Simulates the sync-restart path in collection-options: syncedJson is
-        // owned at the outer closure level and shared across makeDiffEmit calls.
-        // A new `emit` closure (representing a sync.sync restart) must receive
-        // the same syncedJson reference so already-committed rows are seen as
-        // known, not inserted/updated anew.
+    it("does not emit spurious updates for unchanged rows across emit closures sharing one cache", () => {
+        // The map, not the closure, is the unit of synced state: a second
+        // `makeDiffEmit` over the same populated map sees already-committed rows
+        // as known. NOT a simulation of the sync-RESTART path — the sole
+        // production caller clears the map in its `sync.sync` teardown (a
+        // restart must re-insert the full snapshot, since TanStack drops its
+        // synced store on gc cleanup). That lifecycle is covered end to end by
+        // `collection-options.test.ts`'s "re-inserts the full snapshot after a
+        // sync restart", which drives the real `sync.sync` seam.
         const syncedJson = new Map<string, string>();
         const { ops: ops1, writer: writer1 } = recordingWriter();
 
@@ -189,8 +192,8 @@ describe(makeDiffEmit, () => {
         ]);
         expect(syncedJson.size).toBe(2);
 
-        // Sync restart: a new writer (and therefore a new emit closure) is created,
-        // but the same syncedJson is passed — the committed state must be preserved.
+        // A new writer (and therefore a new emit closure) over the same
+        // syncedJson — the committed state must be preserved.
         const { ops: ops2, writer: writer2 } = recordingWriter();
         const emit2 = makeDiffEmit(syncedJson, writer2);
 
@@ -209,15 +212,16 @@ describe(makeDiffEmit, () => {
         expect(ops2).toStrictEqual([]);
     });
 
-    it("correctly detects a change on the first emit after a sync restart", () => {
-        // After restart, a row whose value actually changed must still emit "update".
+    it("correctly detects a change on the first emit through a new closure", () => {
+        // A row whose value actually changed must still emit "update" when the
+        // next emit comes from a different closure over the same cache.
         const syncedJson = new Map<string, string>();
         const { writer: writer1 } = recordingWriter();
         const emit1 = makeDiffEmit(syncedJson, writer1);
 
         emit1(toMap([{ _id: "a", text: "v1" }] satisfies Row[], (r) => r._id));
 
-        // Restart with a new writer/closure, same syncedJson.
+        // New writer/closure, same syncedJson.
         const { ops: ops2, writer: writer2 } = recordingWriter();
         const emit2 = makeDiffEmit(syncedJson, writer2);
 

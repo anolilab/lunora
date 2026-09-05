@@ -276,15 +276,17 @@ describe("createImages", () => {
         expect(calls.transforms).toEqual([{ width: 200 }, { width: 256 }]);
     });
 
-    it("does not leak the URL-form draw key into the binding transform", async () => {
-        expect.assertions(2);
+    it("clamps a fractional dimension up to 1 rather than down to 0", async () => {
+        expect.assertions(1);
 
+        // The positivity guard runs on the RAW value, so `0.5` passed it and
+        // then floored to `0` — outside the `[1, maxDimension]` range the clamp
+        // promises, and a dimension the binding rejects.
         const { binding, calls } = createFakeBinding();
         const images = createImages({ binding });
 
-        await images.transform(streamOf(new Uint8Array([1])), { draw: [{ url: "https://cdn.test/logo.png" }], width: 128 });
+        await images.transform(streamOf(new Uint8Array([1])), { height: 0.5, width: 0.25 });
 
-        expect(calls.transforms[0]).not.toHaveProperty("draw");
-        expect(calls.transforms[0]).toMatchObject({ width: 128 });
+        expect(calls.transforms[0]).toStrictEqual({ height: 1, width: 1 });
     });
 });

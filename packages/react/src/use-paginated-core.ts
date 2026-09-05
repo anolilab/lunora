@@ -167,8 +167,10 @@ const usePaginatedCore = function <T>(
         onErrorRef.current?.(pageError);
     };
 
-    // Per-page detach handles so a page falling out of the request set releases
-    // its subscription without disturbing the others.
+    // Per-page release handles so a page falling out of the request set drops
+    // its subscription AND its cache entry without disturbing the others. See the
+    // release closure built at attach time for why the cache entry is this
+    // hook's to remove.
     const detachesRef = useLazyRef((): Map<string, () => void> => new Map());
 
     // The LunoraClient the current detach handles are bound to. Page-key hashes
@@ -224,12 +226,35 @@ const usePaginatedCore = function <T>(
             // when two mounts ask for the same page range. `staleTime: 0` is
             // deliberate here (unlike `useQuery`): split/join recycle page-range
             // queryKeys, so a key can reappear carrying a *prior* boundary
-            // configuration's cached rows. Forcing the queryFn to run on every
-            // fresh attach guarantees a recycled key never serves that corpse —
-            // the live subscription then keeps it current. The attach only fires
-            // once per newly-desired page, so this stays a single fetch per page.
+            // configuration's cached rows, and forcing the queryFn to run on
+            // every fresh attach re-fetches those rows rather than trusting them.
+            //
+            // `staleTime: 0` alone does NOT keep a recycled key from *serving*
+            // the corpse first: this effect runs post-commit while `pageResults`
+            // reads `getQueryData` synchronously in the render body, so the
+            // recycled entry would paint for at least one frame before the fetch
+            // resolves. What actually closes that window is the release closure
+            // below removing the entry when the page is detached — the recycle
+            // then finds nothing to read. The attach only fires once per
+            // newly-desired page, so this stays a single fetch per page.
             // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from LunoraContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Client swaps are handled explicitly via detachClientRef above. Unlike the sibling call sites, this one still needs the directive: the callee is wrapped in a type assertion, so the `client.query` MemberExpression's parent is a TSAsExpression rather than the CallExpression, and the rule's `isFunctionCallTarget` check (added in 5.101.4) does not see through it.
             const initialFetch = queryClient.fetchQuery({
+                // Pin the page for as long as this hook holds it. Unlike every
+                // other hook here, the paginated path has NO TanStack observer
+                // (`fetchQuery` + `getQueryData`, never `useQuery`), and
+                // query-core collects a query whenever
+                // `!observers.length && fetchStatus === "idle"` —
+                // `addObserver -> clearGcTimeout()` is precisely why `useQuery`
+                // is immune and this is not. Left on the provider's 5-minute
+                // default, every page range that saw no server row change was
+                // evicted while still mounted: `pageResults` read `undefined`,
+                // `derivePaginationStatus` fell back to `LoadingFirstPage`, and
+                // `loadMore` became a permanent no-op — none of which the hook
+                // could even notice, since its cache subscriber filters for
+                // `"updated"` and eviction emits `"removed"`. Pinning makes this
+                // hook the owner of the entry's whole lifecycle, so the release
+                // closure below removes it on detach rather than leaking it.
+                gcTime: Number.POSITIVE_INFINITY,
                 queryFn: () =>
                     (client.query as (function_: FunctionReference, args: unknown, options: { shardKey?: string }) => Promise<unknown>)(
                         desired.fn,
@@ -254,14 +279,32 @@ const usePaginatedCore = function <T>(
                 );
             });
 
-            detaches.set(
-                hash,
-                registry.attach(queryClient, entry.key, desired.fn, entry.args, desired.shardKey, {
-                    onError: (pageError) => {
-                        failPage(hash, entry.key, pageError);
-                    },
-                }),
-            );
+            const detach = registry.attach(queryClient, entry.key, desired.fn, entry.args, desired.shardKey, {
+                onError: (pageError) => {
+                    failPage(hash, entry.key, pageError);
+                },
+            });
+
+            // Detach, then drop the pinned entry — but only once nobody else is
+            // holding the same page range, or a sibling hook would go blank with
+            // no frame coming to refill it.
+            //
+            // Removing is not just leak hygiene. SPLIT/JOIN recycles page-range
+            // queryKeys: a JOIN of [(null,C,10),(C,null,10)] rebuilds exactly
+            // `initialPages(10)`'s key, so a lingering entry from before the
+            // `loadMore` would be read synchronously by `pageResults` on the
+            // very render that re-attaches it — painting rows that may no longer
+            // exist for at least a frame, ahead of the post-commit `fetchQuery`
+            // that `staleTime: 0` schedules. No entry, no corpse.
+            const queryKey = entry.key;
+
+            detaches.set(hash, (): void => {
+                detach();
+
+                if (!registry.hasConsumers(queryKey)) {
+                    queryClient.removeQueries({ exact: true, queryKey });
+                }
+            });
         }
         // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the attach effect re-runs only when the set of page keys (`pageKeysHash`), the client, or the skip flag changes. `detachesRef`/`desiredRef`/`queryClient` are stable refs read at run time; the latest fn/args/entries come from `desiredRef.current` (updated in a sibling effect). Client swaps are handled explicitly via `detachClientRef`.
     }, [client, queryClient, pageKeysHash, skipped]);

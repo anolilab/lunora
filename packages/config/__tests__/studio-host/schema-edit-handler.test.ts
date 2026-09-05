@@ -91,6 +91,32 @@ describe("handleSchemaEditRequest", () => {
         expect(existsSync(join(projectRoot, "lunora", "_generated", "openrpc.json"))).toBe(true);
     });
 
+    it("writes the source but skips codegen when the codegen switch is off", () => {
+        expect.assertions(3);
+
+        writeSchema(SCHEMA);
+
+        // `lunora dev --no-codegen` travels as LUNORA_CODEGEN=0 and promises that
+        // `_generated/` is written only by an explicit `lunora codegen`. The studio
+        // endpoints regenerate in-process, so without reading the switch one "add
+        // column" rewrote the whole generated tree the flag had just excluded.
+        process.env.LUNORA_CODEGEN = "0";
+
+        try {
+            const result = handleSchemaEditRequest({
+                body: { column: "due", kind: "addOptionalColumn", table: "todos", validator: "v.number()" },
+                method: "POST",
+                projectRoot,
+            });
+
+            expect(result.status).toBe(200);
+            expect(readFileSync(schemaPath, "utf8")).toContain("v.optional(v.number())");
+            expect(existsSync(join(projectRoot, "lunora", "_generated"))).toBe(false);
+        } finally {
+            delete process.env.LUNORA_CODEGEN;
+        }
+    });
+
     it("returns 409 needsMigration on a destructive POST and does NOT write the file", () => {
         expect.assertions(3);
 

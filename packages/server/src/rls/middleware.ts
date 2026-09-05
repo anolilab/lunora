@@ -308,15 +308,19 @@ const assertBatchLimit = (count: number, limit: number | undefined, op: string):
  *
  * The `roles` CLAIM on the resolved identity ({@link readIdentityRoles}) is what
  * the identity provider asserted about the caller. `ctx.auth.roles`, set by an
- * upstream middleware, is what a request-time mapping derived —
- * `@lunora/cloudflare-access`'s `accessRoles()` is the shipped example: the
- * Access envelope carries `groups`, never `roles`, and that middleware's entire
- * job is to map verified groups onto role labels here.
+ * upstream middleware, is what a request-time mapping derived.
  *
  * Reading only the claim silently drops the second, which does not fail loudly —
  * a role-gated ALLOW branch stops firing and users lose access, and a role-gated
- * DENY branch stops firing and rows LEAK. `accessRoles` declares its own context
+ * DENY branch stops firing and rows LEAK. A middleware declares its own context
  * type, so there is no compile-time signal either way.
+ *
+ * The middleware source reaches THIS path only. A live shape runs no procedure,
+ * so `composeShapeReadWhere` sees the claim and nothing else — which is why the
+ * shipped Access mapping mints its roles onto the identity
+ * (`createAccessResolver({ roles })`) instead of into `ctx.auth.roles`. Anything
+ * deriving roles in middleware must accept that shapes will not see them; see
+ * the KNOWN DIVERGENCE note in `./shape-read-base`.
  *
  * What is deliberately absent is the same field on the TEST harness: see
  * `TestIdentity` in `./testing`. A middleware setting `ctx.auth.roles` is a real
@@ -1749,7 +1753,7 @@ const resolvePolicyAuth = async (
     // eslint-disable-next-line unicorn/no-null -- the public auth contexts carry `null` for the anonymous/no-resolver case
     const identity = (await auth.getIdentity?.()) ?? null;
     // Union, not either/or — see `AuthLike`. A Set dedups while preserving
-    // first-seen order, matching how `accessRoles` already merges its own input.
+    // first-seen order.
     const roles: ReadonlyArray<string> = [...new Set<string>([...readIdentityRoles(identity), ...(auth.roles ?? [])])];
 
     return {

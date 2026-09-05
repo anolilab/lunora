@@ -6,10 +6,10 @@
  * `DeployDriver` that ties them together for `--target cloudflare`.
  *
  * Split out from the package root so `@lunora/config` itself stays
- * provider-neutral. The root keeps what any target needs — the `ResourceGraph`
- * and `DeployDriver` contracts, the driver registry, project config and target
- * resolution, `.dev.vars` grammar, binding *inference* — while emission and
- * validation, which are wrangler-shaped by definition, live behind this subpath.
+ * provider-neutral. The root keeps what any target needs — the `DeployDriver`
+ * contract, the driver registry, project config and target resolution,
+ * `.dev.vars` grammar, binding *inference* — while emission and validation,
+ * which are wrangler-shaped by definition, live behind this subpath.
  * Plan 114 §5.3 (D6): a package carrying real provider code isolates it behind a
  * subpath rather than relocating wholesale.
  */

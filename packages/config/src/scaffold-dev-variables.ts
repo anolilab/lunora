@@ -617,11 +617,13 @@ interface DevSecretsFillPlan {
 
 /**
  * Plan the in-place generation of dev secrets for a `.dev.vars`. First, every
- * line whose KEY looks like a secret (`*_SECRET`, `*_TOKEN`, `*_KEY`,
- * `*_PASSWORD`) and whose value is empty or a placeholder gets a freshly
- * generated value — so a `lunora add`-scaffolded `.dev.vars` (which writes each
- * secret blank) becomes usable on `lunora dev` / `vite dev` without the user
- * running `openssl` by hand. Second, any {@link CORE_SECRETS} key absent from
+ * line whose key is {@link isMintableSecretKey mintable} — registry membership,
+ * NOT the key's name shape — and whose value is empty or a placeholder gets a
+ * freshly generated value, so a `lunora add`-scaffolded `.dev.vars` (which
+ * writes each secret blank) becomes usable on `lunora dev` / `vite dev` without
+ * the user running `openssl` by hand. A provider-issued key (`OPENAI_API_KEY`,
+ * `STRIPE_SECRET_KEY`) is left verbatim so `lunora env doctor` can still report
+ * it as unfilled. Second, any {@link CORE_SECRETS} key absent from
  * the file is appended (generated) — notably `LUNORA_ADMIN_TOKEN`, which the
  * local Studio needs to call the worker's admin gate in dev (without it the
  * Studio shows its login gate).

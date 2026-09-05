@@ -85,6 +85,7 @@ import {
     NotFoundError,
     NotUniqueError,
     RANK_TIEBREAK,
+    rankPivotConditionSql,
     rankTableName,
     readAggregateValue,
     relationHooks,
@@ -126,6 +127,7 @@ import {
     queryBatch,
     queryRun,
     serializeColumnValue,
+    serializeDocumentColumn,
     tableColumns,
 } from "./sql-exec";
 import { bigintSqlKey, effectiveColumnKind } from "./value-codec";
@@ -293,6 +295,42 @@ interface SqlCtxDbOptions {
      * key cap when omitted.
      */
     maxRelationKeys?: number;
+
+    /**
+     * Object identifying the database this store provisions, so the one-shot
+     * `CREATE TABLE/INDEX IF NOT EXISTS` sweep is shared by every ctx-db built
+     * against it instead of repeating per instance.
+     *
+     * Hosts build a ctx-db **per request** (the writer captures the caller's
+     * identity and D1 bookmark), so without this the sweep — one round trip per
+     * global table plus one per index — runs again on the first `.global()`
+     * access of every request. On a 50-table schema that is ~1s in `lunora dev`
+     * and a real latency floor in production.
+     *
+     * WHAT TO PASS: something that outlives the request AND names one database
+     * (and one configuration). The D1 binding off `env` and the declaration
+     * object a host builds once both qualify; the result of a per-request
+     * factory does not — it keys the memo on a fresh object every time and
+     * shares nothing (which is silent, and looks exactly like not passing it).
+     *
+     * INVARIANT, unenforced: one scope ⇒ one `schema`, `dialect` and `cdc`. The
+     * memoised run closes over the FIRST writer's, so a later writer sharing a
+     * scope with `cdc: true` behind one with `cdc: false` never gets
+     * `__cdc_log`. Hosts pass app-level constants for all three, which is why
+     * this is a note rather than a composite key.
+     *
+     * Two behaviours change with a shared memo, both benign and both worth
+     * knowing: the DDL runs in the FIRST writer's D1 session, so a later
+     * session's first read is no longer implicitly pinned behind a write of its
+     * own (on a replicated binding that can mean one transient stale read on a
+     * freshly-provisioned database); and a database reset out from under a live
+     * isolate is no longer healed by the next request, since the entry lives as
+     * long as the scope does.
+     *
+     * Omit it and the memo stays per ctx-db — slower, never wrong, and what the
+     * tests want (they pair a fresh database with a reused schema object).
+     */
+    provisionScope?: object;
 
     /**
      * Scheduler exposed to global-table trigger handlers as `ctx.scheduler`.
@@ -541,26 +579,38 @@ const buildRankBeforeBranches = (
     sortColumns: ReadonlyArray<string>,
     own: Record<string, unknown>,
     rowId: string,
-): SQL | undefined => {
+): SQL => {
     const branches: SQL[] = [];
 
     for (let pivot = 0; pivot < sortColumns.length + 1; pivot += 1) {
+        const column = sortColumns[pivot];
+        const sortKey = index.sortBy[pivot];
+        // Each pivot's comparison comes from the shared `rankPivotConditionSql`,
+        // which owns the NULL cases: `col < NULL` is UNKNOWN, and NULL rows sort
+        // ahead of a non-null pivot ascending, so a bare comparator both
+        // under-counts and mis-reads a NULL-valued row's own position. The
+        // `__id__` tiebreak closes the tuple and is never NULL.
+        const isSortPivot = pivot < sortColumns.length && column !== undefined && sortKey !== undefined;
+        const direction = sortKey?.direction === "desc" ? "desc" : "asc";
+        const pivotCondition = isSortPivot ? rankPivotConditionSql(column, own[column], direction, false) : sql`${sql.identifier(RANK_TIEBREAK)} < ${rowId}`;
+
+        if (pivotCondition === undefined) {
+            continue;
+        }
+
         const conditions: SQL[] = sortColumns
             .slice(0, pivot)
             .map((prefixColumn) => nullSafeEqualsSql(engine, sql`${sql.identifier(prefixColumn)}`, own[prefixColumn]));
-        const column = sortColumns[pivot];
-        const sortKey = index.sortBy[pivot];
 
-        if (pivot < sortColumns.length && column !== undefined && sortKey !== undefined) {
-            conditions.push(sql`${sql.identifier(column)} ${sql.raw(sortKey.direction === "desc" ? ">" : "<")} ${own[column]}`);
-        } else {
-            conditions.push(sql`${sql.identifier(RANK_TIEBREAK)} < ${rowId}`);
-        }
+        conditions.push(pivotCondition);
 
         branches.push(andBranch(conditions));
     }
 
-    return branches.length > 0 ? sql.join(branches, sql` OR `) : undefined;
+    // Never `undefined`: an absent clause counts the WHOLE partition, and "every
+    // pivot was a NULL at the start of its ordering" means nothing sorts before
+    // this row at all.
+    return branches.length > 0 ? sql.join(branches, sql` OR `) : sql`1 = 0`;
 };
 
 /**
@@ -582,6 +632,14 @@ const buildRankCursorSeek = (
     const branches: SQL[] = [];
 
     for (const [pivot, col] of columns.entries()) {
+        // Shared with the DO twin — see `rankPivotConditionSql` for why a bare
+        // `>`/`<` at the pivot drops every row once a sort column holds NULL.
+        const pivotCondition = rankPivotConditionSql(col.column, decoded[pivot], col.direction, true);
+
+        if (pivotCondition === undefined) {
+            continue;
+        }
+
         const conditions: SQL[] = [];
 
         for (let prefix = 0; prefix < pivot; prefix += 1) {
@@ -594,8 +652,14 @@ const buildRankCursorSeek = (
             conditions.push(nullSafeEqualsSql(engine, sql`${sql.identifier(prefixCol.column)}`, decoded[prefix]));
         }
 
-        conditions.push(sql`${sql.identifier(col.column)} ${sql.raw(col.direction === "desc" ? "<" : ">")} ${decoded[pivot]}`);
+        conditions.push(pivotCondition);
         branches.push(andBranch(conditions));
+    }
+
+    if (branches.length === 0) {
+        // The cursor sits at the end of the ordering on every pivot: no row
+        // resumes after it.
+        return sql`(1 = 0)`;
     }
 
     return sql`(${sql.join(branches, sql` OR `)})`;
@@ -604,8 +668,17 @@ const buildRankCursorSeek = (
 /**
  * The rankPage column tuple in sort order: `[partition, ...sortColumns, id]`.
  * Partition and id sort ascending; each sort column follows its index direction.
+ *
+ * `nullable` marks the columns the seek has to place NULLs for: `__partition__`
+ * is the canonical-JSON key tuple and `__id__` is store-minted, so only the
+ * `__sort_k<i>__` columns can hold one (`syncRankIndexEntry` writes
+ * `record[field] ?? null`). It drives the ORDER BY's `NULLS FIRST/LAST` — the
+ * seek assumes SQLite's placement, which Postgres does not share.
  */
-const rankPageColumns = (index: RankIndexDefinitionLike, sortColumns: ReadonlyArray<string>): { column: string; direction: "asc" | "desc" }[] => {
+const rankPageColumns = (
+    index: RankIndexDefinitionLike,
+    sortColumns: ReadonlyArray<string>,
+): { column: string; direction: "asc" | "desc"; nullable: boolean }[] => {
     // A rank index with no sort columns degenerates the cursor tuple to
     // `[__partition__, RANK_TIEBREAK]`, which lets `buildRankCursorSeek` silently
     // mismatch and return a wrong/empty page. The schema builder already requires
@@ -615,13 +688,13 @@ const rankPageColumns = (index: RankIndexDefinitionLike, sortColumns: ReadonlyAr
         throw new LunoraError("INTERNAL", `rankIndex "${index.name}" requires at least one "sortBy" column for stable pagination`);
     }
 
-    const columns: { column: string; direction: "asc" | "desc" }[] = [{ column: "__partition__", direction: "asc" }];
+    const columns: { column: string; direction: "asc" | "desc"; nullable: boolean }[] = [{ column: "__partition__", direction: "asc", nullable: false }];
 
     for (const [i, sortKey] of index.sortBy.entries()) {
-        columns.push({ column: sortColumns[i] ?? sortColumnName(i), direction: sortKey.direction });
+        columns.push({ column: sortColumns[i] ?? sortColumnName(i), direction: sortKey.direction, nullable: true });
     }
 
-    columns.push({ column: RANK_TIEBREAK, direction: "asc" });
+    columns.push({ column: RANK_TIEBREAK, direction: "asc", nullable: false });
 
     return columns;
 };
@@ -1243,6 +1316,14 @@ const mapWriteError = (dialect: SqlDialect, error: unknown, table: string): neve
     throw error;
 };
 
+/**
+ * The provisioning sweep in flight (or completed) for a given
+ * {@link SqlCtxDbOptions.provisionScope}, so per-request ctx-dbs built against
+ * the same database share one run. Weak so a scope that goes out of scope takes
+ * its entry with it; a rejected run is evicted so the next call retries.
+ */
+const provisioningByScope = new WeakMap<object, Promise<void>>();
+
 const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     const { crossShardCounter, crossShardReader, exec, maxRelationKeys, schema } = options;
 
@@ -1386,12 +1467,28 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     // once per ctx-db, lazily, before any path that can touch a companion. The
     // cached value is the resolving `Promise` so concurrent first-callers share
     // the single round-trip rather than racing duplicate DDL (mirrors the
-    // dialect's fts5 flag). CREATE IF NOT EXISTS is idempotent, so running it
-    // once per instance is cheap.
-    let migratedPromise: Promise<void> | undefined;
+    // dialect's fts5 flag).
+    //
+    // "Once per ctx-db" is only cheap when the ctx-db outlives the request — and
+    // it does not: hosts build one per request so the writer can carry the
+    // caller's identity and bookmark. `provisionScope` lifts the memo onto the
+    // database it provisions ({@link SqlCtxDbOptions.provisionScope}), which is
+    // what makes the sweep once-per-isolate rather than once-per-request.
+    //
+    // A caller that passes no scope gets a private one. That is not a special
+    // case in disguise: the entry then lives exactly as long as this closure
+    // holds the key, which IS a per-ctx-db memo — same lifetime as the `let` it
+    // replaces, one mechanism instead of two.
+    const provisionScope = options.provisionScope ?? {};
 
     const ensureMigrated = async (): Promise<void> => {
-        migratedPromise ??= (async (): Promise<void> => {
+        const cached = provisioningByScope.get(provisionScope);
+
+        if (cached) {
+            return cached;
+        }
+
+        const run = (async (): Promise<void> => {
             // Base `.global()` tables first — the companion migrations below and
             // every read/write path assume they exist.
             await runSqlGlobalTableMigrations(exec, schema, dialect);
@@ -1408,13 +1505,18 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         })().catch((error: unknown) => {
             // Don't cache a rejection — a transient DDL failure (e.g. a dropped
             // connection) would otherwise poison every later call on this
-            // ctx-db. Clear the cache so the next call retries the idempotent
+            // scope. Clear the cache so the next call retries the idempotent
             // CREATE-IF-NOT-EXISTS migrations.
-            migratedPromise = undefined;
+            provisioningByScope.delete(provisionScope);
             throw error;
         });
 
-        return migratedPromise;
+        // Recorded synchronously (the IIFE above has only run to its first
+        // await), so concurrent first-callers single-flight onto this run — and
+        // so the `delete` above can never drop a fresher entry than its own.
+        provisioningByScope.set(provisionScope, run);
+
+        return run;
     };
 
     /**
@@ -2232,7 +2334,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // Raw (unquoted) column names — the INSERT quotes them via `sql.identifier`.
             columns: ["id", "_creationTime", ...fields],
             // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
-            values: [id, creationTime, ...fields.map((field) => serializeColumnValue(document[field] ?? null))],
+            values: [id, creationTime, ...fields.map((field) => serializeDocumentColumn(definition, field, document[field] ?? null))],
         };
     };
 
@@ -2686,8 +2788,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 // merged row; read scoping (not companion removal) hides it.
                 const merged: Record<string, unknown> = { ...existing, [softField]: clock() };
                 const assignments = sql.join(
-                    // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column binds `null`, matching the patch path.
-                    Object.keys(definition.shape).map((field) => sql`${sql.identifier(field)} = ${serializeColumnValue(merged[field] ?? null)}`),
+                    Object.keys(definition.shape).map(
+                        // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column binds `null`, matching the patch path.
+                        (field) => sql`${sql.identifier(field)} = ${serializeDocumentColumn(definition, field, merged[field] ?? null)}`,
+                    ),
                     sql`, `,
                 );
 
@@ -3177,7 +3281,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const fields = Object.keys(definition.shape);
             const assignments = sql.join(
                 // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
-                fields.map((field) => sql`${sql.identifier(field)} = ${serializeColumnValue(merged[field] ?? null)}`),
+                fields.map((field) => sql`${sql.identifier(field)} = ${serializeDocumentColumn(definition, field, merged[field] ?? null)}`),
                 sql`, `,
             );
 
@@ -3539,7 +3643,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const beforeRows = await queryAll(
                 exec,
                 dialect,
-                sql`SELECT COUNT(*) AS c FROM ${sql.identifier(rankTable)} WHERE ${sql.identifier("__partition__")} = ${partitionKey}${beforeClause ? sql` AND (${beforeClause})` : sql``}`,
+                sql`SELECT COUNT(*) AS c FROM ${sql.identifier(rankTable)} WHERE ${sql.identifier("__partition__")} = ${partitionKey} AND (${beforeClause})`,
             );
             const totalRows = await queryAll(
                 exec,
@@ -3590,7 +3694,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // ascending except the sort columns, which follow their index.
             const rankColumns = rankPageColumns(index, sortColumns);
             const orderBy = sql.join(
-                rankColumns.map((col) => sql`${sql.identifier(col.column)} ${sql.raw(col.direction === "desc" ? "DESC" : "ASC")}`),
+                rankColumns.map(
+                    (col) =>
+                        sql`${sql.identifier(col.column)} ${sql.raw(`${col.direction === "desc" ? "DESC" : "ASC"}${nullsPlacement(dialect, { direction: col.direction, nullable: col.nullable })}`)}`,
+                ),
                 sql`, `,
             );
 
@@ -3706,7 +3813,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 [
                     sql`${sql.identifier("_creationTime")} = ${creationTime}`,
                     // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
-                    ...fields.map((field) => sql`${sql.identifier(field)} = ${serializeColumnValue(replaced[field] ?? null)}`),
+                    ...fields.map((field) => sql`${sql.identifier(field)} = ${serializeDocumentColumn(definition, field, replaced[field] ?? null)}`),
                 ],
                 sql`, `,
             );

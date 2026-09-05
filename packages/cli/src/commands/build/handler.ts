@@ -45,6 +45,14 @@ interface BuildCommandOptions {
     spawner?: Spawner;
 
     /**
+     * Fail the build on ERROR-level codegen advisories. `undefined` leaves the
+     * CI-vs-local default (`resolveStrictAdvisories`) in charge. `build` runs the
+     * same gate `deploy` does and prints the same remediation, so it has to take
+     * the same opt-out — the gate named a flag `build` rejected.
+     */
+    strictAdvisories?: boolean;
+
+    /**
      * Deploy target the artifact is built for. Defaults to `"target"` in
      * `lunora.json`, then `"cloudflare"`. `build` is the artifact half of the
      * `lunora build` → `lunora deploy --prebuilt` CI split, so without this that
@@ -125,6 +133,7 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
         logger,
         outDir: outDirectory,
         spawner: options.spawner ?? (jsonMode ? stderrOnlySpawner : undefined),
+        strictAdvisories: options.strictAdvisories,
         target: options.target,
     });
 
@@ -160,6 +169,7 @@ const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions>(async 
         format: options.format,
         logger,
         outDir: options.outDir,
+        strictAdvisories: options.strictAdvisories,
         target: options.target,
     });
 

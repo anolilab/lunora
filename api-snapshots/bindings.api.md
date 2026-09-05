@@ -116,23 +116,6 @@ const createAnalyticsSqlClient: (config: AnalyticsSqlConfig) => AnalyticsSqlClie
 
 ## `@lunora/bindings/images`
 
-### `DrawOverlay` (interface)
-
-```ts
-interface DrawOverlay {
-    bottom?: number;
-    composite?: ImageCompositeMode;
-    height?: number;
-    left?: number;
-    opacity?: number;
-    repeat?: "x" | "y" | boolean;
-    right?: number;
-    top?: number;
-    url: string;
-    width?: number;
-}
-```
-
 ### `ImageCompositeMode` (type)
 
 ```ts
@@ -285,7 +268,6 @@ interface TransformOptions {
     blur?: number;
     brightness?: number;
     contrast?: number;
-    draw?: DrawOverlay[];
     fit?: "aspect-crop" | "contain" | "cover" | "crop" | "pad" | "scale-down" | "scale-up" | "squeeze";
     flip?: "h" | "hv" | "v";
     gamma?: number;

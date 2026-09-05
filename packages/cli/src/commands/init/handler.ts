@@ -36,7 +36,7 @@ import {
     withTuiSpinner,
 } from "../../util/tui-prompts";
 import type { FeatureItem } from "../add/features";
-import { detectAuthUiItem } from "../add/features";
+import { detectAuthUiItem, isReactNativeProject } from "../add/features";
 import { runAddCommand } from "../registry";
 import describeDownloadFailure from "./download-failure";
 import { emitMascot, emitStep } from "./flow";
@@ -219,12 +219,19 @@ import { lunora } from "@lunora/vite";
 export default defineConfig({ plugins: [lunora()] });
 `;
 
-/** Sample `lunora/schema.ts` written when scaffolding Lunora into an existing app. */
+/**
+ * Sample `lunora/schema.ts` written when scaffolding Lunora into an existing app.
+ *
+ * `channelId` is a `v.string()`, not a `v.id("channels")`: this schema declares
+ * exactly one table, so an `Id<"channels">` names a document type codegen never
+ * emits and every scaffolded project failed `tsc` with TS2345 on the sample
+ * function's very first argument. The bespoke templates spell it the same way.
+ */
 const SAMPLE_SCHEMA = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export default defineSchema({
     messages: defineTable({
-        channelId: v.id("channels"),
+        channelId: v.string(),
         text: v.string(),
     })
         .shardBy("channelId")
@@ -236,13 +243,13 @@ export default defineSchema({
 const SAMPLE_FUNCTION = `import { mutation, query, v } from "./_generated/server";
 
 export const list = query
-    .input({ channelId: v.id("channels"), limit: v.optional(v.number()) })
+    .input({ channelId: v.string(), limit: v.optional(v.number()) })
     .query(async ({ args }) => {
         return { channelId: args.channelId, limit: args.limit ?? 50, messages: [] };
     });
 
 export const send = mutation
-    .input({ channelId: v.id("channels"), text: v.string() })
+    .input({ channelId: v.string(), text: v.string() })
     .mutation(async ({ args }) => {
         return { channelId: args.channelId, text: args.text };
     });
@@ -1142,6 +1149,24 @@ const scaffoldLunoraDirectory = (cwd: string, logger: Logger): ReadonlyArray<str
 };
 
 /**
+ * Frameworks that own their build via their own config and wire Lunora through
+ * their server entry, so `init --here` writes no `lunora()` Vite plugin for them
+ * — and must not tell them to install `@lunora/vite` either.
+ *
+ * Gated on the framework ALONE: this used to sit behind "and no Vite config
+ * exists", which SvelteKit and Nuxt always have — so the skip never fired for
+ * them and a bare `lunora()` was patched in regardless, without the
+ * `{ cloudflare: false, validateWrangler: false }` options the class-B templates
+ * pass it.
+ *
+ * Named because two places have to agree on it: the patcher below and the next-
+ * steps install line. They did not — the patch wrote `@lunora/vite` into the
+ * config for every other framework while the printed install command omitted it,
+ * so following the instructions verbatim produced an unresolvable import.
+ */
+const wiresLunoraThroughServerEntry = (framework: DetectedFramework): boolean => framework === "sveltekit" || framework === "nuxt" || framework === "astro";
+
+/**
  * Per-framework "next steps" copy printed after the in-place patch. Each entry
  * names the idiomatic Lunora adapter to install and the composition wiring
  * the user must add by hand (worker `httpRouter` for class A, hook-injection for
@@ -1156,7 +1181,17 @@ const printFrameworkNextSteps = (detection: FrameworkDetection, manager: Package
     logger.info("");
     logger.info(`detected framework: ${framework} (class ${frameworkClass})`);
     logger.info("next steps:");
-    logger.info(`  1. install the adapter:  ${installCommand(manager, [adapter, "@lunora/client", "@lunora/runtime", "@lunora/server"])}`);
+    // `@lunora/vite` is listed whenever this run patched (or wrote) a Vite config
+    // naming it — otherwise the very first instruction produced a config with an
+    // unresolvable import. Only the create-vite overlay path used to add the dep,
+    // and `--here` is not that path.
+    const packages = [adapter, "@lunora/client", "@lunora/runtime", "@lunora/server"];
+
+    if (!wiresLunoraThroughServerEntry(framework)) {
+        packages.push("@lunora/vite");
+    }
+
+    logger.info(`  1. install the adapter:  ${installCommand(manager, packages)}`);
     logger.info("  2. run codegen:          lunora codegen");
 
     if (frameworkClass === "A") {
@@ -1190,14 +1225,7 @@ const printFrameworkNextSteps = (detection: FrameworkDetection, manager: Package
  * Returns the InitCommandResult so a hard write failure aborts the whole run.
  */
 const patchOrCreateViteConfig = (cwd: string, framework: DetectedFramework, logger: Logger): InitCommandResult => {
-    // SvelteKit / Nuxt / Astro own their build via their own config and wire
-    // Lunora through their server entry, so they get `lunora/` + instructions
-    // and no plugin patch. Gated on the framework ALONE: this used to sit
-    // behind "and no Vite config exists", which SvelteKit and Nuxt always have
-    // — so the skip never fired for them and a bare `lunora()` was patched in
-    // regardless, without the `{ cloudflare: false, validateWrangler: false }`
-    // options the class-B templates pass it.
-    if (framework === "sveltekit" || framework === "nuxt" || framework === "astro") {
+    if (wiresLunoraThroughServerEntry(framework)) {
         logger.info(`${framework} wires Lunora through its server entry, not a lunora() Vite plugin — leaving the Vite config alone (see next steps)`);
 
         return { code: 0, files: [], target: cwd };
@@ -1372,16 +1400,29 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
         projectName: basename(projectDirectory),
         // Detect the per-framework auth-UI item from the scaffolded template's deps.
         resolveAuthUiItem: () => {
+            let dependencies: Record<string, string>;
+
             try {
                 const pkg = JSON.parse(readFileSync(join(projectDirectory, "package.json"), "utf8")) as {
                     dependencies?: Record<string, string>;
                     devDependencies?: Record<string, string>;
                 };
 
-                return detectAuthUiItem({ ...pkg.dependencies, ...pkg.devDependencies }) ?? "auth-ui-react";
+                dependencies = { ...pkg.dependencies, ...pkg.devDependencies };
             } catch {
                 return "auth-ui-react";
             }
+
+            // The same gate `lunora add auth-ui` applies, and for the same reason:
+            // every auth-UI port renders DOM, so there is no item that fits an Expo
+            // project. `undefined` is the refusal the offer acts on — this used to
+            // fall through to the React payload and copy ~85 DOM files into a Metro
+            // bundle while `lunora add` in the very same project refused.
+            if (isReactNativeProject(dependencies)) {
+                return undefined;
+            }
+
+            return detectAuthUiItem(dependencies) ?? "auth-ui-react";
         },
         select:
             options.prompt?.select ??

@@ -74,11 +74,25 @@ carries:
 
 - `ctx.auth`: the resolved caller identity.
 - `ctx.fetch`: outbound HTTP.
-- `ctx.runQuery` / `ctx.runMutation` / `ctx.runAction`: reach the data layer; these forward to the owning shard.
+- `ctx.runQuery` / `ctx.runMutation` / `ctx.runAction`: reach the data layer; these forward an RPC to the **default** shard.
+- `ctx.forShard(key)`: the same trio bound to another shard.
+- `ctx.waitUntil`: keep work alive past the response, when the host supplies one.
+- `ctx.scheduler`: present when the app declared `.scheduler(...)`.
+- `ctx.storage`: present when the app declared `.storage(...)`.
 
-An HTTP action has no direct `ctx.db`, `ctx.scheduler`, `ctx.storage`, or
-`ctx.vectors`. Go through `runQuery` / `runMutation` / `runAction` to read or
-write your tables. (To stream a stored R2 object straight from a handler,
+An HTTP action runs in the worker, one hop away from every shard, so unlike a
+query or mutation — which already execute inside the owning DO — it has to be
+told which shard it wants. The bare `ctx.run*` targets the default shard; on a
+[sharded](/docs/concepts/sharding) app that is the root DO, which holds none of a
+`.shardBy(...)` table's rows, so name the shard:
+
+```ts
+const messages = await ctx.forShard(channelId).runQuery(api.messages.list, { channelId });
+```
+
+An HTTP action has no direct `ctx.db` or `ctx.vectors`. Go through `runQuery` /
+`runMutation` / `runAction` to read or write your tables. (To stream a stored R2
+object straight from a handler,
 `serveStorageObject(ctx, key, request, authorize)` is the purpose-built
 helper — it owns `Range`/`ETag`/`nosniff`, and its required `authorize` gate is
 where your signed-URL or session check goes.)

@@ -3,6 +3,9 @@ import { LunoraError } from "@lunora/errors";
 import { getAuthTables } from "better-auth/db";
 
 import type { LunoraAuth } from "./create-auth";
+// Aliased: this module exposes methods of the same names, and a method body
+// calling an identically-named import is a needless double-take.
+import { createSignUpInvitation as issueSignUpInvitation, revokeSignUpInvitation as withdrawSignUpInvitation } from "./invite-only";
 
 /**
  * A timestamp as it leaves the admin API: epoch-ms (better-auth stores `Date`s,
@@ -91,6 +94,31 @@ interface AuthInvitation {
     status?: null | string;
 }
 
+/**
+ * One sign-up invitation (from the `inviteOnly` plugin). Distinct from
+ * {@link AuthInvitation}, which invites an existing account into an organization:
+ * this one is what lets an address create an account at all.
+ */
+interface AuthSignUpInvitation {
+    [key: string]: unknown;
+
+    /** When an account was created for this address; `null` while the invitation is unspent. */
+    acceptedAt?: AuthTimestamp;
+    createdAt?: AuthTimestamp;
+    email?: null | string;
+    expiresAt?: AuthTimestamp;
+    id: string;
+    invitedBy?: null | string;
+
+    /**
+     * The plaintext invitation token — present **only** on the row
+     * {@link AuthAdmin.createSignUpInvitation} returns, never on a listed one.
+     * The stored `tokenHash` is in {@link SENSITIVE_FIELDS}, so it cannot leave
+     * this plane by accident.
+     */
+    token?: string;
+}
+
 /** One team row (from the `organization` plugin with `teams.enabled`). */
 interface AuthTeam {
     [key: string]: unknown;
@@ -151,6 +179,8 @@ interface AuthCapabilities {
     accounts: boolean;
     /** The `admin()` plugin: ban/role/impersonate/create/delete/set-password. */
     admin: boolean;
+    /** The `inviteOnly` plugin: sign-up invitations. */
+    inviteOnly: boolean;
     /** The `organization` plugin: orgs, members, invitations. */
     organization: boolean;
     /** The `@better-auth/passkey` plugin: per-user passkeys. */
@@ -274,6 +304,14 @@ interface AuthAdmin {
     }) => Promise<AuthOrganization>;
     /** Create a custom org role with a permission grant (a `resource → actions[]` map). */
     createOrgRole: (input: { organizationId: string; permission: Record<string, string[]>; role: string }) => Promise<AuthOrgRole>;
+
+    /**
+     * Invite an address to sign up, or refresh an existing invitation for it.
+     * Needs the `inviteOnly` plugin — without it the row is written to a table
+     * nothing reads, which is why the studio gates the panel on
+     * {@link AuthCapabilities.inviteOnly}.
+     */
+    createSignUpInvitation: (input: { email: string; expiresInSeconds?: number; invitedBy?: string }) => Promise<AuthSignUpInvitation>;
     /** Create a team under an organization. */
     createTeam: (input: { name: string; organizationId: string }) => Promise<AuthTeam>;
     createUser: (input: { data?: Record<string, unknown>; email: string; name: string; password?: string; role?: string | string[] }) => Promise<AuthAdminUser>;
@@ -294,6 +332,14 @@ interface AuthAdmin {
     listOrgRoles: (options: { limit?: number; offset?: number; organizationId: string }) => Promise<AuthPage<AuthOrgRole>>;
     listPasskeys: (input: { userId: string }) => Promise<AuthPasskey[]>;
     listSessions: (options: { limit?: number; offset?: number; userId?: string }) => Promise<AuthPage<AuthAdminSession>>;
+
+    /**
+     * Sign-up invitations, newest first. Unfiltered on purpose: "pending" is
+     * `acceptedAt === null && expiresAt > now`, and applying that after a page
+     * would let page 1 come back empty while pending rows sat on page 2. The
+     * caller has both columns and can label each row itself.
+     */
+    listSignUpInvitations: (options: { limit?: number; offset?: number }) => Promise<AuthPage<AuthSignUpInvitation>>;
     /** List a team's members. */
     listTeamMembers: (options: { limit?: number; offset?: number; teamId: string }) => Promise<AuthPage<AuthTeamMember>>;
     /** List an org's teams. */
@@ -305,6 +351,8 @@ interface AuthAdmin {
     /** Remove a member from a team. */
     removeTeamMember: (input: { teamMemberId: string }) => Promise<void>;
     removeUser: (input: { userId: string }) => Promise<void>;
+    /** Withdraw a sign-up invitation. Not retroactive — an account already created keeps existing; use {@link AuthAdmin.removeUser} for that. */
+    revokeSignUpInvitation: (input: { email: string }) => Promise<void>;
     revokeUserSession: (input: { sessionId: string }) => Promise<void>;
     revokeUserSessions: (input: { userId: string }) => Promise<void>;
     setRole: (input: { role: string | string[]; userId: string }) => Promise<AuthAdminUser>;
@@ -417,7 +465,7 @@ const USER_CASCADE = [
  * secret-bearing columns of better-auth core + the admin/organization/passkey/
  * two-factor plugin tables.
  */
-const SENSITIVE_FIELDS = new Set(["accessToken", "backupCodes", "idToken", "password", "publicKey", "refreshToken", "secret", "token"]);
+const SENSITIVE_FIELDS = new Set(["accessToken", "backupCodes", "idToken", "password", "publicKey", "refreshToken", "secret", "token", "tokenHash"]);
 
 const clampLimit = (limit?: number): number => Math.min(Math.max(Math.trunc(limit ?? DEFAULT_LIMIT), 1), MAX_LIMIT);
 const clampOffset = (offset?: number): number => Math.max(0, Math.trunc(offset ?? 0));
@@ -590,6 +638,7 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
         return {
             accounts: features.accounts ?? true,
             admin: features.admin ?? has("admin"),
+            inviteOnly: features.inviteOnly ?? has("lunora-invite-only"),
             organization: features.organization ?? has("organization"),
             passkey: features.passkey ?? has("passkey"),
             twoFactor: features.twoFactor ?? has("two-factor"),
@@ -1082,6 +1131,33 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 }),
             ),
 
+        // Delegates to `./invite-only.ts` rather than re-implementing the upsert:
+        // the validation, the TTL ceiling and the unique-index fallback all live
+        // with the plugin that owns the table. Only the timestamp shape is this
+        // layer's business — the admin plane hands back epoch-ms, like every other
+        // row it returns.
+        createSignUpInvitation: ({ email, expiresInSeconds, invitedBy }) =>
+            withContext(async () => {
+                const issued = await issueSignUpInvitation(auth, { email, expiresInSeconds, invitedBy });
+
+                // `normalizeRow` strips `token`, and must — it is what keeps the
+                // column out of every *listed* row. Putting it back is deliberate:
+                // issuing is the one moment the plaintext is meant to leave the
+                // server, and it is never readable again.
+                return { ...(normalizeRow({ ...issued }) as AuthSignUpInvitation), token: issued.token };
+            }),
+
+        listSignUpInvitations: ({ limit, offset }) =>
+            withContext((context_) =>
+                page<AuthSignUpInvitation>(context_, "signUpInvitation", {
+                    limit,
+                    offset,
+                    sortBy: { direction: "desc", field: "createdAt" },
+                }),
+            ),
+
+        revokeSignUpInvitation: ({ email }) => withContext(async () => withdrawSignUpInvitation(auth, { email })),
+
         listMembers: ({ limit, offset, organizationId }) =>
             withContext((context_) =>
                 page<AuthMember>(context_, "member", {
@@ -1282,6 +1358,7 @@ export type {
     AuthOrgRole,
     AuthPage,
     AuthPasskey,
+    AuthSignUpInvitation,
     AuthTeam,
     AuthTeamMember,
     AuthTimestamp,

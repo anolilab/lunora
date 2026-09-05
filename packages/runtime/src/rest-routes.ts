@@ -241,26 +241,47 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
 
 /** Structural view of a `@lunora/ratelimit` `RateLimiter` — only the `.limit()` call, so the runtime needs no hard dependency. */
 interface RateLimiterLike {
-    limit: (name: string, args?: { key?: string }) => Promise<{ ok: boolean; retryAfter: number }>;
+    limit: (name: string, args?: { key?: string }) => Promise<{ ok: boolean; reason?: string; retryAfter: number }>;
 }
+
+/**
+ * The bucket every caller whose IP could not be resolved shares.
+ *
+ * Charging the limit with no `key` at all would put them in its UNKEYED bucket —
+ * the one a deliberately-global charge of the same limit uses — so a single
+ * IP-less caller could drain an app-wide limit for everybody. A named bucket
+ * keeps that blast radius to the IP-less callers themselves, and makes the
+ * pooling visible in storage. Pass `options.key` to key them properly.
+ */
+const UNRESOLVED_IP_BUCKET = "no-trusted-ip";
 
 /**
  * Adapt a `@lunora/ratelimit` limiter into a {@link RestRateLimit} gate for the
  * public REST surface (plan 167). Pass the limiter and the rate name to charge;
  * `key` isolates the limit per caller (IP / user / API key — defaults to the
- * `cf-connecting-ip` header, else a shared bucket). A denied request becomes a
- * `429` with a `Retry-After` header (seconds, ceil of the limiter's ms). The
- * runtime imports nothing from `@lunora/ratelimit` — build the limiter in the
- * worker entry and pass it here.
+ * `cf-connecting-ip` header, else {@link UNRESOLVED_IP_BUCKET}).
+ *
+ * A rate rejection becomes a `429` with a `Retry-After` header (seconds, ceil of
+ * the limiter's ms). A deny-list hit becomes a `403` and no `Retry-After` —
+ * matching both `@lunora/ratelimit` entry points, and the only honest answer for
+ * a denial that never clears: its `retryAfter` is `Infinity`, which renders as
+ * the header value `"Infinity"` and invites a client to retry forever.
+ *
+ * The runtime imports nothing from `@lunora/ratelimit` — build the limiter in
+ * the worker entry and pass it here.
  */
 const createRestRateLimit =
     (limiter: RateLimiterLike, options: { key?: (request: Request, functionPath: string) => string | undefined; name: string }): RestRateLimit =>
     async (request, functionPath) => {
-        const key = options.key ? options.key(request, functionPath) : (request.headers.get("cf-connecting-ip") ?? undefined);
-        const status = await limiter.limit(options.name, key === undefined ? {} : { key });
+        const key = (options.key ? options.key(request, functionPath) : request.headers.get("cf-connecting-ip")) ?? UNRESOLVED_IP_BUCKET;
+        const status = await limiter.limit(options.name, { key });
 
         if (status.ok) {
             return undefined;
+        }
+
+        if (status.reason === "deny") {
+            return Response.json({ error: { code: "FORBIDDEN", message: "Request denied" } }, { headers: { "content-type": "application/json" }, status: 403 });
         }
 
         const retryAfterSeconds = Math.max(1, Math.ceil(status.retryAfter / 1000));
