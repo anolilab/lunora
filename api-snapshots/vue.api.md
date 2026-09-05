@@ -297,6 +297,7 @@ interface UseAgentChatOptions {
     api: UseAgentChatApi;
     cancel?: FunctionReference<"mutation">;
     limit?: number;
+    onError?: SubscriptionErrorCallback;
     send: FunctionReference<"mutation">;
     sendArgs?: Record<string, unknown>;
     stream?: AgentTokenStreamReference;
@@ -310,6 +311,7 @@ interface UseAgentChatOptions {
 interface UseAgentChatResult {
     approve: (toolCallId: string, note?: string) => Promise<void>;
     cancel: () => Promise<void>;
+    error: ComputedRef<Error | undefined>;
     messages: ComputedRef<ReadonlyArray<AgentChatMessage>>;
     reject: (toolCallId: string, note?: string) => Promise<void>;
     send: (input: string, args?: Record<string, unknown>) => Promise<void>;
@@ -324,6 +326,7 @@ interface UseAgentChatResult {
 interface UseAgentOptions {
     api: UseAgentApi;
     cancel?: FunctionReference<"mutation">;
+    onError?: SubscriptionErrorCallback;
     run: FunctionReference<"mutation">;
     runArgs?: Record<string, unknown>;
     threadKey: MaybeRefOrGetter<string>;
@@ -335,6 +338,7 @@ interface UseAgentOptions {
 ```ts
 interface UseAgentResult {
     cancel: () => Promise<void>;
+    error: Ref<Error | undefined>;
     pending: Readonly<Ref<boolean>>;
     run: (input: string, args?: Record<string, unknown>) => Promise<void>;
     status: ComputedRef<AgentThreadStatus | undefined>;
@@ -465,6 +469,7 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
     heartbeat: H;
     intervalMs?: number;
     listPresent: L;
+    onError?: SubscriptionErrorCallback;
     sessionId?: string;
     shardKey?: string;
 }
@@ -474,6 +479,7 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
 
 ```ts
 interface UsePresenceResult<L extends ListPresentReference> {
+    error: ShallowRef<SubscriptionError | undefined>;
     present: ShallowRef<ReturnOf<L> | undefined>;
     sessionId: string;
     setData: (data: Record<string, unknown> | undefined) => void;

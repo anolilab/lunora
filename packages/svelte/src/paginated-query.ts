@@ -4,6 +4,7 @@ import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "
 import type { Readable } from "svelte/store";
 import { derived, get, readable, writable } from "svelte/store";
 
+import { isBrowser } from "../../../shared/is-browser";
 import { stableWireKey } from "../../../shared/wire-key";
 import { getLunoraClient } from "./context";
 import { isFunctionReference } from "./is-function-reference";
@@ -102,6 +103,8 @@ const createPaginatedEngine = <T>(
     error: Readable<SubscriptionError | undefined>;
     loadMore: (numberItems: number) => void;
     pageResults: Readable<(PaginationResult<T> | undefined)[]>;
+    /** Whether the currently-resolved base args are the `"skip"` sentinel. */
+    skipped: Readable<boolean>;
     status: Readable<PaginationStatus>;
 } => {
     const { initialNumItems, onError, shardKey } = options;
@@ -340,9 +343,18 @@ const createPaginatedEngine = <T>(
     };
 
     // pageResults is a lazy Svelte readable: subscriptions open on the first
-    // $-read and close when the last subscriber unsubscribes — matching the
-    // pattern used by `query.ts` so no WS handles leak after unmount.
+    // browser-side $-read and close when the last subscriber unsubscribes —
+    // matching the pattern used by `query.ts` so no WS handles leak after
+    // unmount and a server render opens nothing.
     const pageResults: Readable<(PaginationResult<T> | undefined)[]> = readable<(PaginationResult<T> | undefined)[]>([], (set) => {
+        // Server-render guard: svelte's server runtime subscribes to `{$store}`
+        // during `render()`, so this start callback runs on the server too. See
+        // `query.ts` for why opening there is wrong (and, on a relative-URL
+        // client, throws out of the render).
+        if (!isBrowser()) {
+            return () => {};
+        }
+
         // Wire internal store updates through to this readable's subscribers.
         const unsubInternal = pageResultsInternal.subscribe(set);
 
@@ -373,6 +385,12 @@ const createPaginatedEngine = <T>(
         pageResults,
         (results) => derivePaginationStatus(currentBaseArgs === "skip", results).status,
     );
+
+    // A skipped feed reports `status === "LoadingFirstPage"` (it has no first
+    // page and never will), so `isLoading` must not derive from `status` alone —
+    // it would spin forever. Piggyback on `pageResults` the way `status` does so
+    // a reactive args source that flips to/from `"skip"` re-evaluates.
+    const skipped = derived<Readable<(PaginationResult<T> | undefined)[]>, boolean>(pageResults, () => currentBaseArgs === "skip");
 
     const loadMore = (numberItems: number): void => {
         if (currentBaseArgs === "skip") {
@@ -423,7 +441,7 @@ const createPaginatedEngine = <T>(
         rebuildPageResults();
     };
 
-    return { error: { subscribe: errorStore.subscribe }, loadMore, pageResults, status };
+    return { error: { subscribe: errorStore.subscribe }, loadMore, pageResults, skipped, status };
 };
 
 /**
@@ -461,15 +479,15 @@ export function paginatedQuery<F extends FunctionReference>(
     const args = (hasExplicitClient ? argumentsOrOptions : functionOrArguments) as ReactivePaginatedArgs<F>;
     const options = (hasExplicitClient ? maybeOptions : argumentsOrOptions) as PaginatedQueryOptions;
 
-    const { error, loadMore, pageResults, status } = createPaginatedEngine<PageItemOf<F>>(client, functionRef, args, options);
+    const { error, loadMore, pageResults, skipped, status } = createPaginatedEngine<PageItemOf<F>>(client, functionRef, args, options);
 
     const results = derived<Readable<(PaginationResult<PageItemOf<F>> | undefined)[]>, PageItemOf<F>[]>(pageResults, (currentResults) =>
         currentResults.flatMap((page) => page?.page ?? []),
     );
 
-    const isLoading = derived<Readable<PaginationStatus>, boolean>(
-        status,
-        (currentStatus) => currentStatus === "LoadingFirstPage" || currentStatus === "LoadingMore",
+    const isLoading = derived(
+        [status, skipped],
+        ([currentStatus, isSkipped]) => !isSkipped && (currentStatus === "LoadingFirstPage" || currentStatus === "LoadingMore"),
     );
 
     return { error, isLoading, loadMore, results, status };
@@ -506,15 +524,15 @@ export function infiniteQuery<F extends FunctionReference>(
     const options = (hasExplicitClient ? maybeOptions : argumentsOrOptions) as InfiniteQueryOptions;
     const { initialNumItems } = options;
 
-    const { error, loadMore, pageResults, status } = createPaginatedEngine<PageItemOf<F>>(client, functionRef, args, options);
+    const { error, loadMore, pageResults, skipped, status } = createPaginatedEngine<PageItemOf<F>>(client, functionRef, args, options);
 
     const pages = derived<Readable<(PaginationResult<PageItemOf<F>> | undefined)[]>, PageItemOf<F>[][]>(pageResults, (currentResults) =>
         currentResults.flatMap((page) => (page ? [page.page] : [])),
     );
 
-    const isLoading = derived<Readable<PaginationStatus>, boolean>(status, (s) => s === "LoadingFirstPage");
+    const isLoading = derived([status, skipped], ([s, isSkipped]) => !isSkipped && s === "LoadingFirstPage");
     const hasNextPage = derived<Readable<PaginationStatus>, boolean>(status, (s) => s === "CanLoadMore");
-    const isFetchingNextPage = derived<Readable<PaginationStatus>, boolean>(status, (s) => s === "LoadingMore");
+    const isFetchingNextPage = derived([status, skipped], ([s, isSkipped]) => !isSkipped && s === "LoadingMore");
 
     const fetchNextPage = (numberItems?: number): void => {
         loadMore(numberItems ?? initialNumItems);

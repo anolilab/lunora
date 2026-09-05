@@ -2,6 +2,7 @@ import type { FunctionReference, LunoraClient, Preloaded, SubscriptionErrorCallb
 import type { Readable } from "svelte/store";
 import { readable } from "svelte/store";
 
+import { isBrowser } from "../../../shared/is-browser";
 import { getLunoraClient } from "./context";
 
 /**
@@ -21,10 +22,11 @@ import { getLunoraClient } from "./context";
  * server pushes (a session expiry, an RLS denial); without it such an error is
  * dropped and the store keeps rendering the SSR snapshot as if it were live.
  *
- * Note on SSR: `readable`'s start callback only runs when the store is actually
- * subscribed (the browser), so on the server the store simply holds the seeded
- * value and opens no socket. The token's `value` is the single source of truth
- * for the first paint either way.
+ * Note on SSR: `readable`'s start callback DOES run on the server — svelte's
+ * server runtime resolves `{$store}` by subscribing to it — so the socket is
+ * opened behind an explicit `isBrowser()` guard rather than left to the store's
+ * laziness. On the server the store simply holds the seeded value. The token's
+ * `value` is the single source of truth for the first paint either way.
  */
 // eslint-disable-next-line import/prefer-default-export -- the package barrel re-exports every store by name; a default here would break the `import { hydratePreloaded } from "@lunora/svelte"` surface.
 export const hydratePreloaded = <T>(preloaded: Preloaded<T>, client?: LunoraClient, options: { onError?: SubscriptionErrorCallback } = {}): Readable<T> => {
@@ -33,16 +35,19 @@ export const hydratePreloaded = <T>(preloaded: Preloaded<T>, client?: LunoraClie
     const functionRef: FunctionReference = { __lunoraRef: functionPath };
 
     // Seed `readable` with the preloaded value so the synchronous first read
-    // already has data — the start callback (which opens the WS) runs only once
-    // a subscriber attaches, i.e. client-side after hydration.
-    return readable<T>(value, (set) =>
-        resolvedClient.subscribe(
+    // already has data; the WS opens only in the browser, after hydration.
+    return readable<T>(value, (set) => {
+        if (!isBrowser()) {
+            return () => {};
+        }
+
+        return resolvedClient.subscribe(
             functionRef,
             args,
             (next: unknown) => {
                 set(next as T);
             },
             { onError: options.onError, shardKey },
-        ),
-    );
+        );
+    });
 };

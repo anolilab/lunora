@@ -1,7 +1,7 @@
 import type { FunctionReference, LunoraClient, SubscriptionError, Unsubscribe } from "@lunora/client";
 import type { PaginationResult } from "@lunora/client/pagination";
 import { get, writable } from "svelte/store";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { infiniteQuery, paginatedQuery } from "../src/paginated-query";
 
@@ -54,6 +54,21 @@ const fn = { __lunoraRef: "messages:list" } as FunctionReference;
 const NUM_ITEMS = 5;
 const firstPageItems = [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }, { id: "e" }];
 const secondPageItems = [{ id: "f" }, { id: "g" }, { id: "h" }, { id: "i" }, { id: "j" }];
+
+// Every subscribing primitive in this package gates on a browser `window` (the
+// SSR guard — svelte's server runtime subscribes to `{$store}` during
+// `render()`, so a `readable`'s start callback runs on the server too). The
+// vitest env is `node`, so define one for the client-path tests. Mirrors the
+// same stub in `flag.test.ts` / `presence.test.ts`.
+/* eslint-disable vitest/require-top-level-describe -- the `window` stub is shared by every describe in this file, so it belongs at file scope */
+beforeAll(() => {
+    Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
+});
+
+afterAll(() => {
+    Reflect.deleteProperty(globalThis, "window");
+});
+/* eslint-enable vitest/require-top-level-describe */
 
 describe("paginatedQuery (Svelte)", () => {
     it("first page loads and results flatten", async () => {
@@ -129,13 +144,16 @@ describe("paginatedQuery (Svelte)", () => {
     it("skip short-circuits to LoadingFirstPage", async () => {
         const fake = createFakePaginatedClient();
 
-        const { status } = paginatedQuery(fake.client, fn, "skip", { initialNumItems: NUM_ITEMS });
+        const { isLoading, status } = paginatedQuery(fake.client, fn, "skip", { initialNumItems: NUM_ITEMS });
         const stopStatus = status.subscribe(() => {});
 
         await flushAsync();
 
         expect(get(status)).toBe("LoadingFirstPage");
         expect(fake.subscribeCalls).toHaveLength(0);
+        // `status` alone is "LoadingFirstPage" for a skipped feed, so a spinner
+        // bound to `isLoading` would never stop — React's `!skipped` contract.
+        expect(get(isLoading)).toBe(false);
 
         stopStatus();
     });
@@ -716,5 +734,36 @@ describe("paginatedQuery with reactive args", () => {
 
         stopStatus();
         stopResults();
+    });
+});
+
+// Regression: `readable`'s start callback is NOT browser-only. Svelte's server
+// runtime resolves `{$store}` by calling `subscribe_to_store`, so every store
+// read in a server-rendered template runs its start callback — opening a live
+// socket per rendered request against a client whose URL does not resolve
+// server-side, and throwing straight out of the render when that URL is the
+// relative/empty one the SvelteKit template builds.
+describe("paginatedQuery during SSR", () => {
+    it("opens no page subscriptions without a browser window", () => {
+        const original = Reflect.getOwnPropertyDescriptor(globalThis, "window");
+
+        Reflect.deleteProperty(globalThis, "window");
+
+        try {
+            const fake = createFakePaginatedClient();
+            const { results, status } = paginatedQuery(fake.client, fn, {}, { initialNumItems: NUM_ITEMS });
+
+            const stop = results.subscribe(() => {});
+
+            expect(fake.subscribeCalls).toHaveLength(0);
+            expect(get(results)).toStrictEqual([]);
+            expect(get(status)).toBe("LoadingFirstPage");
+
+            stop();
+        } finally {
+            if (original) {
+                Object.defineProperty(globalThis, "window", original);
+            }
+        }
     });
 });

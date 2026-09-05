@@ -3,6 +3,7 @@ import { DestroyRef, inject, signal } from "@angular/core";
 import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf } from "@lunora/client";
 
 import { resolveLunoraClient } from "./client";
+import { shouldOpenSubscription } from "./platform";
 
 /**
  * The lifecycle of a stream the primitive is observing.
@@ -65,8 +66,8 @@ export interface StreamResult<T> {
  * chunk the server pushes — use it for token-by-token deltas and other append-only
  * feeds. Pass `"skip"` as `args` to keep the primitive mounted without opening a
  * stream (mirrors `subscription`); the stream tears down when the owning
- * `DestroyRef` fires. The Angular counterpart to React's `useStream`, re-expressed
- * with signals.
+ * `DestroyRef` fires. Nothing opens on the Angular server platform (SSR). The
+ * Angular counterpart to React's `useStream`, re-expressed with signals.
  *
  * Call from an injection context (component/service field or constructor):
  * ```ts
@@ -81,6 +82,7 @@ export const stream = <F extends FunctionReference<"stream">>(
 ): StreamResult<ReturnOf<F>> => {
     const client = resolveLunoraClient(options.client);
     const destroyRef = options.destroyRef ?? inject(DestroyRef);
+    const fromInjectionContext = options.destroyRef === undefined;
 
     const chunks = signal<ReadonlyArray<ReturnOf<F>>>([]);
     const error = signal<Error | undefined>(undefined);
@@ -96,7 +98,13 @@ export const stream = <F extends FunctionReference<"stream">>(
         cancelIterable?.();
     };
 
-    if (args !== "skip") {
+    // The `shouldOpenSubscription()` guard skips the stream on the Angular server
+    // platform (SSR), exactly as `liveQuery`/`subscription`/`paginatedQuery` skip
+    // their sockets: Angular runs field initializers during a server render, and
+    // an un-gated `client.stream(...)` opens a real socket per render that no
+    // `DestroyRef` on the server ever closes. `chunks` stays empty and `status`
+    // stays `"idle"` until the browser render re-runs this and attaches.
+    if (args !== "skip" && shouldOpenSubscription(fromInjectionContext)) {
         status.set("streaming");
 
         const iterable = client.stream(reference, args, { durable: options.durable, maxBuffer: options.maxBuffer, shardKey: options.shardKey });

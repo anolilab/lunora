@@ -70,6 +70,10 @@ const useSubscription = <F extends FunctionReference>(
                                 ? new Error(subscriptionError.message)
                                 : new LunoraError(subscriptionError.code, subscriptionError.message);
                         data.value = undefined;
+                        // `UseQueryOptions.onError` is part of this composable's
+                        // surface; forward the raw wire error (code included) so a
+                        // caller that only passes a handler still sees the failure.
+                        options.onError?.(subscriptionError);
                     },
                     onReset: () => {
                         data.value = undefined;

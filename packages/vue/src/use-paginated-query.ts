@@ -1,7 +1,7 @@
 import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 import type { PaginationStatus } from "@lunora/client/pagination";
 import type { MaybeRefOrGetter, Ref } from "vue";
-import { computed } from "vue";
+import { computed, toValue } from "vue";
 
 import { usePaginatedCore } from "./use-paginated-core";
 
@@ -64,7 +64,10 @@ const usePaginatedQuery = <F extends FunctionReference>(
 
     const results = computed<PageItemOf<F>[]>(() => pageResults.value.flatMap((result) => result?.page ?? []));
 
-    const isLoading = computed<boolean>(() => status.value === "LoadingFirstPage" || status.value === "LoadingMore");
+    // A skipped feed reports `status === "LoadingFirstPage"` (it has no first page
+    // and never will), so `isLoading` must not derive from `status` alone — it
+    // would spin forever behind an auth/route gate. Matches React's `!skipped &&`.
+    const isLoading = computed<boolean>(() => toValue(args) !== "skip" && (status.value === "LoadingFirstPage" || status.value === "LoadingMore"));
 
     return { error, isLoading, loadMore, results, status };
 };
@@ -113,9 +116,10 @@ const useInfiniteQuery = <F extends FunctionReference>(
 
     const pages = computed<PageItemOf<F>[][]>(() => pageResults.value.flatMap((result) => (result ? [result.page] : [])));
 
-    const isLoading = computed<boolean>(() => status.value === "LoadingFirstPage");
+    // See `usePaginatedQuery` for why `"skip"` gates these — React's `!skipped &&`.
+    const isLoading = computed<boolean>(() => toValue(args) !== "skip" && status.value === "LoadingFirstPage");
     const hasNextPage = computed<boolean>(() => status.value === "CanLoadMore");
-    const isFetchingNextPage = computed<boolean>(() => status.value === "LoadingMore");
+    const isFetchingNextPage = computed<boolean>(() => toValue(args) !== "skip" && status.value === "LoadingMore");
 
     const fetchNextPage = (numberItems?: number): void => {
         loadMore(numberItems ?? initialNumItems);

@@ -2,6 +2,7 @@ import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf } from "@lunora/
 import type { Readable } from "svelte/store";
 import { readable, writable } from "svelte/store";
 
+import { isBrowser } from "../../../shared/is-browser";
 import { getLunoraClient } from "./context";
 import { isFunctionReference } from "./is-function-reference";
 
@@ -43,8 +44,9 @@ interface StreamHandle<T> {
 /**
  * Open a streaming query and expose its chunks, lifecycle status, and last error
  * as Svelte readable stores. The `chunks` store is lazy: the stream opens on the
- * first subscriber to `chunks` and is cancelled when the last one leaves (its
- * chunks reset on the next open). `status` and `error` mirror that same stream.
+ * first browser-side subscriber to `chunks` and is cancelled when the last one
+ * leaves (its chunks reset on the next open); a server render opens nothing.
+ * `status` and `error` mirror that same stream.
  *
  * Passing `"skip"` as `args` keeps the stores connected but the stream dormant
  * (`chunks` stays empty, `status` stays `"idle"`). The Svelte counterpart to
@@ -94,6 +96,15 @@ function stream<F extends FunctionReference<"stream">>(
         // Reset for the (re-)opened stream.
         set([]);
         errorStore.set(undefined);
+
+        // Server-render guard: svelte's server runtime subscribes to `{$store}`
+        // during `render()`, so this start callback runs on the server too. See
+        // `query.ts`. The stores stay at their inert values until hydration.
+        if (!isBrowser()) {
+            statusStore.set("idle");
+
+            return () => undefined;
+        }
 
         if (args === "skip") {
             statusStore.set("idle");

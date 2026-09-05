@@ -86,10 +86,13 @@ describe(paginatedQuery, () => {
         const fake = createFakeClient();
         const destroy = createFakeDestroyRef();
 
-        const { status } = paginatedQuery(fn, "skip", { client: fake.asClient, destroyRef: destroy.asDestroyRef, initialNumItems: NUM_ITEMS });
+        const { isLoading, status } = paginatedQuery(fn, "skip", { client: fake.asClient, destroyRef: destroy.asDestroyRef, initialNumItems: NUM_ITEMS });
 
         expect(status()).toBe("LoadingFirstPage");
         expect(fake.subscriptions).toHaveLength(0);
+        // `status` alone is "LoadingFirstPage" for a skipped feed, so a spinner
+        // bound to `isLoading` would never stop — React's `!skipped` contract.
+        expect(isLoading()).toBe(false);
     });
 
     it("last page reports Exhausted", () => {

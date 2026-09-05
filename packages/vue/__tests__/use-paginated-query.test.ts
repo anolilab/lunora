@@ -226,6 +226,9 @@ describe("usePaginatedQuery (Vue)", () => {
 
         expect(result.status.value).toBe("LoadingFirstPage");
         expect(result.results.value).toStrictEqual([]);
+        // `status` alone is "LoadingFirstPage" for a skipped feed, so a spinner
+        // bound to `isLoading` would never stop — React's `!skipped` contract.
+        expect(result.isLoading.value).toBe(false);
 
         scope.stop();
     });

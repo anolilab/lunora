@@ -3,6 +3,7 @@ import { createQuerySubscription } from "@lunora/client/query";
 import type { Readable } from "svelte/store";
 import { readable } from "svelte/store";
 
+import { isBrowser } from "../../../shared/is-browser";
 import { getLunoraClient } from "./context";
 import { isFunctionReference } from "./is-function-reference";
 import { subscribeReactiveArgs } from "./subscribe-reactive-args";
@@ -32,9 +33,11 @@ export type QueryStore<F extends FunctionReference> = Readable<ReturnOf<F> | und
  * re-emits on every server delta — the Svelte equivalent of React's `useQuery`.
  *
  * The subscription is opened lazily (inside `readable`'s start callback, on the
- * first `$`-read / `.subscribe()`) and torn down by the returned stop function
- * when the last subscriber goes away — so a store that's never read opens no
- * socket, and a component that unmounts releases its subscription. Sharing one
+ * first `$`-read / `.subscribe()`) and only in the browser — a server render
+ * reads the store's `undefined` seed and opens nothing. It is torn down by the
+ * returned stop function when the last subscriber goes away — so a store that's
+ * never read opens no socket, and a component that unmounts releases its
+ * subscription. Sharing one
  * store across several components shares a single underlying subscription
  * (the `LunoraClient` de-dupes by `(fn, args, shardKey)`).
  *
@@ -70,6 +73,16 @@ export function query<F extends FunctionReference>(
     const options = (hasExplicitClient ? maybeOptions : (argumentsOrOptions as QueryStoreOptions | undefined)) ?? {};
 
     return readable<ReturnOf<F> | undefined>(undefined, (set) => {
+        // Server-render guard. Svelte's server runtime resolves `{$store}` by
+        // calling `subscribe_to_store`, so this start callback *does* run during
+        // `render()` — the store is not inert on the server. Opening there is a
+        // socket per rendered request against a client whose URL does not resolve
+        // server-side, and with an empty/relative URL the very first subscribe
+        // throws synchronously out of the render. Hold `undefined` until hydration.
+        if (!isBrowser()) {
+            return () => {};
+        }
+
         // The shared `@lunora/client/query` state machine owns the subscribe +
         // cleanup: it replays the last value synchronously when one exists and
         // pushes every subsequent delta into the store, and its returned teardown

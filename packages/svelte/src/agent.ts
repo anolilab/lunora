@@ -61,7 +61,8 @@ interface AgentOptions {
     /**
      * Called when the live thread subscription reports an error (a session
      * expiry, an RLS denial). Without it such an error is dropped and `thread` /
-     * `status` freeze at their last value.
+     * `status` freeze at their last value — unlike the React, Angular, Solid and Vue
+     * ports, this one leaves the value store untouched on error.
      */
     onError?: SubscriptionErrorCallback;
 

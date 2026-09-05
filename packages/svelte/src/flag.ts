@@ -18,9 +18,10 @@ import { getLunoraClient } from "./context";
  * completes, so this is a per-render open rather than the permanent leak the
  * same defect caused in `@lunora/vue` and `@lunora/angular` (which never
  * unmount). It is still a socket per rendered request against a client whose
- * same-origin URL does not resolve server-side, and every other subscribing
- * primitive in this package already guards — `presence.ts`, `agent.ts`,
- * `agent-chat.ts`, `rate-limit.ts`. The store holds its default until hydration.
+ * same-origin URL does not resolve server-side — and on a client built with a
+ * relative/empty URL the first subscribe throws straight out of the render.
+ * Every subscribing primitive in this package carries the same guard. The store
+ * holds its default until hydration.
  */
 const openFlag = <T extends FlagValue>(client: LunoraClient, key: string, defaultValue: T, set: (value: T) => void): Unsubscribe =>
     isBrowser() ? subscribeFlag<T>(client, { default: defaultValue, key }, set) : () => {};

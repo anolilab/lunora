@@ -1,4 +1,4 @@
-import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
+import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 import type { ShallowRef } from "vue";
 import { shallowRef } from "vue";
 
@@ -39,6 +39,13 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
     listPresent: L;
 
     /**
+     * Called when the `listPresent` subscription reports an error (a session
+     * expiry, an RLS denial). Without it — and without reading `error` — such a
+     * failure is invisible and `present` is cleared until a later frame arrives.
+     */
+    onError?: SubscriptionErrorCallback;
+
+    /**
      * Stable id for this presence row. Defaults to a fresh per-mount id.
      * Pass a user/connection id to control deduping across tabs.
      */
@@ -48,6 +55,8 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
 }
 
 interface UsePresenceResult<L extends ListPresentReference> {
+    /** The `listPresent` subscription's last error, or `undefined`. */
+    error: ShallowRef<SubscriptionError | undefined>;
     /** The present members for the room. `undefined` until the first push. */
     present: ShallowRef<ReturnOf<L> | undefined>;
     /** This mount's session id (generated when not supplied). */
@@ -66,6 +75,7 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
     const sessionId = options.sessionId ?? randomSessionId();
 
     const present = shallowRef<ReturnOf<L> | undefined>(undefined) as ShallowRef<ReturnOf<L> | undefined>;
+    const error = shallowRef<SubscriptionError | undefined>(undefined);
 
     // Latest awareness data — updated by `setData`; read at heartbeat time so
     // changing data never resets the interval or closes the subscription.
@@ -121,8 +131,15 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
             { roomId } as ArgsOf<L>,
             (value) => {
                 present.value = value;
+                error.value = undefined;
             },
-            { shardKey },
+            {
+                onError: (subscriptionError) => {
+                    error.value = subscriptionError;
+                    options.onError?.(subscriptionError);
+                },
+                shardKey,
+            },
         );
 
         // Teardown: clear interval, remove listener, clear connection context, unsubscribe.
@@ -144,7 +161,7 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
         );
     }
 
-    return { present, sessionId, setData };
+    return { error, present, sessionId, setData };
 };
 
 export type { HeartbeatReference, ListPresentReference, UsePresenceOptions, UsePresenceResult };
