@@ -704,10 +704,11 @@ interface GeoPointInput {
 
 ```ts
 type HttpActionCtx = {
+    readonly forShard: (shardKey: string) => HttpRunners;
     readonly scheduler?: ActionCtx["scheduler"];
     readonly storage?: ActionCtx["storage"];
     readonly waitUntil?: (promise: Promise<unknown>) => void;
-} & Pick<ActionCtx, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery">;
+} & HttpRunners & Pick<ActionCtx, "auth" | "cache" | "fetch">;
 ```
 
 ### `HttpActionHandler` (type)
@@ -775,6 +776,12 @@ interface HttpRouteHandlerOptions<SearchParams extends ArgsValidator, Body exten
     params: InferArgs<Params>;
     searchParams: InferArgs<SearchParams>;
 }
+```
+
+### `HttpRunners` (type)
+
+```ts
+type HttpRunners = Pick<ActionCtx, "runAction" | "runMutation" | "runQuery">;
 ```
 
 ### `HttpStreamHandlerOptions` (interface)

@@ -963,6 +963,7 @@ interface HttpActionContext {
         }) => Promise<unknown>;
     };
     fetch: typeof globalThis.fetch;
+    forShard: (shardKey: string) => Pick<HttpActionContext, "runAction" | "runMutation" | "runQuery">;
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
