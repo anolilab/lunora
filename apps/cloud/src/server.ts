@@ -191,7 +191,10 @@ export const ShardDO = createShardDO({
 
 // Must stay a `type`: an `interface` gets no implicit index signature, so it will
 // not satisfy `Record<string, unknown>` at the mailer and alert-delivery call
-// sites (`createMailerFromEnv`, `deliverAlert`).
+// sites (`createMailerFromEnv`, `deliverAlert`). Those read keys this type does
+// not declare (`RESEND_API_KEY`, `SEND_EMAIL`, `WORKER_ENV`, …) — it is the set
+// this module uses, not the full runtime env, so an undeclared var is not
+// necessarily an unused one.
 type Env = {
     /** Secret backing the studio's better-auth sessions. */
     AUTH_SECRET?: string;

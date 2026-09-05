@@ -17,13 +17,19 @@ import type { QueryCtx as QueryContext } from "./_generated/server.js";
  */
 
 /**
- * Adapt a stored subscription row to `@lunora/payment`'s `Subscription`: the row
- * is keyed by Lunora's `_id`, the payment contract requires `id`.
+ * Adapt a stored subscription row to `@lunora/payment`'s `Subscription`.
+ *
+ * `Subscription.id` is the *provider's* id, not Lunora's row id — the package
+ * maps it to and from `providerSubscriptionId` (`rowToSubscription` /
+ * `subscriptionToRow` in `@lunora/payment`'s database store), and
+ * `(provider, providerSubscriptionId)` is the unique key its webhook sync
+ * reconciles on. Mapping `_id` here would round-trip a Lunora id into that
+ * column.
  */
-const toSubscription = (row: StoredRow<"subscriptions">): Subscription => {
+export const toSubscription = (row: StoredRow<"subscriptions">): Subscription => {
     return {
         ...row,
-        id: row._id,
+        id: row.providerSubscriptionId,
         // `subscriptions` is `.externallyManaged()` — the payment webhook sync
         // owns these two columns, so the schema keeps them `v.string()` instead
         // of restating the provider layer's unions. Narrowed here rather than
