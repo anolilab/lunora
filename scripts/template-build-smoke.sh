@@ -749,8 +749,24 @@ assert_no_registry_lunora() {
 #
 # Nothing else in this repo can see that. It compiles, it deploys, the binding
 # table is right, and only a wall-clock wait proves the cron never ran. Every
-# template that exports `app` wholesale (`export default app`) is fine by
-# construction; this only checks the ones that hand-build the object.
+# entry that exports the composed worker wholesale (`export default app`) is
+# fine by construction; this only checks the ones that hand-build the object.
+#
+# The delegate is matched by SHAPE, not by name: an entry may bind the composed
+# worker to any identifier (`app`, `worker`, …) and may build it lazily inside
+# `fetch`, so keying on a literal `app.fetch(` saw 2 of the 14 hand-built
+# entries in this repo and skipped the rest. An offence is scoped to the
+# handlers the app ACTUALLY declares — a `lunora/crons.ts`, a `defineQueue`, an
+# `.onEmail(` — because that is the failure the gate exists to catch: the
+# trigger gets provisioned from the same discovery and then fires into nothing.
+# An entry that drops a handler its app never composes is not yet broken, and
+# this trips the moment that declaration appears.
+#
+# Ceiling: the forward has to name the binding (`worker.scheduled(...)`), so an
+# entry that forwards through an expression — `(await ensureWorker(env)).scheduled(...)`
+# — is reported as dropping it. That errs toward refusal, which is the right
+# direction for a gate whose false negative is a cron that fires into nothing;
+# bind the worker to a name in that handler to satisfy it.
 assert_entry_forwards_handlers() {
     local scaffold_dir="$1"
 
@@ -772,17 +788,38 @@ const walk = (dir) => {
 
         const source = fs.readFileSync(full, 'utf8');
 
-        // Only a hand-built default export that delegates to the composed app.
-        // \`export default app\` forwards everything already.
-        if (!source.includes('export default {') || !source.includes('app.fetch(')) continue;
+        // Only a hand-built default export that delegates to the composed worker.
+        // \`export default app\` forwards everything already. The delegate's name
+        // is whatever the entry chose, so take it from the \`<name>.fetch(\` call
+        // inside the object rather than assuming \`app\`.
+        if (!source.includes('export default {')) continue;
 
-        const missing = ['scheduled', 'queue', 'email'].filter((name) => !source.includes('app.' + name));
+        const delegate = /(\w+)\.fetch\s*\(/.exec(source);
 
-        if (missing.length > 0) offenders.push(path.relative(root, full) + ' → drops ' + missing.join(', '));
+        if (!delegate) continue;
+
+        const binding = delegate[1];
+        const missing = declared.filter((name) => !source.includes(binding + '.' + name));
+
+        if (missing.length > 0) offenders.push(path.relative(root, full) + ' → ' + binding + ' drops ' + missing.join(', '));
     }
 };
 
-walk(root);
+// Which handlers this app composes. \`scheduled\` is always on the built worker,
+// but an entry that omits it only matters once a cron exists to fire into it.
+const declared = [];
+
+if (fs.existsSync(path.join(root, 'lunora', 'crons.ts'))) declared.push('scheduled');
+
+const lunoraDir = path.join(root, 'lunora');
+const schema = fs.existsSync(lunoraDir)
+    ? fs.readdirSync(lunoraDir).filter((n) => n.endsWith('.ts')).map((n) => fs.readFileSync(path.join(lunoraDir, n), 'utf8')).join('\n')
+    : '';
+
+if (schema.includes('defineQueue')) declared.push('queue');
+if (schema.includes('.onEmail(')) declared.push('email');
+
+if (declared.length > 0) walk(root);
 
 if (offenders.length > 0) {
     console.log(offenders.join('\n'));
