@@ -106,7 +106,7 @@ describe("shardDO system dispatch", () => {
                 id: { name: "test-shard" },
                 storage: { sql: harness.sql as unknown as ShardDOState["storage"]["sql"] },
             },
-            { LUNORA_ADMIN_TOKEN: "s3cret-admin" },
+            { LUNORA_ADMIN_TOKEN: "test-admin-token" },
         );
 
         const parkedDispatch = shard.fetch(
@@ -127,7 +127,7 @@ describe("shardDO system dispatch", () => {
                     args: { args: {}, functionPath: "target", userId: "victim" },
                     functionPath: ADMIN_FUNCTIONS.runAs,
                 }),
-                headers: { authorization: "Bearer s3cret-admin", "content-type": "application/json" },
+                headers: { authorization: "Bearer test-admin-token", "content-type": "application/json" }, // gitleaks:allow -- fixture token, matched against the DO's own env value above
                 method: "POST",
             }),
         );
