@@ -101,6 +101,7 @@ interface AuthInvitation {
  */
 interface AuthSignUpInvitation {
     [key: string]: unknown;
+
     /** When an account was created for this address; `null` while the invitation is unspent. */
     acceptedAt?: AuthTimestamp;
     createdAt?: AuthTimestamp;
@@ -108,6 +109,14 @@ interface AuthSignUpInvitation {
     expiresAt?: AuthTimestamp;
     id: string;
     invitedBy?: null | string;
+
+    /**
+     * The plaintext invitation token — present **only** on the row
+     * {@link AuthAdmin.createSignUpInvitation} returns, never on a listed one.
+     * The stored `tokenHash` is in {@link SENSITIVE_FIELDS}, so it cannot leave
+     * this plane by accident.
+     */
+    token?: string;
 }
 
 /** One team row (from the `organization` plugin with `teams.enabled`). */
@@ -456,7 +465,7 @@ const USER_CASCADE = [
  * secret-bearing columns of better-auth core + the admin/organization/passkey/
  * two-factor plugin tables.
  */
-const SENSITIVE_FIELDS = new Set(["accessToken", "backupCodes", "idToken", "password", "publicKey", "refreshToken", "secret", "token"]);
+const SENSITIVE_FIELDS = new Set(["accessToken", "backupCodes", "idToken", "password", "publicKey", "refreshToken", "secret", "token", "tokenHash"]);
 
 const clampLimit = (limit?: number): number => Math.min(Math.max(Math.trunc(limit ?? DEFAULT_LIMIT), 1), MAX_LIMIT);
 const clampOffset = (offset?: number): number => Math.max(0, Math.trunc(offset ?? 0));
@@ -1128,7 +1137,15 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
         // layer's business — the admin plane hands back epoch-ms, like every other
         // row it returns.
         createSignUpInvitation: ({ email, expiresInSeconds, invitedBy }) =>
-            withContext(async () => normalizeRow({ ...(await issueSignUpInvitation(auth, { email, expiresInSeconds, invitedBy })) }) as AuthSignUpInvitation),
+            withContext(async () => {
+                const issued = await issueSignUpInvitation(auth, { email, expiresInSeconds, invitedBy });
+
+                // `normalizeRow` strips `token`, and must — it is what keeps the
+                // column out of every *listed* row. Putting it back is deliberate:
+                // issuing is the one moment the plaintext is meant to leave the
+                // server, and it is never readable again.
+                return { ...(normalizeRow({ ...issued }) as AuthSignUpInvitation), token: issued.token };
+            }),
 
         listSignUpInvitations: ({ limit, offset }) =>
             withContext((context_) =>

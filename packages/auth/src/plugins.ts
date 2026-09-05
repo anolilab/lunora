@@ -61,7 +61,7 @@
  * Declares the `signUpInvitation` table it reads. Lunora's own, not a better-auth
  * re-export.
  */
-export type { InviteOnlyOptions, SignUpInvitation } from "./invite-only";
+export type { InviteOnlyOptions, IssuedSignUpInvitation, SignUpInvitation } from "./invite-only";
 export { inviteOnly } from "./invite-only";
 
 /**
