@@ -90,9 +90,8 @@ describe("ssr platform gating", () => {
         // getter, the same source the attached path would have used.
         const fake = createFakeClient();
 
-        const { isLoading, status } = runInInjectionContext(makeInjector(fake, "server"), () =>
-            paginatedQuery(listRef, () => "skip" as const, { initialNumItems: 5 }),
-        );
+        const skipGetter = () => "skip" as const;
+        const { isLoading, status } = runInInjectionContext(makeInjector(fake, "server"), () => paginatedQuery(listRef, skipGetter, { initialNumItems: 5 }));
 
         expect(fake.subscriptions).toHaveLength(0);
         expect(status()).toBe("LoadingFirstPage");
