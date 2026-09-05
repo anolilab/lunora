@@ -312,7 +312,10 @@ describe("createPipelineLogReader", () => {
 
         await reader.query(query);
 
-        expect(capture.statement).toContain("WHERE ts >= 1 AND ts <= 9 AND functionPath LIKE 'm:%' AND shardKey = 's'");
+        // Each fragment is parenthesised: `SelectBuilder` wraps every `.where()`
+        // fragment so a condition containing `OR` cannot bind looser than the
+        // `AND` that joins them.
+        expect(capture.statement).toContain("WHERE (ts >= 1) AND (ts <= 9) AND (functionPath LIKE 'm:%') AND (shardKey = 's')");
     });
 
     it("pages a duplicate-ts dataset to exhaustion losslessly — the union of all pages equals the full result, no gaps, no dupes", async () => {

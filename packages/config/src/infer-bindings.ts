@@ -313,10 +313,14 @@ interface InferredBindings {
     usesKv: boolean;
     /** `@lunora/mail` is imported (Resend API key must be set in `.dev.vars`; no binding). */
     usesMail: boolean;
+    /** `@lunora/notify` is imported (Web Push needs VAPID/FCM secrets in `.dev.vars`; no binding). */
+    usesNotify: boolean;
     /** `@lunora/payment` is imported (provider secrets must be set in `.dev.vars`; no binding). */
     usesPayment: boolean;
     /** `ctx.pipelines` is used (binding needs an un-mintable remote pipeline name; hint-only). */
     usesPipelines: boolean;
+    /** `ctx.r2sql` is used (needs the `R2_SQL_*` secrets in `.dev.vars`; no binding). */
+    usesR2sql: boolean;
     /** `@lunora/scheduler` is imported. */
     usesScheduler: boolean;
     /** `@lunora/storage` is imported (R2 bucket binding name is user-defined). */
@@ -616,6 +620,8 @@ const isTypeOnlyExportRegexFallback = (code: string, className: string): boolean
     );
 };
 
+/* eslint-disable no-secrets/no-secrets -- false positive: the two detector names in prose below, not credentials */
+
 /**
  * The Durable Object classes the worker entry exports. Uses `es-module-lexer`'s
  * export list so every form is covered (`export const ShardDO`, `export {
@@ -630,6 +636,7 @@ const isTypeOnlyExportRegexFallback = (code: string, className: string): boolean
  * SHARD binding and `wrangler-validator` then failed the deploy telling the user
  * their dev server auto-reconciles this on startup.
  */
+/* eslint-enable no-secrets/no-secrets -- re-enable after the detector doc block */
 const detectExportedDurableObjects = (entryPath: string): DurableObjectSpec[] => {
     const code = readFileSync(entryPath, "utf8");
     let exportedNames: Set<string>;
