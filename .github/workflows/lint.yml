@@ -4,7 +4,7 @@
 "on": # yamllint disable-line rule:truthy
     "pull_request":
         "types": ["opened", "synchronize", "reopened"]
-        "branches": ["main", "alpha", "next", "beta", "fix/**"]
+        "branches": ["main", "alpha", "next", "beta", "feat/**", "fix/**"]
     "merge_group": # yamllint disable-line rule:empty-values
     "workflow_dispatch": # yamllint disable-line rule:empty-values
 
