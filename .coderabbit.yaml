@@ -17,9 +17,19 @@
             - "WIP"
             - "DO NOT MERGE"
         "drafts": false
+        # Regexes, matched against the PR's BASE branch. A base that matches
+        # nothing here is not reviewed at all — which silently skipped every
+        # stacked PR in the repo, since a stack's base is the branch below it
+        # rather than an integration branch.
         "base_branches":
             - "main"
             - "alpha"
+            - "next"
+            - "beta"
+            # Stacked PRs: the base is the feature branch underneath.
+            - "claude/.*"
+            - "feat/.*"
+            - "fix/.*"
 
     "profile": "chill"
 
