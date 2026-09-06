@@ -293,11 +293,14 @@ const replicaControlRefusal = (host: ReplicaOwnerHost): Response | undefined => 
     return undefined;
 };
 
-/**
+/*
  * Serve the owner half of the `/_lunora/replica` control channel: authenticate
  * the frame, then answer a pull or a bootstrap. Stateless — an owner keeps no
  * per-replica bookkeeping, because a replica's position lives with the replica
  * and the changelog it reads is the one the shard already keeps.
+ *
+ * A section band for what follows, not a docblock: `replicaResponse` sits at the
+ * top of the section and documents itself.
  */
 
 /**
