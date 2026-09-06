@@ -1452,11 +1452,10 @@ interface WorkerOptions {
      * stamps over anything the client sent, and this option is ignored. Anywhere
      * else (`target: "node"`, a container, a bare process) nothing overwrites
      * that header, so the runtime resolves no IP at all: `ctx.ip` is `undefined`
-     * and the REST limiter's default key pools every caller into one
-     * `no-trusted-ip` bucket. That is correct for a directly-exposed host, and
-     * wrong for an origin sitting BEHIND a proxy that does stamp a client address
-     * — there a real per-IP limit collapses into one bucket a single client can
-     * exhaust for everybody. Naming the header restores per-IP limiting:
+     * and the REST limiter's default key resolves to nothing, so every request it
+     * gates is refused with a `500` rather than pooled behind one bucket a single
+     * caller could drain for everybody. Naming the header restores per-IP
+     * limiting:
      *
      * ```ts
      * trustedClientIpHeader: "cf-connecting-ip"   // origin behind Cloudflare

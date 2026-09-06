@@ -426,11 +426,14 @@ With no `key` callback the limit is keyed on Cloudflare's `CF-Connecting-IP`, an
 only while running on Cloudflare — the edge stamps that header over anything the
 client sent, so it is the one client-address header a caller cannot choose. On any
 other target (`target: "node"`, a container, a bare host) nothing overwrites it, so
-the runtime resolves no IP at all and every such caller shares one coarse
-`no-trusted-ip` bucket. That is deliberate: trusting the header off Cloudflare
-would let an attacker rotate `Cf-Connecting-IP` for a fresh bucket per request and
-the limit would stop applying to exactly the traffic it exists to stop. Off
-Cloudflare, pass `key` and identify callers by something they cannot forge:
+the runtime resolves no IP at all — and the gate then **refuses** the request with
+a `500` naming the fix, rather than pooling every caller behind one bucket. That is
+deliberate on both counts: trusting the header off Cloudflare would let an attacker
+rotate `Cf-Connecting-IP` for a fresh bucket per request and the limit would stop
+applying to exactly the traffic it exists to stop, while a shared bucket inverts a
+per-caller limit into a one-request-per-period lever anyone can pull for the whole
+deployment. Off Cloudflare, pass `key` and identify callers by something they
+cannot forge:
 
 ```ts
 createRestRateLimit(limiter, { key: (request) => request.headers.get("x-api-key") ?? undefined, name: "rest" });
@@ -438,14 +441,12 @@ createRestRateLimit(limiter, { key: (request) => request.headers.get("x-api-key"
 
 ### Origins behind a proxy: `trustedClientIpHeader`
 
-A non-Cloudflare origin sitting **behind** Cloudflare is the one case where that
-default gets strictly worse rather than staying neutral. On a bare host with no
-proxy the header was never set, so pooling changes nothing. But on a fronted
-origin — the edge stamps `CF-Connecting-IP`, the origin accepts only Cloudflare
-traffic, so the header genuinely is trustworthy — the runtime still resolves no
-IP, because the code runs on the origin and nothing in the request tells it apart
-from a directly-exposed host. Every caller lands in the single `no-trusted-ip`
-bucket, which one client can exhaust for everyone.
+A non-Cloudflare origin sitting **behind** Cloudflare is the case where the refusal
+is pure loss rather than protection. The edge stamps `CF-Connecting-IP`, the origin
+accepts only Cloudflare traffic, so the header genuinely is trustworthy — yet the
+runtime still resolves no IP, because the code runs on the origin and nothing in
+the request tells it apart from a directly-exposed host. A limit that could have
+been per-IP refuses every request instead.
 
 Only the deployment knows it is fronted, so the deployment says so. Declare the
 header and per-IP limiting comes back:

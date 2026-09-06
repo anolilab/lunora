@@ -139,7 +139,8 @@ default it keys on the caller's IP from `CF-Connecting-IP`, but only while runni
 on Cloudflare, where the edge stamps that header over anything the client sent.
 On any other target nothing overwrites it, so it is a header the caller typed and
 trusting it would hand an attacker a fresh bucket per request — those deployments
-resolve no IP and pool into one shared `no-trusted-ip` bucket instead. An origin
+resolve no IP at all, and the gate answers `500` rather than pooling every caller
+behind one bucket a single client could drain for everybody. An origin
 fronted by a proxy that does stamp a client address declares it with
 `trustedClientIpHeader` to get per-IP buckets back; see
 [`@lunora/runtime`](/docs/packages/runtime) for what that assertion commits you
