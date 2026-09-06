@@ -794,7 +794,18 @@ const walk = (dir) => {
         // \`export default app\` forwards everything already. The delegate's name
         // is whatever the entry chose, so take it from the \`<name>.fetch(\` call
         // inside the object rather than assuming \`app\`.
-        if (!source.includes('export default {')) continue;
+        //
+        // A hand-built object can also be bound first and exported by name
+        // (\`const entry = { … }; export default entry;\`), which is the same
+        // defect wearing different syntax — so resolve that identifier too, and
+        // treat it as hand-built only when the file binds it to an OBJECT
+        // LITERAL. An identifier bound to \`defineApp(…).build()\` or imported is
+        // the composed worker and stays exempt.
+        const exportedName = /export default (\\w+)\\s*;/.exec(source);
+        const bindsObjectLiteral =
+            exportedName !== null && new RegExp('(?:const|let|var)\\\\s+' + exportedName[1] + '\\\\s*(?::[^=]+)?=\\\\s*\\\\{').test(source);
+
+        if (!source.includes('export default {') && !bindsObjectLiteral) continue;
 
         const delegate = /(\w+)\.fetch\s*\(/.exec(source);
 

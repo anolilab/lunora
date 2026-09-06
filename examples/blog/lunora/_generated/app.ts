@@ -433,6 +433,16 @@ class AppBuilder<Env extends object> {
                 indexes: this.shardExtras.vectors(env as unknown as Record<string, unknown>),
                 registry: LUNORA_VECTOR_INDEXES,
             });
+        } else {
+            // Emitted only when the schema declares an index, so reaching here
+            // means the app declared one and never bound it. The studio's
+            // Vectors tab is on (its flag is the same index count) and every
+            // request to it would answer VECTORS_NOT_CONFIGURED, while
+            // `ctx.vectors` is the throwing stub — so this is already broken,
+            // just later and less legibly. Same shape as `.auth()`'s guards.
+            throw new Error(
+                ".vectors(): the schema declares vector index(es) but no binding map was chained. Pass `.vectors((env) => ({ <indexName>: env.<BINDING> }))` so `ctx.vectors` resolves and the studio's Vectors tab can list them.",
+            );
         }
 
         options.logArchive = resolveLogArchiveFromEnv(env);
