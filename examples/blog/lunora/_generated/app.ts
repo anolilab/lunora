@@ -4,6 +4,7 @@
 import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 import { createKvIntrospectorFromEnv } from "@lunora/bindings/kv";
+import { createVectorAdminIntrospector } from "@lunora/bindings/vectors";
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
 import { createScheduler } from "@lunora/scheduler";
 import type { R2BucketLike, R2S3Credentials, Storage } from "@lunora/storage";
@@ -15,6 +16,7 @@ import { LUNORA_CRONS } from "./crons.js";
 import { LUNORA_FUNCTIONS } from "./functions.js";
 import { openApiSpec } from "./openapi.js";
 import { createShardDO } from "./shard.js";
+import { LUNORA_VECTOR_INDEXES } from "./vectors.js";
 
 /** Read a value off the per-request `env`. Returns `undefined` to leave the capability unconfigured (its `ctx.*`/admin surface stays a clear-error stub). */
 type Selector<Env, T> = (env: Env) => T | undefined;
@@ -425,6 +427,23 @@ class AppBuilder<Env extends object> {
         }
 
         options.kvIntrospector = createKvIntrospectorFromEnv(env);
+
+        if (this.shardExtras.vectors) {
+            options.vectorIntrospector = createVectorAdminIntrospector({
+                indexes: this.shardExtras.vectors(env as unknown as Record<string, unknown>),
+                registry: LUNORA_VECTOR_INDEXES,
+            });
+        } else {
+            // Emitted only when the schema declares an index, so reaching here
+            // means the app declared one and never bound it. The studio's
+            // Vectors tab is on (its flag is the same index count) and every
+            // request to it would answer VECTORS_NOT_CONFIGURED, while
+            // `ctx.vectors` is the throwing stub — so this is already broken,
+            // just later and less legibly. Same shape as `.auth()`'s guards.
+            throw new Error(
+                ".vectors(): the schema declares vector index(es) but no binding map was chained. Pass `.vectors((env) => ({ <indexName>: env.<BINDING> }))` so `ctx.vectors` resolves and the studio's Vectors tab can list them.",
+            );
+        }
 
         options.logArchive = resolveLogArchiveFromEnv(env);
 

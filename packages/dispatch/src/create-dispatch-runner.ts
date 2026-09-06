@@ -199,6 +199,19 @@ interface DispatchRunnerOptions {
     identity?: { claims?: Record<string, unknown>; userId?: string };
     /** Package label for directed error messages, e.g. `@lunora/queue`. */
     label: string;
+
+    /**
+     * W3C `traceparent` of the work that is dispatching, forwarded so the callee
+     * JOINS this trace instead of minting a fresh one.
+     *
+     * The trigger tiers are where this matters: a queue batch or a cron fire opens
+     * its own trace (there is no inbound `traceparent` on a queue message or a cron
+     * controller), and without forwarding it every function the handler invokes was
+     * a separate, unrelated trace — the trigger span a childless root and its work
+     * a set of orphans. Absent → the callee mints its own trace, the prior
+     * behaviour and the right answer for a dispatch that belongs to nothing.
+     */
+    traceparent?: string;
 }
 
 /**
@@ -242,6 +255,13 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
 
         const url = `${trimTrailingSlashes(origin)}${SCHEDULER_DISPATCH_PATH}`;
         const headers: Record<string, string> = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+
+        // Joins the caller's trace rather than starting a new one. Read per call
+        // (not captured at construction) so a runner built once per invocation
+        // still reflects the trace it was given.
+        if (options.traceparent !== undefined && options.traceparent.length > 0) {
+            headers.traceparent = options.traceparent;
+        }
 
         // Attribute the dispatch to a verified caller when one is supplied — the
         // shard reconstructs identity from these headers independently of the

@@ -782,13 +782,19 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // the studio nav — keep advertising the feature the other two withheld.
     const vectorStoreSupported = platformGate.signals.vectorStore !== false;
 
-    // Which optional, package-backed features the studio should show a nav page
-    // for. `buildStudioFeatures` OR's the code-usage flags with the schema/project
+    // Which optional features the studio should show a nav page for.
+    // `buildStudioFeatures` OR's the code-usage flags with the schema/project
     // signals the `lunora/`-scoped scan can't see: storage columns + access rules,
-    // declared crons, vector indexes, and — crucially for packages wired only in
-    // the worker entry (e.g. `@lunora/mail`) — the project's declared dependencies.
-    // Emitted into the generated ShardDO's `studioFeatures()` override so the
-    // studio hides only pages whose backing package the app genuinely never wires.
+    // declared crons, and — crucially for packages wired only in the worker entry
+    // (e.g. `@lunora/mail`) — the project's declared dependencies. Emitted into the
+    // generated ShardDO's `studioFeatures()` override.
+    //
+    // The dependency arm fails OPEN: a page whose backing package is installed
+    // shows even when the scan cannot see the wiring, because those pages degrade
+    // to an empty state. `vectors` is the exception and gates on the schema
+    // declaration alone — its endpoints 400 without a registry to serve, so
+    // failing open there would fail open into an error. See
+    // `buildStudioFeatures`' docblock.
     const studioFeatures = buildStudioFeatures(featureUsage, {
         containerCount: containers.length,
         cronCount: crons.length,

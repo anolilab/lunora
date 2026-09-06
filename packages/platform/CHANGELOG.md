@@ -1,3 +1,156 @@
+## @lunora/platform [1.0.0-alpha.27](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.26...@lunora/platform@1.0.0-alpha.27) (2026-09-05)
+
+### ⚠ BREAKING CHANGES
+
+* **storage,server,cli:** an oversized streamed body now rejects the `upload()` call with
+`PAYLOAD_TOO_LARGE` rather than resolving and erroring later when the bucket drains the stream.
+
+`list()` never sent `include`, and under `r2_list_honor_include` (every compat date since
+2022-08-04) R2 omits `httpMetadata`/`customMetadata` from list entries unless asked. The projection
+copied both as if present, so a real bucket returned empty bags for every entry while `head()` on
+the same key returned them in full. `R2BucketLike.list` had no `include` either, so nothing COULD
+ask.
+
+The JS `WhereInput` evaluator behind `rls()` diverged from the SQL compiler it mirrors, twice, both
+fail-open on the write path. A non-array `notIn` passed every row where the compiler throws
+`BAD_REQUEST` — a policy written to keep `admin` rows out admitted one on write. And a NULL cell
+passed `ne`/`notIn`, where SQL's three-valued logic excludes it. Both are fixed at the shared
+operator evaluator, so the read filter, the write USING/WITH-CHECK gates and the `expectPolicy`
+harness all move together; `in` gets the same refusal, and `eq`/`ne` against a `null` operand keep
+folding to `IS NULL`/`IS NOT NULL`. The SQL side is unchanged.
+
+`migrate generate` emitted `NOT NULL` for a `.nullable()` column: the CLI derived nullability from
+`v.optional` alone, though the runtime rule is `notNull` AND not optional, and `.nullable()` is what
+clears `notNull`. A table created from the migration file rejected the null the column exists to
+accept while the auto-provisioned one took it. It now reads `nullable` off the `FieldSnapshot` the
+snapshot already carries.
+
+The gate was the real defect for the first two: the unit suite's fake bucket accepts any stream and
+returns whatever it stored, so only the workerd suite can see either. It now uploads a stream and
+asserts list metadata.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(storage): bound the buffered upload path and validate the cap that bounds it
+
+Capping a streamed upload buffers it, so `maxSize` is now the per-request memory
+ceiling — and nothing checked that it was a usable number. `typeof NaN === "number"`
+let a NaN cap into the branch, where `seen > NaN` is never true: the cap silently
+off while the whole body was still collected into the isolate, an unbounded buffer
+from something as ordinary as an unset byte-limit variable coerced with `Number(...)`.
+A negative cap is the mirror image — `seen > -1` is true on the first chunk, so every
+upload was refused. Both now fail up front as VALIDATION_ERROR.
+
+The ceiling is shared, not per request: N in-flight uploads hold up to N x maxSize
+against one ~128 MB isolate, so a 50 MB cap OOMs three uploads deep with every one
+inside its documented limit. A streamed `maxSize` above 16 MiB is therefore refused
+with a pointer to `createMultipartUpload`/`createUploadHandler`, which never hold the
+whole object. "Omit maxSize" is dropped as the escape hatch for large objects — the
+advisor lint fires on exactly that, so the two guidances contradicted each other; the
+lint's remediation now names the multipart path instead, which it does not flag.
+
+The counter accepts every BufferSource shape but re-enqueued the original chunk, and
+undici's `Response` body takes only Uint8Array, so an ArrayBuffer/DataView/Float32Array
+chunk failed with a bare `TypeError: Received non-Uint8Array chunk` — no code, nothing
+naming storage. Chunks are normalised to a Uint8Array view (no copy). workerd accepts
+the raw shapes, so this only ever broke under Node; the workerd suite now carries the
+case either way.
+
+Also documents that a `list()` page may hold fewer objects than `limit`, since R2
+shrinks a page to fit the metadata `include` asks for — paginate on truncated/cursor.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(server): evaluate rls predicates under sql's three-valued logic
+
+The JS `WhereInput` evaluator folded SQL's UNKNOWN into `false` at each operator. That is the
+right answer at the top of a `WHERE` and the wrong one under a `NOT`: `NOT UNKNOWN` is UNKNOWN and
+still excludes the row, while `!false` is `true` and admits it. `{ NOT: { role: { ne: "admin" } } }`
+against a NULL cell therefore admitted a row SQL excludes — fail-open on the write gate.
+
+The evaluator now carries the three values (FALSE < UNKNOWN < TRUE, so AND is the minimum, OR the
+maximum, NOT the reflection) and collapses them exactly once, in `matchesWhere`, where only TRUE
+keeps the row. No operator has to reason about whether UNKNOWN happens to be safe at its position.
+
+Closed by the same change:
+
+- `in` kept the mirror of the `notIn` bug. `[null, "admin"].includes(null)` is true in JS, so a
+  NULL cell passed a membership check SQL excludes unconditionally. A write policy
+  `{ tenantId: { in: allowedTenants } }` whose list carried a null admitted a `tenantId: null` row
+  that every read of the same policy then hid.
+- `contains` and the ordered comparators admitted a NULL cell under a `NOT`, for the reason `ne`
+  did. A NULL *operand* on an ordered comparator stays FALSE, which is what the compiler emits.
+- an `undefined` operand — `{ ownerId: undefined }`, `{ ownerId: { eq: undefined } }`, or an
+  undefined member of an `in` list — now raises BAD_REQUEST. It is a dropped variable: the SQL
+  compiler binds the placeholder so the driver rejects the statement, while this evaluator
+  compared with `!==` and quietly matched every row that lacked the column.
+- the equality shorthand reads an absent column as SQL NULL, so `{ role: null }` means
+  `role IS NULL` the way it does in SQL.
+
+The `matchesOperators` docblock claimed full NULL parity. It now names the three divergences that
+remain — case-sensitive `contains`, and two degenerate shapes that stay deliberately fail-closed.
+
+BREAKING: the evaluator also backs the legacy `query()` row filter and `expectPolicy`, so reads
+converge on the same answers. A NULL cell that a `ne`/`in`/`notIn`/`contains` read policy used to
+return from `query()` is now filtered out, matching what the SQL readers always did. A malformed
+operand that used to be ignored there now throws BAD_REQUEST from inside the filter, so an app
+with a scalar `notIn` or a dropped variable in a read policy goes from a silent wrong answer to a
+visible 400 on every legacy `query()`.
+
+Every row of the truth table pinned in `rls-null-semantics.test.ts` was produced by compiling the
+predicate with `compileWhereSql`, rendering it and running it on `node:sqlite` — none of it from
+memory. Eight of the sixteen cases fail against the pre-change evaluator, all in the fail-open
+direction.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* refactor(server): move the rls where evaluator into its own module
+
+`rls/middleware.ts` was 2,035 lines and 400 of them were a self-contained pure evaluator that has
+to be read against `@lunora/shard-engine`'s `where-sql.ts` to be reviewed at all — the two are
+parallel implementations of one predicate language, and their agreement is a security property, not
+a nicety.
+
+Moved verbatim to `rls/where-match.ts`, which states that contract in its header: what the twin is
+for, why it exists twice, and where the pinned truth table lives. `containsRelationPredicate` and
+`matchesWhere` are the only two names the middleware used; `matchesWhere` stays re-exported from
+`./middleware` so the in-process harness and the sibling middlewares keep one import site.
+
+No behaviour change — the only edit to a moved line is a JSDoc `{@link}` that no longer resolves
+across the file boundary.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(server): pin that a malformed NOT operand cannot admit a write
+
+Review raised `{ NOT: "a" }` as a fail-open: the operand is cast to a
+`WhereInput` and recursed, and `Object.keys("a")` is ["0"], so it tests a column
+no document has.
+
+It was fail-open under the boolean evaluator — an absent column read FALSE and
+`NOT` flipped it to a write-admitting TRUE. The three-valued rewrite closed it:
+an absent column is UNKNOWN, `kleeneNot(UNKNOWN)` is UNKNOWN, and only TRUE
+admits. Verified by probe across string, array and number operands.
+
+No behaviour change — these are guard rails, and the comment says so rather than
+implying they repair something.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(server): type the malformed-NOT operands the evaluator is asked to refuse
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **storage,server,cli:** make streaming uploads work, and stop RLS writes failing open ([#616](https://github.com/anolilab/lunora/issues/616)) ([c76d854](https://github.com/anolilab/lunora/commit/c76d854db12705c12b4d4c11b2e8f805287cdb16))
+
 ## @lunora/platform [1.0.0-alpha.26](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.25...@lunora/platform@1.0.0-alpha.26) (2026-09-04)
 
 ### ⚠ BREAKING CHANGES

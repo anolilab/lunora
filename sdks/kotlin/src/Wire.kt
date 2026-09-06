@@ -38,6 +38,9 @@ object Wire {
      */
     const val MAX_TIME_VALUE: Double = 8.64e15
 
+    /** An RFC 3986 scheme, then the rest — what makes an href ABSOLUTE. */
+    private val ABSOLUTE_HREF = Regex("^[A-Za-z][A-Za-z0-9+\\-.]*:[\\s\\S]*$")
+
     /**
      * Bytes per element for the typed-array views the codec round-trips. A view
      * whose payload is not a whole number of elements is not a view the
@@ -134,7 +137,7 @@ object Wire {
         "-inf" -> WireValue.NegInfinity
         "bigint" -> decodeBigInt(items)
         "date" -> decodeDate(items, depth)
-        "url" -> WireValue.Url(items.getOrNull(2) as? String ?: throw WireFormatException("wire-codec: malformed url tag"))
+        "url" -> decodeUrl(items)
         "map" -> decodeMap(items, depth)
         "set" -> decodeSet(items, depth)
         "error" -> decodeError(items, depth)
@@ -262,13 +265,37 @@ object Wire {
         // Date. Kept verbatim, an out-of-range epoch re-encoded as a date tag
         // the reference — whose own Date can never hold that value — refuses to
         // produce.
+        // TimeClip is ToIntegerOrInfinity, not truncation, and the two differ on
+        // exactly one window: an epoch in (-1, 0] gives +0 there and -0 under
+        // `ceil`, which keeps the sign of zero. The window is one value wide,
+        // and the stable subscription key spells -0 as the bare token `-0`,
+        // distinct from `0` — so the `+ 0.0` is what keeps a Date built from
+        // -0.5 on the same subscription as the TS client.
         val clipped = when {
             epoch is WireValue.Num && Math.abs(epoch.value) <= MAX_TIME_VALUE ->
-                WireValue.Num(if (epoch.value < 0) Math.ceil(epoch.value) else Math.floor(epoch.value))
+                WireValue.Num((if (epoch.value < 0) Math.ceil(epoch.value) else Math.floor(epoch.value)) + 0.0)
             else -> WireValue.NaN
         }
 
         return WireValue.Date(clipped)
+    }
+
+    /**
+     * An href must be ABSOLUTE — a scheme, per RFC 3986, then the rest.
+     *
+     * The reference builds a real `URL`, which throws on anything unparseable,
+     * while every port stored the string verbatim and accepted `"not a url"` — a
+     * frame that kills a JS peer's subscription and is waved through here.
+     * Reproducing WHATWG URL parsing in eight languages is not on offer (their
+     * own parsers disagree with it in the deep end), so the contract, and
+     * `protocol/README.md` §2.1, is the floor of it.
+     */
+    private fun decodeUrl(items: List<*>): WireValue {
+        val href = items.getOrNull(2) as? String ?: throw WireFormatException("wire-codec: malformed url tag")
+
+        if (!ABSOLUTE_HREF.matches(href)) throw WireFormatException("wire-codec: url href is not absolute")
+
+        return WireValue.Url(href)
     }
 
     private fun decodeBigInt(items: List<*>): WireValue {
@@ -293,9 +320,17 @@ object Wire {
         val raw = items[4] as? Map<*, *> ?: throw WireFormatException("wire-codec: malformed error tag — props must be an object")
         val props = raw.map { (key, item) -> key.toString() to decode(item, depth + 1) }
 
+        // Both label slots are type-CHECKED, like every other slot. Defaulting to
+        // "" accepted the frame while erasing the error's identity, and the ports
+        // did not even agree on that: two carried the non-string through
+        // verbatim. A slot that must hold a string and does not is a malformed
+        // frame.
+        val name = items.getOrNull(2) as? String ?: throw WireFormatException("wire-codec: malformed error tag")
+        val message = items.getOrNull(3) as? String ?: throw WireFormatException("wire-codec: malformed error tag")
+
         return WireValue.Err(
-            name = items.getOrNull(2) as? String ?: "",
-            message = items.getOrNull(3) as? String ?: "",
+            name = name,
+            message = message,
             props = props,
             cause = if (items.size > 5) decode(items[5], depth + 1) else null,
         )
@@ -308,6 +343,16 @@ object Wire {
             Base64.getDecoder().decode(encoded)
         } catch (error: IllegalArgumentException) {
             throw WireFormatException("wire-codec: invalid base64 in bytes tag")
+        }
+
+        // The payload must be CANONICAL, not merely decodable. The JDK's basic
+        // decoder infers missing padding and ignores the unused low bits of a
+        // short final quantum, so "AQI" and "AQJ=" both decoded here — the second
+        // one silently, into two bytes that re-encode as "AQI=", different bytes
+        // than the peer wrote. Re-encoding and comparing is the whole rule: the
+        // payload must be exactly what a conforming encoder would have written.
+        if (Base64.getEncoder().encodeToString(data) != encoded) {
+            throw WireFormatException("wire-codec: bytes payload is not canonical padded base64")
         }
 
         val ctor = items.getOrNull(3) as? String ?: "Uint8Array"

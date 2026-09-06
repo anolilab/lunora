@@ -19,7 +19,7 @@ import { useMutation, useQuery } from "@lunora/react";
 
 export const Chat = ({ channelId }: { channelId: string }) => {
     const messages = useQuery(api.messages.list, { channelId });
-    const send = useMutation(api.messages.send);
+    const { mutate: send } = useMutation(api.messages.send);
 
     if (!messages) return <p>Loading…</p>;
     return (
