@@ -1,6 +1,6 @@
 {
     "name": "@lunora/x402",
-    "version": "1.0.0-alpha.54",
+    "version": "1.0.0-alpha.55",
     "description": "Agentic payments (x402) for Lunora: charge agents per request (charge rail) and let your agents pay x402-gated resources (pay rail)",
     "keywords": [
         "agents",

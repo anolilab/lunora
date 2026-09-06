@@ -1,3 +1,15 @@
+## @lunora/agent [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.91...@lunora/agent@1.0.0-alpha.92) (2026-09-06)
+
+### Bug Fixes
+
+* **agent,ai,ratelimit,x402:** point prettier at the repo ignore file ([#638](https://github.com/anolilab/lunora/issues/638)) ([bf2a8e7](https://github.com/anolilab/lunora/commit/bf2a8e7e50019149ddf3a50f38adbb91f6e0351b))
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.76
+* **@lunora/server:** upgraded to 1.0.0-alpha.106
+
 ## @lunora/agent [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.90...@lunora/agent@1.0.0-alpha.91) (2026-09-06)
 
 ### ⚠ BREAKING CHANGES

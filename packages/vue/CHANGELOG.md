@@ -1,3 +1,25 @@
+## @lunora/vue [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.118...@lunora/vue@1.0.0-alpha.119) (2026-09-06)
+
+### ⚠ BREAKING CHANGES
+
+* **nuxt:** `checkClientOnlyProvider` takes Nuxt's resolved plugin list
+instead of a source directory, and the new `ResolvedNuxtPlugin` type describes
+its entries.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **nuxt:** provide the client during SSR, and warn when it is client-only ([#632](https://github.com/anolilab/lunora/issues/632)) ([076fc5d](https://github.com/anolilab/lunora/commit/076fc5d36438ea08d97bed092b71a4a109f821e8))
+* **svelte,vue,config:** four loose ends, two of them false comments ([#633](https://github.com/anolilab/lunora/issues/633)) ([d86364b](https://github.com/anolilab/lunora/commit/d86364b9ea05e7e770cf041c7ff86cf1af8239ca))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.83
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.42
+
 ## @lunora/vue [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.117...@lunora/vue@1.0.0-alpha.118) (2026-09-06)
 
 

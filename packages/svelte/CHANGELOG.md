@@ -1,3 +1,15 @@
+## @lunora/svelte [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.117...@lunora/svelte@1.0.0-alpha.118) (2026-09-06)
+
+### Bug Fixes
+
+* **svelte,vue,config:** four loose ends, two of them false comments ([#633](https://github.com/anolilab/lunora/issues/633)) ([d86364b](https://github.com/anolilab/lunora/commit/d86364b9ea05e7e770cf041c7ff86cf1af8239ca))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.83
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.42
+
 ## @lunora/svelte [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.116...@lunora/svelte@1.0.0-alpha.117) (2026-09-06)
 
 

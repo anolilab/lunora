@@ -1,6 +1,6 @@
 {
     "name": "@lunora/ai",
-    "version": "1.0.0-alpha.75",
+    "version": "1.0.0-alpha.76",
     "description": "Workers AI helper for Lunora: provider-agnostic AI SDK access from functions, Workers AI by default",
     "keywords": [
         "ai",
