@@ -1,15 +1,52 @@
 /**
  * Outbound idempotency keys.
  *
- * Almost every mutating provider call carries a stable key derived from our own operation + inputs,
- * so a Worker retry can never double-charge. Distinct from inbound webhook dedupe (keyed on the
- * provider event id).
+ * A key here is a stable string derived from our own operation + inputs, so a Worker retry of a
+ * mutating provider call cannot repeat its effect. Distinct from inbound webhook dedupe (keyed on
+ * the provider event id).
  *
- * THE ONE EXCEPTION IS A POLAR REFUND. `@polar-sh/sdk`'s `RefundCreate` has no idempotency field
- * and the endpoint accepts none, so a retried `refunds.create` genuinely issues a second refund —
- * nothing on the wire can prevent it. The guard for that call is local instead: `refundPayment`
- * records the refunded total on the session row before returning, so the over-refund check rejects
- * the retry without reaching the adapter. Polar's *usage* ingestion does dedupe, on `externalId`.
+ * **This only reaches the wire where the provider offers a surface for it, and most do not.** Only
+ * Stripe carries a general per-request `idempotencyKey`; the other four adapters can key a call
+ * only where the request body happens to have a field for it (Creem checkout's `requestId`, Dodo
+ * usage ingestion's `event_id`, Polar usage ingestion's `externalId`). Everything else is sent
+ * un-keyed, and a retry is a second call at the provider.
+ *
+ * The un-keyable calls that MOVE MONEY, and are therefore the real exposure:
+ *
+ * - `creem.ts` `subscriptions.upgrade` — `UpgradeSubscriptionRequestEntity` is `{ productId,
+ * updateBehavior }` and Creem's `RequestOptions` has no key field. We pass
+ * `updateBehavior: "proration-charge-immediately"`, so a retry charges the proration twice.
+ * (Creem does understand `Idempotency-Key` on `products.create`, which takes it as an explicit
+ * argument — nothing in the SDK says the subscription routes honour the same header.)
+ * - `dodopayments.ts` `subscriptions.changePlan` — sent with
+ * `proration_billing_mode: "prorated_immediately"`, so the same double-proration applies. See
+ * the Dodo note below for why its typed key is not a fix.
+ * - `autumn.ts` `billing.attach` (both the `createCheckout` and `updateSubscription` paths) —
+ * `autumn-js` has no idempotency surface anywhere (zero matches for `idempot` in the package),
+ * and attach charges the card immediately unless `invoiceMode` is set, which we do not set.
+ * - Polar and Dodo `refunds.create` — Polar's `RefundCreate` is `{ metadata, orderId, reason,
+ * amount, comment, revokeBenefits }`, with no key field and no working per-request option on
+ * either SDK, so a retry genuinely issues a second refund. `create-payment.ts`'s `refundPayment`
+ * still computes a key and hands it to the adapter; those two adapters have nowhere to put it.
+ * The guard is local instead, and provider-agnostic: `refundPayment` records the refunded total
+ * on the session row before returning, so the over-refund check rejects the retry without
+ * reaching the adapter at all.
+ *
+ * Un-keyable and non-money-moving, for completeness: Creem `subscriptions.cancel` and
+ * `customers.create`; Autumn `billing.update` (the cancel/uncancel pair); Dodo
+ * `subscriptions.update`; and the hosted-checkout creators on Polar and Dodo (a checkout is a URL
+ * the customer must still act on, so a duplicate is an abandoned session, not a charge).
+ *
+ * **Dodo's `RequestOptions.idempotencyKey` is inert.** The field is typed on every method, but the
+ * client only turns it into a header when `this.idempotencyHeader` is set, and that property is
+ * declared and read and never once assigned in the package — so the key we pass on
+ * `customers.create` type-checks and never leaves the process. Dodo's only working idempotency in
+ * this SDK version is body-level (`event_id` on usage ingestion), which we do use.
+ *
+ * **Two Stripe calls are un-keyed but trivially keyable** — `subscriptions.update` in
+ * `resumeSubscription` and in `updateSubscription` (a plan/quantity change, so a money-moving
+ * proration) are the only mutating Stripe calls in that adapter with no third `RequestOptions`
+ * argument. Adding one is a follow-up, not a change to make blind.
  */
 import type { Money } from "./types";
 
