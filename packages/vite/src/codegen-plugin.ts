@@ -3,17 +3,17 @@ import { basename, join, resolve, sep } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
 import { CodegenDiagnosticError, createCodegenProject, describeErrorLevelFindings, findTsconfig, refreshCodegenProject, runCodegen } from "@lunora/codegen";
-import { CODEGEN_ENV, inferLunoraBindings, isCodegenDisabled, LUNORA_CONFIG_FILE, runPostCodegenHook } from "@lunora/config";
+import { CODEGEN_ENV, isCodegenDisabled, LUNORA_CONFIG_FILE, runPostCodegenHook } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
-import { collectWranglerSecretVariables, reconcileWranglerBindings, reconcileWranglerCompatibilityDate, WRANGLER_FILES } from "@lunora/config/cloudflare";
+import { collectWranglerSecretVariables, WRANGLER_FILES } from "@lunora/config/cloudflare";
 import type { Project } from "ts-morph";
 import type { Plugin, ViteDevServer } from "vite";
 import { isRunnableDevEnvironment } from "vite";
 
 import { computeConfigFingerprint } from "./config-fingerprint";
-import { reconcileWranglerCrons } from "./cron-sync";
 import LUNORA_API_UPDATED_EVENT from "./hmr-events";
 import { advisoryLine, LUNORA_TAG } from "./log";
+import { reconcileBindingsSafely, reconcileWranglerExtras } from "./reconcile-wrangler";
 import { createRegenerateScheduler, HOOK_SETTLE_MS } from "./regenerate-scheduler";
 import fingerprintSchemaSources from "./schema-fingerprint";
 import type { PendingCloseMap } from "./server-close";
@@ -43,90 +43,11 @@ const formatExportGapOverlay = (gaps: ReadonlyArray<ExportGap>): string => {
     ].join("\n");
 };
 
-/**
- * Infer the Cloudflare bindings the project's code implies and reconcile them
- * into `wrangler.jsonc` (Durable Objects, their migration classes, and the
- * `DB` D1 binding for `.global()` schemas). Best-effort and idempotent — runs
- * once at startup so the user never hand-writes binding boilerplate. A failure
- * here must never abort codegen; the wrangler validator reports real problems.
- *
- * `onExportGaps` (dev only) is invoked when a declared container/workflow isn't
- * re-exported by the worker entry, so the caller can raise it in the browser
- * error overlay in addition to the console warning.
- */
-const reconcileBindingsSafely = async (
-    options: Pick<ResolvedLunoraPluginOptions, "projectRoot" | "schemaDir">,
-    logger: { info?: (message: string) => void; warn: (message: string) => void },
-    onExportGaps?: (gaps: ReadonlyArray<ExportGap>) => void,
-): Promise<void> => {
-    try {
-        const inferred = await inferLunoraBindings({ projectRoot: options.projectRoot, schemaDir: options.schemaDir });
-        const reconciled = reconcileWranglerBindings(options.projectRoot, inferred);
-
-        if (reconciled.changed) {
-            logger.info?.(`${LUNORA_TAG} inferred bindings → ${reconciled.added.join(", ")} (written to ${reconciled.wranglerPath ?? "wrangler.jsonc"})`);
-        }
-
-        for (const warning of reconciled.warnings) {
-            logger.warn(`${LUNORA_TAG} ${warning}`);
-        }
-
-        if (reconciled.exportGaps.length > 0) {
-            onExportGaps?.(reconciled.exportGaps);
-        }
-    } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        logger.warn(`${LUNORA_TAG} binding inference skipped: ${message}`);
-    }
-};
-
 /** Callbacks injected from the dev-server context into {@link runCodegenSafely}. */
 interface OverlayCallbacks {
     /** Called on fatal codegen failure to push the error into the browser overlay. */
     onError: (error: unknown, message: string) => void;
 }
-
-/**
- * Reconcile cron triggers and compatibility date into wrangler.jsonc.
- * Extracted to keep {@link runCodegenSafely}'s cognitive complexity bounded.
- */
-const reconcileWranglerExtras = (
-    projectRoot: string,
-    cronTriggers: ReadonlyArray<string>,
-    logger: { info?: (message: string) => void; warn: (message: string) => void },
-): void => {
-    try {
-        const reconciled = reconcileWranglerCrons(projectRoot, cronTriggers);
-
-        if (reconciled.changed) {
-            logger.info?.(`${LUNORA_TAG} synced ${cronTriggers.length.toFixed(0)} cron trigger(s) into ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
-        }
-
-        // The array is not the codegen-derived set — see the deploy handler.
-        if (reconciled.preserved.length > 0) {
-            logger.info?.(`${LUNORA_TAG} kept ${reconciled.preserved.length.toFixed(0)} hand-written cron trigger(s): ${reconciled.preserved.join(", ")}`);
-        }
-    } catch (cronError: unknown) {
-        const message = cronError instanceof Error ? cronError.message : String(cronError);
-
-        logger.warn(`${LUNORA_TAG} cron trigger sync skipped: ${message}`);
-    }
-
-    try {
-        const reconciled = reconcileWranglerCompatibilityDate(projectRoot);
-
-        if (reconciled.changed) {
-            logger.info?.(
-                `${LUNORA_TAG} bumped compatibility_date to ${reconciled.date ?? "unknown"} (Workers Cache enabled) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`,
-            );
-        }
-    } catch (dateError: unknown) {
-        const message = dateError instanceof Error ? dateError.message : String(dateError);
-
-        logger.warn(`${LUNORA_TAG} compatibility date sync skipped: ${message}`);
-    }
-};
 
 /** {@link runCodegenSafely}'s result. */
 interface CodegenSafelyResult {
@@ -1000,4 +921,4 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     };
 };
 
-export { codegenPlugin, reconcileBindingsSafely };
+export default codegenPlugin;
