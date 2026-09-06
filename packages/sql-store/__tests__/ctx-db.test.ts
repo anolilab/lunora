@@ -1723,6 +1723,79 @@ describe("createSqlCtxDb — min/max companion over a bigint column", () => {
     });
 });
 
+/**
+ * The same table shape with the bigint column left UNDECLARED. `sqliteEncode`
+ * keys off the runtime type, so a `bigint` written into a `v.any()` column is
+ * stored as the identical order-preserving key a `v.bigint()` column gets —
+ * while a refusal that reads the DECLARED kind sees only "any" and waves the
+ * scan through to reduce the padding.
+ */
+const untypedAmountSchema: SchemaLike = {
+    tables: {
+        ledger: {
+            indexes: [],
+            shape: { amount: col("any"), tenant: col("string") },
+            shardMode: { kind: "global" },
+        },
+    },
+} as never;
+
+describe("createSqlCtxDb — an undeclared column holding a bigint", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const seeded = async () => {
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedAmountSchema });
+
+        await writer.insert("ledger", { amount: 10n, tenant: "t1" });
+        await writer.insert("ledger", { amount: 32n, tenant: "t1" });
+
+        return writer;
+    };
+
+    it("round-trips the value but refuses to reduce it", async () => {
+        expect.assertions(5);
+
+        const writer = await seeded();
+        const { page } = await writer.findMany("ledger", {});
+
+        // Sorted: the fixed clock gives both rows the same `_creationTime`, so
+        // the tie breaks on a random id and the page order is not stable.
+        expect(page.map((row) => row["amount"] as bigint).toSorted((left, right) => Number(left - right))).toStrictEqual([10n, 32n]);
+
+        // Unfixed, `sum` returned 2e+39 and `max` the 40-character padded key.
+        for (const op of ["sum", "max"] as const) {
+            // eslint-disable-next-line no-await-in-loop -- two ops against one seeded table, sequential by design
+            const error = await writer.aggregate("ledger", { field: "amount", op }).catch((error_: unknown) => error_);
+
+            expect(error).toBeInstanceOf(LunoraError);
+            expect((error as Error).message).toContain("aggregateIndex");
+        }
+    });
+
+    it("refuses it as a groupBy reducer field and as a group key", async () => {
+        expect.assertions(4);
+
+        const writer = await seeded();
+        const reducerError = await writer.groupBy("ledger", { agg: { field: "amount", op: "sum" }, by: ["tenant"] }).catch((error_: unknown) => error_);
+
+        expect(reducerError).toBeInstanceOf(LunoraError);
+        expect((reducerError as Error).message).toContain("aggregateIndex");
+
+        const keyError = await writer.groupBy("ledger", { agg: { op: "count" }, by: ["amount"] }).catch((error_: unknown) => error_);
+
+        expect(keyError).toBeInstanceOf(LunoraError);
+        expect((keyError as Error).message).toContain("aggregateIndex");
+    });
+});
+
 /** A table with one `v.optional()` and one `v.optional(v.nullable())` column, so the decoder's two NULL meanings are both covered. */
 const optionalSchema: SchemaLike = {
     tables: {

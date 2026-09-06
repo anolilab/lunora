@@ -129,7 +129,7 @@ import type {
     TableReaderLike,
     ValidatorLike,
 } from "./schema-types";
-import { isProjectedKind } from "./sql-projection";
+import { mayHoldProjectedValue } from "./sql-projection";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
 import { createSystemReader } from "./system-reader";
 import { ConflictError } from "./transaction";
@@ -1032,14 +1032,29 @@ const runPlainFetch = (
 const doWhereSqlStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, serialize: serializeSqlValue };
 
 /**
- * Whether `field` is stored as an order-preserving sort key rather than as its
- * value — the condition SQL cannot reduce or group.
- * @returns `true` when the column is projected (a `v.bigint()` / `v.bytes()` kind)
+ * Whether `field` MAY be stored as an order-preserving sort key rather than as
+ * its value — the condition SQL cannot reduce or group.
+ *
+ * The test is `mayHoldProjectedValue`, not `isProjectedKind`: the projection
+ * dispatches on the RUNTIME type, so a `bigint`/bytes written into a `v.any()`
+ * / `v.union()` / `v.from()` column is stored as the same padded key a declared
+ * one gets. Reading the declared kind saw only `"any"` and waved the scan
+ * through — `sum` of two small amounts came back as `2e+39`, `max` as the
+ * 40-character key, and `groupBy` keyed on the padding. The write side has used
+ * the wide test since a declared-kind gate wrote ~1e39 into a companion
+ * (`ctx-db-companions.ts`); this is the read side matching it.
+ *
+ * Refusing per COLUMN over-matches: an untyped column that only ever holds
+ * plain numbers is refused too. That is the deliberate side to be wrong on —
+ * the declared-kind version returned a confident wrong number instead, and the
+ * escape hatch (a declared `aggregateIndex`, which the error names) answers
+ * both cases exactly. `count()` passes SQL no field at all and is unaffected.
+ * @returns `true` when the column is projected, or is declared loosely enough to hold a projected value
  */
 const isProjectedField = (definition: TableDefinitionLike, field: string | undefined): boolean => {
     const validator = field === undefined ? undefined : definition.shape[field];
 
-    return validator !== undefined && isProjectedKind(validator);
+    return validator !== undefined && mayHoldProjectedValue(validator);
 };
 
 /**
@@ -1089,7 +1104,7 @@ const assertReducibleBySql = (definition: TableDefinitionLike, field: string, la
     if (isProjectedField(definition, field)) {
         throw new LunoraError(
             "BAD_REQUEST",
-            `${label}: "${field}" is stored as an order-preserving key, which SQL cannot reduce or group — declare an aggregateIndex covering this (by, field, op) so the maintained companion answers it instead (its running total is a REAL, so it stays exact only while the total is inside 2^53)`,
+            `${label}: "${field}" may hold an order-preserving key rather than a value SQL can reduce or group — declare an aggregateIndex covering this (by, field, op) so the maintained companion answers it instead (its running total is a REAL, so it stays exact only while the total is inside 2^53)`,
         );
     }
 };
