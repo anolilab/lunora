@@ -1,3 +1,13 @@
+## @lunora/workflow [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.47...@lunora/workflow@1.0.0-alpha.48) (2026-09-06)
+
+### Bug Fixes
+
+* **client,workflow,testing:** stop losing wire-decode failures ([#644](https://github.com/anolilab/lunora/issues/644)) ([9be24dd](https://github.com/anolilab/lunora/commit/9be24dd665af62e524375eda6ecdcb9d6f1a3572))
+
+### Tests
+
+* **dispatch,queue,workflow,agent,do:** pin both halves of the ctx.run wire bracket ([#645](https://github.com/anolilab/lunora/issues/645)) ([9fd8827](https://github.com/anolilab/lunora/commit/9fd882739609734a3db51b45b27c380062e4b9ff))
+
 ## @lunora/workflow [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.46...@lunora/workflow@1.0.0-alpha.47) (2026-09-06)
 
 ### ⚠ BREAKING CHANGES
