@@ -40,6 +40,15 @@ interface ReconcileResult {
     /** Human-readable reason when reconciliation was skipped (for logging). */
     reason?: string;
 
+    /**
+     * Problems with the ownership record itself, for the caller to `warn`. A
+     * damaged `lunora.crons` is not fatal — the reconciler degrades to add-only
+     * — but the degradation is invisible: the generated cron it wrote last pass
+     * is reported back as hand-written and is then kept for good. Silence is
+     * what turns a merge conflict into a permanent orphan.
+     */
+    warnings: string[];
+
     /** Resolved wrangler path, or `undefined` when none was found. */
     wranglerPath?: string;
 }
@@ -85,11 +94,49 @@ const readManifest = (projectRoot: string): Manifest | undefined => {
     }
 };
 
-/** The cron set this reconciler wrote on its last pass; `[]` when none is recorded. */
-const readManagedCrons = (manifest: Manifest | undefined): string[] => {
+/**
+ * The cron set this reconciler wrote on its last pass; `[]` when none is
+ * recorded, appending to `warnings` when a record IS there but is unusable.
+ *
+ * Degrading a damaged record to "we own nothing" is the safe direction — the
+ * alternative is deleting a trigger on a guess — but it is not a quiet one. A
+ * merge conflict or a hand-edit that leaves `lunora.crons` a non-array (or an
+ * array with non-string entries) makes the reconciler report the cron it
+ * generated itself as hand-written, and by this module's design it is then never
+ * cleared again.
+ */
+const readManagedCrons = (manifest: Manifest | undefined, warnings: string[]): string[] => {
+    if (manifest?.lunoraIsForeign === true) {
+        warnings.push(
+            `${manifest.path}: \`lunora\` is not an object, so the cron ownership record cannot be read or written — a removed cron will keep firing.`,
+        );
+
+        return [];
+    }
+
     const recorded = manifest?.lunora?.["crons"];
 
-    return Array.isArray(recorded) ? recorded.filter((value): value is string => typeof value === "string") : [];
+    if (recorded === undefined) {
+        return [];
+    }
+
+    if (!Array.isArray(recorded)) {
+        warnings.push(
+            `${manifest?.path ?? "package.json"}: \`lunora.crons\` is not an array of cron expressions — the crons it recorded are now treated as hand-written and will not be cleared.`,
+        );
+
+        return [];
+    }
+
+    const managed = recorded.filter((value): value is string => typeof value === "string");
+
+    if (managed.length !== recorded.length) {
+        warnings.push(
+            `${manifest?.path ?? "package.json"}: \`lunora.crons\` dropped ${String(recorded.length - managed.length)} non-string entry(s) — anything it recorded there is now treated as hand-written and will not be cleared.`,
+        );
+    }
+
+    return managed;
 };
 
 /**
@@ -187,13 +234,13 @@ const reconcileWranglerCrons = (projectRoot: string, cronTriggers: ReadonlyArray
     const wranglerPath = findWranglerFile(projectRoot);
 
     if (!wranglerPath) {
-        return { changed: false, preserved: [], reason: "wrangler.jsonc not found" };
+        return { changed: false, preserved: [], reason: "wrangler.jsonc not found", warnings: [] };
     }
 
     const { parsed, text } = readWranglerJsonc<{ triggers?: { crons?: unknown } }>(wranglerPath);
 
     if (parsed === undefined) {
-        return { changed: false, preserved: [], reason: `failed to parse ${wranglerPath} as JSONC`, wranglerPath };
+        return { changed: false, preserved: [], reason: `failed to parse ${wranglerPath} as JSONC`, warnings: [], wranglerPath };
     }
 
     const existing = Array.isArray(parsed.triggers?.crons)
@@ -201,8 +248,9 @@ const reconcileWranglerCrons = (projectRoot: string, cronTriggers: ReadonlyArray
         : [];
 
     const generated = [...cronTriggers];
+    const warnings: string[] = [];
     const manifest = readManifest(projectRoot);
-    const managed = readManagedCrons(manifest);
+    const managed = readManagedCrons(manifest, warnings);
     // An entry that is neither generated now nor generated last time was
     // hand-written and stays — after the ones we own, in the order codegen emits.
     const preserved = existing.filter((entry) => !generated.includes(entry) && !managed.includes(entry));
@@ -221,7 +269,7 @@ const reconcileWranglerCrons = (projectRoot: string, cronTriggers: ReadonlyArray
     if (sameTriggers(existing, next)) {
         record();
 
-        return { changed: false, preserved, reason: "triggers.crons already in sync", wranglerPath };
+        return { changed: false, preserved, reason: "triggers.crons already in sync", warnings, wranglerPath };
     }
 
     // `modify` returns minimal edits that keep surrounding comments, and creates
@@ -229,7 +277,7 @@ const reconcileWranglerCrons = (projectRoot: string, cronTriggers: ReadonlyArray
     const edits = modify(text, ["triggers", "crons"], next, { formattingOptions: formattingFor(text) });
 
     if (edits.length === 0) {
-        return { changed: false, preserved, reason: "no structural edit produced", wranglerPath };
+        return { changed: false, preserved, reason: "no structural edit produced", warnings, wranglerPath };
     }
 
     writeFileSync(wranglerPath, applyEdits(text, edits), "utf8");
@@ -238,8 +286,17 @@ const reconcileWranglerCrons = (projectRoot: string, cronTriggers: ReadonlyArray
     // reflect would let the next pass clear a cron that is still declared.
     record();
 
-    return { changed: true, preserved, wranglerPath };
+    return { changed: true, preserved, warnings, wranglerPath };
 };
 
+/**
+ * The one log line worth printing for a reconcile that kept entries it does not
+ * own, or `undefined` when it owned the whole array. Lives here rather than in
+ * each caller because `lunora deploy` and the Vite plugin print it verbatim and
+ * had already drifted into two copies of the same sentence.
+ */
+const describePreservedCrons = (preserved: ReadonlyArray<string>): string | undefined =>
+    preserved.length === 0 ? undefined : `kept ${String(preserved.length)} hand-written cron trigger(s): ${preserved.join(", ")}`;
+
 export type { ReconcileResult };
-export { reconcileWranglerCrons };
+export { describePreservedCrons, reconcileWranglerCrons };

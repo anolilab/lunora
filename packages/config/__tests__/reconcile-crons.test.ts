@@ -271,6 +271,57 @@ describe("reconcileWranglerCrons", () => {
         expect((JSON.parse(readFileSync(join(workdir, "package.json"), "utf8")) as { lunora?: unknown }).lunora).toBe("not-an-object");
     });
 
+    it("warns when the ownership record is not an array, instead of silently owning nothing", () => {
+        expect.assertions(3);
+
+        // A merge conflict or a hand-edit leaves `lunora.crons` a non-array. It
+        // degrades to "we own nothing", so the cron this reconciler generated
+        // itself is reported back as hand-written and — by this module's design
+        // — is never cleared again. Degrading is the safe direction; degrading
+        // silently is how it becomes a permanent orphan.
+        writeWrangler(workdir, '{\n    "triggers": { "crons": ["0 3 * * *"] }\n}\n');
+        writeManifest(workdir, '{\n    "name": "app",\n    "lunora": { "crons": "0 3 * * *" }\n}\n');
+
+        const result = reconcileWranglerCrons(workdir, ["0 3 * * *"]);
+
+        expect(result.preserved).toStrictEqual([]);
+        expect(result.warnings).toHaveLength(1);
+        expect(result.warnings[0]).toContain("lunora.crons");
+    });
+
+    it("warns when the ownership record has entries it cannot read", () => {
+        expect.assertions(2);
+
+        writeWrangler(workdir, '{\n    "triggers": { "crons": ["0 3 * * *"] }\n}\n');
+        writeManifest(workdir, '{\n    "name": "app",\n    "lunora": { "crons": ["*/5 * * * *", 3] }\n}\n');
+
+        const result = reconcileWranglerCrons(workdir, ["*/5 * * * *"]);
+
+        expect(result.warnings).toHaveLength(1);
+        expect(result.warnings[0]).toContain("1 non-string");
+    });
+
+    it("warns that a lunora value it cannot index leaves ownership unrecorded", () => {
+        expect.assertions(2);
+
+        writeWrangler(workdir, '{\n    "triggers": { "crons": ["0 3 * * *"] }\n}\n');
+        writeManifest(workdir, '{\n    "name": "app",\n    "lunora": "not-an-object"\n}\n');
+
+        const result = reconcileWranglerCrons(workdir, ["*/5 * * * *"]);
+
+        expect(result.warnings).toHaveLength(1);
+        expect(result.warnings[0]).toContain("not an object");
+    });
+
+    it("says nothing when the ownership record is intact", () => {
+        expect.assertions(1);
+
+        writeWrangler(workdir, '{\n    "triggers": { "crons": ["0 3 * * *"] }\n}\n');
+        writeManifest(workdir);
+
+        expect(reconcileWranglerCrons(workdir, ["0 3 * * *"]).warnings).toStrictEqual([]);
+    });
+
     it("returns a skip reason when no wrangler file exists", () => {
         expect.assertions(2);
 
