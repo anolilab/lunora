@@ -16941,3 +16941,54 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 ### `withRedirectTo` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `AdminUsersExtra` (interface)
+
+```ts
+interface AdminUsersExtra {
+    search: string;
+    total?: number;
+}
+```
+
+### `AnyAuthClient` (interface)
+
+```ts
+interface AnyAuthClient {
+    getSession: (...args: never[]) => unknown;
+}
+```
+
+### `CaptchaGlobal` (interface)
+
+```ts
+interface CaptchaGlobal {
+    render: (element: Element, parameters: {
+        callback: (token: string) => void;
+        "expired-callback"?: () => void;
+        sitekey: string;
+    }) => unknown;
+    reset?: (widgetId?: unknown) => void;
+}
+```
+
+### `CaptchaHeaderOptions` (interface)
+
+```ts
+interface CaptchaHeaderOptions {
+    basePath?: string;
+    endpoints?: ReadonlyArray<string>;
+}
+```
+
+### `NoFunction` (type)
+
+```ts
+type NoFunction<T> = T extends Function ? never : T;
+```

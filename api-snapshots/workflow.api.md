@@ -714,3 +714,43 @@ class LunoraWorkflow<Params = Record<string, unknown>, Output = unknown> extends
     override run(event: Readonly<WorkflowEvent<Params>>, step: WorkflowStep): Promise<Output>;
 }
 ```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `RunContextOptions` (interface)
+
+```ts
+interface RunContextOptions<Params> {
+    env: Record<string, unknown>;
+    event: WorkflowEventLike<Params>;
+    exportName: string;
+    fetchImpl?: typeof fetch;
+    nonRetryableErrorClass?: NativeNonRetryableErrorConstructor;
+    step: WorkflowStepLike;
+}
+```
+
+### `RunStepDeps` (interface)
+
+```ts
+interface RunStepDeps {
+    env: Record<string, unknown>;
+    log: WorkflowLogger;
+    nonRetryableErrorClass?: NativeNonRetryableErrorConstructor;
+    run: WorkflowRunFunction;
+    step: WorkflowStepLike;
+}
+```
+
+### `WaitForEventDeps` (interface)
+
+```ts
+interface WaitForEventDeps {
+    nonRetryableErrorClass?: NativeNonRetryableErrorConstructor;
+    step: WorkflowStepLike;
+}
+```

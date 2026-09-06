@@ -78,3 +78,32 @@ const createSocketHost: (state: DurableObjectState) => SocketHost;
 ```ts
 const createWorkerPlatform: (env: unknown, options?: WorkerPlatformOptions) => WorkerPlatform;
 ```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `AlarmStorageLike` (interface)
+
+```ts
+interface AlarmStorageLike {
+    deleteAlarm?: () => Promise<void>;
+    getAlarm?: () => Promise<number | null>;
+    setAlarm?: (scheduledTime: number | Date) => Promise<void>;
+}
+```
+
+### `KvStorageLike` (interface)
+
+```ts
+interface KvStorageLike {
+    delete: (key: string) => Promise<boolean | number>;
+    get: <T = unknown>(key: string) => Promise<T | undefined>;
+    list?: <T = unknown>(options?: {
+        prefix?: string;
+    }) => Promise<Map<string, T>>;
+    put: (key: string, value: unknown) => Promise<void>;
+}
+```

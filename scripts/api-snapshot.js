@@ -39,6 +39,11 @@
  *   churn without a snapshot update. Adding/removing the tag IS a gated change.
  * - Internal `import("./packem_shared/…-<hash>.js")` specifiers inside type text
  *   are rewritten to `import("~internal")` so packem chunk-hash churn is inert.
+ * - A type a printed signature REFERENCES but that the package does not itself
+ *   export is printed too, in a per-package `Referenced internal declarations`
+ *   appendix — otherwise it appears by name and is declared nowhere, and its
+ *   members can change under the signature without moving a byte here. See
+ *   `collectInternalReferences`.
  * - Exports are sorted by name; subpaths lexicographically with `.` first.
  */
 
@@ -377,6 +382,125 @@ const printDeclaration = (decl) => {
     return normalizeText(printed.replaceAll(/^export\s+/gm, "").replaceAll(/^declare\s+/gm, ""));
 };
 
+/** Stable identity for a declaration: which file, and where in it. */
+const declarationKey = (decl) => `${decl.getSourceFile().fileName}:${decl.pos}`;
+
+/**
+ * Declaration kinds the internal-reference appendix prints.
+ *
+ * Types everywhere; values only out of a `.d.ts`. A `declare const` or a class
+ * in a declaration file IS a signature and nothing else — `@lunora/values`
+ * exports one object literal whose every member is `typeof <unexported const>`,
+ * so refusing them would leave twenty of that package's members unpinned. In
+ * `auth-ui`, which ships `.ts`/`.tsx` source rather than a build (see
+ * `collectEntries`), the same declaration carries its implementation, and
+ * inlining a function body would fail the gate on every refactor.
+ */
+const TYPE_KINDS = new Set([ts.SyntaxKind.EnumDeclaration, ts.SyntaxKind.InterfaceDeclaration, ts.SyntaxKind.TypeAliasDeclaration]);
+const DECLARATION_FILE_KINDS = new Set([ts.SyntaxKind.ClassDeclaration, ts.SyntaxKind.FunctionDeclaration, ts.SyntaxKind.VariableDeclaration]);
+
+const isPrintableInternal = (decl) =>
+    // Anonymous (a default-exported function) has no name to head a section with.
+    Boolean(decl.name && ts.isIdentifier(decl.name)) &&
+    (TYPE_KINDS.has(decl.kind) || (decl.getSourceFile().isDeclarationFile && DECLARATION_FILE_KINDS.has(decl.kind)));
+
+/** The name node a type-position reference resolves through, if this node is one. */
+const referencedTypeName = (node) => {
+    if (ts.isTypeReferenceNode(node)) {
+        return node.typeName;
+    }
+
+    if (ts.isExpressionWithTypeArguments(node)) {
+        return node.expression;
+    }
+
+    if (ts.isTypeQueryNode(node)) {
+        return node.exprName;
+    }
+
+    if (ts.isImportTypeNode(node)) {
+        return node.qualifier;
+    }
+
+    return undefined;
+};
+
+/**
+ * Every declaration a printed signature REFERENCES that this package owns but
+ * does not export — transitively, de-duplicated.
+ *
+ * `printDeclaration` prints the exported symbol's own declaration and nothing
+ * else, so a referenced type appears in the snapshot by NAME and is declared
+ * nowhere. `interface RestExposure { cache?: RestCachePolicy; rest?: boolean }`
+ * is referenced twice by `runtime.api.md` and declared zero times: adding a
+ * required member to it, or renaming `rest`, breaks every `expose: {…}` caller
+ * while the snapshot bytes do not move and the gate stays green. 403 such
+ * declarations across the 55 packages were unpinned that way; this closes 396
+ * of them. The remaining 7 are `auth-ui` props interfaces behind a `.tsx`
+ * component, which this program deliberately does not resolve through — see the
+ * `auth-ui` paragraph on `COVERED` — so their referencing export prints as an
+ * unresolved re-export and reaches no type reference to follow.
+ *
+ * Own package only. A referenced type from a sibling `@lunora/*` is pinned by
+ * that package's own snapshot, and one from `node_modules` is a dependency's
+ * concern — the same rule `resolveExport`'s foreign handling already applies.
+ */
+const collectInternalReferences = (checker, ownPrefix, roots, exportedKeys) => {
+    const found = new Map();
+    const queue = [...roots];
+    const walked = new Set(roots.map((decl) => declarationKey(decl)));
+
+    while (queue.length > 0) {
+        const current = queue.pop();
+
+        const visit = (node) => {
+            const nameNode = referencedTypeName(node);
+
+            if (nameNode) {
+                let symbol = checker.getSymbolAtLocation(nameNode);
+
+                // eslint-disable-next-line no-bitwise
+                if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
+                    try {
+                        symbol = checker.getAliasedSymbol(symbol);
+                    } catch {
+                        /* keep the alias symbol */
+                    }
+                }
+
+                for (const decl of symbol?.declarations ?? []) {
+                    const key = declarationKey(decl);
+
+                    if (!walked.has(key) && !exportedKeys.has(key) && decl.getSourceFile().fileName.startsWith(ownPrefix) && isPrintableInternal(decl)) {
+                        walked.add(key);
+                        found.set(key, decl);
+                        queue.push(decl);
+                    }
+                }
+            }
+
+            ts.forEachChild(node, visit);
+        };
+
+        visit(current);
+    }
+
+    // Sorted by name then body, never by file: packem spells a shared chunk
+    // `x.d-<hash>.d.ts`, so any file-derived order would churn the snapshot on
+    // an unrelated rebuild — the same hazard `normalizeText` rewrites inline
+    // import specifiers for. Identical (name, body) pairs collapse, which is
+    // what a chunk copied into two subpath bundles produces.
+    const printed = new Map();
+
+    for (const decl of found.values()) {
+        const entry = { kind: kindOfDeclaration(decl), name: decl.name.getText(), text: printDeclaration(decl) };
+
+        printed.set(`${entry.name} ${entry.kind} ${entry.text}`, entry);
+    }
+
+    return [...printed.values()].sort((a, b) => (a.name === b.name ? (a.text < b.text ? -1 : 1) : a.name < b.name ? -1 : 1));
+};
+
 /**
  * Resolve everything the renderer needs about one exported symbol: its name,
  * kind, declarations, `@experimental` tag, and whether those declarations live
@@ -558,6 +682,37 @@ const renderPackage = (program, checker, covered) => {
         }
 
         sections.push(lines.join("\n"));
+    }
+
+    // Roots are the declarations that PRINT in full above. An `@experimental`
+    // export deliberately pins name + kind only, and a foreign re-export is
+    // pinned at its source — neither has a signature here for a referenced type
+    // to change the meaning of, so neither drags one in.
+    const roots = [];
+
+    for (const { exports } of entriesWithExports) {
+        for (const info of exports) {
+            if (!info.experimental && !info.isForeign) {
+                roots.push(...info.declarations.filter((decl) => !ts.isSourceFile(decl)));
+            }
+        }
+    }
+
+    const exportedKeys = new Set(entriesWithExports.flatMap(({ exports }) => exports).flatMap(({ declarations }) => declarations.map(declarationKey)));
+    const internal = collectInternalReferences(checker, `${pkgDir}${sep}`, roots, exportedKeys);
+
+    if (internal.length > 0) {
+        sections.push(
+            [
+                "## Referenced internal declarations",
+                "",
+                "Not exported, and reachable only through a signature above. Their members",
+                "are part of that signature's meaning, so a change here is a change to the",
+                "public API and is gated as one. Listed once per package, sorted by name.",
+                "",
+                internal.map(({ kind, name, text }) => `### \`${name}\` (${kind})\n\n\`\`\`ts\n${text}\n\`\`\``).join("\n\n"),
+            ].join("\n"),
+        );
     }
 
     // Spread as lines, so `header` stays one-line-per-element and the sentence

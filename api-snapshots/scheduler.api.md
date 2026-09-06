@@ -598,3 +598,27 @@ const resolveScheduleId: (requested: unknown) => string;
 ```ts
 const warnIfSecondsLeading: (schedule: string, context: string) => void;
 ```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `CronTargetArgs` (type)
+
+```ts
+type CronTargetArgs<T extends CronTarget> = T extends WorkflowReference<infer Params> ? Params : Record<string, unknown>;
+```
+
+### `SchedulableReference` (type)
+
+```ts
+type SchedulableReference<Args = unknown, Return = unknown> = FunctionReference<Exclude<FunctionKind, "stream">, Args, Return>;
+```
+
+### `ScheduleTargetArgs` (type)
+
+```ts
+type ScheduleTargetArgs<T extends CronTarget> = T extends WorkflowReference<infer Params> ? Params : T extends SchedulableReference ? ArgsOf<T> : Record<string, unknown>;
+```
