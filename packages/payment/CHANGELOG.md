@@ -1,3 +1,46 @@
+## @lunora/payment [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.109...@lunora/payment@1.0.0-alpha.110) (2026-09-06)
+
+### ⚠ BREAKING CHANGES
+
+* **payment:** `PaymentAdapter.resumeSubscription` takes an optional second `options` argument and
+`SubscriptionPatch` gains an optional `idempotencyKey`.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(payment): pin the idempotency key dodo drops on the wire
+
+`dodopayments@2` accepts an `idempotencyKey` per request and never sends it: its client builds the
+header only `if (this.idempotencyHeader …)`, and that field is declared `protected` and assigned
+nowhere in the package, so the guard is always falsy. `ClientOptions` exposes no way to set it, and
+the API reference documents no header name for it — so there is nothing we could set that is known
+to be honoured, and a guessed header name would only look like protection.
+
+The key we pass on `customers.create` therefore does nothing; the store lookup in front of it is the
+real guard. A new test drives the real client with an injected `fetch` and asserts no idempotency
+header leaves, so a future SDK release that starts honouring the key fails loudly instead of
+quietly making this note stale.
+
+The module docblock claimed one exception to outbound keys and there were several, so it now names
+each uncovered call and why it cannot carry one.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* docs(payment): mark the creem plan upgrade as un-deduped
+
+`subscriptions.upgrade` charges the proration immediately and carries no idempotency key, so a retry
+charges it again. Neither `UpgradeSubscriptionRequestEntity` nor Creem's `RequestOptions` has
+anywhere to put one — checkout's `requestId` has no counterpart on this endpoint — so say that at
+the call site rather than leaving it looking like an oversight.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **payment:** key the mutating calls the providers let us key ([#639](https://github.com/anolilab/lunora/issues/639)) ([1fba55f](https://github.com/anolilab/lunora/commit/1fba55f16cf4773b1f0486972ea58b000a7a264c))
+
 ## @lunora/payment [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.108...@lunora/payment@1.0.0-alpha.109) (2026-09-06)
 
 
