@@ -1164,7 +1164,7 @@ type LunoraRouteHandler = (c: Context<LunoraHttpEnv>) => Promise<Response>;
 ### `LunoraTracer` (type)
 
 ```ts
-type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields | SpanOptions) => Promise<T>;
+type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields | SpanOptions, identity?: SpanIdentity) => Promise<T>;
 ```
 
 ### `LunoraWideEvent` (type)
@@ -2016,6 +2016,16 @@ type ShardMode = {
 };
 ```
 
+### `SpanContextIds` (interface)
+
+```ts
+interface SpanContextIds {
+    sampled?: boolean;
+    spanId: string;
+    traceId: string;
+}
+```
+
 ### `SpanEvaluation` (interface)
 
 ```ts
@@ -2036,10 +2046,16 @@ interface SpanHandle {
     recordException: (error: unknown) => void;
     setAttribute: (key: string, value: LogFields[string]) => void;
     setAttributes: (fields: LogFields) => void;
-    spanContext: () => {
-        spanId: string;
-        traceId: string;
-    };
+    spanContext: () => SpanContextIds;
+}
+```
+
+### `SpanIdentity` (interface)
+
+```ts
+interface SpanIdentity {
+    parentSpanId: string;
+    spanId: string;
 }
 ```
 
@@ -4853,11 +4869,19 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
+### `SpanContextIds` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
 ### `SpanEvaluation` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `SpanHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `SpanIdentity` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 

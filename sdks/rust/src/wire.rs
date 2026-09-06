@@ -153,9 +153,26 @@ fn base64_encode(data: &[u8]) -> String {
     out
 }
 
-/// Decode base64 exactly as the reference does.
+/// Whether an href carries a URL scheme, per RFC 3986: an ASCII letter followed
+/// by letters, digits, `+`, `-` or `.`, then `:`.
 ///
-/// The reference decodes through `atob`, i.e. WHATWG "forgiving base64": ASCII
+/// The reference builds a real `URL`, which throws on anything unparseable,
+/// while every port stored the string verbatim and accepted `"not a url"` — a
+/// frame that kills a JS peer's subscription and is waved through here.
+/// Reproducing WHATWG URL parsing in eight languages is not on offer (their own
+/// parsers disagree with it in the deep end), so the contract, and
+/// `protocol/README.md` §2.1, is the floor of it: an href must be ABSOLUTE.
+fn is_absolute_href(href: &str) -> bool {
+    let Some(scheme) = href.split(':').next().filter(|scheme| scheme.len() < href.len()) else {
+        return false;
+    };
+
+    scheme.starts_with(|first: char| first.is_ascii_alphabetic()) && scheme.chars().all(|char| char.is_ascii_alphanumeric() || matches!(char, '+' | '-' | '.'))
+}
+
+/// Decode base64, then require that it was CANONICAL.
+///
+/// The permissive half mirrors `atob`, i.e. WHATWG "forgiving base64": ASCII
 /// whitespace is stripped, up to two `=` are removed from the end of a
 /// multiple-of-four input, and a remaining length of 1 mod 4 — or any other
 /// character outside the alphabet — is a hard error.
@@ -166,15 +183,27 @@ fn base64_encode(data: &[u8]) -> String {
 /// `[1, 2, 3]`. Seven ports rejected both; this one handed short, valid-looking
 /// bytes to application code, which is the single outcome the `bytes` tag
 /// exists to prevent.
+///
+/// The forgiving decode is still what parses, but the result is now re-encoded
+/// and compared, so what survives is exactly what a conforming encoder would
+/// have written: no missing padding, no embedded whitespace, and no non-zero
+/// trailing bits in a short final quantum. That last one is a silent rewrite
+/// rather than mere leniency — `"AQJ="` decodes to 01 02 and re-encodes as
+/// `"AQI="`, different bytes than the peer wrote.
 fn base64_decode(text: &str) -> Option<Vec<u8>> {
-    // `atob` removes ASCII whitespace before doing anything else, so a payload
-    // wrapped across lines decodes here too — that leniency IS the reference's.
-    let cleaned: Vec<u8> = text.bytes().filter(|byte| !matches!(byte, b' ' | b'\t' | b'\n' | b'\x0C' | b'\r')).collect();
+    // No whitespace stripping: the canonicity compare at the end of this
+    // function tests the ORIGINAL `text`, so a payload wrapped across lines can
+    // never match a re-encode regardless of what happens here. The reference
+    // rejects it too (`bytes-base64-newline`), and stripping first would only
+    // decode bytes for the compare to throw away.
+    let cleaned: &[u8] = text.as_bytes();
 
     let mut end = cleaned.len();
 
     // Padding is only padding at the end of a whole quantum. An `=` anywhere
-    // else stays in `body` and is rejected by the alphabet match below.
+    // else stays in `body` and is rejected by the alphabet match below. This
+    // loop is load-bearing, not a leniency: without it every correctly padded
+    // payload hits that same rejection.
     if end.is_multiple_of(4) {
         for _ in 0..2 {
             if end > 0 && cleaned[end - 1] == b'=' {
@@ -215,6 +244,12 @@ fn base64_decode(text: &str) -> Option<Vec<u8>> {
             bits -= 8;
             out.push((accumulator >> bits) as u8);
         }
+    }
+
+    // Re-encode and compare: the payload must be exactly the string a
+    // conforming encoder would have written for these bytes.
+    if base64_encode(&out) != text {
+        return None;
     }
 
     Some(out)
@@ -456,15 +491,29 @@ fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
             // Invalid Date. Kept verbatim, an out-of-range epoch re-encoded as a
             // date tag the reference — whose own `Date` can never hold that
             // value — refuses to produce.
+            // TimeClip is ToIntegerOrInfinity, not truncation, and the two
+            // differ on exactly one window: an epoch in (-1, 0] gives +0 there
+            // and -0 under `trunc`, which keeps the sign of zero. The window is
+            // one value wide, and the stable subscription key spells -0 as the
+            // bare token `-0`, distinct from `0` — so `+ 0.0` here is what keeps
+            // a Date built from -0.5 on the same subscription as the TS client.
             let clipped = match epoch {
-                WireValue::Number(epoch) if epoch.abs() <= MAX_TIME_VALUE => WireValue::Number(epoch.trunc()),
+                WireValue::Number(epoch) if epoch.abs() <= MAX_TIME_VALUE => WireValue::Number(epoch.trunc() + 0.0),
                 WireValue::Number(_) | WireValue::NaN | WireValue::Infinity | WireValue::NegInfinity => WireValue::NaN,
                 _ => return Err(WireError::Malformed("date")),
             };
 
             WireValue::Date(Box::new(clipped))
         }
-        "url" => WireValue::Url(items.get(2).and_then(Value::as_str).ok_or(WireError::Malformed("url"))?.to_string()),
+        "url" => {
+            let href = items.get(2).and_then(Value::as_str).ok_or(WireError::Malformed("url"))?;
+
+            if !is_absolute_href(href) {
+                return Err(WireError::Malformed("url"));
+            }
+
+            WireValue::Url(href.to_string())
+        }
         "map" => {
             let raw = items.get(2).and_then(Value::as_array).ok_or(WireError::Malformed("map"))?;
             let mut entries: Vec<(WireValue, WireValue)> = Vec::with_capacity(raw.len());
@@ -541,9 +590,17 @@ fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
                 _ => return Err(WireError::Malformed("error")),
             };
 
+            // Both label slots are type-CHECKED, like every other slot.
+            // Substituting "" for a non-string accepted the frame while erasing
+            // the error's identity, and the ports did not even agree on that:
+            // two carried the non-string through verbatim. A slot that must hold
+            // a string and does not is a malformed frame.
+            let name = items.get(2).and_then(Value::as_str).ok_or(WireError::Malformed("error"))?;
+            let message = items.get(3).and_then(Value::as_str).ok_or(WireError::Malformed("error"))?;
+
             WireValue::Error {
-                name: items.get(2).and_then(Value::as_str).unwrap_or("").to_string(),
-                message: items.get(3).and_then(Value::as_str).unwrap_or("").to_string(),
+                name: name.to_string(),
+                message: message.to_string(),
                 props,
                 cause: match items.get(5) {
                     Some(inner) => Some(Box::new(decode_at(inner, depth + 1)?)),

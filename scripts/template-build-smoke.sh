@@ -737,6 +737,111 @@ assert_no_registry_lunora() {
 }
 
 # ---------------------------------------------------------------------------
+# Helper: a hand-built worker entry must forward every handler build() composes.
+# ---------------------------------------------------------------------------
+# `defineApp().build()` composes `fetch` AND `scheduled`, plus `queue` when the
+# project declares a `defineQueue` and `email` when it declares `.onEmail(...)`.
+# An entry that re-wraps the composed app in its own `export default { fetch }`
+# silently drops the rest — and `lunora deploy`/`prepare` write the discovered
+# crons into `wrangler.jsonc` regardless, so a user who adds `lunora/crons.ts`
+# gets a provisioned trigger and a Worker with no `scheduled()` export.
+# Cloudflare fires it into nothing: no error, no invocation.
+#
+# Nothing else in this repo can see that. It compiles, it deploys, the binding
+# table is right, and only a wall-clock wait proves the cron never ran. Every
+# entry that exports the composed worker wholesale (`export default app`) is
+# fine by construction; this only checks the ones that hand-build the object.
+#
+# The delegate is matched by SHAPE, not by name: an entry may bind the composed
+# worker to any identifier (`app`, `worker`, …) and may build it lazily inside
+# `fetch`, so keying on a literal `app.fetch(` saw 2 of the 14 hand-built
+# entries in this repo and skipped the rest. An offence is scoped to the
+# handlers the app ACTUALLY declares — a `lunora/crons.ts`, a `defineQueue`, an
+# `.onEmail(` — because that is the failure the gate exists to catch: the
+# trigger gets provisioned from the same discovery and then fires into nothing.
+# An entry that drops a handler its app never composes is not yet broken, and
+# this trips the moment that declaration appears.
+#
+# Ceiling: the forward has to name the binding (`worker.scheduled(...)`), so an
+# entry that forwards through an expression — `(await ensureWorker(env)).scheduled(...)`
+# — is reported as dropping it. That errs toward refusal, which is the right
+# direction for a gate whose false negative is a cron that fires into nothing;
+# bind the worker to a name in that handler to satisfy it.
+assert_entry_forwards_handlers() {
+    local scaffold_dir="$1"
+
+    node -e "
+const fs = require('fs');
+const path = require('path');
+
+const root = process.argv[1];
+const offenders = [];
+
+const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (entry.name === 'node_modules' || entry.name === '_generated' || entry.name.startsWith('.')) continue;
+
+        const full = path.join(dir, entry.name);
+
+        if (entry.isDirectory()) { walk(full); continue; }
+        if (!/\.(ts|tsx|js|mjs)\$/.test(entry.name)) continue;
+
+        // Strip comments first: this is a text match, so a handler named only in
+        // prose ('forwards app.queue too') would otherwise satisfy it.
+        const source = fs.readFileSync(full, 'utf8').replace(/\\/\\*[\\s\\S]*?\\*\\//g, '').replace(/\\/\\/.*$/gm, '');
+
+        // Only a hand-built default export that delegates to the composed worker.
+        // \`export default app\` forwards everything already. The delegate's name
+        // is whatever the entry chose, so take it from the \`<name>.fetch(\` call
+        // inside the object rather than assuming \`app\`.
+        //
+        // A hand-built object can also be bound first and exported by name
+        // (\`const entry = { … }; export default entry;\`), which is the same
+        // defect wearing different syntax — so resolve that identifier too, and
+        // treat it as hand-built only when the file binds it to an OBJECT
+        // LITERAL. An identifier bound to \`defineApp(…).build()\` or imported is
+        // the composed worker and stays exempt.
+        const exportedName = /export default (\\w+)\\s*;/.exec(source);
+        const bindsObjectLiteral =
+            exportedName !== null && new RegExp('(?:const|let|var)\\\\s+' + exportedName[1] + '\\\\s*(?::[^=]+)?=\\\\s*\\\\{').test(source);
+
+        if (!source.includes('export default {') && !bindsObjectLiteral) continue;
+
+        const delegate = /(\w+)\.fetch\s*\(/.exec(source);
+
+        if (!delegate) continue;
+
+        const binding = delegate[1];
+        const missing = declared.filter((name) => !source.includes(binding + '.' + name));
+
+        if (missing.length > 0) offenders.push(path.relative(root, full) + ' → ' + binding + ' drops ' + missing.join(', '));
+    }
+};
+
+// Which handlers this app composes. \`scheduled\` is always on the built worker,
+// but an entry that omits it only matters once a cron exists to fire into it.
+const declared = [];
+
+if (fs.existsSync(path.join(root, 'lunora', 'crons.ts'))) declared.push('scheduled');
+
+const lunoraDir = path.join(root, 'lunora');
+const schema = fs.existsSync(lunoraDir)
+    ? fs.readdirSync(lunoraDir).filter((n) => n.endsWith('.ts')).map((n) => fs.readFileSync(path.join(lunoraDir, n), 'utf8')).join('\n')
+    : '';
+
+if (schema.includes('defineQueue')) declared.push('queue');
+if (schema.includes('.onEmail(')) declared.push('email');
+
+if (declared.length > 0) walk(root);
+
+if (offenders.length > 0) {
+    console.log(offenders.join('\n'));
+    process.exit(1);
+}
+" "$scaffold_dir" 2>&1
+}
+
+# ---------------------------------------------------------------------------
 # Helper: inject @lunora/* overrides into a scaffold directory.
 # ---------------------------------------------------------------------------
 inject_overrides() {
@@ -836,6 +941,20 @@ for tname in "${TEMPLATES[@]}"; do
         echo "  FAIL: {{name}} placeholder survived scaffolding in $tname"
         grep -rlF '{{name}}' "$scaffold_dir" --exclude-dir=node_modules | sed "s|$scaffold_dir/|    |"
         FAIL+=("$tname(scaffold:placeholder)")
+        continue
+    fi
+
+    # A hand-built `export default { fetch }` compiles and deploys while every
+    # other handler the builder composed is unreachable — checked on the source,
+    # before the install, because nothing downstream can observe it.
+    if ! entry_gaps="$(assert_entry_forwards_handlers "$scaffold_dir")"; then
+        echo "  FAIL: $tname's worker entry re-wraps the composed app but forwards only some handlers:"
+        echo "$entry_gaps" | sed 's/^/    /'
+        echo "        \`.build()\` composes scheduled (always), queue (with a defineQueue) and email (with"
+        echo "        .onEmail). \`lunora deploy\` provisions the matching triggers from the same discovery,"
+        echo "        so a dropped handler is a trigger firing into nothing. Forward them, or"
+        echo "        \`export default app\` when the entry has no pre-worker routing of its own."
+        FAIL+=("$tname(entry-handlers)")
         continue
     fi
 

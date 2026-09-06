@@ -74,6 +74,14 @@ internal fun fixture(name: String): Map<*, *> = Json.parse(File(fixturesDir(), n
 /** Canonical text form so two structures compare independent of key order. */
 private fun canonical(value: Any?): String = Key.stableStringify(value)
 
+/**
+ * Renders a value the way `Client.kt` puts it on the socket, with `Json.write`. Separate from
+ * [canonical], which is free to normalise: `stableStringify` spells every number the ECMAScript
+ * way, so `1.0` and `1` compare EQUAL through it — the divergence a round-trip case exists to
+ * catch. Dart's dates went out as `1700000000000.0` for exactly that reason, on a green suite.
+ */
+private fun wireText(value: Any?): String = Json.write(value)
+
 private fun wireCodecRoundTrip() {
     covers("wire_codec_round_trip")
 
@@ -91,6 +99,10 @@ private fun wireCodecRoundTrip() {
         val expected = if (testCase.containsKey("reencoded")) testCase["reencoded"] else encoded
 
         check(canonical(roundTripped) == canonical(expected), "round-trip mismatch for ${testCase["name"]}")
+        // And again as the BYTES the transport sends: a round-trip assertion
+        // measured on a string the transport never sends cannot see the
+        // divergence it exists to catch.
+        check(wireText(roundTripped) == wireText(expected), "wire-text mismatch for ${testCase["name"]}")
     }
 }
 

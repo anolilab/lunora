@@ -16,6 +16,8 @@
 
 import { LunoraError } from "@lunora/errors";
 
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+
 /** The RPC path the Lunora Worker exposes. */
 const RPC_PATH = "/_lunora/rpc";
 
@@ -175,7 +177,16 @@ const createContainerBridge = (options: ContainerBridgeOptions): ContainerBridge
         }
 
         const response = await fetchImpl(joinUrl(options.baseUrl, RPC_PATH), {
-            body: JSON.stringify({ args, functionPath, shardKey }),
+            // `encodeWire`/`decodeWire` bracket this hop for the same reason
+            // `createShardClient` and `LunoraClient` bracket theirs: this is the
+            // SAME `/_lunora/rpc` protocol, and the shard runs `decodeWire` over
+            // inbound `args` and answers `encodeWire(result)`. Un-bracketed, a
+            // `bigint` argument threw outright here (`JSON.stringify` refuses
+            // one), a `Date`/`Uint8Array` argument reached the handler as an ISO
+            // string / `{}`, and a `v.bigint()` or `v.bytes()` column came back
+            // to the container as a raw `["$lunora.wire$", …]` tag rather than a
+            // value. Identity for pure JSON, so an ordinary call is unchanged.
+            body: JSON.stringify({ args: encodeWire(args), functionPath, shardKey }),
             headers,
             method: "POST",
         });
@@ -211,7 +222,8 @@ const createContainerBridge = (options: ContainerBridgeOptions): ContainerBridge
             throw statusError(functionPath, response);
         }
 
-        return (body as { result: Result }).result;
+        // The inbound half of the bracket above.
+        return decodeWire((body as { result: unknown }).result) as Result;
     };
 
     const run = async <Reference extends BridgeFunctionReference>(
