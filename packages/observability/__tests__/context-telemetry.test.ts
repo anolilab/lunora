@@ -33,6 +33,66 @@ const setup = (overrides: Partial<TracerDeps> = {}) => {
     return { recorded, trace };
 };
 
+describe("createTracer span options", () => {
+    it("reads a bag with an UNKNOWN kind as attributes, not options", async () => {
+        expect.assertions(3);
+
+        const { recorded, trace } = setup();
+
+        await trace("charge", () => undefined, { kind: "premium" });
+
+        // `"premium"` is not a span kind. Read as options it produced a span with
+        // NO kind on the wire (the encoder maps an unknown kind to `undefined`)
+        // AND silently swallowed the caller's attribute — the value was simply
+        // gone. Read as what it is, an attribute bag, both facts survive.
+        expect(recorded[0]?.kind).toBeUndefined();
+        expect(recorded[0]?.attributes?.["kind"]).toBe("premium");
+
+        // A real kind still discriminates as options.
+        await trace("stripe", () => undefined, { kind: "client" });
+
+        expect(recorded[1]?.kind).toBe("client");
+    });
+
+    it("records a span under a caller-supplied identity", async () => {
+        expect.assertions(2);
+
+        const { recorded, trace } = setup();
+
+        await trace("bridged", () => undefined, undefined, { parentSpanId: "aaaaaaaaaaaaaaaa", spanId: "bbbbbbbbbbbbbbbb" });
+
+        // The `@opentelemetry/api` bridge publishes a span's `SpanContext`
+        // synchronously, so the span has to be recorded under the id it published
+        // or every downstream span parents to an id that never reaches a collector.
+        expect(recorded[0]?.spanId).toBe("bbbbbbbbbbbbbbbb");
+        expect(recorded[0]?.parentSpanId).toBe("aaaaaaaaaaaaaaaa");
+    });
+
+    it("puts the trace's sampling verdict on a span handle's context", async () => {
+        expect.assertions(2);
+
+        const sampledOut = createTracer({
+            anchor: { ...anchor, sampled: false },
+            functionPath: "messages:list",
+            record: () => undefined,
+            shardKey: undefined,
+            userId: () => undefined,
+        });
+
+        let seen: { sampled?: boolean } | undefined;
+
+        await sampledOut("span", (_trace, span) => {
+            seen = span.spanContext();
+        });
+
+        // Anything that announces this span downstream from its ids alone — a
+        // hand-built `traceparent`, an OTel `SpanContext` — needs the verdict in
+        // the same breath, or it claims SAMPLED on a trace nobody kept.
+        expect(seen?.sampled).toBe(false);
+        expect(createSpanCollector({ sampled: true, spanId: "a".repeat(16), traceId: "b".repeat(32) }).handle.spanContext().sampled).toBe(true);
+    });
+});
+
 describe("createTracer error-message redaction", () => {
     it("redacts a span body's thrown message by default", async () => {
         expect.assertions(2);

@@ -236,6 +236,20 @@ describe("classifyStatement offsets", () => {
         // batch scan fixes a rule nobody chose; this one someone did.
         expect(classifyStatement("SELECT 'DROP TABLE x'")?.code).toBe("SQL_NOT_READONLY");
     });
+
+    it("allows SQLite's read-only `replace()` scalar but still refuses `REPLACE INTO`", () => {
+        expect.assertions(4);
+
+        // `replace` is a write only in the `REPLACE INTO` statement form. As a
+        // scalar it is a core string function, and refusing it broke a plain
+        // SELECT with a message that named no rule the operator had broken.
+        expect(classifyStatement("SELECT REPLACE(name, 'a', 'b') FROM users")).toBeUndefined();
+        expect(classifyStatement("SELECT replace(name, 'a', 'b') AS n FROM users")).toBeUndefined();
+        // The statement form is still refused — including from inside a CTE,
+        // which is the reason the keyword scan exists at all.
+        expect(classifyStatement("REPLACE INTO t VALUES (1)")?.code).toBe("SQL_NOT_READONLY");
+        expect(classifyStatement("WITH x AS (SELECT 1) REPLACE INTO t SELECT * FROM x")?.code).toBe("SQL_NOT_READONLY");
+    });
 });
 
 describe("lintReadonlySql", () => {

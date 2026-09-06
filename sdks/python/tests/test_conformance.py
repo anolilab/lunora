@@ -5,6 +5,7 @@ tested against)."""
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import unittest
@@ -22,9 +23,20 @@ from lunora.client import (
     build_unsubscribe_frame,
     parse_rpc_response,
 )
-from lunora.wire import decode_wire, encode_wire, stable_wire_key
+from lunora.wire import decode_wire, encode_wire, stable_stringify, stable_wire_key
 from tests._fixtures import load
 from tests._manifest import covers
+
+
+def wire_text(value):
+    """Render a value the way ``client.py`` puts it on the socket, with ``json.dumps``.
+
+    Separate from ``stable_stringify``, which is free to normalise: it spells every number the
+    ECMAScript way, so ``1.0`` and ``1`` compare EQUAL through it — the divergence a round-trip case
+    exists to catch. Dart's dates went out as ``1700000000000.0`` for exactly that reason, on a
+    green suite.
+    """
+    return json.dumps(value)
 
 
 class TestWireCodecFixtures(unittest.TestCase):
@@ -39,7 +51,14 @@ class TestWireCodecFixtures(unittest.TestCase):
                 # A handful of shapes are legitimately not fixed points — a bare
                 # [TAG] array is escaped on the way out, an `undefined` object
                 # field is dropped — and carry the expected re-encoding.
-                self.assertEqual(encode_wire(decode_wire(encoded)), case.get("reencoded", encoded))
+                expected = case.get("reencoded", encoded)
+                round_tripped = encode_wire(decode_wire(encoded))
+
+                self.assertEqual(stable_stringify(round_tripped), stable_stringify(expected))
+                # And again as the BYTES the transport sends: a round-trip
+                # assertion measured on a string the transport never sends
+                # cannot see the divergence it exists to catch.
+                self.assertEqual(wire_text(round_tripped), wire_text(expected))
 
 
 class TestStableKeyFixtures(unittest.TestCase):

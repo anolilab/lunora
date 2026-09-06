@@ -1,11 +1,35 @@
 import { LunoraError } from "@lunora/errors";
 
 import { collectPages } from "../../../shared/collect-pages";
+import { decodeWire, encodeArgsOrThrow } from "../../../shared/wire-codec";
 import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { CronTarget, LunoraSchedulerOptions, RunOptions, Scheduler, ScheduleRecord, ScheduleTargetArgs } from "./types";
 import { isWorkflowReference } from "./types";
 import assertScheduleDelay from "./validate-delay";
 import assertScheduleInstant from "./validate-instant";
+
+/**
+ * Name a schedule target for an error message: a workflow/agent binding, a
+ * function reference's path, or the bare `"ns:fn"` string the loosely-typed
+ * `ctx.scheduler` surface still accepts.
+ */
+const targetLabel = (target: CronTarget): string => {
+    if (typeof (target as unknown) === "string") {
+        return target as unknown as string;
+    }
+
+    return (isWorkflowReference(target) ? target.binding : target.__lunoraRef) ?? "<unknown>";
+};
+
+/**
+ * Undo `runAt`'s encode on a record read back out of the DO, so `list()` /
+ * `get()` — and the `_scheduled_functions` system table they back — answer the
+ * same value the caller scheduled rather than the tagged wire form. Identity for
+ * pure-JSON args, so a record written before the encode landed reads unchanged.
+ */
+const decodeRecordArgs = (record: ScheduleRecord): ScheduleRecord => {
+    return { ...record, args: decodeWire(record.args) as Record<string, unknown> };
+};
 
 /**
  * Client-side scheduler — forwards `runAfter` / `runAt` / `cancel` calls to a
@@ -40,7 +64,13 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
         // instance. `maxConcurrency` only means anything for a pooled job, so it
         // rides along only when `pool` is set (mirroring `createWorkpool`).
         const base = {
-            args,
+            // Wire-encoded, and decoded again by `decodeRecordArgs` on the way
+            // back out — see `create-dispatch-runner.ts` for why the hop needs
+            // bracketing. The record is stored verbatim and POSTed verbatim to
+            // `/_lunora/scheduler/dispatch` on fire, where the decode is the
+            // shard's for a function target and `handleSchedulerDispatch`'s
+            // workflow branch (before `create({ params })`) for a workflow one.
+            args: encodeArgsOrThrow("ctx.scheduler.runAt", targetLabel(target), args),
             // Pre-minted id, when the caller decided it before the call could be
             // made (see `RunOptions.id`). Absent for an ordinary schedule, and the
             // DO mints one.
@@ -100,13 +130,16 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
      * unbounded duplicates. Paging keeps that promise while each individual
      * response stays bounded.
      */
-    const listAll = async (path: string): Promise<ScheduleRecord[]> =>
-        await collectPages<ScheduleRecord>(async (cursor) =>
+    const listAll = async (path: string): Promise<ScheduleRecord[]> => {
+        const records = await collectPages<ScheduleRecord>(async (cursor) =>
             getDO<{ cursor?: string; records?: ScheduleRecord[]; truncated?: boolean }>(
                 options,
                 cursor === undefined ? path : `${path}?cursor=${encodeURIComponent(cursor)}`,
             ),
         );
+
+        return records.map((record) => decodeRecordArgs(record));
+    };
 
     // The DO's `/list` returns one bounded page of the pending `id:` headers;
     // `listAll` walks them all so callers see every pending job.
@@ -119,7 +152,7 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
         const body = await getDO<{ record?: ScheduleRecord }>(options, `/get?id=${encodeURIComponent(id)}`);
 
         // eslint-disable-next-line unicorn/no-null -- public contract returns `ScheduleRecord | null` (Convex `get` convention), not undefined
-        return body.record ?? null;
+        return body.record === undefined ? null : decodeRecordArgs(body.record);
     };
 
     // The DO's `/dead` returns the records parked by `recordRetry()` after their

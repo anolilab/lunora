@@ -2755,6 +2755,27 @@ describe("lunoraClient", () => {
             expect((init.headers as Record<string, string>)["authorization"]).toBe("Bearer tkn");
         });
 
+        // The admin routes PROXY the SchedulerDO's stored records byte for byte,
+        // and `ctx.scheduler.runAt` stores `encodeWire(args)`. The proxy cannot
+        // decode on the way through — it re-serializes with `JSON.stringify`,
+        // which throws on the very `bigint` the encode exists to carry — so the
+        // decode belongs here, at the consumer, where `createScheduler.list()`
+        // does it for a shard-side reader.
+        it("decodes record args on the admin list reads so they match what was scheduled", async () => {
+            expect.assertions(2);
+
+            const args = { amount: 1234n, when: new Date(0) };
+            const stored = { args: encodeWire(args), enqueuedAt: 1, functionPath: "billing:settle", id: "j1", scheduledFor: 2000 };
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ records: [stored] }));
+
+            const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+            client.setAuthToken("tkn");
+
+            await expect(client.listScheduledJobs()).resolves.toStrictEqual([{ ...stored, args }]);
+            await expect(client.listDeadJobs()).resolves.toStrictEqual([{ ...stored, args }]);
+        });
+
         it("listDeadJobs walks every page rather than stopping at the first", async () => {
             expect.assertions(3);
 
@@ -3460,6 +3481,34 @@ describe("lunoraClient", () => {
     });
 
     describe("lunoraClient — scheduled-jobs subscription", () => {
+        // The live push carries the same stored records the HTTP list does, so it
+        // decodes on the same terms — otherwise a panel showed tagged tuples the
+        // instant a job changed and real values on the next poll.
+        it("decodes record args on a pushed job list", () => {
+            expect.assertions(1);
+
+            const args = { amount: 1234n };
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+                wsToken: "adm1n",
+            });
+
+            const seen: unknown[] = [];
+            const unsubscribe = client.subscribeScheduledJobs((jobs) => seen.push(jobs[0]?.args));
+
+            latestSocket().open();
+            latestSocket().receive({
+                records: [{ args: encodeWire(args), enqueuedAt: 1, functionPath: "billing:settle", id: "j1", scheduledFor: 2 }],
+                type: "jobs",
+            });
+
+            expect(seen).toStrictEqual([args]);
+
+            unsubscribe();
+        });
+
         it("opens the scheduler admin WS with the token and delivers pushed job lists", () => {
             expect.assertions(4);
 

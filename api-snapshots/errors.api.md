@@ -240,6 +240,31 @@ const ERROR_CATALOG: {
         readonly status: 502;
         readonly title: "Cloudflare Workflows REST API error";
     };
+    readonly CONFIG_INVALID: {
+        readonly internal: true;
+        readonly status: 500;
+        readonly title: "Payment configuration invalid";
+    };
+    readonly CURRENCY_MISMATCH: {
+        readonly status: 400;
+        readonly title: "Currency mismatch";
+    };
+    readonly PROVIDER_ERROR: {
+        readonly status: 502;
+        readonly title: "Payment provider error";
+    };
+    readonly WEBHOOK_EVENT_ID_MISSING: {
+        readonly status: 400;
+        readonly title: "Webhook event id missing";
+    };
+    readonly WEBHOOK_SIGNATURE_INVALID: {
+        readonly status: 400;
+        readonly title: "Webhook signature invalid";
+    };
+    readonly WEBHOOK_TIMESTAMP_INVALID: {
+        readonly status: 400;
+        readonly title: "Webhook timestamp outside tolerance";
+    };
     readonly ADMIN_FORBIDDEN: {
         readonly status: 403;
         readonly title: "Admin access forbidden";

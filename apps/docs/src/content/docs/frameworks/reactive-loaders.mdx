@@ -95,7 +95,7 @@ import { useMutation, usePreloadedQuery } from "@lunora/react";
 function ChannelView() {
     const { preloaded } = Route.useLoaderData();
     const messages = usePreloadedQuery(preloaded); // SSR value first, then live
-    const send = useMutation(api.messages.send);
+    const { mutate: send } = useMutation(api.messages.send);
 
     return (
         <ul>

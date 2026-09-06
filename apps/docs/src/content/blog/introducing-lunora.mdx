@@ -72,7 +72,7 @@ import { api } from "../lunora/_generated/api";
 
 function Chat() {
     const messages = useQuery(api.messages.list) ?? [];
-    const send = useMutation(api.messages.send);
+    const { mutate: send } = useMutation(api.messages.send);
     // `messages` is fully typed and stays live. Optimistic writes and an
     // offline queue come for free.
 }

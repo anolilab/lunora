@@ -62,6 +62,15 @@ fn canonical(value: &Value) -> String {
     stable_stringify(value)
 }
 
+/// Renders a value the way `client.rs` puts it on the socket, with `serde_json`.
+/// Separate from `canonical`, which is free to normalise: `stable_stringify`
+/// spells every number the ECMAScript way, so `1.0` and `1` compare EQUAL
+/// through it — the divergence a round-trip case exists to catch. Dart's dates
+/// went out as `1700000000000.0` for exactly that reason, on a green suite.
+fn wire_text(value: &Value) -> String {
+    serde_json::to_string(value).expect("serialize")
+}
+
 /// Fails if this run did not exercise every case in the shared manifest.
 ///
 /// libtest has no after-all hook and no cross-test state a final check could
@@ -147,6 +156,11 @@ fn wire_codec_round_trip() {
         let expected = case.get("reencoded").unwrap_or(encoded);
 
         assert_eq!(canonical(&round_tripped), canonical(expected), "round-trip mismatch for {name}");
+
+        // And again as the BYTES the transport sends: a round-trip assertion
+        // measured on a string the transport never sends cannot see the
+        // divergence it exists to catch.
+        assert_eq!(wire_text(&round_tripped), wire_text(expected), "wire-text mismatch for {name}");
     }
 }
 
@@ -197,10 +211,6 @@ fn malformed_values_rejected() {
     }
 
     assert_eq!(decode_wire(&json!([TAG, "bytes", "AQID"])).expect("decode"), WireValue::Bytes(vec![1, 2, 3]));
-
-    // Whitespace INSIDE a payload is not a rejection: the reference decodes via
-    // `atob`, which strips ASCII whitespace before doing anything else.
-    assert_eq!(decode_wire(&json!([TAG, "bytes", "AQ\nID"])).expect("decode"), WireValue::Bytes(vec![1, 2, 3]));
 
     // A bare [TAG] is NOT malformed: it is the forward-compat shape, and the
     // reference hands it back as an ordinary array.

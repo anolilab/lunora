@@ -89,6 +89,7 @@
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
+        "@lunora/observability": "workspace:*",
         "@lunora/search-core": "workspace:*",
         "@opentelemetry/api": "catalog:otel",
         "@types/node": "catalog:types",
