@@ -52,7 +52,7 @@ interface SchedulerEnv {
     /**
      * Base URL where the Worker is mounted. SchedulerDO uses this at dispatch
      * time to call back into the Worker. Read at fire time (NOT taken from the
-     * request body) to prevent SSRF via a forged `originUrl` field.
+     * request body, which carries no dispatch target at all) to prevent SSRF.
      */
     LUNORA_ORIGIN_URL?: string;
 
@@ -179,12 +179,6 @@ interface ScheduleRequestBody {
      */
     maxConcurrency?: number;
 
-    /**
-     * Legacy field accepted but ignored: dispatch always uses
-     * `env.LUNORA_ORIGIN_URL`. Kept on the wire so older `@lunora/scheduler`
-     * clients can still talk to this DO.
-     */
-    originUrl?: string;
     /** Logical workpool name; gates dispatch behind {@link ScheduleRequestBody.maxConcurrency}. */
     pool?: string;
     /** Per-job retry policy; overrides the DO's built-in defaults when present. */
@@ -546,8 +540,8 @@ class SchedulerDO {
      * `dead:` key for inspection — never silently deleted.
      *
      * The dispatch target is taken from `env.LUNORA_ORIGIN_URL` (NOT from the
-     * stored record) to prevent SSRF via a forged `originUrl` on the schedule
-     * request. If that env var is missing at fire time (a deploy/binding
+     * stored record) so a schedule request can never name where the DO calls
+     * back — that would be SSRF. If that env var is missing at fire time (a deploy/binding
      * regression — schedule time already enforced its presence) we return
      * `false` so the record is retried rather than silently dropped.
      */
@@ -1218,6 +1212,34 @@ class SchedulerDO {
         return undefined;
     }
 
+    /**
+     * The id the record is stored under, or the `Response` refusing it.
+     *
+     * A caller id that is not a safe key segment is refused with a `400` rather
+     * than minted over: `RunOptions.id` is not an idempotency key, so swapping an
+     * invalid one for a random id made two calls naming it schedule two jobs
+     * where the second should have answered `409`.
+     *
+     * Only an id the CALLER chose can collide — a minted one is 96 random bits —
+     * so {@link idConflict} costs two `get`s on the deferred path and nothing on
+     * the ordinary one.
+     */
+    private async resolveId(requested: unknown): Promise<Response | string> {
+        let id: string;
+
+        try {
+            id = resolveScheduleId(requested);
+        } catch (error: unknown) {
+            return SchedulerDO.error(400, "INVALID_SCHEDULE_ID", error instanceof Error ? error.message : "invalid `id`");
+        }
+
+        if (requested === undefined) {
+            return id;
+        }
+
+        return (await this.idConflict(id)) ?? id;
+    }
+
     private async handleSchedule(request: Request): Promise<Response> {
         const body = (await request.json().catch(() => undefined)) as ScheduleRequestBody | undefined;
         const target = SchedulerDO.resolveScheduleTarget(body);
@@ -1242,9 +1264,9 @@ class SchedulerDO {
             return SchedulerDO.error(400, "INVALID_INPUT", "scheduledFor must be a positive integer epoch-millisecond number no greater than 999999999999999");
         }
 
-        // Dispatch target lives only in env — never trust an `originUrl` from
-        // the caller (would be an SSRF vector). Refuse schedules if the env
-        // hasn't been configured: the job would be unfireable.
+        // Dispatch target lives only in env — the schedule request has no field
+        // for one, and a caller-supplied one would be an SSRF vector. Refuse
+        // schedules if the env hasn't been configured: the job would be unfireable.
         if (typeof this.env.LUNORA_ORIGIN_URL !== "string" || this.env.LUNORA_ORIGIN_URL.length === 0) {
             return SchedulerDO.error(500, "ORIGIN_NOT_CONFIGURED", "LUNORA_ORIGIN_URL env binding must be set on the SchedulerDO");
         }
@@ -1252,16 +1274,14 @@ class SchedulerDO {
         const pool = typeof body.pool === "string" && body.pool.length > 0 ? body.pool : undefined;
         const instanceName = typeof body.instanceName === "string" && body.instanceName.length > 0 ? body.instanceName : undefined;
         const retry = SchedulerDO.normalizeRetry(body.retry);
-        const id = resolveScheduleId(body.id);
 
-        // Only an id the CALLER chose can collide — a minted one is 96 random
-        // bits — so this costs two `get`s on the deferred path and nothing on
-        // the ordinary one.
-        const conflict = id === body.id ? await this.idConflict(id) : undefined;
+        const resolved = await this.resolveId(body.id);
 
-        if (conflict) {
-            return conflict;
+        if (resolved instanceof Response) {
+            return resolved;
         }
+
+        const id = resolved;
 
         const record: ScheduleRecord = {
             // body is parsed from an untrusted request; args may be absent at runtime

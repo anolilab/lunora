@@ -60,20 +60,43 @@ createShardDO({
 
 ## 3. Add the webhook route
 
-`processWebhook` is an `internalAction`, so it runs inside the shard where `ctx.payments` and its store exist. The HTTP route at the Worker edge forwards the raw body and the provider signature header to it:
+`processWebhook` is an `internalAction`, so it runs inside the shard where `ctx.payments` and its store exist. The HTTP route at the Worker edge forwards the raw body and the signature headers to it:
 
 ```ts
 import { webhookResponse } from "@lunora/payment";
+
+// Which header carries the signature is the provider's choice — `stripe-signature`,
+// `creem-signature`, the Standard-Webhooks `webhook-*` trio (Polar, Dodo Payments), or `svix-*`
+// (Autumn) — so forward all of them and let the adapter read the one it verifies with. Add yours
+// if you wire an adapter that signs with another header.
+const SIGNATURE_HEADERS = [
+    "creem-signature",
+    "stripe-signature",
+    "svix-id",
+    "svix-signature",
+    "svix-timestamp",
+    "webhook-id",
+    "webhook-signature",
+    "webhook-timestamp",
+];
 
 app.post(
     "/payment/webhook",
     httpAction(async (ctx, request) => {
         const body = await request.text();
-        const signature = request.headers.get("stripe-signature") ?? "";
-        return webhookResponse(await ctx.runAction(processWebhook, { body, signature }));
+        const headers = Object.fromEntries(
+            SIGNATURE_HEADERS.flatMap((name) => {
+                const value = request.headers.get(name);
+
+                return value === null ? [] : [[name, value]];
+            }),
+        );
+        return webhookResponse(await ctx.runAction(processWebhook, { body, headers }));
     }),
 );
 ```
+
+An allowlist rather than `Object.fromEntries(request.headers)`: the whole header set puts a hostile POST's `cookie` / `authorization` into the RPC argument for no reason, and re-attaches entity headers (`content-encoding`, `content-length`) to a `Request` whose body has already been decoded to text.
 
 Answer with `webhookResponse`, never `Response.json(result)`: only the JSON payload crosses the `runAction` boundary, so the HTTP status has to be re-applied at the edge. Without it an **orphaned** event — one patching a row whose create event has not arrived yet — answers `200` instead of its deliberate `500`, the provider never retries it, and the out-of-order update is lost for good.
 

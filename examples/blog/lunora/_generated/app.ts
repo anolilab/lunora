@@ -4,6 +4,7 @@
 import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 import { createKvIntrospectorFromEnv } from "@lunora/bindings/kv";
+import { createVectorAdminIntrospector } from "@lunora/bindings/vectors";
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
 import { createScheduler } from "@lunora/scheduler";
 import type { R2BucketLike, R2S3Credentials, Storage } from "@lunora/storage";
@@ -15,6 +16,7 @@ import { LUNORA_CRONS } from "./crons.js";
 import { LUNORA_FUNCTIONS } from "./functions.js";
 import { openApiSpec } from "./openapi.js";
 import { createShardDO } from "./shard.js";
+import { LUNORA_VECTOR_INDEXES } from "./vectors.js";
 
 /** Read a value off the per-request `env`. Returns `undefined` to leave the capability unconfigured (its `ctx.*`/admin surface stays a clear-error stub). */
 type Selector<Env, T> = (env: Env) => T | undefined;
@@ -36,12 +38,10 @@ interface StorageDeclaration<Env> {
     signingSecret?: Selector<Env, string>;
 }
 
-/** `.scheduler(...)` declaration — the `SchedulerDO` namespace plus the worker origin its callbacks dispatch back to. Backs `ctx.scheduler` AND the studio's scheduled-jobs view. */
+/** `.scheduler(...)` declaration — the `SchedulerDO` namespace. Backs `ctx.scheduler` AND the studio's scheduled-jobs view. The origin its callbacks dispatch back to is not declared here: the DO reads `env.LUNORA_ORIGIN_URL` at fire time, because a caller-supplied dispatch target would be an SSRF vector. */
 interface SchedulerDeclaration<Env> {
     /** The `SchedulerDO` namespace binding (typically `env.SCHEDULER`). */
     namespace: Selector<Env, DurableObjectNamespaceLike & ShardNamespaceLike>;
-    /** The worker origin the `SchedulerDO` dispatches HTTP job callbacks back to. */
-    origin?: Selector<Env, string>;
 }
 
 /** `.auth(...)` declaration — better-auth options plus the storage the adapter reads. Give it `d1` (the default) or `namespace` (a Durable Object that hosts the auth tables), never both. The builder owns the lazy build + `ensureMigrated` dance and wires `authHandler` / `resolveIdentity` / `authAdmin`. */
@@ -295,12 +295,11 @@ class AppBuilder<Env extends object> {
         return composed;
     }
 
-    /** Resolve the `SchedulerDO`-backed scheduler for this env; `undefined` until both the namespace and origin are wired. */
+    /** Resolve the `SchedulerDO`-backed scheduler for this env; `undefined` until the namespace is wired. */
     private resolveScheduler(env: Env): ReturnType<typeof createScheduler> | undefined {
         const namespace = this.schedulerDeclaration?.namespace(env);
-        const origin = this.schedulerDeclaration?.origin?.(env);
 
-        return namespace && origin ? createScheduler({ namespace, originUrl: origin }) : undefined;
+        return namespace ? createScheduler({ namespace }) : undefined;
     }
 
     /**
@@ -382,7 +381,15 @@ class AppBuilder<Env extends object> {
             }
         }
 
-        const pick = (name?: string): Storage => buckets[name !== undefined && name !== "" ? name : "default"] ?? fallbackStorage;
+        // `Object.hasOwn`, not a bare lookup: `buckets` is a plain object, so a
+        // prototype key (`?bucket=constructor`, `__proto__`, `toString`) resolves
+        // to an inherited Object.prototype member, `??` never engages, and the
+        // caller gets a method-less value instead of the default bucket.
+        const pick = (name?: string): Storage => {
+            const wanted = name !== undefined && name !== "" ? name : "default";
+
+            return (Object.hasOwn(buckets, wanted) ? buckets[wanted] : undefined) ?? fallbackStorage;
+        };
         const hasSigning = Boolean(declaration.publicBaseUrl?.(env) && declaration.signingSecret?.(env));
 
         return {
@@ -425,6 +432,23 @@ class AppBuilder<Env extends object> {
         }
 
         options.kvIntrospector = createKvIntrospectorFromEnv(env);
+
+        if (this.shardExtras.vectors) {
+            options.vectorIntrospector = createVectorAdminIntrospector({
+                indexes: this.shardExtras.vectors(env as unknown as Record<string, unknown>),
+                registry: LUNORA_VECTOR_INDEXES,
+            });
+        } else {
+            // Emitted only when the schema declares an index, so reaching here
+            // means the app declared one and never bound it. The studio's
+            // Vectors tab is on (its flag is the same index count) and every
+            // request to it would answer VECTORS_NOT_CONFIGURED, while
+            // `ctx.vectors` is the throwing stub — so this is already broken,
+            // just later and less legibly. Same shape as `.auth()`'s guards.
+            throw new Error(
+                ".vectors(): the schema declares vector index(es) but no binding map was chained. Pass `.vectors((env) => ({ <indexName>: env.<BINDING> }))` so `ctx.vectors` resolves and the studio's Vectors tab can list them.",
+            );
+        }
 
         options.logArchive = resolveLogArchiveFromEnv(env);
 

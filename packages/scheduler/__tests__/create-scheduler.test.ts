@@ -1,11 +1,11 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import createScheduler from "../src/create-scheduler";
 import { createCronTrigger } from "../src/cron";
 import type { DurableObjectNamespaceLike, DurableObjectStubLike, FunctionReference, ScheduleRecord, WorkflowReference } from "../src/types";
 
 const NAMESPACE_PATTERN = /namespace/;
-const ORIGIN_URL_PATTERN = /originUrl/;
 const DELAY_MS_PATTERN = /delayMs/;
 const SCHEDULER_DO_PATTERN = /SchedulerDO/;
 const MISSING_BINDING_PATTERN = /missing its `binding`/;
@@ -63,18 +63,17 @@ const fnRef: FunctionReference<"mutation"> = { __lunoraRef: "messages.send" };
 const agentRef: WorkflowReference = { binding: "AGENT_SUPPORT", isLunoraWorkflow: true, name: "support" };
 
 describe("createScheduler", () => {
-    it("requires a namespace + originUrl", () => {
-        expect.assertions(2);
+    it("requires a namespace", () => {
+        expect.assertions(1);
 
         expect(() => createScheduler({} as never)).toThrow(NAMESPACE_PATTERN);
-        expect(() => createScheduler({ namespace: fakeNamespace().namespace } as never)).toThrow(ORIGIN_URL_PATTERN);
     });
 
     it("runAt() forwards the RPC envelope to SchedulerDO", async () => {
         expect.assertions(3);
 
         const { calls, namespace } = fakeNamespace();
-        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const scheduler = createScheduler({ namespace });
         const at = new Date("2026-06-01T12:00:00Z");
 
         const result = await scheduler.runAt(at, fnRef, { userId: "u-1" });
@@ -85,7 +84,6 @@ describe("createScheduler", () => {
             args: { userId: "u-1" },
             functionPath: "messages.send",
             instanceName: "default",
-            originUrl: "https://app.test",
             scheduledFor: at.getTime(),
             shardKey: undefined,
         });
@@ -102,7 +100,7 @@ describe("createScheduler", () => {
         expect.assertions(2);
 
         const { namespace } = fakeNamespace();
-        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const scheduler = createScheduler({ namespace });
 
         const id = await scheduler.runAfter(0, fnRef, { userId: "u-1" });
 
@@ -121,7 +119,7 @@ describe("createScheduler", () => {
         // slot per job (fatal at a cap of 1) plus a phantom pool row on the wrong
         // instance.
         const { calls, namespace } = fakeNamespace();
-        const scheduler = createScheduler({ instanceName: "tenant-a", namespace, originUrl: "https://app.test" });
+        const scheduler = createScheduler({ instanceName: "tenant-a", namespace });
 
         await scheduler.runAfter(0, fnRef, { userId: "u-1" }, { maxConcurrency: 4, pool: "billing" });
 
@@ -134,7 +132,7 @@ describe("createScheduler", () => {
         expect.assertions(1);
 
         const { calls, namespace } = fakeNamespace();
-        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const scheduler = createScheduler({ namespace });
 
         await scheduler.runAfter(0, fnRef, { userId: "u-1" }, { maxConcurrency: 4 });
 
@@ -145,7 +143,7 @@ describe("createScheduler", () => {
         expect.assertions(3);
 
         const { calls, namespace } = fakeNamespace();
-        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const scheduler = createScheduler({ namespace });
         const at = new Date("2026-06-01T12:00:00Z");
 
         const result = await scheduler.runAt(at, agentRef, { prompt: "summarize" });
@@ -155,7 +153,6 @@ describe("createScheduler", () => {
         expect(calls[0]?.body).toEqual({
             args: { prompt: "summarize" },
             instanceName: "default",
-            originUrl: "https://app.test",
             scheduledFor: at.getTime(),
             workflow: "AGENT_SUPPORT",
         });
@@ -166,7 +163,7 @@ describe("createScheduler", () => {
         expect.assertions(2);
 
         const { calls, namespace } = fakeNamespace();
-        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const scheduler = createScheduler({ namespace });
 
         await scheduler.runAfter(5000, agentRef, { prompt: "digest" });
 
@@ -178,7 +175,7 @@ describe("createScheduler", () => {
         expect.assertions(2);
 
         const { calls, namespace } = fakeNamespace();
-        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const scheduler = createScheduler({ namespace });
 
         await expect(scheduler.runAt(1000, { isLunoraWorkflow: true }, {})).rejects.toThrow(MISSING_BINDING_PATTERN);
         // Nothing was dispatched to the DO.
@@ -189,7 +186,7 @@ describe("createScheduler", () => {
         expect.assertions(2);
 
         const { namespace } = fakeNamespace();
-        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const scheduler = createScheduler({ namespace });
 
         await expect(scheduler.runAfter(-1, fnRef, {})).rejects.toThrow(DELAY_MS_PATTERN);
         await expect(scheduler.runAfter(Number.NaN, fnRef, {})).rejects.toThrow(DELAY_MS_PATTERN);
@@ -199,7 +196,7 @@ describe("createScheduler", () => {
         expect.assertions(3);
 
         const { calls, namespace } = fakeNamespace();
-        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const scheduler = createScheduler({ namespace });
 
         const before = Date.now();
 
@@ -217,7 +214,7 @@ describe("createScheduler", () => {
         expect.assertions(3);
 
         const { calls, namespace } = fakeNamespace();
-        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const scheduler = createScheduler({ namespace });
 
         const result = await scheduler.cancel("abc");
 
@@ -234,7 +231,7 @@ describe("createScheduler", () => {
             { args: {}, enqueuedAt: 2, functionPath: "messages.purge", id: "b", scheduledFor: 20 },
         ];
         const { calls, namespace } = fakeNamespace({ "/list": { records } });
-        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const scheduler = createScheduler({ namespace });
 
         const result = await scheduler.list();
 
@@ -248,7 +245,7 @@ describe("createScheduler", () => {
 
         const records = [{ args: {}, enqueuedAt: 1, functionPath: "messages.send", id: "a", scheduledFor: 10 }];
         const { calls, namespace } = fakeNamespace({ "/list": { records } });
-        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const scheduler = createScheduler({ namespace });
 
         await expect(scheduler.get("a")).resolves.toEqual(records[0]);
         await expect(scheduler.get("missing")).resolves.toBeNull();
@@ -266,10 +263,53 @@ describe("createScheduler", () => {
         // DO drift / unexpected 200 body: `records` absent. list() must return
         // [] (not undefined) and get() must resolve null rather than throwing.
         const { namespace } = fakeNamespace({ "/list": { ok: true } });
-        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const scheduler = createScheduler({ namespace });
 
         await expect(scheduler.list()).resolves.toEqual([]);
         await expect(scheduler.get("a")).resolves.toBeNull();
+    });
+
+    it("wire-encodes scheduled args so a bigint/bytes/NaN argument survives to the shard", async () => {
+        expect.assertions(2);
+
+        const { calls, namespace } = fakeNamespace();
+        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const args = { amount: 5n, blob: new Uint8Array([1, 2]), missed: Number.NaN };
+
+        // `callDO` JSON.stringifies this body, so an un-encoded `bigint` throws
+        // outright and a `Uint8Array` degrades to `{"0":1,"1":2}` — the shard
+        // `decodeWire`s `payload.args` at the far end of the dispatch.
+        await scheduler.runAt(Date.now() + 1000, fnRef, args);
+
+        expect(calls[0]!.body.args).toStrictEqual(encodeWire(args));
+        expect(decodeWire(calls[0]!.body.args)).toStrictEqual(args);
+    });
+
+    it("decodes record args back on list()/get() so the read surface matches what was scheduled", async () => {
+        expect.assertions(2);
+
+        const args = { amount: 5n, when: new Date(0) };
+        const records = [{ args: encodeWire(args) as Record<string, unknown>, enqueuedAt: 1, functionPath: "messages.send", id: "a", scheduledFor: 10 }];
+        const { namespace } = fakeNamespace({ "/list": { records } });
+        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+
+        await expect(scheduler.list()).resolves.toStrictEqual([{ ...records[0], args }]);
+        await expect(scheduler.get("a")).resolves.toStrictEqual({ ...records[0], args });
+    });
+
+    // `encodeWire` rejects any non-plain object, where `JSON.stringify` used to
+    // swallow it into `{}`. The codec's own message names the offending type and
+    // nothing else, so a job that failed to schedule at 03:00 left a log line that
+    // could not be traced to the call that carried the argument.
+    it("labels an unencodable argument with the scheduler surface and the function path", async () => {
+        expect.assertions(1);
+
+        const { namespace } = fakeNamespace();
+        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+
+        await expect(scheduler.runAt(Date.now() + 1000, fnRef, { pattern: /nope/u })).rejects.toThrow(
+            /ctx\.scheduler\.runAt: cannot encode args for 'messages\.send' — /,
+        );
     });
 
     it("throws when SchedulerDO returns a non-2xx response", async () => {
@@ -284,7 +324,7 @@ describe("createScheduler", () => {
                 return { toString: () => "default" };
             },
         };
-        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const scheduler = createScheduler({ namespace });
 
         await expect(scheduler.runAfter(0, fnRef, {})).rejects.toThrow(SCHEDULER_DO_PATTERN);
     });
@@ -303,7 +343,7 @@ describe("createScheduler", () => {
                 return { toString: () => "default" };
             },
         };
-        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const scheduler = createScheduler({ namespace });
 
         // Flattened to `INTERNAL`, the message is what `toErrorBody` redacts — so
         // the developer who named a job id twice was shown "Internal error" and
@@ -374,7 +414,7 @@ describe("createScheduler jurisdiction", () => {
             },
         };
 
-        const scheduler = createScheduler({ jurisdiction: "us", namespace, originUrl: "https://app.example.com" });
+        const scheduler = createScheduler({ jurisdiction: "us", namespace });
 
         await scheduler.runAfter(1000, fnRef, {});
 
@@ -388,7 +428,7 @@ describe("createScheduler jurisdiction", () => {
         expect.assertions(1);
 
         const { namespace } = fakeNamespace();
-        const scheduler = createScheduler({ jurisdiction: "eu", namespace, originUrl: "https://app.example.com" });
+        const scheduler = createScheduler({ jurisdiction: "eu", namespace });
 
         await expect(scheduler.runAfter(1000, fnRef, {})).rejects.toThrow(/does not support jurisdiction/);
     });

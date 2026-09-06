@@ -478,7 +478,47 @@ func timeClip(epoch float64) float64 {
 		return math.NaN()
 	}
 
-	return math.Trunc(epoch)
+	truncated := math.Trunc(epoch)
+
+	// TimeClip is ToIntegerOrInfinity, not truncation, and the two differ on
+	// exactly one window: an epoch in (-1, 0] gives +0 there and -0 here,
+	// because Trunc keeps the sign of zero. The window is one value wide, and
+	// the stable subscription key spells -0 as the bare token `-0`, distinct
+	// from `0` — so without this a Date built from -0.5 opens a different
+	// subscription than the TS client's does.
+	if truncated == 0 {
+		return 0
+	}
+
+	return truncated
+}
+
+// isAbsoluteHref reports whether an href carries a URL scheme, per RFC 3986:
+// an ASCII letter followed by letters, digits, "+", "-" or ".", then ":".
+//
+// The reference builds a real URL, which throws on anything unparseable, while
+// every port stored the string verbatim and accepted "not a url" — a frame that
+// kills a JS peer's subscription and is waved through here. Reproducing WHATWG
+// URL parsing in eight languages is not on offer (their own parsers disagree
+// with it in the deep end), so the contract, and protocol/README.md §2.1, is the
+// floor of it: an href must be ABSOLUTE.
+func isAbsoluteHref(href string) bool {
+	for index := 0; index < len(href); index++ {
+		char := href[index]
+
+		switch {
+		case char == ':':
+			return index > 0
+		case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z':
+			continue
+		case index > 0 && (char >= '0' && char <= '9' || char == '+' || char == '-' || char == '.'):
+			continue
+		default:
+			return false
+		}
+	}
+
+	return false
 }
 
 // maxExactInteger is the largest integer a float64 represents exactly (2^53-1).
@@ -592,6 +632,10 @@ func decodeTagged(value []any, depth int) (any, error) {
 		href, ok := value[2].(string)
 		if !ok {
 			return nil, fmt.Errorf("wire-codec: url href is %T, want string", value[2])
+		}
+
+		if !isAbsoluteHref(href) {
+			return nil, fmt.Errorf("wire-codec: url href %q is not absolute", href)
 		}
 
 		return URL{Href: href}, nil
@@ -769,8 +813,21 @@ func decodeError(value []any, depth int) (any, error) {
 		return nil, fmt.Errorf("wire-codec: malformed error tag")
 	}
 
-	name, _ := value[2].(string)
-	message, _ := value[3].(string)
+	// Both label slots are type-CHECKED, like every other slot. Substituting ""
+	// for a non-string accepted the frame while erasing the error's identity,
+	// and the eight ports did not even agree on that: two carried the
+	// non-string through verbatim. A slot that must hold a string and does not
+	// is a malformed frame.
+	name, ok := value[2].(string)
+	if !ok {
+		return nil, fmt.Errorf("wire-codec: error name is %T, want string", value[2])
+	}
+
+	message, ok := value[3].(string)
+	if !ok {
+		return nil, fmt.Errorf("wire-codec: error message is %T, want string", value[3])
+	}
+
 	decoded := Error{Message: message, Name: name, Props: map[string]any{}, Cause: Undefined}
 
 	// The props slot is NOT optional, NOT nullable and NOT a primitive: the
@@ -819,6 +876,16 @@ func decodeBytes(value []any) (any, error) {
 	data, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, fmt.Errorf("wire-codec: invalid base64 in bytes tag: %w", err)
+	}
+
+	// The payload must be CANONICAL, not merely decodable. Go's decoder skips
+	// newlines and ignores the unused low bits of a short final quantum, so
+	// "AQID\n" and "AQJ=" both decoded here — the second one silently, into two
+	// bytes that re-encode as "AQI=", different bytes than the peer wrote.
+	// Re-encoding and comparing is the whole rule: the payload must be exactly
+	// what a conforming encoder would have written for these bytes.
+	if base64.StdEncoding.EncodeToString(data) != encoded {
+		return nil, fmt.Errorf("wire-codec: bytes payload is not canonical padded base64")
 	}
 
 	ctor := "Uint8Array"

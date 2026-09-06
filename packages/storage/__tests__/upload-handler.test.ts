@@ -381,5 +381,50 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
 
             expect(withinCap.status).toBe(201);
         });
+
+        it("rejects a chunked-REST create whose declared total (X-Total-Size) is over the cap", async () => {
+            expect.hasAssertions();
+
+            // A chunked-REST create carries NO body: the total lives in
+            // `X-Total-Size` and `Content-Length` is zero/absent. Reading only
+            // `Upload-Length`/`Content-Length` let this create through, leaving
+            // the provider's own `maxUploadSize` (5 TB by default) as the sole
+            // ceiling — the documented `maxFileSize` never fired.
+            const tight = createUploadHandler({ maxFileSize: 1000, protocol: "chunked-rest", silent: true, storage: new MemoryStorage({ path: "/upload" }) });
+
+            const tooBig = await tight.fetch(
+                new Request(ENDPOINT, {
+                    headers: { "content-type": "application/octet-stream", "x-chunked-upload": "true", "x-total-size": "5000000000" },
+                    method: "POST",
+                }),
+            );
+
+            expect(tooBig.status).toBe(413);
+
+            const withinCap = await tight.fetch(
+                new Request(ENDPOINT, {
+                    headers: { "content-type": "application/octet-stream", "x-chunked-upload": "true", "x-total-size": "512" },
+                    method: "POST",
+                }),
+            );
+
+            expect(withinCap.status).toBe(201);
+        });
+
+        it("checks the largest declared size, so a small X-Total-Size cannot mask an oversized body", async () => {
+            expect.hasAssertions();
+
+            const tight = createUploadHandler({ maxFileSize: 1000, protocol: "chunked-rest", silent: true, storage: new MemoryStorage({ path: "/upload" }) });
+
+            const response = await tight.fetch(
+                new Request(ENDPOINT, {
+                    body: new Uint8Array(4096).fill(65),
+                    headers: { "content-length": "4096", "content-type": "application/octet-stream", "x-total-size": "10" },
+                    method: "POST",
+                }),
+            );
+
+            expect(response.status).toBe(413);
+        });
     });
 });

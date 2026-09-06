@@ -7,7 +7,7 @@ import { runPostCodegenHook } from "@lunora/config";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
-import { codegenPlugin } from "../src/codegen-plugin";
+import codegenPlugin from "../src/codegen-plugin";
 import type { ResolvedLunoraPluginOptions } from "../src/types";
 
 // Spy on `createCodegenProject` (kept fully functional via `importOriginal`) so

@@ -12,14 +12,14 @@ import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import { signCanonical } from "../../../shared/hmac-url";
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
-import { otlpRandomHex } from "../../../shared/otlp";
+import { buildTraceparent, otlpRandomHex } from "../../../shared/otlp";
 import type { RegionHint } from "../../../shared/region-hint";
 import { regionHintFromRequest } from "../../../shared/region-hint";
 import { RELAY_NAME_INFIX, relayName } from "../../../shared/relay-name";
 import { parseMinSeq, REPLICA_NAME_INFIX, replicaName } from "../../../shared/replica-name";
 import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeArgsOrThrow, encodeWire } from "../../../shared/wire-codec";
 import { isEnvFlagEnabled, mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import { assertArgsObject } from "./assert-args-object";
 import type { AuthAdmin } from "./auth-admin-routes";
@@ -530,11 +530,21 @@ interface ScheduledControllerLike {
 type CronHandler = (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
 
 /**
+ * The trigger's own trace, handed to a consumer so every function it dispatches
+ * is a child of the trigger span instead of an unrelated root trace.
+ */
+interface TriggerTrace {
+    /** W3C `traceparent` naming the trigger's SERVER span. */
+    traceparent: string;
+}
+
+/**
  * A Cloudflare Queues push-consumer handler — the worker's `queue()` entry
  * forwards each delivered `MessageBatch` (typed `unknown` here to keep the
- * runtime decoupled from `@lunora/queue`'s structural batch type).
+ * runtime decoupled from `@lunora/queue`'s structural batch type) along with the
+ * invocation's own {@link TriggerTrace}.
  */
-type QueueConsumerHandler = (batch: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>;
+type QueueConsumerHandler = (batch: unknown, env: unknown, context: ExecutionContextLike, trigger: TriggerTrace) => Promise<void>;
 
 /**
  * A single code-defined cron job, shaped like an entry of the generated
@@ -2832,6 +2842,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         shardKey: string,
         mutationId?: string,
         forwardedIdentity?: { identity?: string; userId?: string },
+        traceparent?: string,
     ): Promise<Response> => {
         // The scheduler-dispatch endpoint takes `functionPath` off a request body and a
         // cron target is app-authored — neither can legitimately be the reserved
@@ -2871,6 +2882,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             headers["x-lunora-mutation-id"] = mutationId;
         }
 
+        // Join the caller's trace when there is one. Without it the shard mints a
+        // fresh trace for every server-initiated dispatch, so a cron's span was a
+        // childless root and each function it fired was an unrelated orphan trace.
+        // Only reachable from the admin/HMAC-gated paths above, so the value is
+        // already inside the trust boundary — no inbound-trust policy applies.
+        if (traceparent !== undefined && traceparent.length > 0) {
+            headers.traceparent = traceparent;
+        }
+
         return forwardToShard(shardDO, shardKey, shardRpcRequest(functionPath, args, headers));
     };
 
@@ -2893,9 +2913,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * re-fire it too). Without an id Cloudflare mints a fresh random instance for
      * each of those, so one scheduled job runs its whole pipeline up to five times
      * — while two scheduler docblocks justify the retry loop with "idempotent
-     * dispatch keyed by record id". The record id is already on the wire and
-     * already constrained to a safe key segment by `resolveScheduleId`, which is
-     * exactly what `create({ id })` accepts.
+     * dispatch keyed by record id". The record id is already on the wire, and
+     * `resolveScheduleId` constrains it to `^\w[\w-]{0,63}$`, which is inside the
+     * engine's own `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$` (and well inside its 100-char
+     * ceiling) — so `create({ id })` accepts it. That containment is the whole
+     * reason the leading character is constrained at all: base64url mints `-` as
+     * often as any other character, and a leading one is a VALIDATION rejection
+     * here, which {@link isDuplicateInstanceError} does not match and the
+     * scheduler therefore retries to `dead:` five attempts later.
      *
      * **The cron path passes nothing.** There is no record id there, every
      * scheduled fire of an expression is a distinct run, and the admin "Run now"
@@ -2945,7 +2970,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * Throws a {@link LunoraError} on failure so both the scheduled-fire loop and
      * the manual `/cron-jobs/run` trigger surface the same error shape.
      */
-    const runOneCronJob = async (job: CronJobDispatch, env: unknown): Promise<void> => {
+    const runOneCronJob = async (job: CronJobDispatch, env: unknown, traceparent?: string): Promise<void> => {
         if (job.workflow) {
             await startWorkflowInstance(job.workflow, job.args ?? {}, env, `cron job "${job.name}"`);
 
@@ -2959,7 +2984,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             });
         }
 
-        const response = await dispatchToShard(job.functionPath, job.args ?? {}, job.shardKey ?? defaultShard);
+        const response = await dispatchToShard(job.functionPath, job.args ?? {}, job.shardKey ?? defaultShard, undefined, undefined, traceparent);
 
         if (!response.ok) {
             // A failed background job is operationally a 500-class "didn't run",
@@ -3008,7 +3033,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * @returns how many jobs were declared under `cron` — 0 means the expression
      * matched nothing, which the caller reports rather than treating as success.
      */
-    const runCronJobs = async (cron: string, env: unknown, errors: Error[], toError: (error: unknown) => Error): Promise<number> => {
+    const runCronJobs = async (cron: string, env: unknown, errors: Error[], toError: (error: unknown) => Error, traceparent?: string): Promise<number> => {
         const cronJobs = options.cronJobs?.[cron];
 
         if (!cronJobs) {
@@ -3018,7 +3043,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         for (const job of cronJobs) {
             try {
                 // eslint-disable-next-line no-await-in-loop -- intentional: jobs on one expression run sequentially for deterministic order and to avoid a concurrent-RPC herd against a single shard
-                await runOneCronJob(job, env);
+                await runOneCronJob(job, env, traceparent);
             } catch (error: unknown) {
                 errors.push(toError(error));
             }
@@ -3192,6 +3217,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // hold a slot, and returning before the release below wedged the pool for
         // good at the default `maxConcurrency: 1`.
         if (typeof candidate.workflow === "string" && candidate.workflow.length > 0) {
+            // Deliberately NOT decoded here. A function target's args are decoded by
+            // the shard, but a workflow target's become Workflow `params`, which
+            // Cloudflare serialises as JSON into durable storage — so a decoded
+            // `bigint` fails creation outright and a decoded `Date` silently arrives
+            // as a string. The wire form IS JSON-safe, so it travels intact and
+            // `createRunContext` decodes it where the handler reads `params`.
             await startWorkflowInstance(candidate.workflow, args, env, "scheduled workflow", recordId);
 
             await releasePoolSlot(candidate);
@@ -3212,7 +3243,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // headers pass through to the shard alongside the system flag for RLS.
         const identity = readForwardedIdentity(request);
 
-        const response = await dispatchToShard(candidate.functionPath, args, shardKey, recordId, identity);
+        // The caller (a trigger's `ctx.run`, the scheduler DO) already opened a
+        // trace and named it on the request; forward it so the dispatched function
+        // is a CHILD of the work that asked for it rather than its own trace.
+        const response = await dispatchToShard(candidate.functionPath, args, shardKey, recordId, identity, request.headers.get("traceparent") ?? undefined);
 
         // Workpool jobs hold a concurrency slot until the action settles; release
         // it. Best-effort only in that a failure can't fail this dispatch — a
@@ -3527,7 +3561,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     /**
      * `ctx.scheduler` for an HTTP action — a thin RPC wrapper over the scheduler
      * DO, mirroring what `@lunora/scheduler`'s `createScheduler` does from a
-     * shard.
+     * shard. The two write to and read from the SAME records, so they must agree
+     * on the envelope: both wire-encode `args` on the way in and decode a record
+     * on the way out (see `create-dispatch-runner.ts` for why the hop needs
+     * bracketing).
      *
      * The scheduler DO takes its callback origin from `env.LUNORA_ORIGIN_URL`
      * at both schedule and fire time — deliberately, so a request cannot steer
@@ -3535,6 +3572,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * nothing origin-shaped is sent from here.
      */
     const buildHttpScheduler = (namespace: ShardNamespaceLike): SchedulerContext => {
+        /** Undo `schedule`'s encode on a record read back out of the DO — the mirror of `@lunora/scheduler`'s `decodeRecordArgs`. Identity for pure-JSON args. */
+        const decodeRecordArgs = (record: Record<string, unknown>): Record<string, unknown> =>
+            "args" in record ? { ...record, args: decodeWire(record["args"]) } : record;
+
         const instanceName = options.schedulerInstanceName ?? "default";
         const stub = (): ResolvedShard => resolveShard(namespace, instanceName);
 
@@ -3602,23 +3643,41 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
          * `@lunora/scheduler`'s `createScheduler.list()` — the shard-side client
          * of the same route — also uses, so the two cannot drift apart.
          */
-        const listAll = async (): Promise<Record<string, unknown>[]> =>
-            await collectPages<Record<string, unknown>>(async (cursor) =>
+        const listAll = async (): Promise<Record<string, unknown>[]> => {
+            const records = await collectPages<Record<string, unknown>>(async (cursor) =>
                 call<{ cursor?: string; records?: Record<string, unknown>[]; truncated?: boolean }>(
                     cursor === undefined ? "/list" : `/list?cursor=${encodeURIComponent(cursor)}`,
                     { method: "GET" },
                 ),
             );
 
+            return records.map((record) => decodeRecordArgs(record));
+        };
+
         const schedule = async (scheduledFor: number, target: unknown, args: Record<string, unknown> = {}): Promise<string> => {
-            const { id } = await post<{ id: string }>("/schedule", { args, scheduledFor, ...targetFields(target) });
+            const fields = targetFields(target);
+
+            const { id } = await post<{ id: string }>("/schedule", {
+                args: encodeArgsOrThrow("ctx.scheduler", String(fields["functionPath"] ?? fields["workflow"]), args),
+                scheduledFor,
+                ...fields,
+            });
 
             return id;
         };
 
         return {
             cancel: async (id) => await post<{ cancelled: boolean }>("/cancel", { id }),
-            get: async (id) => await call<Record<string, unknown> | null>(`/get?id=${encodeURIComponent(id)}`, { method: "GET" }),
+            // The DO answers `{ record }` — or `{}` for an id that matched
+            // nothing — never the bare record, so handing its body back broke the
+            // declared `Record<string, unknown> | null` and gave a caller
+            // `{ record: … }` where `createScheduler.get()` gives the record.
+            get: async (id) => {
+                const body = await call<{ record?: Record<string, unknown> }>(`/get?id=${encodeURIComponent(id)}`, { method: "GET" });
+
+                // eslint-disable-next-line unicorn/no-null -- public contract returns `Record<string, unknown> | null`, mirroring `createScheduler.get`
+                return body.record === undefined ? null : decodeRecordArgs(body.record);
+            },
             list: listAll,
             runAfter: async (delayMs, target, args) => {
                 // `@lunora/scheduler`'s `assertScheduleDelay`, restated: this
@@ -3676,12 +3735,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 // absent from observability while the docs promised every dispatch is a
                 // span.
                 //
-                // `encodeWire`/`decodeWire` bracket it for the same reason
-                // `createShardClient` does: the shard decodes `args` and answers
-                // `encodeWire(result)`, so an un-bracketed hop handed the handler a
-                // tagged `["$lunora.wire$", "bigint", …]` array where a `bigint`/`Date`/
-                // `Uint8Array` belonged, and threw outright on a `bigint` ARGUMENT
-                // (`JSON.stringify` refuses one). `decodeWire` is identity for pure JSON.
+                // Wire-bracketed in both directions, as every dispatch hop is; see
+                // `create-dispatch-runner.ts`.
                 //
                 // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `dispatchSingleShard` is a closure-captured const declared below; this arrow only ever runs per request, long after construction
                 const response = await dispatchSingleShard(
@@ -4775,15 +4830,20 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * the producing request is instead the job of `span.addLink`, since parenting
      * would be wrong — the producer's request is long over by then.
      */
-    const instrumentTrigger = async <T>(functionPath: string, context: ExecutionContextLike, run: () => Promise<T>): Promise<T> => {
+    const instrumentTrigger = async <T>(functionPath: string, context: ExecutionContextLike, run: (traceparent: string) => Promise<T>): Promise<T> => {
         const { observability } = options;
         const startedAt = Date.now();
         const traceId = otlpRandomHex(16);
         const spanId = otlpRandomHex(8);
         const sinkContext = sinkContextFor(context);
+        // Handed to the work this trigger drives so its dispatches JOIN this trace.
+        // Always sampled: trigger events deliberately bypass the head ratio (see
+        // above), and announcing a verdict we did not apply is how a downstream tier
+        // drops the children of a span we kept.
+        const triggerTraceparent = buildTraceparent(traceId, spanId, true);
 
         try {
-            const result = await run();
+            const result = await run(triggerTraceparent);
 
             emitRpcEvent(observability, { durationMs: Date.now() - startedAt, functionPath, ok: true, spanId, traceId }, sinkContext);
 
@@ -4800,7 +4860,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
-    const handleScheduled = async (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike): Promise<void> => {
+    const handleScheduled = async (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike, traceparent?: string): Promise<void> => {
         // A cron can fire on an isolate that never served a `fetch`, so resolve
         // `env.LUNORA_ADMIN_TOKEN` here too — the built-in backup authenticates its
         // per-shard export fan-out with `effectiveAdminToken()`.
@@ -4822,7 +4882,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // Code-defined crons: run every job declared under the firing expression.
         // Failures join `errors` for the combined rethrow below. `env` carries the
         // `WORKFLOW_*` bindings a workflow-targeting job starts an instance on.
-        const ranJobs = await runCronJobs(controller.cron, env, errors, toError);
+        const ranJobs = await runCronJobs(controller.cron, env, errors, toError, traceparent);
         const isBackupCron = Boolean(options.backupStore) && options.backupCron !== undefined && options.backupCron === controller.cron;
 
         if (isBackupCron) {
@@ -5239,16 +5299,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             //
             // Named after the queue so a collector groups consumer invocations per
             // queue rather than lumping every batch under one span name.
-            await instrumentTrigger(`queue:${queueNameOf(batch)}`, context, async () => {
-                await options.queue?.(batch, env, context);
+            await instrumentTrigger(`queue:${queueNameOf(batch)}`, context, async (traceparent) => {
+                await options.queue?.(batch, env, context, { traceparent });
             });
         },
         async scheduled(controller, env, context) {
             // Named after the cron EXPRESSION, which is the stable identity of a
             // trigger — `scheduledTime` varies per fire and would make every run
             // its own group in a collector.
-            await instrumentTrigger(`cron:${controller.cron}`, context, async () => {
-                await handleScheduled(controller, env, context);
+            await instrumentTrigger(`cron:${controller.cron}`, context, async (traceparent) => {
+                await handleScheduled(controller, env, context, traceparent);
             });
         },
         serverQuery,
@@ -5309,8 +5369,19 @@ type FrameworkWorkerOptionsInput = ((env: unknown) => FrameworkWorkerOptions) | 
 
 const toHttpRouter = (handler: FrameworkHostHandler): HttpRouterLike => (typeof handler === "function" ? { fetch: handler } : handler);
 
-/** Whether the Lunora options configure any cron surface (so Lunora owns `scheduled` rather than the framework host). */
-const hasLunoraCrons = (options: FrameworkWorkerOptions): boolean => Boolean(options.crons ?? options.cronJobs ?? options.backupCron);
+/**
+ * Whether the Lunora options configure any cron surface (so Lunora owns
+ * `scheduled` rather than the framework host).
+ *
+ * EMPTINESS, not presence. Codegen emits `cronJobs: LUNORA_CRONS` unconditionally
+ * and `LUNORA_CRONS` is `{}` for a cron-free app, so a presence check (`??` stops
+ * at the first non-nullish value) is `true` for every app built through
+ * `defineApp().buildFrameworkWorker(host)` — which made the preservation branch
+ * below unreachable and dropped the framework host's own `scheduled` in every one
+ * of them.
+ */
+const hasLunoraCrons = (options: FrameworkWorkerOptions): boolean =>
+    Boolean(options.backupCron) || Object.keys(options.crons ?? {}).length > 0 || Object.keys(options.cronJobs ?? {}).length > 0;
 
 /**
  * Compose a meta-framework's Cloudflare Worker handler with Lunora's realtime
@@ -5507,6 +5578,7 @@ export type {
     StorageObject,
     StorageSignedUrlFunction as StorageSignedUrlFn,
     StorageUploadFunction as StorageUploadFn,
+    TriggerTrace,
     VectorIndexSummary,
     VectorIntrospector,
     VectorQueryMatch,
