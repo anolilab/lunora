@@ -1,3 +1,14 @@
+## @lunora/client [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.83...@lunora/client@1.0.0-alpha.84) (2026-09-06)
+
+### Bug Fixes
+
+* **client,workflow,testing:** stop losing wire-decode failures ([#644](https://github.com/anolilab/lunora/issues/644)) ([9be24dd](https://github.com/anolilab/lunora/commit/9be24dd665af62e524375eda6ecdcb9d6f1a3572))
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.99
+
 ## @lunora/client [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.82...@lunora/client@1.0.0-alpha.83) (2026-09-06)
 
 
