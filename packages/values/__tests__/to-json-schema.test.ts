@@ -17,10 +17,10 @@ describe("toJsonSchema", () => {
             expect(toJsonSchema(v.null())).toStrictEqual({ type: "null" });
         });
 
-        it("carries bigint as an int64 integer", () => {
+        it("carries bigint as an int64 decimal string", () => {
             expect.assertions(1);
 
-            expect(toJsonSchema(v.bigint())).toStrictEqual({ format: "int64", type: "integer" });
+            expect(toJsonSchema(v.bigint())).toStrictEqual({ format: "int64", type: "string" });
         });
 
         it("schemas date and timestamp as epoch-millisecond integers", () => {
@@ -74,7 +74,11 @@ describe("toJsonSchema", () => {
         it("maps a record to additionalProperties", () => {
             expect.assertions(1);
 
-            expect(toJsonSchema(v.record(v.string(), v.number()))).toStrictEqual({ additionalProperties: { type: "number" }, type: "object" });
+            expect(toJsonSchema(v.record(v.string(), v.number()))).toStrictEqual({
+                additionalProperties: { type: "number" },
+                propertyNames: { type: "string" },
+                type: "object",
+            });
         });
 
         it("maps a union to anyOf", () => {
@@ -95,7 +99,6 @@ describe("toJsonSchema", () => {
             );
 
             expect(schema).toStrictEqual({
-                additionalProperties: false,
                 properties: {
                     age: { type: "number" },
                     name: { type: "string" },
@@ -112,10 +115,8 @@ describe("toJsonSchema", () => {
             const schema = toJsonSchema(v.object({ author: v.object({ id: v.id("users") }) }));
 
             expect(schema).toStrictEqual({
-                additionalProperties: false,
                 properties: {
                     author: {
-                        additionalProperties: false,
                         properties: { id: { description: 'Id<"users">', type: "string", "x-lunora-table": "users" } },
                         required: ["id"],
                         type: "object",
@@ -197,7 +198,6 @@ describe("argsToJsonSchema", () => {
         });
 
         expect(schema).toStrictEqual({
-            additionalProperties: false,
             properties: {
                 cursor: { type: "string" },
                 limit: { type: "number" },
@@ -211,7 +211,7 @@ describe("argsToJsonSchema", () => {
     it("yields an empty object schema for a no-arg function", () => {
         expect.assertions(1);
 
-        expect(argsToJsonSchema({})).toStrictEqual({ additionalProperties: false, properties: {}, required: [], type: "object" });
+        expect(argsToJsonSchema({})).toStrictEqual({ properties: {}, required: [], type: "object" });
     });
 });
 
@@ -221,7 +221,7 @@ describe("literal const carrier", () => {
 
         // The `typeof value === "bigint"` branch of validatorReader.literalSchema —
         // JSON Schema `const` must be JSON-serializable, so a bigint is stringified.
-        expect(toJsonSchema(v.literal(9_007_199_254_740_993n))).toStrictEqual({ const: "9007199254740993", type: "string" });
+        expect(toJsonSchema(v.literal(9_007_199_254_740_993n))).toStrictEqual({ const: "9007199254740993", format: "int64", type: "string" });
     });
 });
 
@@ -246,6 +246,7 @@ describe("jsonSchemaFromNode over an IR-style reader", () => {
             constraints: () => undefined,
             inner: () => undefined,
             isNullable: () => false,
+            keyChild: () => undefined,
             kind: (node) => node.kind,
             literalSchema: () => {
                 return { const: undefined };
@@ -301,9 +302,72 @@ describe("jsonSchemaFromNode over an IR-style reader", () => {
         const schema: JsonSchema = objectSchemaFromNodes(shape, reader);
 
         expect(schema).toStrictEqual({
-            additionalProperties: false,
             properties: { flag: { type: "boolean" }, maybe: {} },
             required: ["flag"],
+            type: "object",
+        });
+    });
+});
+
+// Every case here pairs the emitted schema with the RUNTIME verdict on the same
+// value. The emitter shipped four claims the parser contradicted, and each only
+// shows up when the two are asserted side by side: a client generated from the
+// spec refused bodies the server accepts, and could not express what the server
+// requires.
+describe("schema agrees with the runtime parser", () => {
+    it("does not close an object the parser leaves open", () => {
+        expect.assertions(2);
+
+        // `v.object` STRIPS an undeclared key by default (`.output()`'s
+        // rejectUnknownKeys mode is the only thing that refuses one), so
+        // `additionalProperties: false` had a generated client rejecting a body
+        // the server accepts.
+        const validator = v.object({ a: v.string() });
+
+        expect(validator.safeParse({ a: "x", b: 1 }).ok).toBe(true);
+        expect(toJsonSchema(validator)).toStrictEqual({
+            properties: { a: { type: "string" } },
+            required: ["a"],
+            type: "object",
+        });
+    });
+
+    it("omits from `required` every field the parser accepts as absent", () => {
+        expect.assertions(4);
+
+        // `v.any()` accepts `undefined`, and a union with an optional member
+        // does too — neither has `kind === "optional"`, which was the whole test
+        // for requiredness.
+        expect(v.object({ a: v.any() }).safeParse({}).ok).toBe(true);
+        expect(argsToJsonSchema({ a: v.any() }).required).toStrictEqual([]);
+        expect(v.object({ a: v.union(v.string(), v.optional(v.number())) }).safeParse({}).ok).toBe(true);
+        expect(argsToJsonSchema({ a: v.union(v.string(), v.optional(v.number())) }).required).toStrictEqual([]);
+    });
+
+    it("describes bigint with one lossless carrier, scalar and literal alike", () => {
+        expect.assertions(3);
+
+        // `type: "integer"` advertised the one JSON form the parser refuses (a
+        // number), and lost precision past 2^53 besides. A bigint rides as its
+        // decimal string everywhere else in the system — the wire codec's tagged
+        // payload, and `v.literal(5n)`'s own `const` — so the schema says string
+        // too, exactly as `bytes` already says base64 string for an ArrayBuffer.
+        expect(v.bigint().safeParse(5).ok).toBe(false);
+        expect(toJsonSchema(v.bigint())).toStrictEqual({ format: "int64", type: "string" });
+        expect(toJsonSchema(v.literal(5n))).toStrictEqual({ const: "5", format: "int64", type: "string" });
+    });
+
+    it("reflects a record's key constraint the parser enforces", () => {
+        expect.assertions(2);
+
+        // The key validator was read for nothing: the parser rejects a
+        // non-matching key, but the schema said any key would do.
+        const validator = v.record(v.string().pattern(/^k_/u), v.number());
+
+        expect(validator.safeParse({ nope: 1 }).ok).toBe(false);
+        expect(toJsonSchema(validator)).toStrictEqual({
+            additionalProperties: { type: "number" },
+            propertyNames: { pattern: "^k_", type: "string" },
             type: "object",
         });
     });

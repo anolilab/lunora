@@ -327,7 +327,18 @@ const encodeWire = (value: unknown, depth = 0): unknown => {
             }
         }
 
-        const encodedError: unknown[] = [TAG, "error", error.name, error.message, properties];
+        // Coerced, because `decodeWire` now REFUSES a non-string in either slot
+        // and an encoder must not emit a frame its own decoder rejects. Both are
+        // writable and neither is type-checked by the platform:
+        // `error.message = { a: 1 }` leaves `typeof` as `"object"`. The old
+        // decoder tolerated that by accident (`new Error(5)` ToString-coerces),
+        // so the strictness landed on the decode side alone and turned a
+        // malformed-but-survivable error into a decoder throw — which, on a
+        // subscription frame, kills the subscription rather than surfacing the
+        // error. The ports whose labels are statically `String` cannot express
+        // the shape; python and ruby coerce at the same place for the same
+        // reason.
+        const encodedError: unknown[] = [TAG, "error", String(error.name), String(error.message), properties];
 
         // `cause` (from `new Error(msg, { cause })`) is a non-enumerable own prop, so
         // the `Object.keys` loop above misses it — carry it in a positional slot so an
@@ -506,11 +517,34 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
                         throw new TypeError("wire-codec: malformed url — href must be a string");
                     }
 
+                    // `new URL` also refuses an href that does not PARSE, which
+                    // is the one decode divergence where this side was the
+                    // strict one: all eight ports stored the string verbatim and
+                    // accepted `"not a url"` — a frame that kills a JS peer's
+                    // subscription and is waved through everywhere else. The
+                    // fail-loud rule wins, so the ports gained the check rather
+                    // than this side losing it. They are held to the floor of it
+                    // (an href must be absolute — a scheme, then the rest) since
+                    // no language parser reproduces WHATWG in the deep end.
                     return new URL(href);
                 }
                 case "error": {
-                    const name = value[2] as string;
-                    const message = value[3] as string;
+                    // Type-CHECK both label slots, like every other slot here.
+                    // These were the last two that were not, and the leniency
+                    // split nine implementations three ways on one malformed
+                    // frame: six ports substituted `""` (accepting the frame
+                    // while erasing the error's identity), two carried the
+                    // non-string through verbatim, and this one ToString-coerced
+                    // the message via `new Error(5)` while passing the name
+                    // straight into `error.name`. A slot that must hold a string
+                    // and does not is a malformed frame.
+                    const name = value[2];
+                    const message = value[3];
+
+                    if (typeof name !== "string" || typeof message !== "string") {
+                        throw new TypeError("wire-codec: malformed error — name and message must be strings");
+                    }
+
                     // Allow-list lookup only (`Object.hasOwn`), never a bare bracket
                     // index — a wire-supplied name must not walk the prototype chain
                     // and dispatch `new` to an unexpected target.
@@ -573,6 +607,22 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
                     }
 
                     const bytes = fromBase64(encoded);
+
+                    // CANONICITY, not merely decodability. `atob` implements
+                    // WHATWG "forgiving base64": it strips embedded whitespace,
+                    // infers missing padding, and discards the unused low bits
+                    // of a short final quantum. The last of those is a silent
+                    // rewrite rather than leniency — `"AQJ="` decodes to 01 02
+                    // and re-encodes as `"AQI="`, different bytes than the peer
+                    // wrote — and the other two split the eight ports 3-accept /
+                    // 5-reject, because each inherited whatever its language's
+                    // decoder happened to allow. Re-encoding and comparing is
+                    // the whole rule in one line: the payload must be exactly
+                    // what a conforming encoder would have written.
+                    if (toBase64(bytes) !== encoded) {
+                        throw new TypeError("wire-codec: malformed bytes — payload must be canonical padded base64");
+                    }
+
                     const ctorName = (value[3] as string | undefined) ?? "Uint8Array";
 
                     if (ctorName === "ArrayBuffer") {
@@ -653,4 +703,29 @@ const decodeDocument = (text: string): Record<string, unknown> | undefined => {
     }
 };
 
-export { decodeDocument, decodeWire, encodeWire, isPlainObject, needsWireEncoding, TAG as WIRE_TAG };
+/**
+ * {@link encodeWire} an outbound call's `args`, re-throwing the bare codec error
+ * with the calling surface and the target function attached.
+ *
+ * Every producer of a Lunora call envelope encodes here — `@lunora/client`'s
+ * service binding, `@lunora/dispatch`'s runner, `ctx.scheduler` (from a shard and
+ * from an HTTP action), and the workpool. `encodeWire` REJECTS any non-plain
+ * object (a `RegExp`, a `Headers`, a class instance, one with a working
+ * `toJSON()`), where `JSON.stringify` used to swallow it into `{}`. Loud beats
+ * silently wrong, but the codec's own message names only the offending type: an
+ * unattributed `TypeError` out of `pool.enqueue` or a scheduled job's log line
+ * cannot be traced back to the call that carried the bad argument. `label` is the
+ * surface (`@lunora/queue`, `ctx.scheduler.runAt`), `path` the target function.
+ */
+const encodeArgsOrThrow = (label: string, path: string, args: unknown): unknown => {
+    try {
+        return encodeWire(args);
+    } catch (error: unknown) {
+        throw new TypeError(
+            `${label}: cannot encode args for '${path}' — ${error instanceof Error ? error.message : String(error)}`,
+            error instanceof Error ? { cause: error } : undefined,
+        );
+    }
+};
+
+export { decodeDocument, decodeWire, encodeArgsOrThrow, encodeWire, isPlainObject, needsWireEncoding, TAG as WIRE_TAG };

@@ -1,3 +1,231 @@
+## @lunora/client [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.81...@lunora/client@1.0.0-alpha.82) (2026-09-06)
+
+### ⚠ BREAKING CHANGES
+
+* **dispatch,scheduler:** `ctx.run(...)` now resolves the function's return value instead of the raw
+`{ result }` envelope. A caller that compensated by reading `.result` must drop that unwrap.
+
+The existing mocks all answered a bare `{ ok: 1 }`, which is exactly why this shipped green; they
+now answer a realistic `{ result: encodeWire(value) }` envelope, plus a bigint/bytes/Date/NaN
+round-trip in both directions.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(runtime): decode a scheduled workflow's args before create({ params })
+
+Review of the wire-bracketing change caught a regression the change itself
+introduced. `ctx.scheduler.runAt` now stores `encodeWire(args)` in one envelope
+that both dispatch targets share, but only one of them decoded it: a function
+target's args are decoded by the shard, while a workflow target never reaches the
+shard — `handleSchedulerDispatch` hands them straight to `create({ params })`.
+
+So `runAt(when, workflows.foo, { total: 5n })` started an instance whose
+`event.payload.total` was `["$lunora.wire$", "bigint", "5"]`. Before the encode
+landed it threw on `JSON.stringify` instead, which is wrong but loud; this turned
+it into a silent corruption, which is worse.
+
+The workflow branch now decodes, so the two targets are symmetric. The docblock on
+the encode named only the shard's decode and now names both, because a reader
+checking whether the round trip closes would have concluded from it that it did.
+
+The regression test drives the workflow branch with a `Date` and a bigint past
+float range and asserts what `create()` receives; it fails against the un-decoded
+version and passes with it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(runtime): bracket the httpAction scheduler on the same wire as the shard
+
+`ctx.scheduler` on an httpAction context and `@lunora/scheduler`'s
+`createScheduler` write to and read from the SAME SchedulerDO records, but only
+the shard-side one encoded on write and decoded on `list()`/`get()`. So
+`ctx.scheduler.runAt(t, internal.billing.settle, { amount: 1234n })` from a
+webhook threw outright (`JSON.stringify` refuses a bigint), and a record
+scheduled from a shard read back through the httpAction's `get()` as the tagged
+`["$lunora.wire$","bigint","1234"]` tuple while `ctx.db.system.query
+("_scheduled_functions")` on the same record answered `1234n`. Both surfaces now
+encode on write and decode on read.
+
+`get()` also returned the DO's `{ record }` envelope rather than the record, and
+`{}` rather than `null` for an id that matched nothing — both breaking its
+declared `Record<string, unknown> | null` and diverging from
+`createScheduler.get()`. It unwraps now.
+
+The admin proxy behind the studio's scheduled-jobs and dead-letter panels keeps
+forwarding records verbatim, deliberately: it re-serializes with
+`JSON.stringify`, which throws on the very bigint the encode exists to carry, so
+decoding on the way through would turn any such job into a 500. `@lunora/client`
+decodes at the consumer instead (`listScheduledJobs`, `listDeadJobs`, and the
+`subscribeScheduledJobs` live push, which the proxy could never have covered).
+
+Reject a dispatch response body that is not a `{ result }` envelope. `typeof []
+=== "object"`, so a 200 body of `[1,2,3]` — or one with no `result` key — slipped
+the object guard and resolved `decodeWire(undefined)`, i.e. `undefined`, as "the
+function returned nothing". A genuine `undefined` return is emitted as
+`{"result":["$lunora.wire$","undefined"]}` with the key always present, so
+requiring it costs nothing.
+
+Route all four call-envelope producers through one
+`encodeArgsOrThrow(label, path, args)` in `shared/wire-codec.ts`. `encodeWire`
+throws on any non-plain object; three of the four sites dropped the labelled
+error the fourth had, so a bad argument left a bare unattributable `TypeError`
+from `ctx.run` / `ctx.scheduler.runAt` / `pool.enqueue` — useless on a scheduled
+job debugged from a log line.
+* **dispatch,scheduler:** `encodeWire` rejects any non-plain object INCLUDING one with a
+working `toJSON()`, which `JSON.stringify` honoured. So
+`ctx.scheduler.runAfter(60_000, internal.billing.charge, { amount: new
+Decimal("9.99") })` — which serialised before — now throws at schedule time.
+Loud rather than silently wrong; pass a plain value instead.
+
+The same wire-bracketing rationale had been restated five times across three
+files (~25 comment lines against ~15 of code), which is how the scheduler
+docblock came to be wrong without anyone noticing. One canonical note now lives
+at the dispatch runner's encode; the rest point at it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(workflow): decode a scheduled workflow's params where the handler reads them
+
+Review caught that the earlier fix put the decode on the wrong side of the seam.
+Workflow `params` are JSON-serialised by Cloudflare into durable storage, so
+decoding before `create({ params })` fails creation outright on a `bigint` and
+silently flattens a `Date` back to a string — the wire form was the only shape
+that could survive that hop intact.
+
+The dispatch branch now passes the encoded args through untouched, and
+`createRunContext` decodes at `params`, which is the first point that can hand a
+handler real `bigint`/`Date`/bytes values. `decodeWire` is identity on pure JSON,
+so a directly created or spawned instance is unaffected.
+
+Both sides are pinned. The runtime test asserts the boundary still carries the
+wire form — decoding there is what breaks creation — and the workflow test
+asserts the handler receives the decoded values; it fails against the raw payload.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+* **protocol,sdks:** the codec refuses four decode inputs it used to accept — a non-canonical
+base64 `bytes` payload, a non-string `error` name or message, and, in the ports, a
+non-absolute `url` href.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(protocol): pin the absolute-href floor against a bare colon check
+
+The three `url-href-*` rejections were `"not a url"`, `""` and `"//example.com/x"`,
+and the one accepted case was `"https://example.com/"`. All four are satisfied by
+`href.includes(":")`, so a port hand-rolling exactly that passed the suite while
+accepting `":x"`, `"1http:x"` and `"é:x"` — the fixtures documented an
+intention rather than pinning a floor.
+
+Add those three as rejections, plus `a+b-c.1:x` as an accepted case so the
+counterweight holds too: a port cannot satisfy the new rejections by narrowing to
+an alphanumeric-only scheme, since `+`, `-` and `.` are legal per RFC 3986. The
+reference agrees on all four via `new URL`.
+
+Verified by poisoning: moving `":x"` into `cases[]` fails all eight suites, and
+the corrected fixture passes all eight — so every port genuinely reads and
+enforces these, rather than three of them generating a subtest per entry while
+the rest quietly loop over a stale copy.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* refactor(sdks): drop the Rust decoder's unreachable whitespace strip
+
+The canonicity compare added with the base64 rule tests the ORIGINAL `text`
+against a re-encode, so the leading whitespace filter could not change any
+outcome: a payload wrapped across lines decodes to bytes whose re-encode carries
+no newline, and the compare rejects it. The reference rejects it too
+(`bytes-base64-newline` is in `rejected[]`), which is what the rule decided.
+
+The comment above it still claimed the opposite — "that leniency IS the
+reference's" — a stale line inside a docblock whose surrounding text had already
+been updated.
+
+The padding loop next to it is NOT dead and now says so: an `=` reaching the
+alphabet match returns `None`, so without that loop no correctly padded payload
+decodes at all. Verified by deleting it — `conformance_manifest_is_covered`
+fails immediately.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(sdks): assert the round trip on the wire bytes
+
+The conformance suites compared `canonical(roundTripped) == canonical(expected)`, and
+`canonical` routes through `stableStringify`, which spells every number the ECMAScript way. A
+port that puts `1.0` on the wire where the reference puts `1` therefore compared EQUAL — the
+comparison normalises away the very difference it exists to measure. One port shipped exactly
+that: every date went out as `1700000000000.0` under a green suite.
+
+Two suites had grown their own answer to this and six had none. All eight now spell one rule:
+`wireText`, defined beside `canonical` as the serializer that port's own transport puts on the
+socket, asserted immediately after it. Removing rust's integral narrowing turns rust red on 1
+wire-text line with `round-trip` still green; removing dart's turns 17 red, all of them
+wire-text. In go, java and kotlin the second line cannot currently fail independently — go
+defines `canonical` in terms of `wireText`, and the JVM parsers map every JSON number to
+`Double` so both sides of the comparison move together — but it is the shape a ninth port
+copies, and a change to either parser makes it live. sdks/README.md records which serializer
+each port uses and this measurement.
+
+Adds `number-past-exact-integer-range` (`1e20`), the first fixture case in `(2^53, 1e21)` —
+which is where every port's integer-narrowing bound sits, and where nothing reached before.
+Raising dart's bound to the 1e21 its comment claimed corrupts the value outright:
+`(1e20).toInt()` saturates at 9223372036854775807, and the new case catches it on both lines.
+That comment stated the wrong bound (exponent form starts at 1e21, not 2^53); it now states the
+real one, the residual trailing `.0` on `(2^53, 1e21)`, and why closing it would mean a ninth
+number formatter. What a fixture cannot pin is recorded under "Deliberately unpinned, and why":
+`wireText` compares a port against its own parse, never against the reference's bytes, which no
+fixture can carry without also pinning whitespace and key order.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(protocol): coerce the error labels on encode
+
+`decodeWire` now refuses a non-string in an error frame's `name` or `message` slot, type-checked
+like every other slot. `encodeWire` kept writing both verbatim, so the codec could emit a frame
+its own decoder rejects — and a decoder throw on a subscription frame kills the subscription
+rather than surfacing the error. Both slots are writable and neither is type-checked by the
+platform: `error.message = { a: 1 }` leaves `typeof` as `"object"`, and the old decoder tolerated
+that only by accident, because `new Error(5)` ToString-coerces.
+
+Coerced at encode in the three implementations whose labels can hold a non-string — the
+reference, python and ruby. The other six declare them as `String` and cannot express the shape.
+
+A fixture cannot pin this: `cases[]` and `rejected[]` carry wire VALUES, and the input here is a
+language-native error object. Each of the three gets a test instead, asserting the frame's slots
+are strings and that the frame this codec emits is one its own decoder accepts.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(client): cast at the assignment so the label-coercion test compiles
+
+`Error["message"]` is `string`, so `Error & { message: unknown }` intersects
+back to `string` and the non-string assignment the test exists to make would
+not type-check. Cast at the assignment site instead.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **dispatch,scheduler:** wire-bracket ctx.run so it returns the value, not the envelope ([#615](https://github.com/anolilab/lunora/issues/615)) ([404264a](https://github.com/anolilab/lunora/commit/404264a805812b080a8298ff33e10c70e224ca2f))
+* **protocol,sdks:** pin the wire slots nine codecs answered differently ([#620](https://github.com/anolilab/lunora/issues/620)) ([e07cdd2](https://github.com/anolilab/lunora/commit/e07cdd2ed7895a7751aa9bf9a1b73a3040cb84f4))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.33
+* **@lunora/do:** upgraded to 1.0.0-alpha.121
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.97
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.58
+
 ## @lunora/client [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.80...@lunora/client@1.0.0-alpha.81) (2026-09-05)
 
 

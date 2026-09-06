@@ -105,8 +105,13 @@ export interface RunOptions {
      * `runAfter`/`runAt` is buffered until the transaction commits, but the
      * handler is handed the id synchronously, so the id has to be decided before
      * the call is made. Callers that are not deferring should leave it unset and
-     * take the minted id from the return value. The DO ignores anything that is
-     * not a plain `[A-Za-z0-9_-]` id.
+     * take the minted id from the return value. Anything that is not a plain
+     * `[A-Za-z0-9_-]` id of at most 64 characters, or that LEADS with `-`, is
+     * REFUSED (`400 INVALID_SCHEDULE_ID`) rather than replaced: the id is handed
+     * to `WorkflowBinding.create({ id })` verbatim for a workflow target, and the
+     * engine's instance-id grammar (`^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`) refuses that
+     * first character. Minting over it would mean two calls naming the same bad
+     * id ran the job twice instead of the second answering `409`.
      *
      * **Not an idempotency key.** An id that is already scheduled is REFUSED
      * (`409 DUPLICATE_SCHEDULE_ID`), not replaced or de-duplicated: the time
@@ -275,14 +280,15 @@ export interface LunoraSchedulerOptions {
      * un-pinned global namespace.
      */
     jurisdiction?: DurableObjectJurisdiction;
-    /** Binding to the `SchedulerDO` durable object namespace. */
-    namespace: DurableObjectNamespaceLike;
 
     /**
-     * Origin where the Worker is mounted. SchedulerDO uses this base URL when
-     * dispatching scheduled functions back to the Worker on alarm fire.
+     * Binding to the `SchedulerDO` durable object namespace.
+     *
+     * The origin the DO dispatches back to is NOT passed here: it reads
+     * `env.LUNORA_ORIGIN_URL` off its own binding at fire time, because a
+     * caller-supplied dispatch target would be an SSRF vector.
      */
-    originUrl: string;
+    namespace: DurableObjectNamespaceLike;
 }
 
 /** Per-enqueue options for a {@link Workpool}. Extends {@link RunOptions} minus the implicit `pool` (the pool sets that). */
@@ -297,7 +303,7 @@ export interface EnqueueOptions {
 
 /**
  * Options for `createWorkpool`. Mirrors {@link LunoraSchedulerOptions}
- * (same `namespace` / `originUrl` / `instanceName`) plus the bounded-concurrency
+ * (same `namespace` / `instanceName`) plus the bounded-concurrency
  * controls. A workpool is a NAMED logical pool inside the existing SchedulerDO —
  * it needs no extra Durable Object or wrangler binding beyond the SchedulerDO
  * the scheduler already uses.

@@ -1,6 +1,6 @@
 {
     "name": "@lunora/react",
-    "version": "1.0.0-alpha.86",
+    "version": "1.0.0-alpha.87",
     "description": "React hooks for Lunora: useQuery, useMutation, useSubscription, and useAuth",
     "keywords": [
         "cloudflare",
@@ -73,9 +73,9 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/client": "1.0.0-alpha.81",
-        "@lunora/errors": "1.0.0-alpha.32",
-        "@lunora/ratelimit": "1.0.0-alpha.40",
+        "@lunora/client": "1.0.0-alpha.82",
+        "@lunora/errors": "1.0.0-alpha.33",
+        "@lunora/ratelimit": "1.0.0-alpha.41",
         "@visulima/storage-client": "catalog:storage"
     },
     "devDependencies": {

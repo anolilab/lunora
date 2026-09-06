@@ -540,12 +540,12 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         expect.assertions(3);
 
         // The studio nav reads `studioFeatures.vectors` out of the emitted shard.
-        // That flag was built from the RAW `.vectorize()` count and the raw
-        // `@lunora/bindings` dependency, both un-gated — so the same build that
-        // withheld `ctx.vectors` from the shard shipped a Vector browser entry
-        // advertising a binding this host does not have. BOTH arms have to fall
-        // to the platform verdict, not just the count: an app depending on
-        // `@lunora/bindings` for `ctx.kv` would otherwise keep the page.
+        // That flag was built from the RAW `.vectorize()` count, un-gated — so the
+        // same build that withheld `ctx.vectors` from the shard shipped a Vector
+        // browser entry advertising a binding this host does not have. The count
+        // has to fall to the platform verdict. `@lunora/bindings` is declared here
+        // to pin the sibling half: `kv` DOES fail open on the dependency, and must
+        // keep doing so on a target where `keyValueStore` is supported.
         writeFileSync(
             join(workdir, "package.json"),
             `{ "name": "gated", "dependencies": { "@lunora/bindings": "*", "@lunora/d1": "*", "@lunora/storage": "*" } }`,

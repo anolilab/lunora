@@ -663,6 +663,45 @@ describe(".nullable() runtime parsing", () => {
         expect(validator.parse(7)).toBe(7);
         expect(() => validator.parse("7")).toThrow(ValidationError);
     });
+
+    it("chain order decides whether a refinement sees null, and the type says which", () => {
+        expect.assertions(3);
+
+        // `.nullable().check(p)` refines the WIDENED type, so `p` runs on null —
+        // and its parameter is typed `string | null`, which is what makes that
+        // safe to rely on. A predicate that dereferences the value here is a
+        // compile error, not a runtime surprise:
+        //
+        //     v.string().nullable().check((s) => s.length > 0)
+        //     //                                 ^ TS18047: 's' is possibly 'null'
+        const seen: unknown[] = [];
+
+        expect(
+            v
+                .string()
+                .nullable()
+                .check((value) => {
+                    seen.push(value);
+
+                    return true;
+                })
+                .parse(null),
+        ).toBeNull();
+        expect(seen).toStrictEqual([null]);
+
+        // `.check(p).nullable()` wraps the refined parser instead, so null
+        // short-circuits ahead of `p`. Same two calls, opposite semantics —
+        // pick the order that states the invariant you mean.
+        expect(
+            v
+                .string()
+                .check(() => {
+                    throw new Error("predicate must not run for null");
+                })
+                .nullable()
+                .parse(null),
+        ).toBeNull();
+    });
 });
 
 describe("v.optional() standalone parsing", () => {

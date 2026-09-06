@@ -7,11 +7,19 @@ import { mutation, query, v } from "./_generated/server.js";
 
 /**
  * Everyone posting here is signed in, so the limit keys on the user — one
- * account cannot exhaust another's budget, and `ctx.ip` is only the fallback for
- * a request that somehow reached the handler without a resolved session. Never
- * key on a value out of `args`: a caller can rotate that per request and never
- * share a bucket with themselves. Limits themselves live in
- * `lunora/ratelimit/schema.ts`.
+ * account cannot exhaust another's budget. Never key on a value out of `args`: a
+ * caller can rotate that per request and never share a bucket with themselves.
+ * Limits themselves live in `lunora/ratelimit/schema.ts`.
+ *
+ * The `ctx.ip` fallback covers a request that reached the handler without a
+ * resolved session — the rate-limit middleware runs before `assertSignedIn`, so
+ * every unauthenticated attempt is keyed here before it is rejected. `ctx.ip` is
+ * Cloudflare's server-side `CF-Connecting-IP` and is populated ONLY when the app
+ * runs on Cloudflare, where the edge stamps that header over anything the client
+ * sent. Deploy this to another target and `ctx.ip` is `undefined` by design — the
+ * runtime will not pass on a header the caller can type — so those attempts all
+ * share the one `"anon"` bucket. Off Cloudflare, key on something the caller
+ * cannot choose (an API key, a signed session) before relying on this limit.
  */
 const limiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
 const byUser = { key: (ctx: { auth: { userId?: null | string }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon" };

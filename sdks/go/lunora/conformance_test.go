@@ -68,6 +68,18 @@ func fixtureScenario(t *testing.T, section string, name string) map[string]any {
 func canonical(t *testing.T, value any) string {
 	t.Helper()
 
+	return wireText(t, value)
+}
+
+// wireText renders a value the way client.go puts it on the socket, with
+// encoding/json. Separate from canonical, which is free to normalise: the other
+// seven suites route canonical through stableStringify, which spells every
+// number the ECMAScript way, so `1.0` and `1` compare EQUAL through it — the
+// divergence a round-trip case exists to catch. Dart's dates went out as
+// `1700000000000.0` for exactly that reason, on a green suite.
+func wireText(t *testing.T, value any) string {
+	t.Helper()
+
 	raw, err := json.Marshal(value)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -115,6 +127,13 @@ func TestWireCodecRoundTrip(t *testing.T) {
 
 			if got, want := canonical(t, reEncoded), canonical(t, expected); got != want {
 				t.Errorf("round-trip mismatch\n got: %s\nwant: %s", got, want)
+			}
+
+			// And again as the BYTES the transport sends: a round-trip
+			// assertion measured on a string the transport never sends cannot
+			// see the divergence it exists to catch.
+			if got, want := wireText(t, reEncoded), wireText(t, expected); got != want {
+				t.Errorf("wire-text mismatch\n got: %s\nwant: %s", got, want)
 			}
 		})
 	}

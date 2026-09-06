@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
+import { encodeWire } from "../../../shared/wire-codec";
 import { createDispatchLogger } from "../src/create-dispatch-logger";
 import { createDispatchRunner, isDeterministicDispatchFailure } from "../src/create-dispatch-runner";
 
@@ -8,10 +9,10 @@ const ENV = { LUNORA_ADMIN_TOKEN: "tok", LUNORA_ORIGIN_URL: "https://app.example
 const REF = { __lunoraRef: "messages:send" };
 
 describe("createDispatchRunner", () => {
-    it("pOSTs to /_lunora/scheduler/dispatch with the bearer + envelope and resolves the JSON body", async () => {
+    it("pOSTs to /_lunora/scheduler/dispatch with the bearer + envelope and resolves the decoded result", async () => {
         expect.assertions(5);
 
-        const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ ok: 1 }, { status: 200 }));
+        const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ result: { ok: 1 } }, { status: 200 }));
         const run = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" });
 
         await expect(run(REF, { to: "a" }, { shardKey: "s1" })).resolves.toEqual({ ok: 1 });
@@ -24,10 +25,28 @@ describe("createDispatchRunner", () => {
         expect(JSON.parse(init.body as string)).toEqual({ args: { to: "a" }, functionPath: "messages:send", shardKey: "s1" });
     });
 
+    it("forwards a caller `traceparent` so the callee joins the trace, and omits it when unset", async () => {
+        expect.assertions(2);
+
+        const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ ok: 1 }, { status: 200 }));
+        const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+
+        await createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue", traceparent })(REF, { to: "a" });
+        await createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" })(REF, { to: "a" });
+
+        const headersOf = (index: number): Record<string, string> =>
+            (fetchImpl.mock.calls[index] as unknown as [string, RequestInit])[1].headers as Record<string, string>;
+
+        // A queue batch or cron fire opens its own trace; without this header every
+        // function the handler invokes became a separate root trace.
+        expect(headersOf(0).traceparent).toBe(traceparent);
+        expect(headersOf(1).traceparent).toBeUndefined();
+    });
+
     it("forwards dedupId as the body's `id` (the receiver's dedup key) and omits the key when unset", async () => {
         expect.assertions(3);
 
-        const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ ok: 1 }, { status: 200 }));
+        const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ result: { ok: 1 } }, { status: 200 }));
         const run = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" });
 
         await run(REF, { to: "a" }, { dedupId: "msg-1#1" });
@@ -228,7 +247,11 @@ describe("createDispatchRunner", () => {
         vi.useFakeTimers();
 
         try {
-            const run = createDispatchRunner({ env: ENV, fetchImpl: async () => Response.json({ ok: 1 }, { status: 200 }), label: "@lunora/queue" });
+            const run = createDispatchRunner({
+                env: ENV,
+                fetchImpl: async () => Response.json({ result: { ok: 1 } }, { status: 200 }),
+                label: "@lunora/queue",
+            });
 
             await expect(run(REF)).resolves.toEqual({ ok: 1 });
             // `dispose()` in the runner's `finally` cleared the deadline timer.
@@ -342,6 +365,125 @@ describe("isDeterministicDispatchFailure", () => {
         const unrelated = new LunoraError("STORAGE_OBJECT_NOT_FOUND", "not found", { status: 404 });
 
         expect(isDeterministicDispatchFailure(unrelated)).toBe(false);
+    });
+});
+
+describe("createDispatchRunner wire bracketing", () => {
+    // The shard answers `jsonResponse({ result: encodeWire(result) })`
+    // (`ShardDO.buildDispatchResponse`), so a realistic mock is an ENVELOPE
+    // carrying an ENCODED result — not the bare object the older mocks used,
+    // which is precisely why an unbracketed hop stayed green here.
+    const shardEnvelope = async (result: unknown, extra: Record<string, unknown> = {}): Promise<Response> =>
+        Response.json({ ...extra, result: encodeWire(result) }, { status: 200 });
+
+    it("resolves the DECODED result off the `{ result }` envelope, not the envelope itself", async () => {
+        expect.assertions(1);
+
+        const value = { status: "cancelled", total: 5n, when: new Date(0) };
+        const run = createDispatchRunner({ env: ENV, fetchImpl: async () => shardEnvelope(value), label: "@lunora/workflow" });
+
+        // The documented workflow guard — `if (order.status === "cancelled")` —
+        // reads `undefined` off the raw envelope.
+        await expect(run(REF)).resolves.toStrictEqual(value);
+    });
+
+    it("round-trips bigint, bytes, Date and NaN through the result", async () => {
+        expect.assertions(4);
+
+        const value = { blob: new Uint8Array([1, 2, 3]), missed: Number.NaN, total: 9_007_199_254_740_993n, when: new Date("2024-03-04T05:06:07.008Z") };
+        const run = createDispatchRunner({ env: ENV, fetchImpl: async () => shardEnvelope(value), label: "@lunora/queue" });
+        const resolved = (await run(REF)) as typeof value;
+
+        expect(resolved.total).toBe(9_007_199_254_740_993n);
+        expect(resolved.blob).toStrictEqual(new Uint8Array([1, 2, 3]));
+        expect(resolved.when).toStrictEqual(new Date("2024-03-04T05:06:07.008Z"));
+        expect(resolved.missed).toBeNaN();
+    });
+
+    it("unwraps the mutation envelope variants (`commitCursor`, `lastMutationId`) the same way", async () => {
+        expect.assertions(2);
+
+        const withCursor = createDispatchRunner({ env: ENV, fetchImpl: async () => shardEnvelope({ id: 1n }, { commitCursor: 42 }), label: "@lunora/queue" });
+        const withSeq = createDispatchRunner({ env: ENV, fetchImpl: async () => shardEnvelope({ id: 2n }, { lastMutationId: 7 }), label: "@lunora/queue" });
+
+        await expect(withCursor(REF)).resolves.toStrictEqual({ id: 1n });
+        await expect(withSeq(REF)).resolves.toStrictEqual({ id: 2n });
+    });
+
+    it("wire-encodes args so a bigint/bytes/Date ARGUMENT survives instead of throwing on JSON.stringify", async () => {
+        expect.assertions(2);
+
+        const fetchImpl = vi.fn<typeof fetch>(async () => shardEnvelope(undefined));
+        const run = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" });
+        const args = { amount: 5n, blob: new Uint8Array([1, 2]), when: new Date(0) };
+
+        await expect(run(REF, args)).resolves.toBeUndefined();
+
+        const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+
+        // The shard `decodeWire`s `payload.args`, so the encoded tagged form is
+        // exactly what makes it back to a `bigint`/`Uint8Array`/`Date` there.
+        expect(JSON.parse(init.body as string)).toStrictEqual({ args: encodeWire(args), functionPath: "messages:send" });
+    });
+
+    it("throws INTERNAL for a 200 JSON body that is not an envelope object", async () => {
+        expect.assertions(2);
+
+        // `JSON.parse("null")` is `null`, on which reading `.result` throws a bare
+        // TypeError that escapes as neither a dispatch failure nor a timeout.
+        const run = createDispatchRunner({ env: ENV, fetchImpl: async () => new Response("null", { status: 200 }), label: "@lunora/workflow" });
+
+        const error = (await run(REF).then(
+            () => undefined,
+            (error_: unknown) => error_,
+        )) as { code?: unknown; message?: unknown };
+
+        expect(error.code).toBe("INTERNAL");
+        expect(error.message).toMatch(/@lunora\/workflow: function dispatch returned a JSON body that is not a \{ result \} envelope \(200\)/);
+    });
+
+    // `typeof [] === "object"`, so the object guard alone let a bare JSON array
+    // and an `{}` through to `decodeWire(undefined)` — resolving `undefined` as
+    // "the function returned nothing" for a body that is not a shard envelope at
+    // all. The shard emits `{"result":["$lunora.wire$","undefined"]}` for a
+    // genuine `undefined` return, never an absent key, so requiring the key is
+    // free.
+    it.each([
+        ["a JSON array", "[1,2,3]"],
+        ["an object with no `result` key", '{"commitCursor":42}'],
+    ])("throws INTERNAL for %s rather than resolving undefined", async (_label: string, body: string) => {
+        expect.assertions(2);
+
+        const run = createDispatchRunner({ env: ENV, fetchImpl: async () => new Response(body, { status: 200 }), label: "@lunora/workflow" });
+
+        const error = (await run(REF).then(
+            () => undefined,
+            (error_: unknown) => error_,
+        )) as { code?: unknown; message?: unknown };
+
+        expect(error.code).toBe("INTERNAL");
+        expect(error.message).toMatch(/@lunora\/workflow: function dispatch returned a JSON body that is not a \{ result \} envelope \(200\)/);
+    });
+
+    // A genuine `undefined` return still resolves — the key is present, tagged.
+    it("resolves undefined for the shard's tagged-undefined envelope", async () => {
+        expect.assertions(1);
+
+        const run = createDispatchRunner({ env: ENV, fetchImpl: async () => shardEnvelope(undefined), label: "@lunora/queue" });
+
+        await expect(run(REF)).resolves.toBeUndefined();
+    });
+
+    // `encodeWire` rejects any non-plain object, where `JSON.stringify` swallowed
+    // it into `{}`. The bare codec TypeError names only the offending type, so an
+    // operator reading a failed dispatch's log line cannot tell which call carried
+    // it — the label and the function path are the whole point.
+    it("labels an unencodable argument with the package and the function path", async () => {
+        expect.assertions(1);
+
+        const run = createDispatchRunner({ env: ENV, fetchImpl: async () => shardEnvelope(undefined), label: "@lunora/queue" });
+
+        await expect(run(REF, { pattern: /nope/u })).rejects.toThrow(/@lunora\/queue: cannot encode args for 'messages:send' — /);
     });
 });
 

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { encodeWire } from "../../../shared/wire-codec";
 import createWorkpool from "../src/create-workpool";
 import { SchedulerDO } from "../src/scheduler-do";
 import type { DurableObjectNamespaceLike, DurableObjectStubLike, FunctionReference, ScheduleRecord } from "../src/types";
@@ -477,19 +478,18 @@ const fakeNamespace = (
 };
 
 describe("createWorkpool", () => {
-    it("requires namespace, originUrl, and a positive maxConcurrency", () => {
-        expect.assertions(3);
+    it("requires a namespace and a positive maxConcurrency", () => {
+        expect.assertions(2);
 
         expect(() => createWorkpool({} as never)).toThrow(/namespace/);
-        expect(() => createWorkpool({ namespace: fakeNamespace().namespace } as never)).toThrow(/originUrl/);
-        expect(() => createWorkpool({ maxConcurrency: 0, namespace: fakeNamespace().namespace, originUrl: "https://app.test" })).toThrow(/maxConcurrency/);
+        expect(() => createWorkpool({ maxConcurrency: 0, namespace: fakeNamespace().namespace })).toThrow(/maxConcurrency/);
     });
 
     it("enqueue() forwards pool, maxConcurrency, and retry to /schedule", async () => {
         expect.assertions(5);
 
         const { calls, namespace } = fakeNamespace();
-        const pool = createWorkpool({ maxConcurrency: 3, name: "stripe", namespace, originUrl: "https://app.test" });
+        const pool = createWorkpool({ maxConcurrency: 3, name: "stripe", namespace });
 
         const result = await pool.enqueue(fnRef, { invoiceId: "in_1" }, { retry: { maxAttempts: 2 } });
 
@@ -504,7 +504,7 @@ describe("createWorkpool", () => {
         expect.assertions(2);
 
         const { calls, namespace } = fakeNamespace({ "/pool": { inFlight: 1, maxConcurrency: 3, queued: 4 } });
-        const pool = createWorkpool({ maxConcurrency: 3, name: "stripe", namespace, originUrl: "https://app.test" });
+        const pool = createWorkpool({ maxConcurrency: 3, name: "stripe", namespace });
 
         const status = await pool.status();
 
@@ -512,11 +512,35 @@ describe("createWorkpool", () => {
         expect(new URL(calls[0]!.url).searchParams.get("name")).toBe("stripe");
     });
 
-    it("rejects a negative delayMs", async () => {
+    it("wire-encodes enqueued args so a bigint/bytes argument survives to the shard", async () => {
+        expect.assertions(1);
+
+        const { calls, namespace } = fakeNamespace();
+        const pool = createWorkpool({ maxConcurrency: 1, namespace, originUrl: "https://app.test" });
+        const args = { amount: 5n, blob: new Uint8Array([1, 2]) };
+
+        // Same hop as `ctx.scheduler.runAt`: `callDO` JSON.stringifies the body
+        // and the shard `decodeWire`s `payload.args` at the far end.
+        await pool.enqueue(fnRef, args);
+
+        expect(calls[0]?.body.args).toStrictEqual(encodeWire(args));
+    });
+
+    // Same unattributable-TypeError problem as `ctx.scheduler.runAt`; same label.
+    it("labels an unencodable argument with the pool surface and the function path", async () => {
         expect.assertions(1);
 
         const { namespace } = fakeNamespace();
         const pool = createWorkpool({ maxConcurrency: 1, namespace, originUrl: "https://app.test" });
+
+        await expect(pool.enqueue(fnRef, { pattern: /nope/u })).rejects.toThrow(/workpool\.enqueue: cannot encode args for 'stripe\.sync' — /);
+    });
+
+    it("rejects a negative delayMs", async () => {
+        expect.assertions(1);
+
+        const { namespace } = fakeNamespace();
+        const pool = createWorkpool({ maxConcurrency: 1, namespace });
 
         await expect(pool.enqueue(fnRef, {}, { delayMs: -1 })).rejects.toThrow(/delayMs/);
     });

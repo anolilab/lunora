@@ -79,7 +79,6 @@ describe("schedulerDO", () => {
             post("/schedule", {
                 args: { text: "hi" },
                 functionPath: "messages.send",
-                originUrl: "https://app.test",
                 scheduledFor,
             }),
         );
@@ -102,8 +101,8 @@ describe("schedulerDO", () => {
         const later = Date.now() + 60_000;
         const sooner = Date.now() + 1000;
 
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: later }));
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "b", originUrl: "https://x.test", scheduledFor: sooner }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", scheduledFor: later }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "b", scheduledFor: sooner }));
 
         expect(state.alarm).toBe(sooner);
     });
@@ -116,10 +115,10 @@ describe("schedulerDO", () => {
         const later = Date.now() + 60_000;
         const sooner = Date.now() + 1000;
 
-        const soonerResponse = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "b", originUrl: "https://x.test", scheduledFor: sooner }));
+        const soonerResponse = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "b", scheduledFor: sooner }));
         const soonerBody = await readSchedule(soonerResponse);
 
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: later }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", scheduledFor: later }));
 
         expect(state.alarm).toBe(sooner);
 
@@ -148,8 +147,8 @@ describe("schedulerDO", () => {
         const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
         const now = Date.now();
 
-        await scheduler.fetch(post("/schedule", { args: { x: 1 }, functionPath: "due", originUrl: "https://x.test", scheduledFor: now - 1000 }));
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "later", originUrl: "https://x.test", scheduledFor: now + 60_000 }));
+        await scheduler.fetch(post("/schedule", { args: { x: 1 }, functionPath: "due", scheduledFor: now - 1000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "later", scheduledFor: now + 60_000 }));
 
         await scheduler.alarm();
 
@@ -275,7 +274,7 @@ describe("schedulerDO — live subscriptions", () => {
         // Simulate an already-connected subscriber.
         state.acceptWebSocket?.(createFakeSocket() as never);
 
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: Date.now() + 10_000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", scheduledFor: Date.now() + 10_000 }));
 
         const pushed = state.sockets[0]?.sent ?? [];
 
@@ -289,9 +288,7 @@ describe("schedulerDO — live subscriptions", () => {
         const state = createFakeStateWithSockets();
         const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
-        const scheduled = await scheduler.fetch(
-            post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: Date.now() + 10_000 }),
-        );
+        const scheduled = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", scheduledFor: Date.now() + 10_000 }));
         const { id } = await readSchedule(scheduled);
 
         // Connect after scheduling, then cancel — the cancel should push an empty list.
@@ -310,9 +307,7 @@ describe("schedulerDO — live subscriptions", () => {
         const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
         // No WS hooks on the plain fake — broadcast must be a silent no-op.
-        const response = await scheduler.fetch(
-            post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: Date.now() + 10_000 }),
-        );
+        const response = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", scheduledFor: Date.now() + 10_000 }));
 
         expect(response.status).toBe(200);
     });
@@ -398,7 +393,7 @@ describe("schedulerDO — bounded listing", () => {
         // the wire format both paths emit.)
         state.acceptWebSocket?.(createFakeSocket() as never);
 
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "new", originUrl: "https://x.test", scheduledFor: Date.now() + 10_000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "new", scheduledFor: Date.now() + 10_000 }));
 
         const changeMessage = JSON.parse(state.sockets[0]?.sent.at(-1) ?? "{}") as { records: ScheduleRecord[]; truncated: boolean; type: string };
 
@@ -777,6 +772,23 @@ describe("schedulerDO — dead-letter admin endpoints", () => {
         expect(state.alarm).toBe(result.scheduledFor);
     });
 
+    it("refuses a caller-supplied id the workflow engine would reject", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        // Minting over it stored the job under an id the caller never sees, so a
+        // repeated call scheduled a SECOND job rather than answering 409.
+        const response = await scheduler.fetch(
+            post("/schedule", { args: {}, functionPath: "jobs.charge", id: "-daily-2026-09-06", scheduledFor: Date.now() + 60_000 }),
+        );
+
+        expect(response.status).toBe(400);
+        await expect(response.json<{ error: { code: string } }>()).resolves.toMatchObject({ error: { code: "INVALID_SCHEDULE_ID" } });
+        expect([...state.storageMap.keys()]).toStrictEqual([]);
+    });
+
     it("refuses a caller-supplied id a dead-letter record still holds, so /dead/retry cannot overwrite the new job", async () => {
         expect.assertions(4);
 
@@ -881,9 +893,7 @@ describe("schedulerDO — alarm contract (fake clock)", () => {
 
         // runAt posts /schedule with an absolute time; runAfter is the same path
         // with `Date.now() + delayMs`. Schedule 60s out.
-        await scheduler.fetch(
-            post("/schedule", { args: { text: "hi" }, functionPath: "messages.send", originUrl: "https://app.test", scheduledFor: now + 60_000 }),
-        );
+        await scheduler.fetch(post("/schedule", { args: { text: "hi" }, functionPath: "messages.send", scheduledFor: now + 60_000 }));
 
         // The DO armed the alarm for exactly the scheduled time.
         expect(setAlarmCalls).toEqual([now + 60_000]);
@@ -904,16 +914,12 @@ describe("schedulerDO — alarm contract (fake clock)", () => {
         const now = 1_700_000_000_000;
         const { scheduler, fastForwardToAlarm, currentAlarm } = harness((state, env) => new TestScheduler(state, env), now);
 
-        const first = await scheduler.fetch(
-            post("/schedule", { args: {}, functionPath: "jobs.remind", id: "reminder-42", originUrl: "https://app.test", scheduledFor: now + 1000 }),
-        );
+        const first = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.remind", id: "reminder-42", scheduledFor: now + 1000 }));
         // Same id, five seconds later. Accepting it overwrites the `id:` header
         // while BOTH `t:` index entries survive, so the drain dispatches the
         // t+5000 record at t+1000 and then deletes the entry it should have
         // fired at — the job runs four seconds early and never runs again.
-        const second = await scheduler.fetch(
-            post("/schedule", { args: {}, functionPath: "jobs.remind", id: "reminder-42", originUrl: "https://app.test", scheduledFor: now + 5000 }),
-        );
+        const second = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.remind", id: "reminder-42", scheduledFor: now + 5000 }));
 
         expect(first.status).toBe(200);
         expect(second.status).toBe(409);
@@ -932,8 +938,8 @@ describe("schedulerDO — alarm contract (fake clock)", () => {
         const now = 1_700_000_000_000;
         const { scheduler, setAlarmCalls, fastForwardToAlarm, currentAlarm } = harness((state, env) => new TestScheduler(state, env), now);
 
-        await scheduler.fetch(post("/schedule", { args: { x: 1 }, functionPath: "due", originUrl: "https://app.test", scheduledFor: now + 1000 }));
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "later", originUrl: "https://app.test", scheduledFor: now + 60_000 }));
+        await scheduler.fetch(post("/schedule", { args: { x: 1 }, functionPath: "due", scheduledFor: now + 1000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "later", scheduledFor: now + 60_000 }));
 
         // Earliest-pending wins the alarm (armed to the sooner of the two).
         expect(currentAlarm()).toBe(now + 1000);
@@ -953,8 +959,8 @@ describe("schedulerDO — alarm contract (fake clock)", () => {
         const now = 1_700_000_000_000;
         const { scheduler, setAlarmCalls, fastForwardToAlarm, currentAlarm } = harness((state, env) => new TestScheduler(state, env), now);
 
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "first", originUrl: "https://app.test", scheduledFor: now + 1000 }));
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "second", originUrl: "https://app.test", scheduledFor: now + 2000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "first", scheduledFor: now + 1000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "second", scheduledFor: now + 2000 }));
 
         await fastForwardToAlarm();
         await fastForwardToAlarm();
@@ -971,7 +977,7 @@ describe("schedulerDO — alarm contract (fake clock)", () => {
         const now = 1_700_000_000_000;
         const { scheduler, setAlarmCalls, fastForwardToAlarm } = harness((state, env) => new FailingScheduler(state, env, Number.POSITIVE_INFINITY), now);
 
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", originUrl: "https://app.test", scheduledFor: now + 1000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: now + 1000 }));
 
         const { firedAt } = await fastForwardToAlarm();
 

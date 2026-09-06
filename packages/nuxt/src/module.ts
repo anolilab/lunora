@@ -27,6 +27,43 @@
  * export { default } from "./.output/server/index.mjs";
  * export { ShardDO } from "./lunora/server";
  * ```
+ *
+ * ## Why this module registers no Vue plugin
+ *
+ * The `LunoraClient` is provided by a plugin the *project* owns
+ * (`plugins/lunora.ts`), not by `addPlugin` from here. That looks like the
+ * wrong layer — a module-registered plugin would fix every app rather than
+ * only freshly scaffolded ones — and it has been proposed more than once, so
+ * the reasons are recorded here rather than re-derived:
+ *
+ * - **The client URL is not knowable from this module.** In production it is
+ *   the page's own origin (`useRequestURL().origin`), but in dev `nuxt dev`
+ *   runs Nitro under Node, which cannot host `ShardDO`, so the client must
+ *   talk to the `wrangler dev` sidecar instead — on a port the Lunora CLI
+ *   resolves per run (`--worker-port`, then wrangler's `dev.port`, then the
+ *   first free port at or above 8787). This module sees none of that. It
+ *   could only hardcode the template's 8788, which is wrong for exactly the
+ *   hand-written apps a module-level fix is meant to serve, or grow a `devUrl`
+ *   option the user has to keep in sync with their own wrangler config by
+ *   hand.
+ * - **It would be a SECOND provider, and the loser is not free.** `addPlugin`
+ *   unshifts, so a module plugin installs before the project's own; both call
+ *   `app.provide` on the same injection key and the project's wins. That
+ *   ordering is the right way round, but it leaves a live orphan: in a browser
+ *   the `LunoraClient` constructor auto-probes IndexedDB persistence and
+ *   queues outbox hydration, which opens sockets for restored writes. Two
+ *   clients would then contend over one durable outbox, one of them dialling a
+ *   guessed origin. A loud `useLunora(): no LunoraClient provided` is a better
+ *   failure than that.
+ * - **Every other framework integration provides the client in user-land**
+ *   too (`root.tsx`, `layout.tsx`, `providers.tsx`, `__root.tsx`), for the
+ *   same reason: the URL is app-specific. Nuxt silently constructing one would
+ *   be the odd case, and it would also force `@lunora/vue` (and Vue) onto apps
+ *   that use only the `@lunora/nuxt/server` reactive-loader helpers.
+ *
+ * What this module does instead is warn — see {@link checkClientOnlyProvider},
+ * which catches the actual defect (a `.client.ts` provider, which never runs on
+ * the server) at build time, the same stance it already takes for `worker.ts`.
  */
 
 /* eslint-disable import/exports-last -- the public ModuleOptions type is declared next to the module definition it configures rather than grouped at the file end */
@@ -190,6 +227,78 @@ export const checkWorkerEntry = (rootDirectory: string, warn: (message: string) 
     }
 };
 
+/** Whether the source installs `@lunora/vue`'s provider (`app.use(createLunora(client))`). */
+const CREATE_LUNORA_PATTERN = /\bcreateLunora\b/u;
+
+/** Read `path` and report whether it mentions `createLunora`; an unreadable file simply doesn't count as a provider. */
+const providesLunoraClient = (path: string): boolean => {
+    try {
+        return CREATE_LUNORA_PATTERN.test(readFileSync(path, "utf8"));
+    } catch {
+        return false;
+    }
+};
+
+/**
+ * One entry of Nuxt's resolved plugin list (`app.plugins` at `app:resolve`):
+ * an absolute `src` plus the `mode` Nuxt derived for it. Declared structurally
+ * for the same reason as {@link LunoraNuxtModule} — `@nuxt/schema`, which owns
+ * `NuxtPlugin`, is not a resolvable dependency here — and `NuxtPlugin[]`
+ * satisfies it.
+ */
+export interface ResolvedNuxtPlugin {
+    mode?: "all" | "client" | "server";
+    src: string;
+}
+
+/**
+ * Warn when the project's ONLY `LunoraClient` provider is a client-only plugin.
+ *
+ * `@lunora/vue`'s composables call `useLunora()` unconditionally — ahead of
+ * their own browser guard — and it throws when nothing is injected. A
+ * `plugins/lunora.client.ts` by definition never runs on the server, so the
+ * first server-rendered page touching Lunora answers 500 with
+ * `useLunora(): no LunoraClient provided`. The fix is dropping `.client` from
+ * the filename plus a universal way to read the origin, which the warning says.
+ *
+ * Takes Nuxt's own resolved plugin list (`app.plugins`, from the `app:resolve`
+ * hook) rather than scanning `plugins/` itself. That is the whole point: Nuxt
+ * loads plugins with a two-pattern, ONE-level glob — top-level entries plus a
+ * subdirectory's `index` file — over every layer's configured plugins dir, so
+ * a filesystem scan of its own has to mirror the glob, the extension list,
+ * `dir.plugins` and every layer — and gets the answer WRONG in both directions
+ * when it doesn't. A recursive scan counts `plugins/lib/make-client.ts` (an
+ * ordinary colocated helper Nuxt never loads) as a universal provider and goes
+ * silent on a genuinely broken app. Reading `mode` off the resolved entry also
+ * drops the `.client` filename rule, since that is what Nuxt derived it from.
+ *
+ * Detection of the provider itself is the same shape as
+ * {@link looksLikeShardDoExport}: a documented keyword test, not a TS parse,
+ * because the outcome is a build-time warning. Its imprecision is a
+ * `createLunora` mention inside a comment, whose only cost is a warning
+ * pointing at a file that is already about the client.
+ *
+ * Silence requires a provider Nuxt loads on the server — `mode` `"all"` or
+ * `"server"` — not merely a working app: an app that confines every Lunora
+ * usage to `<ClientOnly>` is correct with a client-only provider and still
+ * warns, which is why the message names that case as a reason to ignore it.
+ */
+export const checkClientOnlyProvider = (plugins: ReadonlyArray<ResolvedNuxtPlugin>, warn: (message: string) => void): void => {
+    const providers = plugins.filter((plugin) => providesLunoraClient(plugin.src));
+
+    if (providers.length === 0 || providers.some((plugin) => plugin.mode !== "client")) {
+        return;
+    }
+
+    warn(
+        `the only plugin providing a \`LunoraClient\` is client-only (${providers.map((plugin) => plugin.src).join(", ")}) — ` +
+            `\`@lunora/vue\`'s composables resolve the client during SSR too and throw \`useLunora(): no LunoraClient provided\` without one, ` +
+            `so the first server-rendered page that touches Lunora answers 500. Drop the \`.client\` from the filename to make the plugin ` +
+            `universal, and read the origin with \`useRequestURL().origin\`, which resolves from the incoming request on the server and from ` +
+            `\`window.location\` in the browser. Ignore this if every Lunora usage is confined to \`<ClientOnly>\`, which never renders on the server.`,
+    );
+};
+
 /** The fixed path prefix the Lunora worker routes on (`RPC_PATH` / `WS_PATH` in `@lunora/runtime`). */
 const LUNORA_ROUTE_PREFIX = "/_lunora";
 
@@ -270,6 +379,21 @@ const lunoraNuxtModule: LunoraNuxtModule = defineNuxtModule<ModuleOptions>({
         // otherwise-valid build. See `checkWorkerEntry` for the three checks.
         checkWorkerEntry(nuxt.options.rootDir, (message) => {
             useLogger("@lunora/nuxt").warn(message);
+        });
+
+        // The client-side counterpart: the project (not this module) owns the
+        // plugin that provides the `LunoraClient` — see the file docblock for
+        // why — so the one failure mode we can still catch cheaply is a
+        // provider that never runs on the server. Same warn-don't-fail stance.
+        // Hooked on `app:resolve` (which runs in `nuxt build` and `nuxt dev`
+        // alike) so the check sees the plugin list Nuxt actually resolved,
+        // modes included, instead of re-deriving it from the filesystem — a
+        // scan of its own has to mirror Nuxt's one-level glob, extension list,
+        // `dir.plugins` and layers, and silently misjudges apps when it drifts.
+        nuxt.hook("app:resolve", (app) => {
+            checkClientOnlyProvider(app.plugins, (message) => {
+                useLogger("@lunora/nuxt").warn(message);
+            });
         });
     },
 });

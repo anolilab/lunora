@@ -15,17 +15,13 @@ import type { DurableObjectNamespaceLike, LunoraSchedulerOptions } from "./types
 
 /**
  * Defensive runtime guard shared by `createScheduler` and `createWorkpool`:
- * `namespace` / `originUrl` are required by the type, but JS callers can omit
- * them (exercised by `createScheduler({} as never)` in the tests).
+ * `namespace` is required by the type, but a JS caller can omit it (exercised
+ * by `createScheduler({} as never)` in the tests).
  */
 const assertSchedulerOptions = (options: LunoraSchedulerOptions): void => {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
     if (!options.namespace) {
         throw new LunoraError("INTERNAL", "@lunora/scheduler: `namespace` (SchedulerDO binding) is required");
-    }
-
-    if (!options.originUrl) {
-        throw new LunoraError("INTERNAL", "@lunora/scheduler: `originUrl` is required so the DO can dispatch back to the Worker");
     }
 };
 

@@ -2123,6 +2123,14 @@ interface TraceSamplingConfig {
 type TraceTrustSignal = "mtls";
 ```
 
+### `TriggerTrace` (interface)
+
+```ts
+interface TriggerTrace {
+    traceparent: string;
+}
+```
+
 ### `TrustInboundTraceContext` (type)
 
 ```ts

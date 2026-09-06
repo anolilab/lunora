@@ -106,27 +106,49 @@ const compileClause = (clause: AuthWhereClause): SqlFragment => {
     }
 };
 
+/** Join one connector group into a parenthesized fragment, or `undefined` when the group is empty. */
+const compileGroup = (clauses: ReadonlyArray<AuthWhereClause>, joiner: "AND" | "OR"): SqlFragment | undefined => {
+    if (clauses.length === 0) {
+        return undefined;
+    }
+
+    const fragments = clauses.map((clause) => compileClause(clause));
+
+    return { params: fragments.flatMap((fragment) => fragment.params), sql: fragments.map((fragment) => `(${fragment.sql})`).join(` ${joiner} `) };
+};
+
 /**
  * Compile a better-auth where clause list into a single SQL fragment (no leading
- * `WHERE`). Clauses fold left-to-right by their `connector`, parenthesized so the
- * grouping matches better-auth's own left-associative semantics rather than
- * SQL's `AND`-over-`OR` precedence. An empty list compiles to an empty fragment.
+ * `WHERE`).
+ *
+ * The list is PARTITIONED by `connector` into an AND group and an OR group, and
+ * the two groups are then ANDed — the same grouping every persistent better-auth
+ * adapter produces — and the same grouping `store.ts`'s `matchesWhere` applies,
+ * which this must agree with clause for clause. Every group is parenthesized, so
+ * SQL's `AND`-over-`OR` precedence cannot regroup it.
+ *
+ * Folding left-associatively instead — as this did — turns `[A, B(OR), C(OR)]`
+ * into `A OR B OR C`, which returns rows failing `A`. On a credential lookup that
+ * is an authentication bypass in shape. An empty list compiles to an empty
+ * fragment; a list with no OR clause compiles to the same conjunction as before.
  */
 const compileWhere = (where: ReadonlyArray<AuthWhereClause>): SqlFragment => {
-    if (where.length === 0) {
+    const groups = [
+        compileGroup(
+            where.filter((clause) => clause.connector !== "OR"),
+            "AND",
+        ),
+        compileGroup(
+            where.filter((clause) => clause.connector === "OR"),
+            "OR",
+        ),
+    ].filter((group): group is SqlFragment => group !== undefined);
+
+    if (groups.length === 0) {
         return { params: [], sql: "" };
     }
 
-    let accumulator = compileClause(where[0] as AuthWhereClause);
-
-    for (const clause of where.slice(1)) {
-        const fragment = compileClause(clause);
-        const connector = clause.connector === "OR" ? "OR" : "AND";
-
-        accumulator = { params: [...accumulator.params, ...fragment.params], sql: `(${accumulator.sql} ${connector} ${fragment.sql})` };
-    }
-
-    return accumulator;
+    return { params: groups.flatMap((group) => group.params), sql: groups.map((group) => `(${group.sql})`).join(" AND ") };
 };
 
 /** Build the ` WHERE …` suffix (with leading space) or an empty string. */
