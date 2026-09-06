@@ -757,11 +757,19 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `SpanContextIds` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `SpanEvaluation` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `SpanHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanIdentity` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -4461,6 +4469,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `TriggerTrace` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `TrustInboundTraceContext` (type)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -5475,11 +5487,19 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `SpanContextIds` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `SpanEvaluation` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `SpanHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanIdentity` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -7289,11 +7309,19 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `SpanContextIds` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `SpanEvaluation` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `SpanHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanIdentity` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

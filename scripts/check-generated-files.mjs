@@ -297,6 +297,73 @@ if (unbuilt.length > 0) {
     process.exit(1);
 }
 
+/**
+ * The third half: the CI job in FRONT of this script has to run at all.
+ *
+ * `lint.yml` gates `generated-files` on the `generated_files` path filter in
+ * `.github/file-filters.yml`. That filter listed `packages/codegen/**` and
+ * nothing else from the emitter's closure — so a PR editing only an advisor
+ * lint's remediation text (which every example's `shard.ts` embeds verbatim)
+ * matched no filter, the job was skipped, `Check Lint Run` went green, and all
+ * 13 examples drifted for the next unrelated codegen PR to trip over. A gate
+ * that never runs is indistinguishable from a gate that passes.
+ *
+ * Parsed with a line scan rather than a YAML dependency: the block is a flat
+ * list of quoted globs, and the failure mode of a wrong parse here is a false
+ * alarm on a file no other job reads.
+ */
+const uncoveredByFilter = () => {
+    const filtersPath = join(rootDir, ".github/file-filters.yml");
+    const lines = readFileSync(filtersPath, "utf8").split("\n");
+    const start = lines.findIndex((line) => line.startsWith("generated_files:"));
+
+    if (start === -1) {
+        return ["<no `generated_files:` key in .github/file-filters.yml>"];
+    }
+
+    const globs = new Set();
+
+    for (const line of lines.slice(start + 1)) {
+        // The block ends at the next top-level key; blanks and comments are skipped.
+        if (/^\S/.test(line) && line.trim() !== "") {
+            break;
+        }
+
+        const match = /^\s+-\s+"(.+)"\s*$/.exec(line);
+
+        if (match) {
+            globs.add(match[1]);
+        }
+    }
+
+    return [...emitterClosure()].filter((dir) => !globs.has(`${dir}/**`)).sort();
+};
+
+const unfiltered = uncoveredByFilter();
+
+if (unfiltered.length > 0) {
+    console.error(`❌ ${unfiltered.length} package(s) behind \`lunora codegen\` are not in the \`generated_files\` path filter:`);
+    console.error("");
+
+    for (const dir of unfiltered) {
+        console.error(`   ${dir}`);
+    }
+
+    console.error("");
+    console.error("   A PR touching only those paths skips the `generated-files` job entirely and its");
+    console.error("   required check reports green while the examples drift. Add them:");
+    console.error("");
+
+    for (const dir of unfiltered) {
+        console.error(`     - "${dir}/**"`);
+    }
+
+    console.error("");
+    console.error("   to `generated_files` in .github/file-filters.yml.");
+
+    process.exit(1);
+}
+
 const stale = staleFromDirtySources();
 
 if (stale.length > 0) {

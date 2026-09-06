@@ -21,6 +21,7 @@ interface OtlpKeyValue {
 interface ParsedSpan {
     attributes: OtlpKeyValue[];
     endTimeUnixNano: string;
+    flags?: number;
     kind: number;
     name: string;
     parentSpanId?: string;
@@ -34,9 +35,12 @@ interface ParsedSpan {
 interface ParsedLogRecord {
     attributes: OtlpKeyValue[];
     body: { stringValue: string };
+    flags?: number;
     severityNumber: number;
     severityText: string;
+    spanId?: string;
     timeUnixNano: string;
+    traceId?: string;
 }
 
 const TRACE_ID_HEX = /^[0-9a-f]{32}$/;
@@ -172,6 +176,63 @@ describe(createContainerTelemetry, () => {
         // ...but keeps its own child span id.
         expect(span.spanId).toMatch(SPAN_ID_HEX);
         expect(span.spanId).not.toBe("b7ad6b7169203331");
+    });
+
+    it("obeys a sampled-OUT traceparent: no span export, logs still flow", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            // Flags `00` — the worker settled this trace as dropped and propagated
+            // the verdict. Exporting anyway leaves the collector holding container
+            // spans for a trace whose worker and shard spans were thrown away.
+            traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00",
+        });
+
+        telemetry.emitSpan({ endMs: 10, name: "transcode", startMs: 5 });
+        telemetry.emitLog({ message: "hello" });
+        await telemetry.flush();
+
+        expect(calls.map((call) => call.url)).toStrictEqual(["https://collect.example.com/v1/logs"]);
+
+        // Logs are never sampled — but they carry the verdict so a collector can see it.
+        const { records } = logsFrom(calls[0]!.body);
+
+        expect(records[0]?.flags).toBe(0);
+    });
+
+    it("stamps every log record with the propagated trace context", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        });
+
+        telemetry.emitLog({ message: "hello" });
+        await telemetry.flush();
+
+        const { records } = logsFrom(calls[0]!.body);
+
+        // Without these a container log record is unreachable from the trace it
+        // belongs to, so "show me this request's container logs" cannot be asked.
+        expect(records[0]?.traceId).toBe("0af7651916cd43dd8448eb211c80319c");
+        expect(records[0]?.spanId).toBe("b7ad6b7169203331");
+        expect(records[0]?.flags).toBe(1);
+    });
+
+    it("carries the sampled bit in the exported span flags", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        });
+
+        telemetry.emitSpan({ endMs: 10, name: "transcode", startMs: 5 });
+        await telemetry.flush();
+
+        expect(spanFrom(calls[0]!.body).span.flags).toBe(1);
     });
 
     it("mints a fresh root trace when the traceparent is malformed", async () => {

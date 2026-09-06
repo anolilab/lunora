@@ -242,9 +242,11 @@ export default crons;
         expect(written).toContain("0 * * * *");
     });
 
-    it("clears a stale triggers.crons array when the project declares no crons", async () => {
+    it("keeps a triggers.crons entry the project never generated", async () => {
         expect.assertions(2);
 
+        // A hand-written `backupCron` trigger: codegen cannot see it, so prepare
+        // must not treat "not generated" as "stale".
         writeFileSync(
             join(workdir, "wrangler.jsonc"),
             VALID_WRANGLER.replace('"d1_databases"', '"triggers": { "crons": ["0 0 * * *"] },\n    "d1_databases"'),
@@ -258,7 +260,7 @@ export default crons;
 
         const parsed = parseJsonc(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")) as { triggers?: { crons?: string[] } };
 
-        expect(parsed.triggers?.crons).toEqual([]);
+        expect(parsed.triggers?.crons).toStrictEqual(["0 0 * * *"]);
     });
 
     it("returns code 1 when codegen fails (no schema.ts)", async () => {

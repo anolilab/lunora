@@ -73,8 +73,9 @@ interface CreateUploadHandlerOptions {
     /**
      * Maximum accepted file size in bytes. Forwarded to the multipart parser
      * (protocol `"multipart"`) and, for `"tus"`/`"chunked-rest"`, enforced by
-     * this handler itself against the request's declared size (`Upload-Length`
-     * / `Content-Length`) — see {@link declaredUploadSize}. Defaults to
+     * this handler itself against the largest size the request declares across
+     * `Upload-Length` (TUS), `X-Total-Size` (chunked REST) and `Content-Length`
+     * — see {@link declaredUploadSize}. Defaults to
      * {@link DEFAULT_MAX_UPLOAD_BYTES} (100 MiB) — pass this to raise or lower
      * the ceiling; there is no unbounded option.
      */
@@ -170,9 +171,16 @@ const tooLargeResponse = (protocol: UploadProtocol): Response =>
  * STORAGE construction time. `createUploadHandler` receives an
  * already-constructed `storage`, so it cannot tighten that cap after the
  * fact; this pre-check is what actually enforces `maxFileSize` for those two
- * protocols. TUS's create (`POST`) declares the total size via
- * `Upload-Length`; REST/other single-shot requests carry it in
- * `Content-Length`.
+ * protocols.
+ *
+ * Each protocol declares the total in its own header, so all three are read and
+ * the LARGEST is checked. TUS's create (`POST`) uses `Upload-Length`. A chunked
+ * REST create sends `X-Chunked-Upload: true` with the total in `X-Total-Size`
+ * and a zero (or absent) `Content-Length`, since the create carries no body —
+ * reading `Content-Length` alone let every chunked-REST upload past the cap.
+ * Single-shot REST requests carry the size in `Content-Length`. Taking the
+ * largest rather than the first present means a request that declares a small
+ * total beside a large body cannot pick the lenient header.
  *
  * Deliberately skipped for `"multipart"`: there, `Content-Length` covers the
  * whole multipart body (boundaries + field headers, not just file bytes), so
@@ -188,15 +196,24 @@ const declaredUploadSize = (request: Request, protocol: UploadProtocol): number 
         return undefined;
     }
 
-    const raw = request.headers.get("Upload-Length") ?? request.headers.get("Content-Length");
+    let largest: number | undefined;
 
-    if (raw === null) {
-        return undefined;
+    // `Headers.get` matches case-insensitively, so the casing here is cosmetic.
+    for (const header of ["Upload-Length", "X-Total-Size", "Content-Length"]) {
+        const raw = request.headers.get(header);
+
+        if (raw === null) {
+            continue;
+        }
+
+        const parsed = Number(raw);
+
+        if (Number.isFinite(parsed) && (largest === undefined || parsed > largest)) {
+            largest = parsed;
+        }
     }
 
-    const parsed = Number(raw);
-
-    return Number.isFinite(parsed) ? parsed : undefined;
+    return largest;
 };
 
 const instantiateHandler = (protocol: UploadProtocol, handlerOptions: UploadHandlerOptions): { fetch: (request: Request) => Promise<Response> } => {

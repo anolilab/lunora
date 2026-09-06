@@ -25,6 +25,7 @@ import { assertArgsObject } from "./assert-args-object";
 import { methodGuard } from "./method-guard";
 import { applyRestCache } from "./rest-cache";
 import { restEdgeCacheFor, VARY_KEY_PARAM } from "./rest-edge-cache";
+import { trustedClientIp } from "./trusted-client-ip";
 
 /** The bits of a registered function the REST router reads: its kind and its `.expose` tag. */
 interface RestRegistryEntry {
@@ -258,8 +259,15 @@ const UNRESOLVED_IP_BUCKET = "no-trusted-ip";
 /**
  * Adapt a `@lunora/ratelimit` limiter into a {@link RestRateLimit} gate for the
  * public REST surface (plan 167). Pass the limiter and the rate name to charge;
- * `key` isolates the limit per caller (IP / user / API key — defaults to the
- * `cf-connecting-ip` header, else {@link UNRESOLVED_IP_BUCKET}).
+ * `key` isolates the limit per caller (IP / user / API key — defaults to
+ * {@link trustedClientIp}, else {@link UNRESOLVED_IP_BUCKET}).
+ *
+ * That default resolves an IP only ON Cloudflare, where the edge stamps
+ * `cf-connecting-ip` over anything the client sent. On any other host it is a
+ * header the caller types, so trusting it would give an attacker a fresh bucket
+ * per request and the limit would stop applying to exactly the traffic it exists
+ * to stop; those deployments pool into {@link UNRESOLVED_IP_BUCKET} instead, and
+ * should pass `key` to identify callers by something they cannot forge.
  *
  * A rate rejection becomes a `429` with a `Retry-After` header (seconds, ceil of
  * the limiter's ms). A deny-list hit becomes a `403` and no `Retry-After` —
@@ -273,7 +281,7 @@ const UNRESOLVED_IP_BUCKET = "no-trusted-ip";
 const createRestRateLimit =
     (limiter: RateLimiterLike, options: { key?: (request: Request, functionPath: string) => string | undefined; name: string }): RestRateLimit =>
     async (request, functionPath) => {
-        const key = (options.key ? options.key(request, functionPath) : request.headers.get("cf-connecting-ip")) ?? UNRESOLVED_IP_BUCKET;
+        const key = (options.key ? options.key(request, functionPath) : trustedClientIp(request.headers)) ?? UNRESOLVED_IP_BUCKET;
         const status = await limiter.limit(options.name, { key });
 
         if (status.ok) {

@@ -37,7 +37,6 @@ describe("schedulerDO (workerd)", () => {
         const response = await post(stub, "/schedule", {
             args: { text: "hi" },
             functionPath: "messages.send",
-            originUrl: "https://app.test",
             scheduledFor,
         });
 
@@ -59,8 +58,8 @@ describe("schedulerDO (workerd)", () => {
 
         // Two records: one already due (so alarm() should pick it up), one in
         // the future (so the post-fire alarm should be re-armed to that time).
-        await post(stub, "/schedule", { args: { x: 1 }, functionPath: "due", originUrl: "https://app.test", scheduledFor: now - 1000 });
-        await post(stub, "/schedule", { args: {}, functionPath: "later", originUrl: "https://app.test", scheduledFor: now + 60_000 });
+        await post(stub, "/schedule", { args: { x: 1 }, functionPath: "due", scheduledFor: now - 1000 });
+        await post(stub, "/schedule", { args: {}, functionPath: "later", scheduledFor: now + 60_000 });
 
         // `runDurableObjectAlarm()` short-circuits the wall clock — it fires
         // the pending alarm synchronously.
@@ -87,12 +86,11 @@ describe("schedulerDO (workerd)", () => {
         const soonerResponse = await post(stub, "/schedule", {
             args: {},
             functionPath: "b",
-            originUrl: "https://app.test",
             scheduledFor: sooner,
         });
         const soonerBody = await soonerResponse.json<ScheduleResponseBody>();
 
-        await post(stub, "/schedule", { args: {}, functionPath: "a", originUrl: "https://app.test", scheduledFor: later });
+        await post(stub, "/schedule", { args: {}, functionPath: "a", scheduledFor: later });
 
         await runInDurableObject(stub, async (_instance, state) => {
             await expect(state.storage.getAlarm()).resolves.toBe(sooner);

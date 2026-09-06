@@ -22,7 +22,7 @@ export { collectExportGaps, reconcileWranglerBindings } from "./reconcile-bindin
 export type { ReconcileCompatibilityDateResult } from "./reconcile-compatibility-date";
 export { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-date";
 export type { ReconcileResult as ReconcileCronsResult } from "./reconcile-crons";
-export { reconcileWranglerCrons } from "./reconcile-crons";
+export { describePreservedCrons, reconcileWranglerCrons } from "./reconcile-crons";
 export type { MaterializeOptions, MaterializeResult, RemoteBindingPlan, RemoteEnableInputs, RemoteWranglerShape } from "./remote-bindings";
 export {
     injectRemoteFlags,

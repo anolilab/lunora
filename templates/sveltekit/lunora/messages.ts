@@ -17,9 +17,16 @@ const limiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
  * One bucket per caller, not one bucket for the whole app.
  *
  * `ctx.auth.userId` is `null` until you wire auth (`lunora registry add auth`),
- * so the `ctx.ip` fallback is what actually keys the limit in a fresh project —
- * Cloudflare's server-side `CF-Connecting-IP`, never a client header. Keying on
- * `"anon"` alone would let one script exhaust the budget for every user.
+ * so the `ctx.ip` fallback is what actually keys the limit in a fresh project.
+ * Keying on `"anon"` alone would let one script exhaust the budget for every user.
+ *
+ * `ctx.ip` is Cloudflare's server-side `CF-Connecting-IP` and is populated ONLY
+ * when the app runs on Cloudflare, where the edge stamps that header over
+ * anything the client sent. Deploy this to another target and `ctx.ip` is
+ * `undefined` by design — the runtime will not pass on a header the caller can
+ * type — so every anonymous caller falls back to the shared `"anon"` bucket.
+ * Off Cloudflare, key on something the caller cannot choose (an API key, a
+ * signed session) before relying on this limit.
  */
 const byCaller = { key: (ctx: { auth: { userId?: null | string }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon" };
 

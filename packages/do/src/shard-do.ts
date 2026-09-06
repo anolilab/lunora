@@ -1420,9 +1420,12 @@ abstract class ShardDO {
 
     /**
      * Per-request caller IP forwarded from the runtime via the
-     * `x-lunora-client-ip` header (sourced server-side from Cloudflare's trusted
-     * `CF-Connecting-IP`). Surfaced to handlers as `ctx.ip` via `getCurrentIp`;
-     * cleared in the `finally` block of `fetch` like the other per-request fields.
+     * `x-lunora-client-ip` header. The runtime sources it from Cloudflare's
+     * `CF-Connecting-IP` and only while running ON Cloudflare, where the edge
+     * stamps that header itself; off the edge it forwards nothing rather than a
+     * value the caller typed, so this stays `undefined`. Surfaced to handlers as
+     * `ctx.ip` via `getCurrentIp`; cleared in the `finally` block of `fetch` like
+     * the other per-request fields.
      */
     private currentRequestIp: string | undefined;
 
@@ -2780,7 +2783,9 @@ abstract class ShardDO {
 
     /**
      * The caller's IP for the current request (Cloudflare's `CF-Connecting-IP`,
-     * forwarded server-side), or `undefined` when unknown. Use this to populate
+     * forwarded server-side by the runtime, and only while running on Cloudflare
+     * — off the edge that header is client-written, so the runtime forwards
+     * nothing), or `undefined` when nothing trustworthy says. Use this to populate
      * `ctx.ip` inside `buildCtx`.
      */
     protected getCurrentIp(): string | undefined {
@@ -5252,7 +5257,10 @@ abstract class ShardDO {
 
             // Raw `recordException` stacktraces/messages in dev only — matches
             // `makeTracer`'s `captureRaw` posture for the wide event's collector.
-            entry.collector ??= createSpanCollector({ spanId: anchor.rootSpanId, traceId: anchor.traceId }, isDevEnvironment(this.env));
+            entry.collector ??= createSpanCollector(
+                { ...(anchor.sampled === undefined ? {} : { sampled: anchor.sampled }), spanId: anchor.rootSpanId, traceId: anchor.traceId },
+                isDevEnvironment(this.env),
+            );
             this.dispatchSpans.set(spanKey, entry);
 
             return entry.collector;
@@ -5266,7 +5274,11 @@ abstract class ShardDO {
             // anchor, not from anything the handler recorded. Reading the dispatch's
             // trace id must not itself count as "this dispatch produced a wide event".
             spanContext: () => {
-                return { spanId: anchor.rootSpanId, traceId: anchor.traceId };
+                // `sampled` rides along so anything that ANNOUNCES this dispatch
+                // downstream from the ids alone — a hand-built `traceparent`, the
+                // `@opentelemetry/api` bridge's `SpanContext` — carries the settled
+                // verdict instead of claiming SAMPLED on a trace that was dropped.
+                return { ...(anchor.sampled === undefined ? {} : { sampled: anchor.sampled }), spanId: anchor.rootSpanId, traceId: anchor.traceId };
             },
             addLink: (link) => {
                 collector().handle.addLink(link);
@@ -10818,10 +10830,12 @@ abstract class ShardDO {
         this.currentMutatorClass = undefined;
         this.mutationBookkeeping = undefined;
         this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
-        // The caller's IP, forwarded server-side from Cloudflare's trusted
-        // `CF-Connecting-IP` (never copied from a client header). Surfaced as
-        // `ctx.ip` so handlers/middleware can key on it (e.g. rate-limit
-        // unauthenticated traffic by IP).
+        // The caller's IP, forwarded server-side from Cloudflare's
+        // `CF-Connecting-IP` — and only on Cloudflare, where the edge stamps that
+        // header itself. Off the edge the runtime forwards nothing rather than a
+        // client-written value, so this is absent. Surfaced as `ctx.ip` so
+        // handlers/middleware can key on it (e.g. rate-limit unauthenticated
+        // traffic by IP).
         this.currentRequestIp = request.headers.get("x-lunora-client-ip") ?? undefined;
         this.currentRequestSystem = request.headers.get("x-lunora-system") === "1";
         this.currentRequestTraceparent = request.headers.get("traceparent") ?? undefined;

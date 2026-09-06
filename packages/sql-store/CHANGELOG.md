@@ -1,3 +1,52 @@
+## @lunora/sql-store [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.110...@lunora/sql-store@1.0.0-alpha.111) (2026-09-06)
+
+### ⚠ BREAKING CHANGES
+
+* **shard-engine:** `aggregate`/`groupBy` now refuse a `v.any()` / `v.union()` /
+`v.from()` column instead of reducing it. Declare an `aggregateIndex` covering
+the `(by, field, op)`, or narrow the column's validator.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* refactor(shard-engine): drop readCdcChanges' inert table filter
+
+The `tables` option narrowed the page to a set of tables, and its docblock said
+the shape/poke path read one filtered page per flush. Nothing passed it: both
+production callers (`cdc-retention.ts`, `shard-do.ts`) pass `{ limit, sinceSeq }`
+only, and the shape/poke path goes through `readCdcChangeKeys`, which takes a
+single `table` and returns keys without post-images. The only thing exercising
+the option was its own unit test.
+
+It could not simply be wired up either. `tableInClause` binds one parameter per
+table name against workerd's cap of 100, unchunked — its sibling
+`cdcTouchesTables` chunks at 90 for exactly that reason. And chunking is not the
+same shape here: `cdcTouchesTables` is an existence probe that may answer from
+any chunk, while this is an ordered, LIMIT-ed page — chunks would have to be
+merged back into commit order with the cursor re-derived from the merge, or the
+page truncates at whichever chunk filled `limit` first.
+
+So the option goes, the docblock says what the reader actually does, and
+`tableInClause` now takes a non-empty set so the parameter cap stays one call
+site away rather than one argument. Its test asserts the interleaving a
+table-dropping reader would break — a single-table log looks right either way.
+* **shard-engine:** `readCdcChanges` no longer accepts `options.tables`. Read one
+table's changes through `readCdcChangeKeys`.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **shard-engine:** reach global rows through their own by-id facade ([#626](https://github.com/anolilab/lunora/issues/626)) ([7eb4033](https://github.com/anolilab/lunora/commit/7eb40330e4d269918a8dbf8d19323826f6fe1e07))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.33
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.58
+* **@lunora/do:** upgraded to 1.0.0-alpha.121
+
 ## @lunora/sql-store [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.109...@lunora/sql-store@1.0.0-alpha.110) (2026-09-05)
 
 

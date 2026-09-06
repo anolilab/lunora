@@ -45,6 +45,23 @@ final class ConformanceTests: XCTestCase {
     /// order, independent of the order the fixture file happens to use.
     func canonical(_ value: Any?) -> String { Wire.stableStringify(value) }
 
+    /// Renders a value the way `Client.swift` puts it on the socket, with
+    /// `JSONSerialization`. Separate from `canonical`, which is free to
+    /// normalise: `stableStringify` spells every number the ECMAScript way, so
+    /// `1.0` and `1` compare EQUAL through it — the divergence a round-trip case
+    /// exists to catch. Dart's dates went out as `1700000000000.0` for exactly
+    /// that reason, on a green suite. Keys are sorted because a Swift dictionary
+    /// carries no order of its own; both sides go through the same writer, so
+    /// only the SPELLING of a value can differ.
+    func wireText(_ value: Any?) throws -> String {
+        let data = try JSONSerialization.data(
+            withJSONObject: value ?? NSNull(),
+            options: [.fragmentsAllowed, .sortedKeys]
+        )
+
+        return try XCTUnwrap(String(data: data, encoding: .utf8))
+    }
+
     // MARK: - Manifest coverage
 
     /// Fails if this run did not exercise every case in the shared manifest.
@@ -126,6 +143,10 @@ final class ConformanceTests: XCTestCase {
             // is dropped — and carry the expected re-encoding.
             let expected = testCase["reencoded"] ?? encoded
             XCTAssertEqual(canonical(roundTripped), canonical(expected), "round-trip mismatch for \(name)")
+            // And again as the BYTES the transport sends: a round-trip
+            // assertion measured on a string the transport never sends cannot
+            // see the divergence it exists to catch.
+            XCTAssertEqual(try wireText(roundTripped), try wireText(expected), "wire-text mismatch for \(name)")
         }
     }
 

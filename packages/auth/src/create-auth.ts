@@ -3,6 +3,7 @@ import type { BetterAuthOptions } from "better-auth";
 import { betterAuth } from "better-auth";
 import { getIP } from "better-auth/api";
 
+import { onCloudflareEdge } from "../../../shared/on-cloudflare-edge";
 import { validateSessionPolicy } from "./session";
 
 /**
@@ -23,19 +24,6 @@ import { validateSessionPolicy } from "./session";
  * in.
  */
 const CLOUDFLARE_CLIENT_IP_HEADER = "cf-connecting-ip";
-
-/**
- * Whether this process runs behind Cloudflare's edge — the only condition under
- * which {@link CLOUDFLARE_CLIENT_IP_HEADER} is a header the client cannot write.
- *
- * workerd sets `navigator.userAgent` to `"Cloudflare-Workers"`; Node and every
- * other host this framework now targets do not. Read at call time rather than
- * module scope so a test can stand the global up, and off `globalThis` with an
- * optional chain because it is absent on older runtimes — where the honest
- * answer is "not Cloudflare", which is also the safe one.
- */
-// eslint-disable-next-line n/no-unsupported-features/node-builtins -- read defensively off globalThis precisely because the runtime may not have it; this is a Workers-vs-Node probe, not a Node API call
-const onCloudflareEdge = (): boolean => (globalThis as { navigator?: { userAgent?: string } }).navigator?.userAgent === "Cloudflare-Workers";
 
 /**
  * Which headers better-auth may resolve a client IP from, when the caller has
@@ -525,7 +513,3 @@ export const createAuth = (options: LunoraAuthOptions): LunoraAuth => {
 
     return betterAuth(resolveAuthOptions(options));
 };
-
-// Re-exported for `audit-hooks.ts`, whose client-IP resolver must apply the same
-// gate — the two must not disagree about who a request came from.
-export { onCloudflareEdge };

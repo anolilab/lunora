@@ -481,8 +481,8 @@ describe("autumn adapter", () => {
                 store: new MemoryPaymentStore(),
             });
 
-            // Neither featureId nor priceId — must throw CONFIG_INVALID, not reach Autumn unscoped.
-            await expect(payment.check({ referenceId: "user_1" })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+            // Neither featureId nor priceId — must throw VALIDATION_ERROR, not reach Autumn unscoped.
+            await expect(payment.check({ referenceId: "user_1" })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
         });
     });
 });

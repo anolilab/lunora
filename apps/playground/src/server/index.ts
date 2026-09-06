@@ -118,7 +118,7 @@ const app = defineApp<Env>()
         publicBaseUrl: (env) => env.PUBLIC_STORAGE_BASE_URL,
         signingSecret: (env) => env.STORAGE_SECRET,
     })
-    .scheduler({ namespace: (env) => env.SCHEDULER, origin: (env) => env.LUNORA_WORKER_ORIGIN })
+    .scheduler({ namespace: (env) => env.SCHEDULER })
     .global({ d1: (env) => env.DB, origin: (env) => env.LUNORA_WORKER_ORIGIN })
     .auth({ d1: (env) => env.DB, options: authOptions })
     .admin((env) => env.LUNORA_ADMIN_TOKEN)
@@ -216,16 +216,20 @@ const clearD1 = async (database: D1Reset): Promise<void> => {
     }
 };
 
+/**
+ * `/test/reset` — clears the **D1** state the e2e suite shares (users, channels
+ * and every other `.global()` table). Gated by `LUNORA_E2E === "true"`.
+ *
+ * It does NOT reset Durable Object state, and does not pretend to. It used to
+ * POST `https://do/internal/reset` at a DO named `__e2e_reset__` behind a
+ * swallowing `catch`: `ShardDO.fetch` 404s anything that is not `/rpc` or its
+ * WS/relay routes, and that name is neither `__root__` nor any channel shard, so
+ * the call cleared nothing and reported success either way. Deleted rather than
+ * implemented — shard-local rows (`messages`) are reachable only through their
+ * channel, and every spec mints a fresh channel, so nothing depends on clearing
+ * them. A spec that ever does needs a real per-shard admin op, not this.
+ */
 const handleTestReset = async (env: Env): Promise<Response> => {
-    try {
-        const id = env.SHARD.idFromName("__e2e_reset__");
-        const stub = env.SHARD.get(id);
-
-        await stub.fetch(new Request("https://do/internal/reset", { method: "POST" }));
-    } catch {
-        // best-effort
-    }
-
     try {
         await clearD1(env.DB);
     } catch {
@@ -284,8 +288,7 @@ const handleTestSchedule = async (request: Request, env: Env): Promise<Response>
         return Response.json({ error: "`functionPath` is required", jobId: null }, { status: 400 });
     }
 
-    const originUrl = new URL(request.url).origin;
-    const scheduler = createScheduler({ namespace: env.SCHEDULER, originUrl });
+    const scheduler = createScheduler({ namespace: env.SCHEDULER });
     const scheduledFor = body.scheduledFor ?? Date.now() + (body.delayMs ?? 0);
 
     // `runAt` resolves the bare job id; `scheduledFor` is the instant we just
@@ -329,11 +332,11 @@ const handleTestRoute = async (request: Request, env: Env): Promise<Response | n
     if (url.pathname === "/test/job-status" && method === "GET") {
         const id = url.searchParams.get("id");
 
-        if (!id || !env.SCHEDULER || !env.LUNORA_WORKER_ORIGIN) {
+        if (!id || !env.SCHEDULER) {
             return Response.json({ status: "unknown" });
         }
 
-        const scheduler = createScheduler({ namespace: env.SCHEDULER, originUrl: env.LUNORA_WORKER_ORIGIN });
+        const scheduler = createScheduler({ namespace: env.SCHEDULER });
         const record = await scheduler.get(id);
 
         // The SchedulerDO deletes a job's rows once it completes successfully, so

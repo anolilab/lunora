@@ -4,8 +4,8 @@ A Lunora app on **Nuxt**, scaffolded by `lunora init`.
 
 The scaffold ships a static welcome page plus the wiring behind it: a sharded
 schema, the typed API, and one Cloudflare Worker that serves Nuxt SSR and the
-Lunora realtime plane together. `plugins/lunora.client.ts` already provides the
-browser `LunoraClient`, so `useQuery` / `useMutation` / `hydratePreloaded` from
+Lunora realtime plane together. `plugins/lunora.ts` already provides the
+`LunoraClient`, so `useQuery` / `useMutation` / `hydratePreloaded` from
 `@lunora/vue` resolve in any component you add.
 
 ## Making a loader live
@@ -47,9 +47,10 @@ deploys that wrapper. One `wrangler.jsonc`, one deploy, a same-origin client.
   app as `default` and the bound `ShardDO` class. `@lunora/nuxt` mounts this.
 - **`wrangler.jsonc`** — the single worker config: `main` points at the
   `worker.ts` wrapper, with the `SHARD` DO binding + migration.
-- **`plugins/lunora.client.ts`** — the browser `LunoraClient`, pointed at the
-  page's own origin in production (it reaches `/_lunora/ws` on the same worker)
-  and at the `wrangler dev` sidecar in dev.
+- **`plugins/lunora.ts`** — the `LunoraClient`, pointed at the page's own
+  origin in production (it reaches `/_lunora/ws` on the same worker) and at the
+  `wrangler dev` sidecar in dev. Universal, not `.client.ts`: `@lunora/vue`'s
+  composables resolve the client during SSR too, and throw without a provider.
 - **`pages/index.vue`** — the static welcome page. It loads no data; see
   "Making a loader live" above.
 
@@ -66,7 +67,7 @@ Install dependencies, then start the dev server with the Lunora CLI:
 `http://localhost:3000`) and a `wrangler dev` sidecar (`wrangler.dev.jsonc`,
 `:8788`) running in `workerd` that owns the real `ShardDO` Durable Object. In
 dev the browser `LunoraClient` talks to the sidecar directly (see
-`plugins/lunora.client.ts`); the sidecar's `LUNORA_ALLOWED_ORIGINS` allows that
+`plugins/lunora.ts`); the sidecar's `LUNORA_ALLOWED_ORIGINS` allows that
 cross-origin call. Open `http://localhost:3000`. `Ctrl-C` stops both.
 
 > Why the sidecar: `nuxt dev` runs Nitro's SSR in Node, and Cloudflare bindings

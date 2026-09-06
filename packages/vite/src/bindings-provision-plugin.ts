@@ -1,6 +1,6 @@
 import type { Plugin } from "vite";
 
-import { reconcileBindingsSafely } from "./codegen-plugin";
+import { reconcileBindingsSafely } from "./reconcile-wrangler";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
 /**
