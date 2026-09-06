@@ -1,3 +1,14 @@
+## @lunora/ratelimit [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.41...@lunora/ratelimit@1.0.0-alpha.42) (2026-09-06)
+
+### Bug Fixes
+
+* **agent,ai,ratelimit,x402:** point prettier at the repo ignore file ([#638](https://github.com/anolilab/lunora/issues/638)) ([bf2a8e7](https://github.com/anolilab/lunora/commit/bf2a8e7e50019149ddf3a50f38adbb91f6e0351b))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.106
+
 ## @lunora/ratelimit [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.40...@lunora/ratelimit@1.0.0-alpha.41) (2026-09-06)
 
 
