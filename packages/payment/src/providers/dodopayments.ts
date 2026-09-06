@@ -314,8 +314,10 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
 
         getOrCreateCustomer: async (ref: CustomerRef): Promise<Customer> => {
             // Dodo's `customers.create` is NOT idempotent by email, so a retried/raced first checkout
-            // for the same reference would mint duplicate customers. Key the create on the reference so
-            // repeats return the same customer (the facade also gates this behind a store lookup).
+            // for the same reference would mint duplicate customers. The store lookup the facade puts in
+            // front of this call is what actually prevents that: the key below is INERT on this SDK,
+            // which drops it rather than sending a header (see the `@lunora/payment` idempotency
+            // docblock). It is passed anyway so the call is covered the day the SDK starts honouring it.
             const customer = asRecord(
                 await client.customers.create(
                     { email: ref.email ?? "", name: ref.metadata?.name ?? ref.referenceId },
@@ -429,6 +431,8 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
                     patch.priceId !== undefined && patch.quantity !== undefined ? undefined : await client.subscriptions.retrieve(subscriptionId),
                 );
 
+                // Un-deduped on purpose, for want of anywhere to put a key: `SubscriptionChangePlanParams`
+                // has no idempotency field and this SDK never sends the header one. A retry prorates twice.
                 await client.subscriptions.changePlan(subscriptionId, {
                     product_id: patch.priceId ?? readString(current, "product_id") ?? "",
                     proration_billing_mode: "prorated_immediately",

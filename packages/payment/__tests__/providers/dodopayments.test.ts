@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 
+import DodoPayments from "dodopayments";
 import { describe, expect, it } from "vitest";
 
 import type { DodoPaymentsClientLike } from "../../src/providers/dodopayments";
@@ -240,6 +241,32 @@ describe("dodopayments adapter", () => {
 
         expect(typeof options?.idempotencyKey).toBe("string");
         expect(options?.idempotencyKey).not.toHaveLength(0);
+    });
+
+    it("pins that the SDK drops that key rather than sending it (the fake above cannot see this)", async () => {
+        expect.assertions(2);
+
+        let sent: Headers | undefined;
+        // The real client, not the structural fake: `buildHeaders` only emits an idempotency header
+        // when `this.idempotencyHeader` is truthy, and that field is declared `protected` and never
+        // assigned anywhere in the package — so the key we pass type-checks and goes nowhere. Flip
+        // this test to assert the header when a future SDK release starts setting it, and update the
+        // `@lunora/payment` idempotency docblock with it.
+        const client = new DodoPayments({
+            bearerToken: "test-key",
+            environment: "test_mode",
+            fetch: async (_input, init) => {
+                sent = new Headers(init?.headers);
+
+                return Response.json({ customer_id: "cus_1", email: "a@b.test" });
+            },
+            maxRetries: 0,
+        });
+
+        await client.customers.create({ email: "a@b.test", name: "user_1" }, { idempotencyKey: "customer:dodopayments:user_1" });
+
+        expect(sent).toBeDefined();
+        expect([...(sent as Headers).keys()].filter((name) => name.includes("idempotency"))).toStrictEqual([]);
     });
 
     it("ingests usage as a Dodo usage-event keyed on the customer id", async () => {
