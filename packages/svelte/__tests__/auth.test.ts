@@ -1,6 +1,6 @@
 import type { LunoraClient, Unsubscribe, User } from "@lunora/client";
 import { get } from "svelte/store";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { auth, authGate } from "../src/auth";
 
@@ -44,6 +44,20 @@ const createAuthFakeClient = () => {
 const flushAsync = async (): Promise<void> => {
     await vi.waitFor(() => undefined);
 };
+
+// The stores gate their listeners on a browser `window` (the SSR guard every
+// other subscribing primitive in this package applies); the vitest env is
+// `node`, so define one or every test below would silently exercise the SSR
+// path instead of the one it means to. Mirrors the same stub in `flag.test.ts`.
+/* eslint-disable vitest/require-top-level-describe -- the `window` stub is shared by every describe in this file, so it belongs at file scope */
+beforeAll(() => {
+    Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
+});
+
+afterAll(() => {
+    Reflect.deleteProperty(globalThis, "window");
+});
+/* eslint-enable vitest/require-top-level-describe */
 
 describe("auth store (Svelte)", () => {
     it("token starts as null when no token is set", () => {
@@ -182,5 +196,44 @@ describe("authGate store (Svelte)", () => {
 
         stopA();
         stopL();
+    });
+});
+
+describe("auth stores during SSR", () => {
+    // A `readable`'s start function runs on its first subscriber, and `$token` /
+    // `$user` in a template subscribe during `renderToString`. The user store's
+    // first subscribe is not merely a listener registration: the identity store
+    // kicks off `getCurrentUser()` on it, so an unguarded server render issues a
+    // network round-trip against a client whose URL does not resolve there.
+    it("registers no listener and fetches no identity without a browser window", () => {
+        expect.assertions(4);
+
+        const original = Reflect.getOwnPropertyDescriptor(globalThis, "window");
+
+        Reflect.deleteProperty(globalThis, "window");
+
+        try {
+            const fake = createAuthFakeClient();
+            const { token, user } = auth(fake.client);
+
+            // The identity store registers its own token listener when it is
+            // created, independent of these stores — measure the delta from there.
+            const baseline = fake.onAuthTokenChange.mock.calls.length;
+
+            const stopToken = token.subscribe(() => {});
+            const stopUser = user.subscribe(() => {});
+
+            expect(fake.onAuthTokenChange).toHaveBeenCalledTimes(baseline);
+            expect(fake.getCurrentUser).not.toHaveBeenCalled();
+            expect(get(token)).toBeNull();
+            expect(get(user)).toBeNull();
+
+            stopToken();
+            stopUser();
+        } finally {
+            if (original) {
+                Object.defineProperty(globalThis, "window", original);
+            }
+        }
     });
 });
