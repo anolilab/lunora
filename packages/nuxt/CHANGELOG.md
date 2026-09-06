@@ -1,3 +1,24 @@
+## @lunora/nuxt [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.111...@lunora/nuxt@1.0.0-alpha.112) (2026-09-06)
+
+### ⚠ BREAKING CHANGES
+
+* **nuxt:** `checkClientOnlyProvider` takes Nuxt's resolved plugin list
+instead of a source directory, and the new `ResolvedNuxtPlugin` type describes
+its entries.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **nuxt:** provide the client during SSR, and warn when it is client-only ([#632](https://github.com/anolilab/lunora/issues/632)) ([076fc5d](https://github.com/anolilab/lunora/commit/076fc5d36438ea08d97bed092b71a4a109f821e8))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.83
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.98
+
 ## @lunora/nuxt [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.110...@lunora/nuxt@1.0.0-alpha.111) (2026-09-06)
 
 
