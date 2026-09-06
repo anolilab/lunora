@@ -1,3 +1,23 @@
+## @lunora/runtime [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.98...@lunora/runtime@1.0.0-alpha.99) (2026-09-06)
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** `trustedClientIp` now takes the declared header as a second argument.
+
+
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+### security
+
+* **runtime:** let a fronted origin declare its client-ip header ([#635](https://github.com/anolilab/lunora/issues/635)) ([8752db4](https://github.com/anolilab/lunora/commit/8752db49a3a4629a983e8ed7fc66e2b58c6edb55))
+
+
+### Dependencies
+
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.48
+
 ## @lunora/runtime [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.97...@lunora/runtime@1.0.0-alpha.98) (2026-09-06)
 
 ### ⚠ BREAKING CHANGES
