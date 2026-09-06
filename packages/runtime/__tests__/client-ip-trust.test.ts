@@ -143,6 +143,95 @@ describe("client IP trust", () => {
         });
     });
 
+    describe("a declared trustedClientIpHeader", () => {
+        it("keys the REST limiter per caller off Cloudflare", async () => {
+            expect.assertions(2);
+
+            const { namespace } = recordingShard();
+            const limiter = {
+                limit: vi.fn<() => Promise<{ ok: boolean; retryAfter: number }>>(async () => {
+                    return { ok: true, retryAfter: 0 };
+                }),
+            };
+            const worker = createWorker({
+                functions,
+                restRateLimit: createRestRateLimit(limiter, { name: "rest", trustedClientIpHeader: "cf-connecting-ip" }),
+                shardDO: namespace,
+            });
+
+            // The behind-Cloudflare origin the fail-closed default pools into one
+            // bucket: with the header declared, two callers get two buckets again.
+            await worker.fetch(
+                new Request("https://app.example/_lunora/rest/messages/list", { headers: { "cf-connecting-ip": "203.0.113.4" } }),
+                {},
+                fakeContext,
+            );
+            await worker.fetch(
+                new Request("https://app.example/_lunora/rest/messages/list", { headers: { "cf-connecting-ip": "203.0.113.5" } }),
+                {},
+                fakeContext,
+            );
+
+            expect(limiter.limit).toHaveBeenNthCalledWith(1, "rest", { key: "203.0.113.4" });
+            expect(limiter.limit).toHaveBeenNthCalledWith(2, "rest", { key: "203.0.113.5" });
+        });
+
+        it("forwards ctx.ip off Cloudflare", async () => {
+            expect.assertions(1);
+
+            const shard = recordingShard();
+            const worker = createWorker({ functions, shardDO: shard.namespace, trustedClientIpHeader: "cf-connecting-ip" });
+
+            await worker.fetch(rpc(), {}, fakeContext);
+
+            expect(shard.calls[0]?.headers.get("x-lunora-client-ip")).toBe("203.0.113.7");
+        });
+
+        it("resolves nothing from a declared header carrying a forwarded chain", async () => {
+            expect.assertions(1);
+
+            const shard = recordingShard();
+            const worker = createWorker({ functions, shardDO: shard.namespace, trustedClientIpHeader: "x-forwarded-for" });
+
+            // A chain's leftmost entry is whatever the client typed, so an
+            // appending proxy cannot be read as one trusted address. The
+            // declaration is for headers infrastructure REPLACES, and a comma is
+            // the cheap signal that this header is not one of them.
+            await worker.fetch(
+                new Request("https://app.example/_lunora/rpc", {
+                    body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
+                    headers: { "x-forwarded-for": "198.51.100.9, 203.0.113.7" },
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+            expect(shard.calls[0]?.headers.get("x-lunora-client-ip")).toBeNull();
+        });
+
+        it("is ignored on Cloudflare, where cf-connecting-ip still wins", async () => {
+            expect.assertions(1);
+
+            vi.stubGlobal("navigator", CLOUDFLARE_NAVIGATOR);
+
+            const shard = recordingShard();
+            const worker = createWorker({ functions, shardDO: shard.namespace, trustedClientIpHeader: "x-client-ip" });
+
+            await worker.fetch(
+                new Request("https://app.example/_lunora/rpc", {
+                    body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
+                    headers: { "cf-connecting-ip": "203.0.113.7", "x-client-ip": "198.51.100.9" },
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+            expect(shard.calls[0]?.headers.get("x-lunora-client-ip")).toBe("203.0.113.7");
+        });
+    });
+
     describe("x-lunora-client-ip forwarded to the shard (ctx.ip)", () => {
         it("forwards cf-connecting-ip on Cloudflare", async () => {
             expect.assertions(1);

@@ -135,9 +135,16 @@ export default createWorker({
 ```
 
 It runs **before** dispatch, so a limited request costs you nothing downstream. By
-default it keys on the caller's IP (`CF-Connecting-IP`); pass `key` to key on
-something else, such as an API key header, or the `functionPath` to limit per
-endpoint:
+default it keys on the caller's IP from `CF-Connecting-IP`, but only while running
+on Cloudflare, where the edge stamps that header over anything the client sent.
+On any other target nothing overwrites it, so it is a header the caller typed and
+trusting it would hand an attacker a fresh bucket per request — those deployments
+resolve no IP and pool into one shared `no-trusted-ip` bucket instead. An origin
+fronted by a proxy that does stamp a client address declares it with
+`trustedClientIpHeader` to get per-IP buckets back; see
+[`@lunora/runtime`](/docs/packages/runtime) for what that assertion commits you
+to. Otherwise pass `key` to key on something you control, such as an API key
+header, or the `functionPath` to limit per endpoint:
 
 ```ts
 createRestRateLimit(limiter, {

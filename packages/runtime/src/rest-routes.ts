@@ -269,6 +269,13 @@ const UNRESOLVED_IP_BUCKET = "no-trusted-ip";
  * to stop; those deployments pool into {@link UNRESOLVED_IP_BUCKET} instead, and
  * should pass `key` to identify callers by something they cannot forge.
  *
+ * An origin fronted by a proxy that stamps a client address can instead declare
+ * that header as `trustedClientIpHeader` and get per-IP buckets back, at the cost
+ * of asserting the header is unwritable by callers — the same assertion, and the
+ * same consequence for getting it wrong, as `WorkerOptions.trustedClientIpHeader`
+ * (which governs `ctx.ip`). Declare it in both places or the two disagree about
+ * who a request came from.
+ *
  * A rate rejection becomes a `429` with a `Retry-After` header (seconds, ceil of
  * the limiter's ms). A deny-list hit becomes a `403` and no `Retry-After` —
  * matching both `@lunora/ratelimit` entry points, and the only honest answer for
@@ -279,9 +286,13 @@ const UNRESOLVED_IP_BUCKET = "no-trusted-ip";
  * the worker entry and pass it here.
  */
 const createRestRateLimit =
-    (limiter: RateLimiterLike, options: { key?: (request: Request, functionPath: string) => string | undefined; name: string }): RestRateLimit =>
+    (
+        limiter: RateLimiterLike,
+        options: { key?: (request: Request, functionPath: string) => string | undefined; name: string; trustedClientIpHeader?: string },
+    ): RestRateLimit =>
     async (request, functionPath) => {
-        const key = (options.key ? options.key(request, functionPath) : trustedClientIp(request.headers)) ?? UNRESOLVED_IP_BUCKET;
+        const key =
+            (options.key ? options.key(request, functionPath) : trustedClientIp(request.headers, options.trustedClientIpHeader)) ?? UNRESOLVED_IP_BUCKET;
         const status = await limiter.limit(options.name, { key });
 
         if (status.ok) {

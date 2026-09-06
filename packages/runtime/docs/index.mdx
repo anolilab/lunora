@@ -430,24 +430,50 @@ Cloudflare, pass `key` and identify callers by something they cannot forge:
 createRestRateLimit(limiter, { key: (request) => request.headers.get("x-api-key") ?? undefined, name: "rest" });
 ```
 
-This applies to a non-Cloudflare origin sitting **behind** Cloudflare too, and
-that case is worth calling out because it is the one where the default gets
-strictly worse rather than staying neutral. On a bare host with no proxy the
-header was never set, so pooling changes nothing. But an origin fronted by
-Cloudflare — the edge stamps `CF-Connecting-IP`, the origin accepts only
-Cloudflare traffic, so the header genuinely is trustworthy — still resolves no
+### Origins behind a proxy: `trustedClientIpHeader`
+
+A non-Cloudflare origin sitting **behind** Cloudflare is the one case where that
+default gets strictly worse rather than staying neutral. On a bare host with no
+proxy the header was never set, so pooling changes nothing. But on a fronted
+origin — the edge stamps `CF-Connecting-IP`, the origin accepts only Cloudflare
+traffic, so the header genuinely is trustworthy — the runtime still resolves no
 IP, because the code runs on the origin and nothing in the request tells it apart
 from a directly-exposed host. Every caller lands in the single `no-trusted-ip`
-bucket, which one client can exhaust for everyone. Those deployments are the ones
-that must pass `key`; they are also the ones that can, because only the
-deployment knows it is fronted:
+bucket, which one client can exhaust for everyone.
+
+Only the deployment knows it is fronted, so the deployment says so. Declare the
+header and per-IP limiting comes back:
 
 ```ts
-createRestRateLimit(limiter, { key: (request) => request.headers.get("cf-connecting-ip") ?? undefined, name: "rest" });
+createWorker({
+    shardDO: env.SHARD,
+    functions: LUNORA_FUNCTIONS,
+    // Governs `ctx.ip`.
+    trustedClientIpHeader: "cf-connecting-ip",
+    // Governs the REST limiter's default key. Set both, or the two disagree
+    // about who a request came from.
+    restRateLimit: createRestRateLimit(limiter, { name: "rest", trustedClientIpHeader: "cf-connecting-ip" }),
+});
 ```
 
-Only do that where the origin cannot be reached except through the edge —
-otherwise it is the client-writable header this default exists to refuse.
+Declaring it asserts that the named header is set by infrastructure **you
+control**, on every request, replacing whatever the caller sent — so no caller
+can choose its value. A proxy that only forwards or appends a client-supplied
+header is not such a thing, and neither is an origin that can be reached around
+it: if any route bypasses the proxy, a caller arrives with the header they typed,
+rotates it for a fresh bucket per request, and forges the `ctx.ip` your procedures
+key on. Lock the origin to the proxy before setting this. Left unset, the
+fail-closed default above applies; on Cloudflare the option is ignored and
+`CF-Connecting-IP` is used regardless.
+
+A value containing a comma is refused rather than read, because that is an
+appended chain (`x-forwarded-for: <client>, <hop>`) whose leftmost entry is
+client-written. Declare a header your proxy replaces, or key on something else
+with `key`.
+
+This mirrors `@lunora/auth`'s `advanced.ipAddress.trustedProxies` opt-in, which
+solves the same problem for the sign-in limiter. Both are per-deployment
+assertions and neither implies the other, so a fronted origin sets both.
 
 Security guidance: keep the surface small, prefer `.output()` on exposed
 procedures so the response shape is contractual, and rely on the procedure's own

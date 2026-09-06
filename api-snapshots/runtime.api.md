@@ -2257,6 +2257,7 @@ interface WorkerOptions {
     storageSignedUrl?: StorageSignedUrlFunction;
     storageUpload?: StorageUploadFunction;
     syncGlobals?: GlobalCdcSyncFunction;
+    trustedClientIpHeader?: string;
     trustInboundTraceContext?: TrustInboundTraceContext;
     vectorIntrospector?: VectorIntrospector;
     voiceAgents?: Record<string, ShardNamespaceLike>;
@@ -2395,6 +2396,7 @@ const createQueryCoordinator: (options: QueryCoordinatorOptions) => QueryCoordin
 const createRestRateLimit: (limiter: RateLimiterLike, options: {
     key?: (request: Request, functionPath: string) => string | undefined;
     name: string;
+    trustedClientIpHeader?: string;
 }) => RestRateLimit;
 ```
 
