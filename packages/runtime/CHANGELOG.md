@@ -1,3 +1,9 @@
+## @lunora/runtime [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.99...@lunora/runtime@1.0.0-alpha.100) (2026-09-06)
+
+### Features
+
+* **codegen:** discover the crons configured on createWorker ([#636](https://github.com/anolilab/lunora/issues/636)) ([218342f](https://github.com/anolilab/lunora/commit/218342f8e612b6852f9f918abb78f7a0c7fc7273))
+
 ## @lunora/runtime [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.98...@lunora/runtime@1.0.0-alpha.99) (2026-09-06)
 
 ### ⚠ BREAKING CHANGES
