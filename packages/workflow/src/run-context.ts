@@ -13,6 +13,7 @@ import { LunoraError } from "@lunora/errors";
 import { decodeWire } from "../../../shared/wire-codec";
 import { workflowBindingName } from "./define-workflow";
 import type { NativeNonRetryableErrorConstructor } from "./errors";
+import { raiseNonRetryable } from "./errors";
 import type { WorkflowBindingResolver } from "./fan-out";
 import { createParallel, createSpawn } from "./fan-out";
 import { createRunStep } from "./run-step";
@@ -91,17 +92,38 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
         step: options.step,
     };
 
+    // `decodeWire`, not the raw payload: a scheduled workflow's args travel in
+    // wire form because Workflow `params` are JSON-serialised into durable
+    // storage, and this is the first point that can hand the handler real
+    // `bigint`/`Date`/bytes values. Identity for pure JSON, so a directly
+    // created or spawned instance is unaffected.
+    //
+    // A payload the codec refuses is PERMANENT — the params are already in
+    // durable storage and no retry re-serialises them — but `decodeWire` throws
+    // a bare `TypeError` (malformed tag) or `RangeError` (past its depth bound),
+    // which the platform treats as retryable and re-runs until the budget is
+    // gone. Raise it non-retryably, naming the workflow, so it fails once and
+    // says why.
+    const decodeParams = (): Readonly<Params> => {
+        try {
+            return decodeWire(options.event.payload) as Readonly<Params>;
+        } catch (error) {
+            return raiseNonRetryable(
+                `@lunora/workflow: workflow "${options.exportName}" params could not be decoded — ${error instanceof Error ? error.message : String(error)}`,
+                error,
+                options.nonRetryableErrorClass,
+            );
+        }
+    };
+
+    const params = decodeParams();
+
     return {
         env: options.env,
         event: options.event,
         log,
         parallel: createParallel(fanOutDeps),
-        // `decodeWire`, not the raw payload: a scheduled workflow's args travel in
-        // wire form because Workflow `params` are JSON-serialised into durable
-        // storage, and this is the first point that can hand the handler real
-        // `bigint`/`Date`/bytes values. Identity for pure JSON, so a directly
-        // created or spawned instance is unaffected.
-        params: decodeWire(options.event.payload) as Readonly<Params>,
+        params,
         run,
         runStep: createRunStep({ env: options.env, log, nonRetryableErrorClass: options.nonRetryableErrorClass, run, step: options.step }),
         spawn: createSpawn(fanOutDeps),

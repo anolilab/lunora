@@ -3509,6 +3509,57 @@ describe("lunoraClient", () => {
             unsubscribe();
         });
 
+        it("surfaces a decode failure instead of discarding it as a non-JSON frame", () => {
+            expect.assertions(3);
+
+            // The `try` here is documented as covering the JSON PARSE, but it
+            // used to wrap the decode and the consumer callback too — with an
+            // empty body. So a `decodeWire` throw on a malformed tag was
+            // discarded in total silence and the operator's live job list just
+            // stopped updating, with nothing logged and nothing thrown.
+            //
+            // Narrowed to the parse, the failure now reaches
+            // `openManagedSocket`'s last-resort frame-handler catch, which
+            // reports it. The socket deliberately stays up: one bad frame must
+            // not take the listener down.
+            const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+            try {
+                const client = new LunoraClient({
+                    fetch: async () => jsonResponse({ result: null }),
+                    url: "https://app.example",
+                    WebSocket: createMockWebSocket(),
+                    wsToken: "adm1n",
+                });
+
+                const seen: unknown[] = [];
+                const unsubscribe = client.subscribeScheduledJobs((jobs) => seen.push(jobs[0]?.args));
+
+                latestSocket().open();
+                latestSocket().receive({
+                    records: [{ args: ["$lunora.wire$", "bigint", "not-a-number"], enqueuedAt: 1, functionPath: "billing:settle", id: "j1", scheduledFor: 2 }],
+                    type: "jobs",
+                });
+
+                expect(errors).toHaveBeenCalledWith("[lunora] server frame handler threw", expect.any(RangeError));
+                // The consumer is not handed a half-decoded list.
+                expect(seen).toStrictEqual([]);
+
+                // A well-formed frame still lands afterwards — the subscription
+                // survives the bad one rather than going quiet for good.
+                latestSocket().receive({
+                    records: [{ args: encodeWire({ amount: 7n }), enqueuedAt: 1, functionPath: "billing:settle", id: "j2", scheduledFor: 2 }],
+                    type: "jobs",
+                });
+
+                expect(seen).toStrictEqual([{ amount: 7n }]);
+
+                unsubscribe();
+            } finally {
+                errors.mockRestore();
+            }
+        });
+
         it("opens the scheduler admin WS with the token and delivers pushed job lists", () => {
             expect.assertions(4);
 
