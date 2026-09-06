@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { decodeIdentityHeader } from "../../../shared/identity-header";
-import { encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ExecutionContextLike, HttpActionContext, HttpRouterLike, Route } from "../src/create-worker";
 import { composeWorker, createLunoraHandler, createWorker } from "../src/create-worker";
 import type { ObservabilityEvent } from "../src/observability";
@@ -1829,6 +1829,43 @@ describe("createWorker — HTTP actions", () => {
         // `env.LUNORA_ORIGIN_URL` at both schedule and fire time, deliberately,
         // so a request cannot steer where the job dispatches back to.
         expect(body["originUrl"]).toBeUndefined();
+    });
+
+    it("c.var.lunora.scheduler wire-encodes args so a bigint/Date arg survives the hop", async () => {
+        expect.assertions(4);
+
+        // This facade is the SECOND producer on the SchedulerDO's `/schedule`
+        // route (`@lunora/scheduler`'s `createScheduler` is the first), and both
+        // its consumers decode: the shard `decodeWire`s a function target's args,
+        // `@lunora/workflow`'s run-context decodes a workflow target's params.
+        // Un-encoded, a `bigint` arg threw inside `JSON.stringify` before the job
+        // was recorded and a `Date` silently arrived as an ISO string.
+        const scheduler = createShardSpy(Response.json({ id: "job-1", scheduledFor: 1 }, { status: 200 }));
+        const dueAt = new Date("2026-06-01T12:00:00.000Z");
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/hooks/stripe", async (c) => {
+                    const id = await c.var.lunora.scheduler?.runAfter(0, { __lunoraRef: "billing:settle" }, { amountCents: 9_007_199_254_740_993n, dueAt });
+
+                    return new Response(id ?? "no-scheduler", { status: 202 });
+                }),
+            ),
+            schedulerDO: scheduler.namespace,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/hooks/stripe", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(202);
+        expect(scheduler.calls).toHaveLength(1);
+
+        const body = (await scheduler.calls[0]?.request.json()) as { args: unknown };
+        // `decodeWire` is exactly what the shard applies to `payload.args`.
+        const decoded = decodeWire(body.args) as { amountCents: unknown; dueAt: unknown };
+
+        expect(decoded.amountCents).toBe(9_007_199_254_740_993n);
+        expect(decoded.dueAt).toStrictEqual(dueAt);
     });
 
     it("c.var.lunora.storage stores an object through the worker's own R2 binding", async () => {

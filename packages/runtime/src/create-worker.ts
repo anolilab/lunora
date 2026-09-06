@@ -3605,7 +3605,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             );
 
         const schedule = async (scheduledFor: number, target: unknown, args: Record<string, unknown> = {}): Promise<string> => {
-            const { id } = await post<{ id: string }>("/schedule", { args, scheduledFor, ...targetFields(target) });
+            // `encodeWire` for the same reason `@lunora/scheduler`'s own
+            // `createScheduler.runAt` does — this facade is the second producer on
+            // the SAME `/schedule` route, and both its consumers decode. Without it
+            // `post`'s `JSON.stringify` threw on a `bigint` arg before the job was
+            // recorded, and rendered a `Date` as an ISO string the handler read back
+            // as a string. Identity for pure JSON.
+            const { id } = await post<{ id: string }>("/schedule", {
+                args: encodeWire(args) as Record<string, unknown>,
+                scheduledFor,
+                ...targetFields(target),
+            });
 
             return id;
         };

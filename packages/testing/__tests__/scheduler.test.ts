@@ -790,13 +790,20 @@ describe("fake scheduler production parity", () => {
         await expect(t.run(async (ctx) => ctx.scheduler.runAt(1, "log:appendLog", { message: "x" }))).resolves.toMatch(/\S/u);
     });
 
-    it("rejects args the scheduler cannot serialize", async () => {
-        expect.assertions(1);
+    it("rejects args the wire codec cannot carry, and accepts the ones it can", async () => {
+        expect.assertions(2);
 
         const t = start();
 
-        // Production posts the job as JSON, so a bigint arg throws at schedule time.
-        await expect(t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:appendLog", { message: 1n as unknown as string }))).rejects.toThrow(/BigInt/u);
+        // Production wire-encodes the args before posting them, so what throws at
+        // schedule time is what `encodeWire` refuses: a non-plain object has no own
+        // enumerable keys, and encoding it to `{}` would be silent data loss.
+        await expect(t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:appendLog", { message: /re/u as unknown as string }))).rejects.toThrow(/wire-codec/u);
+
+        // …and a `bigint` is now carried rather than refused. The fake is a THIRD
+        // `runAt` alongside `createScheduler` and the deferral facade, so a harness
+        // that rejected this would tell a test the opposite of what ships.
+        await expect(t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:appendLog", { message: 1n as unknown as string }))).resolves.toMatch(/\S/u);
     });
 
     it("gives a scheduled job the advanced clock as ctx.now", async () => {

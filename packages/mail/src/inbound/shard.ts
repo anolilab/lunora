@@ -7,6 +7,8 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { encodeWire } from "../../../../shared/wire-codec";
+
 /** Default shard the runtime routes admin RPC (captured mail, inbound dispatch) through. */
 const DEFAULT_ROOT_SHARD = "__root__";
 
@@ -84,7 +86,21 @@ const postShardRpc = async (namespace: ShardNamespaceLike, options: PostShardRpc
     const scoped = applyJurisdiction(namespace, options.jurisdiction);
     const stub = scoped.get(scoped.idFromName(options.shardKey));
     const response = await stub.fetch("https://shard.internal/rpc", {
-        body: JSON.stringify(options.envelope),
+        // The envelope is a WIRE payload, and the shard decodes it on BOTH arms
+        // this route reaches: an ordinary function dispatch runs
+        // `decodeWire(payload.args)`, and a reserved `__lunora_admin__:*` op runs
+        // `decodeAdminArgs`. Un-encoded, the hop was asymmetric — a `bigint` threw
+        // in `JSON.stringify` before anything was sent, and a `Date` arrived as an
+        // ISO string. Encoding here rather than at the two callers keeps this
+        // function the single owner of what goes on the wire, as it already is of
+        // the URL, the headers and the response checks.
+        //
+        // Identity for pure JSON, so neither existing caller changes: the capture
+        // sink's `SendPayload` is strings throughout, and the inbound dispatcher's
+        // default `resolveArgs` (`toJsonSafeEmail`) has already base64'd the only
+        // binary it carries. It is a caller-supplied `resolveArgs` override that
+        // was exposed.
+        body: JSON.stringify(encodeWire(options.envelope)),
         headers: {
             authorization: `Bearer ${options.adminToken}`,
             "content-type": "application/json",

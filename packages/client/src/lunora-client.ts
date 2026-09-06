@@ -277,6 +277,26 @@ type WSState = "idle" | "connecting" | "open" | "closed";
  */
 type ConnectionStatus = "connected" | "connecting" | "idle" | "offline";
 
+/**
+ * Decode the wire form out of a batch of `ScheduleRecord`s.
+ *
+ * A scheduled job's `args` are a WIRE payload: `@lunora/scheduler` `encodeWire`s
+ * them at the producer so a `bigint`/`Date`/bytes arg survives the JSON hop into
+ * the SchedulerDO, and every consumer decodes — the shard for a function target,
+ * `@lunora/workflow`'s run-context for a workflow one. These read APIs are
+ * consumers too, so without this a caller reading a job's args back would get a
+ * raw `["$lunora.wire$", …]` array where its value belonged. Identity for pure
+ * JSON, so an ordinary job's record is unchanged.
+ *
+ * Only `args` is decoded: every other field on the record is a plain scalar the
+ * DO writes itself (`id`, `scheduledFor`, `functionPath`, …) and never went
+ * through the codec.
+ */
+const decodeScheduleRecords = (records: ScheduleRecord[]): ScheduleRecord[] =>
+    records.map((record) => {
+        return { ...record, args: decodeWire(record.args) as Record<string, unknown> };
+    });
+
 /** One shard's socket + watermark state in a {@link LunoraClient.debug} snapshot. */
 interface ClientDebugShard {
     /**
@@ -2583,7 +2603,7 @@ class LunoraClient {
 
         const body = (await this.adminFetch(SCHEDULED_PATH, "GET")) as { records?: ScheduleRecord[] };
 
-        return body.records ?? [];
+        return decodeScheduleRecords(body.records ?? []);
     }
 
     /**
@@ -2634,13 +2654,18 @@ class LunoraClient {
         // one, so stopping at the first page would hide exactly the backlog the
         // operator opened it for. Returning `records` alone made this silently
         // truncate the moment the route grew its limit.
-        return await collectPages<ScheduleRecord>(
-            async (cursor) =>
-                (await this.adminFetch(cursor === undefined ? SCHEDULED_DEAD_PATH : `${SCHEDULED_DEAD_PATH}?cursor=${encodeURIComponent(cursor)}`, "GET")) as {
-                    cursor?: string;
-                    records?: ScheduleRecord[];
-                    truncated?: boolean;
-                },
+        return decodeScheduleRecords(
+            await collectPages<ScheduleRecord>(
+                async (cursor) =>
+                    (await this.adminFetch(
+                        cursor === undefined ? SCHEDULED_DEAD_PATH : `${SCHEDULED_DEAD_PATH}?cursor=${encodeURIComponent(cursor)}`,
+                        "GET",
+                    )) as {
+                        cursor?: string;
+                        records?: ScheduleRecord[];
+                        truncated?: boolean;
+                    },
+            ),
         );
     }
 
@@ -2817,7 +2842,7 @@ class LunoraClient {
                             // reconnect at the initial delay forever instead of
                             // backing off (mirrors the shard socket's fix).
                             reconnect.reset();
-                            onJobs(message.records);
+                            onJobs(decodeScheduleRecords(message.records));
                         }
                     } catch {
                         /* a non-JSON frame — ignore */

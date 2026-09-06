@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { decodeWire } from "../../../shared/wire-codec";
 import type { ForwardableEmailMessageLike } from "../src/inbound/handler";
 import { createInboundEmailHandler, dispatchToLunoraFunction } from "../src/inbound/handler";
 import type { InboundEmail } from "../src/inbound/parse";
@@ -498,6 +499,43 @@ describe("dispatchToLunoraFunction", () => {
         const envelope = JSON.parse(init.body) as { args: unknown; shardKey: string };
 
         expect(envelope).toStrictEqual({ args: { subject: "Hi" }, functionPath: "inbound:onEmail", shardKey: "tenant-7" });
+    });
+
+    it("wire-encodes the envelope args so a custom resolveArgs can return a bigint/Date", async () => {
+        expect.assertions(3);
+
+        // The shard decodes `args` on BOTH arms this envelope can reach — the
+        // ordinary function dispatch (`decodeWire(payload.args)`) and the reserved
+        // `__lunora_admin__:*` ops (`decodeAdminArgs`) — so the producer has to
+        // encode or the hop is asymmetric. The default `resolveArgs` is
+        // `toJsonSafeEmail`, which is already pure JSON (attachment bytes are
+        // base64'd), so only a caller-supplied override was exposed: a `bigint`
+        // threw in `JSON.stringify` and a `Date` arrived as an ISO string.
+        const receivedAt = new Date("2026-06-01T12:00:00.000Z");
+        const { fetch, shard } = stubShard({
+            json: async () => {
+                return { result: "ok" };
+            },
+            ok: true,
+        });
+
+        const dispatch = dispatchToLunoraFunction({
+            functionPath: "inbound:onEmail",
+            resolveArgs: () => {
+                return { receivedAt, sizeBytes: 9_007_199_254_740_993n };
+            },
+            shard,
+        });
+
+        await dispatch(fixture, { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() });
+
+        const [, init] = fetch.mock.calls[0] as unknown as [string, { body: string }];
+        const envelope = JSON.parse(init.body) as { args: unknown; functionPath: string };
+        const decoded = decodeWire(envelope.args) as { receivedAt: unknown; sizeBytes: unknown };
+
+        expect(envelope.functionPath).toBe("inbound:onEmail");
+        expect(decoded.sizeBytes).toBe(9_007_199_254_740_993n);
+        expect(decoded.receivedAt).toStrictEqual(receivedAt);
     });
 
     it("throws (so the handler rejects) when the admin token is missing", async () => {

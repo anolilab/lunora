@@ -10,6 +10,7 @@
 import { createDispatchLogger, createDispatchRunner } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
+import { decodeWire } from "../../../shared/wire-codec";
 import { workflowBindingName } from "./define-workflow";
 import type { NativeNonRetryableErrorConstructor } from "./errors";
 import type { WorkflowBindingResolver } from "./fan-out";
@@ -31,6 +32,27 @@ interface RunContextOptions<Params> {
 /** Assemble the {@link WorkflowRunContext} passed to a `defineWorkflow` handler. */
 const createWorkflowRunContext = <Params = Record<string, unknown>>(options: RunContextOptions<Params>): WorkflowRunContext<Params> => {
     const log = createDispatchLogger(`[workflow:${options.exportName}]`);
+
+    // Decode the wire codec (`bigint`/`Date`/`bytes`/`Map`/… leaves) out of the
+    // params, mirroring what `@lunora/do`'s dispatch loop does to a function
+    // target's args — a scheduled workflow's params ARE the scheduler's `args`
+    // (`ctx.scheduler.runAfter(delay, workflows.payout, args)`), and
+    // `@lunora/scheduler` encodes them at the producer.
+    //
+    // The decode belongs at this READ rather than at dispatch because Cloudflare
+    // JSON-serialises workflow `params` into durable storage on `create()`. The
+    // tagged wire form is exactly what survives that hop; a real `bigint` fails
+    // instance creation outright and a real `Date` degrades to an ISO string. So
+    // the value cannot be decoded any earlier than here and still be intact.
+    //
+    // `decodeWire` is identity for pure JSON, so params from every other create
+    // surface (`ctx.parallel`/`ctx.spawn`, a hand-written `env.WORKFLOW_X.create`)
+    // are untouched. It runs before the context is built so `ctx.params` and
+    // `ctx.event.payload` cannot disagree — `params` is documented as an alias of
+    // the payload, and handing one the decoded value and the other a raw tagged
+    // array would make that a lie.
+    const event: WorkflowEventLike<Params> = { ...options.event, payload: decodeWire(options.event.payload) as Readonly<Params> };
+
     // `@lunora/dispatch`'s runner is deliberately loose at the boundary (its
     // `ArgsOf` collapses to `Record<string, unknown>`); this package's
     // `WorkflowRunFunction` reads the reference's `__lunoraPhantom` instead, so a
@@ -92,10 +114,10 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
 
     return {
         env: options.env,
-        event: options.event,
+        event,
         log,
         parallel: createParallel(fanOutDeps),
-        params: options.event.payload,
+        params: event.payload,
         run,
         runStep: createRunStep({ env: options.env, log, nonRetryableErrorClass: options.nonRetryableErrorClass, run, step: options.step }),
         spawn: createSpawn(fanOutDeps),

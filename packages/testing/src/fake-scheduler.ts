@@ -2,6 +2,8 @@ import { LunoraError } from "@lunora/errors";
 import { assertScheduleDelay, MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS } from "@lunora/scheduler";
 import type { ScheduledJob, Scheduler } from "@lunora/server";
 
+import { encodeWire } from "../../../shared/wire-codec";
+
 /** A pending job entry in the fake scheduler queue. */
 interface FakeScheduledJob extends ScheduledJob {
     /** The args the job was scheduled with. */
@@ -162,11 +164,18 @@ const createFakeScheduler = (
     const recordedFailures: ScheduledJobFailure[] = [];
 
     const enqueue = (scheduledFor: number, functionPath: string, args: Record<string, unknown> = {}, requestedId?: string): string => {
-        // Production posts the job to the SchedulerDO as a JSON body
-        // (`@lunora/scheduler`'s `callDO` → `JSON.stringify`), so an arg it cannot
-        // serialize — a `bigint`, a cycle — throws at SCHEDULE time. Do the same
-        // work here rather than accepting the job and failing only in production.
-        JSON.stringify(args);
+        // Production wire-encodes the args before posting them to the SchedulerDO
+        // (`@lunora/scheduler`'s `createScheduler.runAt` → `encodeWire` → `callDO`),
+        // so an arg the CODEC cannot carry — a cycle, a `RegExp`, a class instance
+        // — throws at SCHEDULE time. Do the same work here rather than accepting
+        // the job and failing only in production.
+        //
+        // Note what this deliberately no longer rejects: a `bigint` or a `Date`.
+        // Raw `JSON.stringify` threw on the first and silently flattened the second,
+        // and mirroring that here made the fake refuse jobs production now accepts.
+        // The encoded value is discarded — the fake dispatches in-process, so the
+        // handler must see what production's decode hands it, which is `args` itself.
+        encodeWire(args);
 
         // A caller-supplied id is honoured exactly as the SchedulerDO honours
         // `RunOptions.id`: `@lunora/server`'s deferred-schedule facade decides the

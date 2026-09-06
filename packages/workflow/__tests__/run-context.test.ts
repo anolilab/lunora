@@ -1,6 +1,7 @@
 import { v } from "@lunora/values";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { encodeWire } from "../../../shared/wire-codec";
 import { defineWorkflowEvent } from "../src/define-event";
 import { defineStep } from "../src/define-step";
 import { createWorkflowRunContext } from "../src/run-context";
@@ -41,7 +42,9 @@ describe("createWorkflowRunContext", () => {
         const ctx = createWorkflowRunContext({ env: { LUNORA_ORIGIN_URL: "x" }, event, exportName: "orderPipeline", step });
 
         expect(ctx.params).toEqual({ orderId: "o1" });
-        expect(ctx.event).toBe(event);
+        // Not the same object reference: the payload is `decodeWire`d off the wire
+        // form, so the context carries a rebuilt event with the decoded payload.
+        expect(ctx.event).toEqual(event);
         expect(ctx.step).toBe(step);
         expect(ctx.env).toEqual({ LUNORA_ORIGIN_URL: "x" });
         expect(typeof ctx.run).toBe("function");
@@ -157,5 +160,71 @@ describe("createWorkflowRunContext", () => {
         ctx.log.info("hi", 1);
 
         expect(spy).toHaveBeenCalledWith("[workflow:orderPipeline]", "hi", 1);
+    });
+});
+
+/**
+ * A scheduled workflow's params are the scheduler's `args`: `ctx.scheduler
+ * .runAfter(delay, workflows.payout, args)` encodes them (`shared/wire-codec`),
+ * they ride through the SchedulerDO and Cloudflare's own durable serialisation
+ * of `create({ params })`, and arrive here as `event.payload`. Decoding at the
+ * READ is what makes this target symmetric with the function target, which the
+ * shard decodes in its dispatch loop.
+ */
+describe("createWorkflowRunContext params wire codec", () => {
+    /**
+     * What Cloudflare hands back: the params, JSON round-tripped through durable
+     * storage. Deliberately `JSON.stringify` + `JSON.parse` and not
+     * `structuredClone` — modelling that hop is the whole point, and
+     * `structuredClone` would carry a `Date`/`bigint` through it intact.
+     */
+    const throughDurableStorage = (params: unknown): Record<string, unknown> => {
+        const json = JSON.stringify(encodeWire(params));
+
+        return JSON.parse(json) as Record<string, unknown>;
+    };
+
+    const dueAt = new Date("2026-06-01T12:00:00.000Z");
+
+    const contextFor = (payload: Record<string, unknown>): ReturnType<typeof createWorkflowRunContext> =>
+        createWorkflowRunContext({
+            env: {},
+            event: { ...makeEvent(), payload } as unknown as WorkflowEventLike<{ orderId: string }>,
+            exportName: "orderPipeline",
+            step: makeStep(),
+        });
+
+    it("decodes a bigint param into a real bigint", () => {
+        expect.assertions(1);
+
+        const ctx = contextFor(throughDurableStorage({ invoiceCents: 9_007_199_254_740_993n }));
+
+        expect(ctx.params).toStrictEqual({ invoiceCents: 9_007_199_254_740_993n });
+    });
+
+    it("decodes a Date param into a real Date rather than an ISO string", () => {
+        expect.assertions(2);
+
+        const ctx = contextFor(throughDurableStorage({ dueAt }));
+        const params = ctx.params as { dueAt: unknown };
+
+        expect(params.dueAt).toBeInstanceOf(Date);
+        expect(params.dueAt).toStrictEqual(dueAt);
+    });
+
+    it("decodes ctx.event.payload too, so `params` stays a true alias of it", () => {
+        expect.assertions(1);
+
+        const ctx = contextFor(throughDurableStorage({ dueAt }));
+
+        expect(ctx.event.payload).toStrictEqual(ctx.params);
+    });
+
+    it("leaves plain-JSON params untouched, so nothing changes for existing workflows", () => {
+        expect.assertions(1);
+
+        const plain = { attempt: 3, nested: { ok: true, tags: ["a", "b"] }, orderId: "o1" };
+
+        expect(contextFor(plain).params).toStrictEqual(plain);
     });
 });
