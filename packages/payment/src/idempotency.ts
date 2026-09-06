@@ -43,10 +43,15 @@
  * `customers.create` type-checks and never leaves the process. Dodo's only working idempotency in
  * this SDK version is body-level (`event_id` on usage ingestion), which we do use.
  *
- * **Two Stripe calls are un-keyed but trivially keyable** — `subscriptions.update` in
- * `resumeSubscription` and in `updateSubscription` (a plan/quantity change, so a money-moving
- * proration) are the only mutating Stripe calls in that adapter with no third `RequestOptions`
- * argument. Adding one is a follow-up, not a change to make blind.
+ * **A key is stable for the logical OPERATION, not fresh per attempt.** A plan change is keyed on
+ * the subscription AND the target plan/quantity, so an identical retry replays while a different
+ * target is a different key — one key across two parameter sets is a provider-side mismatch error.
+ * The cost of that stability is a toggle: re-issuing a target that was applied and then changed
+ * away from, inside the provider's idempotency window (24h on Stripe), replays the first response
+ * instead of acting. Pass an explicit key (`SubscriptionPatch.idempotencyKey`,
+ * `CancelSubscriptionOptions.idempotencyKey`, `resumeSubscription`'s `options`) for that case.
+ * Those overrides are honoured by the Stripe adapter only — per the list above, no other
+ * provider's plan-change endpoint accepts a key at all.
  */
 import type { Money } from "./types";
 

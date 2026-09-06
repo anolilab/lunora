@@ -91,7 +91,12 @@ export interface PaymentAdapter {
      * absent, `track` still records usage durably and `check` enforces limits locally.
      */
     reportUsage?: (input: ReportUsageInput) => Promise<void>;
-    resumeSubscription: (subscriptionId: string) => Promise<Subscription>;
+
+    /**
+     * Clear a pending cancellation. `options.idempotencyKey` overrides the adapter's own stable key
+     * and is honoured by the Stripe adapter only — no other provider's endpoint accepts one.
+     */
+    resumeSubscription: (subscriptionId: string, options?: { idempotencyKey?: string }) => Promise<Subscription>;
     updateSubscription: (subscriptionId: string, patch: SubscriptionPatch) => Promise<Subscription>;
 }
 

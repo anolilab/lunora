@@ -506,8 +506,14 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
             );
         },
 
-        resumeSubscription: async (subscriptionId) => {
-            const subscription = await client.subscriptions.update(subscriptionId, { cancel_at_period_end: false });
+        resumeSubscription: async (subscriptionId, resumeOptions) => {
+            // Its own operation name: `cancel_subscription`'s key on the same subscription would make a
+            // resume replay the cancel's cached response instead of clearing the pending cancellation.
+            const subscription = await client.subscriptions.update(
+                subscriptionId,
+                { cancel_at_period_end: false },
+                { idempotencyKey: resumeOptions?.idempotencyKey ?? idempotencyKey("resume_subscription", "stripe", subscriptionId) },
+            );
 
             return subscriptionFromStripe(subscription);
         },
@@ -523,7 +529,13 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
                 parameters.items = [{ id: current.items.data[0]?.id, price: patch.priceId, quantity: patch.quantity }];
             }
 
-            const subscription = await client.subscriptions.update(subscriptionId, parameters);
+            // A plan change prorates, so an un-keyed retry charges twice. The TARGET is part of the key:
+            // this is the one call whose parameters vary, and reusing one key across two of them makes
+            // Stripe reject the second as a mismatch — while an identical retry must still replay.
+            const subscription = await client.subscriptions.update(subscriptionId, parameters, {
+                idempotencyKey:
+                    patch.idempotencyKey ?? idempotencyKey("update_subscription", "stripe", subscriptionId, patch.priceId ?? "", patch.quantity ?? ""),
+            });
 
             return subscriptionFromStripe(subscription);
         },

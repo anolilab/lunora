@@ -18,7 +18,8 @@ deliveries safe by construction, and synced into a durable store that rides the
 request's `ctx.db`. Switching providers is a configuration change: the provider
 is a stateless translator; the store owns all state.
 
-Outbound calls carry idempotency keys (no double-charge), and every mutation is
+Outbound calls carry idempotency keys wherever the provider accepts one (no
+double-charge), and every mutation is
 authorized per-caller. Each adapter takes the provider's SDK client by injection.
 The provider SDKs are **optional peer dependencies**, so you install (and bundle) only
 the providers you actually use.

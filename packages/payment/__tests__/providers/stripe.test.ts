@@ -634,6 +634,71 @@ describe("stripe adapter", () => {
         expect(subscription.state).toBe("active");
     });
 
+    it("carries a stable idempotency key on resume, distinct from the cancel key", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+
+        await adapter.resumeSubscription("sub_1");
+
+        const call = calls.find((entry) => entry.name === "sub.update");
+
+        // Stable for the logical operation, so a Worker retry replays instead of re-issuing. The
+        // operation name must differ from `cancel_subscription` or a resume would replay the cancel.
+        expect((call?.args[2] as undefined | { idempotencyKey?: string })?.idempotencyKey).toBe("resume_subscription:stripe:sub_1");
+        expect((call?.args[2] as undefined | { idempotencyKey?: string })?.idempotencyKey).not.toBe("cancel_subscription:stripe:sub_1");
+    });
+
+    it("lets the caller override the resume idempotency key", async () => {
+        expect.assertions(1);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+
+        await adapter.resumeSubscription("sub_1", { idempotencyKey: "resume_2" });
+
+        const call = calls.find((entry) => entry.name === "sub.update");
+
+        expect((call?.args[2] as undefined | { idempotencyKey?: string })?.idempotencyKey).toBe("resume_2");
+    });
+
+    it("keys a plan/quantity update on the subscription AND the target plan (proration moves money)", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+
+        await adapter.updateSubscription("sub_1", { priceId: "price_new", quantity: 3 });
+
+        const first = calls.find((entry) => entry.name === "sub.update");
+
+        expect((first?.args[2] as undefined | { idempotencyKey?: string })?.idempotencyKey).toBe("update_subscription:stripe:sub_1:price_new:3");
+
+        // A different target is a different logical operation: reusing one key across two parameter
+        // sets makes Stripe reject the second call as a mismatch.
+        const other: RecordedCall[] = [];
+
+        await createStripeAdapter({ client: makeClient(other), webhookSecret: "whsec" }).updateSubscription("sub_1", { quantity: 3 });
+
+        expect((other.find((entry) => entry.name === "sub.update")?.args[2] as undefined | { idempotencyKey?: string })?.idempotencyKey).toBe(
+            "update_subscription:stripe:sub_1::3",
+        );
+    });
+
+    it("lets the caller override the plan-change idempotency key", async () => {
+        expect.assertions(1);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+
+        await adapter.updateSubscription("sub_1", { idempotencyKey: "plan_2", priceId: "price_new" });
+
+        const call = calls.find((entry) => entry.name === "sub.update");
+
+        expect((call?.args[2] as undefined | { idempotencyKey?: string })?.idempotencyKey).toBe("plan_2");
+    });
+
     it("resumes a subscription by toggling cancel_at_period_end back to false", async () => {
         expect.assertions(3);
 
