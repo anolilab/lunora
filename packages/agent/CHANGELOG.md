@@ -1,3 +1,14 @@
+## @lunora/agent [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.93...@lunora/agent@1.0.0-alpha.94) (2026-09-06)
+
+### Tests
+
+* **dispatch,queue,workflow,agent,do:** pin both halves of the ctx.run wire bracket ([#645](https://github.com/anolilab/lunora/issues/645)) ([9fd8827](https://github.com/anolilab/lunora/commit/9fd882739609734a3db51b45b27c380062e4b9ff))
+
+
+### Dependencies
+
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.48
+
 ## @lunora/agent [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.92...@lunora/agent@1.0.0-alpha.93) (2026-09-06)
 
 
