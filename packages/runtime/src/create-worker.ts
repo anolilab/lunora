@@ -63,6 +63,7 @@ import { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPref
 import { buildStorageAdminRoutes, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
 import type { TrustInboundTraceContext } from "./trace-trust";
 import { createDroppedTraceNotice, resolveTraceTrust } from "./trace-trust";
+import { trustedClientIp } from "./trusted-client-ip";
 import { buildVectorAdminRoutes } from "./vector-admin-routes";
 import type { WorkflowsRestClient } from "./workflows-admin-routes";
 import { buildWorkflowsAdminRoutes } from "./workflows-admin-routes";
@@ -1950,11 +1951,16 @@ const resolveForwardContext = async (
         headers["x-lunora-client-seq"] = clientSeq;
     }
 
-    // Forward the caller's IP server-side from Cloudflare's `CF-Connecting-IP`
-    // (set by the edge, overwriting any client-supplied value — so it's trusted;
-    // a raw `x-forwarded-for` is client-spoofable and deliberately NOT used).
-    // The DO surfaces it as `ctx.ip` (e.g. to rate-limit anonymous traffic by IP).
-    const clientIp = request.headers.get("cf-connecting-ip");
+    // Forward the caller's IP, but only where one can be believed: ON Cloudflare
+    // the edge sets `CF-Connecting-IP` itself, overwriting any client-supplied
+    // value. On any other host nothing overwrites it, so it is a header the
+    // caller typed — forwarding it there would let an attacker choose the `ctx.ip`
+    // every procedure rate-limits on. `x-forwarded-for` is client-spoofable in
+    // both cases and deliberately NOT used. Off the edge the header is simply not
+    // forwarded and `ctx.ip` reads `undefined`, which it is already documented to
+    // do. See `./trusted-client-ip.ts` for the behind-Cloudflare origin this
+    // deliberately pools, and what those deployments should do instead.
+    const clientIp = trustedClientIp(request.headers);
 
     if (clientIp) {
         headers["x-lunora-client-ip"] = clientIp;
