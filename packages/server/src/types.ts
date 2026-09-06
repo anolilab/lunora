@@ -2141,7 +2141,26 @@ interface SpanHandle {
      * it in a bug report, to build a `traceparent` for a hand-rolled outbound
      * call, or to parent a third-party library's spans onto this request.
      */
-    spanContext: () => { spanId: string; traceId: string };
+    spanContext: () => SpanContextIds;
+}
+
+/**
+ * A span's W3C ids plus the trace's settled sampling verdict.
+ *
+ * `sampled` is the propagated head decision — absent means none reached this
+ * tier, which every consumer reads as keep. It rides with the ids because
+ * everything that announces this span downstream from them (a hand-built
+ * `traceparent`, an `@opentelemetry/api` `SpanContext`) needs the flag in the
+ * same breath: claiming SAMPLED on a trace that was sampled out leaves a
+ * collector holding the middle of a trace nobody kept.
+ */
+interface SpanContextIds {
+    /** The trace's settled W3C `sampled` verdict; absent when none was propagated. */
+    sampled?: boolean;
+    /** This span's id (16-hex). */
+    spanId: string;
+    /** The trace this span belongs to (32-hex). */
+    traceId: string;
 }
 
 /**
@@ -2227,10 +2246,41 @@ interface SpanOptions {
  * @param attributes Either a plain attribute bag to stamp on the span at start
  * (normalized like a log line's `fields`), or a {@link SpanOptions} object when
  * you need `kind` or `links`. It is read as options only when *every* key is one
- * of `attributes`/`kind`/`links`; `{ attributes: { kind: "premium" } }` is the
- * explicit form if your own attributes happen to be named that.
+ * of `attributes`/`kind`/`links` AND a `kind`, if present, actually names a
+ * {@link SpanKind}; `{ attributes: { kind: "premium" } }` is the explicit form if
+ * your own attributes happen to be named that.
+ * @param identity Adapter-only: record the span under ids the caller has ALREADY
+ * published (see {@link SpanIdentity}). A handler never passes this — it exists
+ * so the `@opentelemetry/api` bridge, which must hand a library a `SpanContext`
+ * synchronously, is recorded under the id it handed out rather than a phantom.
  */
-type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields | SpanOptions) => Promise<T>;
+type LunoraTracer = <T>(
+    name: string,
+    function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T,
+    attributes?: LogFields | SpanOptions,
+    identity?: SpanIdentity,
+) => Promise<T>;
+
+/**
+ * Caller-supplied ids for one `ctx.trace` span — the tracer's fourth argument.
+ *
+ * For adapters that must publish a span's identity BEFORE the body runs: the
+ * `@opentelemetry/api` bridge returns a `SpanContext` synchronously from
+ * `startSpan` and a library builds a `traceparent` from it, so the span has to be
+ * recorded under the id already announced or every downstream span parents to an
+ * id that never reaches the collector. `parentSpanId` lets such an adapter
+ * express its own parent/child structure without an ambient span stack.
+ *
+ * Both ids are required: an adapter that has published one has published the
+ * other, and `identity` is itself optional — omitting it, not passing a partial
+ * object, is how a caller says "no adapter involved".
+ */
+interface SpanIdentity {
+    /** Parent to this span id instead of the enclosing `ctx.trace` / dispatch span. */
+    parentSpanId: string;
+    /** Record the span under this id (16-hex) instead of a freshly minted one. */
+    spanId: string;
+}
 
 /**
  * `ctx.span` — a handle onto **this request's own span**, and with it the
@@ -2617,8 +2667,10 @@ export type {
     SecretsStoreSecretLike,
     ShardInitEvent,
     ShardMode,
+    SpanContextIds,
     SpanEvaluation,
     SpanHandle,
+    SpanIdentity,
     SpanKind,
     SpanLink,
     SpanOptions,
