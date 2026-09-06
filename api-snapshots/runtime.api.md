@@ -748,6 +748,8 @@ interface FivetranResponse {
 
 ```ts
 type FrameworkHostHandler = ((request: Request, env?: unknown, context?: ExecutionContextLike) => Promise<Response> | Response) | (HttpRouterLike & {
+    email?: (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
+    queue?: (batch: unknown, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
     scheduled?: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
 });
 ```
@@ -1214,6 +1216,7 @@ type LunoraHandlerOptions = ((env: unknown) => FrameworkWorkerOptions) | Partial
 
 ```ts
 interface LunoraWorker {
+    email?: (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>;
     fetch: (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response>;
     queue?: (batch: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>;
     scheduled: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void>;

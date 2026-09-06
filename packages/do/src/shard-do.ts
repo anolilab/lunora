@@ -236,6 +236,7 @@ import { jsonResponse } from "../../../shared/json-response";
 import type { LogSinkContext } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent } from "../../../shared/metric-event";
+import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
 import { LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
@@ -3979,6 +3980,10 @@ abstract class ShardDO {
      * poke a paid query itself, or it is served free. The base class has no
      * function registry, so the default is `false`; the codegen-generated
      * subclass overrides it with the real `LUNORA_FUNCTIONS` lookup.
+     *
+     * Also backs the `/rpc` backstop: an origin built without a `functions`
+     * registry cannot read the tag at all, so it charges nothing and marks
+     * nothing — and this is the only place left that still knows the call is paid.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to consult `LUNORA_FUNCTIONS`
     protected isPaidFunction(_functionPath: string): boolean {
@@ -5820,6 +5825,29 @@ abstract class ShardDO {
         // `this`. See {@link ShardDO.withAdminRequestScope}.
         if (payload.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
             return await this.withAdminRequestScope(async () => await this.handleAdminRpc(request, payload.functionPath, payload.args ?? {}));
+        }
+
+        // Paid (`.x402`) backstop. The paywall itself lives at the origin worker,
+        // which reads the price off the `functions` registry it was built with — so
+        // a worker built WITHOUT one (`createLunoraHandler()`, a hand-rolled
+        // `createWorker({ shardDO })`) cannot see the tag and would dispatch every
+        // paid procedure free. The shard always knows: the generated subclass
+        // overrides `isPaidFunction` from `LUNORA_FUNCTIONS`. So an unmarked paid
+        // dispatch is refused here rather than served.
+        //
+        // Placed after the admin branch and before `beginDispatch` so a refusal
+        // costs no dispatch bookkeeping. The batch transport replays each entry
+        // through this same `/rpc` path, so it is covered by this one guard.
+        if (request.headers.get(ORIGIN_PAYWALL_HEADER) !== ORIGIN_PAYWALL_APPLIED && this.isPaidFunction(payload.functionPath)) {
+            return jsonResponse(
+                {
+                    error: {
+                        code: "MISCONFIGURED",
+                        message: `paid (\`.x402\`) function "${payload.functionPath}" reached the shard without passing the origin paywall, so nothing charged for it; build the worker with \`defineApp()\` (or pass \`functions\` to \`createWorker\`) and call it individually over /_lunora/rpc`,
+                    },
+                },
+                500,
+            );
         }
 
         // Stash the inbound D1 bookmark and identity headers for the
