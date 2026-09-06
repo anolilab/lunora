@@ -225,7 +225,13 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "subscription.plan_changed":
         case "subscription.renewed":
         case "subscription.updated": {
-            const status = readString(object, "status");
+            // The event name is authoritative for a pause: Dodo's `SubscriptionStatus` is
+            // pending|active|on_hold|cancelled|failed|expired, with no `paused` member, so a
+            // `subscription.paused` payload cannot say so itself. Read from the status alone, a
+            // deliberate pause landed on the fail-closed `past_due` and raised the dunning alert
+            // `sync.ts` emits for it. `paused` is non-entitling either way — this only stops a
+            // customer-initiated pause from being reported as a failed payment.
+            const status = eventType === "subscription.paused" ? "paused" : readString(object, "status");
 
             return {
                 ...base,
