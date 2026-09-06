@@ -377,6 +377,9 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
         updateSubscription: async (subscriptionId, patch: SubscriptionPatch) => {
             // A plan change is an `upgrade` to the new product (prorated immediately); a bare
             // metadata/quantity patch has no upgrade semantics, so return the current truth.
+            // Un-deduped on purpose, for want of anywhere to put a key: neither
+            // `UpgradeSubscriptionRequestEntity` nor Creem's `RequestOptions` carries one (checkout's
+            // `requestId` has no counterpart here), so a retry charges the proration twice.
             if (patch.priceId) {
                 return subscriptionFromCreem(
                     await client.subscriptions.upgrade(subscriptionId, { productId: patch.priceId, updateBehavior: "proration-charge-immediately" }),
