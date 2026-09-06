@@ -315,10 +315,16 @@ object Wire {
         // `[TAG,"error","E","m","ab"]` would decode there with the invented props
         // {0:"a",1:"b"} while substituting an empty map accepted the same frame
         // here.
-        if (items.size < 5 || items[4] == null) throw WireFormatException("wire-codec: malformed error tag")
+        if (items.size < 5) throw WireFormatException("wire-codec: malformed error tag")
 
-        val raw = items[4] as? Map<*, *> ?: throw WireFormatException("wire-codec: malformed error tag — props must be an object")
-        val props = raw.map { (key, item) -> key.toString() to decode(item, depth + 1) }
+        // The slot is decoded as one VALUE at depth+1, which puts its own fields
+        // at depth+2 — what the reference does with a single
+        // `decodeWire(value[4], depth + 1)` before it touches a field. Walking
+        // the raw map's entries here charged a level too few, so a props value
+        // nested one past the cap re-encoded happily out of this port and out of
+        // no other (`error-props-past-cap`).
+        val slot = decode(items[4], depth + 1)
+        val props = (slot as? WireValue.Obj ?: throw WireFormatException("wire-codec: malformed error tag — props must be an object")).fields
 
         // Both label slots are type-CHECKED, like every other slot. Defaulting to
         // "" accepted the frame while erasing the error's identity, and the ports
