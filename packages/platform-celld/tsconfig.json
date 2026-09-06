@@ -1,0 +1,11 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        // Intentionally no `outDir`/`rootDir`, matching `platform-cloudflare`/`platform-node`:
+        // `lint:types` is `tsc --noEmit` and packem owns the emit, so neither is
+        // load-bearing — and a set `rootDir` raises TS6059 for `__tests__`.
+        "moduleResolution": "bundler",
+        "types": ["node"]
+    },
+    "include": ["src/**/*", "__tests__/**/*"]
+}
