@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ExecutionContextLike, WorkerOptions } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
@@ -42,6 +42,15 @@ const functions: WorkerOptions["functions"] = {
 };
 
 describe("createWorker — opt-in public REST surface", () => {
+    // One case below stubs `navigator` to stand up the Cloudflare runtime. Undo it
+    // here rather than at the end of that test body: an `expect` failing before
+    // the unstub would leave `navigator.userAgent === "Cloudflare-Workers"` set
+    // for every case after it, so the file starts lying exactly while someone is
+    // reading it to debug a failure.
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
     it("routes an exposed query over REST GET through the procedure dispatch", async () => {
         expect.assertions(3);
 
@@ -234,8 +243,6 @@ describe("createWorker — opt-in public REST surface", () => {
         await worker.fetch(new Request("https://app.example/_lunora/rest/messages/list", { headers: { "cf-connecting-ip": "203.0.113.7" } }), {}, fakeContext);
 
         expect(limiter.limit).toHaveBeenCalledWith("rest", { key: "203.0.113.7" });
-
-        vi.unstubAllGlobals();
     });
 
     it("restSurfaceFromRegistry lists exactly the exposed, non-stream procedures", () => {
