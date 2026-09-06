@@ -2409,17 +2409,8 @@ interface MutationCtx {
 
     /**
      * The caller's IP for this request, or `undefined` when nothing trustworthy
-     * says who called.
-     *
-     * Populated only from Cloudflare's `CF-Connecting-IP`, forwarded server-side,
-     * and only while running ON Cloudflare — that is the one place the edge stamps
-     * the header over anything the client sent. On any other host it is a header
-     * the caller typed, so the runtime resolves nothing rather than hand a handler
-     * an attacker-chosen address; a rate limit keyed on a forgeable `ip` is worse
-     * than no limit, because it reads as enforced. `undefined` therefore covers: a
-     * live-subscription re-run, a server-initiated dispatch, and ANY non-Cloudflare
-     * host. A convenient rate-limit key for anonymous traffic on Cloudflare;
-     * elsewhere, key on something the caller cannot choose.
+     * says who called. Identical to {@link QueryCtx.ip} — see there for which
+     * host populates it and why every other one deliberately does not.
      */
     readonly ip?: string;
 
@@ -2509,17 +2500,8 @@ interface ActionCtx {
 
     /**
      * The caller's IP for this request, or `undefined` when nothing trustworthy
-     * says who called.
-     *
-     * Populated only from Cloudflare's `CF-Connecting-IP`, forwarded server-side,
-     * and only while running ON Cloudflare — that is the one place the edge stamps
-     * the header over anything the client sent. On any other host it is a header
-     * the caller typed, so the runtime resolves nothing rather than hand a handler
-     * an attacker-chosen address; a rate limit keyed on a forgeable `ip` is worse
-     * than no limit, because it reads as enforced. `undefined` therefore covers: a
-     * live-subscription re-run, a server-initiated dispatch, and ANY non-Cloudflare
-     * host. A convenient rate-limit key for anonymous traffic on Cloudflare;
-     * elsewhere, key on something the caller cannot choose.
+     * says who called. Identical to {@link QueryCtx.ip} — see there for which
+     * host populates it and why every other one deliberately does not.
      */
     readonly ip?: string;
 
