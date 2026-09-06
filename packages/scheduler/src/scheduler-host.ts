@@ -36,15 +36,14 @@ interface SchedulerHostOptions {
      */
     jurisdiction?: "eu" | "fedramp" | "us";
 
-    /** The `SchedulerDO` namespace binding. */
-    namespace: Parameters<typeof createScheduler>[0]["namespace"];
-
     /**
-     * Public origin the Worker is mounted at. `SchedulerDO` dispatches back to
-     * this base URL when an alarm fires, so a wrong value means jobs fire into
-     * nothing.
+     * The `SchedulerDO` namespace binding.
+     *
+     * The origin the DO dispatches back to is not configured here — it reads
+     * `env.LUNORA_ORIGIN_URL` off its own binding at fire time, so a wrong value
+     * there (or none) is what makes jobs fire into nothing.
      */
-    originUrl: string;
+    namespace: Parameters<typeof createScheduler>[0]["namespace"];
 }
 
 /**
@@ -72,7 +71,6 @@ const createSchedulerHost = (options: SchedulerHostOptions): SchedulerHost => {
         instanceName: options.instanceName,
         jurisdiction: options.jurisdiction,
         namespace: options.namespace,
-        originUrl: options.originUrl,
     });
 
     /**

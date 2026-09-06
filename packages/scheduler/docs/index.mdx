@@ -53,7 +53,6 @@ import { api } from "@/lunora/_generated/api";
 
 const scheduler = createScheduler({
     namespace: env.SCHEDULER, // SchedulerDO binding
-    originUrl: "https://app.acme.test", // required by the type; the DO dispatches from env.LUNORA_ORIGIN_URL
 });
 
 const id = await scheduler.runAfter(5 * 60_000, api.email.sendReminder, { userId: "u-1" });
@@ -157,7 +156,6 @@ import { internal } from "@/lunora/_generated/api";
 
 const pool = createWorkpool({
     namespace: env.SCHEDULER,
-    originUrl: "https://app.acme.test", // as above: the DO dispatches from env.LUNORA_ORIGIN_URL
     maxConcurrency: 5,
     name: "stripe-sync",
 });

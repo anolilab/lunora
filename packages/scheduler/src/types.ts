@@ -280,14 +280,15 @@ export interface LunoraSchedulerOptions {
      * un-pinned global namespace.
      */
     jurisdiction?: DurableObjectJurisdiction;
-    /** Binding to the `SchedulerDO` durable object namespace. */
-    namespace: DurableObjectNamespaceLike;
 
     /**
-     * Origin where the Worker is mounted. SchedulerDO uses this base URL when
-     * dispatching scheduled functions back to the Worker on alarm fire.
+     * Binding to the `SchedulerDO` durable object namespace.
+     *
+     * The origin the DO dispatches back to is NOT passed here: it reads
+     * `env.LUNORA_ORIGIN_URL` off its own binding at fire time, because a
+     * caller-supplied dispatch target would be an SSRF vector.
      */
-    originUrl: string;
+    namespace: DurableObjectNamespaceLike;
 }
 
 /** Per-enqueue options for a {@link Workpool}. Extends {@link RunOptions} minus the implicit `pool` (the pool sets that). */
@@ -302,7 +303,7 @@ export interface EnqueueOptions {
 
 /**
  * Options for `createWorkpool`. Mirrors {@link LunoraSchedulerOptions}
- * (same `namespace` / `originUrl` / `instanceName`) plus the bounded-concurrency
+ * (same `namespace` / `instanceName`) plus the bounded-concurrency
  * controls. A workpool is a NAMED logical pool inside the existing SchedulerDO —
  * it needs no extra Durable Object or wrangler binding beyond the SchedulerDO
  * the scheduler already uses.

@@ -188,7 +188,6 @@ interface LunoraSchedulerOptions {
     instanceName?: string;
     jurisdiction?: DurableObjectJurisdiction;
     namespace: DurableObjectNamespaceLike;
-    originUrl: string;
 }
 ```
 
@@ -432,7 +431,6 @@ interface SchedulerHostOptions {
     instanceName?: string;
     jurisdiction?: "eu" | "fedramp" | "us";
     namespace: Parameters<typeof createScheduler>[0]["namespace"];
-    originUrl: string;
 }
 ```
 

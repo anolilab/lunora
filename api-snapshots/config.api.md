@@ -1754,6 +1754,7 @@ interface ReconcileResult {
     changed: boolean;
     preserved: string[];
     reason?: string;
+    warnings: string[];
     wranglerPath?: string;
 }
 ```
@@ -2087,6 +2088,12 @@ const collectExportGaps: (inferred: InferredBindings) => ExportGap[];
 
 ```ts
 const collectWranglerSecretVariables: (projectRoot: string) => WranglerVariableIR[];
+```
+
+### `describePreservedCrons` (const)
+
+```ts
+const describePreservedCrons: (preserved: ReadonlyArray<string>) => string | undefined;
 ```
 
 ### `findWranglerFile` (const)

@@ -42,17 +42,14 @@
     },
     "vars": {
         "PUBLIC_STORAGE_BASE_URL": "https://files.example.com",
-        // REPLACE both before deploying to production — they are the origin the
-        // Worker is called back on. Pointing at localhost in production silently
+        // REPLACE before deploying to production — this is the origin the Worker
+        // is called back on, and pointing it at localhost in production silently
         // breaks scheduled jobs.
         //
-        // `LUNORA_ORIGIN_URL` is the one the SchedulerDO reads: it takes the
-        // dispatch target from its OWN env and ignores the `originUrl` passed to
-        // `createScheduler` (a caller-supplied target would be an SSRF vector).
-        // Without it every `ctx.scheduler.runAfter` is refused with
-        // `ORIGIN_NOT_CONFIGURED`. `LUNORA_WORKER_ORIGIN` is the cross-shard
-        // relation resolver's.
+        // The SchedulerDO takes its dispatch target from its OWN env and from
+        // nowhere else — a caller-supplied one would be an SSRF vector — so
+        // without this every `ctx.scheduler.runAfter` is refused with
+        // `ORIGIN_NOT_CONFIGURED`.
         "LUNORA_ORIGIN_URL": "http://localhost:8787",
-        "LUNORA_WORKER_ORIGIN": "http://localhost:8787",
     },
 }

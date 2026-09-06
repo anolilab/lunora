@@ -306,12 +306,10 @@ interface StorageDeclaration<Env> {
         : []),
     ...(options.hasScheduler
         ? [
-              `/** \`.scheduler(...)\` declaration — the \`SchedulerDO\` namespace plus the worker origin its callbacks dispatch back to. Backs \`ctx.scheduler\` AND the studio's scheduled-jobs view. */
+              `/** \`.scheduler(...)\` declaration — the \`SchedulerDO\` namespace. Backs \`ctx.scheduler\` AND the studio's scheduled-jobs view. The origin its callbacks dispatch back to is not declared here: the DO reads \`env.LUNORA_ORIGIN_URL\` at fire time, because a caller-supplied dispatch target would be an SSRF vector. */
 interface SchedulerDeclaration<Env> {
     /** The \`SchedulerDO\` namespace binding (typically \`env.SCHEDULER\`). */
     namespace: Selector<Env, DurableObjectNamespaceLike & ShardNamespaceLike>;
-    /** The worker origin the \`SchedulerDO\` dispatches HTTP job callbacks back to. */
-    origin?: Selector<Env, string>;
 }`,
           ]
         : []),
@@ -931,12 +929,11 @@ const buildSchedulerHelper = (options: EmitAppOptions): string => {
     const jurisdiction = options.jurisdiction ? ` jurisdiction: ${JSON.stringify(options.jurisdiction)},` : "";
 
     return `
-    /** Resolve the \`SchedulerDO\`-backed scheduler for this env; \`undefined\` until both the namespace and origin are wired. */
+    /** Resolve the \`SchedulerDO\`-backed scheduler for this env; \`undefined\` until the namespace is wired. */
     private resolveScheduler(env: Env): ReturnType<typeof createScheduler> | undefined {
         const namespace = this.schedulerDeclaration?.namespace(env);
-        const origin = this.schedulerDeclaration?.origin?.(env);
 
-        return namespace && origin ? createScheduler({${jurisdiction} namespace, originUrl: origin }) : undefined;
+        return namespace ? createScheduler({${jurisdiction} namespace }) : undefined;
     }
 `;
 };

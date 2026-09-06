@@ -118,7 +118,7 @@ const app = defineApp<Env>()
         publicBaseUrl: (env) => env.PUBLIC_STORAGE_BASE_URL,
         signingSecret: (env) => env.STORAGE_SECRET,
     })
-    .scheduler({ namespace: (env) => env.SCHEDULER, origin: (env) => env.LUNORA_WORKER_ORIGIN })
+    .scheduler({ namespace: (env) => env.SCHEDULER })
     .global({ d1: (env) => env.DB, origin: (env) => env.LUNORA_WORKER_ORIGIN })
     .auth({ d1: (env) => env.DB, options: authOptions })
     .admin((env) => env.LUNORA_ADMIN_TOKEN)
@@ -284,8 +284,7 @@ const handleTestSchedule = async (request: Request, env: Env): Promise<Response>
         return Response.json({ error: "`functionPath` is required", jobId: null }, { status: 400 });
     }
 
-    const originUrl = new URL(request.url).origin;
-    const scheduler = createScheduler({ namespace: env.SCHEDULER, originUrl });
+    const scheduler = createScheduler({ namespace: env.SCHEDULER });
     const scheduledFor = body.scheduledFor ?? Date.now() + (body.delayMs ?? 0);
 
     // `runAt` resolves the bare job id; `scheduledFor` is the instant we just
@@ -329,11 +328,11 @@ const handleTestRoute = async (request: Request, env: Env): Promise<Response | n
     if (url.pathname === "/test/job-status" && method === "GET") {
         const id = url.searchParams.get("id");
 
-        if (!id || !env.SCHEDULER || !env.LUNORA_WORKER_ORIGIN) {
+        if (!id || !env.SCHEDULER) {
             return Response.json({ status: "unknown" });
         }
 
-        const scheduler = createScheduler({ namespace: env.SCHEDULER, originUrl: env.LUNORA_WORKER_ORIGIN });
+        const scheduler = createScheduler({ namespace: env.SCHEDULER });
         const record = await scheduler.get(id);
 
         // The SchedulerDO deletes a job's rows once it completes successfully, so
