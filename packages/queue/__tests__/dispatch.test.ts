@@ -92,7 +92,7 @@ describe("dispatchQueueBatch", () => {
         expect.assertions(1);
 
         const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
-        const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({}, { status: 200 }));
+        const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ result: null }, { status: 200 }));
 
         const q = defineQueue({
             handler: async (context, b) => {
@@ -499,7 +499,9 @@ const dispatchFetchFailingFor = (failFor: string, status: number, code: string) 
         return Response.json({ error: { code, message: `dispatch failed for ${failFor}` } }, { status });
     }
 
-    return Response.json({ ok: true });
+    // The shard's dispatch response always carries a `result` key, so a bare body
+    // is not a shape it can produce and the runner now rejects one.
+    return Response.json({ result: { ok: true } });
 };
 
 /** A handler that scopes its own `ctx.run` call per message via `messageId` — the shape attribution requires. */
@@ -570,7 +572,8 @@ const dedupingDispatchFetch = (): { executed: string[]; fetchImpl: typeof fetch 
 
         executed.push(functionPath);
 
-        const result = { ran: functionPath };
+        // Wrapped in the `{ result }` envelope the DO always emits.
+        const result = { result: { ran: functionPath } };
 
         if (id !== undefined) {
             cache.set(id, result);
@@ -666,7 +669,9 @@ describe("dispatchQueueBatch — poison message isolation (deterministic dispatc
                 return Response.json({ error: { code: "INTERNAL", message: `upstream rejected: authorization=${secret}` } }, { status: 400 });
             }
 
-            return Response.json({ ok: true });
+            // The shard's dispatch response always carries a `result` key, so a bare body
+            // is not a shape it can produce and the runner now rejects one.
+            return Response.json({ result: { ok: true } });
         }) as typeof fetch;
 
         const error = vi.spyOn(console, "error").mockImplementation(() => {});

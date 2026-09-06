@@ -28,7 +28,7 @@ describe("createDispatchRunner", () => {
     it("forwards a caller `traceparent` so the callee joins the trace, and omits it when unset", async () => {
         expect.assertions(2);
 
-        const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ ok: 1 }, { status: 200 }));
+        const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ result: { ok: 1 } }, { status: 200 }));
         const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
 
         await createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue", traceparent })(REF, { to: "a" });

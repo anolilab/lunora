@@ -188,6 +188,12 @@ const createQueueConsumer =
  */
 const httpDispatcher = (options: HttpDispatcherOptions): QueueDispatch => {
     const run = createDispatchRunner({
+        // `enqueue`/`enqueueBatch` already encoded these before the job entered the
+        // queue — that hop is its own JSON serialisation and a `bigint` throws at
+        // `queue.send`. Without this the runner encodes a SECOND time and the shard
+        // decodes once, so the handler gets `["$lunora.wire$","bigint","7"]` rather
+        // than `7n`, and a `Date` that is no longer a `Date`.
+        argsAlreadyEncoded: true,
         env: { LUNORA_ADMIN_TOKEN: options.adminToken, LUNORA_ORIGIN_URL: options.originUrl },
         fetchImpl: options.fetchImpl,
         label: "@lunora/scheduler",
