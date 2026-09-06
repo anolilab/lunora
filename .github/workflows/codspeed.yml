@@ -100,18 +100,28 @@
               "run": "pnpm install --frozen-lockfile"
 
             # Benchmarks import the workspace packages from their gitignored `dist/`,
-            # so without this they fail to resolve. PRs build only the affected chain,
-            # mirroring the bench selection below; pushes build everything.
+            # so without this they fail to resolve.
+            #
+            # The SAME full, uncached build on every event, deliberately. A PR used to
+            # build only the affected chain while the `alpha` push that produced the
+            # baseline built everything — so head and base were measured against
+            # different `dist/` sets, which is what CodSpeed reports as "Different
+            # runtime environments detected". Two concrete ways that produced false
+            # regressions of 10-70% on benchmarks whose packages the PR never touched:
+            #
+            #   - `packages/do` does not depend on `@lunora/codegen`, so a codegen-only
+            #     PR left `packages/do/dist` unbuilt while its benchmarks still ran.
+            #   - the build cache keys on a package's own inputs and does NOT see
+            #     `shared/*`, which is bundler-inlined. `shard-do.ts` alone imports it
+            #     15 times, so a PR editing `shared/wire-codec.ts` benchmarked a `dist/`
+            #     still carrying the OLD inlined copy.
+            #
+            # `--no-cache` is here for the same reason `test:bench` already carries it:
+            # a cache hit serves a `dist/` built from different source, and a benchmark
+            # measuring code that is not the branch's code is worse than no benchmark —
+            # every false positive costs a manual disproof.
             - "name": "Build packages"
-              "shell": "bash"
-              "env":
-                  "EVENT_NAME": "${{ github.event_name }}"
-              "run": |
-                  if [ "$EVENT_NAME" = "pull_request" ]; then
-                      pnpm run build:affected:packages
-                  else
-                      pnpm run build:packages
-                  fi
+              "run": 'pnpm exec vis run build --no-cache --query "tag=type:package"'
 
             # PRs run only the affected benches; pushes run all of them to keep the
             # baseline complete. `--no-cache` forces real execution — a vis cache hit
