@@ -182,6 +182,42 @@ describe("read replicas", () => {
         expect(replica?.appliedSeq()).toBe(2);
     });
 
+    it("carries wire-typed leaves across the control channel intact", async () => {
+        expect.assertions(4);
+
+        // `decodeDocJson` hands the owner REAL `bigint` / `ArrayBuffer` / `Date`
+        // values, so both directions of this channel have to run the codec: an
+        // unencoded `bigint` throws inside `Response.json`, which the follower
+        // reads as "owner unreachable" and retries forever, and unencoded bytes
+        // flatten to `{}` for the follower to write into its copy of the shard.
+        owner.snapshot = [{ doc: { _id: "a", blob: new Uint8Array([1, 2, 3]).buffer, views: 7n }, table: "posts" }];
+
+        const replica = createReplicaLink(host);
+
+        // The snapshot crosses on the bootstrap frame…
+        await replica?.ensureFresh();
+
+        expect(imported[0]?.doc).toStrictEqual({ _id: "a", blob: new Uint8Array([1, 2, 3]).buffer, views: 7n });
+
+        // …and a later write crosses on a pull frame. `9007199254740993` is past
+        // `Number.MAX_SAFE_INTEGER`, so a codec that round-tripped it through a
+        // JSON number would come back off by one rather than merely mistyped.
+        owner.changes = [
+            {
+                doc: { _id: "b", at: new Date("2024-01-01T00:00:00.000Z"), views: 9_007_199_254_740_993n },
+                id: "b",
+                op: "insert",
+                seq: 1,
+                table: "posts",
+                ts: 1,
+            },
+        ];
+
+        await expect(replica?.ensureFresh(1)).resolves.toBe("fresh");
+        expect(applied[0]?.doc).toStrictEqual({ _id: "b", at: new Date("2024-01-01T00:00:00.000Z"), views: 9_007_199_254_740_993n });
+        expect(replica?.appliedSeq()).toBe(1);
+    });
+
     it("serves inside the staleness window without touching the owner", async () => {
         expect.assertions(2);
 

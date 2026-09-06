@@ -121,7 +121,6 @@
           "name": "args",
           "required": true,
           "schema": {
-            "additionalProperties": false,
             "properties": {
               "body": {
                 "type": "string"
@@ -268,7 +267,6 @@
           "name": "args",
           "required": true,
           "schema": {
-            "additionalProperties": false,
             "properties": {
               "boardId": {
                 "type": "string"
