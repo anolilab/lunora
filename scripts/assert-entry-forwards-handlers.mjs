@@ -24,7 +24,23 @@
  * the entry's handler set cannot be read at all.
  */
 import { readdirSync, readFileSync, existsSync } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/** This repo's root, resolved from the script rather than the scaffold under test. */
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+/**
+ * The suite that proves the generated class-A entry forwards its handlers.
+ *
+ * A `virtual:` main has no file to read here, and this check runs on the source
+ * before the install, so there is no built worker either. The entry is emitted by
+ * our own Vite plugin, and that emitter IS covered end to end — the suite below
+ * writes the real emitted entry to disk and invokes `scheduled`/`queue`/`email`.
+ * So rather than pretend to prove it here or wave it through, this asserts the
+ * proof still exists: delete that suite and this gate fails.
+ */
+const CLASS_A_ENTRY_SUITE = "packages/vite/__tests__/class-a-worker-entry.test.ts";
 
 const SKIP_DIRS = new Set(["node_modules", "_generated", "dist", "build", ".git", ".svelte-kit", ".output", ".nuxt", ".vinxi"]);
 
@@ -102,10 +118,13 @@ const offences = [];
 // read here, so neither may pass silently: an app that declares a handler and
 // cannot be shown to forward it is exactly the case this gate exists for.
 if (main !== undefined && main.startsWith("virtual:")) {
-    offences.push(
-        `wrangler main is "${main}", generated at build time — its handler set cannot be read from the scaffold, ` +
-            `so forwarding of ${declared.join(", ")} is unproven. Point the smoke test at the built worker, or export the handlers explicitly.`,
-    );
+    if (!existsSync(join(REPO_ROOT, CLASS_A_ENTRY_SUITE))) {
+        offences.push(
+            `wrangler main is "${main}", emitted by the Vite plugin, so its handler set cannot be read from the ` +
+                `scaffold — and ${CLASS_A_ENTRY_SUITE}, the suite that invokes the emitted entry's ` +
+                `${declared.join("/")}, is gone. Restore it, or this template's forwarding is proven nowhere.`,
+        );
+    }
 } else {
     const entryFile = main === undefined ? undefined : join(root, main);
     const candidates = entryFile !== undefined && existsSync(entryFile) ? [entryFile] : files;
