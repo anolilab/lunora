@@ -69,6 +69,7 @@ import {
     AGG_COUNT,
     AGG_KEY,
     AGG_VALUE,
+    decodeGroupKeyValue,
     DOC_COLUMN,
     encodeDocJson,
     geoTableName,
@@ -92,9 +93,11 @@ import {
     buildSeekWhere,
     decodeCursor,
     encodeCursor,
+    equalityPinnedFields,
     normalizeOrderKeys,
     softDeleteScope,
     tiebreakDirectionFor,
+    uniqueIndexFields,
 } from "./query-args";
 import { encodePartitionKey, RANK_TIEBREAK, rankPivotConditionSql, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 import type { ReactiveCache } from "./reactive-cache";
@@ -127,7 +130,6 @@ import type {
     ServerDefaultContextLike,
     TableDefinitionLike,
     TableReaderLike,
-    ValidatorLike,
 } from "./schema-types";
 import { mayHoldProjectedValue } from "./sql-projection";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
@@ -1233,6 +1235,10 @@ const compileOrderBySql = (keys: OrderKey[]): SQL => {
 /** Invert the reader's staged SQL comparators back into `where`-tree operators. */
 const COMPARATOR_TO_OPERATOR: Record<string, string> = { "<": "lt", "<=": "lte", "=": "eq", ">": "gt", ">=": "gte" };
 
+/** The staged index fields an `.eq()` fixes to one value — a range (`.gt()`/`.lte()`) pins nothing. */
+const pinnedIndexFields = (stage: QueryStage): ReadonlySet<string> =>
+    new Set(stage.sqlConditions.filter((condition) => condition.comparator === "=").map((condition) => condition.field));
+
 /**
  * The index fields a staged read still has to ORDER BY: `indexFields` minus the
  * LEADING run the range builder pins with `.eq()`.
@@ -1259,7 +1265,7 @@ const COMPARATOR_TO_OPERATOR: Record<string, string> = { "<": "lt", "<=": "lte",
  * the read — so it does not qualify.
  */
 const unpinnedIndexFields = (stage: QueryStage): ReadonlyArray<string> => {
-    const pinned = new Set(stage.sqlConditions.filter((condition) => condition.comparator === "=").map((condition) => condition.field));
+    const pinned = pinnedIndexFields(stage);
     let start = 0;
 
     while (start < stage.indexFields.length && pinned.has(stage.indexFields[start] ?? "")) {
@@ -1278,16 +1284,23 @@ const unpinnedIndexFields = (stage: QueryStage): ReadonlyArray<string> => {
  * through `normalizeOrderKeys` so the fluent reader and the object-form `findMany`
  * answer that question the same way.
  */
-const paginateOrderKeys = (stage: QueryStage, shape: Record<string, ValidatorLike>): OrderKey[] => {
+const paginateOrderKeys = (stage: QueryStage, definition: TableDefinitionLike): OrderKey[] => {
     const direction = stage.order;
     const orderFields = unpinnedIndexFields(stage);
+    const { shape } = definition;
 
     if (orderFields.length > 0) {
+        // The `.eq()`-pinned leading run is already gone from `orderFields`, so
+        // `pinned` is handed over purely to complete the unique-index cover test:
+        // a `.withIndex("by_a_b", (q) => q.eq("a", …))` over a UNIQUE `(a, b)`
+        // index still orders its rows totally on `b` alone, so that read needs no
+        // `_creationTime` tiebreak either.
         return normalizeOrderKeys(
             orderFields.map((field) => {
                 return { [field]: direction };
             }),
             shape,
+            { pinned: pinnedIndexFields(stage), uniqueBy: uniqueIndexFields(definition.indexes, shape) },
         );
     }
 
@@ -1360,8 +1373,8 @@ const scanDocs = (rows: Record<string, unknown>[], filters: QueryStage["inMemory
 const paginateStage = (
     sql: SqlExec,
     tableName: string,
-    /** The table's declared columns — decides which ordered keys are nullable. */
-    shape: Record<string, ValidatorLike>,
+    /** The paged table — its shape decides which ordered keys are nullable, its indexes which sorts need no `_creationTime` tiebreak. */
+    definition: TableDefinitionLike,
     stage: QueryStage,
     options: PaginationOptions,
     scopeCondition?: TextFragment,
@@ -1369,7 +1382,7 @@ const paginateStage = (
     onScanned: (count: number) => void = () => undefined,
 ): QueryPage => {
     const numberItems = Math.max(0, Math.floor(options.numItems));
-    const orderKeys = paginateOrderKeys(stage, shape);
+    const orderKeys = paginateOrderKeys(stage, definition);
     // A cursor is always a non-empty base64 string, so truthiness distinguishes
     // a bounded page (endCursor set) from the legacy open-ended one (null/omitted).
     const bounded = typeof options.endCursor === "string";
@@ -1619,7 +1632,7 @@ const buildReader = (
         // came out in the order of their RANDOM server-minted ids. That looked
         // deterministic only while the index could not satisfy the ORDER BY and
         // SQLite sorted into a temp B-tree whose input order it preserved.
-        compileOrderBySql(paginateOrderKeys(stage, tableDefinition.shape));
+        compileOrderBySql(paginateOrderKeys(stage, tableDefinition));
 
     /**
      * Report this read's dependency footprint, once per terminal.
@@ -1839,7 +1852,7 @@ const buildReader = (
                 throw new LunoraError("INTERNAL", "pagination is not supported on geo queries; use .take(n) or .collect()");
             }
 
-            const page = paginateStage(sql, tableName, tableDefinition.shape, stage, options, scopeConditionText, (count) => {
+            const page = paginateStage(sql, tableName, tableDefinition, stage, options, scopeConditionText, (count) => {
                 scanned = count;
             });
 
@@ -3526,7 +3539,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 onRead(tableName);
             }
 
-            const orderKeys = normalizeOrderKeys(args.orderBy, findManyDefinition.shape);
+            const orderKeys = normalizeOrderKeys(args.orderBy, findManyDefinition.shape, {
+                pinned: equalityPinnedFields(args.where),
+                uniqueBy: uniqueIndexFields(findManyDefinition.indexes, findManyDefinition.shape),
+            });
             const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
 
             // RLS (3.2) / aggregates (3.1) inject a `baseWhere` we AND-merge
@@ -3856,7 +3872,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
                 for (const field of groupOptions.by) {
                     // eslint-disable-next-line unicorn/no-null -- GroupByEntry.key tuple: a NULL group value surfaces as null in the returned key, matching the wire shape
-                    key[field] = row[field] ?? null;
+                    key[field] = decodeGroupKeyValue(definition.shape[field], row[field] ?? null);
                 }
 
                 const { value } = row as { value: unknown };

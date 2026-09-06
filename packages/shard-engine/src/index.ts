@@ -264,9 +264,12 @@ export {
     CURSOR_PREFIX,
     decodeCursor,
     encodeCursor,
+    equalityPinnedFields,
     normalizeOrderKeys,
+    type OrderKeyConstraints,
     softDeleteScope,
     tiebreakDirectionFor,
+    uniqueIndexFields,
 } from "./query-args";
 // Consumed by `@lunora/do` internals rather than by end users: these were
 // module-private inside `@lunora/do` before the relocation, and are published
