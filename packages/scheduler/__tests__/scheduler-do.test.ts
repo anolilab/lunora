@@ -777,6 +777,23 @@ describe("schedulerDO — dead-letter admin endpoints", () => {
         expect(state.alarm).toBe(result.scheduledFor);
     });
 
+    it("refuses a caller-supplied id the workflow engine would reject", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        // Minting over it stored the job under an id the caller never sees, so a
+        // repeated call scheduled a SECOND job rather than answering 409.
+        const response = await scheduler.fetch(
+            post("/schedule", { args: {}, functionPath: "jobs.charge", id: "-daily-2026-09-06", scheduledFor: Date.now() + 60_000 }),
+        );
+
+        expect(response.status).toBe(400);
+        await expect(response.json<{ error: { code: string } }>()).resolves.toMatchObject({ error: { code: "INVALID_SCHEDULE_ID" } });
+        expect([...state.storageMap.keys()]).toStrictEqual([]);
+    });
+
     it("refuses a caller-supplied id a dead-letter record still holds, so /dead/retry cannot overwrite the new job", async () => {
         expect.assertions(4);
 

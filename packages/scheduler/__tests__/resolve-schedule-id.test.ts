@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 import resolveScheduleId from "../src/resolve-schedule-id";
 
 /** The engine's own instance-id grammar (see `@lunora/workflow`'s `boundInstanceId`). */
-const CLOUDFLARE_INSTANCE_ID = /^[a-zA-Z0-9_][\w-]*$/u;
+const CLOUDFLARE_INSTANCE_ID = /^\w[\w-]*$/u;
 
 describe("resolveScheduleId", () => {
     it("mints only ids Cloudflare Workflows accepts as an instance id", () => {
@@ -33,13 +33,12 @@ describe("resolveScheduleId", () => {
         expect(resolveScheduleId(undefined)).not.toContain(":");
     });
 
-    it("replaces a caller id Cloudflare would reject", () => {
-        expect.assertions(3);
+    it("refuses a caller id Cloudflare would reject instead of replacing it", () => {
+        expect.assertions(2);
 
-        const resolved = resolveScheduleId("-leading-dash");
-
-        expect(resolved).not.toBe("-leading-dash");
-        expect(resolved).toMatch(CLOUDFLARE_INSTANCE_ID);
+        // `id` is not an idempotency key — a duplicate is a 409 — so minting over
+        // an invalid one made two calls with the same id run the job twice.
+        expect(() => resolveScheduleId("-leading-dash")).toThrow("must not start with `-`");
         // `_` IS a legal leading character — only `-` is not.
         expect(resolveScheduleId("_leading-underscore")).toBe("_leading-underscore");
     });
@@ -49,14 +48,14 @@ describe("resolveScheduleId", () => {
 
         expect(resolveScheduleId("job_42")).toBe("job_42");
         expect(resolveScheduleId("a".repeat(64))).toBe("a".repeat(64));
-        expect(resolveScheduleId("a".repeat(65))).not.toBe("a".repeat(65));
+        expect(() => resolveScheduleId("a".repeat(65))).toThrow("must be 1-64 characters");
     });
 
-    it("mints for a caller id that is not a usable string", () => {
+    it("refuses a caller id that is not a usable string", () => {
         expect.assertions(3);
 
-        expect(resolveScheduleId("with:colon")).toMatch(CLOUDFLARE_INSTANCE_ID);
-        expect(resolveScheduleId("")).toMatch(CLOUDFLARE_INSTANCE_ID);
-        expect(resolveScheduleId(42)).toMatch(CLOUDFLARE_INSTANCE_ID);
+        expect(() => resolveScheduleId("with:colon")).toThrow("must be 1-64 characters");
+        expect(() => resolveScheduleId("")).toThrow("must be 1-64 characters");
+        expect(() => resolveScheduleId(42)).toThrow("must be 1-64 characters");
     });
 });
