@@ -17,10 +17,19 @@ interface ModuleOptions {
 }
 ```
 
+### `ResolvedNuxtPlugin` (interface)
+
+```ts
+interface ResolvedNuxtPlugin {
+    mode?: "all" | "client" | "server";
+    src: string;
+}
+```
+
 ### `checkClientOnlyProvider` (const)
 
 ```ts
-const checkClientOnlyProvider: (srcDirectory: string, warn: (message: string) => void) => void;
+const checkClientOnlyProvider: (plugins: ReadonlyArray<ResolvedNuxtPlugin>, warn: (message: string) => void) => void;
 ```
 
 ### `checkWorkerEntry` (const)

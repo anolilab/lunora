@@ -67,7 +67,7 @@
  */
 
 /* eslint-disable import/exports-last -- the public ModuleOptions type is declared next to the module definition it configures rather than grouped at the file end */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import { addServerHandler, createResolver, defineNuxtModule, useLogger } from "@nuxt/kit";
@@ -227,12 +227,6 @@ export const checkWorkerEntry = (rootDirectory: string, warn: (message: string) 
     }
 };
 
-/** Any file Nuxt will load as a plugin (`.ts`, `.js`, and the `.mts`/`.cts`/`.mjs`/`.cjs` forms). */
-const PLUGIN_FILE_SUFFIX = /\.[cm]?[jt]s$/u;
-
-/** A plugin filename Nuxt loads in the browser ONLY — `foo.client.ts` and its extension variants. */
-const CLIENT_ONLY_PLUGIN_SUFFIX = /\.client\.[cm]?[jt]s$/u;
-
 /** Whether the source installs `@lunora/vue`'s provider (`app.use(createLunora(client))`). */
 const CREATE_LUNORA_PATTERN = /\bcreateLunora\b/u;
 
@@ -246,6 +240,18 @@ const providesLunoraClient = (path: string): boolean => {
 };
 
 /**
+ * One entry of Nuxt's resolved plugin list (`app.plugins` at `app:resolve`):
+ * an absolute `src` plus the `mode` Nuxt derived for it. Declared structurally
+ * for the same reason as {@link LunoraNuxtModule} — `@nuxt/schema`, which owns
+ * `NuxtPlugin`, is not a resolvable dependency here — and `NuxtPlugin[]`
+ * satisfies it.
+ */
+export interface ResolvedNuxtPlugin {
+    mode?: "all" | "client" | "server";
+    src: string;
+}
+
+/**
  * Warn when the project's ONLY `LunoraClient` provider is a client-only plugin.
  *
  * `@lunora/vue`'s composables call `useLunora()` unconditionally — ahead of
@@ -255,44 +261,41 @@ const providesLunoraClient = (path: string): boolean => {
  * `useLunora(): no LunoraClient provided`. The fix is dropping `.client` from
  * the filename plus a universal way to read the origin, which the warning says.
  *
- * Only fires when *no* universal plugin provides a client, so an app that keeps
- * a correct `plugins/lunora.ts` alongside some other `.client.ts` file is
- * silent. Detection is the same shape as {@link looksLikeShardDoExport}: a
- * documented keyword test, not a TS parse, because the outcome is a build-time
- * warning. Its imprecision is a `createLunora` mention inside a comment, whose
- * only cost is a warning pointing at a file that is already about the client.
+ * Takes Nuxt's own resolved plugin list (`app.plugins`, from the `app:resolve`
+ * hook) rather than scanning `plugins/` itself. That is the whole point: Nuxt
+ * loads plugins with a two-pattern, ONE-level glob — top-level entries plus a
+ * subdirectory's `index` file — over every layer's configured plugins dir, so
+ * a filesystem scan of its own has to mirror the glob, the extension list,
+ * `dir.plugins` and every layer — and gets the answer WRONG in both directions
+ * when it doesn't. A recursive scan counts `plugins/lib/make-client.ts` (an
+ * ordinary colocated helper Nuxt never loads) as a universal provider and goes
+ * silent on a genuinely broken app. Reading `mode` off the resolved entry also
+ * drops the `.client` filename rule, since that is what Nuxt derived it from.
  *
- * Scans `srcDirectory` (Nuxt's `srcDir`, which is where `plugins/` lives —
- * `app/` by default in Nuxt 4), recursively, so nested plugin directories count
- * too. A project with no `plugins/` directory is silent.
+ * Detection of the provider itself is the same shape as
+ * {@link looksLikeShardDoExport}: a documented keyword test, not a TS parse,
+ * because the outcome is a build-time warning. Its imprecision is a
+ * `createLunora` mention inside a comment, whose only cost is a warning
+ * pointing at a file that is already about the client.
+ *
+ * Silence requires a provider Nuxt loads on the server — `mode` `"all"` or
+ * `"server"` — not merely a working app: an app that confines every Lunora
+ * usage to `<ClientOnly>` is correct with a client-only provider and still
+ * warns, which is why the message names that case as a reason to ignore it.
  */
-export const checkClientOnlyProvider = (srcDirectory: string, warn: (message: string) => void): void => {
-    const pluginsDirectory = join(srcDirectory, "plugins");
+export const checkClientOnlyProvider = (plugins: ReadonlyArray<ResolvedNuxtPlugin>, warn: (message: string) => void): void => {
+    const providers = plugins.filter((plugin) => providesLunoraClient(plugin.src));
 
-    let entries: unknown[];
-
-    try {
-        entries = readdirSync(pluginsDirectory, { recursive: true });
-    } catch {
-        // No `plugins/` directory (or it is unreadable) — nothing to check.
-        return;
-    }
-
-    const providers = entries
-        .filter((entry): entry is string => typeof entry === "string")
-        .map((entry) => entry.split("\\").join("/"))
-        .filter((entry) => PLUGIN_FILE_SUFFIX.test(entry) && providesLunoraClient(join(pluginsDirectory, entry)));
-
-    if (providers.length === 0 || providers.some((entry) => !CLIENT_ONLY_PLUGIN_SUFFIX.test(entry))) {
+    if (providers.length === 0 || providers.some((plugin) => plugin.mode !== "client")) {
         return;
     }
 
     warn(
-        `the only plugin providing a \`LunoraClient\` is client-only (${providers.map((entry) => `plugins/${entry}`).join(", ")}) — ` +
+        `the only plugin providing a \`LunoraClient\` is client-only (${providers.map((plugin) => plugin.src).join(", ")}) — ` +
             `\`@lunora/vue\`'s composables resolve the client during SSR too and throw \`useLunora(): no LunoraClient provided\` without one, ` +
             `so the first server-rendered page that touches Lunora answers 500. Drop the \`.client\` from the filename to make the plugin ` +
             `universal, and read the origin with \`useRequestURL().origin\`, which resolves from the incoming request on the server and from ` +
-            `\`window.location\` in the browser.`,
+            `\`window.location\` in the browser. Ignore this if every Lunora usage is confined to \`<ClientOnly>\`, which never renders on the server.`,
     );
 };
 
@@ -382,8 +385,15 @@ const lunoraNuxtModule: LunoraNuxtModule = defineNuxtModule<ModuleOptions>({
         // plugin that provides the `LunoraClient` — see the file docblock for
         // why — so the one failure mode we can still catch cheaply is a
         // provider that never runs on the server. Same warn-don't-fail stance.
-        checkClientOnlyProvider(nuxt.options.srcDir, (message) => {
-            useLogger("@lunora/nuxt").warn(message);
+        // Hooked on `app:resolve` (which runs in `nuxt build` and `nuxt dev`
+        // alike) so the check sees the plugin list Nuxt actually resolved,
+        // modes included, instead of re-deriving it from the filesystem — a
+        // scan of its own has to mirror Nuxt's one-level glob, extension list,
+        // `dir.plugins` and layers, and silently misjudges apps when it drifts.
+        nuxt.hook("app:resolve", (app) => {
+            checkClientOnlyProvider(app.plugins, (message) => {
+                useLogger("@lunora/nuxt").warn(message);
+            });
         });
     },
 });
