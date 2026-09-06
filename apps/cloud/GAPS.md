@@ -442,11 +442,24 @@ enforcement + recovery engine above already reacts to whatever balance exists.
 
 ## D. Data & trust
 
-### D1. Control-plane + tenant backups, PITR, restore runbook (🌐)
+### D1. Control-plane + tenant backups, PITR, restore runbook (✅ same-account backup + runbook shipped; 🔨 cross-account copy)
 
-D1 Time Travel export to platform R2 in a _different_ cell, on a cron; tested
-restore runbook. The single most-critical 🌐 item — the control-plane DB is the
-crown jewel.
+`src/backup/sweep.ts` takes a full SQL dump through D1's export API on the
+existing six-hourly tick and streams it into R2 at
+`control-plane/<cell>/<timestamp>.sql`, pruning past 30 days. `docs/RESTORE.md`
+is the runbook, and it separates the two layers that fail differently: Time
+Travel already covers a bad write in place, so the dump exists for losing the
+database itself.
+
+**Still open, and it is the half that motivated the row:** the copy is
+same-account. A Worker's R2 binding cannot address another Cloudflare account,
+so a second copy in another cell needs R2's S3 API and a credential for that
+account. Until then an account-level loss is uncovered — this is 🔨 (code
+tractable) rather than 🌐.
+
+The runbook's quarterly restore drill has **not been run**. A backup nobody has
+restored is a hypothesis, and the recovery-time number an incident is judged on
+is not knowable from the code.
 
 ### D2. `lunora eject` — self-serve full export (✅ shipped end to end)
 

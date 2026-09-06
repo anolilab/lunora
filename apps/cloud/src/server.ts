@@ -18,6 +18,8 @@ import { LUNORA_FUNCTIONS } from "../lunora/_generated/functions.js";
 import { openApiSpec } from "../lunora/_generated/openapi.js";
 import { createShardDO } from "../lunora/_generated/shard.js";
 import schema from "../lunora/schema.js";
+import type { BackupBucket } from "./backup/sweep";
+import { runBackupSweep } from "./backup/sweep";
 import type { CreemCreditsClientLike } from "./billing/creem-credits";
 import { createCreemCreditsLedger } from "./billing/creem-credits";
 import { reconcileAllOverages } from "./billing/overage";
@@ -198,12 +200,27 @@ export const ShardDO = createShardDO({
 type Env = {
     /** Secret backing the studio's better-auth sessions. */
     AUTH_SECRET?: string;
+
     /** Base URL better-auth resolves callbacks against. */
     AUTH_URL?: string;
+
+    /**
+     * Private R2 bucket the control-plane dumps are written to (GAPS.md D1).
+     * Absent → the backup sweep no-ops. The dump contains every sealed admin
+     * token and auth session in the cell, so this bucket must never be public.
+     */
+    BACKUPS?: BackupBucket;
     /** Cloudflare account hosting this cell — the teardown sweep's REST target (§2.5). */
     CLOUDFLARE_ACCOUNT_ID?: string;
     /** Scoped Cloudflare API token; absent → resource teardown is skipped. */
     CLOUDFLARE_API_TOKEN?: string;
+
+    /**
+     * The control-plane D1's own uuid, which the export REST call addresses.
+     * A binding cannot answer its database id, so it is configured; absent →
+     * the backup sweep no-ops.
+     */
+    CONTROL_PLANE_DATABASE_ID?: string;
     /** Creem (MoR) billing secrets (§4). Absent → billing reads work, live calls fail. */
     CREEM_API_KEY?: string;
     CREEM_TEST_MODE?: string;
@@ -549,6 +566,29 @@ const sweepRollouts = async (env: Env): Promise<void> => {
 };
 
 /**
+ * Back the control plane up to R2 (GAPS.md D1).
+ *
+ * Needs the account credentials (the export goes through D1's REST API), the
+ * database's own uuid, and a bucket — each absent piece makes this a no-op
+ * rather than an error, so a cell without backups configured still ticks.
+ */
+const sweepBackup = async (env: Env): Promise<void> => {
+    if (!env.BACKUPS || !env.CONTROL_PLANE_DATABASE_ID || !env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) {
+        return;
+    }
+
+    const api = createHttpCloudflareApi({ accountId: env.CLOUDFLARE_ACCOUNT_ID, apiToken: env.CLOUDFLARE_API_TOKEN });
+    const databaseId = env.CONTROL_PLANE_DATABASE_ID;
+
+    await runBackupSweep({
+        bucket: env.BACKUPS,
+        cell: env.LUNORA_CELL ?? "default",
+        now: Date.now(),
+        startExport: () => api.exportD1Database(databaseId),
+    });
+};
+
+/**
  * Which sweeps ride which cron bucket — declarative, so "what runs on which
  * tick" is one table, not scattered conditionals. Each sweep no-ops when its own
  * env isn't configured. Teardown + usage rollback ride the *hourly* expression
@@ -563,6 +603,9 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: Env) => Promise<void> }[] = [
     { cron: EVERY_HOUR, run: sweepTeardown },
     { cron: EVERY_HOUR, run: sweepUsageRollback },
     { cron: EVERY_SIX_HOURS, run: sweepOverageReconciliation },
+    // Control-plane backup. Rides the existing 6-hourly trigger rather than
+    // claiming a fourth cron (Cloudflare caps a Worker at three).
+    { cron: EVERY_SIX_HOURS, run: sweepBackup },
     { cron: EVERY_MINUTE, run: sweepUptime },
     // Metric-window rules (error_rate/latency_p95/llm_cost) re-evaluated each
     // minute so quiet windows the ingest never re-examines still fire/clear —

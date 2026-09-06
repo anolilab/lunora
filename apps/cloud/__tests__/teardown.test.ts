@@ -148,6 +148,7 @@ const cloudflareApi = (over: Partial<CloudflareApi> = {}): CloudflareApi => {
         deleteD1Database: () => Promise.resolve(),
         deleteDispatchScript: () => Promise.resolve(),
         deleteR2Bucket: () => Promise.resolve(),
+        exportD1Database: () => Promise.resolve({ signedUrl: "https://example.invalid/dump.sql" }),
         findD1DatabaseByName: () => Promise.resolve(null),
         putDispatchScript: () => Promise.resolve(),
         putSecret: () => Promise.resolve(),
