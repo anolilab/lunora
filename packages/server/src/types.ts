@@ -2334,10 +2334,18 @@ interface QueryCtx {
     readonly env?: Record<string, unknown>;
 
     /**
-     * The caller's IP for this request — Cloudflare's trusted `CF-Connecting-IP`,
-     * forwarded server-side (never read from a client header). `undefined` when
-     * unknown: a live-subscription re-run, a server-initiated dispatch, or
-     * non-Cloudflare hosting. A convenient rate-limit key for anonymous traffic.
+     * The caller's IP for this request, or `undefined` when nothing trustworthy
+     * says who called.
+     *
+     * Populated only from Cloudflare's `CF-Connecting-IP`, forwarded server-side,
+     * and only while running ON Cloudflare — that is the one place the edge stamps
+     * the header over anything the client sent. On any other host it is a header
+     * the caller typed, so the runtime resolves nothing rather than hand a handler
+     * an attacker-chosen address; a rate limit keyed on a forgeable `ip` is worse
+     * than no limit, because it reads as enforced. `undefined` therefore covers: a
+     * live-subscription re-run, a server-initiated dispatch, and ANY non-Cloudflare
+     * host. A convenient rate-limit key for anonymous traffic on Cloudflare;
+     * elsewhere, key on something the caller cannot choose.
      */
     readonly ip?: string;
 
@@ -2400,10 +2408,18 @@ interface MutationCtx {
     readonly env?: Record<string, unknown>;
 
     /**
-     * The caller's IP for this request — Cloudflare's trusted `CF-Connecting-IP`,
-     * forwarded server-side (never read from a client header). `undefined` when
-     * unknown: a live-subscription re-run, a server-initiated dispatch, or
-     * non-Cloudflare hosting. A convenient rate-limit key for anonymous traffic.
+     * The caller's IP for this request, or `undefined` when nothing trustworthy
+     * says who called.
+     *
+     * Populated only from Cloudflare's `CF-Connecting-IP`, forwarded server-side,
+     * and only while running ON Cloudflare — that is the one place the edge stamps
+     * the header over anything the client sent. On any other host it is a header
+     * the caller typed, so the runtime resolves nothing rather than hand a handler
+     * an attacker-chosen address; a rate limit keyed on a forgeable `ip` is worse
+     * than no limit, because it reads as enforced. `undefined` therefore covers: a
+     * live-subscription re-run, a server-initiated dispatch, and ANY non-Cloudflare
+     * host. A convenient rate-limit key for anonymous traffic on Cloudflare;
+     * elsewhere, key on something the caller cannot choose.
      */
     readonly ip?: string;
 
@@ -2492,10 +2508,18 @@ interface ActionCtx {
     readonly fetch: typeof globalThis.fetch;
 
     /**
-     * The caller's IP for this request — Cloudflare's trusted `CF-Connecting-IP`,
-     * forwarded server-side (never read from a client header). `undefined` when
-     * unknown: a live-subscription re-run, a server-initiated dispatch, or
-     * non-Cloudflare hosting. A convenient rate-limit key for anonymous traffic.
+     * The caller's IP for this request, or `undefined` when nothing trustworthy
+     * says who called.
+     *
+     * Populated only from Cloudflare's `CF-Connecting-IP`, forwarded server-side,
+     * and only while running ON Cloudflare — that is the one place the edge stamps
+     * the header over anything the client sent. On any other host it is a header
+     * the caller typed, so the runtime resolves nothing rather than hand a handler
+     * an attacker-chosen address; a rate limit keyed on a forgeable `ip` is worse
+     * than no limit, because it reads as enforced. `undefined` therefore covers: a
+     * live-subscription re-run, a server-initiated dispatch, and ANY non-Cloudflare
+     * host. A convenient rate-limit key for anonymous traffic on Cloudflare;
+     * elsewhere, key on something the caller cannot choose.
      */
     readonly ip?: string;
 

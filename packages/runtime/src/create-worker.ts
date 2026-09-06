@@ -12,6 +12,7 @@ import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import { signCanonical } from "../../../shared/hmac-url";
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
+import { trustedClientIp } from "../../../shared/on-cloudflare-edge";
 import { otlpRandomHex } from "../../../shared/otlp";
 import type { RegionHint } from "../../../shared/region-hint";
 import { regionHintFromRequest } from "../../../shared/region-hint";
@@ -1940,11 +1941,15 @@ const resolveForwardContext = async (
         headers["x-lunora-client-seq"] = clientSeq;
     }
 
-    // Forward the caller's IP server-side from Cloudflare's `CF-Connecting-IP`
-    // (set by the edge, overwriting any client-supplied value — so it's trusted;
-    // a raw `x-forwarded-for` is client-spoofable and deliberately NOT used).
-    // The DO surfaces it as `ctx.ip` (e.g. to rate-limit anonymous traffic by IP).
-    const clientIp = request.headers.get("cf-connecting-ip");
+    // Forward the caller's IP, but only where one can be believed: ON Cloudflare
+    // the edge sets `CF-Connecting-IP` itself, overwriting any client-supplied
+    // value. On any other host nothing overwrites it, so it is a header the
+    // caller typed — forwarding it there would let an attacker choose the `ctx.ip`
+    // every procedure rate-limits on. `x-forwarded-for` is client-spoofable in
+    // both cases and deliberately NOT used. Off the edge the header is simply not
+    // forwarded and `ctx.ip` reads `undefined`, which it is already documented to
+    // do. See shared/on-cloudflare-edge.ts.
+    const clientIp = trustedClientIp(request.headers);
 
     if (clientIp) {
         headers["x-lunora-client-ip"] = clientIp;

@@ -225,9 +225,17 @@ describe("createWorker — opt-in public REST surface", () => {
 
         expect(limiter.limit).toHaveBeenCalledWith("rest", { key: "no-trusted-ip" });
 
+        // The header identifies a caller only ON Cloudflare, where the edge
+        // stamps it over anything the client sent; this suite runs under
+        // `environment: "node"`, so say so. `client-ip-trust.test.ts` pins both
+        // directions of that gate.
+        vi.stubGlobal("navigator", { userAgent: "Cloudflare-Workers" });
+
         await worker.fetch(new Request("https://app.example/_lunora/rest/messages/list", { headers: { "cf-connecting-ip": "203.0.113.7" } }), {}, fakeContext);
 
         expect(limiter.limit).toHaveBeenCalledWith("rest", { key: "203.0.113.7" });
+
+        vi.unstubAllGlobals();
     });
 
     it("restSurfaceFromRegistry lists exactly the exposed, non-stream procedures", () => {

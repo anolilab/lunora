@@ -412,6 +412,20 @@ createWorker({
 });
 ```
 
+With no `key` callback the limit is keyed on Cloudflare's `CF-Connecting-IP`, and
+only while running on Cloudflare — the edge stamps that header over anything the
+client sent, so it is the one client-address header a caller cannot choose. On any
+other target (`target: "node"`, a container, a bare host) nothing overwrites it, so
+the runtime resolves no IP at all and every such caller shares one coarse
+`no-trusted-ip` bucket. That is deliberate: trusting the header off Cloudflare
+would let an attacker rotate `Cf-Connecting-IP` for a fresh bucket per request and
+the limit would stop applying to exactly the traffic it exists to stop. Off
+Cloudflare, pass `key` and identify callers by something they cannot forge:
+
+```ts
+createRestRateLimit(limiter, { key: (request) => request.headers.get("x-api-key") ?? undefined, name: "rest" });
+```
+
 Security guidance: keep the surface small, prefer `.output()` on exposed
 procedures so the response shape is contractual, and rely on the procedure's own
 RLS/auth for authorization; never expose an unauthenticated mutation that

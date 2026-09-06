@@ -1420,9 +1420,12 @@ abstract class ShardDO {
 
     /**
      * Per-request caller IP forwarded from the runtime via the
-     * `x-lunora-client-ip` header (sourced server-side from Cloudflare's trusted
-     * `CF-Connecting-IP`). Surfaced to handlers as `ctx.ip` via `getCurrentIp`;
-     * cleared in the `finally` block of `fetch` like the other per-request fields.
+     * `x-lunora-client-ip` header. The runtime sources it from Cloudflare's
+     * `CF-Connecting-IP` and only while running ON Cloudflare, where the edge
+     * stamps that header itself; off the edge it forwards nothing rather than a
+     * value the caller typed, so this stays `undefined`. Surfaced to handlers as
+     * `ctx.ip` via `getCurrentIp`; cleared in the `finally` block of `fetch` like
+     * the other per-request fields.
      */
     private currentRequestIp: string | undefined;
 
@@ -2780,7 +2783,9 @@ abstract class ShardDO {
 
     /**
      * The caller's IP for the current request (Cloudflare's `CF-Connecting-IP`,
-     * forwarded server-side), or `undefined` when unknown. Use this to populate
+     * forwarded server-side by the runtime, and only while running on Cloudflare
+     * — off the edge that header is client-written, so the runtime forwards
+     * nothing), or `undefined` when nothing trustworthy says. Use this to populate
      * `ctx.ip` inside `buildCtx`.
      */
     protected getCurrentIp(): string | undefined {
@@ -10818,10 +10823,12 @@ abstract class ShardDO {
         this.currentMutatorClass = undefined;
         this.mutationBookkeeping = undefined;
         this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
-        // The caller's IP, forwarded server-side from Cloudflare's trusted
-        // `CF-Connecting-IP` (never copied from a client header). Surfaced as
-        // `ctx.ip` so handlers/middleware can key on it (e.g. rate-limit
-        // unauthenticated traffic by IP).
+        // The caller's IP, forwarded server-side from Cloudflare's
+        // `CF-Connecting-IP` — and only on Cloudflare, where the edge stamps that
+        // header itself. Off the edge the runtime forwards nothing rather than a
+        // client-written value, so this is absent. Surfaced as `ctx.ip` so
+        // handlers/middleware can key on it (e.g. rate-limit unauthenticated
+        // traffic by IP).
         this.currentRequestIp = request.headers.get("x-lunora-client-ip") ?? undefined;
         this.currentRequestSystem = request.headers.get("x-lunora-system") === "1";
         this.currentRequestTraceparent = request.headers.get("traceparent") ?? undefined;
