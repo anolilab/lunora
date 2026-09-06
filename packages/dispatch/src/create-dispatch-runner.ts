@@ -12,7 +12,7 @@ import { isLunoraError, LunoraError } from "@lunora/errors";
 
 import { abortDeadline } from "../../../shared/abort-deadline";
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
-import { encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ArgsOf, DispatchRunFunction, FunctionReference, RunFunctionOptions } from "./types";
 
 /** The reserved worker endpoint that re-dispatches a server-initiated function call to its shard. */
@@ -221,11 +221,14 @@ interface DispatchRunnerOptions {
  * Build a {@link DispatchRunFunction} that invokes a Lunora function by POSTing
  * to `/_lunora/scheduler/dispatch` with the admin bearer. `args` go out in wire
  * form (see `wireArgs` below) so a `bigint`/`Date`/bytes argument survives to
- * the handler, which the shard's single `decodeWire` restores.
+ * the handler, which the shard's single `decodeWire` restores. The RETURN value
+ * travels the same wire in reverse: the shard `encodeWire`s it into a
+ * `{ result }` transport envelope, and this runner is its single decoder — so
+ * the runner owns both directions and `ctx.run` resolves the function's own
+ * return value with its `bigint`/`Date`/bytes intact.
  *
- * The parsed JSON body
- * (the function's return value) is resolved; an empty body resolves to
- * `undefined`. A non-ok response is rethrown as a {@link LunoraError} carrying
+ * The envelope's unwrapped, decoded `result` is resolved; an empty body resolves
+ * to `undefined`. A non-ok response is rethrown as a {@link LunoraError} carrying
  * the dispatch endpoint's original `code`/`status`/`data` (so consumers can map
  * a deterministic 4xx to a non-retryable failure); an unparseable error body
  * falls back to `INTERNAL`. A non-empty body that is not valid JSON is a
@@ -388,8 +391,10 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
                 return undefined;
             }
 
+            let body: unknown;
+
             try {
-                return JSON.parse(text);
+                body = JSON.parse(text);
             } catch {
                 // A non-empty body that isn't valid JSON can't be a function's
                 // JSON-encoded return value — it's a malformed response (an
@@ -399,6 +404,30 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
                     status: response.status,
                 });
             }
+
+            // Unwrap the shard's transport envelope and decode — the consumer
+            // half of the bracket `wireArgs` opens. The shard answers
+            // `{ result }`, `{ commitCursor, result }` (a mutation on a
+            // CDC-enabled shard — `dedupId` puts every re-fired `ctx.run` there)
+            // or `{ lastMutationId, result }` (a `"next"` custom-mutator push),
+            // with `result` already `encodeWire`d; `handleSchedulerDispatch` and
+            // `dispatchToShard` forward it verbatim. Handing that object straight
+            // back made `await ctx.run(fn)` resolve the envelope rather than the
+            // function's return value, wire-encoded — so a `bigint` return
+            // arrived as a tagged array nested one level too deep.
+            //
+            // `commitCursor` and `lastMutationId` are deliberately dropped: both
+            // are client-session bookkeeping (dropping a per-call optimistic
+            // overlay, demanding a cursor off a replica) and this runner has
+            // neither a session nor subscriptions. No consumer reads them.
+            //
+            // This is the ONLY decode on the path — `decodeWire` is not
+            // idempotent, and a second pass flattens a `Date` to `{}` while a
+            // `bigint` survives, silent for exactly the type a check would catch.
+            // A void handler's `undefined` arrives tagged (`encodeWire` does not
+            // let `JSON.stringify` drop the key), and decodes back to
+            // `undefined`; an envelope with no `result` at all reads the same.
+            return decodeWire((body as { result?: unknown } | null)?.result);
         } finally {
             deadline.dispose();
         }

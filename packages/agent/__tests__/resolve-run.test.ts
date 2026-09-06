@@ -31,7 +31,9 @@ describe(resolveAgentRun, () => {
             capturedHeaders = init.headers as Record<string, string>;
             capturedBody = init.body as string;
 
-            return Response.json([{ content: "hi" }]);
+            // The shard's real transport envelope — the loop's `listMessages`
+            // read gets the ARRAY back only because the runner unwraps it.
+            return Response.json({ result: [{ content: "hi" }] });
         });
 
         vi.stubGlobal("fetch", fetchSpy);
@@ -52,7 +54,8 @@ describe(resolveAgentRun, () => {
         expect(capturedHeaders["x-lunora-userid"]).toBe("user-a");
         expect(JSON.parse(capturedBody)).toStrictEqual({ args: { key: "thread-1" }, functionPath: "agents:agentMessages" });
 
-        // The dispatcher resolves the function's JSON return value.
+        // The dispatcher resolves the function's own return value, unwrapped out
+        // of the `{ result }` envelope — not the envelope.
         expect(result).toStrictEqual([{ content: "hi" }]);
     });
 });

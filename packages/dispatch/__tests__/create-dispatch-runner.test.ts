@@ -11,7 +11,9 @@ describe("createDispatchRunner", () => {
     it("pOSTs to /_lunora/scheduler/dispatch with the bearer + envelope and resolves the JSON body", async () => {
         expect.assertions(5);
 
-        const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ ok: 1 }, { status: 200 }));
+        // The stub answers the shard's real transport envelope; the runner
+        // unwraps `result` and decodes it (see `dispatch-result-wire.test.ts`).
+        const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ result: { ok: 1 } }, { status: 200 }));
         const run = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" });
 
         await expect(run(REF, { to: "a" }, { shardKey: "s1" })).resolves.toEqual({ ok: 1 });
@@ -27,7 +29,7 @@ describe("createDispatchRunner", () => {
     it("forwards dedupId as the body's `id` (the receiver's dedup key) and omits the key when unset", async () => {
         expect.assertions(3);
 
-        const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ ok: 1 }, { status: 200 }));
+        const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ result: { ok: 1 } }, { status: 200 }));
         const run = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" });
 
         await run(REF, { to: "a" }, { dedupId: "msg-1#1" });
@@ -228,7 +230,11 @@ describe("createDispatchRunner", () => {
         vi.useFakeTimers();
 
         try {
-            const run = createDispatchRunner({ env: ENV, fetchImpl: async () => Response.json({ ok: 1 }, { status: 200 }), label: "@lunora/queue" });
+            const run = createDispatchRunner({
+                env: ENV,
+                fetchImpl: async () => Response.json({ result: { ok: 1 } }, { status: 200 }),
+                label: "@lunora/queue",
+            });
 
             await expect(run(REF)).resolves.toEqual({ ok: 1 });
             // `dispose()` in the runner's `finally` cleared the deadline timer.

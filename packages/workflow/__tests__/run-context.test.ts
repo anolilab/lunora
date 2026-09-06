@@ -125,7 +125,9 @@ describe("createWorkflowRunContext", () => {
     it("wires ctx.run through the shared dispatch runner (POST + workflow label on error)", async () => {
         expect.assertions(3);
 
-        const fetchImpl = vi.fn<typeof fetch>(async () => okResponse(JSON.stringify({ ok: true })));
+        // The shard's real transport envelope; `ctx.run` resolves the `result`
+        // inside it, not the envelope (see `@lunora/dispatch`'s result-wire suite).
+        const fetchImpl = vi.fn<typeof fetch>(async () => okResponse(JSON.stringify({ result: { ok: true } })));
         const ctx = createWorkflowRunContext({
             env: { LUNORA_ADMIN_TOKEN: "secret", LUNORA_ORIGIN_URL: "https://app.example.com" },
             event: makeEvent(),
