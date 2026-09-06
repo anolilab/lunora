@@ -111,9 +111,30 @@ export default defineNuxtConfig({
   wrapper (`wrangler.jsonc`'s `main`), which re-exports Nitro's SSR handler
   and `ShardDO`.
 
-Because everything is same-origin, the browser client needs no URL: the
-default page-origin client from [`@lunora/vue`](/docs/frameworks/vue) loops
-`/_lunora/ws` straight back into the composed worker.
+## Provide the client
+
+Nuxt renders your app on the server as well as in the browser, and every
+[`@lunora/vue`](/docs/frameworks/vue) composable resolves its client through
+`useLunora()` — including inside `renderToString`. So the plugin that provides
+it must be **universal**, not `lunora.client.ts`: a client-only plugin leaves
+the server render with no provider, and the first SSR'd page that touches
+Lunora throws `useLunora(): no LunoraClient provided`.
+
+```ts title="plugins/lunora.ts"
+import { LunoraClient } from "lunorash/client";
+import { createLunora } from "@lunora/vue";
+
+export default defineNuxtPlugin((nuxtApp) => {
+    // Same-origin: `useRequestURL()` resolves the request origin during SSR and
+    // `window.location` in the browser. The client appends `/_lunora/ws` and
+    // `/_lunora/rpc` itself, which the module's route serves.
+    nuxtApp.vueApp.use(createLunora(new LunoraClient({ url: useRequestURL().origin })));
+});
+```
+
+Providing the client server-side opens nothing: every composable gates its
+WebSocket on a browser `window`, so the socket still attaches after hydration
+while SSR renders the preloaded seed.
 
 ## Reactive loaders
 
