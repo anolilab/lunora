@@ -34,7 +34,7 @@ export const list = query.input({ organizationId: v.id("organizations") }).query
 
     const { page } = await context.db.issues.findMany({ where: { organizationId } });
 
-    return (page as unknown as IssueRow[]).toSorted((a, b) => b.lastSeen - a.lastSeen);
+    return page.toSorted((a, b) => b.lastSeen - a.lastSeen);
 });
 
 /** Resolve or reopen an issue (owners/admins). */

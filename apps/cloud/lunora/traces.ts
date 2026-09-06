@@ -100,7 +100,7 @@ export const list = query
 
         // Push `deploymentId` into the query (its own index) so the scanned window
         // is that deployment's spans, not the global recent window.
-        const { page } = await context.db.observations.findMany({
+        const { page: spans } = await context.db.observations.findMany({
             limit: SCAN_LIMIT,
             orderBy: [{ startedAt: "desc" }],
             where:
@@ -108,8 +108,6 @@ export const list = query
                     ? { organizationId: args.organizationId }
                     : { deploymentId: args.deploymentId, organizationId: args.organizationId },
         });
-
-        const spans = page as unknown as ObservationRow[];
 
         // Fold every scanned span, then apply the trace-level filters, then cap —
         // filtering after the cap would return fewer than `limit` matching traces.
@@ -205,7 +203,7 @@ export const get = query
             where: { organizationId: args.organizationId, traceId: args.traceId },
         });
 
-        return (page as unknown as ObservationRow[]).map((row) => toSpanView(row));
+        return page.map((row) => toSpanView(row));
     });
 
 /**

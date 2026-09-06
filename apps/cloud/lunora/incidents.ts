@@ -1,7 +1,7 @@
 import { generateText } from "@lunora/ai";
 import { LunoraError } from "@lunora/server";
 
-import type { EvidenceLogRow, EvidenceSpanRow, GeneratePort, InvestigationIncident, InvestigationResult } from "../src/telemetry/investigation";
+import type { EvidenceLogRow, GeneratePort, InvestigationIncident, InvestigationResult } from "../src/telemetry/investigation";
 import { buildEvidenceBundle, resolveInvestigationRunner } from "../src/telemetry/investigation";
 import type { TriageIncident, TriageIssue } from "../src/telemetry/triage";
 import { buildTriagePrompt, MAX_ISSUES } from "../src/telemetry/triage";
@@ -59,7 +59,7 @@ export const list = query.input({ organizationId: v.id("organizations") }).query
 
     const { page } = await context.db.incidents.findMany({ where: { organizationId } });
 
-    return (page as unknown as IncidentRow[]).toSorted((a, b) => b.lastSeen - a.lastSeen);
+    return page.toSorted((a, b) => b.lastSeen - a.lastSeen);
 });
 
 /** Resolve or reopen an incident (owners/admins). Resolving stamps `closedAt`. */
@@ -93,11 +93,6 @@ interface IncidentDocument extends TriageIncident {
     hash: string;
 }
 
-/** A related issue row, plus the `hash` the mirror-row exclusion keys on. */
-interface RelatedIssue extends TriageIssue {
-    hash: string;
-}
-
 /**
  * The other error groups raised by `container`, most-frequent first, excluding
  * the incident's own mirror row (`selfHash`).
@@ -118,7 +113,7 @@ const relatedIssues = async (context: ActionContext, organizationId: Id<"organiz
         where: { culprit: `container:${container}`, organizationId },
     });
 
-    return (page as unknown as RelatedIssue[]).filter((issue) => issue.hash !== selfHash).slice(0, MAX_ISSUES);
+    return page.filter((issue) => issue.hash !== selfHash).slice(0, MAX_ISSUES);
 };
 
 /**
@@ -179,11 +174,6 @@ const EVIDENCE_SPAN_SCAN = 300;
 /** Max correlated log lines fetched per related trace (bounded). */
 const EVIDENCE_LOG_SCAN_PER_TRACE = 50;
 
-/** An `observations` row, reduced to the fields the evidence builder reads. */
-interface ObservationRow extends EvidenceSpanRow {
-    _id: Id<"observations">;
-}
-
 /** A `tenantLogs` row, reduced to the fields the evidence builder reads. */
 interface LogRow extends EvidenceLogRow {
     _id: Id<"tenantLogs">;
@@ -198,13 +188,11 @@ interface LogRow extends EvidenceLogRow {
  * fetched logs) to produce the bundle the runner reasons over.
  */
 const gatherEvidence = async (context: ActionContext, organizationId: Id<"organizations">, incident: InvestigationIncident) => {
-    const { page: spanPage } = await context.db.observations.findMany({
+    const { page: spans } = await context.db.observations.findMany({
         limit: EVIDENCE_SPAN_SCAN,
         orderBy: [{ startedAt: "desc" }],
         where: { organizationId },
     });
-
-    const spans = spanPage as unknown as ObservationRow[];
 
     // First pass: correlate spans → related trace ids (no logs yet).
     const preliminary = buildEvidenceBundle({ incident, logs: [], spans });
@@ -219,7 +207,7 @@ const gatherEvidence = async (context: ActionContext, organizationId: Id<"organi
             where: { organizationId, traceId },
         });
 
-        logs.push(...(logPage as unknown as LogRow[]));
+        logs.push(...logPage);
     }
 
     return buildEvidenceBundle({ incident, logs, spans });

@@ -14,6 +14,13 @@ AUTH_SECRET=replace-with-openssl-rand-hex-32
 # create D1/R2 and upload tenant Workers into the dispatch namespace.
 CLOUDFLARE_API_TOKEN=replace-with-cloudflare-api-token
 
+# Control-plane backups (GAPS.md D1). The export REST call addresses the database
+# by uuid, and a binding cannot answer its own id, so it is configured here.
+# Unset -> the six-hourly backup sweep no-ops. Pair with a PRIVATE R2 bucket
+# bound as BACKUPS in wrangler config: the dump holds every sealed admin token
+# and auth session in the cell. Restore steps: apps/cloud/docs/RESTORE.md.
+# CONTROL_PLANE_DATABASE_ID=replace-with-the-control-plane-d1-uuid
+
 # Per-org "Cloudflare costs" tab (Billable Usage API): each BYO org connects its
 # OWN Cloudflare account + a token scoped to "Billing Read" from the console's
 # Cloudflare costs tab. That token is encrypted at the edge with

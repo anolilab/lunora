@@ -22,7 +22,9 @@ export interface LunoraActionContext {
     runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
 }
 
-export interface RouterEnv {
+// Must stay a `type`: an `interface` gets no implicit index signature, so it will
+// not satisfy `Record<string, unknown>` at `sendInvitationEmail`/`deliverAlert`.
+export type RouterEnv = {
     __lunoraCtx?: LunoraActionContext;
     CLOUDFLARE_ACCOUNT_ID?: string;
     CLOUDFLARE_API_TOKEN?: string;
@@ -43,7 +45,7 @@ export interface RouterEnv {
     TELEMETRY?: AnalyticsEngineDatasetLike;
     /** Raw-telemetry archive Pipeline for the telemetry ingest (may be unbound). */
     TELEMETRY_PIPELINE?: PipelineBindingLike;
-}
+};
 
 export const jsonError = (status: number, error: string): Response => Response.json({ error }, { headers: { "content-type": "application/json" }, status });
 

@@ -54,6 +54,12 @@ export interface CloudflareApi {
      * needs the S3/data API (a separate credential the teardown context lacks).
      */
     deleteR2Bucket: (name: string) => Promise<void>;
+
+    /**
+     * Start a full SQL export of a D1 database and poll it to completion, then
+     * answer the presigned URL of the dump. The URL is valid for one hour.
+     */
+    exportD1Database: (databaseId: string) => Promise<{ signedUrl: string }>;
     /** Resolve a D1 database uuid by its name (teardown), or null if none exists. */
     findD1DatabaseByName: (name: string) => Promise<null | { uuid: string }>;
     /** Upload (create/update) a user Worker into a dispatch namespace. */
@@ -77,6 +83,20 @@ interface CloudflareEnvelope {
 }
 
 const DEFAULT_BASE = "https://api.cloudflare.com/client/v4";
+
+/** D1's export endpoint answers a progress report inside the account envelope, not the dump. */
+interface D1ExportResponse {
+    at_bookmark?: string;
+    error?: string;
+    messages?: string[];
+    result?: { signed_url?: string };
+    status?: string;
+    success?: boolean;
+}
+
+/** Bounds the export poll so a stuck run degrades into a failed backup, not a hung cron. */
+const MAX_EXPORT_POLLS = 30;
+const EXPORT_POLL_INTERVAL_MS = 2000;
 
 /**
  * HTTP implementation of {@link CloudflareApi}. Real code against the documented
@@ -169,6 +189,46 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
             throw new Error(
                 `cloudflare create R2 bucket failed: ${data.errors?.map((error) => error.message).join("; ") ?? `HTTP ${String(response.status)}`}`,
             );
+        },
+        exportD1Database: async (databaseId) => {
+            // Two-phase, per D1's REST contract: the first POST starts the export
+            // and answers `status: "active"` with a bookmark, and each subsequent
+            // POST carrying that bookmark reports progress until `"complete"`,
+            // when `result.signed_url` appears. Passing the bookmark back is what
+            // identifies the run — omitting it starts a second export.
+            let bookmark: string | undefined;
+
+            for (let attempt = 0; attempt < MAX_EXPORT_POLLS; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- polling is sequential by definition
+                const response = (await callJson(`/d1/database/${databaseId}/export`, "POST", {
+                    ...(bookmark === undefined ? {} : { current_bookmark: bookmark }),
+                    dump_options: { no_data: false, no_schema: false, tables: [] },
+                    output_format: "polling",
+                })) as D1ExportResponse;
+
+                if (response.status === "error" || response.success === false) {
+                    throw new Error(`cloudflare D1 export failed: ${response.error ?? response.messages?.join("; ") ?? "unknown error"}`);
+                }
+
+                if (response.status === "complete") {
+                    const signedUrl = response.result?.signed_url;
+
+                    if (!signedUrl) {
+                        throw new Error("cloudflare D1 export completed without a signed_url");
+                    }
+
+                    return { signedUrl };
+                }
+
+                bookmark = response.at_bookmark;
+
+                // eslint-disable-next-line no-await-in-loop -- deliberate backoff between polls
+                await new Promise((resolve) => {
+                    setTimeout(resolve, EXPORT_POLL_INTERVAL_MS);
+                });
+            }
+
+            throw new Error(`cloudflare D1 export did not complete within ${String(MAX_EXPORT_POLLS)} polls`);
         },
         deleteD1Database: async (uuid) => {
             const response = await fetchImpl(`${base}/d1/database/${uuid}`, { headers: { authorization: authHeader }, method: "DELETE" });

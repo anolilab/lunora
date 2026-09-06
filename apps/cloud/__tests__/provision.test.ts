@@ -30,6 +30,9 @@ const fakeApi = (): { api: CloudflareApi; deletes: string[]; puts: PutScriptInpu
             }),
             createR2Bucket: vi.fn<CloudflareApi["createR2Bucket"]>(async () => undefined),
             deleteD1Database: vi.fn<CloudflareApi["deleteD1Database"]>(async () => undefined),
+            exportD1Database: vi.fn<CloudflareApi["exportD1Database"]>(async () => {
+                return { signedUrl: "https://example.invalid/dump.sql" };
+            }),
             deleteDispatchScript: vi.fn<CloudflareApi["deleteDispatchScript"]>(async ({ scriptName }) => {
                 deletes.push(scriptName);
             }),

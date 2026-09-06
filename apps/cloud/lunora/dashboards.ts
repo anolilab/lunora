@@ -118,7 +118,7 @@ export const list = query
 
         const { page } = await context.db.dashboards.findMany({ where: { organizationId } });
 
-        return (page as unknown as DashboardRow[]).toSorted((a, b) => b.createdAt - a.createdAt).map((row) => toView(row));
+        return page.toSorted((a, b) => b.createdAt - a.createdAt).map((row) => toView(row));
     });
 
 /** One dashboard by id, org-checked (any member). `null` when it isn't in the org. */

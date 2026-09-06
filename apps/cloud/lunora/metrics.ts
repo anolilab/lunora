@@ -1,10 +1,8 @@
 import { LunoraError } from "@lunora/server";
 
-import type { StoredMetricPoint } from "../src/telemetry/metric-series";
 import { foldMetricSeries } from "../src/telemetry/metric-series";
 import type { MetricSeries } from "../src/telemetry/metrics-read";
 import { createMetricsReader, DEFAULT_METRICS_WINDOW_MS } from "../src/telemetry/metrics-read";
-import type { Id } from "./_generated/dataModel.js";
 import { action, internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, authorizeTelemetryKey } from "./authz";
 import { rateLimit } from "./guards";
@@ -154,12 +152,6 @@ export const ingest = mutation
 /** Recent metric points scanned before folding into exact series (bounds the read). */
 const METRIC_SCAN_LIMIT = 5000;
 
-/** One stored metric-point row, as {@link series} reads it. */
-interface MetricPointRow extends StoredMetricPoint {
-    _id: Id<"metricPoints">;
-    organizationId: Id<"organizations">;
-}
-
 /**
  * Exact per-metric series from the D1 `metricPoints` store over `[from, to]` —
  * every stored point averaged per bucket (precise, not sampled like the AE
@@ -185,7 +177,7 @@ export const series = query
             where: { organizationId: args.organizationId },
         });
 
-        const points = (page as unknown as MetricPointRow[]).filter((row) => row.at >= from && row.at <= to);
+        const points = page.filter((row) => row.at >= from && row.at <= to);
 
         return foldMetricSeries(points).map((point) => toView(point));
     });
@@ -196,12 +188,6 @@ export const METRIC_POINT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 /** Rows one prune tick deletes. Bounds a single mutation; a backlog drains over ticks. */
 const PRUNE_BATCH = 1000;
 
-/** One stored metric point, for the retention scan. */
-interface MetricRetentionRow {
-    _id: Id<"metricPoints">;
-    at: number;
-}
-
 /** Delete exact metric points past retention. SYSTEM only (cron dispatch). */
 export const prune = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
     const cutoff = context.now - METRIC_POINT_RETENTION_MS;
@@ -210,8 +196,7 @@ export const prune = internalMutation.mutation(async ({ ctx: context }): Promise
     // rows it does not want. Oldest-first keeps a backlog draining in cutoff order,
     // and PRUNE_BATCH bounds the work one cron tick does — a table far past retention
     // converges over several ticks instead of timing out on one.
-    const { page } = await context.db.metricPoints.findMany({ limit: PRUNE_BATCH, orderBy: [{ at: "asc" }], where: { at: { lt: cutoff } } });
-    const stale = page as unknown as MetricRetentionRow[];
+    const { page: stale } = await context.db.metricPoints.findMany({ limit: PRUNE_BATCH, orderBy: [{ at: "asc" }], where: { at: { lt: cutoff } } });
 
     for (const row of stale) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple

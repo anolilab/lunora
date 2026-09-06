@@ -1,5 +1,4 @@
 import { createTrafficReader, DEFAULT_TRAFFIC_WINDOW_MS, MAX_TRAFFIC_SCRIPTS } from "../src/telemetry/traffic-read";
-import type { Id } from "./_generated/dataModel.js";
 import { action, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
@@ -56,12 +55,6 @@ interface TrafficSnapshotView {
 /** The empty view every degraded path returns — no credentials, no deployments, or a failed read. */
 const EMPTY_VIEW: TrafficSnapshotView = { countries: [], hostnames: [], routes: [], series: [], statuses: [], totalRequests: 0 };
 
-/** A deployment row, as the script-name resolution reads it. */
-interface DeploymentScriptRow {
-    _id: Id<"deployments">;
-    scriptName: string;
-}
-
 /**
  * Request analytics for the org over `[from, to]`, optionally filtered to one
  * domain.
@@ -110,7 +103,7 @@ export const snapshot = action
         // Every release the org has ever cut, not just the live one: a window that
         // spans a deploy must still count the traffic the superseded script served,
         // or the chart shows a cliff at each release that never happened.
-        const scriptNames = [...new Set((page as unknown as DeploymentScriptRow[]).map((row) => row.scriptName).filter((name) => name !== ""))];
+        const scriptNames = [...new Set(page.map((row) => row.scriptName).filter((name) => name !== ""))];
 
         if (scriptNames.length === 0) {
             return EMPTY_VIEW;
@@ -179,19 +172,6 @@ interface LiveTrafficView {
     requests: LiveRequestView[];
 }
 
-/** One observation row, as the live read consumes it. */
-interface ObservationRow {
-    _id: Id<"observations">;
-    durationMs: number;
-    level: string;
-    name: string;
-    parentSpanId?: string;
-    serviceName?: string;
-    startedAt: number;
-    statusMessage?: string;
-    traceId: string;
-}
-
 /**
  * Is this span a request, rather than work inside one?
  *
@@ -254,7 +234,7 @@ export const live = query
             where: { organizationId: args.organizationId },
         });
 
-        const roots = (page as unknown as ObservationRow[]).filter((row) => isRequestSpan(row));
+        const roots = page.filter((row) => isRequestSpan(row));
         // Percentiles come from the whole scanned window, not the truncated list —
         // a p99 over the 50 rows the pane happens to show is a different statistic
         // from a p99 over the window, and the smaller one is the misleading one.

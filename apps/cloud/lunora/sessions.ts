@@ -93,7 +93,7 @@ export const list = query
             where: { organizationId: args.organizationId },
         });
 
-        const turns = (page as unknown as SessionObservationRow[]).filter((row) => isSessionTurn(row));
+        const turns = page.filter((row) => isSessionTurn(row));
 
         // `SessionSummary` and the local `SessionSummaryView` are structurally
         // identical — the view mirror is what codegen inlines into the API types.
@@ -122,7 +122,7 @@ export const get = query
             where: { organizationId: args.organizationId, sessionId: args.sessionId },
         });
 
-        return (page as unknown as SessionObservationRow[])
+        return page
             .filter((row) => row.kind === "generation")
             .toSorted((a, b) => a.startedAt - b.startedAt)
             .map((row) => {

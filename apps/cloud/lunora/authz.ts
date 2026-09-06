@@ -19,13 +19,6 @@ import type { QueryCtx as QueryContext } from "./_generated/server.js";
 
 export type MemberRole = "admin" | "member" | "owner" | "viewer";
 
-interface MemberRow {
-    _id: Id<"members">;
-    organizationId: Id<"organizations">;
-    role: MemberRole;
-    userId: string;
-}
-
 interface DeployKeyRow {
     _id: Id<"deployKeys">;
     capability?: "deploy" | "ingest";
@@ -52,7 +45,7 @@ export const assertMember = async (
     }
 
     const { page } = await context.db.members.findMany({ where: { organizationId, userId } });
-    const member = (page as unknown as MemberRow[])[0];
+    const member = page[0];
 
     if (!member) {
         throw new LunoraError("FORBIDDEN", "not a member of this organization");
@@ -69,7 +62,7 @@ export const assertMember = async (
 const resolveKeyRow = async (context: QueryContext, organizationId: Id<"organizations">, key: string): Promise<DeployKeyRow> => {
     const hashedKey = await hashDeployKey(key);
     const { page } = await context.db.deployKeys.findMany({ where: { hashedKey } });
-    const row = (page as unknown as DeployKeyRow[])[0];
+    const row = page[0];
 
     if (!row || row.revokedAt != null || row.organizationId !== organizationId) {
         throw new LunoraError("FORBIDDEN", "invalid key for this organization");
@@ -139,7 +132,7 @@ export const authorizeTelemetryKey = async (context: QueryContext, organizationI
 export const resolveDeployKeyOrg = async (context: QueryContext, key: string): Promise<Id<"organizations"> | null> => {
     const hashedKey = await hashDeployKey(key);
     const { page } = await context.db.deployKeys.findMany({ where: { hashedKey } });
-    const row = (page as unknown as DeployKeyRow[])[0];
+    const row = page[0];
 
     return row && row.revokedAt == null ? row.organizationId : null;
 };

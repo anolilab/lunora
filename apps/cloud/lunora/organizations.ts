@@ -4,6 +4,7 @@ import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
+import { purgeScopedRows } from "./purge";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -53,7 +54,7 @@ export const list = query.query(async ({ ctx: context }): Promise<OrganizationRo
     }
 
     const { page: memberships } = await context.db.members.findMany({ where: { userId } });
-    const orgIds = [...new Set((memberships as unknown as { organizationId: Id<"organizations"> }[]).map((membership) => membership.organizationId))];
+    const orgIds = [...new Set(memberships.map((membership) => membership.organizationId))];
 
     // Fetched BY ID rather than read-all-and-filter. The previous form pulled one
     // page of every organization on the platform and kept the caller's — which is
@@ -83,7 +84,7 @@ export const getBySlug = query.input({ slug: boundedString(LIMITS.id) }).query(a
     }
 
     const { page } = await context.db.organizations.findMany({ where: { slug } });
-    const organization = (page as unknown as OrganizationRow[])[0] ?? null;
+    const organization = page[0] ?? null;
 
     if (!organization) {
         return null;
@@ -130,7 +131,7 @@ export const create = mutation
 
         if (!cellId) {
             const { page: cellPage } = await context.db.cells.findMany({});
-            const candidate = (cellPage as unknown as { _id: Id<"cells">; jurisdiction?: string; status: string }[]).find(
+            const candidate = cellPage.find(
                 (cell) => cell.status === "active" && (arguments_.jurisdiction === undefined || cell.jurisdiction === arguments_.jurisdiction),
             );
             const picked = candidate;
@@ -234,12 +235,11 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
     // never matches NULL, so organizations that were never scheduled for deletion are
     // excluded by the query rather than crowding out the ones that were. Oldest-first
     // within the due set, bounded per tick.
-    const { page } = await context.db.organizations.findMany({
+    const { page: due } = await context.db.organizations.findMany({
         limit: PURGE_BATCH,
         orderBy: [{ deletionRequestedAt: "asc" }],
         where: { deletionRequestedAt: { lt: cutoff } },
     });
-    const due = page as unknown as (OrganizationRow & { deletionRequestedAt?: number })[];
 
     // EVERY table carrying an `organizationId`, not a hand-kept subset. The list
     // had drifted to 12 of 25 while the docblock above claimed erasure "across
@@ -290,27 +290,17 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
     for (const organization of due) {
         const organizationId = organization._id;
 
-        for (const table of orgScopedTables) {
-            // The per-table facade types don't unify, so the generic sweep goes
-            // through a minimal structural cast.
-            const facade = context.db[table] as unknown as { findMany: (q: { where: Record<string, unknown> }) => Promise<{ page: unknown[] }> };
-            // eslint-disable-next-line no-await-in-loop -- sequential per-table purge keeps the writer simple
-            const { page: rows } = await facade.findMany({ where: { organizationId } });
-
-            for (const row of rows as unknown as { _id: string }[]) {
-                // eslint-disable-next-line no-await-in-loop -- sequential deletes; volumes are small
-                await context.db.delete(row._id as never);
-            }
-        }
+        // eslint-disable-next-line no-await-in-loop -- one org purged at a time keeps the writer simple
+        await purgeScopedRows(context, orgScopedTables, { organizationId });
 
         // Deployments transition to destroyed (not hard-deleted) so the 🌐
         // teardown path still sees what to tear down; a later sweep removes rows.
         // eslint-disable-next-line no-await-in-loop -- one read per org; volumes are small
         const { page: deployments } = await context.db.deployments.findMany({ where: { organizationId } });
 
-        for (const deployment of deployments as unknown as { _id: string; status: string }[]) {
+        for (const deployment of deployments) {
             // eslint-disable-next-line no-await-in-loop -- sequential patches; volumes are small
-            await context.db.patch(deployment._id as never, { destroyedAt: context.now, status: "destroyed", updatedAt: context.now });
+            await context.db.patch(deployment._id, { destroyedAt: context.now, status: "destroyed", updatedAt: context.now });
         }
 
         // eslint-disable-next-line no-await-in-loop -- one delete per org

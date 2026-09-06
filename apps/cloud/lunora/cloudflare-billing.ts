@@ -25,16 +25,6 @@ import { boundedString, LIMITS } from "./validators";
  * token lacks the Billing Read scope.
  */
 
-interface ConnectionRow {
-    _id: Id<"cloudflareBilling">;
-    ciphertext: string;
-    cloudflareAccountId: string;
-    createdAt: number;
-    iv: string;
-    organizationId: Id<"organizations">;
-    updatedAt: number;
-}
-
 /** The env keys {@link summary} reads off `ctx.env` (the validated `lunora/env.ts` contract). */
 interface CloudflareBillingEnv {
     SECRET_ENCRYPTION_KEY?: string;
@@ -50,7 +40,7 @@ export const status = query
         await assertMember(context, organizationId);
 
         const { page } = await context.db.cloudflareBilling.findMany({ where: { organizationId } });
-        const row = (page as unknown as ConnectionRow[])[0];
+        const row = page[0];
 
         return { cloudflareAccountId: row?.cloudflareAccountId ?? null, connected: Boolean(row) };
     });
@@ -73,7 +63,7 @@ export const store = mutation
         await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
 
         const { page } = await context.db.cloudflareBilling.findMany({ where: { organizationId: arguments_.organizationId } });
-        const existing = (page as unknown as ConnectionRow[])[0];
+        const existing = page[0];
         const { now } = context;
 
         if (existing) {
@@ -105,7 +95,7 @@ export const disconnect = mutation
         await assertMember(context, organizationId, ["owner", "admin"]);
 
         const { page } = await context.db.cloudflareBilling.findMany({ where: { organizationId } });
-        const row = (page as unknown as ConnectionRow[])[0];
+        const row = page[0];
 
         if (!row) {
             return { removed: false };
@@ -155,7 +145,7 @@ export const summary = action
         await assertMember(context, organizationId);
 
         const { page } = await context.db.cloudflareBilling.findMany({ where: { organizationId } });
-        const row = (page as unknown as ConnectionRow[])[0];
+        const row = page[0];
 
         if (!row) {
             return { cloudflareAccountId: null, status: "not-connected", view: null };
