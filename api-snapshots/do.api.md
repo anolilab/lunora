@@ -29,6 +29,14 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `DispatchBookmark` (interface)
+
+```ts
+interface DispatchBookmark {
+    value: string | undefined;
+}
+```
+
 ### `ExportRow` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -297,7 +305,7 @@ abstract class ShardDO {
     webSocketClose(rawSocket: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void>;
     webSocketError(rawSocket: WebSocket, error: unknown): Promise<void>;
     alarm(): Promise<void>;
-    abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope): Promise<unknown>;
+    abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark): Promise<unknown>;
     protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor"): ReadonlyArray<string>;
     protected dispatchLifecycle(event: "connect" | "disconnect", info: LifecycleDispatchInfo): Promise<void>;
     protected dispatchReactors(changed: Set<string>, runs: Map<string, number>): Promise<void>;
@@ -311,7 +319,7 @@ abstract class ShardDO {
     protected deferPastResponse(work: Promise<unknown>): Promise<void>;
     protected runInTransaction<T>(handler: () => Promise<T> | T): Promise<T>;
     protected getInboundBookmark(): string | undefined;
-    protected setOutboundBookmark(bookmark: string | undefined): void;
+    protected setOutboundBookmark(bookmark: string | undefined, sink: DispatchBookmark | undefined): void;
     protected getCurrentUserId(): string | undefined;
     protected getCurrentIp(): string | undefined;
     protected getCurrentTraceparent(): string | undefined;
@@ -370,7 +378,7 @@ abstract class ShardDO {
     protected readIdempotentResult(mutationId: string | undefined): {
         value: unknown;
     } | undefined;
-    protected persistIdempotentResult(result: unknown): void;
+    protected persistIdempotentResult(encodedResult: unknown): void;
     protected isCustomMutator(_functionPath: string): boolean;
     protected isMutationFunction(_functionPath: string): boolean;
     protected classifyClientMutation(): ClientMutationClass | undefined;

@@ -4212,6 +4212,7 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "AdvisoryFinding",
     "DatabaseWriterLike",
     "DataMigrationLike",
+    "DispatchBookmark",
     "ExportRow",
     ...(hasFlags ? ["FlagsResult"] : []),
     "ImportShardResult",
@@ -4956,12 +4957,22 @@ ${vectorNamespaceField}
     // the caller's own prior writes (read-your-writes across replicas), and
     // `onBookmark` lets it report back the bookmark a write produced so this DO
     // can record it via `setOutboundBookmark` and echo it on the response.
+    //
+    // The bookmark lands in `options.bookmarks` — the DISPATCH's own sink,
+    // value-threaded down from `handleRpc`, the way `headroom` and `scope` are.
+    // It must not go on a shared field: a mutation is input-gated, but an ACTION
+    // writes a global row and then `await`s a third party, and any sibling
+    // dispatch running inside that window used to clear the field — so the action
+    // answered with no `x-d1-bookmark` and the client's next global read went
+    // unpinned. A non-`/rpc` caller (an alarm, a lifecycle dispatch) passes no
+    // sink and the bookmark is dropped: there is no response to carry it.
+    //
     // Assigned to a named local (not passed as an inline object literal) so
     // handing it to the narrower Hyperdrive thunk's `request` parameter type —
     // which does not declare these fields — doesn't trip an excess-property
     // error; the Hyperdrive factory simply never reads the extra properties.
     const globalDatabaseLine = hasGlobalTables
-        ? `            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark(), identity, onBookmark: (bookmarkValue: string | undefined) => { this.setOutboundBookmark(bookmarkValue); }, userId };\n            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;\n`
+        ? `            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark(), identity, onBookmark: (bookmarkValue: string | undefined) => { this.setOutboundBookmark(bookmarkValue, options.bookmarks); }, userId };\n            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;\n`
         : "";
 
     // Local-first sync engine, global tier: when a project has shapes AND
@@ -5493,7 +5504,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
     class extends ShardDOBase {${constructorOverride}
         private migrated = false;
 
-        public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope): Promise<unknown> {
+        public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark): Promise<unknown> {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             // Internal functions are reachable server-side only: via \`ctx.run*\`
@@ -5520,7 +5531,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // our dep set — and ours out of theirs. A dispatch with no scope (a
             // mutation, an action, a cache-less shard) builds unbound hooks that
             // stamp no deps.
-            const ctx = this.buildCtx({ functionPath, headroom, scope, trusted: registered.lifecycle === "init" });
+            const ctx = this.buildCtx({ bookmarks, functionPath, headroom, scope, trusted: registered.lifecycle === "init" });
 
             // A mutation's writes must commit all-or-nothing, so its dispatch runs
             // under \`runMutationTransaction\` — the ONE place that opens the span,
@@ -5971,7 +5982,7 @@ ${
 `
         : ""
 }
-        private buildCtx(options: { functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; scope?: QueryReadScope; trusted?: boolean } = {}): unknown {
+        private buildCtx(options: { bookmarks?: DispatchBookmark; functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; scope?: QueryReadScope; trusted?: boolean } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // When the caller threads an explicit identity (subscription seed /
             // refresh — both run in deferred/interleaved contexts), use it by
@@ -6135,7 +6146,7 @@ ${isActionLine}${actionOnlyBlock}
                     reference.__lunoraRef,
                     fnArgs,
                     runOptions?.untracked === true
-                        ? this.buildCtx({ functionPath: options.functionPath, headroom: options.headroom, identity: { identity, userId }, scope: options.scope })
+                        ? this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom, identity: { identity, userId }, scope: options.scope })
                         : ctx,
                     contextKind,
                 );

@@ -147,6 +147,20 @@ class ChangeFeedGlobalShard extends GlobalShapeShard {
     }
 }
 
+/**
+ * A {@link GlobalShapeShard} that also reports an external-source next-due time,
+ * so a tick can leave the SHARED poll alarm armed far out (a `.source()` with a
+ * long `refresh.everyMs`) while no global shape is subscribed.
+ */
+class SourcedGlobalShapeShard extends GlobalShapeShard {
+    /** What `pollExternalSources` reports as its next-due timestamp. */
+    public sourceDueAt: number | undefined = undefined;
+
+    protected override pollExternalSources(): Promise<number | undefined> {
+        return Promise.resolve(this.sourceDueAt);
+    }
+}
+
 let harness: ReturnType<typeof createSqliteExec>;
 const alarmBox: { scheduled: null | number } = { scheduled: null };
 
@@ -646,5 +660,33 @@ describe("shardDO global-shape poll tier", () => {
         expect(ws.sent).toStrictEqual([]);
         // ...but the shape stays counted, so the alarm re-arms and retries next tick.
         expect(alarmBox.scheduled).not.toBeNull();
+    });
+
+    it("pulls a far-off pending alarm in when a fresh global-shape seed needs the poll floor", async () => {
+        expect.assertions(2);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new SourcedGlobalShapeShard(makeState(sockets), {});
+        const startedAt = Date.now();
+
+        // A tick with no global subscribers: only the external-source tier has
+        // pending work, and it is not due for an hour, so the shared alarm is
+        // re-armed way out there.
+        shard.sourceDueAt = startedAt + 3_600_000;
+        await shard.alarm();
+
+        expect(alarmBox.scheduled).toBeGreaterThan(startedAt + 3_500_000);
+
+        // A client now subscribes a global shape. Its membership can only be
+        // polled, so the seed must pull the shared alarm back to the 2 s floor —
+        // a pending-but-distant alarm is not "already scheduled" for this caller.
+        const ws = createFakeWebSocket();
+
+        sockets.push(ws);
+        shard.rows = [{ doc: { _id: "t1", label: "a" }, id: "t1" }];
+
+        await subscribeShape(shard, ws);
+
+        expect(alarmBox.scheduled).toBeLessThanOrEqual(Date.now() + 2000);
     });
 });

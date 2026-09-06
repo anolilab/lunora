@@ -38,6 +38,48 @@ class ReturningShard extends ShardDO {
     }
 }
 
+/** A class instance — the shape `encodeWire` refuses rather than silently flattening to `{}`. */
+class Money {
+    public constructor(public readonly cents: number) {}
+}
+
+/**
+ * A shard whose mutation writes a real row and THEN commits its bookkeeping with
+ * `value`, exactly as a generated mutation branch does. Both halves are inside
+ * one `runInTransaction`, so a throw from the bookkeeping must take the row with
+ * it.
+ */
+class WritingMutationShard extends ShardDO {
+    public runs = 0;
+
+    public value: unknown = undefined;
+
+    public constructor(
+        state: ShardDOState,
+        env: unknown,
+        private readonly database: ReturnType<typeof createSqliteExec>,
+    ) {
+        super(state, env);
+    }
+
+    public override handleRpc(): Promise<unknown> {
+        return this.runInTransaction(() => {
+            this.runs += 1;
+
+            this.database.sql.exec(
+                'INSERT INTO messages (id, _creationTime, "__doc__") VALUES (?, ?, ?)',
+                `msg-${String(this.runs)}`,
+                Date.now(),
+                JSON.stringify({ authorId: "u1", channelId: "c1", text: `debit-${String(this.runs)}` }),
+            );
+
+            this.commitMutationBookkeeping(this.value);
+
+            return this.value;
+        });
+    }
+}
+
 /** Like {@link ReturningShard}, but `messages:sendMutator` is a `"next"` custom mutator (the watermarked push path). */
 class ReturningMutatorShard extends ReturningShard {
     public override handleRpc(): Promise<unknown> {
@@ -62,6 +104,41 @@ const makeState = (database: ReturnType<typeof createSqliteExec>): ShardDOState 
         },
         storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
     };
+};
+
+/**
+ * Extends {@link makeState} with `storage.transaction` — workerd's atomic,
+ * auto-rolling-back boundary, backed here by real SQLite `BEGIN`/`COMMIT`/
+ * `ROLLBACK` on the same connection the handler writes through.
+ *
+ * Without it `ShardHost.transaction` falls through to a bare call (it has no
+ * raw-SQL fallback, because workerd forbids `BEGIN` inside a DO), so nothing
+ * rolls back and a rollback assertion would pass vacuously.
+ */
+const makeTransactionalState = (database: ReturnType<typeof createSqliteExec>): ShardDOState => {
+    const base = makeState(database);
+
+    return {
+        ...base,
+        storage: {
+            ...base.storage,
+            transaction: async <T>(closure: () => Promise<T>): Promise<T> => {
+                database.sql.exec("BEGIN");
+
+                try {
+                    const value = await closure();
+
+                    database.sql.exec("COMMIT");
+
+                    return value;
+                } catch (error: unknown) {
+                    database.sql.exec("ROLLBACK");
+
+                    throw error;
+                }
+            },
+        },
+    } as ShardDOState;
 };
 
 const rpc = (functionPath: string, headers: Record<string, string> = {}): Request =>
@@ -179,6 +256,54 @@ describe("shardDO dispatch result wire", () => {
             const cached = await shard.fetch(rpc("payments:charge", replay));
 
             await expect(cached.json()).resolves.toStrictEqual(expected);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("rolls a mutation back when its return value cannot be wire-encoded, and names the value", async () => {
+        expect.assertions(6);
+
+        const database = createSqliteExec();
+
+        try {
+            runShardMigrations(database.sql, messagesSchema, { cdc: true });
+
+            const shard = new WritingMutationShard(makeTransactionalState(database), {}, database);
+
+            shard.value = new Money(500);
+
+            const rows = (): number => (database.sql.exec("SELECT COUNT(*) AS n FROM messages").one() as { n: number }).n;
+            const dedupRows = (): number => (database.sql.exec("SELECT COUNT(*) AS n FROM __idempotency").one() as { n: number }).n;
+
+            const headers = { "x-lunora-mutation-id": "m1", "x-lunora-userid": "u1" };
+            const first = await shard.fetch(rpc("payments:charge", headers));
+
+            // The encode runs INSIDE the handler's transaction, so the row the
+            // handler wrote went back with it. Previously the write committed,
+            // the dedup row was swallowed by the bookkeeping's best-effort catch,
+            // and the response then failed on a second encode — an effect that
+            // stood behind a non-transient 500 with no replay guard.
+            expect(rows()).toBe(0);
+            expect(dedupRows()).toBe(0);
+
+            // The codec's refusal is surfaced with its own code and message —
+            // not the redacted `RPC_FAILED` an unrecognized throw would become,
+            // which named nothing and left the developer with a bare 500.
+            expect(first.status).toBe(500);
+            await expect(first.json()).resolves.toMatchObject({
+                error: { code: "WIRE_ENCODE_FAILED", message: expect.stringContaining("Money") as unknown as string },
+            });
+
+            // And so the client's retry is safe: it re-runs the handler and,
+            // once the handler returns something encodable, applies exactly one
+            // write rather than a second one on top of a committed first.
+            shard.value = { cents: 500 };
+
+            const retry = await shard.fetch(rpc("payments:charge", headers));
+
+            expect(retry.status).toBe(200);
+            expect(rows()).toBe(1);
         } finally {
             database.close();
         }

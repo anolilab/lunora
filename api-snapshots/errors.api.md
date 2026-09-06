@@ -578,6 +578,10 @@ const ERROR_CATALOG: {
         readonly status: 502;
         readonly title: "Could not decode a server frame";
     };
+    readonly WIRE_ENCODE_FAILED: {
+        readonly status: 500;
+        readonly title: "Could not encode a return value";
+    };
     readonly UNKNOWN_COLUMN: {
         readonly status: 404;
         readonly title: "Unknown column";

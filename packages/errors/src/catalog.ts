@@ -463,6 +463,19 @@ export const ERROR_CATALOG = {
      * `connected` and the cursor silently stopped advancing.
      */
     WIRE_DECODE_FAILED: { status: 502, title: "Could not decode a server frame" },
+
+    /**
+     * A function's RETURN value cannot be carried by the wire codec — a class
+     * instance (`Decimal`, an ORM entity, `Temporal.*`, `RegExp`, `Headers`), or
+     * nesting past the codec's depth cap.
+     *
+     * Deliberately NOT `internal`: the message names the offending constructor,
+     * which is the caller's own handler code and the only thing that makes the
+     * failure actionable. Redacting it leaves a bare 500 with nothing to grep.
+     * Raised INSIDE a mutation's transaction, so the writes roll back rather than
+     * committing behind a response that then fails to serialize.
+     */
+    WIRE_ENCODE_FAILED: { status: 500, title: "Could not encode a return value" },
     UNKNOWN_COLUMN: { status: 404, title: "Unknown column" },
 
     /**
