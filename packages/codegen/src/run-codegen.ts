@@ -608,6 +608,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         crons,
         dataModelContent,
         dependencies,
+        entryCronTriggers,
         env,
         featureUsage,
         hasFlags,
@@ -1062,7 +1063,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         advisorContext,
         agents,
         containers,
-        cronTriggers: emitWranglerCronTriggers(crons),
+        // Declared jobs plus the schedules `createWorker` is configured with
+        // directly (`backupCron`, `crons` keys). Both need a wrangler trigger to
+        // fire, and both count against Cloudflare's per-worker Cron Trigger cap,
+        // so the reconciler and the CLI's limit warning have to see one list.
+        cronTriggers: [...new Set([...emitWranglerCronTriggers(crons), ...entryCronTriggers])],
         generated: {
             agents: agentsContent,
             api: apiContent,

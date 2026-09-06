@@ -903,6 +903,12 @@ interface WorkerOptions {
      * with this exact expression fires. Must match an entry in the worker's
      * wrangler `triggers.crons` (and the string is compared verbatim). Omit it
      * and no automatic backup runs.
+     *
+     * A **string literal** here is discovered by codegen and written into
+     * `triggers.crons` by `lunora deploy` / the dev server. A value it cannot
+     * read statically — a variable, or one supplied through `.extend((env) => ({
+     * … }))` — needs the trigger entry added by hand; it will not be removed,
+     * because the reconciler only clears entries it recorded as its own.
      */
     backupCron?: string;
 
@@ -958,6 +964,11 @@ interface WorkerOptions {
      * `scheduled()` entry dispatches the handler whose key equals the firing
      * trigger's `cron`. Independent of the built-in backup — a handler keyed on
      * the same expression as {@link WorkerOptions.backupCron} runs alongside it.
+     *
+     * Quoted keys of an object literal here are discovered by codegen and
+     * written into wrangler's `triggers.crons`; a computed key (`[env.SWEEP]:`)
+     * or a spread map needs its trigger entry by hand, on the same terms as
+     * {@link WorkerOptions.backupCron}.
      */
     crons?: Record<string, CronHandler>;
 

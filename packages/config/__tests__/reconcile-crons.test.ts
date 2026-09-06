@@ -114,12 +114,15 @@ describe("reconcileWranglerCrons", () => {
         expect(readManaged(workdir)).toBeUndefined();
     });
 
-    it("preserves a hand-written trigger the project's crons.ts never declared, and reports it", () => {
+    it("preserves a trigger codegen could not derive — a computed backupCron — and reports it", () => {
         expect.assertions(3);
 
-        // `backupCron` / `createWorker({ crons })` are documented as needing a
-        // hand-written `triggers.crons` entry, and codegen cannot see either — so
-        // an entry Lunora never generated is the user's and must survive.
+        // Codegen reads a LITERAL `createWorker({ backupCron })` out of the worker
+        // entry, so the static case arrives in the generated set. This is the case
+        // it cannot: `.extend((env) => ({ backupCron: env.NIGHTLY_CRON }))` is a
+        // supported way to configure the backup and its value exists only at
+        // runtime. An entry Lunora never generated is the user's and must survive
+        // — this is the interaction that keeps the ownership record necessary.
         writeWrangler(workdir, '{\n    "triggers": { "crons": ["0 3 * * *"] }\n}\n');
         writeManifest(workdir);
 

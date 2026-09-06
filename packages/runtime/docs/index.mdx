@@ -183,7 +183,7 @@ const build = (env: Env): LunoraWorker =>
         // Built-in backup: on this cron, export every table to NDJSON and write
         // it (plus a manifest sidecar) to the bound R2 bucket.
         backupStore: env.BACKUPS, // any R2 bucket binding
-        backupCron: "0 3 * * *", // must match a wrangler triggers.crons entry
+        backupCron: "0 3 * * *", // a literal here is written into triggers.crons for you
         backupRetain: 14, // the window: `lunora backup prune` keeps the newest 14
         // backupPrefix: "backups/", // key prefix (default)
         // backupTables: ["users"],  // omit to back up every table
@@ -313,11 +313,17 @@ available; the snapshot is still readable with `wrangler r2 object get`.
 ```
 
 The `crons` array must contain the exact `backupCron` string; Wrangler only
-delivers triggers it declares. `lunora deploy` and the dev server rewrite
-`triggers.crons` from your `lunora/crons.ts`, but they only ever remove entries
-they generated — the set they own is recorded in your `package.json` under
-`lunora.crons`, and an entry you hand-wrote for `backupCron` is left alone and
-reported as kept. To restore a scheduled snapshot, download the NDJSON object and
+delivers triggers it declares. `lunora deploy` and the dev server write
+`triggers.crons` for you: codegen reads your `lunora/crons.ts` registrations
+**and** the `backupCron` / `crons` keys your worker entry passes to
+`createWorker`, so a string literal like the one above needs no hand-editing.
+
+A value codegen cannot read statically — `backupCron: env.NIGHTLY_CRON`, or one
+supplied through `.extend((env) => ({ … }))` — still needs its own
+`triggers.crons` entry, and that entry is safe to add: these commands only ever
+remove entries they generated, the set they own being recorded in your
+`package.json` under `lunora.crons`. Anything else is left alone and reported as
+kept. To restore a scheduled snapshot, download the NDJSON object and
 feed it to `lunora backup restore <file>` (optionally with `--to <time>` for
 point-in-time replay).
 

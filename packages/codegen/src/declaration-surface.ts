@@ -49,6 +49,7 @@ import { discoverPlatformSignals } from "./discover/platform-signals";
 import { discoverQueues } from "./discover/queues";
 import { discoverSandboxUsage } from "./discover/sandbox";
 import discoverStorageRulesMetadata from "./discover/storage-rules";
+import discoverWorkerEntryCrons from "./discover/worker-entry-crons";
 import { discoverWorkflows } from "./discover/workflows";
 import { buildStorageColumns, emitDataModel, emitServer } from "./emit";
 import type { AgentIR, ContainerIR, CronJobIR, EnvIR, IdentityIR, QueueIR, SchemaIR, StorageRulesMetadataIR, WorkflowIR } from "./ir";
@@ -134,6 +135,14 @@ interface DeclarationSurface {
     declaredDependencies: ReadonlySet<string> | undefined;
     /** The same names with the absent case flattened to an empty set. */
     dependencies: ReadonlySet<string>;
+
+    /**
+     * Cron expressions the worker entry pins outside `lunora/crons.ts` —
+     * `createWorker({ backupCron })` and the keys of `createWorker({ crons })`.
+     * Not jobs (`createWorker` dispatches them itself), only schedules that must
+     * reach wrangler's `triggers.crons`.
+     */
+    entryCronTriggers: ReadonlyArray<string>;
     env: EnvIR | undefined;
 
     /**
@@ -218,6 +227,13 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // nothing from `_generated/`, which `listLunoraSourceFiles` skips, so moving
     // it earlier cannot change what it finds.
     const crons = discoverCrons(project, lunoraDirectory, workflows, agents);
+
+    // The other two cron surfaces, which are configured on `createWorker` rather
+    // than registered through `cronJobs()` and so are invisible to the discoverer
+    // above. They produce no job — only schedules the wrangler reconciler has to
+    // know it generated. Read beside the crons for that reason alone; nothing in
+    // this phase consumes them.
+    const entryCronTriggers = discoverWorkerEntryCrons(project, lunoraDirectory);
 
     // Intersect what the app uses with what the deploy target supports. For the
     // default Cloudflare target the matrix marks nothing unsupported, so the gate
@@ -306,6 +322,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         dataModelContent: emitDataModel(schema),
         declaredDependencies,
         dependencies,
+        entryCronTriggers,
         env,
         featureUsage,
         hasFlags,

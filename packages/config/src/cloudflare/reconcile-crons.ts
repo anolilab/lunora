@@ -184,14 +184,23 @@ const recordManagedCrons = (manifest: Manifest, managed: ReadonlyArray<string>):
  * config `triggers.crons` array, preserving comments and formatting via
  * `jsonc-parser`'s structural edits.
  *
- * **This does not own the whole array.** Two runtime cron surfaces are invisible
- * to codegen and are documented as needing a hand-written `triggers.crons` entry:
- * `createWorker({ backupCron })` (the nightly NDJSON backup) and
- * `createWorker({ crons })` (handlers keyed by expression). Replacing the array
+ * **This does not own the whole array.** Two runtime cron surfaces live on
+ * `createWorker` rather than in `lunora/crons.ts`: `backupCron` (the nightly
+ * NDJSON backup) and `crons` (handlers keyed by expression). Replacing the array
  * wholesale deleted both on the next `lunora deploy` or dev-server schema save,
  * silently — the nightly backup simply stopped. So an entry this reconciler did
  * not generate is the user's, is kept, and is reported in
  * {@link ReconcileResult.preserved}.
+ *
+ * Codegen now scans the worker entry for both, so the STATIC case arrives in
+ * `cronTriggers` like any declared cron — kept because it is generated, and
+ * cleared when the entry stops declaring it. What it cannot resolve is the
+ * dynamic case, and that case is supported: `.extend((env) => ({ backupCron:
+ * env.NIGHTLY_CRON }))` is the documented escape hatch, and its value exists
+ * only at runtime. That residue — plus a computed `crons` key, a spread options
+ * object, and anything a project put in `triggers.crons` for its own reasons —
+ * is what the preserve rule below is for. It is not redundant with discovery; it
+ * is the half discovery provably cannot reach.
  *
  * Ownership is recorded in the project's `package.json` under `lunora.crons`,
  * which is why a REMOVED generated cron still gets cleared (it is in the record

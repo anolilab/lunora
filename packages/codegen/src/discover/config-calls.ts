@@ -1,11 +1,11 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import type { ArrowFunction, Block, FunctionExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
+import type { ArrowFunction, FunctionExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { ConfigCallIR } from "../ir";
-import { listSecurityScanFiles } from "./ast";
+import { listSecurityScanFiles, objectLiteralFromCallbackBody } from "./ast";
 import { calleeName } from "./callee";
 
 /**
@@ -96,40 +96,6 @@ const keysFromObjectLiteral = (objectLiteral: ObjectLiteralExpression): ConfigCa
  */
 const readConfigArgument = (argument: TsNode | undefined): ConfigCallEvidence =>
     argument && Node.isObjectLiteralExpression(argument) ? keysFromObjectLiteral(argument) : { analyzable: false, presentKeys: [], trueKeys: [] };
-
-/** The sole statement of a single-statement `{ return {...}; }` block, when it returns an object literal. */
-const objectLiteralFromReturnBlock = (block: Block): ObjectLiteralExpression | undefined => {
-    const statements = block.getStatements();
-    const [statement] = statements;
-
-    if (statements.length !== 1 || statement === undefined || !Node.isReturnStatement(statement)) {
-        return undefined;
-    }
-
-    const expression = statement.getExpression();
-
-    return expression !== undefined && Node.isObjectLiteralExpression(expression) ? expression : undefined;
-};
-
-/**
- * The object literal a callback body evaluates to, covering the concise-body
- * form (`() => ({...})`, where the parens make the object literal the whole
- * body) and the block-body form (`() => { return {...}; }`). Anything else
- * (a variable, a multi-statement block, a conditional) is not analyzable.
- */
-const objectLiteralFromCallbackBody = (body: TsNode): ObjectLiteralExpression | undefined => {
-    if (Node.isObjectLiteralExpression(body)) {
-        return body;
-    }
-
-    if (Node.isParenthesizedExpression(body)) {
-        const inner = body.getExpression();
-
-        return Node.isObjectLiteralExpression(inner) ? inner : undefined;
-    }
-
-    return Node.isBlock(body) ? objectLiteralFromReturnBlock(body) : undefined;
-};
 
 /**
  * Read a callback argument (an arrow function or function expression) whose
