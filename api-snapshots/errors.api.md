@@ -513,6 +513,10 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Invalid input";
     };
+    readonly INVALID_SCHEDULE_ID: {
+        readonly status: 400;
+        readonly title: "Invalid schedule id";
+    };
     readonly RATE_LIMITED: {
         readonly status: 429;
         readonly title: "Rate limited";
