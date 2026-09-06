@@ -248,3 +248,31 @@ describe("httpRoute.stream — .output() is enforced per chunk", () => {
         expect(events[0]?.data).toEqual({ id: "ok" });
     });
 });
+
+describe("httpRoute.stream — the wire codec brackets every data frame", () => {
+    it("ships a Date, a bigint and a NaN as wire tags instead of flattening or killing the stream", async () => {
+        expect.assertions(3);
+
+        const route = httpRoute.get("/rich").stream(async function* richGen() {
+            yield { at: new Date(1_700_000_000_000) };
+            yield { balance: 9_007_199_254_740_993n };
+            yield { ratio: Number.NaN };
+        });
+
+        const response = await dispatch(route, "GET", "/rich", new Request("https://x.example/rich"));
+        const { events } = await readSse(response);
+
+        // Raw `JSON.stringify` flattened the Date to an ISO string and `NaN` to
+        // `null` — both still typed as the declared chunk type on the client —
+        // and threw outright on the bigint, killing the stream mid-flight with a
+        // redacted "Internal error" frame.
+        expect(events.map((entry) => entry.event)).toEqual(["message", "message", "message", "complete"]);
+        expect(events.slice(0, 3).map((entry) => entry.data)).toEqual([
+            { at: ["$lunora.wire$", "date", 1_700_000_000_000] },
+            { balance: ["$lunora.wire$", "bigint", "9007199254740993"] },
+            { ratio: ["$lunora.wire$", "nan"] },
+        ]);
+        // The terminal sentinels stay plain — the client reads them without decoding.
+        expect(events.at(-1)?.data).toEqual({});
+    });
+});
