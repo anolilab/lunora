@@ -57,4 +57,17 @@ describe("emitApp — storage bucket factory", () => {
         expect(output).toContain("map[name] = this.makeStorage(env, declaration, bucket, name);");
         expect(output).toContain("buckets[name] = this.makeStorage(env, declaration, bucket, name);");
     });
+
+    // `buckets` is a plain object literal, so `buckets[name] ?? fallbackStorage`
+    // resolved `?bucket=constructor` / `__proto__` / `toString` to an inherited
+    // Object.prototype member — `??` never engaged and the admin storage routes
+    // threw `s.delete is not a function` (500) instead of falling back.
+    it("resolves the bucket by own property so prototype keys hit the fallback", () => {
+        expect.assertions(2);
+
+        const output = emitApp(baseOptions);
+
+        expect(output).toContain("Object.hasOwn(buckets, wanted)");
+        expect(output).not.toContain('buckets[name !== undefined && name !== "" ? name : "default"]');
+    });
 });

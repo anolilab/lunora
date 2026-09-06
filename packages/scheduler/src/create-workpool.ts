@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import { encodeArgsOrThrow } from "../../../shared/wire-codec";
 import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { ArgsOf, EnqueueOptions, FunctionReference, Workpool, WorkpoolOptions } from "./types";
 import assertScheduleDelay from "./validate-delay";
@@ -53,7 +54,9 @@ const createWorkpool = (options: WorkpoolOptions): Workpool => {
         assertScheduleDelay(delayMs, "workpool.enqueue");
 
         return callDO<{ id: string; scheduledFor: number }>(options, "/schedule", {
-            args,
+            // Wire-encoded on the same hop as `ctx.scheduler.runAt`; see
+            // `create-scheduler.ts`.
+            args: encodeArgsOrThrow("workpool.enqueue", function_.__lunoraRef, args),
             functionPath: function_.__lunoraRef,
             instanceName: options.instanceName ?? "default",
             maxConcurrency: options.maxConcurrency,

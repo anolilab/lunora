@@ -1,6 +1,6 @@
 {
     "name": "@lunora/bindings",
-    "version": "1.0.0-alpha.51",
+    "version": "1.0.0-alpha.52",
     "description": "Lightweight Cloudflare binding helpers for Lunora — ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql — one install, per-binding subpaths",
     "keywords": [
         "analytics",
@@ -78,7 +78,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.32",
+        "@lunora/errors": "1.0.0-alpha.33",
         "@lunora/platform": "1.0.0-alpha.27"
     },
     "devDependencies": {

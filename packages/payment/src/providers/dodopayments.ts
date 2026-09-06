@@ -225,7 +225,22 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "subscription.plan_changed":
         case "subscription.renewed":
         case "subscription.updated": {
-            const status = readString(object, "status");
+            // The event name is authoritative for a pause: Dodo's `SubscriptionStatus` is
+            // pending|active|on_hold|cancelled|failed|expired, with no `paused` member, so a
+            // `subscription.paused` payload cannot say so itself. Read from the status alone, a
+            // deliberate pause landed on the fail-closed `past_due` and raised the dunning alert
+            // `sync.ts` emits for it. `paused` is non-entitling either way — this only stops a
+            // customer-initiated pause from being reported as a failed payment.
+            //
+            // The label lasts until the next `reconcile` and no longer: `getSubscriptionStatus` reads
+            // the same enum, so it re-reports `past_due` and reconcile — which trusts the adapter for
+            // subscriptions — writes that back (as `reconcile.drift`, not a fresh dunning alert). Not
+            // preserved the way `mergePaymentTruth` preserves a refund: a refund is monotone and
+            // fails safe, whereas pinning `paused` over provider truth would keep a subscription that
+            // resumed out-of-band non-entitling forever, defeating the one sweep meant to catch a
+            // missed resume. So `paused -> resume` is a webhook-only edge here; on Stripe and Creem,
+            // whose status enums do carry `paused`, the label survives reconcile.
+            const status = eventType === "subscription.paused" ? "paused" : readString(object, "status");
 
             return {
                 ...base,

@@ -12,11 +12,13 @@ import { defineConfig, devices, firefox } from "@playwright/test";
  * Stability tactics:
  *   - `workers: 1` / `fullyParallel: false` — every spec talks to ONE shared
  *     backend (one Vite worker, one D1, shared DO namespaces) and each test
- *     starts with `/test/reset` wiping that shared state. Parallel workers
+ *     starts with `/test/reset` truncating that shared D1. Parallel workers
  *     would race each other's resets and channel lists; this is the stability
  *     boundary, not a workaround.
- *   - Each test calls `await resetServer()` (see fixtures) to clear DO state
- *     before exercising new behaviour, so tests stay order-independent.
+ *   - Each test calls `await resetServer()` (see fixtures). That clears D1 and
+ *     ONLY D1 — Durable Object state is not reset. Order-independence for
+ *     shard-local rows comes from each spec minting its own channel, which is
+ *     the guarantee to preserve when adding one.
  *   - We rely on Playwright auto-wait selectors; explicit `waitForTimeout`
  *     calls are forbidden by convention and only appear where wall-clock time
  *     is itself under test (scheduler delay, signed-URL expiry).

@@ -10,6 +10,7 @@
 import { createDispatchLogger, createDispatchRunner } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
+import { decodeWire } from "../../../shared/wire-codec";
 import { workflowBindingName } from "./define-workflow";
 import type { NativeNonRetryableErrorConstructor } from "./errors";
 import type { WorkflowBindingResolver } from "./fan-out";
@@ -95,7 +96,12 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
         event: options.event,
         log,
         parallel: createParallel(fanOutDeps),
-        params: options.event.payload,
+        // `decodeWire`, not the raw payload: a scheduled workflow's args travel in
+        // wire form because Workflow `params` are JSON-serialised into durable
+        // storage, and this is the first point that can hand the handler real
+        // `bigint`/`Date`/bytes values. Identity for pure JSON, so a directly
+        // created or spawned instance is unaffected.
+        params: decodeWire(options.event.payload) as Readonly<Params>,
         run,
         runStep: createRunStep({ env: options.env, log, nonRetryableErrorClass: options.nonRetryableErrorClass, run, step: options.step }),
         spawn: createSpawn(fanOutDeps),

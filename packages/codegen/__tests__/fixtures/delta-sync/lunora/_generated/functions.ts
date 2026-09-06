@@ -131,8 +131,8 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
  */
 export interface Caller {
     notes: {
-        add: (args: { body: string; boardId: string }) => Promise<unknown>;
-        list: (args: { boardId: string }) => Promise<unknown>;
+        add: (args: { body: string; boardId: string }) => Promise<import("@lunora/values").Id<"notes">>;
+        list: (args: { boardId: string }) => Promise<import("./dataModel.js").Doc_notes[]>;
     };
 }
 

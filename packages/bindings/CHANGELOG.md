@@ -1,3 +1,47 @@
+## @lunora/bindings [1.0.0-alpha.52](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.51...@lunora/bindings@1.0.0-alpha.52) (2026-09-06)
+
+### ⚠ BREAKING CHANGES
+
+* **storage,bindings:** the key and metadata guards raise `BAD_REQUEST` instead of
+`INTERNAL`. `INTERNAL` is a redacting code — `toErrorBody` swaps the
+message for "Internal error" and answers 500 — so keeping it would have
+reproduced the very opaque failure these guards exist to replace. They
+describe caller input, same as the `assertOneExpirationForm` sibling that
+already used `BAD_REQUEST`.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(storage): resolve buckets by own property, not prototype lookup
+
+Both bucket maps are plain object literals looked up with a bare index and
+a truthiness/`??` guard, so a prototype key resolved to an inherited
+`Object.prototype` member and the guard never engaged.
+
+`ctx.storage.bucket("constructor")` returned `{ ...Function, bucket,
+bucketName: "constructor" }` — an empty spread with no methods, carrying a
+`bucketName` tag `storageRules` would go on to match rules against, instead
+of the intended `no bucket registered for "constructor"` error. In the
+codegen-emitted `pick`, `?bucket=constructor` on the admin storage routes
+threw `s.delete is not a function` (a 500) rather than falling back to the
+default bucket the way any other unregistered name does.
+
+Guard both with `Object.hasOwn`, matching the three places that already do
+(`create-vectors`, `kv-introspector`, `create-admin-introspector`).
+Regenerates the two example `_generated` trees and the golden fixture.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **storage,bindings:** enforce the upload cap the docblock promises ([#628](https://github.com/anolilab/lunora/issues/628)) ([d724f69](https://github.com/anolilab/lunora/commit/d724f69d44eb30f3d6158b8422ead3cc74eacdb4))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.33
+
 ## @lunora/bindings [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.50...@lunora/bindings@1.0.0-alpha.51) (2026-09-05)
 
 

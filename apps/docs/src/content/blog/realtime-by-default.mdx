@@ -26,7 +26,7 @@ channels to wire up, no cache to invalidate by hand.
 
 ```ts
 const messages = useQuery(api.messages.list, { roomId });
-const send = useMutation(api.messages.send);
+const { mutate: send } = useMutation(api.messages.send);
 ```
 
 That's the whole surface area. Reactivity isn't a feature you opt into here. It's just how reads

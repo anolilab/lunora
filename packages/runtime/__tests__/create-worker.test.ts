@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { decodeIdentityHeader } from "../../../shared/identity-header";
-import { encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ExecutionContextLike, HttpActionContext, HttpRouterLike, Route } from "../src/create-worker";
 import { composeWorker, createLunoraHandler, createWorker, withFrameworkWorker } from "../src/create-worker";
 import type { ObservabilityEvent } from "../src/observability";
@@ -2017,6 +2017,121 @@ describe("createWorker — HTTP actions", () => {
         expect(res.status).toBe(200);
         await expect(res.json()).resolves.toStrictEqual([{ id: "a" }, { id: "b" }, { id: "c" }]);
         expect(paths).toStrictEqual(["/list", "/list?cursor=id%3Ab"]);
+    });
+
+    // The two `ctx.scheduler` implementations write to and read from the SAME
+    // SchedulerDO record: `@lunora/scheduler`'s `createScheduler` (from a shard)
+    // and this one (from an httpAction). `createScheduler` encodes on `runAt` and
+    // decodes on `list`/`get`; while this one did neither, a job scheduled from a
+    // webhook stored a raw `Date`/`Uint8Array` the shard then decoded as itself,
+    // and `ctx.scheduler.get()` here answered the tagged tuples for a record a
+    // shard read as real values. One record, two contexts, two answers.
+    it("wire-brackets the httpAction scheduler so a shard-side read of the SAME record agrees", async () => {
+        expect.assertions(7);
+
+        // Stateful stand-in for the SchedulerDO, which stores the posted record
+        // verbatim and serves it back from `/get` (`{ record }`) and `/list`.
+        const records: Record<string, unknown>[] = [];
+        const schedulerNamespace: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        const url = new URL(request.url);
+
+                        if (url.pathname === "/schedule") {
+                            const body: Record<string, unknown> = await request.json();
+
+                            records.push({ ...body, id: "job-1" });
+
+                            return Response.json({ id: "job-1", scheduledFor: body["scheduledFor"] });
+                        }
+
+                        if (url.pathname === "/get") {
+                            const record = records.find((candidate) => candidate["id"] === url.searchParams.get("id"));
+
+                            return Response.json(record === undefined ? {} : { record });
+                        }
+
+                        return Response.json({ records, truncated: false });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+
+        const args = { amount: 1234n, blob: new Uint8Array([1, 2]), when: new Date(0) };
+        let readBack: Record<string, unknown> | null = null;
+        let listed: Record<string, unknown>[] = [];
+        let missing: Record<string, unknown> | null = null;
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/hooks/stripe", async (c) => {
+                    const { scheduler } = c.var.lunora;
+
+                    const id = await scheduler!.runAt(Date.now() + 1000, { __lunoraRef: "billing:settle" }, args);
+
+                    readBack = await scheduler!.get(id);
+                    listed = await scheduler!.list();
+                    missing = await scheduler!.get("nope");
+
+                    // The values never leave as JSON — a `bigint` would throw on
+                    // the way out — so the assertions read the closures below.
+                    return new Response(id, { status: 202 });
+                }),
+            ),
+            schedulerDO: schedulerNamespace,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/hooks/stripe", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(202);
+        // Stored in the tagged wire form, byte for byte what `createScheduler`
+        // writes for the same call.
+        expect(records[0]?.["args"]).toStrictEqual(encodeWire(args));
+        // `decodeWire(record.args)` is exactly `createScheduler`'s
+        // `decodeRecordArgs`, i.e. what a shard-side `ctx.scheduler.get()` and
+        // `ctx.db.system.query("_scheduled_functions")` answer for this record.
+        expect(decodeWire(records[0]?.["args"])).toStrictEqual((readBack as unknown as Record<string, unknown> | null)?.["args"]);
+        expect((readBack as unknown as Record<string, unknown> | null)?.["args"]).toStrictEqual(args);
+        // `get` resolves the RECORD, not the DO's `{ record }` envelope — and
+        // `null`, not `{}`, for an id that matched nothing.
+        expect((readBack as unknown as Record<string, unknown> | null)?.["id"]).toBe("job-1");
+        expect(missing).toBeNull();
+        // `list()` decodes on the same terms.
+        expect(listed[0]?.["args"]).toStrictEqual(args);
+    });
+
+    // The codec rejects any non-plain object; the label and the function path are
+    // what make the throw traceable from a webhook's log line.
+    it("labels an unencodable scheduled argument with the surface and the target", async () => {
+        expect.assertions(2);
+
+        const scheduler = createShardSpy(Response.json({ id: "job-1" }, { status: 200 }));
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/hooks/stripe", async (c) => {
+                    try {
+                        await c.var.lunora.scheduler!.runAfter(0, { __lunoraRef: "billing:settle" }, { pattern: /nope/u });
+                    } catch (error: unknown) {
+                        return new Response(error instanceof Error ? error.message : "not-an-error", { status: 400 });
+                    }
+
+                    return new Response("scheduled", { status: 202 });
+                }),
+            ),
+            schedulerDO: scheduler.namespace,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/hooks/stripe", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(400);
+        await expect(res.text()).resolves.toMatch(/ctx\.scheduler: cannot encode args for 'billing:settle' — /);
     });
 
     it("leaves ctx.scheduler undefined when the worker declares no schedulerDO", async () => {

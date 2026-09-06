@@ -6,8 +6,10 @@ import { createScheduler, type DurableObjectNamespaceLike } from "@lunora/schedu
 import type { R2BucketLike } from "@lunora/storage";
 import { createStorage } from "@lunora/storage";
 import type { VectorizeIndexLike } from "@lunora/bindings/vectors";
+import { createVectorAdminIntrospector } from "@lunora/bindings/vectors";
 
 import { LUNORA_CRONS } from "../../lunora/_generated/crons.js";
+import { LUNORA_VECTOR_INDEXES } from "../../lunora/_generated/vectors.js";
 import { openApiSpec } from "../../lunora/_generated/openapi.js";
 import { createShardDO } from "../../lunora/_generated/shard.js";
 
@@ -91,6 +93,16 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         // `openApiSpec` (regenerated on every `lunora/` change) backs the
         // studio's always-current API-reference tab.
         openApiSpec,
+        // The studio shows a Vectors tab whenever the schema declares an index,
+        // and its endpoints answer `VECTORS_NOT_CONFIGURED` without this — the
+        // registry is what tells them which indexes exist, since Vectorize
+        // cannot enumerate them at runtime. `defineApp()` wires this for you;
+        // a hand-built `createWorker` has to pass it, exactly as it passes
+        // `vectors` to `createShardDO` above.
+        vectorIntrospector: createVectorAdminIntrospector({
+            indexes: { posts_search: (env as unknown as ShardEnv).POSTS_SEARCH },
+            registry: LUNORA_VECTOR_INDEXES,
+        }),
         // The dispatcher map codegen emits from `lunora/crons.ts`. The worker's
         // `scheduled()` entry (re-exported below) looks up the firing trigger
         // here and dispatches each job's internal function into the shard —

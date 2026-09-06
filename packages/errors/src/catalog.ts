@@ -197,6 +197,53 @@ export const ERROR_CATALOG = {
     R2_SQL_ERROR: { status: 502, title: "R2 SQL API error" },
     WORKFLOWS_REST_ERROR: { status: 502, title: "Cloudflare Workflows REST API error" },
 
+    /*
+     * `@lunora/payment` codes, minted through `LunoraPaymentError` — a
+     * `LunoraError` subclass. They shipped uncatalogued because the
+     * registration gate's scanner only matched the literal `new LunoraError(`,
+     * so every subclass mint was invisible to it and `isInternalCode` (which
+     * fails OPEN) classed all six as client-safe. `status` mirrors the
+     * package's own `STATUS_BY_CODE`. The remaining payment codes — `FORBIDDEN`,
+     * `INVALID_TRANSITION`, `NOT_FOUND`, `VALIDATION_ERROR` — are the generic
+     * entries above and keep their existing verdicts.
+     *
+     * `CONFIG_INVALID` is `internal` because its messages name server wiring
+     * ("webhook secret not configured", a duplicate/absent adapter), and the
+     * caller can do nothing with them. That verdict only holds while the code
+     * is reserved for server configuration: `check()`'s argument-shape guard
+     * used to mint it for "requires a featureId or priceId", which is the
+     * caller's own mistake and now mints `VALIDATION_ERROR` instead. Keep new
+     * caller-fixable failures off this code rather than widening it.
+     */
+
+    /** Server-side payment wiring is wrong or missing (`webhook secret not configured`, a duplicate/absent adapter). A 500 that names internal configuration — redact on the wire. */
+    CONFIG_INVALID: { internal: true, status: 500, title: "Payment configuration invalid" },
+    /** Arithmetic across two currencies. The message names only the two currency codes the caller supplied. */
+    CURRENCY_MISMATCH: { status: 400, title: "Currency mismatch" },
+
+    /**
+     * A payment provider refused or answered unusably. NOT `internal`, matching
+     * the upstream-API 502s above: the messages are fixed capability text
+     * ("<provider> does not support refundPayment") or echo back the malformed
+     * id the CALLER passed in, so none of them reveals state the caller did not
+     * already have.
+     */
+    PROVIDER_ERROR: { status: 502, title: "Payment provider error" },
+
+    /**
+     * Webhook rejections, addressed to the provider posting the hook, so NOT
+     * `internal`. Five of the six mint sites are fixed strings ("no matching
+     * signature", "missing creem-signature header"). The sixth,
+     * `providers/stripe.ts`, passes the Stripe SDK's own verification message
+     * through — "No signatures found matching…", "Timestamp outside the
+     * tolerance zone" — which still describes the REQUEST the poster sent, not
+     * this server's state. Keep that true of anything added here: an upstream
+     * message is only safe to forward while it is about the caller's input.
+     */
+    WEBHOOK_EVENT_ID_MISSING: { status: 400, title: "Webhook event id missing" },
+    WEBHOOK_SIGNATURE_INVALID: { status: 400, title: "Webhook signature invalid" },
+    WEBHOOK_TIMESTAMP_INVALID: { status: 400, title: "Webhook timestamp outside tolerance" },
+
     /**
      * Admin-gated `/_lunora/admin/*` and `__lunora_admin__:*` codes. Registered
      * here (plan 230, ERRORS-01) after an audit found them minted with `code:`

@@ -216,16 +216,20 @@ const clearD1 = async (database: D1Reset): Promise<void> => {
     }
 };
 
+/**
+ * `/test/reset` — clears the **D1** state the e2e suite shares (users, channels
+ * and every other `.global()` table). Gated by `LUNORA_E2E === "true"`.
+ *
+ * It does NOT reset Durable Object state, and does not pretend to. It used to
+ * POST `https://do/internal/reset` at a DO named `__e2e_reset__` behind a
+ * swallowing `catch`: `ShardDO.fetch` 404s anything that is not `/rpc` or its
+ * WS/relay routes, and that name is neither `__root__` nor any channel shard, so
+ * the call cleared nothing and reported success either way. Deleted rather than
+ * implemented — shard-local rows (`messages`) are reachable only through their
+ * channel, and every spec mints a fresh channel, so nothing depends on clearing
+ * them. A spec that ever does needs a real per-shard admin op, not this.
+ */
 const handleTestReset = async (env: Env): Promise<Response> => {
-    try {
-        const id = env.SHARD.idFromName("__e2e_reset__");
-        const stub = env.SHARD.get(id);
-
-        await stub.fetch(new Request("https://do/internal/reset", { method: "POST" }));
-    } catch {
-        // best-effort
-    }
-
     try {
         await clearD1(env.DB);
     } catch {

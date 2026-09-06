@@ -203,6 +203,7 @@ interface SchemaNodeReader<TNode> {
     constraints: (node: TNode) => JsonSchema | undefined;
     inner: (node: TNode) => TNode | undefined;
     isNullable: (node: TNode) => boolean;
+    keyChild: (node: TNode) => TNode | undefined;
     kind: (node: TNode) => ValidatorKind;
     literalSchema: (node: TNode) => JsonSchema;
     members: (node: TNode) => ReadonlyArray<TNode>;

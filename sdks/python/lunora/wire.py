@@ -20,7 +20,6 @@ See ``protocol/README.md`` §2 for the normative grammar.
 from __future__ import annotations
 
 import base64
-import binascii
 import math
 from dataclasses import dataclass, field
 from typing import Any
@@ -142,9 +141,46 @@ def _b64encode(data: bytes) -> str:
 
 def _b64decode(text: str) -> bytes:
     try:
-        return base64.b64decode(text, validate=True)
-    except binascii.Error as error:
+        data = base64.b64decode(text, validate=True)
+    except ValueError as error:
+        # ValueError, not just its ``binascii.Error`` subclass: a payload
+        # carrying a non-ASCII character raises a BARE ValueError ("string
+        # argument should contain only ASCII characters"), which escaped as
+        # itself — so a caller catching the codec's own type caught the codec's
+        # rejection of every OTHER malformed payload and not that one.
         raise WireFormatError(f"wire-codec: invalid base64 in bytes tag: {error}") from error
+
+    # The payload must be CANONICAL, not merely decodable. ``validate=True``
+    # rejects a character outside the alphabet but not the unused low bits of a
+    # short final quantum, so ``"AQJ="`` decoded to two bytes that re-encode as
+    # ``"AQI="`` — different bytes than the peer wrote, accepted silently.
+    # Re-encoding and comparing is the whole rule: the payload must be exactly
+    # what a conforming encoder would have written for these bytes.
+    if _b64encode(data) != text:
+        raise WireFormatError("wire-codec: bytes payload is not canonical padded base64")
+
+    return data
+
+
+def _is_absolute_href(href: str) -> bool:
+    """Whether an href carries a URL scheme, per RFC 3986.
+
+    An ASCII letter, then letters/digits/``+``/``-``/``.``, then ``:``.
+
+    The reference builds a real ``URL``, which throws on anything unparseable,
+    while every port stored the string verbatim and accepted ``"not a url"`` — a
+    frame that kills a JS peer's subscription and is waved through here.
+    Reproducing WHATWG URL parsing in eight languages is not on offer (their own
+    parsers disagree with it in the deep end), so the contract, and
+    ``protocol/README.md`` §2.1, is the floor of it: an href must be ABSOLUTE.
+    """
+
+    scheme, separator, _ = href.partition(":")
+
+    if not separator or not scheme or not (scheme[0].isascii() and scheme[0].isalpha()):
+        return False
+
+    return all(char.isascii() and (char.isalnum() or char in "+-.") for char in scheme)
 
 
 def encode_wire(value: Any, depth: int = 0) -> Any:
@@ -195,7 +231,11 @@ def encode_wire(value: Any, depth: int = 0) -> Any:
 
     if isinstance(value, WireError):
         props = {k: encode_wire(v, depth + 1) for k, v in value.props.items() if v is not UNDEFINED}
-        encoded = [TAG, "error", value.name, value.message, props]
+        # Coerced, because ``decode_wire`` REFUSES a non-string in either slot
+        # and an encoder must not emit a frame its own decoder rejects.
+        # ``WireError`` is a plain dataclass, so nothing stops a caller putting a
+        # number there.
+        encoded = [TAG, "error", str(value.name), str(value.message), props]
         if value.cause is not UNDEFINED:
             encoded.append(encode_wire(value.cause, depth + 1))
         return encoded
@@ -270,7 +310,7 @@ def decode_wire(value: Any, depth: int = 0) -> Any:
                 return WireDate(_time_clip(epoch))
             if tag == "url":
                 href = _payload(value, "url")
-                if not isinstance(href, str):
+                if not isinstance(href, str) or not _is_absolute_href(href):
                     raise WireFormatError("wire-codec: malformed url tag")
                 return WireUrl(href)
             if tag == "map":
@@ -334,6 +374,12 @@ def _decode_error(value: list, depth: int) -> WireError:
 
     if len(value) < 5 or not isinstance(value[4], dict):
         raise WireFormatError("wire-codec: malformed error tag")
+
+    # Both label slots are type-CHECKED, like every other slot. Carrying a
+    # non-string through verbatim (as this port did) or substituting "" for it
+    # (as six others did) are two different wrong answers to a malformed frame.
+    if not isinstance(value[2], str) or not isinstance(value[3], str):
+        raise WireFormatError("wire-codec: malformed error tag — name and message must be strings")
 
     props = decode_wire(value[4], depth + 1)
     cause = decode_wire(value[5], depth + 1) if len(value) > 5 else UNDEFINED

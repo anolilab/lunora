@@ -4293,7 +4293,6 @@ const readCdcChangeKeys: (sql: SqlExec, table: string, sinceSeq: number, upTo: n
 const readCdcChanges: (sql: SqlExec, options?: {
     limit?: number;
     sinceSeq?: number;
-    tables?: ReadonlySet<string>;
 }) => {
     changes: CdcChange[];
     cursor: number;
