@@ -338,6 +338,9 @@ signing secret and streams events to your dev worker.
 Select at least these events when creating the endpoint:
 
 - `checkout.session.completed`
+- `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed` — required if you accept
+  any delayed-notification method (SEPA Direct Debit, ACH, Boleto, OXXO, Konbini): those sessions complete
+  **unpaid** and settle days later on these two events. Without them a returned debit stays `authorized` forever.
 - `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`
 - `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.amount_capturable_updated`
 - `charge.refunded`
@@ -361,22 +364,30 @@ it through the state machine. Once verified it **always returns 200** so Stripe
 stops retrying; a duplicate or no-op is acknowledged, not re-applied (the Stripe
 event id keys an append-only `events` log for idempotency and audit).
 
-| Stripe event                                 | Normalized transition                                                                                           | Notes                                                                                           |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `checkout.session.completed` (payment mode)  | `payment.captured`                                                                                              | `amount_total` recorded; `payment_intent` (or session id) is the session key.                   |
-| `checkout.session.completed` (subscription)  | `subscription.active` **only if** `payment_status` is `paid`/`no_payment_required`; else `subscription.updated` | Fails closed: an `unpaid` session never entitles.                                               |
-| `customer.subscription.created` / `.updated` | `subscription.active` / `.past_due` / `.paused` / `.canceled` / `.updated`                                      | Routed by the subscription `status`; `updated` is a no-op metadata patch when no state changes. |
-| `customer.subscription.deleted`              | `subscription.canceled`                                                                                         |                                                                                                 |
-| `payment_intent.succeeded`                   | `payment.captured`                                                                                              | Uses `amount_received` (falls back to `amount`).                                                |
-| `payment_intent.payment_failed`              | `payment.failed`                                                                                                | Emits an alertable `payment.failed` observer signal.                                            |
-| `payment_intent.amount_capturable_updated`   | `payment.authorized`                                                                                            | Manual-capture flow: funds held awaiting capture.                                               |
-| `charge.refunded`                            | `payment.refunded`                                                                                              | `amount_refunded` (cumulative) applied as an **absolute** total, so partials never over-count.  |
-| anything else                                | `unhandled`                                                                                                     | Verified and 200-acked, but no state change.                                                    |
+| Stripe event                                 | Normalized transition                                                                                           | Notes                                                                                                                                        |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `checkout.session.completed` (payment mode)  | `payment.captured` **only if** `payment_status` is `paid`/`no_payment_required`; else `payment.authorized`      | Fails closed: an `unpaid` session is money that has not moved. `amount_total` recorded; `payment_intent` (or session id) is the session key. |
+| `checkout.session.completed` (subscription)  | `subscription.active` **only if** `payment_status` is `paid`/`no_payment_required`; else `subscription.updated` | Fails closed: an `unpaid` session never entitles.                                                                                            |
+| `checkout.session.async_payment_succeeded`   | same as `checkout.session.completed` (the session is now `paid`)                                                | Settlement of a delayed-notification payment: `authorized` → `captured`.                                                                     |
+| `checkout.session.async_payment_failed`      | `payment.failed` (payment mode) / `subscription.past_due` (subscription)                                        | The delayed debit was returned. Both emit an alertable observer signal.                                                                      |
+| `customer.subscription.created` / `.updated` | `subscription.active` / `.past_due` / `.paused` / `.canceled` / `.updated`                                      | Routed by the subscription `status`; `updated` is a no-op metadata patch when no state changes.                                              |
+| `customer.subscription.deleted`              | `subscription.canceled`                                                                                         |                                                                                                                                              |
+| `payment_intent.succeeded`                   | `payment.captured`                                                                                              | Uses `amount_received` (falls back to `amount`).                                                                                             |
+| `payment_intent.payment_failed`              | `payment.failed`                                                                                                | Emits an alertable `payment.failed` observer signal.                                                                                         |
+| `payment_intent.amount_capturable_updated`   | `payment.authorized`                                                                                            | Manual-capture flow: funds held awaiting capture.                                                                                            |
+| `charge.refunded`                            | `payment.refunded`                                                                                              | `amount_refunded` (cumulative) applied as an **absolute** total, so partials never over-count.                                               |
+| anything else                                | `unhandled`                                                                                                     | Verified and 200-acked, but no state change.                                                                                                 |
 
 <Callout type="info">
     Subscription status changes, including pause/resume, renewals, and moving to `past_due` after a failed invoice, reach the store through
     `customer.subscription.updated` (Stripe emits it alongside the more specific `customer.subscription.paused` / `.resumed` / `invoice.*` events, which the
     adapter itself treats as `unhandled`). Keep `customer.subscription.updated` selected on your endpoint.
+</Callout>
+
+<Callout type="warn">
+    Do not fulfill on `checkout.session.completed` alone if you accept a delayed-notification method. Those sessions complete `unpaid` with the PaymentIntent
+    still `processing`, so the store records `authorized`, not `captured` — settlement is days away. Gate fulfillment on the session reaching `captured`, which
+    happens on `checkout.session.async_payment_succeeded` (or `payment_intent.succeeded`); a returned debit lands as `failed` instead.
 </Callout>
 
 <Callout type="warn">

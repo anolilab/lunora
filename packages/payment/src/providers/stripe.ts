@@ -181,16 +181,45 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             };
         }
 
-        case "checkout.session.completed": {
+        case "checkout.session.async_payment_failed": {
+            // The delayed debit was returned. For a payment the provisional `authorized` row fails;
+            // for a subscription the invoice behind the checkout never settled, so demote it to the
+            // non-entitling `past_due` and raise the dunning signal. A row already `past_due` (the
+            // usual case — `customer.subscription.created` arrives `incomplete`) is a no-op report.
             if (readString(object, "mode") === "subscription") {
-                // SECURITY: a completed subscription checkout is only ACTIVE when Stripe confirms it was
-                // paid (or no payment was required). An `unpaid` session (async payment still processing) —
-                // or a missing/unknown `payment_status` — must NOT entitle; fail closed to a non-entitling
-                // `subscription.updated` (a no-op metadata patch); the authoritative active state still
-                // arrives via `customer.subscription.*`.
-                const paymentStatus = readString(object, "payment_status");
-                const paid = paymentStatus === "paid" || paymentStatus === "no_payment_required";
+                return {
+                    ...base,
+                    customerId: readString(object, "customer"),
+                    referenceId: readReferenceId(object),
+                    subscriptionId: readString(object, "subscription"),
+                    type: "subscription.past_due",
+                };
+            }
 
+            return {
+                ...base,
+                referenceId: readReferenceId(object),
+                sessionId: readString(object, "payment_intent") ?? readString(object, "id"),
+                type: "payment.failed",
+            };
+        }
+
+        // A delayed-notification method (SEPA debit, ACH, Boleto, OXXO, Konbini) completes the
+        // session BEFORE the money settles — `payment_status: "unpaid"`, PaymentIntent `processing` —
+        // and settlement is signalled days later by `async_payment_succeeded` / `async_payment_failed`.
+        // Both settlement events carry the same Checkout Session object as `completed`, so they share
+        // this mapping and `payment_status` decides the transition for all three.
+        case "checkout.session.async_payment_succeeded":
+        case "checkout.session.completed": {
+            // SECURITY: money has only moved when Stripe says so. An `unpaid` session — or a
+            // missing/unknown `payment_status` — must never be recorded as captured or entitling;
+            // both branches below fail closed to a non-entitling, still-advanceable state.
+            const paymentStatus = readString(object, "payment_status");
+            const paid = paymentStatus === "paid" || paymentStatus === "no_payment_required";
+
+            if (readString(object, "mode") === "subscription") {
+                // Fail closed to a non-entitling `subscription.updated` (a no-op metadata patch); the
+                // authoritative active state still arrives via `customer.subscription.*`.
                 return {
                     ...base,
                     customerId: readString(object, "customer"),
@@ -211,7 +240,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             // `no_payment_required` and Stripe creates NO PaymentIntent for it, so deferring would
             // drop the order entirely and an app fulfilling off `paymentSessions` would silently stop
             // serving free orders. Those keep the cs_… id — the only id that payment ever has.
-            if (paymentIntentId === undefined && readString(object, "payment_status") !== "no_payment_required") {
+            if (paymentIntentId === undefined && paymentStatus !== "no_payment_required") {
                 return { ...base, type: "unhandled" };
             }
 
@@ -223,7 +252,12 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 customerId: readString(object, "customer"),
                 referenceId: readReferenceId(object),
                 sessionId: paymentIntentId ?? readString(object, "id"),
-                type: "payment.captured",
+                // An unsettled session is `authorized`, the same state a `processing` PaymentIntent
+                // maps to — so `reconcile` agrees with the webhook — and the FSM keeps both exits
+                // open from there (`capture` on settlement, `fail` on a return). Recording it as
+                // captured is the one thing that cannot be undone: `captured` has no `fail` edge, by
+                // design, so a returned debit would leave the row captured forever.
+                type: paid ? "payment.captured" : "payment.authorized",
             };
         }
 
