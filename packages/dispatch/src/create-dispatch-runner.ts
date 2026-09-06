@@ -183,6 +183,21 @@ const toDispatchTimeoutError = (label: string, functionPath: string, timeoutMs: 
     new LunoraError("INTERNAL", `${label}: function dispatch to "${functionPath}" timed out after ${String(timeoutMs)}ms`, { status: 503 });
 
 interface DispatchRunnerOptions {
+    /**
+     * Declare that this producer has ALREADY wire-encoded `args`, so the runner
+     * forwards them verbatim instead of encoding again.
+     *
+     * Exactly one producer needs it: `createQueueWorkpool` must encode before the
+     * job enters a Cloudflare Queue, because that is its own JSON-serialising hop
+     * — a `bigint` throws at `queue.send`, long before this runner is reached. The
+     * runner then encodes a second time, and the shard decodes ONCE, so the
+     * handler receives a still-tagged array: `{ n: ["$lunora.wire$","bigint","7"] }`
+     * instead of `7n`, and a `Date` that is no longer a `Date`.
+     *
+     * Leave it unset everywhere else. A producer with no serialising hop of its
+     * own must NOT encode, or it hits the same asymmetry from the other side.
+     */
+    argsAlreadyEncoded?: boolean;
     /** Worker `env` — read `LUNORA_ORIGIN_URL` + `LUNORA_ADMIN_TOKEN` at call time. */
     env: Record<string, unknown>;
     /** Injectable fetch (tests); defaults to the global. */
@@ -240,6 +255,14 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
         if (typeof fetchImpl !== "function") {
             throw new TypeError(`${label}: no fetch implementation available — pass fetchImpl or run on a platform with global fetch`);
         }
+
+        /**
+         * The args exactly as they belong on the wire: encoded here, unless the
+         * producer declared it already encoded them before its own serialising
+         * hop. See {@link DispatchRunnerOptions.argsAlreadyEncoded}.
+         */
+        const wireArgs = (): Record<string, unknown> =>
+            options.argsAlreadyEncoded === true ? (args ?? {}) : (encodeArgsOrThrow(label, function_.__lunoraRef, args ?? {}) as Record<string, unknown>);
 
         const origin = options.env.LUNORA_ORIGIN_URL;
 
@@ -336,7 +359,7 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
                     // or the two halves disagree. `encodeWire`/`decodeWire` are
                     // identity for pure-JSON values, so nothing else changes.
                     body: JSON.stringify({
-                        args: encodeArgsOrThrow(label, function_.__lunoraRef, args ?? {}),
+                        args: wireArgs(),
                         functionPath: function_.__lunoraRef,
                         id: runOptions.dedupId,
                         shardKey: runOptions.shardKey,

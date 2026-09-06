@@ -516,7 +516,7 @@ describe("createWorkpool", () => {
         expect.assertions(1);
 
         const { calls, namespace } = fakeNamespace();
-        const pool = createWorkpool({ maxConcurrency: 1, namespace, originUrl: "https://app.test" });
+        const pool = createWorkpool({ maxConcurrency: 1, namespace });
         const args = { amount: 5n, blob: new Uint8Array([1, 2]) };
 
         // Same hop as `ctx.scheduler.runAt`: `callDO` JSON.stringifies the body
@@ -531,7 +531,7 @@ describe("createWorkpool", () => {
         expect.assertions(1);
 
         const { namespace } = fakeNamespace();
-        const pool = createWorkpool({ maxConcurrency: 1, namespace, originUrl: "https://app.test" });
+        const pool = createWorkpool({ maxConcurrency: 1, namespace });
 
         await expect(pool.enqueue(fnRef, { pattern: /nope/u })).rejects.toThrow(/workpool\.enqueue: cannot encode args for 'stripe\.sync' — /);
     });

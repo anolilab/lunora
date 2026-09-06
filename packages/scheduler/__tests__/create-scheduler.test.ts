@@ -273,7 +273,7 @@ describe("createScheduler", () => {
         expect.assertions(2);
 
         const { calls, namespace } = fakeNamespace();
-        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const scheduler = createScheduler({ namespace });
         const args = { amount: 5n, blob: new Uint8Array([1, 2]), missed: Number.NaN };
 
         // `callDO` JSON.stringifies this body, so an un-encoded `bigint` throws
@@ -291,7 +291,7 @@ describe("createScheduler", () => {
         const args = { amount: 5n, when: new Date(0) };
         const records = [{ args: encodeWire(args) as Record<string, unknown>, enqueuedAt: 1, functionPath: "messages.send", id: "a", scheduledFor: 10 }];
         const { namespace } = fakeNamespace({ "/list": { records } });
-        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const scheduler = createScheduler({ namespace });
 
         await expect(scheduler.list()).resolves.toStrictEqual([{ ...records[0], args }]);
         await expect(scheduler.get("a")).resolves.toStrictEqual({ ...records[0], args });
@@ -305,7 +305,7 @@ describe("createScheduler", () => {
         expect.assertions(1);
 
         const { namespace } = fakeNamespace();
-        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const scheduler = createScheduler({ namespace });
 
         await expect(scheduler.runAt(Date.now() + 1000, fnRef, { pattern: /nope/u })).rejects.toThrow(
             /ctx\.scheduler\.runAt: cannot encode args for 'messages\.send' — /,

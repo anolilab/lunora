@@ -201,23 +201,13 @@ const buildInboundImports = (options: EmitAppOptions): string[] =>
 const buildAgentDefinitionsImport = (options: EmitAppOptions): string[] =>
     hasEmailAgents(options) ? [`import * as lunoraAgentDefinitions from "../agents.js";`] : [];
 
-/** Import lines — only what the enabled capabilities need. Add-ons via `@lunora/*`; the runtime via the umbrella subpath when the app depends on `lunora`. */
-const buildImportLines = (options: EmitAppOptions): string[] => {
-    const {
-        hasAccess,
-        hasAuth,
-        hasFramework,
-        hasGlobal,
-        hasHyperdriveGlobal,
-        hasKvIntrospector,
-        hasQueue,
-        hasScheduler,
-        hasStorage,
-        hasWorkflow,
-        useUmbrella,
-        wantsOpenApi,
-        wantsOpenRpc,
-    } = options;
+/**
+ * The runtime module's own type and value import lines. Which symbols each side
+ * needs is driven entirely by the enabled capabilities, so it is kept next to
+ * the other per-capability builders rather than inline in {@link buildImportLines}.
+ */
+const buildRuntimeImports = (options: EmitAppOptions): string[] => {
+    const { hasFramework, hasGlobal, hasHyperdriveGlobal, hasQueue, useUmbrella } = options;
     const runtimeModule = useUmbrella ? "lunorash/runtime" : "@lunora/runtime";
 
     const runtimeTypeImports = [
@@ -228,21 +218,12 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         "ScheduledControllerLike",
         "ShardNamespaceLike",
         "WorkerOptions",
-    ];
-
-    if (hasQueue) {
         // The queue consumer's fourth argument — the trigger's own trace, forwarded
         // so a handler's `ctx.run` dispatches join it.
-        runtimeTypeImports.push("TriggerTrace");
-    }
-
-    if (hasGlobal) {
-        runtimeTypeImports.push("GlobalIntrospector", "AdminTableResolver");
-    }
-
-    if (hasFramework) {
-        runtimeTypeImports.push("FrameworkHostHandler");
-    }
+        ...(hasQueue ? ["TriggerTrace"] : []),
+        ...(hasGlobal ? ["GlobalIntrospector", "AdminTableResolver"] : []),
+        ...(hasFramework ? ["FrameworkHostHandler"] : []),
+    ];
 
     const runtimeValueImports = [
         ...(hasGlobal || hasHyperdriveGlobal ? ["createCrossShardRelationCapabilities"] : []),
@@ -251,6 +232,27 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         ...(hasFramework ? ["withFrameworkWorker"] : []),
     ].join(", ");
 
+    return [
+        `import type { ${[...runtimeTypeImports].toSorted((a, b) => a.localeCompare(b)).join(", ")} } from "${runtimeModule}";`,
+        `import { ${runtimeValueImports} } from "${runtimeModule}";`,
+    ];
+};
+
+/** Import lines — only what the enabled capabilities need. Add-ons via `@lunora/*`; the runtime via the umbrella subpath when the app depends on `lunora`. */
+const buildImportLines = (options: EmitAppOptions): string[] => {
+    const {
+        hasAccess,
+        hasAuth,
+        hasGlobal,
+        hasHyperdriveGlobal,
+        hasKvIntrospector,
+        hasQueue,
+        hasScheduler,
+        hasStorage,
+        hasWorkflow,
+        wantsOpenApi,
+        wantsOpenRpc,
+    } = options;
     return [
         ...(hasAuth
             ? [
@@ -280,8 +282,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
             : []),
         ...(hasWorkflow ? [`import { createWorkflowsRestClient } from "@lunora/workflow";`] : []),
         ...buildInboundImports(options),
-        `import type { ${[...runtimeTypeImports].toSorted((a, b) => a.localeCompare(b)).join(", ")} } from "${runtimeModule}";`,
-        `import { ${runtimeValueImports} } from "${runtimeModule}";`,
+        ...buildRuntimeImports(options),
         ``,
         ...buildIdentityImports(options.identity),
         ...buildAgentDefinitionsImport(options),
