@@ -163,13 +163,27 @@ const subscriptionFromStripe = (input: unknown): Subscription => {
 };
 
 /**
+ * One delivered event, in the shape every case mapper below takes.
+ *
+ * `base` is the identity every mapped action carries and spreads in; `object` is the event's data
+ * object and `currency` the currency read off it. One named argument rather than three positional
+ * ones, so every case lifted out of `mapEvent` — the checkout session below, the dispute after it,
+ * the next — takes the same shape instead of repeating its own preamble.
+ */
+interface StripeEvent {
+    base: Pick<WebhookAction, "eventId" | "provider" | "raw">;
+    currency: string;
+    object: Record<string, unknown>;
+}
+
+/**
  * The transition a completed/settled Checkout Session implies, decided by `payment_status`.
  *
  * SECURITY: money has only moved when Stripe says so. An `unpaid` session — or a missing/unknown
  * `payment_status` — must never be recorded as captured or entitling; both branches fail closed to a
  * non-entitling, still-advanceable state.
  */
-const checkoutSessionAction = (base: Pick<WebhookAction, "eventId" | "provider" | "raw">, object: Record<string, unknown>, currency: string): WebhookAction => {
+const checkoutSessionAction = ({ base, currency, object }: StripeEvent): WebhookAction => {
     const paymentStatus = readString(object, "payment_status");
     const paid = paymentStatus === "paid" || paymentStatus === "no_payment_required";
 
@@ -217,38 +231,46 @@ const checkoutSessionAction = (base: Pick<WebhookAction, "eventId" | "provider" 
     };
 };
 
+/**
+ * The transition a closed dispute implies — a reversal only when the chargeback was LOST.
+ *
+ * On Stripe nothing else reports that loss: Stripe is not merchant-of-record, so the merchant loses
+ * the money, yet the PaymentIntent stays `succeeded` and no refund is created — `charge.refunded`
+ * never fires and `reconcile` reads the intent as `captured` forever. Record it as a refund so a
+ * customer who charges back does not stay entitled. Every other outcome moves no money on its own: a
+ * won/`warning_closed` dispute leaves the capture standing, and the provisional
+ * `funds_withdrawn`/`funds_reinstated` pair nets to zero (both fall through to `unhandled`).
+ */
+const disputeClosedAction = ({ base, currency, object }: StripeEvent): WebhookAction => {
+    if (readString(object, "status") !== "lost") {
+        return { ...base, type: "unhandled" };
+    }
+
+    return {
+        ...base,
+        // The disputed amount, which can be less than the charge (partial dispute, currency drift).
+        // It is this event's own delta, not a cumulative total, so the default `"delta"` kind applies
+        // — as with the `charge.refunded` total it may follow.
+        amount: money(BigInt(Math.round(readNumber(object, "amount") ?? 0)), currency),
+        referenceId: readReferenceId(object),
+        // Not a refund the facade issued, so the dispute id can never consume a local refund marker
+        // and have its reversal silently dropped — see `sync.ts`.
+        refundId: readString(object, "id"),
+        // Payment rows are keyed on the PaymentIntent id. A dispute on a charge with no intent
+        // (legacy Charges API) has nothing to reverse here and no-ops as `unhandled`.
+        sessionId: readString(object, "payment_intent"),
+        type: "payment.refunded",
+    };
+};
+
 const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>): WebhookAction => {
     const base = { eventId, provider: "stripe" as const, raw: { object, type: eventType } };
     const currency = readString(object, "currency") ?? "usd";
+    const event: StripeEvent = { base, currency, object };
 
     switch (eventType) {
         case "charge.dispute.closed": {
-            // A LOST chargeback is a definitive funds reversal, and on Stripe nothing else reports it:
-            // Stripe is not merchant-of-record, so the merchant loses the money, yet the PaymentIntent
-            // stays `succeeded` and no refund is created — `charge.refunded` never fires and
-            // `reconcile` reads the intent as `captured` forever. Record it as a refund so a customer
-            // who charges back does not stay entitled. Every other outcome moves no money on its own:
-            // a won/`warning_closed` dispute leaves the capture standing, and the provisional
-            // `funds_withdrawn`/`funds_reinstated` pair nets to zero (they fall to `unhandled` below).
-            if (readString(object, "status") !== "lost") {
-                return { ...base, type: "unhandled" };
-            }
-
-            return {
-                ...base,
-                // The disputed amount, which can be less than the charge (partial dispute, currency
-                // drift). It is this event's own delta, not a cumulative total, so the default
-                // `"delta"` kind applies — as with the `charge.refunded` total it may follow.
-                amount: money(BigInt(Math.round(readNumber(object, "amount") ?? 0)), currency),
-                referenceId: readReferenceId(object),
-                // Not a refund the facade issued, so the dispute id can never consume a local refund
-                // marker and have its reversal silently dropped — see `sync.ts`.
-                refundId: readString(object, "id"),
-                // Payment rows are keyed on the PaymentIntent id. A dispute on a charge with no
-                // intent (legacy Charges API) has nothing to reverse here and no-ops as `unhandled`.
-                sessionId: readString(object, "payment_intent"),
-                type: "payment.refunded",
-            };
+            return disputeClosedAction(event);
         }
 
         case "charge.refunded": {
@@ -295,7 +317,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         // this mapping and `payment_status` decides the transition for all three.
         case "checkout.session.async_payment_succeeded":
         case "checkout.session.completed": {
-            return checkoutSessionAction(base, object, currency);
+            return checkoutSessionAction(event);
         }
 
         case "customer.subscription.created":
