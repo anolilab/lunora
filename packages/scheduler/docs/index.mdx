@@ -34,8 +34,11 @@ export const requestExport = mutation.input({ workspaceId: v.id("workspaces") })
 and return the job id.
 
 Under the hood `ctx.scheduler.runAfter` POSTs to the SchedulerDO's `/schedule`
-endpoint with `functionPath`, `args`, `scheduledFor`, and an `originUrl` it can
-call back into.
+endpoint with `functionPath`, `args` and `scheduledFor`. The origin it is called
+back on is NOT on that request: the DO reads it from its own
+`env.LUNORA_ORIGIN_URL`, because a caller-supplied dispatch target would be an
+SSRF vector. Set that var (in `vars` for local dev, as a secret in production) or
+every schedule is refused with `ORIGIN_NOT_CONFIGURED`.
 
 ### Standalone scheduler
 
@@ -50,7 +53,7 @@ import { api } from "@/lunora/_generated/api";
 
 const scheduler = createScheduler({
     namespace: env.SCHEDULER, // SchedulerDO binding
-    originUrl: "https://app.acme.test", // where the DO dispatches back
+    originUrl: "https://app.acme.test", // required by the type; the DO dispatches from env.LUNORA_ORIGIN_URL
 });
 
 const id = await scheduler.runAfter(5 * 60_000, api.email.sendReminder, { userId: "u-1" });
@@ -154,7 +157,7 @@ import { internal } from "@/lunora/_generated/api";
 
 const pool = createWorkpool({
     namespace: env.SCHEDULER,
-    originUrl: "https://app.acme.test",
+    originUrl: "https://app.acme.test", // as above: the DO dispatches from env.LUNORA_ORIGIN_URL
     maxConcurrency: 5,
     name: "stripe-sync",
 });
@@ -195,8 +198,9 @@ status; that's the trade for letting Cloudflare own retries and backoff.
 
 ## Dispatch contract
 
-When the alarm fires the DO POSTs to `${originUrl}/_lunora/scheduler/dispatch`
-with `{ functionPath, args, shardKey, scheduledFor, id }`. The runtime unwraps
+When the alarm fires the DO POSTs to
+`${env.LUNORA_ORIGIN_URL}/_lunora/scheduler/dispatch` with
+`{ functionPath, args, shardKey, scheduledFor, id }`. The runtime unwraps
 that and runs the function on the same code path as an RPC call — with one
 difference: the dispatch is **server-initiated**, so it carries no end-user
 identity. `ctx.auth.userId` is `null` and `ctx.ip` is `undefined`, which is also
