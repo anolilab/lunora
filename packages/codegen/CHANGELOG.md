@@ -1,3 +1,18 @@
+## @lunora/codegen [1.0.0-alpha.162](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.161...@lunora/codegen@1.0.0-alpha.162) (2026-09-06)
+
+### Bug Fixes
+
+* **dispatch:** repair alpha — double-encoded queue args, stale originUrl, envelope mocks ([#643](https://github.com/anolilab/lunora/issues/643)) ([172a34c](https://github.com/anolilab/lunora/commit/172a34c6c3baa9d1c98949234d4f2cb0a54def2a))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.114
+* **@lunora/agent:** upgraded to 1.0.0-alpha.93
+* **@lunora/queue:** upgraded to 1.0.0-alpha.50
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.57
+* **@lunora/server:** upgraded to 1.0.0-alpha.107
+
 ## @lunora/codegen [1.0.0-alpha.161](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.160...@lunora/codegen@1.0.0-alpha.161) (2026-09-06)
 
 ### ⚠ BREAKING CHANGES
