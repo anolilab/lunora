@@ -69,13 +69,6 @@ if (typeof source["priceId"] !== "string") return DEFER;
 if (source["priceId"].length > 256) return DEFER;
 return { "priceId": source["priceId"] };
 });
-installCompiledValidatorMap(lunora_billing_0.processWebhook.args, (source) => {
-if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
-if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
-if (typeof source["body"] !== "string") return DEFER;
-if (typeof source["signature"] !== "string") return DEFER;
-return { "body": source["body"], "signature": source["signature"] };
-});
 
 /**
  * Lifecycle manifest: the function paths the generated ShardDO dispatches when a
@@ -127,7 +120,7 @@ export interface Caller {
         checkout: (args: { priceId: string }) => Promise<{ url: string; }>;
         mySubscriptions: (args?: {}) => Promise<{ providerSubscriptionId: string; referenceId: string; state: string }[]>;
         portal: (args?: {}) => Promise<{ url: string; }>;
-        processWebhook: (args: { body: string; signature: string }) => Promise<{ applied: boolean; status: number; }>;
+        processWebhook: (args: { body: string; headers: Record<string, string> }) => Promise<{ applied: boolean; status: number; }>;
         recordApiCall: (args?: {}) => Promise<{ recorded: boolean; }>;
     };
 }

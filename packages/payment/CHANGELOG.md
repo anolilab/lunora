@@ -1,3 +1,425 @@
+## @lunora/payment [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.106...@lunora/payment@1.0.0-alpha.107) (2026-09-06)
+
+### ⚠ BREAKING CHANGES
+
+* **payment:** a payment-mode checkout session with no `payment_status` now records `authorized`
+instead of `captured`. Stripe always sends the field; the change only affects hand-built payloads.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(payment): reverse a lost chargeback on stripe
+
+`charge.dispute.closed` was unmapped, so a lost chargeback left the payment `captured` and the
+customer entitled to money the merchant no longer has. Stripe is not merchant-of-record, so it is the
+only event that reports the reversal: no refund object is created, `charge.refunded` never fires, and
+the PaymentIntent stays `succeeded` — which means `reconcile` re-reads the row as `captured` too, and
+nothing in either path could ever move it. The Dodo adapter already treats `dispute.lost` this way.
+
+Map it to `payment.refunded` for the disputed `amount` when `status` is `lost`, keyed on the
+PaymentIntent and tagged with the dispute id so it can never consume a facade refund marker. Every
+other outcome is acked without a state change: a won or `warning_closed` dispute leaves the capture
+standing, and the provisional `funds_withdrawn`/`funds_reinstated` pair nets to zero.
+
+`mapEvent` crossed the cognitive-complexity limit with the new branch, so the Checkout Session
+mapping moves to its own function; the behaviour is unchanged.
+
+The other adapters are left alone, verified against the installed SDKs: the Polar webhook catalog
+(`@polar-sh/sdk@0.49.0`) carries no dispute event at all, `creem@1.6.0` publishes only the
+provisional `dispute.created`, and the Autumn package ships no dispute or webhook surface.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* docs(payment): route refunds through the guarded facade
+
+Three provider guides documented `ctx.payments.adapter.refundPayment` as the supported way to refund,
+and the Dodo guide asserted the facade had no refund method at all — while the overview's canonical
+`ctx.payments` table, headed "Every method authorizes the caller against the `referenceId` first",
+omitted `refundPayment`, `capturePayment` and `cancelPayment` entirely.
+
+All three exist on the facade, and the documented adapter path skips everything they do first: the
+caller authorization, the over-refund check, the local refund ledger, the derived idempotency key,
+and the store write. That ledger is load-bearing — Polar's refund endpoint accepts no idempotency
+key, so nothing else stops a retry from issuing a second real refund.
+
+Add the three methods to the table, point the Stripe, Polar and Dodo guides at the facade, and keep
+`ctx.payments.adapter` as a documented escape hatch for the surfaces the facade does not wrap
+(`updateSubscription`, `resumeSubscription`) with a callout naming exactly what a money operation
+gives up there. The API surface is unchanged.
+
+The Dodo guide's partial-refund example was dead code — the adapter rejects any `amount` with
+`PROVIDER_ERROR` because a Dodo partial refund is expressed per line item — so it is replaced by a
+callout saying partial refunds must come from the dashboard.
+
+Two gates in the package's docs suite: no guide may call a money operation on `ctx.payments.adapter`,
+and every method on the `LunoraPayment` interface must appear in the overview's table.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(payment): key a dodo pause off the event, not the status
+
+`subscription.paused` was routed by its payload `status`, but Dodo's `SubscriptionStatus` is
+pending|active|on_hold|cancelled|failed|expired — verified against the installed `dodopayments@2.45.1`
+types, where the webhook payload's subscription extends that same enum. There is no `paused` member,
+so the mapping entry for it could never fire and every deliberate pause fell through the fail-closed
+default to `subscription.past_due`, which raises the dunning alert `sync.ts` emits for a failed
+payment.
+
+Take the transition from the event name instead, as the Creem adapter already does for
+`subscription.scheduled_cancel`. Both states are non-entitling, so this changes no access decision —
+only that a customer-initiated pause stops being reported as a payment failure.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(payment): forward every webhook header, not just stripe's
+
+The copy-in `payment` registry item and the demo both forwarded a single `signature` string from the
+edge into the shard and rebuilt the request with `{ "stripe-signature": signature }`, so the
+provider-agnostic template could only ever verify Stripe. Polar and Dodo Payments sign with the
+Standard-Webhooks trio (`webhook-id` / `webhook-timestamp` / `webhook-signature`), Autumn with
+`svix-*`, and Creem with `creem-signature`; all of them reached `handleWebhook` unsigned and were
+rejected. The template's comment also named `polar-signature`, which Polar does not send.
+
+Forward `Object.fromEntries(request.headers)` instead and hand it to the reconstructed request, so
+the configured adapter finds whichever header it verifies with and switching provider needs no edit.
+* **payment:** `processWebhook` takes `{ body, headers }` instead of `{ body, signature }`. Anyone
+who copied the item in updates their `httpAction` route to pass the headers.
+
+The demo carries the same shape, which is what typechecks the pattern — nothing compiles the registry
+item itself.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* refactor(payment): extract the stripe dispute case
+
+`charge.dispute.closed` carried a ~25-line body and a ~10-line comment inline in `mapEvent`'s
+switch, while the comparable `checkout.session.*` case had already been lifted into
+`checkoutSessionAction`. Same size, same reason: lift it into `disputeClosedAction`.
+
+The extracted mappers took `(base, object, currency)` — a `Pick` of the result type as an input
+parameter, and a preamble every future extraction would repeat. Give them one named `StripeEvent`
+instead, built once at the top of `mapEvent`.
+
+Behaviour is unchanged: the two mappers are the same expressions with the same inputs, covered by
+the existing `charge.dispute.closed` and `checkout.session.*` tests.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* docs(payment): say how long a dodo pause lasts
+
+Keying `subscription.paused` off the event name makes the `paused` state reachable, but
+`getSubscriptionStatus` reads the same `SubscriptionStatus` enum, which has no `paused` member. So
+the next `reconcile` — which trusts the adapter for subscriptions — re-reports the row as `past_due`
+and writes that back. Nothing breaks: both states are non-entitling, `past_due -> activate` is a
+legal edge, and reconcile emits `reconcile.drift` rather than re-raising the dunning alert. But the
+label is transient, and `paused -> resume` is a webhook-only edge for this provider.
+
+Documented rather than preserved. `mergePaymentTruth` can pin a refund over provider truth because a
+refund is monotone and fails safe; pinning `paused` would keep a subscription that resumed
+out-of-band non-entitling forever, defeating the one sweep meant to catch a missed resume. Stripe and
+Creem do carry `paused` in their status enums, so nothing changes for them.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* docs(payment): mark the refund arithmetic seam
+
+`refundedTotalFor` resolves an `"absolute"` amount as `max(action, stored)`, which is right for a
+provider's cumulative refunded-to-date total but does not see a lost-dispute reversal — that arrives
+as a `"delta"` accumulated into the same field. Dispute lost for 30, then a refund of 20, resolves to
+30 while 50 actually left.
+
+Unreachable: Stripe refuses to refund a charge with a lost dispute, so that order never occurs, and
+the reverse order adds to 50 correctly. Left as a `max` on purpose — summing instead would
+over-count every ordinary re-delivered cumulative total, which is reachable. Comment only, so the
+next reader does not re-derive it and so the note is already in place if that provider rule changes.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(payment): forward only the signature headers
+
+The webhook route at the Worker edge forwarded `Object.fromEntries(request.headers)` into the
+`processWebhook` argument and re-attached the lot to a synthetic `Request` inside the shard.
+Forwarding more than one named signature header was the right fix for provider-agnosticism —
+forwarding everything is more than that needs.
+
+Nothing leaked: `handleWebhook` hands the headers to `adapter.parseWebhook` and nowhere else, and no
+RPC arguments are logged. The residual is the entity headers — `content-encoding`,
+`content-length`, `transfer-encoding` end up on a `Request` whose body has already been decoded to
+text, describing a body that no longer exists.
+
+So forward an allowlist of the eight headers the adapters actually verify with (`stripe-signature`,
+`creem-signature`, the Standard-Webhooks trio, the `svix-*` aliases), in the example route, the
+registry item and its README. A new adapter signing with a header nobody adds to that list would
+fail every delivery in the deployer's production, where no gate runs, so a test derives the set from
+the adapters' own `headers.get` calls and checks all three copies against it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* chore(payment-demo): regenerate after the webhook header change
+
+Widening `processWebhook` from `{ body, signature }` to the forwarded header map
+changes its generated signature and drops the compiled fast-path validator built
+for the old shape. The committed `_generated` output was left stale.
+
+`check-generated-files.mjs` is the gate that catches this, and it is one of the
+CI jobs neither lint nor test can see — it was missing from this branch's local
+gate sweep, which is why CI found it first.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+* **errors,values,server:** `ERROR_CATALOG` gains six keys, so `LunoraErrorCode` widens, and a `CONFIG_INVALID`
+message is now redacted to "Internal error" on the wire.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(shared): stop refusing SQLite's read-only `replace()` scalar
+
+`FORBIDDEN_KEYWORD` listed `replace` as a bare word, so a plain
+`SELECT REPLACE(name, 'a', 'b') FROM users` was rejected as "not read-only" — naming a rule the
+operator had not broken. `replace` is a write only in the `REPLACE INTO` statement form; as a scalar
+it is a core string function. The docblock's accepted trade covers a keyword inside a string
+literal, not a bare function call.
+
+The discrimination is a one-token negative lookahead — the write form is `REPLACE INTO`, never
+`REPLACE (`. Deliberately a lookahead rather than matching `replace\s+into`, so an inline block
+comment wedged between the two words (whitespace to SQLite's tokenizer, but not to `\s`) still fails
+the scan. Every other word on the list has no read-only meaning, so none of them moves.
+
+`VALUES (1)` stays refused, and that is left as-is: the diagnostic states exactly the rule enforced
+("only SELECT / WITH / EXPLAIN"), widening the lead set buys nothing, and `INSERT … VALUES` is
+already caught by `insert`. Noted in the docblock so it is not re-litigated.
+
+The AI SQL assistant made a false refusal invisible: it retries once and then discards, and the
+caller only ever learns `unsafe-response` — which reads the same whether the model wrote a real
+`DELETE` or the gate misread a read-only shape. Each discard now warns to the server console with
+the gate's rejection code.
+
+Tests: the scalar form is allowed while `REPLACE INTO` — including from inside a CTE, which is why
+the keyword scan exists — is still refused; and the assistant logs the rejection code once per
+attempt.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(values): make the emitted JSON Schema agree with the runtime parser
+
+Four claims in the schema contradicted what `parse` actually does, so a client generated from the
+OpenAPI/OpenRPC spec rejected bodies the server accepts and could not express what the server
+requires:
+
+  - `additionalProperties: false` on every object, while `v.object` STRIPS an unknown key rather
+    than refusing it (only `.output()`'s `rejectUnknownKeys` refuses one, which is not what these
+    schemas describe). Dropped — absent means allowed, which matches the parser.
+  - `required` listed every key whose kind was not `optional`, so `v.any()` and a union with an
+    optional member were required although `parse {}` succeeds for both. Requiredness is now decided
+    by whether the parser accepts the field ABSENT.
+  - bigint was described two incompatible ways — `{ format: "int64", type: "integer" }` for the
+    scalar, `{ const: "5", type: "string" }` for `v.literal(5n)` — and codegen spelled the literal a
+    third way (`{ const: "5n" }`, the IR's source text falling through the numeric branch). One
+    lossless carrier for all three: an int64 decimal string. `type: "integer"` advertised the one
+    JSON form the parser refuses, and truncated past 2^53 besides; a bigint already rides as its
+    decimal string in the wire codec, and this is the treatment `bytes` already gets.
+  - `v.record(v.string().pattern(…), …)` emitted no `propertyNames` — the reader read only the value
+    child — while the runtime rejects a non-matching key. The reader gains `keyChild`.
+
+Regenerated: both codegen golden fixtures and all 13 examples' committed `_generated` trees.
+
+Also pins the ORDER-DEPENDENT `.check()`/`.nullable()` semantics that round 28 questioned. It holds
+as written: `.nullable().check(p)` refines the widened type, so `p` runs on null — and its parameter
+is typed `string | null`, so dereferencing it is a compile error, not a runtime surprise.
+`.check(p).nullable()` is the other reading and short-circuits. No behaviour change, a test so the
+pair is not "fixed" into agreement later.
+* **errors,values,server:** `SchemaNodeReader` gains a required `keyChild` member, and generated OpenAPI /
+OpenRPC documents change shape (no `additionalProperties: false` on argument objects, a narrower
+`required`, `propertyNames` on records, bigint as an int64 string).
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* docs: correct two APIs the snippets taught with a shape they never had
+
+`useMutation` returns `{ data, error, isError, mutate, pending, reset, withOptimisticUpdate }`, but
+13 snippets — the flagship realtime-chat tutorial, error handling, the React and reactive-loaders
+pages, both migration guides, three blog posts — wrote `const send = useMutation(...)` and then
+called `send(...)`. A reader following them gets `TS2349: This expression is not callable`, or
+`TypeError: send is not a function`. The React page was half-right, reading `send.pending`, which
+does exist on the object. Two prose sentences said "returns a callable with a `.pending` flag".
+
+`ctx.db.findMany("users")` exists on the untyped runtime writer but not on the generated typed
+`ctx.db`, so the masking and RLS snippets may run yet never typecheck in a user project. Replaced
+with the per-table facade (`ctx.db.users.findMany()`).
+
+`check-doc-imports.mjs` only validated import NAMES, so both classes were invisible to it. It gains
+a small deny-table of shapes found wrong in shipped docs, each entry carrying the correct form in
+its message, and now walks `content/blog` as well — two of the wrong snippets lived there. Not a
+type checker: doing this properly needs the packages installed in apps/docs plus synthesized
+`_generated` modules, which is noted in the file.
+
+Only tracked files are touched. `apps/docs/src/content/docs/packages` is gitignored — a local copy
+regenerated at build — so nothing there ships.
+
+The round also reported `ctx.db.from("invoices").all()` in the cloudflare-access page. That call
+appears nowhere in the repo, tracked or otherwise, so nothing was changed for it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* security(playground): make the inbound-email sink internal, and stop claiming a DO reset
+
+The worker entry gates `email()` on `verify: authenticatesFrom` and says so at length: Cloudflare
+Email Routing authenticates the RECIPIENT domain, never the sender, so without the gate anyone who
+can send mail to the routed address reaches the sink with a `from` of their choosing. But the sink
+was a plain `mutation`, registered publicly, so the same call was on the client `api` — the gate was
+walked around rather than through.
+
+`internalMutation` is the sibling pattern (`cleanup.ts`), and it costs the mail path nothing:
+`@lunora/mail`'s shard dispatcher already sends `x-lunora-system: 1`, which is exactly what admits a
+server-initiated dispatch to an internal target — the package's own docblock says an inbound target
+"should be" internal for this reason. Verified rather than assumed: nothing in the app or the e2e
+suite calls it from a client.
+
+`inbound:list` stays public and now says why: it demonstrates that the write lands on the change
+feed, and the `inbox` table has no owner column to scope a read by. Called out as the demo's choice,
+not the pattern to copy.
+
+Separately, `/test/reset` POSTed `https://do/internal/reset` at a DO named `__e2e_reset__` inside a
+swallowing `catch`. `ShardDO.fetch` answers 404 to anything that is not `/rpc` or its WS/relay
+routes, and that name is neither `__root__` nor any channel shard, so even a real route would have
+reset the wrong DO. Only `clearD1` ever ran. Deleted rather than implemented: shard-local rows are
+reachable only through their channel and every spec mints a fresh one, so nothing depends on
+clearing them. The e2e fixture's "Clears DO state so tests are order-independent" and the
+`workers: 1` rationale now say what actually happens — D1 is truncated, DO state is not, and
+order-independence comes from each spec minting its own channel.
+
+Tests: the generated `api` keeps `onEmail` out of `ApiTypes` and in `InternalApiTypes`, and the
+worker entry no longer calls the phantom route.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(docs): make the doc-snippet deny-table falsifiable on its own
+
+Every `NONEXISTENT_API` entry was added because a shipped doc matched it, and
+once that doc is fixed the pattern matches nothing forever. From then on a
+narrowed or broken regex reads exactly like a clean repo — the run is green
+either way. That is the property the error-catalog scanner grew a self-check
+for in this same wave; this file had none.
+
+Add fixture strings per entry, asserting both directions: the pattern still
+matches the wrong form, and does not match the correct one. Verified by breaking
+it each way — narrowing `(?:const|let|var)` back to `const` reports the missed
+`let`, and widening `\w+` to swallow a destructuring pattern reports that it
+would now reject valid docs.
+
+Two patterns widened while adding their fixtures: `useMutation` was bound to
+`const` and missed `let`/`var`, and `ctx.db.findMany` matched only quote
+characters, missing a template literal.
+
+Also demote the payment section header in the error catalog from `/**` to `/*` —
+as a docblock it attached itself to nothing, sitting between the previous entry
+and `CONFIG_INVALID`'s own docblock.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(docs): stop the useMutation gate rejecting a correct snippet
+
+The pattern matched any `const <name> = useMutation(` binding, so it rejected
+the correct non-destructuring form — `const m = useMutation(fn)` then
+`await m.mutate(args)` — which keeps the hook's object and calls `mutate` off
+it. A CI gate that blocks valid docs is worse than the misuse it catches, and
+the self-check added alongside it could not see this because its samples only
+covered the destructuring form.
+
+The two forms differ in whether the bound name is later CALLED, and that spans
+two lines, so a per-line scan cannot tell them apart. Buffer each fence and
+match over its body, with a backreference requiring the binding to be seen
+called. Line numbers are recovered from the match offset, so reports still point
+at the offending line rather than the fence.
+
+Verified against all four shapes: `const send = useMutation(…)` + `send(args)`
+reports at the right line; both correct forms pass; the `ctx.db.findMany` entry
+still fires, so the fence-scoped scan did not weaken the line-local pattern.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(payment): mint the arg-shape guard as VALIDATION_ERROR, not CONFIG_INVALID
+
+Cataloguing `CONFIG_INVALID` as `internal: true` is right for what the code was
+meant to carry — "webhook secret not configured", a duplicate or absent adapter
+— messages that name server wiring and that the caller can do nothing with. But
+`check()`'s argument-shape guard minted the same code for "check() requires a
+featureId or priceId", which is the caller's own mistake, so marking the code
+internal turned actionable guidance into a generic 500.
+
+Move those two sites to `VALIDATION_ERROR`, already in the payment taxonomy at
+400 and already catalogued as caller-safe. The `entitlements`-not-configured
+sites stay on `CONFIG_INVALID`: those do name server configuration, and the
+detail survives in the server-side log.
+
+Record the constraint in the catalog docblock so the next caller-fixable failure
+is not added to this code, which would quietly re-widen what the flag redacts.
+
+252 payment tests and 669 errors tests pass.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* docs(values,errors): correct two claims the code does not support
+
+`v.bigint()`'s JSON Schema said it names "the JSON carrier". It does not: every
+RPC arg path runs `decodeWire` first (`shard-do.ts` 5528/5588/5647/5925), so a
+bigint's actual carrier is the tagged array `["$lunora.wire$","bigint","5"]` and
+a bare `"5"` fails the parser exactly as a bare `5` did. The emitted shape is
+unchanged and still right by the file's own convention — `bytes` and `date`
+describe their decoded payloads the same way, and nothing here consumes a tuple
+schema — but the comment claimed a parser agreement this node does not have,
+which is the class of thing the surrounding wave exists to remove. State the
+convention and the residual gap instead.
+
+The webhook-rejection entry claimed "the messages are fixed and name no internal
+state". Five of the six mints are fixed strings; `providers/stripe.ts` forwards
+the Stripe SDK's verification message. The non-internal verdict is still right —
+those texts describe the request the poster sent — but the justification was
+wrong, so it now says which site differs and what keeps it safe.
+
+187 values tests and 669 errors tests pass.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* style(docs): format check-doc-imports
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* style(errors): add the blank line jsdoc/lines-before-block requires
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **errors,values,server:** close the gates that were failing open ([#621](https://github.com/anolilab/lunora/issues/621)) ([42879c4](https://github.com/anolilab/lunora/commit/42879c4d43379f6475fb3dc9971e70a856fa796b))
+* **payment:** stop recording unsettled money as captured ([#627](https://github.com/anolilab/lunora/issues/627)) ([07a7d0d](https://github.com/anolilab/lunora/commit/07a7d0db4323235b93597b07b28e2442545b4eaf))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.33
+* **@lunora/server:** upgraded to 1.0.0-alpha.105
+* **@lunora/values:** upgraded to 1.0.0-alpha.41
+
 ## @lunora/payment [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.105...@lunora/payment@1.0.0-alpha.106) (2026-09-05)
 
 

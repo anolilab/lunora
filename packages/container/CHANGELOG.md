@@ -1,3 +1,178 @@
+## @lunora/container [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.46...@lunora/container@1.0.0-alpha.47) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.34
+
+## @lunora/container [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.45...@lunora/container@1.0.0-alpha.46) (2026-09-06)
+
+### ⚠ BREAKING CHANGES
+
+* **observability,agent:** `SpanHandle.spanContext()` returns `SpanContextIds`
+(`sampled` alongside the ids); `ctx.trace` accepts an optional fourth
+`SpanIdentity` argument; `WorkerOptions.queue` receives a fourth `TriggerTrace`
+argument, and codegen emits it.
+
+The gates that hid all of this are rewritten to go through the real path: the
+bridge suite drives the real span factory instead of a fake that echoed back
+whatever id it was handed, and the agent suites drive `generateText`/`streamText`
+against a mock model instead of invoking the telemetry hooks by hand.
+
+Not fixed, deliberately: a `ctx.fetch` span still parents to the dispatch rather
+than an enclosing `ctx.trace` (no ambient span stack in the DO profile) — the
+docblock now says so instead of implying otherwise. The Sentry and Braintrust
+model-call spans still end at time-to-first-byte on a streamed turn, because
+their host span must wrap `execute()` to establish the parent context; both
+docblocks now state it and point at the OTLP bridge.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* chore(api): accept the span-identity and trigger-trace surface
+
+The bridge now records under the id it publishes (SpanIdentity), SpanHandle
+reports the propagated sampled bit (SpanContextIds), and a queue consumer accepts
+the trigger's trace (TriggerTrace).
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(agent): close every telemetry bridge at the real end of a call
+
+The Sentry and Braintrust bridges wrapped `execute()`, which on a streamed turn
+resolves the instant `doStream` hands the stream back. Both reported every
+streamed generation as a ~1 ms, zero-token, always-OK call, and a stream that
+died mid-way never reached a span at all.
+
+Both now open the host span around `execute()` — still what parents the
+provider's own work — but keep it open past it. Sentry uses `startSpanManual`
+(present on every SDK built on `@sentry/core`, verified against 10.55.0) and ends
+the span from the terminal event; Braintrust parks its `traced` callback on a
+gate the terminal event releases, so the caller still gets `execute()`'s value
+immediately while the span covers the whole generation. Usage is read off the
+SDK's normalized end event, where a LanguageModelV4 provider's nested
+`{ inputTokens: { total } }` has already been flattened.
+
+The lifecycle all three share moves to `telemetry/in-flight-calls.ts`, and with
+it two fixes:
+
+- Aborts and errors now close the call they NAME. Every ai@7 terminal event
+  carries the model call's `callId`, `onAbort` and `onError` included, but the
+  close was indiscriminate — and a bridge built at module scope, which is the
+  documented `defineAgent({ telemetry: { integrations: [...] } })` shape, shares
+  one map across every concurrent run in the isolate. One run's barge-in
+  reported a sibling's live generation as aborted and swallowed its real span.
+- A stream that rejects outright dispatches no telemetry callback at all, so
+  its entry was never removed and pinned the call's prompt for the life of the
+  integration. Entries older than ten minutes are now swept on the next open.
+  The contradictory claim that the map "cannot grow" is gone.
+
+A throwing integration also no longer fails the user's tool. `traceToolExecution`
+runs inside the tool's durable `step.do`, so a host SDK throwing in `executeTool`
+made the step retry a tool that had already run, or report a successful one as
+failed — against that function's own promise that telemetry is never flow
+control. The tool's real outcome is recorded as it happens and always wins.
+
+`SpanIdentity`'s two ids become required: the sole caller always passes both, and
+`identity?:` already expresses "no adapter involved", so a partial object
+type-checked and meant nothing.
+
+The `version_metadata` object unwrap in `readerFromRecord` is keyed to
+`CF_VERSION_METADATA` alone. Applied to any object-valued binding it would export
+the internal `.id` of whatever a future probed key named as a resource attribute.
+
+Every model-call test now drives the real SDK through `generateText`/`streamText`
+rather than invoking the hooks by hand, which is what hid the streaming defect:
+called directly, `execute()` resolves with a finished result and the span looks
+perfect. Each new assertion was confirmed to fail against the pre-fix behaviour.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(agent): release swept calls and stop the wrapper deciding tool outcomes
+
+Two findings from review, both real.
+
+**The abandoned-call sweep dropped the record but stranded the resource.** A
+swept entry was deleted without `onClose`, which is right — a span ending at
+"whenever the next call started" is worse than none. But two bridges carry
+something live in the host SDK: Sentry's `startSpanManual` span ends only when
+someone ends it, and Braintrust's `traced` callback is parked on a gate the
+terminal event releases. Dropping those entries left the span open and the
+callback parked for the life of the isolate — the same leak the sweep exists to
+prevent, one level down.
+
+`createInFlightCalls` takes an `onEvict`, and each bridge releases its own
+resource there without emitting anything. Both new tests fail without it
+("expected undefined to be defined"). Writing the Braintrust one showed the
+abandonment has to be modelled precisely: with an `execute()` that never
+settles, the callback parks on `execute()` rather than on the gate, and nothing
+can release it. The real shape is a stream handed back at first byte that then
+dies — `execute()` resolves, the callback parks on the gate.
+
+**A telemetry wrapper could decide a durable tool outcome.** The ai@7 contract
+hands `executeTool` the tool's `execute` and trusts what it returns. This file
+guarded a wrapper THROW, but not a wrapper that skips `execute` entirely or
+returns a value of its own — so an integration could record a tool that never
+ran, or replace its result, inside the durable `step.do`. That contradicts the
+function's own promise that telemetry is never flow control.
+
+The wrapper's return value and its rejection are now both discarded, and the
+outcome is read from one memoized promise. Memoized rather than re-run: a
+wrapper that starts `execute` without awaiting it leaves no trace by the time it
+returns, and re-running would execute the tool twice. This also deletes the
+`ran`/`failed` bookkeeping — the promise already carries both.
+
+Five new cases; three fail against the previous flow (skip, replace, and the
+un-awaited start), while reject-after-success and the tool's own failure already
+behaved correctly.
+
+Also suppress the secret scanner on a fixture `Bearer admin-token` in
+`trigger-trace.test.ts`, matching how the e2e fixtures do it — `vis secrets`
+reports clean.
+
+464 agent tests, repo `lint:types`, `api:check` (54 snapshots) and `vis secrets`
+all green.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(agent): floor the streamed-span assertions on the stream, not wall clock
+
+CI failed with `expected 94 to be greater than 96` on the Sentry streamed-span
+test. The assertion was `spanDuration > wallMs / 2`, but `wallMs` starts before
+the span does — so a runner slow enough to spend ~98ms getting from the timer to
+the first `doStream` call inflates the divisor past the span and the test fails
+on scheduling alone, with nothing wrong.
+
+All three bridge suites carried the same shape. Each now floors on the stream's
+OWN delay budget, which the fixture makes knowable: `streamingModel` waits
+`gapMs` per chunk, so `{ chunks: 3, gapMs: 30 }` is ~90ms regardless of how slow
+the runner is getting there.
+
+The floor still separates what it exists to separate. The defect being guarded is
+a span closed when `execute()` resolves — the instant `doStream` hands the stream
+back — which measured ~1ms. Verified by re-introducing exactly that close: the
+streamed test fails again, along with three others.
+
+464 agent tests pass; `eslint --max-warnings=0` clean (the constant sits above the
+expect group rather than splitting it, which `vitest/padding-around-expect-groups`
+flags).
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **observability,agent:** make the trace say what actually happened ([#618](https://github.com/anolilab/lunora/issues/618)) ([c07f788](https://github.com/anolilab/lunora/commit/c07f788836fb5724002a80a2031b88a033e304d0))
+* **shard-engine,container:** bracket two control channels with the wire codec ([#623](https://github.com/anolilab/lunora/issues/623)) ([da5e903](https://github.com/anolilab/lunora/commit/da5e903f9d6ea9c878fe2587f534706f02ecfff4))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.33
+
 ## @lunora/container [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.44...@lunora/container@1.0.0-alpha.45) (2026-09-05)
 
 

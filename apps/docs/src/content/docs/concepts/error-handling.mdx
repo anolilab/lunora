@@ -115,16 +115,17 @@ try {
 For rendering, the React hooks expose error state directly so you don't manage a
 separate `useState`.
 
-`useMutation` returns a callable with a `.pending` flag for in-flight UI; await
-it and `catch` to handle failure:
+`useMutation` returns `{ mutate, pending, ... }`, not a callable: destructure
+`mutate` to invoke the mutation and `pending` for in-flight UI. Await `mutate`
+and `catch` to handle failure:
 
 ```tsx
 import { useMutation } from "@lunora/react";
 import { api } from "@/lunora/_generated/api";
 
-const send = useMutation(api.messages.send);
+const { mutate: send, pending } = useMutation(api.messages.send);
 
-// send.pending is true while a call is in flight
+// pending is true while a call is in flight
 await send({ channelId, text });
 ```
 
@@ -150,7 +151,7 @@ failure), those closures fire and the cache reverts. You don't write any
 rollback code; a rejected mutation leaves the UI as it was.
 
 ```tsx
-const send = useMutation(api.messages.send);
+const { mutate: send } = useMutation(api.messages.send);
 
 await send({ channelId, text }, { optimistic: (current) => [...(current ?? []), draft] });
 // If this rejects, `draft` is removed from the list automatically.

@@ -3,6 +3,7 @@ import { getIdentityStore } from "@lunora/client/auth";
 import type { DeepReadonly, Ref } from "vue";
 import { onScopeDispose, readonly, ref } from "vue";
 
+import { isBrowser } from "../../../shared/is-browser";
 import { useLunora } from "./lunora-provider";
 
 interface UseAuthResult {
@@ -20,6 +21,14 @@ interface UseAuthResult {
  * Multiple `useAuth` instances within the same effect scope share a single
  * per-client identity store (from `@lunora/client/auth`) — a `setToken` from
  * one component re-renders every watcher with the freshly-resolved user.
+ *
+ * Both subscribes are client-only, for the same reason as `useFlags`: this
+ * runs synchronously inside `setup()` during `renderToString`, and that render
+ * scope is never stopped, so `onScopeDispose` never fires. For the identity
+ * subscribe that is not just a stray listener — the store kicks off
+ * `getCurrentUser()` on its first subscriber, so an unguarded server render
+ * issues a round-trip against a client whose URL does not resolve there. Both
+ * refs still hold the client's current values; live updates start at hydration.
  */
 const useAuth = (): UseAuthResult => {
     const client = useLunora();
@@ -37,6 +46,14 @@ const useAuth = (): UseAuthResult => {
         userRef.value = store.getUser();
     };
 
+    const setToken = (next: string | null): void => {
+        client.setAuthToken(next);
+    };
+
+    if (!isBrowser()) {
+        return { setToken, token: readonly(tokenRef), user: readonly(userRef) };
+    }
+
     const unsubToken = client.onAuthTokenChange(onTokenChange);
     const unsubUser = store.subscribe(onUserChange);
 
@@ -44,10 +61,6 @@ const useAuth = (): UseAuthResult => {
         unsubToken();
         unsubUser();
     });
-
-    const setToken = (next: string | null): void => {
-        client.setAuthToken(next);
-    };
 
     return { setToken, token: readonly(tokenRef), user: readonly(userRef) };
 };

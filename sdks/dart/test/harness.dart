@@ -73,6 +73,14 @@ void equals(Object? got, Object? want, String what) {
 /// independent of the order the fixture file happens to use.
 String canonical(Object? value) => stableStringify(value);
 
+/// Renders a value the way `transport.dart` puts it on the socket, with
+/// `jsonEncode`. Separate from [canonical], which is free to normalise:
+/// `stableStringify` spells every number the ECMAScript way, so `1.0` and `1`
+/// compare EQUAL through it — the divergence a round-trip case exists to catch.
+/// This port's dates went out as `1700000000000.0` for exactly that reason, on a
+/// green suite.
+String wireText(Object? value) => jsonEncode(value);
+
 void throws(void Function() body, String what) {
   try {
     body();

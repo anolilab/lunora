@@ -88,6 +88,36 @@ describe("dispatchQueueBatch", () => {
         expect(m.acked).toBe(true);
     });
 
+    it("gives the handler's ctx.run the consumer invocation's traceparent", async () => {
+        expect.assertions(1);
+
+        const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+        const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({}, { status: 200 }));
+
+        const q = defineQueue({
+            handler: async (context, b) => {
+                for (const m of b.messages) {
+                    m.ack();
+                }
+
+                await context.run({ __lunoraRef: "digests:flush" } as never, undefined);
+            },
+        });
+
+        await dispatchQueueBatch(
+            batch("q", [message({})]),
+            { q: { definition: q, exportName: "q" } },
+            { env: { LUNORA_ADMIN_TOKEN: "tok", LUNORA_ORIGIN_URL: "https://app.example.com" }, fetchImpl, traceparent },
+        );
+
+        // The queue span is the parent of the work the handler dispatches; without
+        // this the shard minted a fresh trace per call and one batch's work read as
+        // a pile of unrelated root traces.
+        const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+
+        expect((init.headers as Record<string, string>).traceparent).toBe(traceparent);
+    });
+
     it("throws when no handler is registered for the delivered queue", async () => {
         expect.assertions(1);
 

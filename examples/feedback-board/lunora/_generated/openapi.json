@@ -73,7 +73,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "feedbackId": {
                         "description": "Id<\"feedback\">",
@@ -151,7 +150,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "feedbackId": {
                         "description": "Id<\"feedback\">",
@@ -215,7 +213,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "title": {
                         "type": "string"
@@ -294,7 +291,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "id": {
                         "description": "Id<\"feedback\">",
@@ -358,7 +354,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "status": {
                         "anyOf": [
@@ -455,7 +450,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "voterEmail": {
                         "type": "string"
@@ -517,7 +511,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "id": {
                         "description": "Id<\"feedback\">",
@@ -581,7 +574,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "id": {
                         "description": "Id<\"feedback\">",
@@ -674,7 +666,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "feedbackId": {
                         "description": "Id<\"feedback\">",
@@ -742,7 +733,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "limit": {
                         "type": "number"
@@ -802,7 +792,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {},
                     "required": [],
                     "type": "object"
@@ -858,7 +847,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "id": {
                         "description": "Id<\"summaries\">",

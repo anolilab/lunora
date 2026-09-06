@@ -61,6 +61,24 @@ describe("generateSql", () => {
         expect(result.degraded ? result.reason : undefined).toBe("unsafe-response");
     });
 
+    it("logs the gate's rejection code, so a systematic false refusal is diagnosable", async () => {
+        expect.assertions(2);
+
+        // The discard is correct; its silence was not. An operator only ever
+        // saw "unsafe-response", which reads identically whether the model
+        // wrote a real `DELETE` or the gate misclassified a read-only shape.
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        try {
+            await generateSql(binding("DELETE FROM messages"), { prompt: "remove everything" }, SCHEMA);
+
+            expect(warn).toHaveBeenCalledTimes(MAX_ATTEMPTS);
+            expect(warn.mock.calls[0]?.[0]).toContain("SQL_NOT_READONLY");
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
     it("retries once before giving up, so one bad completion is not fatal", async () => {
         expect.assertions(2);
 

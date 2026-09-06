@@ -9,6 +9,7 @@ import { buildModelMessages } from "./model-messages";
 import { agentBindingName } from "./naming";
 import { toFunctionReference } from "./paths";
 import isPositiveInteger from "./positive-integer";
+import { traceToolExecution } from "./telemetry/tool-execution";
 import { capToolOutputText } from "./tool-output";
 import type {
     AgentApprovalContext,
@@ -415,7 +416,7 @@ const readToolOutcome = (memo: unknown): ToolOutcome => {
 };
 
 const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promise<void> => {
-    const { depth, env, getState, instanceId, onTokenDelta, owner, persist, run, setState, step, threadKey, tools } = turnContext;
+    const { agent, depth, env, getState, instanceId, onTokenDelta, owner, persist, run, setState, step, threadKey, tools } = turnContext;
     const stepName = `tool:${call.name}:${call.id}`;
     const tool: AnyAgentTool | undefined = tools[call.name];
     const messageKey = `${instanceId}:tool:${call.id}`;
@@ -516,7 +517,14 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
     const outcome = readToolOutcome(
         await step.do(stepName, async (): Promise<ToolOutcomeMemo> => {
             try {
-                return { [TOOL_OUTCOME_KEY]: { ok: await tool.execute(call.input, toolContext) } };
+                // Reported to the agent's telemetry integrations from HERE, the
+                // only place a tool actually runs: the SDK is handed schema-only
+                // tools and so never fires its own tool-execution events. Inside
+                // the step body, so a replayed (memoized) call emits nothing.
+                const runTool = (): Promise<unknown> => Promise.resolve(tool.execute(call.input, toolContext) as unknown);
+                const output = await traceToolExecution(agent.telemetry, { id: call.id, input: call.input, name: call.name }, runTool);
+
+                return { [TOOL_OUTCOME_KEY]: { ok: output } };
             } catch (error: unknown) {
                 if (isDeterministicDispatchFailure(error)) {
                     return { [TOOL_OUTCOME_KEY]: { failed: error.message } };

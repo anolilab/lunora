@@ -12,9 +12,9 @@
 
 import { createAuthMiddleware } from "better-auth/api";
 
+import { onCloudflareEdge } from "../../../shared/on-cloudflare-edge";
 import type { AppendAuthAuditEntry, AppendAuthAuditOptions, AuthAuditEvent, AuthAuditOutcome } from "./audit";
 import { appendAuthAuditEntry } from "./audit";
-import { onCloudflareEdge } from "./create-auth";
 import type { SqlExecutor } from "./sql-store";
 
 /** Configuration for {@link authAuditHook}. */
@@ -167,7 +167,7 @@ const header = (context: AuditHookContext, name: string): string | undefined => 
  * header is consulted — none is more trustworthy than `x-forwarded-for`, and an
  * attacker-chosen IP in an audit row is worse than a missing one.
  *
- * The {@link onCloudflareEdge} gate is the same one `create-auth.ts`'s
+ * The {@link onCloudflareEdge} gate is the same shared one `create-auth.ts`'s
  * `defaultIpAddressHeaders` applies, deliberately: off Cloudflare (the Node
  * host, a bare container) nothing overwrites `cf-connecting-ip`, so it is a
  * header like any other. Reading it there lets an attacker set the `ip` on every

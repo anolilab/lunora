@@ -67,12 +67,17 @@ describe("matchesWhere", () => {
         expect(matchesWhere(row, [clause("age", 18, "gt")])).toBe(true);
     });
 
-    it("folds AND vs OR connectors left-to-right", () => {
-        expect.assertions(2);
+    it("partitions AND vs OR connectors into two ANDed groups", () => {
+        expect.assertions(3);
         // AND: both must hold.
         expect(matchesWhere(row, [clause("name", "Ada"), clause("age", 99)])).toBe(false);
-        // OR on the second clause: either holds.
-        expect(matchesWhere(row, [clause("name", "Ada"), clause("age", 99, "eq", "OR")])).toBe(true);
+        // OR clauses are alternatives among THEMSELVES, still ANDed with the AND
+        // group — an OR clause cannot rescue a row that fails an AND clause. The
+        // clause matrix in `sql-store.test.ts` has the note on why (every
+        // persistent better-auth adapter partitions; folding left made this store
+        // strictly broader than all of them) and pins both stores against it.
+        expect(matchesWhere(row, [clause("name", "Ada"), clause("age", 99, "eq", "OR")])).toBe(false);
+        expect(matchesWhere(row, [clause("name", "Ada"), clause("age", 30, "eq", "OR")])).toBe(true);
     });
 
     it("honours case-insensitive mode for strings", () => {

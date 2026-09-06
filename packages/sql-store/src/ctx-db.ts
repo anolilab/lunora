@@ -768,48 +768,18 @@ const encodeRankCursor = (cursorValues: ReadonlyArray<unknown>): string => {
 };
 
 /**
- * Refuse a SQL-side reduce or group over a column stored as an order-preserving
- * key rather than as its value.
- *
- * A `v.bigint()` column holds the zero-padded key {@link bigintSqlKey} builds, so
- * `SUM` over it coerces to nonsense (1.5e40 for a couple of small amounts),
- * `MIN`/`MAX` hand back the padded string, and a `GROUP BY` key comes back as 40
- * characters of padding. All three look like answers, and `SUM` past 2^53 used
- * instead to escape as a raw driver `RangeError`.
- *
- * The maintained `__agg_` companion is what the error names instead. It is exact
- * per contribution — `coerceAggregateNumber` refuses any single `bigint` past
- * 2^53 outright — but its running total accumulates in a REAL column, so a sum
- * of in-range values can still cross 2^53 and round there. The message says so
- * rather than promising exactness the companion cannot give. Applied at every SQL-reducing entry point —
- * `aggregate`'s scan and both halves of `groupBy` — matching the shard twin's
- * `assertReducibleBySql`, which shipped guarding one and not its sibling.
- * @throws LunoraError `BAD_REQUEST` when `field` is stored as an order-preserving key
- */
-const assertReducibleBySql = (definition: SchemaLike["tables"][string], field: string, label: string): void => {
-    const validator = definition.shape[field];
-
-    if (validator !== undefined && effectiveColumnKind(validator) === "bigint") {
-        throw new LunoraError(
-            "BAD_REQUEST",
-            `${label}: "${field}" is stored as an order-preserving key, which SQL cannot reduce or group — declare an aggregateIndex covering this (by, field, op) so the maintained companion answers it instead (its running total is a REAL, so it stays exact only while the total is inside 2^53)`,
-        );
-    }
-};
-
-/**
  * Whether a column of this validator **could** hold a `bigint` — i.e. whether
  * `sqliteEncode` may have stored an order-preserving key there rather than a
  * value SQL can reduce.
  *
- * Deliberately wider than {@link assertReducibleBySql}'s test, which stays on the
- * declared kind because it REFUSES a read. This one only decides whether the
- * min/max write path reduces in SQL or folds in JS, and over-including costs a
- * paged scan where under-including writes a confident wrong number. `sqliteEncode`
- * keys off the RUNTIME type, so a `v.any()` / `v.union()` / `v.from()` column
- * holding a bigint is stored as a padded key exactly like a declared one; gating
- * on the declared kind alone is how the shard twin wrote ~1e39 into a companion,
- * one declaration away.
+ * `sqliteEncode` keys off the RUNTIME type, so a `v.any()` / `v.union()` /
+ * `v.from()` column holding a bigint is stored as a padded key exactly like a
+ * declared one; gating on the declared kind alone is how the shard twin wrote
+ * ~1e39 into a companion, one declaration away. Both the min/max write path
+ * (which decides whether to reduce in SQL or fold in JS) and
+ * {@link assertReducibleBySql} (which refuses a read outright) take this test —
+ * they have to agree, because a column the writer treats as keyed is exactly
+ * one the reader must not reduce.
  *
  * The widening only pays off because `sqliteDecode` reverses those columns'
  * keys too — it did not at first, and the fold then coerced 40 characters of
@@ -830,6 +800,43 @@ const mayHoldBigintKey = (validator: SchemaLike["tables"][string]["shape"][strin
     const kind = effectiveColumnKind(validator);
 
     return kind === "any" || kind === "bigint" || kind === "from" || kind === "union";
+};
+
+/**
+ * Refuse a SQL-side reduce or group over a column stored as an order-preserving
+ * key rather than as its value.
+ *
+ * A `v.bigint()` column holds the zero-padded key {@link bigintSqlKey} builds, so
+ * `SUM` over it coerces to nonsense (1.5e40 for a couple of small amounts),
+ * `MIN`/`MAX` hand back the padded string, and a `GROUP BY` key comes back as 40
+ * characters of padding. All three look like answers, and `SUM` past 2^53 used
+ * instead to escape as a raw driver `RangeError`.
+ *
+ * The test is {@link mayHoldBigintKey}, not the declared kind: `sqliteEncode`
+ * keys off the RUNTIME type, so a `bigint` written into a `v.any()` /
+ * `v.union()` / `v.from()` column is stored as the identical key. Reading the
+ * declared kind saw only `"any"` and let the scan reduce the padding — `sum` of
+ * two small amounts came back as `2e+39`. Refusing per COLUMN over-matches (an
+ * untyped column that only ever holds plain numbers is refused too), and that
+ * is the side to be wrong on: the alternative returned a confident wrong
+ * number, and the companion the error names answers both cases exactly.
+ *
+ * The maintained `__agg_` companion is what the error names instead. It is exact
+ * per contribution — `coerceAggregateNumber` refuses any single `bigint` past
+ * 2^53 outright — but its running total accumulates in a REAL column, so a sum
+ * of in-range values can still cross 2^53 and round there. The message says so
+ * rather than promising exactness the companion cannot give. Applied at every SQL-reducing entry point —
+ * `aggregate`'s scan and both halves of `groupBy` — matching the shard twin's
+ * `assertReducibleBySql`, which shipped guarding one and not its sibling.
+ * @throws LunoraError `BAD_REQUEST` when `field` may hold an order-preserving key
+ */
+const assertReducibleBySql = (definition: SchemaLike["tables"][string], field: string, label: string): void => {
+    if (mayHoldBigintKey(definition.shape[field])) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `${label}: "${field}" may hold an order-preserving key rather than a value SQL can reduce or group — declare an aggregateIndex covering this (by, field, op) so the maintained companion answers it instead (its running total is a REAL, so it stays exact only while the total is inside 2^53)`,
+        );
+    }
 };
 
 /** Applies {@link assertReducibleBySql} to every field a `groupBy` scan hands to SQL: the `by` keys and the reducer's own field. */

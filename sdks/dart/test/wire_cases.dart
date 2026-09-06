@@ -24,7 +24,13 @@ void caseWireCodecRoundTrip() {
     // and carry the expected re-encoding.
     final expected = testCase.containsKey('reencoded') ? testCase['reencoded'] : encoded;
 
-    equals(canonical(encodeWire(decodeWire(encoded))), canonical(expected), 'round-trip mismatch for ${testCase['name']}');
+    final reencoded = encodeWire(decodeWire(encoded));
+
+    equals(canonical(reencoded), canonical(expected), 'round-trip mismatch for ${testCase['name']}');
+    // And again as the BYTES the transport sends: a round-trip assertion
+    // measured on a string the transport never sends cannot see the divergence
+    // it exists to catch.
+    equals(wireText(reencoded), wireText(expected), 'wire-text mismatch for ${testCase['name']}');
   }
 }
 

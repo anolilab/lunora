@@ -20,6 +20,7 @@ import {
 } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import {
+    describePreservedCrons,
     findWranglerFile,
     mergeWranglerEnvironment,
     readWranglerJsonc,
@@ -530,6 +531,21 @@ const syncCronTriggers = (cwd: string, logger: Logger, cronTriggers: ReadonlyArr
 
         if (reconciled.changed) {
             logger.success(`synced ${String(cronTriggers.length)} cron trigger(s) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
+        }
+
+        // A damaged `lunora.crons` ownership record degrades reconciliation to
+        // add-only, which is safe but invisible — see `ReconcileCronsResult`.
+        for (const warning of reconciled.warnings) {
+            logger.warn(warning);
+        }
+
+        // The array is not the codegen-derived set. Say so — a `backupCron`
+        // entry that quietly stopped being delivered is exactly the failure the
+        // preservation exists to prevent, and silence is how it went unnoticed.
+        const kept = describePreservedCrons(reconciled.preserved);
+
+        if (kept !== undefined) {
+            logger.info(kept);
         }
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);

@@ -125,7 +125,6 @@ import { createWorkpool } from "@lunora/scheduler";
 
 const pool = createWorkpool({
     namespace: env.SCHEDULER,
-    originUrl: "https://my-app.example.com",
     name: "imports",
     maxConcurrency: 3,
 });

@@ -22,7 +22,7 @@ const ownDocuments = definePolicy({
     when: ({ auth }) => ({ ownerId: auth.userId }),
 });
 
-export const listDocuments = query.use(rls(definePolicies([ownDocuments]))).query(async ({ ctx }) => ctx.db.findMany("documents"));
+export const listDocuments = query.use(rls(definePolicies([ownDocuments]))).query(async ({ ctx }) => ctx.db.documents.findMany());
 ```
 
 ## Policies

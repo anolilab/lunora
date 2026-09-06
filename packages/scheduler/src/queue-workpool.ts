@@ -22,6 +22,7 @@
 import { createDispatchRunner } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
+import { encodeWire } from "../../../shared/wire-codec";
 import type {
     ArgsOf,
     FunctionReference,
@@ -61,6 +62,34 @@ const MAX_QUEUE_BATCH = 100;
 const DEFAULT_JOB_TIMEOUT_MS = 300_000;
 
 /**
+ * The single owner of what this package's producers put in a {@link QueueJob}'s
+ * `args` — `enqueue` and `enqueueBatch` both go through here, so the two cannot
+ * drift on what a job looks like on the queue.
+ *
+ * A job's args can hold a `bigint`, a `Date` or bytes, and the queue is a
+ * serialising hop: `@lunora/platform-node`'s queue host defaults to
+ * `contentType: "json"`, where a `bigint` throws inside `JSON.stringify` before
+ * the message is ever recorded and a `Date` silently arrives as an ISO string.
+ * A structured-clone (`"v8"`) queue carries both one hop further, only for the
+ * dispatcher's own `JSON.stringify` to refuse them identically. Encoding here
+ * makes the message body pure JSON on every host, which is also what keeps a
+ * dead-lettered job readable.
+ *
+ * The counterpart decode is the shard's, and it is the ONLY one on this path:
+ * `@lunora/do`'s dispatch loop runs `decodeWire(payload.args ?? {})` before the
+ * handler. `httpDispatcher` and `/_lunora/scheduler/dispatch` pass `args`
+ * through untouched, so nothing between here and there may encode or decode
+ * again — `decodeWire` is not idempotent, and a second pass flattens a `Date`
+ * to `{}`.
+ *
+ * `encodeWire` is the identity on pure JSON, so an existing caller's message
+ * body is unchanged. Absent args stay absent rather than becoming `{}`: a
+ * top-level `undefined` would otherwise encode to the tagged form.
+ */
+const encodeJobArgs = (args: Record<string, unknown> | undefined): Record<string, unknown> | undefined =>
+    args === undefined ? undefined : (encodeWire(args) as Record<string, unknown>);
+
+/**
  * Build a Queues producer that enqueues Lunora function dispatches. Concurrency
  * and retry policy live on the consumer's `wrangler.jsonc` config, not here.
  */
@@ -72,12 +101,15 @@ const createQueueWorkpool = (options: QueueWorkpoolOptions): QueueWorkpool => {
     }
 
     const enqueue = async <F extends FunctionReference>(function_: F, args: ArgsOf<F>, enqueueOptions: QueueEnqueueOptions = {}): Promise<void> => {
-        // The wire payload is a plain JSON bag; `ArgsOf<F>` is the reference's own
-        // args object, which TS cannot prove is a `Record<string, unknown>` even
-        // though every generated args type is one. Cast at the serialisation
-        // boundary rather than loosening the parameter, which is what makes the
-        // call site arg-checked at all.
-        const job: QueueJob = { args: args as Record<string, unknown>, functionPath: function_.__lunoraRef, shardKey: enqueueOptions.shardKey };
+        // `ArgsOf<F>` is the reference's own args object, which TS cannot prove is
+        // a `Record<string, unknown>` even though every generated args type is
+        // one. Cast at the serialisation boundary rather than loosening the
+        // parameter, which is what makes the call site arg-checked at all.
+        const job: QueueJob = {
+            args: encodeJobArgs(args as Record<string, unknown>),
+            functionPath: function_.__lunoraRef,
+            shardKey: enqueueOptions.shardKey,
+        };
         const sendOptions = enqueueOptions.delaySeconds === undefined ? undefined : { delaySeconds: enqueueOptions.delaySeconds };
 
         await options.queue.send(job, sendOptions);
@@ -95,7 +127,7 @@ const createQueueWorkpool = (options: QueueWorkpoolOptions): QueueWorkpool => {
         }
 
         const messages = jobs.map((job) => {
-            return { body: { args: job.args, functionPath: job.ref.__lunoraRef, shardKey: job.shardKey } satisfies QueueJob };
+            return { body: { args: encodeJobArgs(job.args), functionPath: job.ref.__lunoraRef, shardKey: job.shardKey } satisfies QueueJob };
         });
 
         await options.queue.sendBatch(messages, sendOptions);
@@ -149,6 +181,10 @@ const createQueueConsumer =
  * message — including a 2xx carrying a non-empty non-JSON body, which is an
  * intermediary's page rather than a function's return value and therefore no
  * evidence the job ran. An empty 2xx is a normal success (a `void` function).
+ *
+ * `job.args` is forwarded VERBATIM: {@link encodeJobArgs} already put it in wire
+ * form at the producer, and the shard's dispatch loop is the single decoder.
+ * Encoding again here would leave the handler a tagged array.
  */
 const httpDispatcher = (options: HttpDispatcherOptions): QueueDispatch => {
     const run = createDispatchRunner({

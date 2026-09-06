@@ -313,21 +313,38 @@ describe("discover/feature-usage", () => {
         it("shows a page when its code-usage flag is set", () => {
             expect.assertions(1);
 
-            expect(buildStudioFeatures({ ...ALL_OFF, storage: true, vectors: true }, NO_SIGNALS)).toMatchObject({ storage: true, vectors: true });
+            expect(buildStudioFeatures({ ...ALL_OFF, storage: true }, NO_SIGNALS)).toMatchObject({ storage: true });
         });
 
-        it("fails open on the `@lunora/bindings` package name for analytics, kv and vectors", () => {
+        it("fails open on the `@lunora/bindings` package name for analytics and kv, but not vectors", () => {
             expect.assertions(1);
 
-            // Regression: these three arms tested subpaths (`@lunora/bindings/kv`)
+            // Regression: these arms tested subpaths (`@lunora/bindings/kv`)
             // against a set of package NAMES, so the fail-open arm could never
             // fire — an app depending on `@lunora/bindings` and wiring KV in its
             // worker entry got the page hidden.
+            //
+            // `vectors` is deliberately NOT in that set. Analytics and KV degrade
+            // to an empty state on a deployment that binds nothing, so failing
+            // open costs a page reading "none bound". The vector browser's
+            // endpoints answer 400 `VECTORS_NOT_CONFIGURED` without a declared
+            // index to build a registry from, so failing open there fails open
+            // into an error — a visible tab with no backend.
             expect(buildStudioFeatures(ALL_OFF, { ...NO_SIGNALS, dependencies: new Set(["@lunora/bindings"]) })).toMatchObject({
                 analytics: true,
                 kv: true,
-                vectors: true,
+                vectors: false,
             });
+        });
+
+        it("hides the vector browser for `ctx.vectors` usage against a schema that declares no index", () => {
+            expect.assertions(1);
+
+            // There is no `LUNORA_VECTOR_INDEXES` registry and no `.vectors()`
+            // builder without a declaration, so `defineApp().build()` can wire no
+            // introspector — the schema declaration is exactly the condition under
+            // which the page has a backend.
+            expect(buildStudioFeatures({ ...ALL_OFF, vectors: true }, NO_SIGNALS)).toMatchObject({ vectors: false });
         });
 
         it("shows a page from its schema/project signal even with no code usage", () => {

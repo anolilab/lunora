@@ -33,6 +33,17 @@
     "typed": [
         { "name": "bigint-arg", "wireArgs": { "n": ["$lunora.wire$", "bigint", "7"] }, "key": "{\"n\":[\"$lunora.wire$\",\"bigint\",\"7\"]}" },
         { "name": "date-arg", "wireArgs": { "d": ["$lunora.wire$", "date", 1700000000000] }, "key": "{\"d\":[\"$lunora.wire$\",\"date\",1700000000000]}" },
+        {
+            "$comment": "The `-0` branch of stableStringify meeting TimeClip. An epoch in (-1, 0] clips to +0, not -0: ToIntegerOrInfinity, not truncation. A port that truncates spells the key `-0` here and opens a different subscription than the TS client for the same Date, which is precisely what this fixture exists to catch. Both spellings carry a decimal point so no JSON parser can narrow them to an integer and drop the sign first.",
+            "name": "date-arg-negative-fraction-epoch",
+            "wireArgs": { "d": ["$lunora.wire$", "date", -0.5] },
+            "key": "{\"d\":[\"$lunora.wire$\",\"date\",0]}"
+        },
+        {
+            "name": "date-arg-negative-zero-epoch",
+            "wireArgs": { "d": ["$lunora.wire$", "date", -0.0] },
+            "key": "{\"d\":[\"$lunora.wire$\",\"date\",0]}"
+        },
         { "name": "bytes-arg", "wireArgs": { "b": ["$lunora.wire$", "bytes", "AQID"] }, "key": "{\"b\":[\"$lunora.wire$\",\"bytes\",\"AQID\"]}" },
         {
             "name": "error-arg",

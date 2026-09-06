@@ -38,8 +38,8 @@ Practical consequences of the MoR model in this adapter:
 
 - **No manual capture / authorize.** Polar captures at checkout. `capturePayment`
   and `cancelPayment` throw `PROVIDER_ERROR`; they are not part of an MoR flow.
-- **Refunds are issued in Polar** (dashboard or API) and flow back in through the
-  `refund.created` webhook; see [Refunds](#refunds).
+- **Refunds** go through `ctx.payments.refundPayment` or the Polar dashboard, and
+  flow back in through the `refund.created` webhook; see [Refunds](#refunds).
 - **Product-based, not price-based.** Polar checkout takes **product ids**; the
   cross-provider `priceId` field carries a Polar product id.
 
@@ -382,18 +382,29 @@ to non-entitling `past_due`, **not** an entitling state; only a genuine
 
 ## Refunds
 
-Refunds are issued in Polar, from the dashboard or via the API, because Polar
-is the merchant of record. Polar then emits `refund.created`, which the adapter
-normalizes to `payment.refunded` with the **delta** amount of that single refund
-(`amountKind` defaults to `"delta"`), so multiple partial refunds accumulate
-correctly against the order's captured total in the store. The `sessionId` is the
-Polar `order_id`, which matches the payment session created from `order.paid`.
+Refund from your own app with `ctx.payments.refundPayment`, or from the Polar
+dashboard — Polar is the merchant of record, so both paths end in the same place.
+Either way Polar emits `refund.created`, which the adapter normalizes to
+`payment.refunded` with the **delta** amount of that single refund (`amountKind`
+defaults to `"delta"`), so multiple partial refunds accumulate correctly against
+the order's captured total in the store. The `sessionId` is the Polar `order_id`,
+which matches the payment session created from `order.paid`.
 
-The adapter's `refundPayment` (`refunds.create`) exists and defaults `reason` to
-`customer_request` (a valid Polar
-[refund reason](https://polar.sh/docs/api-reference/refunds/create)), but the
-provider-agnostic `ctx.payments` facade does not expose a refund method; the
-supported path is **issue in Polar → sync via webhook**.
+```ts
+import { money } from "@lunora/payment";
+
+// Full refund; omit `reason` and the adapter sends Polar's `customer_request`.
+await ctx.payments.refundPayment({ sessionId: orderId });
+
+// Partial refund — amount is Money (integer minor units + currency).
+await ctx.payments.refundPayment({ sessionId: orderId, amount: money(500n, "USD") });
+```
+
+<Callout type="warn">
+    Go through the facade, not `ctx.payments.adapter.refundPayment`. Polar's [Create Refund](https://polar.sh/docs/api-reference/refunds/create) accepts no
+    idempotency key, so nothing on the wire dedupes a retry: the facade's local refund ledger is the only thing that stops a repeated call from moving the money
+    twice. It also authorizes the caller and rejects an over-refund before anything is issued.
+</Callout>
 
 ## Billing portal
 

@@ -76,7 +76,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "body": {
                                                 "type": "string"
@@ -142,7 +141,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "body": {
                                                 "type": "string"
@@ -208,7 +206,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {},
                                         "required": [],
                                         "type": "object"
@@ -264,19 +261,16 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "replacedEndpoint": {
                                                 "type": "string"
                                             },
                                             "subscription": {
-                                                "additionalProperties": false,
                                                 "properties": {
                                                     "endpoint": {
                                                         "type": "string"
                                                     },
                                                     "keys": {
-                                                        "additionalProperties": false,
                                                         "properties": {
                                                             "auth": {
                                                                 "type": "string"

@@ -1733,11 +1733,22 @@ class RelayMember extends RelayLink {
                 { preEncoded: true },
             );
 
-            // `.map` before `.every`, never `.every` alone: a short-circuit here
-            // stops mid-poke, and a `pokeStart` with no `pokeEnd` strands the
-            // client's buffer on frames it will never be told to apply. Attempt
-            // every frame, then take the verdict — the same order and the same
-            // reason as the owner's local poke path.
+            // `.map` before `.every`, never `.every` alone: a short-circuit stops
+            // mid-poke, so a `pokeStart` that got out is never followed by its
+            // `pokeEnd` and the client buffers frames it is never told to apply.
+            // Attempt every frame, then take the verdict.
+            //
+            // This is NOT what the owner's local poke path does. `ShardDO`'s
+            // `sendPoke` is a `try { for (…) ws.send(frame) } catch`, which stops
+            // at the first throw — and its own docblock argues that is safe rather
+            // than accidental: parts are buffered and applied only at `pokeEnd`, so
+            // an abandoned poke leaves the client's view untouched, and
+            // `handlePokeStart` evicts the oldest buffer once the map exceeds its
+            // cap. Of the three senders, that one is the odd one out;
+            // `subscriptionFrames`' sender uses this form too. The verdict is the
+            // same either way — one failed frame makes `complete` false — so the
+            // divergence is in what is attempted after the first throw, not in
+            // what is reported.
             const complete = frames.map((frame) => trySendFrame(ws, frame)).every(Boolean);
 
             // The memo advances either way, and the FAILURE is reported upward
