@@ -1,3 +1,548 @@
+## @lunora/codegen [1.0.0-alpha.160](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.159...@lunora/codegen@1.0.0-alpha.160) (2026-09-06)
+
+### ⚠ BREAKING CHANGES
+
+* **storage,bindings:** the key and metadata guards raise `BAD_REQUEST` instead of
+`INTERNAL`. `INTERNAL` is a redacting code — `toErrorBody` swaps the
+message for "Internal error" and answers 500 — so keeping it would have
+reproduced the very opaque failure these guards exist to replace. They
+describe caller input, same as the `assertOneExpirationForm` sibling that
+already used `BAD_REQUEST`.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(storage): resolve buckets by own property, not prototype lookup
+
+Both bucket maps are plain object literals looked up with a bare index and
+a truthiness/`??` guard, so a prototype key resolved to an inherited
+`Object.prototype` member and the guard never engaged.
+
+`ctx.storage.bucket("constructor")` returned `{ ...Function, bucket,
+bucketName: "constructor" }` — an empty spread with no methods, carrying a
+`bucketName` tag `storageRules` would go on to match rules against, instead
+of the intended `no bucket registered for "constructor"` error. In the
+codegen-emitted `pick`, `?bucket=constructor` on the admin storage routes
+threw `s.delete is not a function` (a 500) rather than falling back to the
+default bucket the way any other unregistered name does.
+
+Guard both with `Object.hasOwn`, matching the three places that already do
+(`create-vectors`, `kv-introspector`, `create-admin-introspector`).
+Regenerates the two example `_generated` trees and the golden fixture.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+* **codegen,scripts:** the studio's Vectors page is now gated on the schema declaring a
+vector index. An app that depended on `@lunora/bindings` without a `.vectorize()`
+column or `defineVectorIndex(...)` loses the nav entry — which only ever rendered
+an error.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(scripts): match the entry-forwarding gate on shape, not on one binding name
+
+The gate keyed its precondition on the literal `app.fetch(`, so it saw 2 of the
+14 hand-built worker entries in this repo and skipped the other 12 — every one
+of which binds the composed worker to `worker`, several building it lazily
+inside `fetch`. A gate that runs on 14% of its subjects reports green for the
+same reason an empty one does.
+
+Take the delegate's name from the `<name>.fetch(` call inside the default-export
+object instead of assuming it, and scope an offence to the handlers the app
+actually declares (a `lunora/crons.ts`, a `defineQueue`, an `.onEmail(`). That
+is the failure this exists to catch: the trigger is provisioned from the same
+discovery and then fires into nothing. An entry that omits a handler its app
+never composes is not yet broken, and the check trips the moment the
+declaration appears.
+
+Verified against six trees: the two currently-conforming entries and an
+`export default app` still pass; blog with its `scheduled` forward removed, and
+the expo template the day a `crons.ts` lands, both fail. The named ceiling is a
+forward written as an expression rather than off the binding — reported as a
+drop, erring toward refusal.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(blog): wire the vector introspector into the hand-built worker
+
+The Vectors tab fix landed in `defineApp()`'s emitter, but `examples/blog` does
+not use `defineApp()` — it builds its worker with a bare `createWorker(...)` and
+references `_generated/app` nowhere. It is also the only app in the repo that
+declares a vector index (`posts_search`, via `.vectorize("body", …)`), so the one
+in-repo app that exercises the bug was the one the fix did not reach: the studio
+still showed a Vectors tab whose endpoints answered `VECTORS_NOT_CONFIGURED`.
+
+Pass `vectorIntrospector` alongside the `vectors` map already handed to
+`createShardDO`, reusing the same binding. This is what the generated
+`_generated/vectors.ts` docblock already told the worker to do — Vectorize
+cannot enumerate indexes at runtime, so the static registry is the only thing
+that can answer the browser.
+
+Verified with `tsc --noEmit` for the example (examples carry no eslint config;
+`lint:types` is their gate).
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(scripts): strip comments before the entry-forwarding text match
+
+The check is a substring match, so an entry that merely mentioned `app.queue`
+in prose satisfied it without forwarding anything. Strip block and line comments
+from the source first.
+
+Verified: an entry whose only mention of `worker.scheduled` is in a comment now
+fails, while the real forwarding form and `export default app` still pass.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(codegen,scripts): close the two gaps review found in the vectors gate
+
+**A declared-but-unbound vector index still reached the studio as a 400.** The
+emitted introspector is gated on `this.shardExtras.vectors`, while the studio's
+Vectors flag is the schema's index count — so an app that declares an index and
+never chains `.vectors(...)` gets the tab, a `VECTORS_NOT_CONFIGURED` on every
+request, and a `ctx.vectors` that is the throwing stub. It is already broken in
+that state, just later and less legibly.
+
+`build()` can see the omission, because `.vectors(...)` is a builder call rather
+than an `env` probe — so it now refuses there with the binding it wants, the
+same shape `.auth()` uses for its own misconfigurations. This deliberately does
+NOT move the flag into `studioFeatures()`: those are codegen-owned, and folding
+a runtime probe into them would make their drift guard meaningless
+(`shard-do.ts` states that rule; `handleAiAvailable` is the separate-endpoint
+precedent).
+
+**The entry-forwarding gate skipped identifier-backed default exports.** It
+required a literal `export default {`, so `const entry = { … }; export default
+entry;` — the same defect in different syntax — was exempt. The identifier is
+now resolved, and treated as hand-built only when the file binds it to an object
+literal; one bound to `defineApp(…).build()` or imported stays exempt.
+
+Verified against nine trees, including both new shapes: an identifier-backed
+entry that drops `scheduled` fails, and `const app = defineApp().build(); export
+default app;` passes.
+
+New `emit-app-vectors.test.ts` covers all three states. Writing it caught that
+`emitApp` normalises `hasVectors` to `hasVectors && vectorIndexCount > 0` — the
+same conjunction the nav flag reads — so a test setting only the boolean asserts
+against an emitter that emitted nothing.
+
+1700 codegen tests pass; `check-generated-files.mjs` clean after regenerating
+`examples/blog`.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+* **observability,agent:** `SpanHandle.spanContext()` returns `SpanContextIds`
+(`sampled` alongside the ids); `ctx.trace` accepts an optional fourth
+`SpanIdentity` argument; `WorkerOptions.queue` receives a fourth `TriggerTrace`
+argument, and codegen emits it.
+
+The gates that hid all of this are rewritten to go through the real path: the
+bridge suite drives the real span factory instead of a fake that echoed back
+whatever id it was handed, and the agent suites drive `generateText`/`streamText`
+against a mock model instead of invoking the telemetry hooks by hand.
+
+Not fixed, deliberately: a `ctx.fetch` span still parents to the dispatch rather
+than an enclosing `ctx.trace` (no ambient span stack in the DO profile) — the
+docblock now says so instead of implying otherwise. The Sentry and Braintrust
+model-call spans still end at time-to-first-byte on a streamed turn, because
+their host span must wrap `execute()` to establish the parent context; both
+docblocks now state it and point at the OTLP bridge.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* chore(api): accept the span-identity and trigger-trace surface
+
+The bridge now records under the id it publishes (SpanIdentity), SpanHandle
+reports the propagated sampled bit (SpanContextIds), and a queue consumer accepts
+the trigger's trace (TriggerTrace).
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(agent): close every telemetry bridge at the real end of a call
+
+The Sentry and Braintrust bridges wrapped `execute()`, which on a streamed turn
+resolves the instant `doStream` hands the stream back. Both reported every
+streamed generation as a ~1 ms, zero-token, always-OK call, and a stream that
+died mid-way never reached a span at all.
+
+Both now open the host span around `execute()` — still what parents the
+provider's own work — but keep it open past it. Sentry uses `startSpanManual`
+(present on every SDK built on `@sentry/core`, verified against 10.55.0) and ends
+the span from the terminal event; Braintrust parks its `traced` callback on a
+gate the terminal event releases, so the caller still gets `execute()`'s value
+immediately while the span covers the whole generation. Usage is read off the
+SDK's normalized end event, where a LanguageModelV4 provider's nested
+`{ inputTokens: { total } }` has already been flattened.
+
+The lifecycle all three share moves to `telemetry/in-flight-calls.ts`, and with
+it two fixes:
+
+- Aborts and errors now close the call they NAME. Every ai@7 terminal event
+  carries the model call's `callId`, `onAbort` and `onError` included, but the
+  close was indiscriminate — and a bridge built at module scope, which is the
+  documented `defineAgent({ telemetry: { integrations: [...] } })` shape, shares
+  one map across every concurrent run in the isolate. One run's barge-in
+  reported a sibling's live generation as aborted and swallowed its real span.
+- A stream that rejects outright dispatches no telemetry callback at all, so
+  its entry was never removed and pinned the call's prompt for the life of the
+  integration. Entries older than ten minutes are now swept on the next open.
+  The contradictory claim that the map "cannot grow" is gone.
+
+A throwing integration also no longer fails the user's tool. `traceToolExecution`
+runs inside the tool's durable `step.do`, so a host SDK throwing in `executeTool`
+made the step retry a tool that had already run, or report a successful one as
+failed — against that function's own promise that telemetry is never flow
+control. The tool's real outcome is recorded as it happens and always wins.
+
+`SpanIdentity`'s two ids become required: the sole caller always passes both, and
+`identity?:` already expresses "no adapter involved", so a partial object
+type-checked and meant nothing.
+
+The `version_metadata` object unwrap in `readerFromRecord` is keyed to
+`CF_VERSION_METADATA` alone. Applied to any object-valued binding it would export
+the internal `.id` of whatever a future probed key named as a resource attribute.
+
+Every model-call test now drives the real SDK through `generateText`/`streamText`
+rather than invoking the hooks by hand, which is what hid the streaming defect:
+called directly, `execute()` resolves with a finished result and the span looks
+perfect. Each new assertion was confirmed to fail against the pre-fix behaviour.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(agent): release swept calls and stop the wrapper deciding tool outcomes
+
+Two findings from review, both real.
+
+**The abandoned-call sweep dropped the record but stranded the resource.** A
+swept entry was deleted without `onClose`, which is right — a span ending at
+"whenever the next call started" is worse than none. But two bridges carry
+something live in the host SDK: Sentry's `startSpanManual` span ends only when
+someone ends it, and Braintrust's `traced` callback is parked on a gate the
+terminal event releases. Dropping those entries left the span open and the
+callback parked for the life of the isolate — the same leak the sweep exists to
+prevent, one level down.
+
+`createInFlightCalls` takes an `onEvict`, and each bridge releases its own
+resource there without emitting anything. Both new tests fail without it
+("expected undefined to be defined"). Writing the Braintrust one showed the
+abandonment has to be modelled precisely: with an `execute()` that never
+settles, the callback parks on `execute()` rather than on the gate, and nothing
+can release it. The real shape is a stream handed back at first byte that then
+dies — `execute()` resolves, the callback parks on the gate.
+
+**A telemetry wrapper could decide a durable tool outcome.** The ai@7 contract
+hands `executeTool` the tool's `execute` and trusts what it returns. This file
+guarded a wrapper THROW, but not a wrapper that skips `execute` entirely or
+returns a value of its own — so an integration could record a tool that never
+ran, or replace its result, inside the durable `step.do`. That contradicts the
+function's own promise that telemetry is never flow control.
+
+The wrapper's return value and its rejection are now both discarded, and the
+outcome is read from one memoized promise. Memoized rather than re-run: a
+wrapper that starts `execute` without awaiting it leaves no trace by the time it
+returns, and re-running would execute the tool twice. This also deletes the
+`ran`/`failed` bookkeeping — the promise already carries both.
+
+Five new cases; three fail against the previous flow (skip, replace, and the
+un-awaited start), while reject-after-success and the tool's own failure already
+behaved correctly.
+
+Also suppress the secret scanner on a fixture `Bearer admin-token` in
+`trigger-trace.test.ts`, matching how the e2e fixtures do it — `vis secrets`
+reports clean.
+
+464 agent tests, repo `lint:types`, `api:check` (54 snapshots) and `vis secrets`
+all green.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(agent): floor the streamed-span assertions on the stream, not wall clock
+
+CI failed with `expected 94 to be greater than 96` on the Sentry streamed-span
+test. The assertion was `spanDuration > wallMs / 2`, but `wallMs` starts before
+the span does — so a runner slow enough to spend ~98ms getting from the timer to
+the first `doStream` call inflates the divisor past the span and the test fails
+on scheduling alone, with nothing wrong.
+
+All three bridge suites carried the same shape. Each now floors on the stream's
+OWN delay budget, which the fixture makes knowable: `streamingModel` waits
+`gapMs` per chunk, so `{ chunks: 3, gapMs: 30 }` is ~90ms regardless of how slow
+the runner is getting there.
+
+The floor still separates what it exists to separate. The defect being guarded is
+a span closed when `execute()` resolves — the instant `doStream` hands the stream
+back — which measured ~1ms. Verified by re-introducing exactly that close: the
+streamed test fails again, along with three others.
+
+464 agent tests pass; `eslint --max-warnings=0` clean (the constant sits above the
+expect group rather than splitting it, which `vitest/padding-around-expect-groups`
+flags).
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+* **errors,values,server:** `ERROR_CATALOG` gains six keys, so `LunoraErrorCode` widens, and a `CONFIG_INVALID`
+message is now redacted to "Internal error" on the wire.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(shared): stop refusing SQLite's read-only `replace()` scalar
+
+`FORBIDDEN_KEYWORD` listed `replace` as a bare word, so a plain
+`SELECT REPLACE(name, 'a', 'b') FROM users` was rejected as "not read-only" — naming a rule the
+operator had not broken. `replace` is a write only in the `REPLACE INTO` statement form; as a scalar
+it is a core string function. The docblock's accepted trade covers a keyword inside a string
+literal, not a bare function call.
+
+The discrimination is a one-token negative lookahead — the write form is `REPLACE INTO`, never
+`REPLACE (`. Deliberately a lookahead rather than matching `replace\s+into`, so an inline block
+comment wedged between the two words (whitespace to SQLite's tokenizer, but not to `\s`) still fails
+the scan. Every other word on the list has no read-only meaning, so none of them moves.
+
+`VALUES (1)` stays refused, and that is left as-is: the diagnostic states exactly the rule enforced
+("only SELECT / WITH / EXPLAIN"), widening the lead set buys nothing, and `INSERT … VALUES` is
+already caught by `insert`. Noted in the docblock so it is not re-litigated.
+
+The AI SQL assistant made a false refusal invisible: it retries once and then discards, and the
+caller only ever learns `unsafe-response` — which reads the same whether the model wrote a real
+`DELETE` or the gate misread a read-only shape. Each discard now warns to the server console with
+the gate's rejection code.
+
+Tests: the scalar form is allowed while `REPLACE INTO` — including from inside a CTE, which is why
+the keyword scan exists — is still refused; and the assistant logs the rejection code once per
+attempt.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(values): make the emitted JSON Schema agree with the runtime parser
+
+Four claims in the schema contradicted what `parse` actually does, so a client generated from the
+OpenAPI/OpenRPC spec rejected bodies the server accepts and could not express what the server
+requires:
+
+  - `additionalProperties: false` on every object, while `v.object` STRIPS an unknown key rather
+    than refusing it (only `.output()`'s `rejectUnknownKeys` refuses one, which is not what these
+    schemas describe). Dropped — absent means allowed, which matches the parser.
+  - `required` listed every key whose kind was not `optional`, so `v.any()` and a union with an
+    optional member were required although `parse {}` succeeds for both. Requiredness is now decided
+    by whether the parser accepts the field ABSENT.
+  - bigint was described two incompatible ways — `{ format: "int64", type: "integer" }` for the
+    scalar, `{ const: "5", type: "string" }` for `v.literal(5n)` — and codegen spelled the literal a
+    third way (`{ const: "5n" }`, the IR's source text falling through the numeric branch). One
+    lossless carrier for all three: an int64 decimal string. `type: "integer"` advertised the one
+    JSON form the parser refuses, and truncated past 2^53 besides; a bigint already rides as its
+    decimal string in the wire codec, and this is the treatment `bytes` already gets.
+  - `v.record(v.string().pattern(…), …)` emitted no `propertyNames` — the reader read only the value
+    child — while the runtime rejects a non-matching key. The reader gains `keyChild`.
+
+Regenerated: both codegen golden fixtures and all 13 examples' committed `_generated` trees.
+
+Also pins the ORDER-DEPENDENT `.check()`/`.nullable()` semantics that round 28 questioned. It holds
+as written: `.nullable().check(p)` refines the widened type, so `p` runs on null — and its parameter
+is typed `string | null`, so dereferencing it is a compile error, not a runtime surprise.
+`.check(p).nullable()` is the other reading and short-circuits. No behaviour change, a test so the
+pair is not "fixed" into agreement later.
+* **errors,values,server:** `SchemaNodeReader` gains a required `keyChild` member, and generated OpenAPI /
+OpenRPC documents change shape (no `additionalProperties: false` on argument objects, a narrower
+`required`, `propertyNames` on records, bigint as an int64 string).
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* docs: correct two APIs the snippets taught with a shape they never had
+
+`useMutation` returns `{ data, error, isError, mutate, pending, reset, withOptimisticUpdate }`, but
+13 snippets — the flagship realtime-chat tutorial, error handling, the React and reactive-loaders
+pages, both migration guides, three blog posts — wrote `const send = useMutation(...)` and then
+called `send(...)`. A reader following them gets `TS2349: This expression is not callable`, or
+`TypeError: send is not a function`. The React page was half-right, reading `send.pending`, which
+does exist on the object. Two prose sentences said "returns a callable with a `.pending` flag".
+
+`ctx.db.findMany("users")` exists on the untyped runtime writer but not on the generated typed
+`ctx.db`, so the masking and RLS snippets may run yet never typecheck in a user project. Replaced
+with the per-table facade (`ctx.db.users.findMany()`).
+
+`check-doc-imports.mjs` only validated import NAMES, so both classes were invisible to it. It gains
+a small deny-table of shapes found wrong in shipped docs, each entry carrying the correct form in
+its message, and now walks `content/blog` as well — two of the wrong snippets lived there. Not a
+type checker: doing this properly needs the packages installed in apps/docs plus synthesized
+`_generated` modules, which is noted in the file.
+
+Only tracked files are touched. `apps/docs/src/content/docs/packages` is gitignored — a local copy
+regenerated at build — so nothing there ships.
+
+The round also reported `ctx.db.from("invoices").all()` in the cloudflare-access page. That call
+appears nowhere in the repo, tracked or otherwise, so nothing was changed for it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* security(playground): make the inbound-email sink internal, and stop claiming a DO reset
+
+The worker entry gates `email()` on `verify: authenticatesFrom` and says so at length: Cloudflare
+Email Routing authenticates the RECIPIENT domain, never the sender, so without the gate anyone who
+can send mail to the routed address reaches the sink with a `from` of their choosing. But the sink
+was a plain `mutation`, registered publicly, so the same call was on the client `api` — the gate was
+walked around rather than through.
+
+`internalMutation` is the sibling pattern (`cleanup.ts`), and it costs the mail path nothing:
+`@lunora/mail`'s shard dispatcher already sends `x-lunora-system: 1`, which is exactly what admits a
+server-initiated dispatch to an internal target — the package's own docblock says an inbound target
+"should be" internal for this reason. Verified rather than assumed: nothing in the app or the e2e
+suite calls it from a client.
+
+`inbound:list` stays public and now says why: it demonstrates that the write lands on the change
+feed, and the `inbox` table has no owner column to scope a read by. Called out as the demo's choice,
+not the pattern to copy.
+
+Separately, `/test/reset` POSTed `https://do/internal/reset` at a DO named `__e2e_reset__` inside a
+swallowing `catch`. `ShardDO.fetch` answers 404 to anything that is not `/rpc` or its WS/relay
+routes, and that name is neither `__root__` nor any channel shard, so even a real route would have
+reset the wrong DO. Only `clearD1` ever ran. Deleted rather than implemented: shard-local rows are
+reachable only through their channel and every spec mints a fresh one, so nothing depends on
+clearing them. The e2e fixture's "Clears DO state so tests are order-independent" and the
+`workers: 1` rationale now say what actually happens — D1 is truncated, DO state is not, and
+order-independence comes from each spec minting its own channel.
+
+Tests: the generated `api` keeps `onEmail` out of `ApiTypes` and in `InternalApiTypes`, and the
+worker entry no longer calls the phantom route.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(docs): make the doc-snippet deny-table falsifiable on its own
+
+Every `NONEXISTENT_API` entry was added because a shipped doc matched it, and
+once that doc is fixed the pattern matches nothing forever. From then on a
+narrowed or broken regex reads exactly like a clean repo — the run is green
+either way. That is the property the error-catalog scanner grew a self-check
+for in this same wave; this file had none.
+
+Add fixture strings per entry, asserting both directions: the pattern still
+matches the wrong form, and does not match the correct one. Verified by breaking
+it each way — narrowing `(?:const|let|var)` back to `const` reports the missed
+`let`, and widening `\w+` to swallow a destructuring pattern reports that it
+would now reject valid docs.
+
+Two patterns widened while adding their fixtures: `useMutation` was bound to
+`const` and missed `let`/`var`, and `ctx.db.findMany` matched only quote
+characters, missing a template literal.
+
+Also demote the payment section header in the error catalog from `/**` to `/*` —
+as a docblock it attached itself to nothing, sitting between the previous entry
+and `CONFIG_INVALID`'s own docblock.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(docs): stop the useMutation gate rejecting a correct snippet
+
+The pattern matched any `const <name> = useMutation(` binding, so it rejected
+the correct non-destructuring form — `const m = useMutation(fn)` then
+`await m.mutate(args)` — which keeps the hook's object and calls `mutate` off
+it. A CI gate that blocks valid docs is worse than the misuse it catches, and
+the self-check added alongside it could not see this because its samples only
+covered the destructuring form.
+
+The two forms differ in whether the bound name is later CALLED, and that spans
+two lines, so a per-line scan cannot tell them apart. Buffer each fence and
+match over its body, with a backreference requiring the binding to be seen
+called. Line numbers are recovered from the match offset, so reports still point
+at the offending line rather than the fence.
+
+Verified against all four shapes: `const send = useMutation(…)` + `send(args)`
+reports at the right line; both correct forms pass; the `ctx.db.findMany` entry
+still fires, so the fence-scoped scan did not weaken the line-local pattern.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(payment): mint the arg-shape guard as VALIDATION_ERROR, not CONFIG_INVALID
+
+Cataloguing `CONFIG_INVALID` as `internal: true` is right for what the code was
+meant to carry — "webhook secret not configured", a duplicate or absent adapter
+— messages that name server wiring and that the caller can do nothing with. But
+`check()`'s argument-shape guard minted the same code for "check() requires a
+featureId or priceId", which is the caller's own mistake, so marking the code
+internal turned actionable guidance into a generic 500.
+
+Move those two sites to `VALIDATION_ERROR`, already in the payment taxonomy at
+400 and already catalogued as caller-safe. The `entitlements`-not-configured
+sites stay on `CONFIG_INVALID`: those do name server configuration, and the
+detail survives in the server-side log.
+
+Record the constraint in the catalog docblock so the next caller-fixable failure
+is not added to this code, which would quietly re-widen what the flag redacts.
+
+252 payment tests and 669 errors tests pass.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* docs(values,errors): correct two claims the code does not support
+
+`v.bigint()`'s JSON Schema said it names "the JSON carrier". It does not: every
+RPC arg path runs `decodeWire` first (`shard-do.ts` 5528/5588/5647/5925), so a
+bigint's actual carrier is the tagged array `["$lunora.wire$","bigint","5"]` and
+a bare `"5"` fails the parser exactly as a bare `5` did. The emitted shape is
+unchanged and still right by the file's own convention — `bytes` and `date`
+describe their decoded payloads the same way, and nothing here consumes a tuple
+schema — but the comment claimed a parser agreement this node does not have,
+which is the class of thing the surrounding wave exists to remove. State the
+convention and the residual gap instead.
+
+The webhook-rejection entry claimed "the messages are fixed and name no internal
+state". Five of the six mints are fixed strings; `providers/stripe.ts` forwards
+the Stripe SDK's verification message. The non-internal verdict is still right —
+those texts describe the request the poster sent — but the justification was
+wrong, so it now says which site differs and what keeps it safe.
+
+187 values tests and 669 errors tests pass.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* style(docs): format check-doc-imports
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* style(errors): add the blank line jsdoc/lines-before-block requires
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **codegen,scripts:** reach the features that shipped unreachable ([#619](https://github.com/anolilab/lunora/issues/619)) ([24e2d47](https://github.com/anolilab/lunora/commit/24e2d47c957275c950c0df05239363970b92f3ed))
+* **errors,values,server:** close the gates that were failing open ([#621](https://github.com/anolilab/lunora/issues/621)) ([42879c4](https://github.com/anolilab/lunora/commit/42879c4d43379f6475fb3dc9971e70a856fa796b))
+* **observability,agent:** make the trace say what actually happened ([#618](https://github.com/anolilab/lunora/issues/618)) ([c07f788](https://github.com/anolilab/lunora/commit/c07f788836fb5724002a80a2031b88a033e304d0))
+* **storage,bindings:** enforce the upload cap the docblock promises ([#628](https://github.com/anolilab/lunora/issues/628)) ([d724f69](https://github.com/anolilab/lunora/commit/d724f69d44eb30f3d6158b8422ead3cc74eacdb4))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.112
+* **@lunora/agent:** upgraded to 1.0.0-alpha.91
+* **@lunora/container:** upgraded to 1.0.0-alpha.46
+* **@lunora/errors:** upgraded to 1.0.0-alpha.33
+* **@lunora/queue:** upgraded to 1.0.0-alpha.48
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.54
+* **@lunora/values:** upgraded to 1.0.0-alpha.41
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.47
+* **@lunora/do:** upgraded to 1.0.0-alpha.121
+* **@lunora/server:** upgraded to 1.0.0-alpha.105
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.58
+
 ## @lunora/codegen [1.0.0-alpha.159](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.158...@lunora/codegen@1.0.0-alpha.159) (2026-09-05)
 
 
