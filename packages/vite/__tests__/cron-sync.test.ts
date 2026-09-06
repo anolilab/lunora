@@ -64,29 +64,33 @@ describe("reconcileWranglerCrons", () => {
         expect(text).toContain("// top-level comment");
     });
 
-    it("is a no-op when triggers.crons already matches", () => {
+    it("is a no-op once the array and the ownership marker both match", () => {
         expect.assertions(2);
 
-        const path = writeWrangler(workdir, '{\n    "triggers": { "crons": ["0 * * * *"] }\n}\n');
-        const before = readFileSync(path, "utf8");
+        writeWrangler(workdir, '{\n    "triggers": { "crons": ["0 * * * *"] }\n}\n');
+        reconcileWranglerCrons(workdir, ["0 * * * *"]);
 
+        const before = readFileSync(join(workdir, "wrangler.jsonc"), "utf8");
         const result = reconcileWranglerCrons(workdir, ["0 * * * *"]);
 
         expect(result.changed).toBe(false);
         // File is untouched byte-for-byte.
-        expect(readFileSync(path, "utf8")).toBe(before);
+        expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(before);
     });
 
-    it("clears a stale crons array when the project declares no crons", () => {
+    it("clears a generated cron the project removed but keeps a hand-written one", () => {
         expect.assertions(2);
 
-        writeWrangler(workdir, '{\n    "triggers": { "crons": ["0 0 * * *"] }\n}\n');
+        // The dev server calls this on EVERY schema save, so a `backupCron`
+        // trigger the user hand-wrote (codegen cannot see it) must survive.
+        writeWrangler(workdir, '{\n    "triggers": { "crons": ["0 0 * * *", "0 3 * * *"] }\n}\n');
+        reconcileWranglerCrons(workdir, ["0 0 * * *"]);
 
         const result = reconcileWranglerCrons(workdir, []);
         const parsed = parseJsonc(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")) as { triggers: { crons: string[] } };
 
         expect(result.changed).toBe(true);
-        expect(parsed.triggers.crons).toEqual([]);
+        expect(parsed.triggers.crons).toStrictEqual(["0 3 * * *"]);
     });
 
     it("returns a skip reason when no wrangler file exists", () => {

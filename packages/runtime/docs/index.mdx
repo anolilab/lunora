@@ -313,7 +313,10 @@ available; the snapshot is still readable with `wrangler r2 object get`.
 ```
 
 The `crons` array must contain the exact `backupCron` string; Wrangler only
-delivers triggers it declares. To restore a scheduled snapshot, download the
+delivers triggers it declares. `lunora deploy` and the dev server rewrite
+`triggers.crons` from your `lunora/crons.ts`, but they only ever remove entries
+they generated (recorded in a `// lunora:crons [...]` comment above the array) —
+an entry you hand-wrote for `backupCron` is left alone. To restore a scheduled snapshot, download the
 NDJSON object and feed it to `lunora backup restore <file>` (optionally with
 `--to <time>` for point-in-time replay).
 
