@@ -26,7 +26,6 @@ interface Env {
 }
 
 interface ShardEnv {
-    LUNORA_WORKER_ORIGIN?: string;
     FILES?: R2BucketLike;
     // Bound by the `[[vectorize]]` entry in wrangler.jsonc; required because the
     // schema declares the `posts_search` index.
@@ -40,9 +39,7 @@ export const ShardDO = createShardDO({
     scheduler: (env) => {
         const shardEnv = env as unknown as ShardEnv;
 
-        return shardEnv.SCHEDULER && shardEnv.LUNORA_WORKER_ORIGIN
-            ? createScheduler({ namespace: shardEnv.SCHEDULER, originUrl: shardEnv.LUNORA_WORKER_ORIGIN })
-            : undefined;
+        return shardEnv.SCHEDULER ? createScheduler({ namespace: shardEnv.SCHEDULER }) : undefined;
     },
     storage: (env) => {
         const shardEnv = env as unknown as ShardEnv;

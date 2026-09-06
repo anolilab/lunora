@@ -478,19 +478,18 @@ const fakeNamespace = (
 };
 
 describe("createWorkpool", () => {
-    it("requires namespace, originUrl, and a positive maxConcurrency", () => {
-        expect.assertions(3);
+    it("requires a namespace and a positive maxConcurrency", () => {
+        expect.assertions(2);
 
         expect(() => createWorkpool({} as never)).toThrow(/namespace/);
-        expect(() => createWorkpool({ namespace: fakeNamespace().namespace } as never)).toThrow(/originUrl/);
-        expect(() => createWorkpool({ maxConcurrency: 0, namespace: fakeNamespace().namespace, originUrl: "https://app.test" })).toThrow(/maxConcurrency/);
+        expect(() => createWorkpool({ maxConcurrency: 0, namespace: fakeNamespace().namespace })).toThrow(/maxConcurrency/);
     });
 
     it("enqueue() forwards pool, maxConcurrency, and retry to /schedule", async () => {
         expect.assertions(5);
 
         const { calls, namespace } = fakeNamespace();
-        const pool = createWorkpool({ maxConcurrency: 3, name: "stripe", namespace, originUrl: "https://app.test" });
+        const pool = createWorkpool({ maxConcurrency: 3, name: "stripe", namespace });
 
         const result = await pool.enqueue(fnRef, { invoiceId: "in_1" }, { retry: { maxAttempts: 2 } });
 
@@ -505,7 +504,7 @@ describe("createWorkpool", () => {
         expect.assertions(2);
 
         const { calls, namespace } = fakeNamespace({ "/pool": { inFlight: 1, maxConcurrency: 3, queued: 4 } });
-        const pool = createWorkpool({ maxConcurrency: 3, name: "stripe", namespace, originUrl: "https://app.test" });
+        const pool = createWorkpool({ maxConcurrency: 3, name: "stripe", namespace });
 
         const status = await pool.status();
 
@@ -541,7 +540,7 @@ describe("createWorkpool", () => {
         expect.assertions(1);
 
         const { namespace } = fakeNamespace();
-        const pool = createWorkpool({ maxConcurrency: 1, namespace, originUrl: "https://app.test" });
+        const pool = createWorkpool({ maxConcurrency: 1, namespace });
 
         await expect(pool.enqueue(fnRef, {}, { delayMs: -1 })).rejects.toThrow(/delayMs/);
     });

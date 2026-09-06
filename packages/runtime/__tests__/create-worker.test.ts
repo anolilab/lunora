@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { decodeIdentityHeader } from "../../../shared/identity-header";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ExecutionContextLike, HttpActionContext, HttpRouterLike, Route } from "../src/create-worker";
-import { composeWorker, createLunoraHandler, createWorker } from "../src/create-worker";
+import { composeWorker, createLunoraHandler, createWorker, withFrameworkWorker } from "../src/create-worker";
 import type { ObservabilityEvent } from "../src/observability";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
@@ -2955,5 +2955,63 @@ describe("createWorker — voice-session upgrade", () => {
         expect(seen).toHaveLength(1);
         // Anonymous upgrade: nothing server-minted is re-set, so NOTHING may survive.
         expect(seen[0]?.headers).toStrictEqual([]);
+    });
+});
+
+describe("withFrameworkWorker — `scheduled` ownership", () => {
+    /**
+     * The exact shape codegen commits: `_generated/app.ts` passes
+     * `cronJobs: LUNORA_CRONS` unconditionally, and `_generated/crons.ts` exports
+     * `{}` for an app that declares no cron. Written as the generated literal (not
+     * a hand-built options object) because a hand-built one omits `cronJobs`
+     * entirely, which is the only case the presence check ever got right.
+     */
+    const generatedCronFreeOptions = { cronJobs: {}, crons: {} };
+
+    const hostWith = (scheduled: () => Promise<void>): HttpRouterLike & { scheduled: () => Promise<void> } => {
+        return { fetch: () => new Response("ssr"), scheduled };
+    };
+
+    it("keeps the framework host's scheduled when the generated cron registry is empty", async () => {
+        expect.assertions(2);
+
+        const shard = createShardSpy();
+        const hostScheduled = vi.fn<() => Promise<void>>(async () => undefined);
+
+        const worker = withFrameworkWorker(hostWith(hostScheduled), { ...generatedCronFreeOptions, shardDO: shard.namespace });
+
+        await worker.scheduled({ cron: "0 3 * * *", scheduledTime: 0 }, {}, fakeContext);
+
+        expect(hostScheduled).toHaveBeenCalledTimes(1);
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("takes scheduled over from the host once Lunora owns a cron surface", async () => {
+        expect.assertions(1);
+
+        const shard = createShardSpy();
+        const hostScheduled = vi.fn<() => Promise<void>>(async () => undefined);
+
+        const worker = withFrameworkWorker(hostWith(hostScheduled), {
+            cronJobs: { "0 3 * * *": [{ args: {}, functionPath: "presence:clear", name: "clear presence" }] },
+            shardDO: shard.namespace,
+        });
+
+        await worker.scheduled({ cron: "0 3 * * *", scheduledTime: 0 }, {}, fakeContext);
+
+        expect(hostScheduled).not.toHaveBeenCalled();
+    });
+
+    it("takes scheduled over for a backupCron even with no cron jobs", async () => {
+        expect.assertions(1);
+
+        const shard = createShardSpy();
+        const hostScheduled = vi.fn<() => Promise<void>>(async () => undefined);
+
+        const worker = withFrameworkWorker(hostWith(hostScheduled), { ...generatedCronFreeOptions, backupCron: "0 3 * * *", shardDO: shard.namespace });
+
+        await worker.scheduled({ cron: "0 3 * * *", scheduledTime: 0 }, {}, fakeContext);
+
+        expect(hostScheduled).not.toHaveBeenCalled();
     });
 });

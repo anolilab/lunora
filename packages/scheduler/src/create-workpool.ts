@@ -8,7 +8,7 @@ import assertScheduleDelay from "./validate-delay";
 /**
  * Bounded-concurrency action queue — the Lunora equivalent of
  * `@convex-dev/workpool`. Mirrors `createScheduler`'s `namespace` /
- * `originUrl` / `instanceName` options and is built on the SAME `SchedulerDO`:
+ * `instanceName` options and is built on the SAME `SchedulerDO`:
  * a workpool is just a NAMED logical pool inside that DO (concurrency counter
  * keyed by {@link WorkpoolOptions.name} under the `pool:<name>` storage key).
  * It needs no extra Durable Object or wrangler binding beyond the SchedulerDO
@@ -19,7 +19,7 @@ import assertScheduleDelay from "./validate-delay";
  * draining them as the runtime reports completions (`POST /complete`).
  *
  * ```ts
- * const pool = createWorkpool({ namespace: env.SCHEDULER, originUrl, maxConcurrency: 5 });
+ * const pool = createWorkpool({ namespace: env.SCHEDULER, maxConcurrency: 5 });
  * await pool.enqueue(internal.stripe.sync, { invoiceId }, { retry: { maxAttempts: 3 } });
  * ```
  *
@@ -60,7 +60,6 @@ const createWorkpool = (options: WorkpoolOptions): Workpool => {
             functionPath: function_.__lunoraRef,
             instanceName: options.instanceName ?? "default",
             maxConcurrency: options.maxConcurrency,
-            originUrl: options.originUrl,
             pool: name,
             retry: options_.retry,
             scheduledFor: Date.now() + delayMs,

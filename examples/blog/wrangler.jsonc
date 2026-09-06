@@ -46,9 +46,14 @@
     },
     "vars": {
         "PUBLIC_STORAGE_BASE_URL": "https://files.example.com",
-        // REPLACE before deploying to production — the SchedulerDO uses
-        // this to dispatch HTTP callbacks back into the Worker. Pointing at
-        // localhost in production silently breaks scheduled jobs.
-        "LUNORA_WORKER_ORIGIN": "http://localhost:8787",
+        // REPLACE before deploying to production — this is the origin the Worker
+        // is called back on, and pointing it at localhost in production silently
+        // breaks scheduled jobs.
+        //
+        // The SchedulerDO takes its dispatch target from its OWN env and from
+        // nowhere else — a caller-supplied one would be an SSRF vector — so
+        // without this every `ctx.scheduler.runAfter` is refused with
+        // `ORIGIN_NOT_CONFIGURED`.
+        "LUNORA_ORIGIN_URL": "http://localhost:8787",
     },
 }

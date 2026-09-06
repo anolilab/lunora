@@ -106,6 +106,17 @@ const VALID_WRANGLER = `{
 }
 `;
 
+/** A `lunora/crons.ts` declaring one schedule, for the trigger-reconciliation tests. */
+const CRONS_FIXTURE = `import { cronJobs } from "@lunora/scheduler";
+import { internal } from "./_generated/api.js";
+
+const crons = cronJobs();
+
+crons.cron("ping", "0 * * * *", internal.messages.list, {});
+
+export default crons;
+`;
+
 /**
  * `VALID_WRANGLER` plus a declared `env.<name>` block repeating the same
  * (non-inheritable) bindings — real wrangler only WARNS on an undeclared
@@ -911,19 +922,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             expect.assertions(2);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-            writeFileSync(
-                join(workdir, "lunora", "crons.ts"),
-                `import { cronJobs } from "@lunora/scheduler";
-import { internal } from "./_generated/api.js";
-
-const crons = cronJobs();
-
-crons.cron("ping", "0 * * * *", internal.messages.list, {});
-
-export default crons;
-`,
-                "utf8",
-            );
+            writeFileSync(join(workdir, "lunora", "crons.ts"), CRONS_FIXTURE, "utf8");
 
             const { spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
@@ -937,25 +936,44 @@ export default crons;
             expect(written).toContain("0 * * * *");
         });
 
-        it("clears a stale triggers.crons array when the project declares no crons", async () => {
-            expect.assertions(2);
+        it("clears a cron it generated but keeps the entry the user hand-wrote", async () => {
+            expect.assertions(3);
 
+            // `backupCron` and `createWorker({ crons })` are documented as needing a
+            // hand-written `triggers.crons` entry and are invisible to codegen, so a
+            // deploy that replaced the array wholesale silently stopped the nightly
+            // backup of every app that followed the docs.
             writeFileSync(
                 join(workdir, "wrangler.jsonc"),
                 VALID_WRANGLER.replace('"d1_databases"', '"triggers": { "crons": ["0 0 * * *"] },\n    "d1_databases"'),
+                "utf8",
+            );
+            writeFileSync(join(workdir, "lunora", "crons.ts"), CRONS_FIXTURE, "utf8");
+            // Which entries Lunora owns is recorded here, so it survives a fresh
+            // CI clone — the first pass writes it, the second reads it back.
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0", "@lunora/scheduler": "1.0.0", "@lunora/storage": "1.0.0" }, name: "app" }),
                 "utf8",
             );
 
             const { spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
+            const first = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
 
-            expect(result.code).toBe(0);
+            expect(first.code).toBe(0);
+
+            // The schedule is deleted from `lunora/crons.ts` — that one must go.
+            rmSync(join(workdir, "lunora", "crons.ts"));
+
+            const second = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
+
+            expect(second.code).toBe(0);
 
             const parsed = parseJsonc(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")) as { triggers?: { crons?: string[] } };
 
-            expect(parsed.triggers?.crons).toEqual([]);
+            expect(parsed.triggers?.crons).toStrictEqual(["0 0 * * *"]);
         });
 
         it("preserves committed triggers.crons on the --prebuilt (skipCodegen) path", async () => {

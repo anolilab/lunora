@@ -7,7 +7,7 @@ import type { Plugin } from "vite";
 
 import agentRulesHintPlugin from "./agent-rules-hint-plugin";
 import bindingsProvisionPlugin from "./bindings-provision-plugin";
-import { codegenPlugin } from "./codegen-plugin";
+import codegenPlugin from "./codegen-plugin";
 import containerLogsPlugin from "./container-logs-plugin";
 import devStatePlugin from "./dev-state-plugin";
 import devVariablesPlugin from "./dev-variables-plugin";
@@ -220,7 +220,7 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
 // from both `src/index.ts` (tsc/vitest) and the bundled `dist/index.mjs`.
 const VERSION: string = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 
-export { codegenPlugin } from "./codegen-plugin";
+export { default as codegenPlugin } from "./codegen-plugin";
 export { default as containerLogsPlugin } from "./container-logs-plugin";
 export type { ReconcileResult } from "./cron-sync";
 export { reconcileWranglerCrons } from "./cron-sync";

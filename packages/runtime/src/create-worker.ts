@@ -2907,9 +2907,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * re-fire it too). Without an id Cloudflare mints a fresh random instance for
      * each of those, so one scheduled job runs its whole pipeline up to five times
      * — while two scheduler docblocks justify the retry loop with "idempotent
-     * dispatch keyed by record id". The record id is already on the wire and
-     * already constrained to a safe key segment by `resolveScheduleId`, which is
-     * exactly what `create({ id })` accepts.
+     * dispatch keyed by record id". The record id is already on the wire, and
+     * `resolveScheduleId` constrains it to `^\w[\w-]{0,63}$`, which is inside the
+     * engine's own `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$` (and well inside its 100-char
+     * ceiling) — so `create({ id })` accepts it. That containment is the whole
+     * reason the leading character is constrained at all: base64url mints `-` as
+     * often as any other character, and a leading one is a VALIDATION rejection
+     * here, which {@link isDuplicateInstanceError} does not match and the
+     * scheduler therefore retries to `dead:` five attempts later.
      *
      * **The cron path passes nothing.** There is no record id there, every
      * scheduled fire of an expression is a distinct run, and the admin "Run now"
@@ -5358,8 +5363,19 @@ type FrameworkWorkerOptionsInput = ((env: unknown) => FrameworkWorkerOptions) | 
 
 const toHttpRouter = (handler: FrameworkHostHandler): HttpRouterLike => (typeof handler === "function" ? { fetch: handler } : handler);
 
-/** Whether the Lunora options configure any cron surface (so Lunora owns `scheduled` rather than the framework host). */
-const hasLunoraCrons = (options: FrameworkWorkerOptions): boolean => Boolean(options.crons ?? options.cronJobs ?? options.backupCron);
+/**
+ * Whether the Lunora options configure any cron surface (so Lunora owns
+ * `scheduled` rather than the framework host).
+ *
+ * EMPTINESS, not presence. Codegen emits `cronJobs: LUNORA_CRONS` unconditionally
+ * and `LUNORA_CRONS` is `{}` for a cron-free app, so a presence check (`??` stops
+ * at the first non-nullish value) is `true` for every app built through
+ * `defineApp().buildFrameworkWorker(host)` — which made the preservation branch
+ * below unreachable and dropped the framework host's own `scheduled` in every one
+ * of them.
+ */
+const hasLunoraCrons = (options: FrameworkWorkerOptions): boolean =>
+    Boolean(options.backupCron) || Object.keys(options.crons ?? {}).length > 0 || Object.keys(options.cronJobs ?? {}).length > 0;
 
 /**
  * Compose a meta-framework's Cloudflare Worker handler with Lunora's realtime

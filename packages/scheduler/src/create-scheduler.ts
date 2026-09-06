@@ -77,7 +77,6 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
             id: options_.id,
             instanceName: options.instanceName ?? "default",
             maxConcurrency: options_.pool === undefined ? undefined : options_.maxConcurrency,
-            originUrl: options.originUrl,
             pool: options_.pool,
             retry: options_.retry,
             scheduledFor,
