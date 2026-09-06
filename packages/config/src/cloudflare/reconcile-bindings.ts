@@ -302,44 +302,63 @@ const unexportedDeclarationWarnings = (
  * stale `workflows[]` entry names a `class_name` the bundle no longer exports,
  * which wrangler rejects at deploy.
  */
-const orphanedEntryWarnings = (inferred: InferredBindings, parsed: WranglerShape): string[] => {
-    const warnings: string[] = [];
-
+/** Workflow/agent `class_name` entries the emitted bundle no longer exports. */
+const orphanedWorkflowWarnings = (inferred: InferredBindings, parsed: WranglerShape): string[] => {
     const declaredClasses = new Set([...inferred.workflows, ...inferred.agents].map((declaration) => declaration.className));
 
-    if (declaredClasses.size > 0) {
-        for (const entry of parsed.workflows ?? []) {
-            if (entry.class_name !== undefined && !declaredClasses.has(entry.class_name)) {
-                warnings.push(
-                    `wrangler.jsonc declares workflows[] entry "${entry.class_name}" but no defineWorkflow/defineAgent export generates that class — a leftover from a rename will fail the deploy (wrangler rejects a class_name the worker does not export). Remove it if it is not hand-wired.`,
-                );
-            }
-        }
+    if (declaredClasses.size === 0) {
+        return [];
     }
 
-    if (inferred.queues.length > 0) {
-        const declaredNames = new Set(inferred.queues.map((queue) => queue.name));
-        const declaredBindings = new Set(inferred.queues.map((queue) => queue.bindingName));
+    // `flatMap` with an in-body guard rather than `filter().map()`: a filter
+    // predicate does not narrow the element type for the map that follows, so the
+    // template literal would still see `string | undefined`.
+    return (parsed.workflows ?? []).flatMap((entry) => {
+        const className = entry.class_name;
 
-        for (const consumer of parsed.queues?.consumers ?? []) {
-            if (consumer.queue !== undefined && !declaredNames.has(consumer.queue)) {
-                warnings.push(
-                    `wrangler.jsonc subscribes queues.consumers[] to "${consumer.queue}" but no defineQueue export declares that queue — a leftover from a rename keeps delivering batches this worker has no handler for (they retry to exhaustion, then drop or dead-letter). Remove it if it is not hand-wired.`,
-                );
-            }
-        }
-
-        for (const producer of parsed.queues?.producers ?? []) {
-            if (producer.binding !== undefined && !declaredBindings.has(producer.binding)) {
-                warnings.push(
-                    `wrangler.jsonc declares queues.producers[] binding "${producer.binding}" but no defineQueue export declares it — a leftover from a rename. Remove it if it is not hand-wired.`,
-                );
-            }
-        }
-    }
-
-    return warnings;
+        return className === undefined || declaredClasses.has(className)
+            ? []
+            : [
+                  `wrangler.jsonc declares workflows[] entry "${className}" but no defineWorkflow/defineAgent export generates that class — a leftover from a rename will fail the deploy (wrangler rejects a class_name the worker does not export). Remove it if it is not hand-wired.`,
+              ];
+    });
 };
+
+/** Queue consumer/producer entries no `defineQueue` export declares. */
+const orphanedQueueWarnings = (inferred: InferredBindings, parsed: WranglerShape): string[] => {
+    if (inferred.queues.length === 0) {
+        return [];
+    }
+
+    const declaredNames = new Set(inferred.queues.map((queue) => queue.name));
+    const declaredBindings = new Set(inferred.queues.map((queue) => queue.bindingName));
+
+    return [
+        ...(parsed.queues?.consumers ?? []).flatMap((consumer) => {
+            const { queue } = consumer;
+
+            return queue === undefined || declaredNames.has(queue)
+                ? []
+                : [
+                      `wrangler.jsonc subscribes queues.consumers[] to "${queue}" but no defineQueue export declares that queue — a leftover from a rename keeps delivering batches this worker has no handler for (they retry to exhaustion, then drop or dead-letter). Remove it if it is not hand-wired.`,
+                  ];
+        }),
+        ...(parsed.queues?.producers ?? []).flatMap((producer) => {
+            const { binding } = producer;
+
+            return binding === undefined || declaredBindings.has(binding)
+                ? []
+                : [
+                      `wrangler.jsonc declares queues.producers[] binding "${binding}" but no defineQueue export declares it — a leftover from a rename. Remove it if it is not hand-wired.`,
+                  ];
+        }),
+    ];
+};
+
+const orphanedEntryWarnings = (inferred: InferredBindings, parsed: WranglerShape): string[] => [
+    ...orphanedWorkflowWarnings(inferred, parsed),
+    ...orphanedQueueWarnings(inferred, parsed),
+];
 
 /**
  * Hints for capabilities used but not safely auto-provisionable — only emitted

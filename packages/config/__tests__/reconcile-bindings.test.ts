@@ -1005,7 +1005,9 @@ describe("reconcileWranglerBindings", () => {
         };
 
         /** Seed the config with the pre-rename entries, then reconcile the renamed declarations onto it. */
-        const seed = (block: string): void => writeFileSync(join(root, "wrangler.jsonc"), `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}${block}}\n`, "utf8");
+        const seed = (block: string): void => {
+            writeFileSync(join(root, "wrangler.jsonc"), `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}${block}}\n`, "utf8");
+        };
 
         it("warns about a queues.consumers[] subscription no defineQueue export declares", () => {
             expect.assertions(3);
