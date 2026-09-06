@@ -39,9 +39,9 @@ Practical consequences of the MoR model in this adapter:
 - **No manual capture / authorize.** Dodo captures at checkout. `capturePayment`
   and `cancelPayment` throw `PROVIDER_ERROR`; they are not part of an MoR flow.
 - **Refunds are first-class.** Unlike some MoRs (Creem's `refundPayment` throws),
-  Dodo exposes `refunds.create`, so the adapter's `refundPayment` really issues a
-  refund. It flows back in through the `refund.succeeded` webhook (see
-  [Refunds](#refunds)).
+  Dodo exposes `refunds.create`, so `ctx.payments.refundPayment` really issues a
+  refund — in full only. It flows back in through the `refund.succeeded` webhook
+  (see [Refunds](#refunds)).
 - **Product-based, not price-based.** Dodo checkout takes **product ids**; the
   cross-provider `priceId` field carries a Dodo `product_id`.
 
@@ -422,27 +422,27 @@ to `past_due`.
 
 ## Refunds
 
-Unlike some Merchants-of-Record, Dodo refunds are **first-class**: the adapter's
-`refundPayment` calls
-[`refunds.create`](https://docs.dodopayments.com/features/transactions/refunds)
-with `payment_id`, an optional minor-unit `amount` (omit for a full refund), and
-an optional `reason`. Reach it through the adapter on the facade:
+Unlike some Merchants-of-Record, Dodo refunds are **first-class**: `refundPayment`
+calls [`refunds.create`](https://docs.dodopayments.com/features/transactions/refunds)
+with `payment_id` and an optional `reason`. Issue it through the facade, which
+authorizes the caller, rejects an over-refund, derives an idempotency key, and
+records the refund on the payment row:
 
 ```ts
 // Full refund of a payment session.
-await ctx.payments.adapter.refundPayment({ sessionId: paymentId, reason: "customer_request" });
-
-// Partial refund — amount is Money (integer minor units + currency).
-import { money } from "@lunora/payment";
-
-await ctx.payments.adapter.refundPayment({ sessionId: paymentId, amount: money(500n, "USD") });
+await ctx.payments.refundPayment({ sessionId: paymentId, reason: "customer_request" });
 ```
 
+<Callout type="warn">
+    **Dodo cannot do partial refunds through this interface.** Its refund API expresses a partial refund per line item (`items[].item_id`), which the
+    amount-based `RefundInput` cannot supply, so any `amount` is rejected with `PROVIDER_ERROR` rather than silently refunding the whole payment. Refund partial
+    amounts from the Dodo dashboard; the `refund.succeeded` webhook syncs them back.
+</Callout>
+
 <Callout type="info">
-    The provider-agnostic `ctx.payments` facade does not expose a top-level refund method; refunds go through `ctx.payments.adapter.refundPayment` (or the Dodo
-    dashboard). Either way, the **authoritative** state comes from the `refund.succeeded` webhook, which the adapter normalizes to `payment.refunded` with the
-    **delta** amount of that single refund (`amountKind` defaults to `"delta"`), so multiple partial refunds accumulate correctly against the payment's captured
-    total in the store.
+    However the refund is issued — facade or dashboard — the **authoritative** state comes from the `refund.succeeded` webhook, which the adapter normalizes to
+    `payment.refunded` with the **delta** amount of that single refund (`amountKind` defaults to `"delta"`), so multiple partial refunds accumulate correctly
+    against the payment's captured total in the store.
 </Callout>
 
 <Callout type="warn">

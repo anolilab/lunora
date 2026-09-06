@@ -407,11 +407,18 @@ event id keys an append-only `events` log for idempotency and audit).
 
 ## Refunds, portal, and manual capture
 
-**Refunds** are first-class. `refundPayment` (exposed via the adapter) calls Stripe
+**Refunds** are first-class. `ctx.payments.refundPayment` authorizes the caller,
+rejects an over-refund, and derives an idempotency key before calling Stripe
 [Create Refund](https://docs.stripe.com/api/refunds/create) against the payment
-intent (omit `amount` for a full refund, pass a `Money` for a partial one), then
-re-reads the intent to resolve `partially_refunded` vs `refunded`. The
-`charge.refunded` webhook keeps the store in sync afterward.
+intent (omit `amount` for a full refund, pass a `Money` for a partial one); the
+refunded total is written to the payment row, and the `charge.refunded` webhook
+restates it afterward without double-counting.
+
+```ts
+import { money } from "@lunora/payment";
+
+await ctx.payments.refundPayment({ sessionId: paymentIntentId, amount: money(500n, "USD") });
+```
 
 **Customer portal.** `capabilities.portal` is `true`, so `createPortalSession`
 opens Stripe's hosted [Billing Portal](https://docs.stripe.com/api/customer_portal/sessions/create)
