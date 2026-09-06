@@ -1,5 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
+import { CAPABILITIES } from "./capabilities";
+import type { FeatureUsage } from "./discover/feature-usage";
 import type { SchemaIR } from "./ir";
 
 /** One package the emitted `_generated/` will import, and the schema feature that pulls it in. */
@@ -37,6 +39,16 @@ interface RequiredPackageSignals {
      * dependency on `@lunora/storage` at all.
      */
     storage?: boolean;
+
+    /**
+     * The platform-gated `ctx.*` usage probe. Reading a bare `ctx.kv` / `ctx.ai`
+     * / … is enough on its own to make the emitters import that capability's
+     * package, so every {@link CAPABILITIES} row carrying a `requiredPackage`
+     * demands it here. Gated usage, not raw: a target that rates a capability
+     * unsupported withholds its surface, so demanding the package would hard-fail
+     * over an import the generated code does not contain.
+     */
+    usage?: FeatureUsage;
 }
 
 /**
@@ -61,7 +73,7 @@ interface RequiredPackageSignals {
  * @param signals the emit signals the schema cannot answer — see {@link RequiredPackageSignals}.
  */
 const requiredPackagesFor = (schema: SchemaIR, signals: RequiredPackageSignals = {}): RequiredPackage[] => {
-    const { hasVectors = true, scheduler = false, storage = false } = signals;
+    const { hasVectors = true, scheduler = false, storage = false, usage } = signals;
     const required: RequiredPackage[] = [];
     const globalTables = schema.tables.filter((table) => table.shardMode === "global");
 
@@ -114,7 +126,30 @@ const requiredPackagesFor = (schema: SchemaIR, signals: RequiredPackageSignals =
         });
     }
 
-    return required;
+    // The `ctx.*` arm, last so the schema-derived reasons above win the dedupe —
+    // they name the declaration that caused the import, which is more actionable
+    // than "you read this ctx property".
+    //
+    // `discover/feature-usage.ts` flips a capability on a bare `ctx.<prop>` read,
+    // with no import anywhere, and the emitters then write that capability's
+    // import into `_generated/`. Nothing above covers that, so `ctx.kv` /
+    // `ctx.ai` / `ctx.analytics` / … exited codegen 0 and died in `tsc` with
+    // `Cannot find module` inside a generated file — the exact class this module
+    // exists to prevent. Driven off the CAPABILITIES table so a capability added
+    // there cannot reintroduce the gap.
+    for (const capability of usage === undefined ? [] : CAPABILITIES) {
+        if (capability.requiredPackage !== undefined && usage?.[capability.key] === true) {
+            required.push({
+                name: capability.requiredPackage,
+                reason: `\`ctx.${capability.contextProperty ?? capability.key}\` usage makes \`_generated/\` import \`${capability.moduleSpecifier}\``,
+            });
+        }
+    }
+
+    // Several capabilities share one package (`@lunora/bindings` backs `/kv`,
+    // `/analytics`, `/images`, `/pipelines`, `/r2sql` and `/vectors`), so the
+    // diagnostic must name it once however many of them the app reaches.
+    return required.filter((entry, index) => required.findIndex((other) => other.name === entry.name) === index);
 };
 
 /**
