@@ -274,34 +274,6 @@ const unexportedDeclarationWarnings = (
                 `${kind} "${declaration.exportName}" is declared but ${declaration.className} is not exported by the worker entry; add \`export * from "./lunora/_generated/${module}"\` so its binding can be provisioned.`,
         );
 
-/**
- * The `workflows[]` / `queues` entries in `wrangler.jsonc` that no longer match
- * any declaration — the leftovers a rename produces, since every reconcile step
- * here is **add-only** (it computes what is missing and appends it; it never
- * removes).
- *
- * Warned about rather than deleted, deliberately. Nothing in `wrangler.jsonc`
- * records which entries this tool wrote, so "unmatched" and "hand-written" are
- * indistinguishable — a project can export a Workflow class or handle a queue
- * itself without a `defineWorkflow` / `defineQueue` declaration, and silently
- * dropping those is exactly the over-eager clear the cron reconciler had to be
- * pulled back from. Establishing ownership needs a marker in the file, which is
- * a larger change than this.
- *
- * Each kind is inspected only when the project declares at least one of that
- * kind: with zero declarations there is no rename to infer, only a config this
- * tool has never had a reason to touch, and warning there would fire on every
- * dev-server boot of a hand-wired project. So a rename is caught and a
- * delete-the-last-one is not — stated here because it is the limit of what can
- * be told apart without ownership.
- *
- * Left behind, a stale `queues.consumers[]` subscription keeps delivering
- * batches to a worker that has no handler for that queue name
- * (`@lunora/queue`'s dispatch throws `no push handler is registered`, so the
- * batch retries to exhaustion and is then dropped or dead-lettered), and a
- * stale `workflows[]` entry names a `class_name` the bundle no longer exports,
- * which wrangler rejects at deploy.
- */
 /** Workflow/agent `class_name` entries the emitted bundle no longer exports. */
 const orphanedWorkflowWarnings = (inferred: InferredBindings, parsed: WranglerShape): string[] => {
     const declaredClasses = new Set([...inferred.workflows, ...inferred.agents].map((declaration) => declaration.className));
@@ -355,6 +327,34 @@ const orphanedQueueWarnings = (inferred: InferredBindings, parsed: WranglerShape
     ];
 };
 
+/**
+ * The `workflows[]` / `queues` entries in `wrangler.jsonc` that no longer match
+ * any declaration — the leftovers a rename produces, since every reconcile step
+ * here is **add-only** (it computes what is missing and appends it; it never
+ * removes).
+ *
+ * Warned about rather than deleted, deliberately. Nothing in `wrangler.jsonc`
+ * records which entries this tool wrote, so "unmatched" and "hand-written" are
+ * indistinguishable — a project can export a Workflow class or handle a queue
+ * itself without a `defineWorkflow` / `defineQueue` declaration, and silently
+ * dropping those is exactly the over-eager clear the cron reconciler had to be
+ * pulled back from. Establishing ownership needs a marker in the file, which is
+ * a larger change than this.
+ *
+ * Each kind is inspected only when the project declares at least one of that
+ * kind: with zero declarations there is no rename to infer, only a config this
+ * tool has never had a reason to touch, and warning there would fire on every
+ * dev-server boot of a hand-wired project. So a rename is caught and a
+ * delete-the-last-one is not — stated here because it is the limit of what can
+ * be told apart without ownership.
+ *
+ * Left behind, a stale `queues.consumers[]` subscription keeps delivering
+ * batches to a worker that has no handler for that queue name
+ * (`@lunora/queue`'s dispatch throws `no push handler is registered`, so the
+ * batch retries to exhaustion and is then dropped or dead-lettered), and a
+ * stale `workflows[]` entry names a `class_name` the bundle no longer exports,
+ * which wrangler rejects at deploy.
+ */
 const orphanedEntryWarnings = (inferred: InferredBindings, parsed: WranglerShape): string[] => [
     ...orphanedWorkflowWarnings(inferred, parsed),
     ...orphanedQueueWarnings(inferred, parsed),
