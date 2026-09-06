@@ -359,6 +359,14 @@ export interface CancelSubscriptionOptions {
  * @experimental
  */
 export interface SubscriptionPatch {
+    /**
+     * Override the outbound idempotency key. Honoured by the Stripe adapter only — no other provider's
+     * plan-change endpoint accepts a key at all (see the `idempotency` module docblock). Stripe
+     * otherwise derives one from the subscription and the target plan/quantity, which is stable across
+     * retries of the same intent; pass your own only to re-issue a target that was already applied and
+     * then changed away from, which a stable key would replay rather than prorate again.
+     */
+    readonly idempotencyKey?: string;
     readonly priceId?: string;
     readonly quantity?: number;
 }
