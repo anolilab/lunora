@@ -231,6 +231,26 @@ describe("reconcileWranglerCrons", () => {
         expect(readCrons(workdir)).toStrictEqual(["*/5 * * * *", "0 3 * * *"]);
     });
 
+    it("clears its own crons key without taking the app's other lunora settings with it", () => {
+        expect.assertions(3);
+
+        // Clearing used to drop the whole `lunora` object whenever it held one key,
+        // without checking that the key was `crons` — so an app carrying any other
+        // Lunora setting lost it to the code whose whole purpose is not to delete
+        // user-owned config.
+        writeWrangler(workdir, '{\n    "triggers": { "crons": ["0 3 * * *"] }\n}\n');
+        writeManifest(workdir, '{\n    "name": "app",\n    "lunora": { "registryUrl": "https://registry.example.test" }\n}\n');
+
+        reconcileWranglerCrons(workdir, []);
+
+        const manifest = JSON.parse(readFileSync(join(workdir, "package.json"), "utf8")) as { lunora?: Record<string, unknown> };
+
+        expect(manifest.lunora?.["registryUrl"]).toBe("https://registry.example.test");
+        expect(manifest.lunora?.["crons"]).toBeUndefined();
+        // The user's hand-written cron is not ours to remove either.
+        expect(readCrons(workdir)).toStrictEqual(["0 3 * * *"]);
+    });
+
     it("returns a skip reason when no wrangler file exists", () => {
         expect.assertions(2);
 

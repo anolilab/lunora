@@ -91,7 +91,14 @@ const readManagedCrons = (manifest: Manifest | undefined): string[] => {
  */
 const recordManagedCrons = (manifest: Manifest, managed: ReadonlyArray<string>): void => {
     const clearing = managed.length === 0;
-    const path = clearing && Object.keys(manifest.lunora ?? {}).length <= 1 ? ["lunora"] : ["lunora", "crons"];
+    // Drop the whole `lunora` object only when `crons` is the ONLY thing in it.
+    // Counting keys is not the same test: an app whose manifest holds one key that
+    // is NOT `crons` — a `registryUrl`, say — matched `length <= 1` and had its own
+    // configuration deleted by the code whose entire purpose is not to delete
+    // user-owned config. This branch is also what establishes `lunora.*` as a
+    // namespace worth putting things in, so that collision was a matter of time.
+    const onlyOwnKeys = Object.keys(manifest.lunora ?? {}).every((key) => key === "crons");
+    const path = clearing && onlyOwnKeys ? ["lunora"] : ["lunora", "crons"];
     const edits = modify(manifest.text, path, clearing ? undefined : [...managed], { formattingOptions: formattingFor(manifest.text) });
 
     if (edits.length === 0) {
