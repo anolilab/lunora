@@ -1,3 +1,9 @@
+## @lunora/scheduler [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.55...@lunora/scheduler@1.0.0-alpha.56) (2026-09-06)
+
+### Bug Fixes
+
+* **scheduler:** wire-encode queue workpool job args ([#634](https://github.com/anolilab/lunora/issues/634)) ([d616aec](https://github.com/anolilab/lunora/commit/d616aecaab862cce564d9b4d45a1d55b626565e2))
+
 ## @lunora/scheduler [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.54...@lunora/scheduler@1.0.0-alpha.55) (2026-09-06)
 
 ### ⚠ BREAKING CHANGES
