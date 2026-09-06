@@ -988,4 +988,79 @@ describe("reconcileWranglerBindings", () => {
             expect(second.added).toEqual([]);
         });
     });
+
+    // Every step here is add-only, so a renamed `defineQueue`/`defineWorkflow`
+    // export leaves the previous entry behind. Removing it would mean deleting
+    // config this tool cannot prove it wrote, so the orphan is named in
+    // `warnings` instead.
+    describe("orphaned workflows[] / queues entries", () => {
+        const RECEIPT_QUEUE = { bindingName: "QUEUE_RECEIPT", exportName: "receiptQueue", mode: "push" as const, name: "receipt-queue", tuning: {} };
+        const SEND_RECEIPT = {
+            bindingName: "WORKFLOW_SEND_RECEIPT",
+            className: "SendReceiptWorkflow",
+            exported: true,
+            exportName: "sendReceipt",
+            name: "send-receipt",
+            steps: [],
+        };
+
+        /** Seed the config with the pre-rename entries, then reconcile the renamed declarations onto it. */
+        const seed = (block: string): void => writeFileSync(join(root, "wrangler.jsonc"), `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}${block}}\n`, "utf8");
+
+        it("warns about a queues.consumers[] subscription no defineQueue export declares", () => {
+            expect.assertions(3);
+
+            seed(`    "queues": {
+        "producers": [{ "binding": "QUEUE_EMAIL", "queue": "email-queue" }],
+        "consumers": [{ "queue": "email-queue" }],
+    },
+`);
+
+            const result = reconcileWranglerBindings(root, baseInferred({ queues: [RECEIPT_QUEUE] }));
+
+            expect(result.warnings.join("\n")).toContain(`queues.consumers[] to "email-queue"`);
+            expect(result.warnings.join("\n")).toContain(`queues.producers[] binding "QUEUE_EMAIL"`);
+            // The orphan is reported, not deleted: removal would also drop a hand-wired subscription.
+            expect(readConfig().queues.consumers.map((entry: { queue: string }) => entry.queue)).toStrictEqual(["email-queue", "receipt-queue"]);
+        });
+
+        it("warns about a workflows[] entry no defineWorkflow/defineAgent export generates", () => {
+            expect.assertions(2);
+
+            seed(`    "workflows": [{ "binding": "WORKFLOW_ORDER_PIPELINE", "class_name": "OrderPipelineWorkflow", "name": "order-pipeline" }],
+`);
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workflows: [SEND_RECEIPT] }));
+
+            expect(result.warnings.join("\n")).toContain(`workflows[] entry "OrderPipelineWorkflow"`);
+            expect(readConfig().workflows.map((entry: { class_name: string }) => entry.class_name)).toStrictEqual([
+                "OrderPipelineWorkflow",
+                "SendReceiptWorkflow",
+            ]);
+        });
+
+        it("stays quiet when the project declares no queue/workflow at all", () => {
+            expect.assertions(1);
+
+            seed(`    "queues": { "producers": [{ "binding": "QUEUE_EMAIL", "queue": "email-queue" }], "consumers": [{ "queue": "email-queue" }] },
+    "workflows": [{ "binding": "WORKFLOW_ORDER_PIPELINE", "class_name": "OrderPipelineWorkflow", "name": "order-pipeline" }],
+`);
+
+            // Nothing declared means nothing to compare against: a hand-wired
+            // config this tool has never touched must not be flagged.
+            const result = reconcileWranglerBindings(root, baseInferred());
+
+            expect(result.warnings).toStrictEqual([]);
+        });
+
+        it("stays quiet once the entries match the declarations", () => {
+            expect.assertions(1);
+
+            reconcileWranglerBindings(root, baseInferred({ queues: [RECEIPT_QUEUE], workflows: [SEND_RECEIPT] }));
+
+            const second = reconcileWranglerBindings(root, baseInferred({ queues: [RECEIPT_QUEUE], workflows: [SEND_RECEIPT] }));
+
+            expect(second.warnings).toStrictEqual([]);
+        });
+    });
 });

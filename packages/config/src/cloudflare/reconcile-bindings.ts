@@ -275,6 +275,73 @@ const unexportedDeclarationWarnings = (
         );
 
 /**
+ * The `workflows[]` / `queues` entries in `wrangler.jsonc` that no longer match
+ * any declaration — the leftovers a rename produces, since every reconcile step
+ * here is **add-only** (it computes what is missing and appends it; it never
+ * removes).
+ *
+ * Warned about rather than deleted, deliberately. Nothing in `wrangler.jsonc`
+ * records which entries this tool wrote, so "unmatched" and "hand-written" are
+ * indistinguishable — a project can export a Workflow class or handle a queue
+ * itself without a `defineWorkflow` / `defineQueue` declaration, and silently
+ * dropping those is exactly the over-eager clear the cron reconciler had to be
+ * pulled back from. Establishing ownership needs a marker in the file, which is
+ * a larger change than this.
+ *
+ * Each kind is inspected only when the project declares at least one of that
+ * kind: with zero declarations there is no rename to infer, only a config this
+ * tool has never had a reason to touch, and warning there would fire on every
+ * dev-server boot of a hand-wired project. So a rename is caught and a
+ * delete-the-last-one is not — stated here because it is the limit of what can
+ * be told apart without ownership.
+ *
+ * Left behind, a stale `queues.consumers[]` subscription keeps delivering
+ * batches to a worker that has no handler for that queue name
+ * (`@lunora/queue`'s dispatch throws `no push handler is registered`, so the
+ * batch retries to exhaustion and is then dropped or dead-lettered), and a
+ * stale `workflows[]` entry names a `class_name` the bundle no longer exports,
+ * which wrangler rejects at deploy.
+ */
+const orphanedEntryWarnings = (inferred: InferredBindings, parsed: WranglerShape): string[] => {
+    const warnings: string[] = [];
+
+    const declaredClasses = new Set([...inferred.workflows, ...inferred.agents].map((declaration) => declaration.className));
+
+    if (declaredClasses.size > 0) {
+        for (const entry of parsed.workflows ?? []) {
+            if (entry.class_name !== undefined && !declaredClasses.has(entry.class_name)) {
+                warnings.push(
+                    `wrangler.jsonc declares workflows[] entry "${entry.class_name}" but no defineWorkflow/defineAgent export generates that class — a leftover from a rename will fail the deploy (wrangler rejects a class_name the worker does not export). Remove it if it is not hand-wired.`,
+                );
+            }
+        }
+    }
+
+    if (inferred.queues.length > 0) {
+        const declaredNames = new Set(inferred.queues.map((queue) => queue.name));
+        const declaredBindings = new Set(inferred.queues.map((queue) => queue.bindingName));
+
+        for (const consumer of parsed.queues?.consumers ?? []) {
+            if (consumer.queue !== undefined && !declaredNames.has(consumer.queue)) {
+                warnings.push(
+                    `wrangler.jsonc subscribes queues.consumers[] to "${consumer.queue}" but no defineQueue export declares that queue — a leftover from a rename keeps delivering batches this worker has no handler for (they retry to exhaustion, then drop or dead-letter). Remove it if it is not hand-wired.`,
+                );
+            }
+        }
+
+        for (const producer of parsed.queues?.producers ?? []) {
+            if (producer.binding !== undefined && !declaredBindings.has(producer.binding)) {
+                warnings.push(
+                    `wrangler.jsonc declares queues.producers[] binding "${producer.binding}" but no defineQueue export declares it — a leftover from a rename. Remove it if it is not hand-wired.`,
+                );
+            }
+        }
+    }
+
+    return warnings;
+};
+
+/**
  * Hints for capabilities used but not safely auto-provisionable — only emitted
  * when the corresponding binding is actually **missing**. `parsed` (the existing
  * `wrangler.jsonc`, when one was read) suppresses a hint whose binding is already
@@ -369,6 +436,10 @@ const collectWarnings = (inferred: InferredBindings, projectRoot: string, parsed
     }
 
     warnings.push(...collectX402Warnings(inferred), ...collectHintBindingWarnings(inferred, parsed));
+
+    if (parsed !== undefined) {
+        warnings.push(...orphanedEntryWarnings(inferred, parsed));
+    }
 
     return warnings;
 };
@@ -642,7 +713,11 @@ const workflowEntryFor = (workflow: InferredAgent | InferredWorkflow): Record<st
  * second step rewriting `workflows[]` off the now-stale `parsed`). Workflows and
  * agents are NOT Durable Objects, so — unlike containers — this writes ONLY the
  * `workflows[]` array: no `durable_objects` binding, no `migrations` class, no
- * `observability` toggle. Pure.
+ * `observability` toggle.
+ *
+ * Add-only: an entry whose `class_name` no declaration generates is left in
+ * place and reported by {@link orphanedEntryWarnings} instead — see there for
+ * why removal needs ownership this file cannot establish. Pure.
  */
 const reconcileWorkflows = (
     text: string,
@@ -676,7 +751,11 @@ const reconcileWorkflows = (
  * `queues.consumers[]` (matched by queue name) from the declared `defineQueue`
  * exports. Every queue gets a producer; push queues add a worker consumer, pull
  * queues add a `type: "http_pull"` consumer. Like workflows, queues are NOT
- * Durable Objects — this writes only the `queues` block. Pure.
+ * Durable Objects — this writes only the `queues` block.
+ *
+ * Add-only: a producer or consumer no `defineQueue` export declares is left in
+ * place and reported by {@link orphanedEntryWarnings} instead — see there for
+ * why removal needs ownership this file cannot establish. Pure.
  */
 const reconcileQueues = (text: string, parsed: WranglerShape, queues: ReadonlyArray<InferredQueue>): ReconcileStep => {
     const existing = parsed.queues ?? {};
