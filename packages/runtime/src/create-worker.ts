@@ -5308,8 +5308,19 @@ type FrameworkWorkerOptionsInput = ((env: unknown) => FrameworkWorkerOptions) | 
 
 const toHttpRouter = (handler: FrameworkHostHandler): HttpRouterLike => (typeof handler === "function" ? { fetch: handler } : handler);
 
-/** Whether the Lunora options configure any cron surface (so Lunora owns `scheduled` rather than the framework host). */
-const hasLunoraCrons = (options: FrameworkWorkerOptions): boolean => Boolean(options.crons ?? options.cronJobs ?? options.backupCron);
+/**
+ * Whether the Lunora options configure any cron surface (so Lunora owns
+ * `scheduled` rather than the framework host).
+ *
+ * EMPTINESS, not presence. Codegen emits `cronJobs: LUNORA_CRONS` unconditionally
+ * and `LUNORA_CRONS` is `{}` for a cron-free app, so a presence check (`??` stops
+ * at the first non-nullish value) is `true` for every app built through
+ * `defineApp().buildFrameworkWorker(host)` — which made the preservation branch
+ * below unreachable and dropped the framework host's own `scheduled` in every one
+ * of them.
+ */
+const hasLunoraCrons = (options: FrameworkWorkerOptions): boolean =>
+    Boolean(options.backupCron) || Object.keys(options.crons ?? {}).length > 0 || Object.keys(options.cronJobs ?? {}).length > 0;
 
 /**
  * Compose a meta-framework's Cloudflare Worker handler with Lunora's realtime
