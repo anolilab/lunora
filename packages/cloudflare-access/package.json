@@ -1,6 +1,6 @@
 {
     "name": "@lunora/cloudflare-access",
-    "version": "1.0.0-alpha.104",
+    "version": "1.0.0-alpha.105",
     "description": "Cloudflare Access (Zero Trust) identity for Lunora — verify the Cf-Access-Jwt-Assertion JWT against your team JWKS and feed the verified identity into ctx.auth / RLS via a resolveIdentity adapter",
     "keywords": [
         "access",
@@ -69,7 +69,7 @@
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
-        "@lunora/server": "1.0.0-alpha.106",
+        "@lunora/server": "1.0.0-alpha.107",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

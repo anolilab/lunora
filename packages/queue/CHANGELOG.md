@@ -1,3 +1,9 @@
+## @lunora/queue [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.49...@lunora/queue@1.0.0-alpha.50) (2026-09-06)
+
+### Bug Fixes
+
+* **dispatch:** repair alpha — double-encoded queue args, stale originUrl, envelope mocks ([#643](https://github.com/anolilab/lunora/issues/643)) ([172a34c](https://github.com/anolilab/lunora/commit/172a34c6c3baa9d1c98949234d4f2cb0a54def2a))
+
 ## @lunora/queue [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.48...@lunora/queue@1.0.0-alpha.49) (2026-09-06)
 
 

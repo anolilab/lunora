@@ -1,3 +1,9 @@
+## @lunora/scheduler [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.56...@lunora/scheduler@1.0.0-alpha.57) (2026-09-06)
+
+### Bug Fixes
+
+* **dispatch:** repair alpha — double-encoded queue args, stale originUrl, envelope mocks ([#643](https://github.com/anolilab/lunora/issues/643)) ([172a34c](https://github.com/anolilab/lunora/commit/172a34c6c3baa9d1c98949234d4f2cb0a54def2a))
+
 ## @lunora/scheduler [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.55...@lunora/scheduler@1.0.0-alpha.56) (2026-09-06)
 
 ### Bug Fixes

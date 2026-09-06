@@ -1,6 +1,6 @@
 {
     "name": "@lunora/advisor",
-    "version": "1.0.0-alpha.113",
+    "version": "1.0.0-alpha.114",
     "description": "Schema & query lints (splinter-style advisors) for Lunora, feeding the Studio Advisors view",
     "keywords": [
         "advisor",
@@ -62,7 +62,7 @@
     },
     "dependencies": {
         "@lunora/errors": "1.0.0-alpha.34",
-        "@lunora/server": "1.0.0-alpha.106"
+        "@lunora/server": "1.0.0-alpha.107"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
