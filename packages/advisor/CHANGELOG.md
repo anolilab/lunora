@@ -1,3 +1,10 @@
+## @lunora/advisor [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.113...@lunora/advisor@1.0.0-alpha.114) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.107
+
 ## @lunora/advisor [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.112...@lunora/advisor@1.0.0-alpha.113) (2026-09-06)
 
 
