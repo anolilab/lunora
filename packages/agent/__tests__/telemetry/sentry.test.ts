@@ -235,6 +235,53 @@ describe(sentryTelemetry, () => {
         expect((ok[0] as RecordedSpan).attributes["gen_ai.usage.input_tokens"]).toBe(12);
     });
 
+    // A stream that dies via `controller.error()` dispatches no telemetry callback
+    // at all, so nothing ever closes its entry. The registry sweeps those out on
+    // the next `open` — but `startSpanManual` hands back a span that ends only
+    // when someone ends it, so dropping the RECORD without ending the SPAN leaves
+    // it open in the Sentry SDK for the life of the isolate.
+    it("ends the span of an abandoned call when the registry sweeps it", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        // Never settles: the model call is opened and no terminal event follows.
+        const pending = async (): Promise<never> =>
+            new Promise(() => {
+                // Intentionally never resolved.
+            });
+
+        try {
+            const { Sentry, spans } = fakeSentry();
+            const shared = sentryTelemetry({ Sentry });
+
+            // Open a call and never deliver a terminal event for it.
+            const opened = shared.executeLanguageModelCall?.(evt({ callId: "call-abandoned", execute: pending, modelId: "m", provider: "p" })) as
+                Promise<unknown> | undefined;
+
+            opened?.catch(() => undefined);
+
+            expect(spans.filter((span) => span.manual)).toHaveLength(1);
+
+            // Past the abandoned-call cutoff, then open an unrelated call so the
+            // sweep runs.
+            vi.setSystemTime(Date.now() + 11 * 60 * 1000);
+
+            const openedLater = shared.executeLanguageModelCall?.(evt({ callId: "call-later", execute: pending, modelId: "m", provider: "p" })) as
+                Promise<unknown> | undefined;
+
+            openedLater?.catch(() => undefined);
+
+            const swept = spans.find((span) => span.manual);
+
+            expect(swept?.endedAt).toBeDefined();
+            // Swept, not reported: it was never observed to succeed or fail.
+            expect(swept?.status).toBeUndefined();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("does not record the prompt or the completion unless asked", async () => {
         const { Sentry, spans } = fakeSentry();
 

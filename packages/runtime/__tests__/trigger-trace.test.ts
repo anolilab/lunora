@@ -120,7 +120,7 @@ describe("createWorker — trigger trace propagation", () => {
         await worker.fetch(
             new Request("https://app.test/_lunora/scheduler/dispatch", {
                 body: JSON.stringify({ args: {}, functionPath: "digests:flush" }),
-                headers: { authorization: "Bearer admin-token", "content-type": "application/json", traceparent: inbound },
+                headers: { authorization: "Bearer admin-token", "content-type": "application/json", traceparent: inbound }, // gitleaks:allow
                 method: "POST",
             }),
             {},

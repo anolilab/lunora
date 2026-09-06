@@ -53,9 +53,11 @@ const resolveIntegration = (telemetry: TelemetryOptions | undefined): Telemetry 
  * integration-less telemetry runs `execute` untouched.
  * @param call The tool call's id, name, and arguments.
  * @param execute The real execution — its value is returned and its failure
- * re-thrown untouched, so telemetry is never flow control. An integration that
- * throws is reported as a telemetry fault and the tool's own outcome stands; it
- * never turns into a failed (and then retried) durable step.
+ * re-thrown untouched, so telemetry is never flow control. This holds for every
+ * way an integration can misbehave, not just a throw: one that skips `execute`,
+ * returns a value of its own, or rejects around a success cannot make the tool
+ * appear to have run, replace what it returned, or turn a success into a failed
+ * (and then retried) durable step.
  */
 const traceToolExecution = async <T>(telemetry: TelemetryOptions | undefined, call: TracedToolCall, execute: () => Promise<T>): Promise<T> => {
     const integration = resolveIntegration(telemetry);
@@ -73,46 +75,44 @@ const traceToolExecution = async <T>(telemetry: TelemetryOptions | undefined, ca
 
     await integration.onToolExecutionStart?.(base);
 
-    // The tool's real outcome, recorded as it happens. `integration.executeTool`
-    // is host SDK code — a Sentry `startSpan`, a Braintrust `traced` — running
-    // inside the tool's durable `step.do`, and a throw from IT must never become
-    // the TOOL's failure: the step would retry a tool that already ran, or report
-    // a successful tool as failed. So the recorded outcome always wins over the
-    // wrapper's, and the tool is executed here only if the wrapper threw without
-    // ever reaching it. The lifecycle callbacks need no such guard — `combine.ts`
-    // fans those out through `Promise.allSettled`.
-    let ran: { output: T } | undefined;
-    let failed: { error: unknown } | undefined;
+    // `integration.executeTool` is host SDK code — a Sentry `startSpan`, a
+    // Braintrust `traced` — running inside the tool's durable `step.do`, and the
+    // ai@7 contract hands it `execute` and then trusts whatever it returns. That
+    // trust is what must not exist here: a wrapper that skips `execute`, returns
+    // a different value, or rejects around a success would respectively record a
+    // tool that never ran, replace its result, or retry one that already
+    // succeeded — telemetry deciding a durable outcome.
+    //
+    // So the wrapper's return value and its rejection are both discarded, and the
+    // outcome is read from this ONE memoized promise. Memoized, not re-run: a
+    // wrapper that starts `execute` without awaiting it would otherwise leave no
+    // trace by the time it returns, and running it again would execute the tool
+    // twice. The lifecycle callbacks need no such guard — `combine.ts` fans those
+    // out through `Promise.allSettled`.
+    let started: Promise<T> | undefined;
 
-    const guarded = async (): Promise<T> => {
-        try {
-            const output = await execute();
+    const guarded = (): Promise<T> => {
+        started ??= execute();
 
-            ran = { output };
-
-            return output;
-        } catch (error) {
-            failed = { error };
-
-            throw error;
-        }
+        return started;
     };
 
     try {
-        let output: T;
-
-        try {
-            output = await (integration.executeTool === undefined ? guarded() : integration.executeTool({ ...base, execute: guarded, toolCallId: call.id }));
-        } catch {
-            if (failed !== undefined) {
-                throw failed.error;
+        if (integration.executeTool === undefined) {
+            await guarded();
+        } else {
+            try {
+                await integration.executeTool({ ...base, execute: guarded, toolCallId: call.id });
+            } catch {
+                // A wrapper fault is a telemetry fault. The tool's own outcome,
+                // below, is the only thing that decides the step.
             }
-
-            // Never ran: running it here is the tool's first and only execution,
-            // not a retry. Already ran: the wrapper threw around a success (ending
-            // a span, say), so the tool's own outcome stands.
-            output = ran === undefined ? await guarded() : ran.output;
         }
+
+        // Starts the tool if the wrapper never did, and otherwise awaits the very
+        // promise the wrapper was handed — so this is its first and only run, and
+        // a tool failure rethrows here into the reporting catch below.
+        const output = await guarded();
 
         await integration.onToolExecutionEnd?.({
             ...base,

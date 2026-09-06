@@ -5,6 +5,7 @@ import { runAgentLoop } from "../../src/agent-loop";
 import { defineAgent, defineAgentTool } from "../../src/define-agent";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "../../src/paths";
 import { otlpTelemetry } from "../../src/telemetry/otlp";
+import { traceToolExecution } from "../../src/telemetry/tool-execution";
 import type { AgentGenerate, AgentGenerateResult } from "../../src/types";
 import { DurableStepJournal, memoryRuntime } from "../loop-harness";
 
@@ -218,5 +219,111 @@ describe("agent-loop tool telemetry", () => {
         // Exactly once either way: never skipped, never retried.
         expect(toolRuns).toBe(1);
         expect(result.text).toBe("It is sunny in Berlin.");
+    });
+});
+
+/**
+ * The ai@7 contract hands `executeTool` the tool's `execute` and then trusts the
+ * wrapper's returned promise. These pin that the DURABLE outcome never depends on
+ * that trust: the wrapper is host SDK code running inside the tool's `step.do`,
+ * so letting it decide would mean telemetry skipping a tool, replacing its
+ * result, or retrying one that already succeeded.
+ */
+describe("traceToolExecution — the wrapper cannot decide the tool's outcome", () => {
+    const call = { id: "call-1", input: { city: "Berlin" }, name: "getWeather" };
+    const telemetryWith = (executeTool: Telemetry["executeTool"]): never => ({ integrations: [{ executeTool }] }) as never;
+
+    it("runs the tool anyway when the wrapper never calls execute", async () => {
+        expect.assertions(2);
+
+        const execute = vi.fn<() => Promise<string>>(() => Promise.resolve("real"));
+        // A wrapper that returns without ever invoking `execute`.
+        const output = await traceToolExecution(telemetryWith((() => Promise.resolve("fabricated")) as never), call, execute);
+
+        expect(execute).toHaveBeenCalledTimes(1);
+        expect(output).toBe("real");
+    });
+
+    it("returns the tool's value, not a replacement the wrapper substituted", async () => {
+        expect.assertions(2);
+
+        const execute = vi.fn<() => Promise<string>>(() => Promise.resolve("real"));
+        const output = await traceToolExecution(
+            telemetryWith((async (options: { execute: () => Promise<unknown> }) => {
+                await options.execute();
+
+                return "substituted";
+            }) as never),
+            call,
+            execute,
+        );
+
+        expect(execute).toHaveBeenCalledTimes(1);
+        expect(output).toBe("real");
+    });
+
+    it("keeps a successful tool successful when the wrapper rejects after it ran", async () => {
+        expect.assertions(2);
+
+        const execute = vi.fn<() => Promise<string>>(() => Promise.resolve("real"));
+        const output = await traceToolExecution(
+            telemetryWith((async (options: { execute: () => Promise<unknown> }) => {
+                await options.execute();
+
+                // Ending a span, flushing — a fault around a success.
+                throw new Error("telemetry is down");
+            }) as never),
+            call,
+            execute,
+        );
+
+        expect(execute).toHaveBeenCalledTimes(1);
+        expect(output).toBe("real");
+    });
+
+    it("executes the tool exactly once when the wrapper starts it without awaiting", async () => {
+        expect.assertions(2);
+
+        const execute = vi.fn<() => Promise<string>>(async () => {
+            await new Promise((resolve) => {
+                setTimeout(resolve, 5);
+            });
+
+            return "real";
+        });
+        const output = await traceToolExecution(
+            telemetryWith(((options: { execute: () => Promise<unknown> }) => {
+                // Started, deliberately not awaited — the memoized promise is what
+                // keeps this from running the tool a second time.
+                options.execute().catch(() => undefined);
+
+                return Promise.resolve("ignored");
+            }) as never),
+            call,
+            execute,
+        );
+
+        expect(execute).toHaveBeenCalledTimes(1);
+        expect(output).toBe("real");
+    });
+
+    it("rethrows the tool's own failure, not the wrapper's", async () => {
+        expect.assertions(1);
+
+        const execute = vi.fn<() => Promise<string>>(() => Promise.reject(new Error("tool blew up")));
+
+        await expect(
+            traceToolExecution(
+                telemetryWith((async (options: { execute: () => Promise<unknown> }) => {
+                    try {
+                        await options.execute();
+                    } catch {
+                        throw new Error("wrapper noticed and threw its own");
+                    }
+                }) as never),
+                call,
+                execute,
+            ),
+        ).rejects.toThrow("tool blew up");
     });
 });

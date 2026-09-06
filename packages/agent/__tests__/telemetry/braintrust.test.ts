@@ -232,6 +232,48 @@ describe(braintrustTelemetry, () => {
         expect(merged(calls[0] as TracedCall).output).toBe("answer");
     });
 
+    // The mirror of the Sentry sweep case, for a different resource: Braintrust's
+    // span ends when the `traced` callback's promise settles, and the bridge parks
+    // that callback on a gate the terminal event releases. An abandoned call never
+    // gets that event, so dropping its record without releasing the gate parks the
+    // callback — and its span — for the life of the isolate.
+    it("releases the parked traced callback of an abandoned call when swept", async () => {
+        expect.assertions(2);
+
+        const { calls, logger } = fakeBraintrust();
+        const shared = braintrustTelemetry({ logger });
+
+        // `execute()` RESOLVES — a stream handed back at first byte — and only then
+        // does the stream die without a callback. That is what leaves the traced
+        // callback parked on the gate rather than on `execute()` itself.
+        const opened = shared.executeLanguageModelCall?.(evt({ callId: "call-abandoned", execute: () => Promise.resolve({}), modelId: "m", provider: "p" })) as
+            Promise<unknown> | undefined;
+
+        opened?.catch(() => undefined);
+
+        await settle();
+
+        expect(calls).toHaveLength(1);
+
+        const cutoffPassed = Date.now() + 11 * 60 * 1000;
+
+        vi.spyOn(Date, "now").mockReturnValue(cutoffPassed);
+
+        try {
+            const openedLater = shared.executeLanguageModelCall?.(
+                evt({ callId: "call-later", execute: () => Promise.resolve({}), modelId: "m", provider: "p" }),
+            ) as Promise<unknown> | undefined;
+
+            openedLater?.catch(() => undefined);
+        } finally {
+            vi.mocked(Date.now).mockRestore();
+        }
+
+        await settle();
+
+        expect((calls[0] as TracedCall).endedAt).toBeDefined();
+    });
+
     it("wraps a tool execution in a traced tool span and returns the result", async () => {
         const { calls, logger } = fakeBraintrust();
 

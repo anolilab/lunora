@@ -81,9 +81,19 @@ export interface InFlightCalls<T> {
  * integration lives. Each `open` therefore sweeps out anything older than
  * {@link ABANDONED_CALL_MS}. Swept entries are DROPPED, not emitted: a span whose
  * end time is "whenever the next call happened to start" is worse than no span.
+ *
+ * Dropping the RECORD is not the same as dropping the resource. A carried value
+ * may own something live in the host SDK — Sentry's `startSpanManual` span, the
+ * promise Braintrust's `traced` callback is parked on — and deleting the entry
+ * strands it exactly as the abandoned call itself would have. `onEvict` is where
+ * a bridge releases that, without emitting anything.
  * @param onClose Emit the bridge's span/record for one finished call.
+ * @param onEvict Release a swept call's host-SDK resource. No span is emitted.
  */
-export const createInFlightCalls = <T>(onClose: (call: T, ok: boolean, message: string | undefined, event: unknown) => void): InFlightCalls<T> => {
+export const createInFlightCalls = <T>(
+    onClose: (call: T, ok: boolean, message: string | undefined, event: unknown) => void,
+    onEvict?: (call: T) => void,
+): InFlightCalls<T> => {
     const inFlight = new Map<string, { call: T; openedAt: number }>();
 
     const close = (callId: string, ok: boolean, message: string | undefined, event: unknown): void => {
@@ -123,6 +133,7 @@ export const createInFlightCalls = <T>(onClose: (call: T, ok: boolean, message: 
             for (const [openCallId, entry] of inFlight) {
                 if (entry.openedAt < cutoff) {
                     inFlight.delete(openCallId);
+                    onEvict?.(entry.call);
                 }
             }
 

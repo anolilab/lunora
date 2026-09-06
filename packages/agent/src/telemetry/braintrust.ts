@@ -81,47 +81,55 @@ export const braintrustTelemetry = (options: BraintrustTelemetryOptions): Teleme
     // Keyed by `callId` and closed one at a time — see `createInFlightCalls` for
     // why a bulk close is wrong when one integration instance is shared by every
     // concurrent run in the isolate.
-    const calls = createInFlightCalls<InFlightCall>((call, ok, message, event) => {
-        const fields: Record<string, unknown> = {};
+    const calls = createInFlightCalls<InFlightCall>(
+        (call, ok, message, event) => {
+            const fields: Record<string, unknown> = {};
 
-        // Usage comes off the END EVENT, which the SDK fires once the response has
-        // been normalized. On a stream that is after its `finish` part; the value
-        // `execute()` resolves with carries no usage at all.
-        const usage = summarizeUsage(readField(event, "usage") ?? readField(call.result, "usage"));
+            // Usage comes off the END EVENT, which the SDK fires once the response has
+            // been normalized. On a stream that is after its `finish` part; the value
+            // `execute()` resolves with carries no usage at all.
+            const usage = summarizeUsage(readField(event, "usage") ?? readField(call.result, "usage"));
 
-        if (usage) {
-            // Braintrust's LLM-span metric names, so token counts and cost roll up
-            // in its own dashboards rather than landing as opaque metadata.
-            fields.metrics = {
-                completion_tokens: usage.outputTokens,
-                prompt_tokens: usage.inputTokens,
-                tokens: usage.totalTokens,
-            };
-        }
-
-        if (!ok) {
-            fields.error = message ?? "the model call failed";
-        }
-
-        if (recordOutputs) {
-            // The normalized content parts, not the value `execute()` resolved
-            // with — on a stream that value is the stream handle, which serialized
-            // to nothing useful.
-            const completion = contentText(readField(event, "content") ?? readField(call.result, "content"));
-
-            if (completion !== undefined) {
-                fields.output = completion;
+            if (usage) {
+                // Braintrust's LLM-span metric names, so token counts and cost roll up
+                // in its own dashboards rather than landing as opaque metadata.
+                fields.metrics = {
+                    completion_tokens: usage.outputTokens,
+                    prompt_tokens: usage.inputTokens,
+                    tokens: usage.totalTokens,
+                };
             }
-        }
 
-        if (Object.keys(fields).length > 0) {
-            call.span.log(fields);
-        }
+            if (!ok) {
+                fields.error = message ?? "the model call failed";
+            }
 
-        // Releases the parked `traced` callback, which ends the span. Logged
-        // fields land first: the callback resumes on a later microtask.
-        call.finish();
-    });
+            if (recordOutputs) {
+                // The normalized content parts, not the value `execute()` resolved
+                // with — on a stream that value is the stream handle, which serialized
+                // to nothing useful.
+                const completion = contentText(readField(event, "content") ?? readField(call.result, "content"));
+
+                if (completion !== undefined) {
+                    fields.output = completion;
+                }
+            }
+
+            if (Object.keys(fields).length > 0) {
+                call.span.log(fields);
+            }
+
+            // Releases the parked `traced` callback, which ends the span. Logged
+            // fields land first: the callback resumes on a later microtask.
+            call.finish();
+        },
+        // A swept call emits no span, but its `traced` callback is still parked on
+        // `finished` — leaving it parked would hold the callback, and the span it
+        // owns, for the life of the isolate. Release it without logging anything.
+        (call) => {
+            call.finish();
+        },
+    );
 
     /**
      * Close the call an `onAbort` / `onError` event names. Both carry the model

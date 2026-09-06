@@ -105,36 +105,45 @@ export const sentryTelemetry = (options: SentryTelemetryOptions): Telemetry => {
     // Keyed by `callId` and closed one at a time — see `createInFlightCalls` for
     // why a bulk close is wrong when one integration instance is shared by every
     // concurrent run in the isolate.
-    const calls = createInFlightCalls<InFlightCall>((call, ok, message, event) => {
-        const attributes: Record<string, unknown> = {};
+    const calls = createInFlightCalls<InFlightCall>(
+        (call, ok, message, event) => {
+            const attributes: Record<string, unknown> = {};
 
-        // Usage comes off the END EVENT, which the SDK fires once the response has
-        // been normalized. On a stream that is after its `finish` part; the value
-        // `execute()` resolves with carries no usage at all, because it resolves
-        // the moment `doStream` hands the stream back.
-        const usage = summarizeUsage(readField(event, "usage") ?? readField(call.result, "usage"));
+            // Usage comes off the END EVENT, which the SDK fires once the response has
+            // been normalized. On a stream that is after its `finish` part; the value
+            // `execute()` resolves with carries no usage at all, because it resolves
+            // the moment `doStream` hands the stream back.
+            const usage = summarizeUsage(readField(event, "usage") ?? readField(call.result, "usage"));
 
-        if (usage) {
-            attributes["gen_ai.usage.input_tokens"] = usage.inputTokens;
-            attributes["gen_ai.usage.output_tokens"] = usage.outputTokens;
-            attributes["gen_ai.usage.total_tokens"] = usage.totalTokens;
-        }
-
-        if (recordOutputs) {
-            const completion = contentText(readField(event, "content") ?? readField(call.result, "content"));
-
-            if (completion !== undefined) {
-                attributes["gen_ai.completion"] = completion;
+            if (usage) {
+                attributes["gen_ai.usage.input_tokens"] = usage.inputTokens;
+                attributes["gen_ai.usage.output_tokens"] = usage.outputTokens;
+                attributes["gen_ai.usage.total_tokens"] = usage.totalTokens;
             }
-        }
 
-        if (Object.keys(attributes).length > 0) {
-            call.span.setAttributes?.(attributes);
-        }
+            if (recordOutputs) {
+                const completion = contentText(readField(event, "content") ?? readField(call.result, "content"));
 
-        call.span.setStatus?.(ok ? { code: 1 } : { code: 2, message: message ?? "" });
-        call.span.end();
-    });
+                if (completion !== undefined) {
+                    attributes["gen_ai.completion"] = completion;
+                }
+            }
+
+            if (Object.keys(attributes).length > 0) {
+                call.span.setAttributes?.(attributes);
+            }
+
+            call.span.setStatus?.(ok ? { code: 1 } : { code: 2, message: message ?? "" });
+            call.span.end();
+        },
+        // A swept call emits nothing, but `startSpanManual` hands back a span that
+        // only ends when someone ends it — so an abandoned one would stay open in
+        // the Sentry SDK forever. End it without a status: it was never observed to
+        // succeed or fail.
+        (call) => {
+            call.span.end();
+        },
+    );
 
     /**
      * Close the call an `onAbort` / `onError` event names. Both carry the model
