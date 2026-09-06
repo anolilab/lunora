@@ -1,19 +1,42 @@
-import { cpSync } from "node:fs";
-import { join } from "node:path";
+import { cpSync, mkdtempSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { CodegenResult } from "../src/index";
 
+/** `packages/codegen/__tests__/fixtures` — where both the fixtures and their scratch workdirs live. */
+const fixturesDirectory = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
+
 /**
- * Copy a fixture's `lunora/` app into a scratch workdir, leaving the committed
- * `_generated/` behind. Discovery already skips `_generated/`, but keeping it out
- * of the workdir makes that independence structural rather than assumed: a golden
- * can never quietly become an input to the run that reproduces it.
+ * Copy a fixture's `lunora/` app into a fresh scratch workdir, leaving the
+ * committed `_generated/` behind. Discovery already skips `_generated/`, but
+ * keeping it out of the workdir makes that independence structural rather than
+ * assumed: a golden can never quietly become an input to the run that reproduces
+ * it.
+ *
+ * The workdir is created **beside the fixtures**, not in `os.tmpdir()`.
+ * `createCodegenProject` walks up from the app for a `tsconfig.json` and falls
+ * back to an isolated ts-morph project when it finds none, and module resolution
+ * needs a `node_modules` up the same chain. An `os.tmpdir()` workdir has neither,
+ * so every cross-module type the emitter asks for came back `any` and the goldens
+ * recorded `unknown` where a real project infers `Id<"notes">` / `Doc_notes[]` —
+ * byte-equality then locked the degraded inference in, and a regression that
+ * erased a return type showed up as no diff at all. Under `fixtures/` the walk-up
+ * finds `packages/codegen/tsconfig.json` and the workspace `node_modules`, which
+ * is what a scaffolded app has.
+ *
+ * `.workdir-*` is gitignored so a run killed before its cleanup cannot fail the
+ * repo-clean check in `scripts/check-generated-files.mjs`.
  */
-const copyFixtureApp = (fixtureRoot: string, workdir: string): void => {
+const makeFixtureWorkdir = (fixtureRoot: string): string => {
+    const workdir = mkdtempSync(join(fixturesDirectory, ".workdir-"));
+
     cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), {
         filter: (source) => !source.includes("_generated"),
         recursive: true,
     });
+
+    return workdir;
 };
 
 /**
@@ -62,4 +85,4 @@ const GOLDEN_OUTPUTS: ReadonlyArray<readonly [string, keyof CodegenResult["gener
     ["openrpc.ts", "openRpcModule"],
 ];
 
-export { copyFixtureApp, GOLDEN_FIXTURES, GOLDEN_OUTPUTS };
+export { GOLDEN_FIXTURES, GOLDEN_OUTPUTS, makeFixtureWorkdir };
