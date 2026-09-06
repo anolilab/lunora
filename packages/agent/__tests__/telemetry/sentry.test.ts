@@ -103,7 +103,6 @@ describe(sentryTelemetry, () => {
     it("measures a STREAMED call to the end of the stream, with its usage", async () => {
         const { Sentry, spans } = fakeSentry();
 
-        const started = Date.now();
         const stream = streamText({
             model: streamingModel({ chunks: 3, gapMs: 30 }),
             prompt: "hi",
@@ -115,15 +114,22 @@ describe(sentryTelemetry, () => {
         await stream.usage;
         await settle();
 
-        const wallMs = Date.now() - started;
         const span = spans[0] as RecordedSpan;
 
         // The old shape wrapped `execute()`, which resolves the instant `doStream`
         // hands the stream back: the span measured ~1 ms of a ~100 ms call and
         // carried no token usage at all.
+        // Floor at half the STREAM's own delay budget (3 chunks x 30 ms), not at a
+        // fraction of wall clock: `wallMs` starts before the span does, so a slow
+        // runner inflates the divisor past the span and the assertion fails on
+        // timing alone (CI hit `expected 94 to be greater than 96`). The defect
+        // this guards is a span that ends at time-to-first-byte — ~1 ms — which
+        // any floor in this range separates decisively.
+        const minStreamedMs = (3 * 30) / 2;
+
         expect(span.manual).toBe(true);
         expect(span.endedAt).toBeDefined();
-        expect((span.endedAt as number) - span.startedAt).toBeGreaterThan(wallMs / 2);
+        expect((span.endedAt as number) - span.startedAt).toBeGreaterThan(minStreamedMs);
         expect(span.attributes["gen_ai.usage.input_tokens"]).toBe(12);
         expect(span.attributes["gen_ai.usage.output_tokens"]).toBe(3);
         expect(span.status?.code).toBe(1);

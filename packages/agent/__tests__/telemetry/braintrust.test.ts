@@ -79,7 +79,6 @@ describe(braintrustTelemetry, () => {
     it("measures a STREAMED call to the end of the stream, with its usage", async () => {
         const { calls, logger } = fakeBraintrust();
 
-        const started = Date.now();
         const stream = streamText({
             model: streamingModel({ chunks: 3, gapMs: 30 }),
             prompt: "hi",
@@ -91,14 +90,21 @@ describe(braintrustTelemetry, () => {
         await stream.usage;
         await settle();
 
-        const wallMs = Date.now() - started;
         const call = calls[0] as TracedCall;
+
+        // Floor at half the STREAM's own delay budget (3 chunks x 30 ms), not at a
+        // fraction of wall clock: `wallMs` starts before the span does, so a slow
+        // runner inflates the divisor past the span and the assertion fails on
+        // timing alone (CI hit `expected 94 to be greater than 96`). The defect
+        // this guards is a span that ends at time-to-first-byte — ~1 ms — which
+        // any floor in this range separates decisively.
+        const minStreamedMs = (3 * 30) / 2;
 
         // The old shape simply awaited `execute()`, which resolves the instant
         // `doStream` hands the stream back: the span measured ~1 ms of a ~100 ms
         // call and logged the stream handle instead of the generation.
         expect(call.endedAt).toBeDefined();
-        expect((call.endedAt as number) - call.startedAt).toBeGreaterThan(wallMs / 2);
+        expect((call.endedAt as number) - call.startedAt).toBeGreaterThan(minStreamedMs);
         expect(merged(call).metrics).toStrictEqual({ completion_tokens: 3, prompt_tokens: 12, tokens: 15 });
     });
 
