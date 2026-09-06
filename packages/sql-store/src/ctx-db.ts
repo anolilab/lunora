@@ -72,6 +72,7 @@ import {
     encodeAggregateKey,
     encodeCursor,
     encodePartitionKey,
+    equalityPinnedFields,
     fanOutScalarCounts,
     foldAggregateTally,
     hasTrigger,
@@ -102,6 +103,7 @@ import {
     sortColumnName,
     throwingScheduler,
     tiebreakDirectionFor,
+    uniqueIndexFields,
 } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
@@ -130,7 +132,7 @@ import {
     serializeDocumentColumn,
     tableColumns,
 } from "./sql-exec";
-import { bigintSqlKey, effectiveColumnKind } from "./value-codec";
+import { bigintSqlKey, effectiveColumnKind, sqliteDecode } from "./value-codec";
 
 /** Order fields that already provide a stable tiebreak (no extra `id` term needed). */
 const ID_ORDER_FIELDS = new Set(["_id", "id"]);
@@ -521,14 +523,27 @@ const tableNameFromId = async (
 // eslint-disable-next-line unicorn/no-null -- GroupByEntry.value / AggregateResult are `number | null`; an empty reduction is null.
 const aggregateScalar = (value: unknown): null | number => (value === null || value === undefined ? null : Number(value));
 
-/** Map raw `GROUP BY` result rows into `GroupByEntry` records, rebuilding each group's key tuple. */
-const mapGroupByRows = (by: ReadonlyArray<string>, rows: ReadonlyArray<Record<string, unknown>>): GroupByEntry[] =>
+/**
+ * Map raw `GROUP BY` result rows into `GroupByEntry` records, rebuilding each
+ * group's key tuple.
+ *
+ * Each group value is reversed through the same {@link sqliteDecode} every row
+ * read uses. Without it the key carried the raw STORAGE form: SQLite has no
+ * boolean, so a `v.boolean()` column grouped into `0`/`1` keys while the
+ * companion-indexed path (which decodes its key tuple through `decodeWire`)
+ * handed back `false`/`true` — the answer's TYPE depended on whether an
+ * aggregate index happened to cover the request, and a caller's
+ * `groups.find((group) => group.key.flag === true)` was `undefined` on the scan.
+ */
+const mapGroupByRows = (definition: TableDefinitionLike, by: ReadonlyArray<string>, rows: ReadonlyArray<Record<string, unknown>>): GroupByEntry[] =>
     rows.map((row) => {
         const key: Record<string, unknown> = {};
 
         for (const field of by) {
+            const validator = definition.shape[field];
+
             // eslint-disable-next-line unicorn/no-null -- GroupByEntry.key mirrors SQL group values; an absent grouped column is null in the result shape.
-            key[field] = row[field] ?? null;
+            key[field] = sqliteDecode(row[field] ?? null, validator && effectiveColumnKind(validator));
         }
 
         return { key, value: aggregateScalar((row as { value: unknown }).value) };
@@ -1339,14 +1354,14 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     // locals shadow the module-level SQLite helpers/imports. `@lunora/hyperdrive/global`
     // injects a Postgres/MySQL dialect; absent one, this is the SQLite default.
     const { dialect } = options;
-    // Value encode stays the shared SQLite codec (`serializeColumnValue`) on every
-    // engine — storage is SQLite-shaped everywhere. Identifier quoting and
-    // placeholder numbering are drizzle's job (rendered per-engine via renderSql),
-    // so the strategy only carries the per-engine WHERE differences: the
-    // substring test's position function, and (on D1) the bound-parameter budget.
-    const whereSqlStrategy: WhereSqlStrategy = {
+    // Value encode stays the shared SQLite codec on every engine — storage is
+    // SQLite-shaped everywhere. Identifier quoting and placeholder numbering are
+    // drizzle's job (rendered per-engine via renderSql), so the base only carries
+    // the per-engine WHERE differences: the substring test's position function,
+    // and (on D1) the bound-parameter budget. `serialize` is per-TABLE — see
+    // {@link whereSqlStrategyFor}.
+    const whereSqlStrategyBase: Omit<WhereSqlStrategy, "serialize"> = {
         fieldRef: columnRefSql,
-        serialize: serializeColumnValue,
         // `contains` keeps whatever case behaviour each engine's substring test
         // already gives callers, which is NOT the same across the three: SQLite is
         // ASCII-case-insensitive (the compiler's `instr(lower(…), lower(…))`
@@ -1364,6 +1379,50 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         // statement at 100 bound parameters. The other two engines bind
         // thousands and have no `json_each`, so they take the literal list.
         ...(dialect.name === "sqlite" ? {} : { inList: literalInList }),
+    };
+
+    /** One `WhereSqlStrategy` per table definition — see {@link whereSqlStrategyFor}. Definitions come from `defineSchema` and never mutate, so the entry is valid for the ctx-db's life. */
+    const whereStrategyByDefinition = new WeakMap<TableDefinitionLike, WhereSqlStrategy>();
+
+    /**
+     * The `where` strategy for one table: the engine base above, plus a
+     * value encode that knows which COLUMN it is filling.
+     *
+     * That last part is not a nicety. `v.any()` / `v.union()` / `v.from()` store
+     * as TEXT on every engine, so a number or boolean written to one is kept in
+     * the marked, self-describing form `serializeDocumentColumn` writes —
+     * `sqliteEncode` cannot infer that from the value alone, and the kind-blind
+     * binding this replaced bound a bare `42` against a column holding the marked
+     * text. Nothing matched: `where: { un: 42 }` returned no rows, `{ un: { gt: 5 } }`
+     * returned no rows, and — because a keyset cursor's pivot binds through this
+     * same strategy — page 2 of a `.paginate()` ordered on such a column came back
+     * EMPTY, silently dropping every row after the first page. The identical
+     * operations against the DO row store are correct, so moving a table to
+     * `.global()` changed the answers.
+     *
+     * What this does NOT fix: the marked form is JSON text, so SQLite orders an
+     * untyped column's numbers LEXICOGRAPHICALLY (`1.5, 10, 100, 2, 9`). Ranges
+     * and cursors are now consistent WITH that order — the same order `ORDER BY`
+     * uses, which is what makes paging return every row — but it is not numeric
+     * order. Making it numeric means an order-preserving stored encoding for an
+     * untyped column, i.e. a storage-format change with a migration, so it is
+     * stated here rather than half-done.
+     */
+    const whereSqlStrategyFor = (definition: TableDefinitionLike): WhereSqlStrategy => {
+        const cached = whereStrategyByDefinition.get(definition);
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const strategy: WhereSqlStrategy = {
+            ...whereSqlStrategyBase,
+            serialize: (value, field) => serializeDocumentColumn(definition, field, value),
+        };
+
+        whereStrategyByDefinition.set(definition, strategy);
+
+        return strategy;
     };
 
     /** NULL-safe equality for the OCC guard, bound to this ctx-db's engine (see the module-level {@link nullSafeEqualsSql}). */
@@ -1704,23 +1763,29 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     const recomputeExtreme = async (tableName: string, index: AggregateIndexDefinitionLike, document: Record<string, unknown>): Promise<null | number> => {
         const field = index.field ?? "";
         const conditions: SQL[] = [];
+        const definition = schema.tables[tableName];
+        // Column-aware, for the same reason `whereSqlStrategyFor` is: an untyped
+        // (`v.any()`/`v.union()`/`v.from()`) `by` or static-`where` column stores a
+        // number in a marked form only the column's kind can reproduce, and a
+        // kind-blind binding here scoped the recompute to no rows at all.
+        const serialize = (key: string, value: unknown): unknown =>
+            definition ? serializeDocumentColumn(definition, key, value) : serializeColumnValue(value);
 
         for (const key of index.by ?? []) {
             // eslint-disable-next-line unicorn/no-null -- canonical key tuple: a missing by-field is matched as NULL, mirroring encodeAggregateKey's null-fill
-            const value = serializeColumnValue(document[key] ?? null);
+            const value = serialize(key, document[key] ?? null);
 
             conditions.push(value === null ? sql`${columnRefSql(key)} IS NULL` : sql`${columnRefSql(key)} = ${value}`);
         }
 
         for (const [key, expected] of Object.entries(index.where ?? {})) {
             const literal = expected !== null && typeof expected === "object" && !Array.isArray(expected) ? (expected as { eq: unknown }).eq : expected;
-            const value = serializeColumnValue(literal);
+            const value = serialize(key, literal);
 
             conditions.push(value === null ? sql`${columnRefSql(key)} IS NULL` : sql`${columnRefSql(key)} = ${value}`);
         }
 
         const whereSql = conditions.length > 0 ? sql` WHERE ${sql.join(conditions, sql` AND `)}` : sql``;
-        const definition = schema.tables[tableName];
 
         if (definition && mayHoldBigintKey(definition.shape[field])) {
             return foldGroupExtreme(definition, tableName, index, conditions);
@@ -2651,7 +2716,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             assertReducibleBySql(definition, aggOptions.field, `aggregate(${tableName}, { op: "${aggOptions.op}", field: "${aggOptions.field}" })`);
 
-            const whereCondition = compileWhereSql(resolved, whereSqlStrategy);
+            const whereCondition = compileWhereSql(resolved, whereSqlStrategyFor(definition));
             const aggregateFunction = sql.raw(aggregateSqlFunction(aggOptions.op));
             const query = sql`SELECT ${aggregateFunction}(${columnRefSql(aggOptions.field)}) AS ${sql.identifier("value")} FROM ${sql.identifier(tableName)}`;
             const rows = await queryAll(exec, dialect, whereCondition ? sql`${query} WHERE ${whereCondition}` : query);
@@ -2710,7 +2775,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 }
             }
 
-            const whereCondition = compileWhereSql(resolved, whereSqlStrategy);
+            const whereCondition = compileWhereSql(resolved, whereSqlStrategyFor(definition));
             const query = sql`SELECT COUNT(*) AS ${sql.identifier("count")} FROM ${sql.identifier(tableName)}`;
             const rows = await queryAll(exec, dialect, whereCondition ? sql`${query} WHERE ${whereCondition}` : query);
 
@@ -2867,7 +2932,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // fresh database returns an empty page instead of `no such table`.
             await ensureMigrated();
 
-            const orderKeys = normalizeOrderKeys(args.orderBy, definition.shape);
+            const orderKeys = normalizeOrderKeys(args.orderBy, definition.shape, {
+                pinned: equalityPinnedFields(args.where),
+                uniqueBy: uniqueIndexFields(definition.indexes, definition.shape),
+            });
             const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
 
             // Relation reads routed by the child's backend (shard-local child of
@@ -2927,7 +2995,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 // findMany(). Pass `undefined` for relationBaseWhere (no nested policy
                 // threading, matching what the old scalar counter did).
                 const resolvedCombined = await resolveAggregateRelations(combined, childTable, undefined);
-                const whereCondition = compileWhereSql(resolvedCombined, whereSqlStrategy);
+                const whereCondition = compileWhereSql(resolvedCombined, whereSqlStrategyFor(childDefinition));
 
                 // `physicalColumn` maps `_id`/`id` → `id`; all other fields are themselves.
                 const fieldRef = columnRefSql(whereField);
@@ -2978,7 +3046,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 predicate = predicate ? { AND: [predicate, seek] } : seek;
             }
 
-            const whereCondition = compileWhereSql(predicate, whereSqlStrategy);
+            const whereCondition = compileWhereSql(predicate, whereSqlStrategyFor(definition));
             const orderBy = compileOrderBySql(orderKeys, dialect);
 
             let query = sql`SELECT * FROM ${sql.identifier(tableName)}`;
@@ -3111,7 +3179,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // keys AND the reducer's field.
             assertGroupByReducibleBySql(definition, tableName, groupOptions.by, agg);
 
-            const whereCondition = compileWhereSql(resolved, whereSqlStrategy);
+            const whereCondition = compileWhereSql(resolved, whereSqlStrategyFor(definition));
 
             const select: SQL[] = groupOptions.by.map((field) => sql`${columnRefSql(field)} AS ${sql.identifier(field)}`);
 
@@ -3143,7 +3211,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             const rows = await queryAll(exec, dialect, query);
 
-            return mapGroupByRows(groupOptions.by, rows);
+            return mapGroupByRows(definition, groupOptions.by, rows);
         },
 
         /**

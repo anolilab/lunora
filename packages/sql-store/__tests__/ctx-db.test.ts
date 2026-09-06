@@ -1995,3 +1995,175 @@ describe("createSqlCtxDb — recomputing an extreme over a large group", () => {
         expect(widest).toBeLessThanOrEqual(BACKFILL_BATCH_SIZE);
     });
 });
+
+/**
+ * `v.union()` / `v.any()` / `v.from()` columns are TEXT on every engine, so a
+ * number or boolean written to one is kept in a marked, self-describing form
+ * (`sqliteEncode` with the column's kind) rather than as a value the engine
+ * would coerce to `"42.0"` on the way in. The READ side then has to bind the
+ * same form — and it did not: every `where` and every keyset-cursor pivot went
+ * through a kind-blind encode, bound a bare `42`, and matched nothing.
+ *
+ * The pagination case is the severe one: a cursor pivot bound in the wrong form
+ * makes page 2 empty, so the rows after the first page are simply never
+ * returned. The identical reads against the DO row store are correct, which is
+ * what made moving a table to `.global()` change the answers.
+ *
+ * NOT fixed here, and asserted so it stays visible: the marked form is JSON
+ * text, so SQLite orders an untyped column's numbers lexicographically. Ranges
+ * and cursors are now consistent WITH that order — which is what makes paging
+ * whole — but it is not numeric order, and making it numeric is a stored-format
+ * change.
+ */
+const untypedFilterSchema: SchemaLike = {
+    tables: {
+        readings: {
+            indexes: [],
+            shape: { label: col("string"), value: col("union") },
+            shardMode: { kind: "global" },
+        },
+    },
+} as never;
+
+describe("createSqlCtxDb — filtering and paging an untyped column", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const makeWriter = () => createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedFilterSchema });
+
+    const seedReadings = async (writer: ReturnType<typeof makeWriter>): Promise<void> => {
+        for (const [label, value] of [
+            ["a", 1.5],
+            ["b", 2],
+            ["c", 9],
+            ["d", 10],
+            ["e", 100],
+            ["f", true],
+            ["g", "10"],
+        ] as const) {
+            // eslint-disable-next-line no-await-in-loop -- a seed loop; ordering the writes keeps `_creationTime` deterministic.
+            await writer.insert("readings", { label, value });
+        }
+    };
+
+    it("matches a number, a boolean and a look-alike string written to the same column", async () => {
+        expect.assertions(4);
+
+        const writer = makeWriter();
+
+        await seedReadings(writer);
+
+        const labels = async (where: Record<string, unknown>): Promise<string[]> => {
+            const result = await writer.findMany("readings", { where });
+
+            return result.page.map((row) => String(row["label"])).toSorted((left, right) => left.localeCompare(right));
+        };
+
+        // Each of these came back EMPTY: the bound value was the bare JS scalar
+        // and the column holds the marked form.
+        await expect(labels({ value: 10 })).resolves.toStrictEqual(["d"]);
+        await expect(labels({ value: true })).resolves.toStrictEqual(["f"]);
+
+        // A string that looks like the number is stored verbatim, so the two
+        // must not collide.
+        await expect(labels({ value: "10" })).resolves.toStrictEqual(["g"]);
+        await expect(labels({ value: 1.5 })).resolves.toStrictEqual(["a"]);
+    });
+
+    it("returns every row across pages when the sort key is an untyped column", async () => {
+        expect.assertions(3);
+
+        const writer = makeWriter();
+
+        await seedReadings(writer);
+
+        const seenLabels: string[] = [];
+        let cursor: null | string = null;
+
+        for (let page = 0; page < 10; page += 1) {
+            // eslint-disable-next-line no-await-in-loop -- keyset pagination is sequential by construction.
+            const result: { continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] } = await writer.findMany("readings", {
+                cursor,
+                limit: 3,
+                orderBy: [{ value: "asc" }],
+            });
+
+            seenLabels.push(...result.page.map((row) => String(row["label"])));
+            cursor = result.continueCursor;
+
+            if (result.isDone) {
+                break;
+            }
+        }
+
+        // Page 2 used to come back EMPTY — the seek pivot bound the raw number —
+        // and the walk stopped there with four of the seven rows unreachable.
+        expect(seenLabels).toHaveLength(7);
+        expect(new Set(seenLabels).size).toBe(7);
+
+        // The order the page walks is the STORAGE order, which for an untyped
+        // column is text order over the marked form. Pinned rather than papered
+        // over: what the fix guarantees is that paging agrees with it, not that
+        // it is numeric.
+        const straight = await writer.findMany("readings", { limit: 100, orderBy: [{ value: "asc" }] });
+
+        expect(seenLabels).toStrictEqual(straight.page.map((row) => String(row["label"])));
+    });
+
+    it("keeps a range filter on the same side of the order the sort uses", async () => {
+        expect.assertions(1);
+
+        const writer = makeWriter();
+
+        await seedReadings(writer);
+
+        const ordered = await writer.findMany("readings", { limit: 100, orderBy: [{ value: "asc" }] });
+        const pivotIndex = ordered.page.findIndex((row) => row["label"] === "c");
+        const after = await writer.findMany("readings", { limit: 100, orderBy: [{ value: "asc" }], where: { value: { gt: 9 } } });
+
+        // `{ gt: 9 }` selects exactly the rows the ORDER BY places after `c`.
+        // Before the fix it bound a bare `9` against marked text and selected
+        // none of them.
+        expect(after.page.map((row) => String(row["label"]))).toStrictEqual(ordered.page.slice(pivotIndex + 1).map((row) => String(row["label"])));
+    });
+});
+
+describe("createSqlCtxDb — groupBy decodes its group key", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("groups a boolean column on `false`/`true`, not on the stored 0/1", async () => {
+        expect.assertions(2);
+
+        // SQLite stores a boolean as 1/0 and the SQL `GROUP BY` hands those
+        // straight back, while the companion-indexed groupBy decodes its key
+        // tuple and returns real booleans. The answer's TYPE depended on whether
+        // an aggregate index covered the request, and
+        // `groups.find((group) => group.key.archived === true)` was `undefined`
+        // on the scan.
+        const writer = createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect: makeSqliteDialect(), exec: harness.exec, schema });
+
+        await writer.insert("notes", { archived: false, body: "a", priority: 1, slug: "a" });
+        await writer.insert("notes", { archived: true, body: "b", priority: 2, slug: "b" });
+        await writer.insert("notes", { archived: true, body: "c", priority: 3, slug: "c" });
+
+        const groups = await writer.groupBy("notes", { by: ["archived"] });
+
+        expect(groups.find((group) => group.key["archived"] === true)).toStrictEqual({ key: { archived: true }, value: 2 });
+        expect(groups.find((group) => group.key["archived"] === false)).toStrictEqual({ key: { archived: false }, value: 1 });
+    });
+});
