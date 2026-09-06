@@ -20,32 +20,37 @@
  * There must be exactly ONE definition rather than byte-similar inline copies
  * that can drift: `@lunora/auth` gated its IP-header policy on this while
  * `@lunora/runtime` trusted the header unconditionally, so one deployment
- * enforced its sign-in limit per client and its REST limit not at all. Like the
- * repo's other `shared/` helpers this is deliberately **not** a package —
- * consumers import it by relative path and the bundler inlines it, so no runtime
- * dependency edge is created between `@lunora/auth` and `@lunora/runtime`. Keep
- * it genuinely zero-dependency or inlining breaks, and consumers must drop
+ * enforced its sign-in limit per client and its REST limit not at all. What each
+ * package then DOES with the answer is its own policy and stays in that package
+ * — `@lunora/runtime`'s `trustedClientIp` and `@lunora/auth`'s `trustedProxies`
+ * handling already differ, and a shared helper that picked one would hand the
+ * other a policy it never chose.
+ *
+ * ## Why here and not `@lunora/platform`
+ *
+ * That package is the real alternative, and a good one: it is the zero-dependency
+ * leaf every other `@lunora/*` package may import without cycles, it already
+ * re-exports a `shared/` file (`ExecutionContextLike`), and it owns
+ * `PlatformCapabilities` — the other "which host is this" question. The
+ * dependency edge is not the objection; `@lunora/auth` → `@lunora/platform` would
+ * be fine. Two things are:
+ *
+ * 1. Platform's index is **published, permanently-supported API**. This is a
+ * one-line sniff at an undocumented workerd detail (`navigator.userAgent`), and
+ * its value is being cheap to change the day workerd identifies itself
+ * differently. Exporting it buys a compatibility obligation for a string compare.
+ * 2. Platform is deliberately declarative — "types and capability metadata only,
+ * near-zero runtime code". A static per-target matrix that codegen reads is a
+ * different thing from live host detection at request time, and merging the two
+ * invites a future reader to ask the matrix what host they are on.
+ *
+ * `shared/constant-time-equal.ts` and `shared/hmac-url.ts` are the precedent for
+ * a security primitive living here. The cost of the choice, stated so it is not
+ * a surprise: the vis build cache does not invalidate on `shared/` edits, so a
+ * change here needs an explicit rebuild before consumers' `dist/` carries it.
+ *
+ * Keep it genuinely zero-dependency or inlining breaks, and consumers must drop
  * `outDir`/`rootDir` from their `tsconfig.json` (a set `rootDir` raises TS6059
  * for this out-of-package file under `tsc --noEmit`).
  */
 export const onCloudflareEdge = (): boolean => (globalThis as { navigator?: { userAgent?: string } }).navigator?.userAgent === "Cloudflare-Workers";
-
-/**
- * The caller's IP for a request, or `undefined` when nothing trustworthy says.
- *
- * `cf-connecting-ip` is the only client-address header worth reading, and only
- * where {@link onCloudflareEdge} holds. Off the edge this deliberately resolves
- * NOTHING rather than falling back to `x-forwarded-for` or the raw header: both
- * are client-written there, and an attacker-chosen address is worse than a
- * missing one — it silently defeats every rate limit keyed on it while reading
- * as if the limit were enforced. Callers already handle the absent case (the
- * REST limiter falls into its shared `no-trusted-ip` bucket; `ctx.ip` is
- * documented optional).
- *
- * A host behind a proxy it controls should terminate at something that sets
- * `cf-connecting-ip` itself. `@lunora/auth` additionally accepts declared
- * `trustedProxies`, which is what makes an `x-forwarded-for` chain interpretable;
- * there is no equivalent knob here yet because the runtime has nowhere to
- * declare one, and inventing a second trust switch is worse than none.
- */
-export const trustedClientIp = (headers: Headers): string | undefined => (onCloudflareEdge() ? (headers.get("cf-connecting-ip") ?? undefined) : undefined);

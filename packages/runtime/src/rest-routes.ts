@@ -19,13 +19,13 @@
 import type { HttpCacheLike } from "@lunora/platform";
 
 import type { ExecutionContextLike } from "../../../shared/execution-context";
-import { trustedClientIp } from "../../../shared/on-cloudflare-edge";
 import type { RestExposure } from "../../../shared/rest-surface";
 import { describeRestSurface } from "../../../shared/rest-surface";
 import { assertArgsObject } from "./assert-args-object";
 import { methodGuard } from "./method-guard";
 import { applyRestCache } from "./rest-cache";
 import { restEdgeCacheFor, VARY_KEY_PARAM } from "./rest-edge-cache";
+import { trustedClientIp } from "./trusted-client-ip";
 
 /** The bits of a registered function the REST router reads: its kind and its `.expose` tag. */
 interface RestRegistryEntry {

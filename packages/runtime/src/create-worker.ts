@@ -12,7 +12,6 @@ import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import { signCanonical } from "../../../shared/hmac-url";
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
-import { trustedClientIp } from "../../../shared/on-cloudflare-edge";
 import { otlpRandomHex } from "../../../shared/otlp";
 import type { RegionHint } from "../../../shared/region-hint";
 import { regionHintFromRequest } from "../../../shared/region-hint";
@@ -64,6 +63,7 @@ import { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPref
 import { buildStorageAdminRoutes, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
 import type { TrustInboundTraceContext } from "./trace-trust";
 import { createDroppedTraceNotice, resolveTraceTrust } from "./trace-trust";
+import { trustedClientIp } from "./trusted-client-ip";
 import { buildVectorAdminRoutes } from "./vector-admin-routes";
 import type { WorkflowsRestClient } from "./workflows-admin-routes";
 import { buildWorkflowsAdminRoutes } from "./workflows-admin-routes";
@@ -1948,7 +1948,8 @@ const resolveForwardContext = async (
     // every procedure rate-limits on. `x-forwarded-for` is client-spoofable in
     // both cases and deliberately NOT used. Off the edge the header is simply not
     // forwarded and `ctx.ip` reads `undefined`, which it is already documented to
-    // do. See shared/on-cloudflare-edge.ts.
+    // do. See `./trusted-client-ip.ts` for the behind-Cloudflare origin this
+    // deliberately pools, and what those deployments should do instead.
     const clientIp = trustedClientIp(request.headers);
 
     if (clientIp) {

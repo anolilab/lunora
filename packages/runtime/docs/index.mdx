@@ -426,6 +426,25 @@ Cloudflare, pass `key` and identify callers by something they cannot forge:
 createRestRateLimit(limiter, { key: (request) => request.headers.get("x-api-key") ?? undefined, name: "rest" });
 ```
 
+This applies to a non-Cloudflare origin sitting **behind** Cloudflare too, and
+that case is worth calling out because it is the one where the default gets
+strictly worse rather than staying neutral. On a bare host with no proxy the
+header was never set, so pooling changes nothing. But an origin fronted by
+Cloudflare — the edge stamps `CF-Connecting-IP`, the origin accepts only
+Cloudflare traffic, so the header genuinely is trustworthy — still resolves no
+IP, because the code runs on the origin and nothing in the request tells it apart
+from a directly-exposed host. Every caller lands in the single `no-trusted-ip`
+bucket, which one client can exhaust for everyone. Those deployments are the ones
+that must pass `key`; they are also the ones that can, because only the
+deployment knows it is fronted:
+
+```ts
+createRestRateLimit(limiter, { key: (request) => request.headers.get("cf-connecting-ip") ?? undefined, name: "rest" });
+```
+
+Only do that where the origin cannot be reached except through the edge —
+otherwise it is the client-writable header this default exists to refuse.
+
 Security guidance: keep the surface small, prefer `.output()` on exposed
 procedures so the response shape is contractual, and rely on the procedure's own
 RLS/auth for authorization; never expose an unauthenticated mutation that
