@@ -60,7 +60,7 @@ createShardDO({
 
 ## 3. Add the webhook route
 
-`processWebhook` is an `internalAction`, so it runs inside the shard where `ctx.payments` and its store exist. The HTTP route at the Worker edge forwards the raw body and the provider signature header to it:
+`processWebhook` is an `internalAction`, so it runs inside the shard where `ctx.payments` and its store exist. The HTTP route at the Worker edge forwards the raw body and the request's headers to it:
 
 ```ts
 import { webhookResponse } from "@lunora/payment";
@@ -69,8 +69,11 @@ app.post(
     "/payment/webhook",
     httpAction(async (ctx, request) => {
         const body = await request.text();
-        const signature = request.headers.get("stripe-signature") ?? "";
-        return webhookResponse(await ctx.runAction(processWebhook, { body, signature }));
+        // Forward the headers as they arrived: the signature header is the provider's choice —
+        // `stripe-signature`, `creem-signature`, the Standard-Webhooks `webhook-*` trio (Polar,
+        // Dodo Payments), or `svix-*` (Autumn) — and the adapter reads the one it verifies with.
+        const headers = Object.fromEntries(request.headers);
+        return webhookResponse(await ctx.runAction(processWebhook, { body, headers }));
     }),
 );
 ```

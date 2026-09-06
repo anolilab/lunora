@@ -36,8 +36,9 @@
  *
  *      app.post("/payment/webhook", httpAction(async (ctx, request) => {
  *          const body = await request.text();
- *          const signature = request.headers.get("stripe-signature") ?? "";
- *          return webhookResponse(await ctx.runAction(processWebhook, { body, signature }));
+ *          // Forward the headers as they arrived; each provider signs with its own.
+ *          const headers = Object.fromEntries(request.headers);
+ *          return webhookResponse(await ctx.runAction(processWebhook, { body, headers }));
  *      }));
  *      ```
  *   3. Run `lunora codegen` to wire `ctx.payments` onto ActionCtx.
@@ -188,21 +189,24 @@ export const mySubscriptions = query.query(async ({ ctx }): Promise<Subscription
  * action (which runs at the Worker edge with no `ctx.db`) so the work happens
  * inside the shard, where `ctx.payments` — and its store — exist.
  *
- * The HTTP route must extract the raw body and the provider-specific signature
- * header from the incoming request and forward them here via `ctx.runAction`.
+ * The HTTP route must forward the raw body and the request's headers here via
+ * `ctx.runAction` (`Object.fromEntries(request.headers)`).
  *
- * Stripe example headers: `stripe-signature`
- * Polar example headers: `polar-signature`
+ * Every header is forwarded rather than one named signature, because the header
+ * that carries the signature is the provider's choice and these functions are
+ * provider-agnostic: Stripe signs with `stripe-signature`, Creem with
+ * `creem-signature`, Polar and Dodo Payments with the Standard-Webhooks trio
+ * (`webhook-id` / `webhook-timestamp` / `webhook-signature`), Autumn with `svix-*`.
+ * Forwarding only `stripe-signature` verified Stripe and failed everything else.
  */
 export const processWebhook = internalAction
-    .input({ body: v.string(), signature: v.string() })
-    .action(async ({ args: { body, signature }, ctx }): Promise<{ applied: boolean; status: number }> => {
-        // `handleWebhook` reads the provider-specific signature header from the
-        // reconstructed request — the caller passes the header value as `signature`
-        // and the HTTP route's provider header name is baked into the adapter config.
+    .input({ body: v.string(), headers: v.record(v.string(), v.string()) })
+    .action(async ({ args: { body, headers }, ctx }): Promise<{ applied: boolean; status: number }> => {
+        // `handleWebhook` reads whichever header the configured adapter verifies with,
+        // off the reconstructed request.
         const request = new Request("https://internal/payment/webhook", {
             body,
-            headers: { "stripe-signature": signature },
+            headers,
             method: "POST",
         });
         const response = await ctx.payments.handleWebhook(request);

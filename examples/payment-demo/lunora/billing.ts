@@ -83,13 +83,19 @@ export const mySubscriptions = query.query(async ({ ctx }): Promise<Subscription
  * Apply a verified Stripe webhook. Called by the `POST /payment/webhook` HTTP
  * action (which runs at the Worker edge with no `ctx.db`) so the work happens
  * inside the shard, where `ctx.payments` — and its store — exist.
+ *
+ * The edge forwards the request's headers verbatim rather than one named
+ * signature header, so the adapter finds whichever header its provider signs
+ * with: `stripe-signature` here, but `creem-signature`, the Standard-Webhooks
+ * `webhook-id`/`webhook-timestamp`/`webhook-signature` trio, or `svix-*`
+ * elsewhere.
  */
 export const processWebhook = internalAction
-    .input({ body: v.string(), signature: v.string() })
-    .action(async ({ args: { body, signature }, ctx }): Promise<{ applied: boolean; status: number }> => {
+    .input({ body: v.string(), headers: v.record(v.string(), v.string()) })
+    .action(async ({ args: { body, headers }, ctx }): Promise<{ applied: boolean; status: number }> => {
         const request = new Request("https://internal/payment/webhook", {
             body,
-            headers: { "stripe-signature": signature },
+            headers,
             method: "POST",
         });
         const response = await ctx.payments.handleWebhook(request);
