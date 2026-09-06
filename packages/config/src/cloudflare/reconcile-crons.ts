@@ -47,6 +47,14 @@ interface ReconcileResult {
 interface Manifest {
     /** The manifest's `lunora` value, when it has one and it is an object. */
     lunora: Record<string, unknown> | undefined;
+
+    /**
+     * `true` when the manifest holds a `lunora` value that is NOT a plain object.
+     * {@link readManifest} normalises that to `lunora: undefined`, but the TEXT
+     * still has it — and `modify(text, ["lunora", "crons"], …)` throws
+     * `Can not add index to parent of type string` on a scalar or array parent.
+     */
+    lunoraIsForeign: boolean;
     path: string;
     text: string;
 }
@@ -71,7 +79,7 @@ const readManifest = (projectRoot: string): Manifest | undefined => {
         const { lunora }: { lunora?: unknown } = JSON.parse(text) as { lunora?: unknown };
         const isObject = typeof lunora === "object" && lunora !== null && !Array.isArray(lunora);
 
-        return { lunora: isObject ? (lunora as Record<string, unknown>) : undefined, path, text };
+        return { lunora: isObject ? (lunora as Record<string, unknown>) : undefined, lunoraIsForeign: lunora !== undefined && !isObject, path, text };
     } catch {
         return undefined;
     }
@@ -98,6 +106,18 @@ const recordManagedCrons = (manifest: Manifest, managed: ReadonlyArray<string>):
     // user-owned config. This branch is also what establishes `lunora.*` as a
     // namespace worth putting things in, so that collision was a matter of time.
     const onlyOwnKeys = Object.keys(manifest.lunora ?? {}).every((key) => key === "crons");
+    // A `lunora` that is a string or an array cannot be indexed into — writing
+    // `["lunora", "crons"]` against it throws out of `jsonc-parser`. Leave it
+    // completely alone rather than replacing it: whatever it means, it is the
+    // app's, and overwriting user config is the failure this whole record exists
+    // to avoid. The cost is that ownership goes unrecorded, so the reconciler
+    // degrades to add-only for that project and a cron removed from
+    // `lunora/crons.ts` keeps firing until the manifest is repaired — loud in the
+    // config, versus silent data loss.
+    if (manifest.lunoraIsForeign) {
+        return;
+    }
+
     const path = clearing && onlyOwnKeys ? ["lunora"] : ["lunora", "crons"];
     const edits = modify(manifest.text, path, clearing ? undefined : [...managed], { formattingOptions: formattingFor(manifest.text) });
 
@@ -188,11 +208,19 @@ const reconcileWranglerCrons = (projectRoot: string, cronTriggers: ReadonlyArray
     const preserved = existing.filter((entry) => !generated.includes(entry) && !managed.includes(entry));
     const next = [...generated, ...preserved];
 
-    if (manifest !== undefined) {
-        recordManagedCrons(manifest, generated);
-    }
+    // Ownership is recorded AFTER the config is written, never before. This used
+    // to run first, so a manifest `modify` that threw took the wrangler write down
+    // with it: both callers swallow the throw into one `warn` line, and the deploy
+    // shipped `triggers.crons: []` with every scheduled function silently dead.
+    const record = (): void => {
+        if (manifest !== undefined) {
+            recordManagedCrons(manifest, generated);
+        }
+    };
 
     if (sameTriggers(existing, next)) {
+        record();
+
         return { changed: false, preserved, reason: "triggers.crons already in sync", wranglerPath };
     }
 
@@ -205,6 +233,10 @@ const reconcileWranglerCrons = (projectRoot: string, cronTriggers: ReadonlyArray
     }
 
     writeFileSync(wranglerPath, applyEdits(text, edits), "utf8");
+
+    // Only once the config is on disk. Recording ownership the config does not
+    // reflect would let the next pass clear a cron that is still declared.
+    record();
 
     return { changed: true, preserved, wranglerPath };
 };

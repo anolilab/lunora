@@ -251,6 +251,26 @@ describe("reconcileWranglerCrons", () => {
         expect(readCrons(workdir)).toStrictEqual(["0 3 * * *"]);
     });
 
+    it("still writes the config when the manifest holds a lunora value it cannot index", () => {
+        expect.assertions(3);
+
+        // `readManifest` normalises a non-object `lunora` to `undefined`, but the
+        // TEXT still holds it, and `modify(text, ["lunora","crons"], …)` threw
+        // `Can not add index to parent of type string`. The throw ran BEFORE the
+        // wrangler write and both callers swallow it into one `warn`, so a deploy
+        // shipped a config with no crons and every scheduled function was silently
+        // dead. The foreign value is left alone rather than replaced — it is the
+        // app's, whatever it means.
+        writeWrangler(workdir, '{\n    "triggers": { "crons": ["0 3 * * *"] }\n}\n');
+        writeManifest(workdir, '{\n    "name": "app",\n    "lunora": "not-an-object"\n}\n');
+
+        const result = reconcileWranglerCrons(workdir, ["*/5 * * * *"]);
+
+        expect(result.changed).toBe(true);
+        expect(readCrons(workdir)).toStrictEqual(["*/5 * * * *", "0 3 * * *"]);
+        expect((JSON.parse(readFileSync(join(workdir, "package.json"), "utf8")) as { lunora?: unknown }).lunora).toBe("not-an-object");
+    });
+
     it("returns a skip reason when no wrangler file exists", () => {
         expect.assertions(2);
 
