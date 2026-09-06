@@ -55,13 +55,14 @@ const recordingQueue = (transport: (body: QueueJob) => QueueJob): QueueLike<Queu
 };
 
 /**
- * Run one delivered job through `httpDispatcher` and return what the shard's
- * dispatch loop would hand the handler. `createQueueConsumer` is deliberately
- * not in the way: it passes `message.body` to the dispatcher verbatim (pinned by
+ * Run one delivered job through `httpDispatcher` and return the `args` it POSTed
+ * to `/_lunora/scheduler/dispatch`, still in wire form — the shard's single
+ * `decodeWire` has not run yet. `createQueueConsumer` is deliberately not in the
+ * way: it passes `message.body` to the dispatcher verbatim (pinned by
  * `queue-workpool.test.ts`), and calling the dispatcher directly lets a producer
  * failure surface as itself rather than as a swallowed `retry()`.
  */
-const dispatchToHandlerArgs = async (job: QueueJob): Promise<Record<string, unknown>> => {
+const dispatchedWireArgs = async (job: QueueJob): Promise<unknown> => {
     let body = "";
 
     const dispatch = httpDispatcher({
@@ -76,10 +77,11 @@ const dispatchToHandlerArgs = async (job: QueueJob): Promise<Record<string, unkn
 
     await dispatch(job, "msg-1");
 
-    const payload = JSON.parse(body) as { args?: unknown };
-
-    return decodeWire(payload.args ?? {}) as Record<string, unknown>;
+    return (JSON.parse(body) as { args?: unknown }).args ?? {};
 };
+
+/** What the shard's dispatch loop would hand the handler for one delivered job. */
+const dispatchToHandlerArgs = async (job: QueueJob): Promise<Record<string, unknown>> => decodeWire(await dispatchedWireArgs(job)) as Record<string, unknown>;
 
 describe.each(Object.entries(TRANSPORTS))("queue workpool args wire over a %s queue", (_name, transport) => {
     it("delivers a bigint argument to the handler as a bigint", async () => {
@@ -138,5 +140,26 @@ describe.each(Object.entries(TRANSPORTS))("queue workpool args wire over a %s qu
         const args = await dispatchToHandlerArgs(queue.delivered[0] as QueueJob);
 
         expect(args).toStrictEqual(plain);
+    });
+
+    it("hands the queued args to the dispatch endpoint unchanged, so the shard decodes exactly once", async () => {
+        expect.assertions(1);
+
+        // The no-double-encode pin. `createDispatchRunner` encodes `args` for
+        // every OTHER producer (`ctx.run` in a workflow body / queue handler,
+        // the agent loop's and voice session's dispatchers), and this path is
+        // the one that must opt out (`argsAlreadyEncoded`) because `enqueue`
+        // already encoded before the queue's own `JSON.stringify`. Asserting the
+        // POST body's `args` are byte-identical to the queued job's is what
+        // fails if that opt-out is ever dropped — the handler-facing assertions
+        // above catch the `bigint`, but a double-encoded `Date` decodes to `{}`
+        // and only a shape check names the cause.
+        const queue = recordingQueue(transport);
+
+        await createQueueWorkpool({ queue }).enqueue(fnRef("jobs:remind"), { amountCents: 7n, dueAt: new Date("2026-06-01T12:00:00.000Z") });
+
+        const job = queue.delivered[0] as QueueJob;
+
+        await expect(dispatchedWireArgs(job)).resolves.toStrictEqual(job.args);
     });
 });

@@ -1,8 +1,11 @@
 {
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
-        "outDir": "dist",
-        "rootDir": ".",
+        // Intentionally no `outDir`/`rootDir` (mirroring `@lunora/workflow`):
+        // `lint:types` is `tsc --noEmit` and the real build is packem (driven by
+        // package.json exports), so neither is load-bearing here. A set `rootDir`
+        // raises TS6059 for the inlined `../../../shared/wire-codec` import (a
+        // file outside this package, bundled in at build time).
         "moduleResolution": "bundler",
         "types": ["@cloudflare/workers-types/experimental", "@cloudflare/vitest-plugin/types", "node"]
     },

@@ -182,12 +182,16 @@ const createQueueConsumer =
  * intermediary's page rather than a function's return value and therefore no
  * evidence the job ran. An empty 2xx is a normal success (a `void` function).
  *
- * `job.args` is forwarded VERBATIM: {@link encodeJobArgs} already put it in wire
- * form at the producer, and the shard's dispatch loop is the single decoder.
- * Encoding again here would leave the handler a tagged array.
+ * `job.args` is forwarded VERBATIM — `argsAlreadyEncoded`, the runner's opt-out
+ * of its own `encodeWire`: {@link encodeJobArgs} already put it in wire form at
+ * the producer (it had to, or the queue's own `JSON.stringify` would have
+ * refused the message), and the shard's dispatch loop is the single decoder.
+ * Encoding again here would leave the handler a tagged array — and a `Date` a
+ * `{}`, silently.
  */
 const httpDispatcher = (options: HttpDispatcherOptions): QueueDispatch => {
     const run = createDispatchRunner({
+        argsAlreadyEncoded: true,
         env: { LUNORA_ADMIN_TOKEN: options.adminToken, LUNORA_ORIGIN_URL: options.originUrl },
         fetchImpl: options.fetchImpl,
         label: "@lunora/scheduler",

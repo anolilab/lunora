@@ -12,6 +12,7 @@ import { isLunoraError, LunoraError } from "@lunora/errors";
 
 import { abortDeadline } from "../../../shared/abort-deadline";
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
+import { encodeWire } from "../../../shared/wire-codec";
 import type { ArgsOf, DispatchRunFunction, FunctionReference, RunFunctionOptions } from "./types";
 
 /** The reserved worker endpoint that re-dispatches a server-initiated function call to its shard. */
@@ -182,6 +183,22 @@ const toDispatchTimeoutError = (label: string, functionPath: string, timeoutMs: 
     new LunoraError("INTERNAL", `${label}: function dispatch to "${functionPath}" timed out after ${String(timeoutMs)}ms`, { status: 503 });
 
 interface DispatchRunnerOptions {
+    /**
+     * Set by a caller that carried `args` over a serialising hop of its own and
+     * therefore already put them in wire form — today only
+     * `@lunora/scheduler`'s `httpDispatcher`, which takes a job off a Queue that
+     * `createQueueWorkpool.enqueue` had to encode before `JSON.stringify` could
+     * write the message at all.
+     *
+     * The default (`false`) is what every direct producer wants: `ctx.run` in a
+     * workflow body / queue handler, and the agent loop's / voice session's
+     * dispatchers all hand real values straight here. Setting it when the args
+     * are NOT already encoded, or leaving it unset when they are, both land the
+     * same way — the shard's single `decodeWire` sees a mismatched number of
+     * encodes — and the `Date` case is silent, so state it from the hop that
+     * knows.
+     */
+    argsAlreadyEncoded?: boolean;
     /** Worker `env` — read `LUNORA_ORIGIN_URL` + `LUNORA_ADMIN_TOKEN` at call time. */
     env: Record<string, unknown>;
     /** Injectable fetch (tests); defaults to the global. */
@@ -202,7 +219,11 @@ interface DispatchRunnerOptions {
 
 /**
  * Build a {@link DispatchRunFunction} that invokes a Lunora function by POSTing
- * to `/_lunora/scheduler/dispatch` with the admin bearer. The parsed JSON body
+ * to `/_lunora/scheduler/dispatch` with the admin bearer. `args` go out in wire
+ * form (see `wireArgs` below) so a `bigint`/`Date`/bytes argument survives to
+ * the handler, which the shard's single `decodeWire` restores.
+ *
+ * The parsed JSON body
  * (the function's return value) is resolved; an empty body resolves to
  * `undefined`. A non-ok response is rethrown as a {@link LunoraError} carrying
  * the dispatch endpoint's original `code`/`status`/`data` (so consumers can map
@@ -216,6 +237,37 @@ interface DispatchRunnerOptions {
  */
 const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFunction => {
     const { label } = options;
+
+    /**
+     * Put `args` in wire form for the POST body — the producer half of the
+     * bracket the shard closes with its single `decodeWire(payload.args ?? {})`.
+     *
+     * Without it a `bigint` argument throws inside the `JSON.stringify` below
+     * before the request is ever sent, and a `Date` (or bytes) reaches the
+     * handler as an ISO string (or a numeric-keyed object) — which fails nothing
+     * until the handler does date arithmetic on it. `encodeWire` is the identity
+     * on pure JSON, so an existing caller's request body is byte for byte what
+     * it always was.
+     *
+     * `undefined` args normalise to `{}` here rather than being encoded: a
+     * top-level `undefined` would otherwise encode to the tagged form, and the
+     * endpoint already reads an absent `args` as `{}`.
+     *
+     * The runner's `argsAlreadyEncoded` option skips it for the one producer
+     * whose args arrive in wire form off a queue. Nothing between here
+     * and the shard encodes or decodes — `handleSchedulerDispatch` and
+     * `dispatchToShard` in `@lunora/runtime` forward `args` verbatim — which is
+     * load-bearing, because `decodeWire` is not idempotent: a second pass
+     * flattens a `Date` to `{}`.
+     */
+    const wireArgs = (args: unknown): unknown => {
+        if (args === undefined) {
+            return {};
+        }
+
+        return options.argsAlreadyEncoded === true ? args : encodeWire(args);
+    };
+
     const globalFetch = (globalThis as { fetch?: typeof fetch }).fetch;
     // Bind the global `fetch` to `globalThis` so calling it through a captured
     // reference cannot trip "Illegal invocation" in receiver-strict runtimes.
@@ -303,7 +355,7 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
                     // path, so a per-MESSAGE id reused across a handler's several
                     // calls would make the second call return the first's cached
                     // result. `JSON.stringify` omits the key when unset.
-                    body: JSON.stringify({ args: args ?? {}, functionPath: function_.__lunoraRef, id: runOptions.dedupId, shardKey: runOptions.shardKey }),
+                    body: JSON.stringify({ args: wireArgs(args), functionPath: function_.__lunoraRef, id: runOptions.dedupId, shardKey: runOptions.shardKey }),
                     headers,
                     method: "POST",
                     signal: deadline.signal,
