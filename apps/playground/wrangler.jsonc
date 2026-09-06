@@ -48,11 +48,12 @@
     ],
     "vars": {
         "PUBLIC_STORAGE_BASE_URL": "https://files.example.com",
-        // REPLACE before deploying to production — both point at the Worker's
-        // own origin so the SchedulerDO can dispatch HTTP callbacks back into it.
-        // `LUNORA_ORIGIN_URL` is the binding the SchedulerDO reads (SSRF-safe);
-        // `LUNORA_WORKER_ORIGIN` is the origin the app passes to `createScheduler`.
-        // Pointing at localhost in production silently breaks scheduled jobs.
+        // REPLACE both before deploying to production — pointing at localhost
+        // there silently breaks the features that call back into the Worker.
+        // `LUNORA_ORIGIN_URL` is the binding the SchedulerDO dispatches from
+        // (read off its own env, so a schedule request cannot steer it);
+        // `LUNORA_WORKER_ORIGIN` is what `.global({ origin })` fans reverse
+        // cross-shard relations across.
         "LUNORA_WORKER_ORIGIN": "http://localhost:8787",
         "LUNORA_ORIGIN_URL": "http://localhost:8787",
     },

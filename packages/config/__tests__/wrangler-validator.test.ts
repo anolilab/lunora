@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { WranglerConfig } from "../src/cloudflare/wrangler-validator";
+import type { WranglerConfig, WranglerValidationReport } from "../src/cloudflare/wrangler-validator";
 import {
     REQUIRED_COMPATIBILITY_DATE,
     REQUIRED_FLAG,
@@ -223,6 +223,94 @@ describe("wrangler-validator", () => {
             // The null entry is skipped; the missing "DB" binding is reported structurally.
             expect(report.valid).toBe(false);
             expect(report.errors.some((line) => line.includes("d1_databases"))).toBe(true);
+        });
+
+        describe("the SchedulerDO dispatch origin", () => {
+            // The DO reads LUNORA_ORIGIN_URL from its own env and refuses to
+            // schedule without it, and nothing provisions the var — so an app can
+            // ship with every ctx.scheduler.runAfter failing. A WARNING, never an
+            // error: `vars` cannot see a secret or a dashboard value.
+            const ORIGIN_VAR = "LUNORA_ORIGIN_URL";
+
+            const withScheduler = (extra: Partial<WranglerConfig> = {}, binding: Record<string, unknown> = {}): WranglerConfig => {
+                return {
+                    compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                    compatibility_flags: [REQUIRED_FLAG],
+                    durable_objects: {
+                        bindings: [
+                            { class_name: "ShardDO", name: "SHARD" },
+                            { class_name: "SchedulerDO", name: "SCHEDULER", ...binding },
+                        ],
+                    },
+                    migrations: [{ new_sqlite_classes: ["ShardDO", "SchedulerDO"] }],
+                    ...extra,
+                };
+            };
+
+            const originWarnings = (report: WranglerValidationReport): string[] => report.warnings.filter((line) => line.includes(ORIGIN_VAR));
+
+            it("warns — never errors — when a declared SchedulerDO has no origin var", () => {
+                expect.assertions(3);
+
+                const report = validateWranglerConfig(withScheduler());
+
+                // Erroring would block a deploy whose origin is a `wrangler secret
+                // put` value, and kill the dev server on the run that wrote the binding.
+                expect(report.valid).toBe(true);
+                expect(originWarnings(report)).toHaveLength(1);
+                expect(originWarnings(report)[0]).toContain(`vars.${ORIGIN_VAR} is unset`);
+            });
+
+            it("stays silent once the var carries a non-empty value", () => {
+                expect.assertions(1);
+
+                expect(originWarnings(validateWranglerConfig(withScheduler({ vars: { LUNORA_ORIGIN_URL: "https://app.example" } })))).toEqual([]);
+            });
+
+            it("treats an empty or non-string value as unset", () => {
+                expect.assertions(2);
+
+                expect(originWarnings(validateWranglerConfig(withScheduler({ vars: { LUNORA_ORIGIN_URL: "" } })))).toHaveLength(1);
+                expect(originWarnings(validateWranglerConfig(withScheduler({ vars: { LUNORA_ORIGIN_URL: 123 } })))).toHaveLength(1);
+            });
+
+            it("ignores a SchedulerDO owned by another script — that Worker's env holds the var", () => {
+                expect.assertions(1);
+
+                // Same carve-out the migration and unexported-class checks make: a
+                // `script_name` binding names a class this config does not deploy,
+                // so this config's `vars` say nothing about its origin.
+                expect(originWarnings(validateWranglerConfig(withScheduler({}, { script_name: "scheduler-worker" })))).toEqual([]);
+            });
+
+            it("stays silent for a project with no SchedulerDO binding", () => {
+                expect.assertions(1);
+
+                const report = validateWranglerConfig({
+                    compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                    compatibility_flags: [REQUIRED_FLAG],
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                });
+
+                expect(originWarnings(report)).toEqual([]);
+            });
+
+            it("names the environment under --env, where vars do not inherit", () => {
+                expect.assertions(2);
+
+                // The top level has the var; env.production does not inherit it
+                // (`vars` is non-inheritable), so a message naming the bare `vars`
+                // would point at a block that already looks correct.
+                const config = withScheduler({
+                    env: { production: { durable_objects: { bindings: [{ class_name: "SchedulerDO", name: "SCHEDULER" }] } } },
+                    vars: { LUNORA_ORIGIN_URL: "https://app.example" },
+                });
+
+                const warnings = originWarnings(validateWranglerConfig(config, undefined, "production"));
+
+                expect(warnings).toHaveLength(1);
+                expect(warnings[0]).toContain(`env.production.vars.${ORIGIN_VAR}`);
+            });
         });
 
         it("rejects a wildcard CORS origin paired with credentials in vars", () => {

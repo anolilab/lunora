@@ -1241,6 +1241,50 @@ const validateCorsVariables = (wrangler: WranglerConfig, errors: string[]): void
     }
 };
 
+/** The `vars` key the SchedulerDO reads its dispatch origin from — see {@link validateSchedulerOrigin}. */
+const SCHEDULER_ORIGIN_VAR = "LUNORA_ORIGIN_URL";
+
+/**
+ * A declared `SchedulerDO` with no `LUNORA_ORIGIN_URL` cannot dispatch anything.
+ *
+ * The DO takes its callback origin from its OWN env — never from the schedule
+ * request, which would be an SSRF vector — and refuses to enqueue without it
+ * (`ORIGIN_NOT_CONFIGURED`). Nothing provisions the var: `reconcileDurableObjects`
+ * writes the SCHEDULER binding off a bare `export { SchedulerDO }` and writes no
+ * `vars`, and no scaffolder produces this key. So an app reaches production with
+ * every `ctx.scheduler.runAfter` failing, discovered only when some unrelated
+ * procedure first schedules — nowhere near the cause.
+ *
+ * A WARNING, and for the same reason as the unexported-class check below: `vars`
+ * is a PARTIAL view of the Worker env. It cannot see a `wrangler secret put`
+ * value (which `lunora deploy` itself recommends for this key), a var set in the
+ * dashboard, or another Worker's env. Each of those fails CLOSED, so erroring
+ * would block a deploy that works — or kill the dev server on the very run in
+ * which Lunora auto-wrote the binding. The reported problem was silence, not
+ * permissiveness, and a warning ends the silence.
+ *
+ * A binding carrying `script_name` names a class in ANOTHER Worker, whose env
+ * owns the var; same carve-out as the migration and unexported-class checks.
+ */
+const validateSchedulerOrigin = (wrangler: WranglerConfig, environment: string | undefined, warnings: string[]): void => {
+    const declaresScheduler = objectBindingEntries(wrangler.durable_objects?.bindings).some(
+        (binding) => binding.class_name === "SchedulerDO" && binding.script_name === undefined,
+    );
+
+    if (!declaresScheduler || isNonEmptyString(wrangler.vars?.[SCHEDULER_ORIGIN_VAR])) {
+        return;
+    }
+
+    // `vars` is non-inheritable, so under `--env <name>` the top-level block is
+    // NOT what wrangler ships — naming the bare key would send the reader to a
+    // `vars` block that already has it.
+    const scope = environment === undefined ? "vars" : `env.${environment}.vars`;
+
+    warnings.push(
+        `durable_objects.bindings declares the SchedulerDO but ${scope}.${SCHEDULER_ORIGIN_VAR} is unset — the DO reads its dispatch origin from its own env and refuses to schedule without it, so every ctx.scheduler.runAfter/runAt fails with ORIGIN_NOT_CONFIGURED. Set ${scope}.${SCHEDULER_ORIGIN_VAR} to the worker's public URL, or \`wrangler secret put ${SCHEDULER_ORIGIN_VAR}\` (ignore this if it is already set as a secret or in the dashboard).`,
+    );
+};
+
 /**
  * Resolve the env-scoped view for {@link validateWranglerConfig} and fold in
  * its "unverified key" warning. Pulled out purely to keep
@@ -1377,6 +1421,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
     validateCache(wrangler, errors);
     validateExports(wrangler, errors);
     validateCorsVariables(wrangler, errors);
+    validateSchedulerOrigin(wrangler, environment, warnings);
 
     return { errors, valid: errors.length === 0, warnings };
 };

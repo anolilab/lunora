@@ -19,7 +19,7 @@ import type { FullConfig } from "@playwright/test";
  * Worker env comes from `.dev.vars` (the plugin loads it, like real dev). We
  * write a deterministic e2e `.dev.vars` on setup and restore the developer's on
  * teardown — `LUNORA_E2E=true` is what gates the `/test/*` routes, and
- * `LUNORA_WORKER_ORIGIN` points the scheduler's HTTP callbacks back at :5173.
+ * `LUNORA_ORIGIN_URL` points the scheduler's HTTP callbacks back at :5173.
  *
  * Reliability notes (each of these was an observed boot-failure mode):
  *   - The child's stdout/stderr are always captured into a bounded ring buffer
