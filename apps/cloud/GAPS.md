@@ -54,7 +54,7 @@ The rest of this list has since shipped — see the status pass below.
 | R3#2 deployment health charts    | ✅ **Shipped.** The blocker row above was stale: `outcome` (blob3) landed 2026-08-13. `src/telemetry/traffic-read.ts` reads the metering stream per script, so passing a single script name gives one deployment's volume, error rate and latency.                                                                                                         |
 | R3#5 onboarding checklist        | ✅ **Shipped** — `lunora/onboarding.ts` + `src/client/OnboardingChecklist.tsx`, on the Projects tab until the org's first deployment is live. Derived from real rows, never stored.                                                                                                                                                                        |
 | R3#7 deploy-key roll UX          | ✅ **Shipped** — `deploy_keys.roll` does issue+revoke in one transactional mutation, so neither the two-live-keys nor the no-keys window exists. Ingest keys are refused (their stored cipher would point at a revoked secret).                                                                                                                            |
-| R3#9 integrations hub            | 🔨 Still open — nothing in `src/client/`.                                                                                                                                                                                                                                                                                                                  |
+| R3#9 integrations hub            | Superseded by the 2026-08-31 pass below — shipped.                                                                                                                                                                                                                                                                                                         |
 
 Also shipped in that pass: a **Traffic tab** (`lunora/traffic.ts`,
 `src/client/TrafficSection.tsx`) — visitors by country, top paths, response-code
@@ -610,29 +610,32 @@ depend on the platform's own telemetry pipeline being healthy.
 #### Backlog items 2–9 — status as of 2026-07-29
 
 (This list had collapsed into a single paragraph through successive edits; it is
-restored here with each item's verified status.)
+restored here with each item's verified status. Re-verified against the code
+2026-09-06: items 2, 5, 7 and 9 read 🔨 open here long after the status passes
+above recorded them shipped — trust the code, not this list.)
 
-2. **Deployment health charts on the project page** (🔨 open — prerequisite now
-   shipped) — request volume / error rate per deployment. The stated blocker is
-   cleared: the dispatcher's AE data point now carries an `outcome` status class
-   (blob3) and a low-cardinality `route` label (blob4) alongside the existing
-   script/plan blobs, so error rate and per-endpoint volume are both readable
-   from the metering stream. A blue/green alias resolves to the versioned script
-   name, so blob1 already carries the deploy identity. What remains is the chart
-   itself — the read query + the project-page panel.
+2. **Deployment health charts on the project page** (✅ shipped) — request
+   volume / error rate per deployment. `src/telemetry/traffic-read.ts` reads the
+   metering stream per script, so a single script name gives one deployment's
+   volume, error rate and latency. The `outcome` status class (blob3) that this
+   row once waited on landed 2026-08-13.
 3. **Log viewer upgrade** (✅ shipped) — severity chips, filter bar, and
    log↔trace correlation landed with B2's full log-management pass.
 4. **Design-system pass** (✅ shipped) — the aurora redesign covered the token
    palette, severity ramp, and empty states across every screen.
-5. **Onboarding checklist** (🔨 open) — first-run "create project → issue key →
-   first deploy → see it live" checklist. No component exists in `src/client/`.
+5. **Onboarding checklist** (✅ shipped) — `lunora/onboarding.ts` +
+   `src/client/OnboardingChecklist.tsx`, on the Projects tab until the org's
+   first deployment is live. Derived from real rows, never stored.
 6. **Time-range picker** (✅ shipped) — `src/client/TimeRangeProvider.tsx` +
    `time-range.ts` provide the shared presets.
-7. **Deploy-key roll UX** (🔨 open) — one-click atomic issue+revoke in the keys
-   tab. Not present in `DeployKeys*.tsx`.
+7. **Deploy-key roll UX** (✅ shipped) — `deploy_keys.roll` does issue+revoke in
+   one transactional mutation, so neither the two-live-keys nor the no-keys
+   window exists. Ingest keys are refused (their stored cipher would point at a
+   revoked secret).
 8. **MCP surface** (✅ shipped) — `src/mcp/tools.ts` exposes the control plane
    over `/v1/mcp`, with per-route `RouteSpec.mcp` opt-in and a hard deny-list
    for `tokens`/`auth`/`mcp`.
-9. **Integrations hub** (🔨 open) — OAuth connect cards for the GitHub App
-   install and the Creem portal, replacing bare settings fields. Nothing in
-   `src/client/`.
+9. **Integrations hub** (✅ shipped, minimally) — `src/client/`'s Integrations
+   tab lists the org's GitHub App installations and can release (unclaim) one,
+   the inverse `claim` never had. Connect cards for the Creem portal are still
+   bare settings fields.
