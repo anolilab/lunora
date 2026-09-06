@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.163...@lunora/codegen@1.0.0-alpha.164) (2026-09-06)
+
+### Features
+
+* **codegen:** discover the crons configured on createWorker ([#636](https://github.com/anolilab/lunora/issues/636)) ([218342f](https://github.com/anolilab/lunora/commit/218342f8e612b6852f9f918abb78f7a0c7fc7273))
+
 ## @lunora/codegen [1.0.0-alpha.163](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.162...@lunora/codegen@1.0.0-alpha.163) (2026-09-06)
 
 
