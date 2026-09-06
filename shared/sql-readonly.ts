@@ -53,6 +53,13 @@ interface SqlRejection {
 /**
  * A statement is only allowed when it *leads* with a read verb. `EXPLAIN` /
  * `EXPLAIN QUERY PLAN` prefixes are permitted (they describe, never mutate).
+ *
+ * A bare `VALUES (1), (2)` — a read-only row constructor in SQLite — is refused
+ * by this list rather than overlooked by it. The rule the diagnostic states is
+ * exactly the rule enforced ("only SELECT / WITH / EXPLAIN"), and an operator
+ * who wants those rows types `SELECT 1 UNION ALL SELECT 2`. Widening the lead
+ * set buys nothing and adds a verb the CTE scan below would then have to reason
+ * about.
  */
 const READONLY_LEAD = /^(?:explain\s+(?:query\s+plan\s+)?)?(?:select|with)\b/iu;
 
@@ -63,8 +70,18 @@ const READONLY_LEAD = /^(?:explain\s+(?:query\s+plan\s+)?)?(?:select|with)\b/iu;
  * alone aren't enough. A benign query that merely mentions one of these words in
  * a string literal is rejected too — an acceptable trade for an admin tool that
  * must never corrupt the doc-store's FTS / aggregate / rank shadow tables.
+ *
+ * `replace` is the one word on this list that is ALSO a core read-only scalar
+ * (`replace(x, 'a', 'b')`), so it gets its own arm: a bare `\breplace\b` refused
+ * an ordinary `SELECT replace(...)` with a message naming a rule the operator
+ * had not broken. The negative lookahead is the whole discrimination — the write
+ * form is `REPLACE INTO`, never `REPLACE (`. It is deliberately the lookahead
+ * and not a `replace\s+into` match, so an inline block comment wedged between
+ * the two words — whitespace to SQLite's tokenizer, but not to `\s` — still
+ * fails the scan. The residual false refusal (a comment between `replace` and
+ * its own paren) errs toward refusing, and nobody writes it.
  */
-const FORBIDDEN_KEYWORD = /\b(?:alter|attach|create|delete|detach|drop|insert|pragma|reindex|replace|truncate|update|vacuum)\b/iu;
+const FORBIDDEN_KEYWORD = /\b(?:alter|attach|create|delete|detach|drop|insert|pragma|reindex|truncate|update|vacuum)\b|\breplace\b(?!\s*\()/iu;
 
 /** The statement's first word, used to point the "not read-only" diagnostic somewhere useful. */
 const LEADING_WORD = /^\w+/u;

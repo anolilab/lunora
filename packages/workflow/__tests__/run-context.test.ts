@@ -1,6 +1,7 @@
 import { v } from "@lunora/values";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { encodeWire } from "../../../shared/wire-codec";
 import { defineWorkflowEvent } from "../src/define-event";
 import { defineStep } from "../src/define-step";
 import { createWorkflowRunContext } from "../src/run-context";
@@ -31,6 +32,29 @@ const makeEvent = (): WorkflowEventLike<{ orderId: string }> => {
 describe("createWorkflowRunContext", () => {
     afterEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it("decodes wire-form params, so a scheduled workflow sees real bigint and Date values", () => {
+        expect.assertions(2);
+
+        // A scheduled workflow's args arrive in wire form on purpose: Workflow
+        // `params` are JSON-serialised into durable storage, so a decoded bigint
+        // would fail creation and a decoded Date would flatten to a string. This is
+        // the first point that can hand the handler the real values.
+        const event = { ...makeEvent(), payload: encodeWire({ at: new Date(0), total: 9_007_199_254_740_993n }) as Record<string, unknown> };
+        const ctx = createWorkflowRunContext({ env: { LUNORA_ORIGIN_URL: "x" }, event, exportName: "orderPipeline", step: makeStep() });
+
+        expect(ctx.params).toStrictEqual({ at: new Date(0), total: 9_007_199_254_740_993n });
+
+        // Pure-JSON params are untouched, so a directly created instance is unaffected.
+        const plain = createWorkflowRunContext({
+            env: { LUNORA_ORIGIN_URL: "x" },
+            event: { ...makeEvent(), payload: { orderId: "o1" } },
+            exportName: "orderPipeline",
+            step: makeStep(),
+        });
+
+        expect(plain.params).toStrictEqual({ orderId: "o1" });
     });
 
     it("assembles the handler context with params, event, step, env, run, and log", () => {
@@ -125,7 +149,9 @@ describe("createWorkflowRunContext", () => {
     it("wires ctx.run through the shared dispatch runner (POST + workflow label on error)", async () => {
         expect.assertions(3);
 
-        const fetchImpl = vi.fn<typeof fetch>(async () => okResponse(JSON.stringify({ ok: true })));
+        // The shard's envelope (`ShardDO.buildDispatchResponse`), not the bare
+        // return value — `ctx.run` unwraps `result` and `decodeWire`s it.
+        const fetchImpl = vi.fn<typeof fetch>(async () => okResponse(JSON.stringify({ result: { ok: true } })));
         const ctx = createWorkflowRunContext({
             env: { LUNORA_ADMIN_TOKEN: "secret", LUNORA_ORIGIN_URL: "https://app.example.com" },
             event: makeEvent(),

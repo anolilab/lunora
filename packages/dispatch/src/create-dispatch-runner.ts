@@ -12,6 +12,7 @@ import { isLunoraError, LunoraError } from "@lunora/errors";
 
 import { abortDeadline } from "../../../shared/abort-deadline";
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
+import { decodeWire, encodeArgsOrThrow } from "../../../shared/wire-codec";
 import type { ArgsOf, DispatchRunFunction, FunctionReference, RunFunctionOptions } from "./types";
 
 /** The reserved worker endpoint that re-dispatches a server-initiated function call to its shard. */
@@ -198,14 +199,28 @@ interface DispatchRunnerOptions {
     identity?: { claims?: Record<string, unknown>; userId?: string };
     /** Package label for directed error messages, e.g. `@lunora/queue`. */
     label: string;
+
+    /**
+     * W3C `traceparent` of the work that is dispatching, forwarded so the callee
+     * JOINS this trace instead of minting a fresh one.
+     *
+     * The trigger tiers are where this matters: a queue batch or a cron fire opens
+     * its own trace (there is no inbound `traceparent` on a queue message or a cron
+     * controller), and without forwarding it every function the handler invokes was
+     * a separate, unrelated trace — the trigger span a childless root and its work
+     * a set of orphans. Absent → the callee mints its own trace, the prior
+     * behaviour and the right answer for a dispatch that belongs to nothing.
+     */
+    traceparent?: string;
 }
 
 /**
  * Build a {@link DispatchRunFunction} that invokes a Lunora function by POSTing
- * to `/_lunora/scheduler/dispatch` with the admin bearer. The parsed JSON body
- * (the function's return value) is resolved; an empty body resolves to
- * `undefined`. A non-ok response is rethrown as a {@link LunoraError} carrying
- * the dispatch endpoint's original `code`/`status`/`data` (so consumers can map
+ * to `/_lunora/scheduler/dispatch` with the admin bearer. The hop is
+ * wire-bracketed in both directions (see the `encodeArgsOrThrow` call below); an
+ * empty body resolves to `undefined`. A non-ok response is rethrown as a
+ * {@link LunoraError} carrying the dispatch endpoint's original
+ * `code`/`status`/`data` (so consumers can map
  * a deterministic 4xx to a non-retryable failure); an unparseable error body
  * falls back to `INTERNAL`. A non-empty body that is not valid JSON is a
  * malformed response (e.g. an intermediary's HTML error page) and throws an
@@ -240,6 +255,13 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
 
         const url = `${trimTrailingSlashes(origin)}${SCHEDULER_DISPATCH_PATH}`;
         const headers: Record<string, string> = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+
+        // Joins the caller's trace rather than starting a new one. Read per call
+        // (not captured at construction) so a runner built once per invocation
+        // still reflects the trace it was given.
+        if (options.traceparent !== undefined && options.traceparent.length > 0) {
+            headers.traceparent = options.traceparent;
+        }
 
         // Attribute the dispatch to a verified caller when one is supplied — the
         // shard reconstructs identity from these headers independently of the
@@ -303,7 +325,22 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
                     // path, so a per-MESSAGE id reused across a handler's several
                     // calls would make the second call return the first's cached
                     // result. `JSON.stringify` omits the key when unset.
-                    body: JSON.stringify({ args: args ?? {}, functionPath: function_.__lunoraRef, id: runOptions.dedupId, shardKey: runOptions.shardKey }),
+                    //
+                    // CANONICAL NOTE on wire-bracketing a dispatch hop — the
+                    // scheduler, the workpool and `ctx.scheduler` on an httpAction
+                    // point here rather than restate it. Plain JSON cannot carry a
+                    // `bigint` (`JSON.stringify` throws), and it flattens a
+                    // `Uint8Array` to `{"0":1,…}` and a `Date` to an ISO string. The
+                    // far end — `ShardDO` — `decodeWire`s `payload.args` and answers
+                    // `encodeWire(result)`, so BOTH ends of the hop must be bracketed
+                    // or the two halves disagree. `encodeWire`/`decodeWire` are
+                    // identity for pure-JSON values, so nothing else changes.
+                    body: JSON.stringify({
+                        args: encodeArgsOrThrow(label, function_.__lunoraRef, args ?? {}),
+                        functionPath: function_.__lunoraRef,
+                        id: runOptions.dedupId,
+                        shardKey: runOptions.shardKey,
+                    }),
                     headers,
                     method: "POST",
                     signal: deadline.signal,
@@ -336,8 +373,10 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
                 return undefined;
             }
 
+            let parsed: unknown;
+
             try {
-                return JSON.parse(text);
+                parsed = JSON.parse(text);
             } catch {
                 // A non-empty body that isn't valid JSON can't be a function's
                 // JSON-encoded return value — it's a malformed response (an
@@ -347,6 +386,30 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
                     status: response.status,
                 });
             }
+
+            // The shard answers an ENVELOPE — `{ result }`, or `{ commitCursor,
+            // result }` / `{ lastMutationId, result }` for a mutation (built by the
+            // shard's `buildDispatchResponse`) — never the bare return value, which
+            // is why an unwrapped `parsed` handed every `ctx.run` caller
+            // `{ result: … }` where a workflow's `order.status` belonged.
+            //
+            // Insist on the envelope SHAPE before reading it: `null` and a bare
+            // scalar are not objects, `typeof [] === "object"` lets an array past,
+            // and an object missing the key reads `undefined` as "returned
+            // nothing". Requiring `result` costs nothing — a genuine `undefined`
+            // return is emitted as `{"result":["$lunora.wire$","undefined"]}`, with
+            // the key always present.
+            if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed) || !("result" in parsed)) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `${label}: function dispatch returned a JSON body that is not a { result } envelope (${String(response.status)}): ${text}`,
+                    {
+                        status: response.status,
+                    },
+                );
+            }
+
+            return decodeWire((parsed as { result?: unknown }).result);
         } finally {
             deadline.dispose();
         }

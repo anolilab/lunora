@@ -573,19 +573,19 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Public write emits no structured event"
     },
     {
-        "cacheKey": "http_action_missing_auth_guard:http:24",
+        "cacheKey": "http_action_missing_auth_guard:http:50",
         "categories": [
             "SECURITY"
         ],
         "description": "An `httpAction`/`httpRoute` handler performs a side effect (`ctx.runMutation`/`ctx.runAction`/a `ctx.db` write) but never reads `ctx.auth` — an unauthenticated HTTP endpoint driving a state change, bypassing the identity/RLS checks that guard the rest of the app.",
-        "detail": "`httpAction` handler `<module>` (http:24) calls `ctx.runAction` but never reads `ctx.auth` — an anonymous caller can drive this write. Authenticate the request before the side effect.",
+        "detail": "`httpAction` handler `<module>` (http:50) calls `ctx.runAction` but never reads `ctx.auth` — an anonymous caller can drive this write. Authenticate the request before the side effect.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
             "exportName": "<module>",
             "file": "http",
             "kind": "httpAction",
-            "line": 24,
+            "line": 50,
             "sideEffect": "runAction"
         },
         "name": "http_action_missing_auth_guard",

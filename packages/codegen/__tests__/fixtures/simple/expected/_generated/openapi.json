@@ -71,7 +71,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": false,
                   "properties": {
                     "channelId": {
                       "description": "Id<\"channels\">",
@@ -170,7 +169,6 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": false,
                 "properties": {
                   "text": {
                     "type": "string"
@@ -211,7 +209,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "channelId": {
                         "description": "Id<\"channels\">",
@@ -278,7 +275,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "channelId": {
                         "description": "Id<\"channels\">",
@@ -302,6 +298,9 @@
                       },
                       "tags": {
                         "additionalProperties": {
+                          "type": "string"
+                        },
+                        "propertyNames": {
                           "type": "string"
                         },
                         "type": "object"

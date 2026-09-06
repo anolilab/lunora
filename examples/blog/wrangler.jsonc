@@ -36,7 +36,11 @@
     ],
     // Kept in sync with `LUNORA_CRON_TRIGGERS` in `lunora/_generated/crons.ts`,
     // which codegen derives from `lunora/crons.ts`. Declare schedules there, not
-    // here — the vite plugin reconciles this list on the next `lunora codegen`.
+    // here — the dev server's vite plugin reconciles this list on every schema
+    // save, and `lunora deploy` / `lunora prepare` reconcile it before shipping.
+    // The bare `lunora codegen` command does NOT: it writes `_generated/` and
+    // leaves this file alone, so a schedule added while the dev server is down
+    // reaches wrangler only on the next deploy.
     "triggers": {
         "crons": ["0 3 * * *"],
     },

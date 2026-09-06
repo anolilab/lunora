@@ -61,6 +61,7 @@ export type {
     ShardingInfo,
     StorageListFn,
     StorageObject,
+    TriggerTrace,
     VectorIndexSummary,
     VectorIntrospector,
     VectorQueryMatch,

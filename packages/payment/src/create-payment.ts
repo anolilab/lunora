@@ -389,7 +389,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // provider — otherwise a `check({ referenceId })` with neither `featureId` nor `priceId`
             // would reach a provider-owned adapter unscoped and could fail open ("customer exists").
             if (input.featureId === undefined && input.priceId === undefined) {
-                throw new LunoraPaymentError("CONFIG_INVALID", "check() requires a featureId or priceId");
+                throw new LunoraPaymentError("VALIDATION_ERROR", "check() requires a featureId or priceId");
             }
 
             // When the provider owns entitlement truth (e.g. Autumn), delegate the whole decision to
@@ -409,7 +409,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // Unreachable at runtime — the arg-shape guard above already rejected "neither", and the
             // priceId branch returned. This narrows `featureId` to `string` for `evaluateFeature` below.
             if (input.featureId === undefined) {
-                throw new LunoraPaymentError("CONFIG_INVALID", "check() requires a featureId or priceId");
+                throw new LunoraPaymentError("VALIDATION_ERROR", "check() requires a featureId or priceId");
             }
 
             if (!options.entitlements) {

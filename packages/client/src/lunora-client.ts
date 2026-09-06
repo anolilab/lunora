@@ -776,6 +776,11 @@ const reconstructErrorWithRetryAfter = (
  * path and the async outbox flush, where the throw has no call-site stack. Prefixing
  * with `label` (e.g. `args for 'messages:send'`) turns it into an actionable message
  * while preserving the original via `cause`.
+ *
+ * The client's broader-payload sibling of `shared/wire-codec.ts`'s
+ * `encodeArgsOrThrow`, which the call-envelope producers share: this one also
+ * labels a whisper payload and a shape's args, neither of which is a function's
+ * `args`, so it keeps its own free-form `label`.
  */
 const encodeCallArgs = (payload: unknown, label: string): unknown => {
     try {
@@ -786,6 +791,20 @@ const encodeCallArgs = (payload: unknown, label: string): unknown => {
         throw new TypeError(`LunoraClient: cannot encode ${label} — ${reason}`, error instanceof Error ? { cause: error } : undefined);
     }
 };
+
+/**
+ * Undo the scheduler's `encodeWire(args)` on a record read back off the admin
+ * routes, so `listScheduledJobs` / `listDeadJobs` / `subscribeScheduledJobs`
+ * answer the same values `@lunora/scheduler`'s `createScheduler.list()` answers
+ * a shard-side reader for the SAME record.
+ *
+ * The decode has to happen HERE and not in the worker's admin proxy: that proxy
+ * re-serializes with `JSON.stringify`, which throws on the very `bigint` the
+ * encode exists to carry, so decoding on the way through would turn a job with a
+ * `bigint` argument into a 500. Identity for pure-JSON args.
+ */
+const decodeRecordArgs = (record: ScheduleRecord): ScheduleRecord =>
+    "args" in record ? { ...record, args: decodeWire(record.args) as Record<string, unknown> } : record;
 
 /** One demuxed result slot of a {@link LunoraClient.batch} call (plan 088). */
 type BatchSlot = { error: LunoraClientError; ok: false } | { ok: true; value: unknown };
@@ -2583,7 +2602,7 @@ class LunoraClient {
 
         const body = (await this.adminFetch(SCHEDULED_PATH, "GET")) as { records?: ScheduleRecord[] };
 
-        return body.records ?? [];
+        return (body.records ?? []).map((record) => decodeRecordArgs(record));
     }
 
     /**
@@ -2634,7 +2653,7 @@ class LunoraClient {
         // one, so stopping at the first page would hide exactly the backlog the
         // operator opened it for. Returning `records` alone made this silently
         // truncate the moment the route grew its limit.
-        return await collectPages<ScheduleRecord>(
+        const records = await collectPages<ScheduleRecord>(
             async (cursor) =>
                 (await this.adminFetch(cursor === undefined ? SCHEDULED_DEAD_PATH : `${SCHEDULED_DEAD_PATH}?cursor=${encodeURIComponent(cursor)}`, "GET")) as {
                     cursor?: string;
@@ -2642,6 +2661,8 @@ class LunoraClient {
                     truncated?: boolean;
                 },
         );
+
+        return records.map((record) => decodeRecordArgs(record));
     }
 
     /**
@@ -2817,7 +2838,7 @@ class LunoraClient {
                             // reconnect at the initial delay forever instead of
                             // backing off (mirrors the shard socket's fix).
                             reconnect.reset();
-                            onJobs(message.records);
+                            onJobs(message.records.map((record) => decodeRecordArgs(record)));
                         }
                     } catch {
                         /* a non-JSON frame — ignore */

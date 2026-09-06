@@ -162,11 +162,117 @@ const subscriptionFromStripe = (input: unknown): Subscription => {
     };
 };
 
+/**
+ * One delivered event, in the shape every case mapper below takes.
+ *
+ * `base` is the identity every mapped action carries and spreads in; `object` is the event's data
+ * object and `currency` the currency read off it. One named argument rather than three positional
+ * ones, so every case lifted out of `mapEvent` — the checkout session below, the dispute after it,
+ * the next — takes the same shape instead of repeating its own preamble.
+ */
+interface StripeEvent {
+    base: Pick<WebhookAction, "eventId" | "provider" | "raw">;
+    currency: string;
+    object: Record<string, unknown>;
+}
+
+/**
+ * The transition a completed/settled Checkout Session implies, decided by `payment_status`.
+ *
+ * SECURITY: money has only moved when Stripe says so. An `unpaid` session — or a missing/unknown
+ * `payment_status` — must never be recorded as captured or entitling; both branches fail closed to a
+ * non-entitling, still-advanceable state.
+ */
+const checkoutSessionAction = ({ base, currency, object }: StripeEvent): WebhookAction => {
+    const paymentStatus = readString(object, "payment_status");
+    const paid = paymentStatus === "paid" || paymentStatus === "no_payment_required";
+
+    if (readString(object, "mode") === "subscription") {
+        // Fail closed to a non-entitling `subscription.updated` (a no-op metadata patch); the
+        // authoritative active state still arrives via `customer.subscription.*`.
+        return {
+            ...base,
+            customerId: readString(object, "customer"),
+            referenceId: readReferenceId(object),
+            subscriptionId: readString(object, "subscription"),
+            type: paid ? "subscription.active" : "subscription.updated",
+        };
+    }
+
+    const paymentIntentId = readString(object, "payment_intent");
+
+    // Async payment methods can complete the session before a payment_intent id is attached.
+    // Capturing under the cs_… id here and the pi_… id on the later payment_intent.succeeded would
+    // create two rows for one payment — defer to payment_intent.succeeded, the authoritative
+    // capture, instead.
+    //
+    // Only when an intent is actually coming, though: a fully discounted session settles as
+    // `no_payment_required` and Stripe creates NO PaymentIntent for it, so deferring would drop the
+    // order entirely and an app fulfilling off `paymentSessions` would silently stop serving free
+    // orders. Those keep the cs_… id — the only id that payment ever has.
+    if (paymentIntentId === undefined && paymentStatus !== "no_payment_required") {
+        return { ...base, type: "unhandled" };
+    }
+
+    const amountTotal = readNumber(object, "amount_total");
+
+    return {
+        ...base,
+        amount: amountTotal === undefined ? undefined : money(BigInt(Math.round(amountTotal)), currency),
+        customerId: readString(object, "customer"),
+        referenceId: readReferenceId(object),
+        sessionId: paymentIntentId ?? readString(object, "id"),
+        // An unsettled session is `authorized`, the same state a `processing` PaymentIntent maps to —
+        // so `reconcile` agrees with the webhook — and the FSM keeps both exits open from there
+        // (`capture` on settlement, `fail` on a return). Recording it as captured is the one thing
+        // that cannot be undone: `captured` has no `fail` edge, by design, so a returned debit would
+        // leave the row captured forever.
+        type: paid ? "payment.captured" : "payment.authorized",
+    };
+};
+
+/**
+ * The transition a closed dispute implies — a reversal only when the chargeback was LOST.
+ *
+ * On Stripe nothing else reports that loss: Stripe is not merchant-of-record, so the merchant loses
+ * the money, yet the PaymentIntent stays `succeeded` and no refund is created — `charge.refunded`
+ * never fires and `reconcile` reads the intent as `captured` forever. Record it as a refund so a
+ * customer who charges back does not stay entitled. Every other outcome moves no money on its own: a
+ * won/`warning_closed` dispute leaves the capture standing, and the provisional
+ * `funds_withdrawn`/`funds_reinstated` pair nets to zero (both fall through to `unhandled`).
+ */
+const disputeClosedAction = ({ base, currency, object }: StripeEvent): WebhookAction => {
+    if (readString(object, "status") !== "lost") {
+        return { ...base, type: "unhandled" };
+    }
+
+    return {
+        ...base,
+        // The disputed amount, which can be less than the charge (partial dispute, currency drift).
+        // It is this event's own delta, not a cumulative total, so the default `"delta"` kind applies
+        // — as with the `charge.refunded` total it may follow.
+        amount: money(BigInt(Math.round(readNumber(object, "amount") ?? 0)), currency),
+        referenceId: readReferenceId(object),
+        // Not a refund the facade issued, so the dispute id can never consume a local refund marker
+        // and have its reversal silently dropped — see `sync.ts`.
+        refundId: readString(object, "id"),
+        // Payment rows are keyed on the PaymentIntent id. A dispute on a charge with no intent
+        // (legacy Charges API) has nothing to reverse here and no-ops as `unhandled`.
+        sessionId: readString(object, "payment_intent"),
+        type: "payment.refunded",
+    };
+};
+
 const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>): WebhookAction => {
     const base = { eventId, provider: "stripe" as const, raw: { object, type: eventType } };
     const currency = readString(object, "currency") ?? "usd";
+    const event: StripeEvent = { base, currency, object };
 
     switch (eventType) {
+        case "charge.dispute.closed": {
+            return disputeClosedAction(event);
+        }
+
         case "charge.refunded": {
             // Stripe's `amount_refunded` is the CUMULATIVE refunded-to-date total (it already sums
             // every prior partial refund), not this event's delta. Tag it `"absolute"` so the sync
@@ -181,50 +287,37 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             };
         }
 
-        case "checkout.session.completed": {
+        case "checkout.session.async_payment_failed": {
+            // The delayed debit was returned. For a payment the provisional `authorized` row fails;
+            // for a subscription the invoice behind the checkout never settled, so demote it to the
+            // non-entitling `past_due` and raise the dunning signal. A row already `past_due` (the
+            // usual case — `customer.subscription.created` arrives `incomplete`) is a no-op report.
             if (readString(object, "mode") === "subscription") {
-                // SECURITY: a completed subscription checkout is only ACTIVE when Stripe confirms it was
-                // paid (or no payment was required). An `unpaid` session (async payment still processing) —
-                // or a missing/unknown `payment_status` — must NOT entitle; fail closed to a non-entitling
-                // `subscription.updated` (a no-op metadata patch); the authoritative active state still
-                // arrives via `customer.subscription.*`.
-                const paymentStatus = readString(object, "payment_status");
-                const paid = paymentStatus === "paid" || paymentStatus === "no_payment_required";
-
                 return {
                     ...base,
                     customerId: readString(object, "customer"),
                     referenceId: readReferenceId(object),
                     subscriptionId: readString(object, "subscription"),
-                    type: paid ? "subscription.active" : "subscription.updated",
+                    type: "subscription.past_due",
                 };
             }
 
-            const paymentIntentId = readString(object, "payment_intent");
-
-            // Async payment methods can complete the session before a payment_intent id is
-            // attached. Capturing under the cs_… id here and the pi_… id on the later
-            // payment_intent.succeeded would create two rows for one payment — defer to
-            // payment_intent.succeeded, the authoritative capture, instead.
-            //
-            // Only when an intent is actually coming, though: a fully discounted session settles as
-            // `no_payment_required` and Stripe creates NO PaymentIntent for it, so deferring would
-            // drop the order entirely and an app fulfilling off `paymentSessions` would silently stop
-            // serving free orders. Those keep the cs_… id — the only id that payment ever has.
-            if (paymentIntentId === undefined && readString(object, "payment_status") !== "no_payment_required") {
-                return { ...base, type: "unhandled" };
-            }
-
-            const amountTotal = readNumber(object, "amount_total");
-
             return {
                 ...base,
-                amount: amountTotal === undefined ? undefined : money(BigInt(Math.round(amountTotal)), currency),
-                customerId: readString(object, "customer"),
                 referenceId: readReferenceId(object),
-                sessionId: paymentIntentId ?? readString(object, "id"),
-                type: "payment.captured",
+                sessionId: readString(object, "payment_intent") ?? readString(object, "id"),
+                type: "payment.failed",
             };
+        }
+
+        // A delayed-notification method (SEPA debit, ACH, Boleto, OXXO, Konbini) completes the
+        // session BEFORE the money settles — `payment_status: "unpaid"`, PaymentIntent `processing` —
+        // and settlement is signalled days later by `async_payment_succeeded` / `async_payment_failed`.
+        // Both settlement events carry the same Checkout Session object as `completed`, so they share
+        // this mapping and `payment_status` decides the transition for all three.
+        case "checkout.session.async_payment_succeeded":
+        case "checkout.session.completed": {
+            return checkoutSessionAction(event);
         }
 
         case "customer.subscription.created":

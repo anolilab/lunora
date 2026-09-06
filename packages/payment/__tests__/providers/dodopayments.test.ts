@@ -326,6 +326,20 @@ describe("dodopayments adapter", () => {
         expect(action.type).toBe("subscription.paused");
     });
 
+    it("routes the subscription.paused event to paused whatever status it carries (regression)", async () => {
+        expect.assertions(1);
+
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        // Dodo's `SubscriptionStatus` is pending|active|on_hold|cancelled|failed|expired — there is no
+        // `paused` member, so a `subscription.paused` payload cannot carry one. Read from the status
+        // alone, a deliberate pause fell through to `subscription.past_due` and raised the dunning alert.
+        const payload = JSON.stringify({ data: { status: "on_hold", subscription_id: "sub_1" }, type: "subscription.paused" });
+        const action = await adapter.parseWebhook({ headers: headersFor("m8", timestamp, sign("m8", timestamp, payload)), payload });
+
+        expect(action.type).toBe("subscription.paused");
+    });
+
     it("rounds a fractional webhook amount instead of throwing on the BigInt conversion (regression)", async () => {
         expect.assertions(2);
 

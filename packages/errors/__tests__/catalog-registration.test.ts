@@ -39,22 +39,45 @@ const SKIP_DIRECTORIES = new Set([
     "test-results",
 ]);
 
-// Matches the two shapes a Lunora package mints an error code in: the
-// `{ code: "X", ... }` structured-error/options shape, and a direct
-// `new LunoraError("X", ...)` first-argument literal. Deliberately textual
-// (not AST-based) — this is meant to catch a *future* uncatalogued code the
-// same cheap way a reviewer would grep for one.
+// The shapes a Lunora package mints an error code in. Each pattern captures the
+// code in group 1; a code found by more than one is deduped by the caller.
 //
-// The `new LunoraError(...)` group's first argument is unambiguously a code,
-// so it tolerates any case (`badRequest`, `BadRequest`, ...) — a mint doesn't
-// have to be SCREAMING_SNAKE_CASE to reach `isInternalCode`. The `code:`
-// object-literal group stays SCREAMING_SNAKE_CASE-only: widening it the same
-// way would flag every unrelated `code: "Enter"` (key events), `code: "en"`
-// (locale tags), `code: "P2002"` (driver errors), and similar repo-wide,
-// which is what makes the textual heuristic viable at all. A template-literal
-// code (`` `CODE_${x}` ``) is undetectable by a textual gate either way — an
-// accepted limitation, not a silent one.
-const CODE_PATTERN = /code:\s*"([A-Z][A-Z0-9_]*)"|new LunoraError\(\s*"([A-Za-z]\w*)"/g;
+// Deliberately textual (not AST-based) — this is meant to catch a *future*
+// uncatalogued code the same cheap way a reviewer would grep for one. Three
+// separate patterns rather than one alternation: the combined form is past the
+// regex-complexity budget, and each shape's case rule reads next to it.
+//
+// A template-literal code (`` `CODE_${x}` ``) is undetectable by a textual gate
+// either way — an accepted limitation, not a silent one.
+const CODE_PATTERNS: ReadonlyArray<RegExp> = [
+    // The `{ code: "X", ... }` structured-error/options shape.
+    //
+    // SCREAMING_SNAKE_CASE-only: widening it would flag every unrelated
+    // `code: "Enter"` (key events), `code: "en"` (locale tags), `code: "P2002"`
+    // (driver errors) repo-wide, which is what makes the heuristic viable.
+    /code:\s*"([A-Z][A-Z0-9_]*)"/g,
+
+    // A direct `new LunoraError("X", ...)`. Its first argument is unambiguously
+    // a code, so any case goes (`badRequest`, `BadRequest`, ...) — a mint
+    // doesn't have to be SCREAMING_SNAKE_CASE to reach `isInternalCode`.
+    /new LunoraError\(\s*"([A-Za-z]\w*)"/g,
+
+    // An INDIRECT mint: `new <Anything>Error("X", ...)` (a `LunoraError`
+    // subclass such as the payment package's), `raise("X", ...)`, and the
+    // `super("X", ...)` a subclass constructor forwards with.
+    //
+    // This is what makes the gate see past the base class. `isInternalCode`
+    // keys off the *code*, not the constructor, so a code minted through a
+    // subclass reaches the wire mappers exactly like a base-class one — and a
+    // pattern pinned to the literal name `LunoraError` classes every subclass
+    // mint as unregistered-therefore-client-safe. Six payment codes shipped
+    // that way.
+    //
+    // SCREAMING_SNAKE_CASE-only, because unlike the group above these shapes
+    // also take a plain MESSAGE first (`new TypeError("some message")`,
+    // `super("message")`) and the case restriction is what tells the two apart.
+    /(?:new\s+\w*Error|raise|super)\(\s*"([A-Z][A-Z0-9_]*)"/g,
+];
 
 /**
  * Codes the gate would otherwise flag as unregistered but that are not
@@ -157,11 +180,13 @@ describe("error catalog registration", () => {
         for (const filePath of collectSourceFiles(REPO_ROOT)) {
             const content = readFileSync(filePath, "utf8");
 
-            for (const match of content.matchAll(CODE_PATTERN)) {
-                const code = match[1] ?? match[2];
+            for (const pattern of CODE_PATTERNS) {
+                for (const match of content.matchAll(pattern)) {
+                    const code = match[1];
 
-                if (code !== undefined && !catalogKeys.has(code) && !missing.has(code)) {
-                    missing.set(code, filePath.replace(`${REPO_ROOT}/`, ""));
+                    if (code !== undefined && !catalogKeys.has(code) && !missing.has(code)) {
+                        missing.set(code, filePath.replace(`${REPO_ROOT}/`, ""));
+                    }
                 }
             }
         }
@@ -172,6 +197,38 @@ describe("error catalog registration", () => {
             unexpected.map(([code, file]) => `${code} (first seen in ${file})`),
             "Found error code(s) minted outside ERROR_CATALOG. Register each with a status/title (and internal: true if its message can carry backend detail) in packages/errors/src/catalog.ts.",
         ).toStrictEqual([]);
+    });
+
+    // Guards the *scanner*, not the catalog. The repo-wide `it` above only goes
+    // red while an uncatalogued code happens to exist, so once the catalog is
+    // complete a narrowing of CODE_PATTERN back to the literal `LunoraError`
+    // name would land green — and every future subclass mint would again be
+    // treated as client-safe by `isInternalCode`.
+    it("the scanner sees indirect mints, not just `new LunoraError(...)`", () => {
+        expect.assertions(1);
+
+        const source = [
+            `throw new SubError("SUBCLASS_MINT", "d");`,
+            `raise("RAISE_MINT", "d");`,
+            `super("SUPER_MINT", message, { name: "X" });`,
+            `new LunoraError("baseMint", "d");`,
+            `const options = { code: "OBJECT_MINT" };`,
+            // Not codes: a plain message-first construction, and a lowercase
+            // `code:` value from an unrelated union.
+            `throw new TypeError("expected a string");`,
+            `super("plain message");`,
+            `const key = { code: "Enter" };`,
+        ].join("\n");
+
+        const found = new Set<string>();
+
+        for (const pattern of CODE_PATTERNS) {
+            for (const match of source.matchAll(pattern)) {
+                found.add(match[1] as string);
+            }
+        }
+
+        expect([...found].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["baseMint", "OBJECT_MINT", "RAISE_MINT", "SUBCLASS_MINT", "SUPER_MINT"]);
     });
 
     it("every KNOWN_NON_LUNORA_CODES entry still occurs in its expected file", () => {
