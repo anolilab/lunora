@@ -106,7 +106,10 @@ export interface RunOptions {
      * handler is handed the id synchronously, so the id has to be decided before
      * the call is made. Callers that are not deferring should leave it unset and
      * take the minted id from the return value. The DO ignores anything that is
-     * not a plain `[A-Za-z0-9_-]` id.
+     * not a plain `[A-Za-z0-9_-]` id of at most 64 characters, and anything that
+     * LEADS with `-`: the id is handed to `WorkflowBinding.create({ id })`
+     * verbatim for a workflow target, and the engine's instance-id grammar
+     * (`^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`) refuses that first character.
      *
      * **Not an idempotency key.** An id that is already scheduled is REFUSED
      * (`409 DUPLICATE_SCHEDULE_ID`), not replaced or de-duplicated: the time
