@@ -255,14 +255,26 @@ const usePaginatedCore = function <T>(
                 // hook the owner of the entry's whole lifecycle, so the release
                 // closure below removes it on detach rather than leaking it.
                 gcTime: Number.POSITIVE_INFINITY,
-                queryFn: () =>
-                    (client.query as (function_: FunctionReference, args: unknown, options: { shardKey?: string }) => Promise<unknown>)(
+                queryFn: async () => {
+                    const pushesBefore = registry.pushCount(entry.key);
+                    const snapshot = await (client.query as (function_: FunctionReference, args: unknown, options: { shardKey?: string }) => Promise<unknown>)(
                         desired.fn,
                         entry.args,
                         {
                             shardKey: desired.shardKey,
                         },
-                    ),
+                    );
+
+                    // Same race `useQuery` carries: TanStack applies a resolved
+                    // fetch unconditionally, so a page frame pushed while this
+                    // snapshot was in flight would be reverted to the older
+                    // rows. The push is strictly newer; yield to it.
+                    if (registry.pushCount(entry.key) === pushesBefore) {
+                        return snapshot;
+                    }
+
+                    return queryClient.getQueryData(entry.key) ?? snapshot;
+                },
                 queryKey: entry.key,
                 staleTime: 0,
             });

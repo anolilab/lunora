@@ -16,6 +16,14 @@ interface RegistryEntry {
      * the subscription opened still hears about it.
      */
     errorCallbacks: Set<SubscriptionErrorCallback>;
+
+    /**
+     * How many subscription frames have been written to the TanStack cache for
+     * this key. Read by {@link LunoraSubscriptionRegistry.pushCount} so a hook's
+     * one-shot HTTP snapshot can tell that a NEWER push landed while it was in
+     * flight — see the `queryFn` guards in `use-query` / `use-paginated-core`.
+     */
+    pushes: number;
     refCount: number;
     /** WS unsubscribe handle, set on first successful attach. */
     unsubscribe: Unsubscribe | undefined;
@@ -69,6 +77,24 @@ class LunoraSubscriptionRegistry {
     }
 
     /**
+     * How many subscription frames this key has written to the TanStack cache.
+     *
+     * A hook fires a one-shot HTTP snapshot alongside the subscription, and
+     * TanStack applies a resolved `queryFn` result unconditionally — a manual
+     * `setQueryData` mid-flight does not cancel it. So a push that lands while
+     * the snapshot is in the air is silently reverted to pre-push data, and with
+     * `staleTime: Infinity` and push-driven freshness it stays reverted until
+     * the next write. Sampling this either side of the fetch is how a `queryFn`
+     * detects that and yields to the newer value.
+     *
+     * `0` for a key with no live subscription, which reads the same as "nothing
+     * pushed" — the snapshot then wins, which is correct.
+     */
+    public pushCount(queryKey: QueryKey): number {
+        return this.entries.get(keyHash(queryKey))?.pushes ?? 0;
+    }
+
+    /**
      * Attach a consumer to the live subscription for `queryKey`. The first
      * attach opens the underlying WS subscription; subsequent attaches reuse
      * it (refcount-bumped). Returns the detach function — call it exactly once
@@ -86,7 +112,7 @@ class LunoraSubscriptionRegistry {
         let entry = this.entries.get(key);
 
         if (!entry) {
-            entry = { errorCallbacks: new Set(), refCount: 0, unsubscribe: undefined };
+            entry = { errorCallbacks: new Set(), pushes: 0, refCount: 0, unsubscribe: undefined };
             this.entries.set(key, entry);
 
             const opened = entry;
@@ -96,6 +122,7 @@ class LunoraSubscriptionRegistry {
                     function_,
                     args,
                     (value) => {
+                        opened.pushes += 1;
                         queryClient.setQueryData(queryKey, value);
                     },
                     {

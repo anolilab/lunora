@@ -178,6 +178,60 @@ describe("useQuery", () => {
         });
     });
 
+    it("keeps a WS push that landed while the initial HTTP snapshot was still in flight", async () => {
+        expect.hasAssertions();
+
+        let releaseSnapshot: () => void = () => {};
+        // The one-shot HTTP snapshot the hook fires on mount, held open so a
+        // subscription frame can overtake it — the shape a mutation produces:
+        // the socket pushes the post-write rows while the pre-write snapshot is
+        // still on the wire.
+        const mock = createMockClient(
+            async () =>
+                new Promise((resolve) => {
+                    releaseSnapshot = () => {
+                        resolve("pre-mutation snapshot");
+                    };
+                }),
+        );
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Display />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        await act(async () => {
+            mock.emit("posts:list", "post-mutation push");
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("display").textContent).toBe(JSON.stringify("post-mutation push"));
+        });
+
+        // TanStack applies a resolved fetch unconditionally, so the older
+        // snapshot must not be allowed to land on top of the newer push — with
+        // `staleTime: Infinity` and push-driven freshness it would stay wrong
+        // until the next write. Drain several macrotasks so the write this
+        // asserts the ABSENCE of has had every chance to land.
+        await act(async () => {
+            releaseSnapshot();
+
+            for (let tick = 0; tick < 5; tick += 1) {
+                // eslint-disable-next-line no-await-in-loop -- intentional sequential drain of task ticks
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 0);
+                });
+            }
+        });
+
+        expect(screen.getByTestId("display").textContent).toBe(JSON.stringify("post-mutation push"));
+    });
+
     // The hydration gate (`client.isReady` / `client.whenReady()`), which every
     // other test in this file runs past because the mock reports ready. Both
     // branches are asserted here so removing the gate from `use-query.ts` fails
