@@ -125,16 +125,29 @@ import { LunoraClient } from "lunorash/client";
 import { createLunora } from "@lunora/vue";
 
 export default defineNuxtPlugin((nuxtApp) => {
-    // Same-origin: `useRequestURL()` resolves the request origin during SSR and
-    // `window.location` in the browser. The client appends `/_lunora/ws` and
-    // `/_lunora/rpc` itself, which the module's route serves.
-    nuxtApp.vueApp.use(createLunora(new LunoraClient({ url: useRequestURL().origin })));
+    // Prod: same-origin. `useRequestURL()` resolves the request origin during
+    // SSR and `window.location` in the browser. The client appends
+    // `/_lunora/ws` and `/_lunora/rpc` itself, which the module's route serves.
+    //
+    // Dev: `nuxt dev` runs Nitro under Node, which can't host `ShardDO`, so
+    // `lunora dev` runs a `wrangler dev` sidecar that owns it — point the
+    // client straight at that instead. Match the port to your
+    // `wrangler.dev.jsonc` `dev.port` (the scaffold pins 8788).
+    const url = import.meta.dev ? "http://localhost:8788" : useRequestURL().origin;
+
+    nuxtApp.vueApp.use(createLunora(new LunoraClient({ url })));
 });
 ```
 
 Providing the client server-side opens nothing: every composable gates its
 WebSocket on a browser `window`, so the socket still attaches after hydration
 while SSR renders the preloaded seed.
+
+`@lunora/nuxt` warns at build time when the only plugin providing a client is
+a `.client.ts` one, so an app written against an older version of this page
+finds out from `nuxt dev` rather than from a 500. The module deliberately does
+not register the provider itself — it cannot know your dev sidecar's origin,
+and a second client would contend with yours over one durable outbox.
 
 ## Reactive loaders
 

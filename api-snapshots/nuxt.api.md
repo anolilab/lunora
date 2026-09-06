@@ -17,6 +17,12 @@ interface ModuleOptions {
 }
 ```
 
+### `checkClientOnlyProvider` (const)
+
+```ts
+const checkClientOnlyProvider: (srcDirectory: string, warn: (message: string) => void) => void;
+```
+
 ### `checkWorkerEntry` (const)
 
 ```ts
