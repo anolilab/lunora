@@ -24,6 +24,24 @@ describe("createDispatchRunner", () => {
         expect(JSON.parse(init.body as string)).toEqual({ args: { to: "a" }, functionPath: "messages:send", shardKey: "s1" });
     });
 
+    it("forwards a caller `traceparent` so the callee joins the trace, and omits it when unset", async () => {
+        expect.assertions(2);
+
+        const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ ok: 1 }, { status: 200 }));
+        const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+
+        await createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue", traceparent })(REF, { to: "a" });
+        await createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" })(REF, { to: "a" });
+
+        const headersOf = (index: number): Record<string, string> =>
+            (fetchImpl.mock.calls[index] as unknown as [string, RequestInit])[1].headers as Record<string, string>;
+
+        // A queue batch or cron fire opens its own trace; without this header every
+        // function the handler invokes became a separate root trace.
+        expect(headersOf(0).traceparent).toBe(traceparent);
+        expect(headersOf(1).traceparent).toBeUndefined();
+    });
+
     it("forwards dedupId as the body's `id` (the receiver's dedup key) and omits the key when unset", async () => {
         expect.assertions(3);
 
