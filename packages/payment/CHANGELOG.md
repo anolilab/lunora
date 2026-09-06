@@ -1,3 +1,14 @@
+## @lunora/payment [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.107...@lunora/payment@1.0.0-alpha.108) (2026-09-06)
+
+### Bug Fixes
+
+* **svelte,vue,config:** four loose ends, two of them false comments ([#633](https://github.com/anolilab/lunora/issues/633)) ([d86364b](https://github.com/anolilab/lunora/commit/d86364b9ea05e7e770cf041c7ff86cf1af8239ca))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.106
+
 ## @lunora/payment [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.106...@lunora/payment@1.0.0-alpha.107) (2026-09-06)
 
 ### ⚠ BREAKING CHANGES
