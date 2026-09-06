@@ -344,6 +344,7 @@ Select at least these events when creating the endpoint:
 - `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`
 - `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.amount_capturable_updated`
 - `charge.refunded`
+- `charge.dispute.closed` — a lost chargeback is a funds reversal that no other Stripe event reports
 
 ### The signature scheme + tolerance
 
@@ -376,6 +377,7 @@ event id keys an append-only `events` log for idempotency and audit).
 | `payment_intent.payment_failed`              | `payment.failed`                                                                                                | Emits an alertable `payment.failed` observer signal.                                                                                         |
 | `payment_intent.amount_capturable_updated`   | `payment.authorized`                                                                                            | Manual-capture flow: funds held awaiting capture.                                                                                            |
 | `charge.refunded`                            | `payment.refunded`                                                                                              | `amount_refunded` (cumulative) applied as an **absolute** total, so partials never over-count.                                               |
+| `charge.dispute.closed`                      | `payment.refunded` **only if** `status` is `lost`; else `unhandled`                                             | The disputed `amount` as a **delta**, keyed on the PaymentIntent and tagged with the dispute id.                                             |
 | anything else                                | `unhandled`                                                                                                     | Verified and 200-acked, but no state change.                                                                                                 |
 
 <Callout type="info">
@@ -388,6 +390,13 @@ event id keys an append-only `events` log for idempotency and audit).
     Do not fulfill on `checkout.session.completed` alone if you accept a delayed-notification method. Those sessions complete `unpaid` with the PaymentIntent
     still `processing`, so the store records `authorized`, not `captured` — settlement is days away. Gate fulfillment on the session reaching `captured`, which
     happens on `checkout.session.async_payment_succeeded` (or `payment_intent.succeeded`); a returned debit lands as `failed` instead.
+</Callout>
+
+<Callout type="info">
+    A lost chargeback is recorded as a refund of the disputed amount, so entitlements derived from that payment stop. `charge.dispute.closed` is the only event
+    that reports it: you are the merchant of record, the PaymentIntent stays `succeeded`, and no refund object is created — so `reconcile` cannot see it either
+    and the row would otherwise stay `captured` forever. The provisional stages (`charge.dispute.created`, `.funds_withdrawn`, `.funds_reinstated`) are acked
+    without a state change, because a won dispute reinstates the funds.
 </Callout>
 
 <Callout type="warn">

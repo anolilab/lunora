@@ -492,6 +492,74 @@ describe("stripe adapter", () => {
         expect(failed.type).toBe("subscription.past_due");
     });
 
+    it("reverses a captured payment when a chargeback is lost (regression)", async () => {
+        expect.assertions(4);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+
+        const captured = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({
+                data: { object: { amount: 5000, amount_received: 5000, currency: "usd", customer: "cus_1", id: "pi_1", metadata: { referenceId: "user_1" } } },
+                id: "evt_pi_ok",
+                type: "payment_intent.succeeded",
+            }),
+        });
+
+        // Stripe is not merchant-of-record: on a lost dispute the merchant loses the funds, but the
+        // PaymentIntent stays `succeeded` and no refund event is emitted — so neither webhooks nor
+        // `reconcile` would ever move the row off `captured` without this mapping.
+        const lost = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({
+                data: { object: { amount: 5000, charge: "ch_1", currency: "usd", id: "dp_1", payment_intent: "pi_1", status: "lost" } },
+                id: "evt_dispute_lost",
+                type: "charge.dispute.closed",
+            }),
+        });
+
+        expect(lost.type).toBe("payment.refunded");
+        expect(lost.sessionId).toBe("pi_1");
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, captured);
+        await applyWebhookAction(store, lost);
+
+        const row = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(row?.state).toBe("refunded");
+        expect(row?.refundedAmount).toStrictEqual(money(5000n, "usd"));
+    });
+
+    it("leaves a won or still-open dispute alone", async () => {
+        expect.assertions(2);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+
+        const won = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({
+                data: { object: { amount: 5000, currency: "usd", id: "dp_1", payment_intent: "pi_1", status: "won" } },
+                id: "evt_dispute_won",
+                type: "charge.dispute.closed",
+            }),
+        });
+
+        // Funds withdrawn while a dispute is open are provisional — reinstated if it is won.
+        const withdrawn = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({
+                data: { object: { amount: 5000, currency: "usd", id: "dp_1", payment_intent: "pi_1", status: "under_review" } },
+                id: "evt_dispute_withdrawn",
+                type: "charge.dispute.funds_withdrawn",
+            }),
+        });
+
+        expect(won.type).toBe("unhandled");
+        expect(withdrawn.type).toBe("unhandled");
+    });
+
     it("rejects an unsigned webhook", async () => {
         expect.assertions(1);
 
