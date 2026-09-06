@@ -124,7 +124,6 @@ export const openRpcSpec: Record<string, unknown> = {
                     "name": "args",
                     "required": true,
                     "schema": {
-                        "additionalProperties": false,
                         "properties": {
                             "body": {
                                 "type": "string"
@@ -271,7 +270,6 @@ export const openRpcSpec: Record<string, unknown> = {
                     "name": "args",
                     "required": true,
                     "schema": {
-                        "additionalProperties": false,
                         "properties": {
                             "boardId": {
                                 "type": "string"

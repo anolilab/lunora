@@ -121,6 +121,21 @@ dependency_manifests:
 # not hypothetical — `shared/schema-snapshot.ts` decides the `LUNORA_SCHEMA_SNAPSHOT`
 # literal in every example's `shard.ts`, so a change confined to it stales all 13
 # while this job is skipped and its required check stays green.
+#
+# `packages/codegen/**` alone was not enough either. The sweep runs the real
+# `lunora codegen`, so every package in the CLI's dependency closure is behind the
+# committed output, and several put their own text INTO it verbatim:
+# `@lunora/advisor`'s lint messages are embedded character-for-character in every
+# example's `shard.ts`, and `@lunora/platform`'s capability matrix decides
+# `studioFeatures.vectors`. A PR editing only an advisor remediation string
+# matched no filter, so the job was skipped, `Check Lint Run` went green, all 13
+# examples drifted, and the NEXT unrelated codegen PR failed `lint:generated` for
+# changes it did not make.
+#
+# The list below is `scripts/check-generated-files.mjs`'s own `emitterClosure()`
+# — the packages it already refuses to run against when their `dist/` is stale.
+# That script asserts this filter still covers the closure, so a new dependency
+# edge fails the sweep loudly instead of silently un-gating it.
 generated_files:
     - "**/package.json"
     - "**/project.json"
@@ -128,7 +143,36 @@ generated_files:
     - "apps/docs/scripts/generate-*.js"
     - "scripts/generate-*.js"
     - "scripts/check-generated-files.mjs"
+    - "packages/advisor/**"
+    - "packages/agent/**"
+    - "packages/ai/**"
+    - "packages/bindings/**"
+    - "packages/cli/**"
+    - "packages/client/**"
     - "packages/codegen/**"
+    - "packages/config/**"
+    - "packages/container/**"
+    - "packages/d1/**"
+    - "packages/do/**"
+    - "packages/errors/**"
+    - "packages/fingerprint/**"
+    - "packages/flags/**"
+    - "packages/lunora/**"
+    - "packages/mail/**"
+    - "packages/mcp/**"
+    - "packages/observability/**"
+    - "packages/platform/**"
+    - "packages/platform-cloudflare/**"
+    - "packages/queue/**"
+    - "packages/ratelimit/**"
+    - "packages/runtime/**"
+    - "packages/scheduler/**"
+    - "packages/seed/**"
+    - "packages/server/**"
+    - "packages/shard-engine/**"
+    - "packages/sql-store/**"
+    - "packages/values/**"
+    - "packages/workflow/**"
     - "shared/**"
     - "examples/**"
     # Self-listed, per the rule at the top of this file: the job's own workflow now

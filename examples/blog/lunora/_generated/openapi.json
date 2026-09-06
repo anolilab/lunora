@@ -73,7 +73,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {},
                     "required": [],
                     "type": "object"
@@ -129,7 +128,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "id": {
                         "description": "Id<\"drafts\">",
@@ -200,7 +198,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "id": {
                         "description": "Id<\"posts\">",
@@ -264,7 +261,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {},
                     "required": [],
                     "type": "object"
@@ -320,7 +316,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "title": {
                         "type": "string"
@@ -389,7 +384,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "contentType": {
                         "type": "string"
@@ -451,7 +445,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "text": {
                         "type": "string"

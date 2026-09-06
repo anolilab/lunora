@@ -391,7 +391,15 @@ class AppBuilder<Env extends object> {
             }
         }
 
-        const pick = (name?: string): Storage => buckets[name !== undefined && name !== "" ? name : "default"] ?? fallbackStorage;
+        // `Object.hasOwn`, not a bare lookup: `buckets` is a plain object, so a
+        // prototype key (`?bucket=constructor`, `__proto__`, `toString`) resolves
+        // to an inherited Object.prototype member, `??` never engages, and the
+        // caller gets a method-less value instead of the default bucket.
+        const pick = (name?: string): Storage => {
+            const wanted = name !== undefined && name !== "" ? name : "default";
+
+            return (Object.hasOwn(buckets, wanted) ? buckets[wanted] : undefined) ?? fallbackStorage;
+        };
         const hasSigning = Boolean(declaration.publicBaseUrl?.(env) && declaration.signingSecret?.(env));
 
         return {

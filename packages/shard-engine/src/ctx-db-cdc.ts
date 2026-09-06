@@ -119,42 +119,45 @@ const appendCdcChange = (sql: SqlExec, ts: number, table: string, id: string, op
  */
 const CDC_TABLE_FILTER_CHUNK = 90;
 
-/** Bind a non-empty table set as an `AND "table" IN (?, …)` fragment, or nothing at all for the unfiltered read. */
-const tableInClause = (tables: ReadonlySet<string> | undefined): SQL => {
-    if (!tables || tables.size === 0) {
-        return dsql``;
-    }
-
+/**
+ * Bind one non-empty chunk of table names as an `AND "table" IN (?, …)`
+ * fragment. Chunking is the caller's job — the only caller is
+ * {@link cdcTouchesTables}, which splits an unbounded read-set at
+ * {@link CDC_TABLE_FILTER_CHUNK} so the statement stays inside workerd's
+ * 100-bound-parameter cap. A helper that silently accepted the whole set would
+ * put that cap one call site away again.
+ */
+const tableInClause = (tables: ReadonlySet<string>): SQL =>
     // Bind each table name as a parameter so the `IN (…)` list can never inject SQL.
-    return dsql` AND ${dsql.identifier("table")} IN (${dsql.join(
+    dsql` AND ${dsql.identifier("table")} IN (${dsql.join(
         [...tables].map((table) => dsql`${table}`),
         dsql`, `,
     )})`;
-};
 
 /**
  * Read changelog entries newer than `sinceSeq` in commit order, up to `limit`
  * (clamped to [1, 10000]). Returns the rows plus the cursor to resume from (the
- * last `seq`, or `sinceSeq` when the page is empty).
+ * last `seq`, or `sinceSeq` when the page is empty). Every table's changes are
+ * in the page — this is the whole-log reader, used by the streaming
+ * export/resume and archive-sweep callers.
  *
- * The optional `tables` set narrows the page to changes on those tables — the
- * shape/poke path reads one filtered page per flush so it never scans op-log
- * entries for tables no live shape is watching. Omit it (or pass an empty set)
- * for the full, unfiltered page (the existing streaming-export/resume callers).
+ * There is deliberately no table filter. One was carried here for the shape/poke
+ * path, which reads per table — but that path goes through
+ * {@link readCdcChangeKeys}, which takes a single `table` and returns keys
+ * without post-images, so nothing ever passed the set. Restoring it is not one
+ * predicate: `tableInClause` binds a parameter per name against workerd's cap of
+ * 100, and chunking an ORDERED, LIMIT-ed page is not the loop
+ * {@link cdcTouchesTables} gets away with — the chunks would have to be merged
+ * back into commit order and the cursor re-derived from the merge, or the page
+ * silently truncates at whichever chunk filled `limit` first.
  */
-const readCdcChanges = (
-    sql: SqlExec,
-    options: { limit?: number; sinceSeq?: number; tables?: ReadonlySet<string> } = {},
-): { changes: CdcChange[]; cursor: number } => {
+const readCdcChanges = (sql: SqlExec, options: { limit?: number; sinceSeq?: number } = {}): { changes: CdcChange[]; cursor: number } => {
     const sinceSeq = options.sinceSeq ?? 0;
     const limit = Math.max(1, Math.min(options.limit ?? 1000, 10_000));
 
-    // An empty/omitted set leaves the predicate off entirely (full page).
-    const tableFilter = tableInClause(options.tables);
-
     const rows = runDrizzle<{ doc: null | string; id: string; op: string; seq: number; table: string; ts: number }>(
         sql,
-        dsql`SELECT seq, ts, ${dsql.identifier("table")}, id, op, doc FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE seq > ${sinceSeq}${tableFilter} ORDER BY seq ASC LIMIT ${limit}`,
+        dsql`SELECT seq, ts, ${dsql.identifier("table")}, id, op, doc FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE seq > ${sinceSeq} ORDER BY seq ASC LIMIT ${limit}`,
     ).toArray();
 
     const changes = rows.map((row): CdcChange => {

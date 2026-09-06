@@ -129,7 +129,7 @@ import type {
     TableReaderLike,
     ValidatorLike,
 } from "./schema-types";
-import { isProjectedKind } from "./sql-projection";
+import { mayHoldProjectedValue } from "./sql-projection";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
 import { createSystemReader } from "./system-reader";
 import { ConflictError } from "./transaction";
@@ -1032,14 +1032,29 @@ const runPlainFetch = (
 const doWhereSqlStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, serialize: serializeSqlValue };
 
 /**
- * Whether `field` is stored as an order-preserving sort key rather than as its
- * value — the condition SQL cannot reduce or group.
- * @returns `true` when the column is projected (a `v.bigint()` / `v.bytes()` kind)
+ * Whether `field` MAY be stored as an order-preserving sort key rather than as
+ * its value — the condition SQL cannot reduce or group.
+ *
+ * The test is `mayHoldProjectedValue`, not `isProjectedKind`: the projection
+ * dispatches on the RUNTIME type, so a `bigint`/bytes written into a `v.any()`
+ * / `v.union()` / `v.from()` column is stored as the same padded key a declared
+ * one gets. Reading the declared kind saw only `"any"` and waved the scan
+ * through — `sum` of two small amounts came back as `2e+39`, `max` as the
+ * 40-character key, and `groupBy` keyed on the padding. The write side has used
+ * the wide test since a declared-kind gate wrote ~1e39 into a companion
+ * (`ctx-db-companions.ts`); this is the read side matching it.
+ *
+ * Refusing per COLUMN over-matches: an untyped column that only ever holds
+ * plain numbers is refused too. That is the deliberate side to be wrong on —
+ * the declared-kind version returned a confident wrong number instead, and the
+ * escape hatch (a declared `aggregateIndex`, which the error names) answers
+ * both cases exactly. `count()` passes SQL no field at all and is unaffected.
+ * @returns `true` when the column is projected, or is declared loosely enough to hold a projected value
  */
 const isProjectedField = (definition: TableDefinitionLike, field: string | undefined): boolean => {
     const validator = field === undefined ? undefined : definition.shape[field];
 
-    return validator !== undefined && isProjectedKind(validator);
+    return validator !== undefined && mayHoldProjectedValue(validator);
 };
 
 /**
@@ -1089,7 +1104,7 @@ const assertReducibleBySql = (definition: TableDefinitionLike, field: string, la
     if (isProjectedField(definition, field)) {
         throw new LunoraError(
             "BAD_REQUEST",
-            `${label}: "${field}" is stored as an order-preserving key, which SQL cannot reduce or group — declare an aggregateIndex covering this (by, field, op) so the maintained companion answers it instead (its running total is a REAL, so it stays exact only while the total is inside 2^53)`,
+            `${label}: "${field}" may hold an order-preserving key rather than a value SQL can reduce or group — declare an aggregateIndex covering this (by, field, op) so the maintained companion answers it instead (its running total is a REAL, so it stays exact only while the total is inside 2^53)`,
         );
     }
 };
@@ -2846,14 +2861,33 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * by-id facade pins it), the probe below is scoped to that one table so a
      * foreign id can never resolve cross-table — closing an IDOR where a
      * branded `Id<"posts">` carrying another table's id would otherwise
-     * read/mutate that other table. An unknown/global `expectedTable` narrows
-     * the probe to nothing, so the global fallback handles it.
+     * read/mutate that other table. A `.global()` `expectedTable` narrows the
+     * probe to nothing because those rows live in D1, not this DO — see
+     * {@link globalFallbackFor}, which picks them up. An unknown
+     * `expectedTable` narrows it to nothing too and nothing picks it up: the
+     * id reads as absent, which is the point.
      */
     const nonGlobalTableNames = (expectedTable?: string): string[] =>
         Object.entries(schema.tables)
             .filter(([, definition]) => definition.shardMode?.kind !== "global")
             .map(([tableName]) => tableName)
             .filter((tableName) => expectedTable === undefined || tableName === expectedTable);
+
+    /**
+     * The D1-backed writer a by-id op falls through to when the shard-local
+     * probe found nothing — or `undefined` when it must not fall through.
+     *
+     * A `.global()` row's id never lives in this DO, so an unpinned lookup
+     * always falls through. A facade-pinned one falls through only when the
+     * pinned table is itself `.global()`: pinning a shard-local table and then
+     * reaching a global row would be exactly the cross-table read/mutate the
+     * pin exists to stop (IDOR). Every caller forwards `expectedTable` on to
+     * the global writer as well, so the pin is re-applied over there — its
+     * `resolveTableName` treats an id owned by another table as absent, which
+     * is what keeps one `.global()` facade out of another `.global()` table.
+     */
+    const globalFallbackFor = (expectedTable?: string): DatabaseWriterLike | undefined =>
+        expectedTable === undefined || isGlobalTable(expectedTable) ? globalDb : undefined;
 
     /**
      * Locate a row by id and return both the owning table and the decoded
@@ -3188,12 +3222,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = locateRowById(id, expectedTable);
 
             if (!located) {
-                // A global row's id never lives in this DO; fall back to D1
-                // (both backends are silent on a genuinely-absent id). But when
-                // the by-id facade pinned a (non-global) table, a global row is
-                // by definition a different table — skip the fallback so a
-                // non-global facade can't reach a `.global()` row (IDOR).
-                const global = expectedTable === undefined ? globalDb : undefined;
+                // A global row's id never lives in this DO; fall back to the
+                // D1 writer when this call is allowed to reach one (both
+                // backends are silent on a genuinely-absent id) — see
+                // `globalFallbackFor`, which also re-applies the facade's pin
+                // over there.
+                const global = globalFallbackFor(expectedTable);
 
                 if (global) {
                     // A delete carries no document, so it costs a row and no
@@ -3206,7 +3240,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // entirely, however many rows it removed.
                     meterWrite(undefined);
 
-                    await global.delete(id, undefined, deleteOptions);
+                    await global.delete(id, expectedTable, deleteOptions);
                 }
 
                 return;
@@ -3612,13 +3646,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = locateRowById(id, expectedTable);
 
             if (!located) {
-                // A global row's id never lives in this DO; fall back to D1 —
-                // but only when no table is pinned: a (non-global) by-id facade
-                // must never reach a `.global()` row (IDOR).
-                const global = expectedTable === undefined ? globalDb : undefined;
+                // A global row's id never lives in this DO; fall back to the
+                // D1 writer when this call is allowed to reach one — see
+                // `globalFallbackFor`, which also re-applies the facade's pin
+                // over there.
+                const global = globalFallbackFor(expectedTable);
 
                 if (global) {
-                    return global.get(id);
+                    return global.get(id, expectedTable);
                 }
 
                 // eslint-disable-next-line unicorn/no-null -- DatabaseWriterLike.get is `Promise<Record | null>`: null is the documented "no such row" result
@@ -4107,10 +4142,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = locateRowById(id, expectedTable);
 
             if (!located) {
-                // A global row's id never lives in this DO; fall back to D1 —
-                // but only when no table is pinned: a (non-global) by-id facade
-                // must never reach a `.global()` row (IDOR).
-                const global = expectedTable === undefined ? globalDb : undefined;
+                // A global row's id never lives in this DO; fall back to the
+                // D1 writer when this call is allowed to reach one — see
+                // `globalFallbackFor`, which also re-applies the facade's pin
+                // over there.
+                const global = globalFallbackFor(expectedTable);
 
                 if (global) {
                     // Same reason as the global `insert` branch. The DELTA is
@@ -4123,7 +4159,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // actually sends.
                     meterWrite(patch);
 
-                    await global.patch(id, patch);
+                    await global.patch(id, patch, expectedTable);
                     return;
                 }
 
@@ -4479,10 +4515,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = locateRowById(id, expectedTable);
 
             if (!located) {
-                const global = expectedTable === undefined ? globalDb : undefined;
+                const global = globalFallbackFor(expectedTable);
 
                 if (global?.restore) {
-                    await global.restore(id);
+                    await global.restore(id, expectedTable);
 
                     return;
                 }
@@ -4527,10 +4563,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = locateRowById(id, expectedTable);
 
             if (!located) {
-                // A global row's id never lives in this DO; fall back to D1 —
-                // but only when no table is pinned: a (non-global) by-id facade
-                // must never reach a `.global()` row (IDOR).
-                const global = expectedTable === undefined ? globalDb : undefined;
+                // A global row's id never lives in this DO; fall back to the
+                // D1 writer when this call is allowed to reach one — see
+                // `globalFallbackFor`, which also re-applies the facade's pin
+                // over there.
+                const global = globalFallbackFor(expectedTable);
 
                 if (global) {
                     // Same reason as the global `patch` branch — and here the
@@ -4538,7 +4575,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // exact rather than a delta.
                     meterWrite(document);
 
-                    await global.replace(id, document, undefined, replaceOptions);
+                    await global.replace(id, document, expectedTable, replaceOptions);
                     return;
                 }
 

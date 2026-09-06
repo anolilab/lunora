@@ -136,7 +136,15 @@ interface ContainerTelemetryOptions {
      * W3C `traceparent` of the Worker RPC that invoked this container; defaults to
      * the `LUNORA_TRACEPARENT` env var. When present (and well-formed) every span
      * inherits its trace id and hangs off its span id, so container spans stitch
-     * under the Worker's trace instead of forming a fresh, disconnected trace.
+     * under the Worker's trace instead of forming a fresh, disconnected trace, and
+     * every log record is stamped with the same ids so a request's container logs
+     * are reachable from its trace.
+     *
+     * It also carries the trace's settled **sampling verdict**, which this exporter
+     * OBEYS rather than re-derives: a `traceparent` whose flags say the trace was
+     * sampled out (`…-00`) suppresses span export, because the worker and shard
+     * spans of that trace were dropped and shipping ours would leave the collector
+     * holding the middle of a trace. Logs are never sampled and are unaffected.
      *
      * `@lunora/container` stamps this trace context as the **`traceparent` request
      * header** on every proxied fetch (`ctx.containers.<name>.…`), so a container
@@ -159,6 +167,9 @@ interface ContainerTelemetryOptions {
 
 /** Default {@link ContainerTelemetryOptions.timeoutMs} — the OTLP-exporter-conventional 10s. */
 const DEFAULT_TIMEOUT_MS = 10_000;
+
+/** W3C `sampled` bit, the value OTLP's per-span/per-record `flags` field carries. */
+const SAMPLED_TRACE_FLAG = 1;
 
 /**
  * The exporter handle {@link createContainerTelemetry} returns.
@@ -212,7 +223,7 @@ const resolveFetch = (injected: OtelFetchLike | undefined): OtelFetchLike | unde
  * envelope is applied once per BATCH (see the exporter's span batcher), not
  * here, so several spans share one wrapper and one POST.
  */
-const encodeSpan = (span: ContainerSpanInput, parent: { parentSpanId: string; traceId: string } | undefined): unknown => {
+const encodeSpan = (span: ContainerSpanInput, parent: { parentSpanId: string; sampled: boolean; traceId: string } | undefined): unknown => {
     const attributes = encodeAttributes(span.attributes);
 
     if (span.error?.type !== undefined) {
@@ -222,6 +233,10 @@ const encodeSpan = (span: ContainerSpanInput, parent: { parentSpanId: string; tr
     const otlpSpan: Record<string, unknown> = {
         attributes,
         endTimeUnixNano: otlpUnixNano(span.endMs),
+        // W3C trace flags, mirroring the verdict this container inherited. Without
+        // it a collector reading `flags` sees 0 (UNSAMPLED) on every span we ship,
+        // including the ones it is meant to keep.
+        flags: (parent?.sampled ?? true) ? SAMPLED_TRACE_FLAG : 0,
         // SPAN_KIND_INTERNAL — the container's own work, not a server/client edge.
         kind: 1,
         name: span.name,
@@ -250,8 +265,18 @@ const encodeSpan = (span: ContainerSpanInput, parent: { parentSpanId: string; tr
     return otlpSpan;
 };
 
-/** Encode one container log line as an OTLP log record. The `resourceLogs` envelope is applied once per batch. */
-const encodeLogRecord = (log: ContainerLogInput, nowMs: number): unknown => {
+/**
+ * Encode one container log line as an OTLP log record. The `resourceLogs`
+ * envelope is applied once per batch.
+ *
+ * Stamped with the inbound trace context when there is one. A log record carrying
+ * no `traceId`/`spanId` is unreachable from the trace it belongs to — the whole
+ * point of propagating a `traceparent` into the container is that one request
+ * reads as one thing, and "show me this request's container logs" was a query
+ * nobody could run. Logs are NOT sampled (only spans are), so this is stamped
+ * whatever the verdict was; `flags` carries the verdict so a collector can tell.
+ */
+const encodeLogRecord = (log: ContainerLogInput, nowMs: number, parent: { parentSpanId: string; sampled: boolean; traceId: string } | undefined): unknown => {
     const level = log.level ?? "info";
 
     return {
@@ -260,6 +285,7 @@ const encodeLogRecord = (log: ContainerLogInput, nowMs: number): unknown => {
         severityNumber: OTLP_SEVERITY[level],
         severityText: level.toUpperCase(),
         timeUnixNano: otlpUnixNano(log.ts ?? nowMs),
+        ...(parent === undefined ? {} : { flags: parent.sampled ? SAMPLED_TRACE_FLAG : 0, spanId: parent.parentSpanId, traceId: parent.traceId }),
     };
 };
 
@@ -294,6 +320,14 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
     const token = options.token ?? readEnv("LUNORA_OTLP_TOKEN");
     const serviceName = options.serviceName ?? readEnv("LUNORA_SERVICE_NAME") ?? "lunora-container";
     const parent = parseTraceparent(options.traceparent ?? readEnv("LUNORA_TRACEPARENT"));
+    // The head decision was settled by the worker and propagated on the
+    // `traceparent`; a container re-derives NOTHING, it reads the verdict. Exporting
+    // regardless leaves the collector holding container spans for traces whose
+    // worker and shard spans were dropped — the "middle of a trace" the sampling
+    // model promises cannot happen. No inbound verdict (no traceparent, or a
+    // malformed one) reads as keep, exactly like every other tier. Logs are not
+    // sampled and keep flowing either way.
+    const exportSpans = parent?.sampled !== false;
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const fetchImpl = resolveFetch(options.fetch);
     const headers = mergeHeaders({ "content-type": "application/json" }, options.headers, token);
@@ -408,7 +442,7 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
     });
 
     const emitSpan = (span: ContainerSpanInput): void => {
-        if (!enabled) {
+        if (!enabled || !exportSpans) {
             return;
         }
 
@@ -420,7 +454,7 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
             return;
         }
 
-        logBatch.add(encodeLogRecord(log, Date.now()));
+        logBatch.add(encodeLogRecord(log, Date.now(), parent));
     };
 
     const trace = async <T>(name: string, run: () => Promise<T>, attributes?: Record<string, ContainerAttributeValue>): Promise<T> => {

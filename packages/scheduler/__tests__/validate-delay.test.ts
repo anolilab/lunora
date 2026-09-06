@@ -89,7 +89,7 @@ describe("schedule-delay guard parity", () => {
     it("createScheduler().runAfter rejects through the shared guard", async () => {
         expect.assertions(1);
 
-        const scheduler = createScheduler({ namespace: namespace(), originUrl: "https://app.example" });
+        const scheduler = createScheduler({ namespace: namespace() });
 
         await expect(scheduler.runAfter(-1, target, {})).rejects.toMatchObject({ code: "INVALID_INPUT" });
     });
@@ -97,7 +97,7 @@ describe("schedule-delay guard parity", () => {
     it("createScheduler().runAt rejects a non-finite instant through the shared guard", async () => {
         expect.assertions(1);
 
-        const scheduler = createScheduler({ namespace: namespace(), originUrl: "https://app.example" });
+        const scheduler = createScheduler({ namespace: namespace() });
 
         await expect(scheduler.runAt(Number.NaN, target, {})).rejects.toMatchObject({ code: "INVALID_INPUT" });
     });
@@ -105,7 +105,7 @@ describe("schedule-delay guard parity", () => {
     it("createWorkpool().enqueue rejects through the shared guard", async () => {
         expect.assertions(1);
 
-        const pool = createWorkpool({ maxConcurrency: 1, namespace: namespace(), originUrl: "https://app.example" });
+        const pool = createWorkpool({ maxConcurrency: 1, namespace: namespace() });
 
         await expect(pool.enqueue(target, {}, { delayMs: Number.NaN })).rejects.toMatchObject({ code: "INVALID_INPUT" });
     });

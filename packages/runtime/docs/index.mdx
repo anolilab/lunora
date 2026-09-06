@@ -313,9 +313,13 @@ available; the snapshot is still readable with `wrangler r2 object get`.
 ```
 
 The `crons` array must contain the exact `backupCron` string; Wrangler only
-delivers triggers it declares. To restore a scheduled snapshot, download the
-NDJSON object and feed it to `lunora backup restore <file>` (optionally with
-`--to <time>` for point-in-time replay).
+delivers triggers it declares. `lunora deploy` and the dev server rewrite
+`triggers.crons` from your `lunora/crons.ts`, but they only ever remove entries
+they generated — the set they own is recorded in your `package.json` under
+`lunora.crons`, and an entry you hand-wrote for `backupCron` is left alone and
+reported as kept. To restore a scheduled snapshot, download the NDJSON object and
+feed it to `lunora backup restore <file>` (optionally with `--to <time>` for
+point-in-time replay).
 
 ## `LunoraError` / `toErrorResponse` / `LunoraErrorBody`
 
@@ -411,6 +415,39 @@ createWorker({
     restRateLimit: createRestRateLimit(new RateLimiter(/* … */), { name: "rest" }),
 });
 ```
+
+With no `key` callback the limit is keyed on Cloudflare's `CF-Connecting-IP`, and
+only while running on Cloudflare — the edge stamps that header over anything the
+client sent, so it is the one client-address header a caller cannot choose. On any
+other target (`target: "node"`, a container, a bare host) nothing overwrites it, so
+the runtime resolves no IP at all and every such caller shares one coarse
+`no-trusted-ip` bucket. That is deliberate: trusting the header off Cloudflare
+would let an attacker rotate `Cf-Connecting-IP` for a fresh bucket per request and
+the limit would stop applying to exactly the traffic it exists to stop. Off
+Cloudflare, pass `key` and identify callers by something they cannot forge:
+
+```ts
+createRestRateLimit(limiter, { key: (request) => request.headers.get("x-api-key") ?? undefined, name: "rest" });
+```
+
+This applies to a non-Cloudflare origin sitting **behind** Cloudflare too, and
+that case is worth calling out because it is the one where the default gets
+strictly worse rather than staying neutral. On a bare host with no proxy the
+header was never set, so pooling changes nothing. But an origin fronted by
+Cloudflare — the edge stamps `CF-Connecting-IP`, the origin accepts only
+Cloudflare traffic, so the header genuinely is trustworthy — still resolves no
+IP, because the code runs on the origin and nothing in the request tells it apart
+from a directly-exposed host. Every caller lands in the single `no-trusted-ip`
+bucket, which one client can exhaust for everyone. Those deployments are the ones
+that must pass `key`; they are also the ones that can, because only the
+deployment knows it is fronted:
+
+```ts
+createRestRateLimit(limiter, { key: (request) => request.headers.get("cf-connecting-ip") ?? undefined, name: "rest" });
+```
+
+Only do that where the origin cannot be reached except through the edge —
+otherwise it is the client-writable header this default exists to refuse.
 
 Security guidance: keep the surface small, prefer `.output()` on exposed
 procedures so the response shape is contractual, and rely on the procedure's own

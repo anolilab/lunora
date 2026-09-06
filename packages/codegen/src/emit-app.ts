@@ -157,6 +157,15 @@ const buildAccessImports = (hasAccess: boolean, hasAuth: boolean): string[] =>
 const buildKvImports = (hasKvIntrospector: boolean): string[] =>
     hasKvIntrospector ? [`import { createKvIntrospectorFromEnv } from "@lunora/bindings/kv";`] : [];
 
+/**
+ * Vector-browser import — the admin introspector factory backing
+ * `createWorker({ vectorIntrospector })`. Its companion is the generated
+ * `LUNORA_VECTOR_INDEXES` registry (Vectorize cannot enumerate indexes at
+ * runtime, which is why `_generated/vectors.ts` exists at all), imported with
+ * the other relative `_generated` modules below.
+ */
+const buildVectorImports = (hasVectors: boolean): string[] => (hasVectors ? [`import { createVectorAdminIntrospector } from "@lunora/bindings/vectors";`] : []);
+
 /** `@lunora/d1` imports for a D1-backed `.global()` app — the store factory, the admin/introspection helpers, and the retrying exec. */
 const buildGlobalImports = (hasGlobal: boolean): string[] =>
     hasGlobal
@@ -221,6 +230,12 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         "WorkerOptions",
     ];
 
+    if (hasQueue) {
+        // The queue consumer's fourth argument — the trigger's own trace, forwarded
+        // so a handler's `ctx.run` dispatches join it.
+        runtimeTypeImports.push("TriggerTrace");
+    }
+
     if (hasGlobal) {
         runtimeTypeImports.push("GlobalIntrospector", "AdminTableResolver");
     }
@@ -253,6 +268,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
               ]
             : []),
         ...buildKvImports(hasKvIntrospector),
+        ...buildVectorImports(options.hasVectors === true),
         ...(hasScheduler
             ? [`import type { DurableObjectNamespaceLike } from "@lunora/scheduler";`, `import { createScheduler } from "@lunora/scheduler";`]
             : []),
@@ -282,6 +298,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         ...(wantsOpenApi ? [`import { openApiSpec } from "./openapi.js";`] : []),
         ...(wantsOpenRpc ? [`import { openRpcSpec } from "./openrpc.js";`] : []),
         `import { createShardDO } from "./shard.js";`,
+        ...(options.hasVectors === true ? [`import { LUNORA_VECTOR_INDEXES } from "./vectors.js";`] : []),
     ];
 };
 
@@ -306,12 +323,10 @@ interface StorageDeclaration<Env> {
         : []),
     ...(options.hasScheduler
         ? [
-              `/** \`.scheduler(...)\` declaration — the \`SchedulerDO\` namespace plus the worker origin its callbacks dispatch back to. Backs \`ctx.scheduler\` AND the studio's scheduled-jobs view. */
+              `/** \`.scheduler(...)\` declaration — the \`SchedulerDO\` namespace. Backs \`ctx.scheduler\` AND the studio's scheduled-jobs view. The origin its callbacks dispatch back to is not declared here: the DO reads \`env.LUNORA_ORIGIN_URL\` at fire time, because a caller-supplied dispatch target would be an SSRF vector. */
 interface SchedulerDeclaration<Env> {
     /** The \`SchedulerDO\` namespace binding (typically \`env.SCHEDULER\`). */
     namespace: Selector<Env, DurableObjectNamespaceLike & ShardNamespaceLike>;
-    /** The worker origin the \`SchedulerDO\` dispatches HTTP job callbacks back to. */
-    origin?: Selector<Env, string>;
 }`,
           ]
         : []),
@@ -735,6 +750,38 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
     // with no manual `createKvIntrospector` call. A deployment with no KV binding
     // yields an empty namespace list rather than crashing.
     ...(options.hasKvIntrospector ? [`        options.kvIntrospector = createKvIntrospectorFromEnv(env);`] : []),
+    // The studio's Vectorize browser, on the SAME flag that emits the `.vectors()`
+    // builder and that `studioFeatures.vectors` gates the nav tab on — so a visible
+    // Vectors tab always has a working backend, never the reverse. Without this the
+    // page and the home-screen "Vectorize Indexes" card both call
+    // `/_lunora/admin/vector/indexes` and get 400 `VECTORS_NOT_CONFIGURED`.
+    //
+    // The index map is the app's OWN `.vectors(...)` selector — the same
+    // `name → binding` mapping the DO uses — rather than a re-scan of `env`, so an
+    // arbitrary binding name resolves to its logical index without guessing.
+    // Embedders live on the schema's `.vectorize()` options and are not reachable
+    // from here, so `queryIndex` is withheld and similarity search reports
+    // `VECTOR_QUERY_UNSUPPORTED`; listing indexes and their live stats works.
+    ...(options.hasVectors === true
+        ? [
+              `        if (this.shardExtras.vectors) {
+            options.vectorIntrospector = createVectorAdminIntrospector({
+                indexes: this.shardExtras.vectors(env as unknown as Record<string, unknown>),
+                registry: LUNORA_VECTOR_INDEXES,
+            });
+        } else {
+            // Emitted only when the schema declares an index, so reaching here
+            // means the app declared one and never bound it. The studio's
+            // Vectors tab is on (its flag is the same index count) and every
+            // request to it would answer VECTORS_NOT_CONFIGURED, while
+            // \`ctx.vectors\` is the throwing stub — so this is already broken,
+            // just later and less legibly. Same shape as \`.auth()\`'s guards.
+            throw new Error(
+                ".vectors(): the schema declares vector index(es) but no binding map was chained. Pass \`.vectors((env) => ({ <indexName>: env.<BINDING> }))\` so \`ctx.vectors\` resolves and the studio's Vectors tab can list them.",
+            );
+        }`,
+          ]
+        : []),
     // The studio's Notifications page reads the app's registered `@lunora/notify`
     // device subscriptions through the SAME store the handlers register into. The
     // store is built from `env` via `lunora/notify.ts`'s `defineNotify({ store })`;
@@ -896,7 +943,7 @@ const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
     // Queues log via the root shard's `recordQueueMessage` admin RPC.
     ...(options.hasQueue
         ? [
-              `            queue: (batch: unknown, queueEnv: unknown, _context: ExecutionContextLike): Promise<void> =>`,
+              `            queue: (batch: unknown, queueEnv: unknown, _context: ExecutionContextLike, trigger: TriggerTrace): Promise<void> =>`,
               `                dispatchQueueBatch(batch as Parameters<typeof dispatchQueueBatch>[0], LUNORA_QUEUE_REGISTRY, {`,
               `                    capture: shouldCaptureQueue(queueEnv as Record<string, unknown>)`,
               `                        ? createQueueCaptureSink(queueEnv as Record<string, unknown>${
@@ -904,6 +951,9 @@ const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
               })`,
               `                        : undefined,`,
               `                    env: queueEnv as Record<string, unknown>,`,
+              // The consumer's `ctx.run` joins the queue invocation's trace instead
+              // of minting a fresh one per dispatched function.
+              `                    traceparent: trigger.traceparent,`,
               `                }),`,
           ]
         : []),
@@ -931,12 +981,11 @@ const buildSchedulerHelper = (options: EmitAppOptions): string => {
     const jurisdiction = options.jurisdiction ? ` jurisdiction: ${JSON.stringify(options.jurisdiction)},` : "";
 
     return `
-    /** Resolve the \`SchedulerDO\`-backed scheduler for this env; \`undefined\` until both the namespace and origin are wired. */
+    /** Resolve the \`SchedulerDO\`-backed scheduler for this env; \`undefined\` until the namespace is wired. */
     private resolveScheduler(env: Env): ReturnType<typeof createScheduler> | undefined {
         const namespace = this.schedulerDeclaration?.namespace(env);
-        const origin = this.schedulerDeclaration?.origin?.(env);
 
-        return namespace && origin ? createScheduler({${jurisdiction} namespace, originUrl: origin }) : undefined;
+        return namespace ? createScheduler({${jurisdiction} namespace }) : undefined;
     }
 `;
 };
@@ -1024,7 +1073,15 @@ const buildStorageHelpers = (hasStorage: boolean): string =>
             }
         }
 
-        const pick = (name?: string): Storage => buckets[name !== undefined && name !== "" ? name : "default"] ?? fallbackStorage;
+        // \`Object.hasOwn\`, not a bare lookup: \`buckets\` is a plain object, so a
+        // prototype key (\`?bucket=constructor\`, \`__proto__\`, \`toString\`) resolves
+        // to an inherited Object.prototype member, \`??\` never engages, and the
+        // caller gets a method-less value instead of the default bucket.
+        const pick = (name?: string): Storage => {
+            const wanted = name !== undefined && name !== "" ? name : "default";
+
+            return (Object.hasOwn(buckets, wanted) ? buckets[wanted] : undefined) ?? fallbackStorage;
+        };
         const hasSigning = Boolean(declaration.publicBaseUrl?.(env) && declaration.signingSecret?.(env));
 
         return {
