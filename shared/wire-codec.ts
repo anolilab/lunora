@@ -703,4 +703,29 @@ const decodeDocument = (text: string): Record<string, unknown> | undefined => {
     }
 };
 
-export { decodeDocument, decodeWire, encodeWire, isPlainObject, needsWireEncoding, TAG as WIRE_TAG };
+/**
+ * {@link encodeWire} an outbound call's `args`, re-throwing the bare codec error
+ * with the calling surface and the target function attached.
+ *
+ * Every producer of a Lunora call envelope encodes here — `@lunora/client`'s
+ * service binding, `@lunora/dispatch`'s runner, `ctx.scheduler` (from a shard and
+ * from an HTTP action), and the workpool. `encodeWire` REJECTS any non-plain
+ * object (a `RegExp`, a `Headers`, a class instance, one with a working
+ * `toJSON()`), where `JSON.stringify` used to swallow it into `{}`. Loud beats
+ * silently wrong, but the codec's own message names only the offending type: an
+ * unattributed `TypeError` out of `pool.enqueue` or a scheduled job's log line
+ * cannot be traced back to the call that carried the bad argument. `label` is the
+ * surface (`@lunora/queue`, `ctx.scheduler.runAt`), `path` the target function.
+ */
+const encodeArgsOrThrow = (label: string, path: string, args: unknown): unknown => {
+    try {
+        return encodeWire(args);
+    } catch (error: unknown) {
+        throw new TypeError(
+            `${label}: cannot encode args for '${path}' — ${error instanceof Error ? error.message : String(error)}`,
+            error instanceof Error ? { cause: error } : undefined,
+        );
+    }
+};
+
+export { decodeDocument, decodeWire, encodeArgsOrThrow, encodeWire, isPlainObject, needsWireEncoding, TAG as WIRE_TAG };
