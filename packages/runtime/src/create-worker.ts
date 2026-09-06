@@ -1433,6 +1433,52 @@ interface WorkerOptions {
     syncGlobals?: GlobalCdcSyncFunction;
 
     /**
+     * The header carrying the caller's IP, for an origin that is fronted by a
+     * proxy. **Default: unset**, and unset is the safe answer — leave it alone
+     * unless the paragraph below describes your deployment exactly.
+     *
+     * On Cloudflare the runtime already reads `CF-Connecting-IP`, which the edge
+     * stamps over anything the client sent, and this option is ignored. Anywhere
+     * else (`target: "node"`, a container, a bare process) nothing overwrites
+     * that header, so the runtime resolves no IP at all: `ctx.ip` is `undefined`
+     * and the REST limiter's default key pools every caller into one
+     * `no-trusted-ip` bucket. That is correct for a directly-exposed host, and
+     * wrong for an origin sitting BEHIND a proxy that does stamp a client address
+     * — there a real per-IP limit collapses into one bucket a single client can
+     * exhaust for everybody. Naming the header restores per-IP limiting:
+     *
+     * ```ts
+     * trustedClientIpHeader: "cf-connecting-ip"   // origin behind Cloudflare
+     * ```
+     *
+     * ## What you are asserting
+     *
+     * That the named header is set by infrastructure **you control**, on every
+     * request, replacing whatever the caller sent — and therefore that no caller
+     * can choose its value. A proxy that only _forwards_ or _appends_ to a
+     * client-supplied header is not such a thing, and neither is one the origin
+     * can be reached around: if any route bypasses the proxy (a `*.workers.dev`
+     * route left enabled, a load-balancer health port, the origin's own IP
+     * reachable from the internet), a caller reaches this worker with the header
+     * they typed.
+     *
+     * If that assertion is untrue, this is worse than leaving it unset: an
+     * attacker rotates the header for a fresh rate-limit bucket per request — so
+     * the limit stops applying to exactly the traffic it exists to stop, while
+     * still reading as enforced — and forges the `ctx.ip` every procedure keys
+     * on and every audit row records. Lock the origin to the proxy first.
+     *
+     * A value containing a comma is refused rather than read, because that is an
+     * appended forwarding chain (`x-forwarded-for: <client>, <hop>`) whose
+     * leftmost entry is client-written. Declare a header your proxy replaces.
+     *
+     * This governs `ctx.ip` only. `createRestRateLimit` takes the same option for
+     * the REST limiter's default key; set both, or the two disagree about who a
+     * request came from.
+     */
+    trustedClientIpHeader?: string;
+
+    /**
      * Who may hand this worker a trace to join. Controls whether an inbound W3C
      * `traceparent` is continued — adopting its trace id, parenting this
      * dispatch's span under the upstream span, and carrying its `tracestate` to
@@ -1908,6 +1954,11 @@ const resolveForwardContext = async (
     request: Request,
     env: unknown,
     resolveIdentity: WorkerOptions["resolveIdentity"],
+    // Deliberately required rather than optional-with-a-default: every call site
+    // is inside `createWorker` with `options` in scope, and an omitted argument
+    // here would silently drop a deployment's declared header on one route while
+    // the others honoured it.
+    trustedClientIpHeader: WorkerOptions["trustedClientIpHeader"],
     // Defaults to the in-flight context recorded by `handle`. Passed explicitly
     // only by callers that did not reach here through the `fetch` funnel.
     context: ExecutionContextLike | undefined = executionContextByRequest.get(request),
@@ -1956,11 +2007,11 @@ const resolveForwardContext = async (
     // value. On any other host nothing overwrites it, so it is a header the
     // caller typed — forwarding it there would let an attacker choose the `ctx.ip`
     // every procedure rate-limits on. `x-forwarded-for` is client-spoofable in
-    // both cases and deliberately NOT used. Off the edge the header is simply not
-    // forwarded and `ctx.ip` reads `undefined`, which it is already documented to
-    // do. See `./trusted-client-ip.ts` for the behind-Cloudflare origin this
-    // deliberately pools, and what those deployments should do instead.
-    const clientIp = trustedClientIp(request.headers);
+    // both cases and deliberately NOT read by default. Off the edge the header is
+    // simply not forwarded and `ctx.ip` reads `undefined`, which it is already
+    // documented to do — unless a fronted origin declared its own trustworthy
+    // header via `trustedClientIpHeader`. See `./trusted-client-ip.ts`.
+    const clientIp = trustedClientIp(request.headers, trustedClientIpHeader);
 
     if (clientIp) {
         headers["x-lunora-client-ip"] = clientIp;
@@ -2712,7 +2763,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // the orchestrated calls. No static token configured → nothing to mint, and
     // the operation fails closed downstream exactly as before.
     const resolveAdminForwardContext = async (request: Request, env: unknown): Promise<ForwardContext> => {
-        const context = await resolveForwardContext(request, env, options.resolveIdentity);
+        const context = await resolveForwardContext(request, env, options.resolveIdentity, options.trustedClientIpHeader);
 
         if (accessAdminGrants.has(request) && context.headers["authorization"] === undefined) {
             const token = effectiveAdminToken();
@@ -3708,7 +3759,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     const buildHttpActionContext = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<HttpActionContext> => {
-        const { claims, headers, userId } = await resolveForwardContext(request, env, publicResolveIdentity);
+        const { claims, headers, userId } = await resolveForwardContext(request, env, publicResolveIdentity, options.trustedClientIpHeader);
 
         const sinkContext = buildSinkContext(env, request, (promise) => context.waitUntil?.(promise));
 
@@ -3881,7 +3932,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // forwarded to the DO so the socket carries a verified userId (the basis
         // for trusted `onConnect`/`onDisconnect` lifecycle hooks). Mirrors the
         // RPC path's `resolveForwardContext` → `authorize*` ordering.
-        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
+        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity, options.trustedClientIpHeader);
 
         await assertShardAuthorized(identity, shardKey);
 
@@ -3987,7 +4038,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // Resolve the caller's identity once and forward it to the voice DO so the
         // session's `agents:*` thread writes are attributed to the caller (RLS /
         // ownership). Same shape/authorization ordering as the RPC/WS paths.
-        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
+        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity, options.trustedClientIpHeader);
 
         // Deliberately NOT `assertShardAuthorized`, and the difference is the
         // `else`: that helper default-denies only a NON-default shard, because its
@@ -4362,7 +4413,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // Forward selected headers from the inbound request so the DO can
         // honour auth, sessions, and D1 read-your-writes consistency.
-        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
+        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity, options.trustedClientIpHeader);
 
         await authorizeRpcEnvelope(envelope, identity);
 
@@ -4486,7 +4537,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // Use `publicResolveIdentity` (the contract-wrapped resolver) so this public
         // data path enforces `defineIdentity(...)` exactly like `handleRpc` — the raw
         // resolver would let contract-violating claims through to the shard verbatim.
-        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
+        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity, options.trustedClientIpHeader);
 
         // Validate + group by target shard (throws on a malformed/reserved/oversized batch).
         const groups = groupBatchCallsByShard(calls, defaultShard);
@@ -4761,7 +4812,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // byte-identical to `handleRpc`'s. The context is passed explicitly
             // because this path has no `fetch` funnel to have recorded it, and an
             // SSR host may well hand us a rebuilt `Request` object.
-            const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity, callOptions.context);
+            const { headers: forwardedHeaders, identity } = await resolveForwardContext(
+                request,
+                env,
+                publicResolveIdentity,
+                options.trustedClientIpHeader,
+                callOptions.context,
+            );
 
             // Run the IDENTICAL per-shard authorization gate. A `shardKey` of
             // `undefined` resolves to `defaultShard` for both the gate and the
@@ -4999,7 +5056,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         assertArgsObject(args, "REST");
 
         const envelope: RpcEnvelope = { args, functionPath, ...(shardKey === undefined ? {} : { shardKey }) };
-        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
+        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity, options.trustedClientIpHeader);
 
         await authorizeRpcEnvelope(envelope, identity);
 
