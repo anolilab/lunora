@@ -46,4 +46,13 @@ module FixtureLoader
   def canonical(value)
     Lunora.stable_stringify(value)
   end
+
+  # Renders a value the way client.rb puts it on the socket, with JSON.generate.
+  # Separate from +canonical+, which is free to normalise: +stable_stringify+
+  # spells every number the ECMAScript way, so 1.0 and 1 compare EQUAL through
+  # it — the divergence a round-trip case exists to catch. Dart's dates went out
+  # as 1700000000000.0 for exactly that reason, on a green suite.
+  def wire_text(value)
+    JSON.generate(value)
+  end
 end
