@@ -75,15 +75,20 @@ describe("createSqlAuthStore — CRUD over node:sqlite", () => {
         await expect(store.count("users", [clause("age", 25, "gt")])).resolves.toBe(1);
     });
 
-    it("folds an OR connector across clauses", async () => {
-        expect.assertions(1);
+    it("groups OR connectors as alternatives, still ANDed with the AND clauses", async () => {
+        expect.assertions(3);
 
         const store = createSqlAuthStore(executor);
         await store.create("users", { age: 30, email: "ada@example.com", id: "u1" });
         await store.create("users", { age: 20, email: "bob@example.com", id: "u2" });
 
-        // id = u1 OR age = 20 → both rows.
-        await expect(store.count("users", [clause("id", "u1"), clause("age", 20, "eq", "OR")])).resolves.toBe(2);
+        // An all-OR list is a plain disjunction.
+        await expect(store.count("users", [clause("id", "u1", "eq", "OR"), clause("age", 20, "eq", "OR")])).resolves.toBe(2);
+        // With an AND clause present the OR group is ANDed with it, not folded
+        // into it: `id = u1 AND age = 20` matches nothing. See
+        // `where-connector.test.ts` for why this is not "id = u1 OR age = 20".
+        await expect(store.count("users", [clause("id", "u1"), clause("age", 20, "eq", "OR")])).resolves.toBe(0);
+        await expect(store.count("users", [clause("id", "u1"), clause("age", 30, "eq", "OR")])).resolves.toBe(1);
     });
 
     it("honours case-insensitive equality via LOWER()", async () => {
@@ -258,8 +263,17 @@ describe("memory and SQL stores agree on the clause matrix", () => {
         { expected: [], name: "contains non-string value", where: [clause("email", 123, "contains")] },
         { expected: ["u1"], name: "eq insensitive", where: [{ ...clause("email", "ada@example.com"), mode: "insensitive" }] },
         { expected: [], name: "eq sensitive (case mismatch)", where: [clause("email", "ada@example.com")] },
-        { expected: ["u2"], name: "AND fold", where: [clause("role", "user"), clause("age", 20)] },
-        { expected: ["u1", "u2", "u3"], name: "OR fold", where: [clause("id", "u1"), clause("age", 20, "eq", "OR")] },
+        { expected: ["u2"], name: "AND group", where: [clause("role", "user"), clause("age", 20)] },
+        // OR clauses are alternatives among themselves and are still ANDed with
+        // the AND group — `id = u1 AND age = 20` selects nothing, it does not
+        // widen to "u1 or anyone aged 20". See `where-connector.test.ts`.
+        { expected: [], name: "OR group under a failing AND clause", where: [clause("id", "u1"), clause("age", 20, "eq", "OR")] },
+        {
+            expected: ["u2"],
+            name: "OR group under a passing AND clause",
+            where: [clause("role", "user"), clause("id", "u2", "eq", "OR"), clause("id", "u3", "eq", "OR")],
+        },
+        { expected: ["u2", "u3"], name: "all-OR list", where: [clause("id", "u2", "eq", "OR"), clause("id", "u3", "eq", "OR")] },
     ];
 
     const idsFrom = async (store: AuthStore, where: AuthWhereClause[]): Promise<string[]> => {
