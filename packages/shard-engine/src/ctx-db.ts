@@ -2846,14 +2846,33 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * by-id facade pins it), the probe below is scoped to that one table so a
      * foreign id can never resolve cross-table — closing an IDOR where a
      * branded `Id<"posts">` carrying another table's id would otherwise
-     * read/mutate that other table. An unknown/global `expectedTable` narrows
-     * the probe to nothing, so the global fallback handles it.
+     * read/mutate that other table. A `.global()` `expectedTable` narrows the
+     * probe to nothing because those rows live in D1, not this DO — see
+     * {@link globalFallbackFor}, which picks them up. An unknown
+     * `expectedTable` narrows it to nothing too and nothing picks it up: the
+     * id reads as absent, which is the point.
      */
     const nonGlobalTableNames = (expectedTable?: string): string[] =>
         Object.entries(schema.tables)
             .filter(([, definition]) => definition.shardMode?.kind !== "global")
             .map(([tableName]) => tableName)
             .filter((tableName) => expectedTable === undefined || tableName === expectedTable);
+
+    /**
+     * The D1-backed writer a by-id op falls through to when the shard-local
+     * probe found nothing — or `undefined` when it must not fall through.
+     *
+     * A `.global()` row's id never lives in this DO, so an unpinned lookup
+     * always falls through. A facade-pinned one falls through only when the
+     * pinned table is itself `.global()`: pinning a shard-local table and then
+     * reaching a global row would be exactly the cross-table read/mutate the
+     * pin exists to stop (IDOR). Every caller forwards `expectedTable` on to
+     * the global writer as well, so the pin is re-applied over there — its
+     * `resolveTableName` treats an id owned by another table as absent, which
+     * is what keeps one `.global()` facade out of another `.global()` table.
+     */
+    const globalFallbackFor = (expectedTable?: string): DatabaseWriterLike | undefined =>
+        expectedTable === undefined || isGlobalTable(expectedTable) ? globalDb : undefined;
 
     /**
      * Locate a row by id and return both the owning table and the decoded
@@ -3188,12 +3207,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = locateRowById(id, expectedTable);
 
             if (!located) {
-                // A global row's id never lives in this DO; fall back to D1
-                // (both backends are silent on a genuinely-absent id). But when
-                // the by-id facade pinned a (non-global) table, a global row is
-                // by definition a different table — skip the fallback so a
-                // non-global facade can't reach a `.global()` row (IDOR).
-                const global = expectedTable === undefined ? globalDb : undefined;
+                // A global row's id never lives in this DO; fall back to the
+                // D1 writer when this call is allowed to reach one (both
+                // backends are silent on a genuinely-absent id) — see
+                // `globalFallbackFor`, which also re-applies the facade's pin
+                // over there.
+                const global = globalFallbackFor(expectedTable);
 
                 if (global) {
                     // A delete carries no document, so it costs a row and no
@@ -3206,7 +3225,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // entirely, however many rows it removed.
                     meterWrite(undefined);
 
-                    await global.delete(id, undefined, deleteOptions);
+                    await global.delete(id, expectedTable, deleteOptions);
                 }
 
                 return;
@@ -3612,13 +3631,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = locateRowById(id, expectedTable);
 
             if (!located) {
-                // A global row's id never lives in this DO; fall back to D1 —
-                // but only when no table is pinned: a (non-global) by-id facade
-                // must never reach a `.global()` row (IDOR).
-                const global = expectedTable === undefined ? globalDb : undefined;
+                // A global row's id never lives in this DO; fall back to the
+                // D1 writer when this call is allowed to reach one — see
+                // `globalFallbackFor`, which also re-applies the facade's pin
+                // over there.
+                const global = globalFallbackFor(expectedTable);
 
                 if (global) {
-                    return global.get(id);
+                    return global.get(id, expectedTable);
                 }
 
                 // eslint-disable-next-line unicorn/no-null -- DatabaseWriterLike.get is `Promise<Record | null>`: null is the documented "no such row" result
@@ -4107,10 +4127,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = locateRowById(id, expectedTable);
 
             if (!located) {
-                // A global row's id never lives in this DO; fall back to D1 —
-                // but only when no table is pinned: a (non-global) by-id facade
-                // must never reach a `.global()` row (IDOR).
-                const global = expectedTable === undefined ? globalDb : undefined;
+                // A global row's id never lives in this DO; fall back to the
+                // D1 writer when this call is allowed to reach one — see
+                // `globalFallbackFor`, which also re-applies the facade's pin
+                // over there.
+                const global = globalFallbackFor(expectedTable);
 
                 if (global) {
                     // Same reason as the global `insert` branch. The DELTA is
@@ -4123,7 +4144,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // actually sends.
                     meterWrite(patch);
 
-                    await global.patch(id, patch);
+                    await global.patch(id, patch, expectedTable);
                     return;
                 }
 
@@ -4479,10 +4500,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = locateRowById(id, expectedTable);
 
             if (!located) {
-                const global = expectedTable === undefined ? globalDb : undefined;
+                const global = globalFallbackFor(expectedTable);
 
                 if (global?.restore) {
-                    await global.restore(id);
+                    await global.restore(id, expectedTable);
 
                     return;
                 }
@@ -4527,10 +4548,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = locateRowById(id, expectedTable);
 
             if (!located) {
-                // A global row's id never lives in this DO; fall back to D1 —
-                // but only when no table is pinned: a (non-global) by-id facade
-                // must never reach a `.global()` row (IDOR).
-                const global = expectedTable === undefined ? globalDb : undefined;
+                // A global row's id never lives in this DO; fall back to the
+                // D1 writer when this call is allowed to reach one — see
+                // `globalFallbackFor`, which also re-applies the facade's pin
+                // over there.
+                const global = globalFallbackFor(expectedTable);
 
                 if (global) {
                     // Same reason as the global `patch` branch — and here the
@@ -4538,7 +4560,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // exact rather than a delta.
                     meterWrite(document);
 
-                    await global.replace(id, document, undefined, replaceOptions);
+                    await global.replace(id, document, expectedTable, replaceOptions);
                     return;
                 }
 
