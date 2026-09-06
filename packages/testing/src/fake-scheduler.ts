@@ -2,6 +2,8 @@ import { LunoraError } from "@lunora/errors";
 import { assertScheduleDelay, MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS } from "@lunora/scheduler";
 import type { ScheduledJob, Scheduler } from "@lunora/server";
 
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+
 /** A pending job entry in the fake scheduler queue. */
 interface FakeScheduledJob extends ScheduledJob {
     /** The args the job was scheduled with. */
@@ -162,11 +164,27 @@ const createFakeScheduler = (
     const recordedFailures: ScheduledJobFailure[] = [];
 
     const enqueue = (scheduledFor: number, functionPath: string, args: Record<string, unknown> = {}, requestedId?: string): string => {
-        // Production posts the job to the SchedulerDO as a JSON body
-        // (`@lunora/scheduler`'s `callDO` → `JSON.stringify`), so an arg it cannot
-        // serialize — a `bigint`, a cycle — throws at SCHEDULE time. Do the same
-        // work here rather than accepting the job and failing only in production.
-        JSON.stringify(args);
+        // Stand in for the same round trip production makes, so a test double
+        // neither accepts what production rejects nor rejects what it accepts.
+        //
+        // `createScheduler.runAt` / `createWorkpool.enqueue` now `encodeWire` the
+        // args BEFORE `callDO`'s `JSON.stringify`, so a `bigint` or a `Date`
+        // survives scheduling and comes back a `bigint` or a `Date`. A bare
+        // `JSON.stringify(args)` here therefore threw on exactly the arguments
+        // production handles, failing valid tests; and it let a `Date` through
+        // as a live object the real path would have handed back as a `Date` only
+        // by way of the codec. What still throws is what the codec still cannot
+        // carry — a cycle, a function — which is the check worth keeping.
+        const encoded = encodeWire(args);
+
+        // The job body must still survive the JSON hop production makes
+        // (`callDO` → `JSON.stringify`), so keep the check rather than trusting
+        // the encode: it is what rejects a body the codec produced but JSON
+        // cannot carry. (`encodeWire` above already refuses a cycle itself, at
+        // its nesting bound.) `structuredClone` would accept both and lose it.
+        JSON.stringify(encoded);
+
+        const wireArgs = decodeWire(encoded) as Record<string, unknown>;
 
         // A caller-supplied id is honoured exactly as the SchedulerDO honours
         // `RunOptions.id`: `@lunora/server`'s deferred-schedule facade decides the
@@ -177,7 +195,7 @@ const createFakeScheduler = (
         nextId += 1;
 
         pending.set(id, {
-            args,
+            args: wireArgs,
             enqueuedAt: nowMs,
             functionPath,
             id,

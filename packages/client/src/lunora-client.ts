@@ -2827,21 +2827,30 @@ class LunoraClient {
                     // `lastFrameAt` is stamped by `openManagedSocket` itself
                     // (its `message` listener) for every caller — nothing to
                     // do here beyond parsing.
-                    try {
-                        const message = JSON.parse(typeof event.data === "string" ? event.data : "") as { records?: ScheduleRecord[]; type?: string };
+                    let message: { records?: ScheduleRecord[]; type?: string };
 
-                        if (message.type === "jobs" && Array.isArray(message.records)) {
-                            // A payload frame is the proof of a live, ACCEPTED
-                            // socket that `open` alone never was: the upgrade
-                            // succeeds before the admin credential is checked,
-                            // so resetting on `open` made a rejected token
-                            // reconnect at the initial delay forever instead of
-                            // backing off (mirrors the shard socket's fix).
-                            reconnect.reset();
-                            onJobs(message.records.map((record) => decodeRecordArgs(record)));
-                        }
+                    try {
+                        message = JSON.parse(typeof event.data === "string" ? event.data : "") as { records?: ScheduleRecord[]; type?: string };
                     } catch {
-                        /* a non-JSON frame — ignore */
+                        // A non-JSON frame, and the ONLY thing this catch ever
+                        // meant. It used to wrap the decode and the consumer
+                        // callback as well, so a `decodeWire` throw on a
+                        // malformed tag — or anything `onJobs` itself raised —
+                        // was discarded under a comment about JSON, and the
+                        // operator's live job list silently stopped updating
+                        // with no error reported anywhere.
+                        return;
+                    }
+
+                    if (message.type === "jobs" && Array.isArray(message.records)) {
+                        // A payload frame is the proof of a live, ACCEPTED
+                        // socket that `open` alone never was: the upgrade
+                        // succeeds before the admin credential is checked,
+                        // so resetting on `open` made a rejected token
+                        // reconnect at the initial delay forever instead of
+                        // backing off (mirrors the shard socket's fix).
+                        reconnect.reset();
+                        onJobs(message.records.map((record) => decodeRecordArgs(record)));
                     }
                 },
             });

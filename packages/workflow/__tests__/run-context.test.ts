@@ -185,3 +185,27 @@ describe("createWorkflowRunContext", () => {
         expect(spy).toHaveBeenCalledWith("[workflow:orderPipeline]", "hi", 1);
     });
 });
+
+describe("createWorkflowRunContext — undecodable params", () => {
+    it("fails the instance without retrying instead of raising a bare codec error", () => {
+        expect.assertions(3);
+
+        // The params are already durable, so every retry decodes the identical
+        // bytes to the identical failure. A bare `TypeError`/`RangeError` here
+        // is retryable to the platform, so it burned the whole retry budget
+        // re-deriving that same answer.
+        const event = { ...makeEvent(), payload: ["$lunora.wire$", "bigint", "not-a-number"] as unknown as { orderId: string } };
+
+        let thrown: unknown;
+
+        try {
+            createWorkflowRunContext({ env: {}, event, exportName: "orderPipeline", step: makeStep() });
+        } catch (error) {
+            thrown = error;
+        }
+
+        expect(thrown).toBeInstanceOf(Error);
+        expect((thrown as Error).name).toBe("NonRetryableError");
+        expect((thrown as Error).message).toMatch(/orderPipeline/u);
+    });
+});

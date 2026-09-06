@@ -790,13 +790,19 @@ describe("fake scheduler production parity", () => {
         await expect(t.run(async (ctx) => ctx.scheduler.runAt(1, "log:appendLog", { message: "x" }))).resolves.toMatch(/\S/u);
     });
 
-    it("rejects args the scheduler cannot serialize", async () => {
+    it("accepts the args production accepts, bigint included", async () => {
         expect.assertions(1);
 
         const t = start();
 
-        // Production posts the job as JSON, so a bigint arg throws at schedule time.
-        await expect(t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:appendLog", { message: 1n as unknown as string }))).rejects.toThrow(/BigInt/u);
+        // This used to assert the opposite, on the premise that "production posts
+        // the job as JSON, so a bigint arg throws at schedule time". That stopped
+        // being true when `createScheduler.runAt` / `createWorkpool.enqueue` began
+        // encoding args through the wire codec BEFORE `callDO`'s `JSON.stringify`:
+        // a bigint is carried as a tag and the job schedules. A harness that
+        // refuses a value production takes tells a test the opposite of what ships,
+        // which is the same failure the old assertion was written to prevent.
+        await expect(t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:appendLog", { message: 1n as unknown as string }))).resolves.toMatch(/\S/u);
     });
 
     it("gives a scheduled job the advanced clock as ctx.now", async () => {
@@ -812,5 +818,34 @@ describe("fake scheduler production parity", () => {
         // The job fired an hour into the virtual clock, so it must see that instant —
         // not the harness's construction time.
         await expect(t.query(readLog, {})).resolves.toStrictEqual([expect.objectContaining({ message: `now:${String(1_000_000 + 3_600_000)}` })]);
+    });
+});
+
+describe("fake scheduler — the wire hop production makes", () => {
+    it("round-trips args through the codec rather than handing them over by reference", async () => {
+        expect.assertions(4);
+
+        const t = start();
+        const dueAt = new Date("2026-06-01T12:00:00.000Z");
+
+        // Production's hop is `encodeWire` (in `createScheduler.runAt`) →
+        // `JSON.stringify` (in `callDO`) → the DO's storage → `decodeWire`. The
+        // fake runs the same bracket, so what a handler sees here is what it
+        // sees in production — including the two places that is NOT the
+        // caller's own object. A bare `JSON.stringify(args)` check threw on the
+        // `bigint` that production now carries fine.
+        await t.run(async (ctx) => ctx.scheduler.runAfter(1000, "log:appendLog", { amountCents: 42n, dueAt, message: "x", skipped: undefined }));
+
+        const [job] = await t.run(async (ctx) => ctx.scheduler.list());
+
+        expect(job?.args["amountCents"]).toBe(42n);
+        expect(job?.args["dueAt"]).toStrictEqual(dueAt);
+        // A rebuilt Date, not the caller's instance — a fake that handed `args`
+        // straight through would pass every value assertion above and still
+        // hide that production round-trips them.
+        expect(job?.args["dueAt"]).not.toBe(dueAt);
+        // `encodeWire` drops an `undefined` object field outright, so the
+        // handler never sees the key at all.
+        expect(job?.args).not.toHaveProperty("skipped");
     });
 });
