@@ -291,10 +291,29 @@ type ConnectionStatus = "connected" | "connecting" | "idle" | "offline";
  * Only `args` is decoded: every other field on the record is a plain scalar the
  * DO writes itself (`id`, `scheduledFor`, `functionPath`, …) and never went
  * through the codec.
+ * @throws LunoraError `WIRE_DECODE_FAILED` when a record's `args` are not a
+ * decodable wire payload — `decodeWire` raises a bare `RangeError` past its
+ * depth bound and a `TypeError` on a malformed tag, and decoding can change the
+ * SHAPE as well as the leaves (a top-level tagged scalar decodes to a
+ * primitive). Both are re-shaped here so a caller sees a coded error rather than
+ * an unmapped throw or a record whose `args` are not an object. Mirrors
+ * `decodeAdminArgs` on the shard.
  */
 const decodeScheduleRecords = (records: ScheduleRecord[]): ScheduleRecord[] =>
     records.map((record) => {
-        return { ...record, args: decodeWire(record.args) as Record<string, unknown> };
+        let args: unknown;
+
+        try {
+            args = decodeWire(record.args);
+        } catch {
+            throw new LunoraError("WIRE_DECODE_FAILED", `malformed wire args on scheduled job "${record.id}"`);
+        }
+
+        if (args === null || typeof args !== "object" || Array.isArray(args)) {
+            throw new LunoraError("WIRE_DECODE_FAILED", `malformed wire args on scheduled job "${record.id}"`);
+        }
+
+        return { ...record, args: args as Record<string, unknown> };
     });
 
 /** One shard's socket + watermark state in a {@link LunoraClient.debug} snapshot. */
@@ -2831,21 +2850,32 @@ class LunoraClient {
                     // `lastFrameAt` is stamped by `openManagedSocket` itself
                     // (its `message` listener) for every caller — nothing to
                     // do here beyond parsing.
-                    try {
-                        const message = JSON.parse(typeof event.data === "string" ? event.data : "") as { records?: ScheduleRecord[]; type?: string };
+                    // The `try` covers the PARSE and nothing else. It used to wrap
+                    // the decode and the `onJobs` callback too, under a comment
+                    // that said "a non-JSON frame" — so a `decodeScheduleRecords`
+                    // throw (or the consumer's own) was DISCARDED as if it were a
+                    // stray frame and the operator's job list silently stopped
+                    // updating. Narrowed, those reach `openManagedSocket`'s
+                    // last-resort frame-handler guard, which reports them and
+                    // keeps the socket's listener alive.
+                    let message: { records?: ScheduleRecord[]; type?: string };
 
-                        if (message.type === "jobs" && Array.isArray(message.records)) {
-                            // A payload frame is the proof of a live, ACCEPTED
-                            // socket that `open` alone never was: the upgrade
-                            // succeeds before the admin credential is checked,
-                            // so resetting on `open` made a rejected token
-                            // reconnect at the initial delay forever instead of
-                            // backing off (mirrors the shard socket's fix).
-                            reconnect.reset();
-                            onJobs(decodeScheduleRecords(message.records));
-                        }
+                    try {
+                        message = JSON.parse(typeof event.data === "string" ? event.data : "") as { records?: ScheduleRecord[]; type?: string };
                     } catch {
                         /* a non-JSON frame — ignore */
+                        return;
+                    }
+
+                    if (message.type === "jobs" && Array.isArray(message.records)) {
+                        // A payload frame is the proof of a live, ACCEPTED
+                        // socket that `open` alone never was: the upgrade
+                        // succeeds before the admin credential is checked,
+                        // so resetting on `open` made a rejected token
+                        // reconnect at the initial delay forever instead of
+                        // backing off (mirrors the shard socket's fix).
+                        reconnect.reset();
+                        onJobs(decodeScheduleRecords(message.records));
                     }
                 },
             });

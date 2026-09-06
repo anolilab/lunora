@@ -31,8 +31,6 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { decodeWire } from "../../../shared/wire-codec";
-
 /* eslint-disable unicorn/prevent-abbreviations -- `Doc`/`SystemDoc`/`ScheduledFunctionDoc` are the deliberate public API names for `ctx.db.system` (they mirror Convex's `Doc` naming and the spec the consuming `@lunora/server` types re-export); `doc`/`docs` is the domain term for a stored document throughout the DO ORM (see ctx-db.ts). Renaming would break the documented surface. */
 
 /** The system tables `ctx.db.system` can read. */
@@ -174,14 +172,15 @@ interface SystemReaderOptions {
  */
 const toScheduledFunctionDoc = (record: Record<string, unknown>): ScheduledFunctionDoc => {
     const doc: ScheduledFunctionDoc = {
-        // `decodeWire`, because the record's `args` are in WIRE form: the scheduler
-        // encodes them at the producer so a `bigint`/`Date`/bytes arg survives the
-        // JSON hop to the SchedulerDO, and every other consumer decodes (the shard
-        // for a function target, `@lunora/workflow`'s run-context for a workflow
-        // one). This read is a consumer too — a handler inspecting a pending job's
-        // args to dedupe before enqueueing would otherwise compare against a raw
-        // `["$lunora.wire$", …]` array and never match. Identity for pure JSON.
-        args: (decodeWire(record["args"] ?? {}) as Record<string, unknown> | undefined) ?? {},
+        // NOT decoded here. `args` cross the wire to the SchedulerDO in encoded
+        // form, but the source this reader is handed (`ctx.scheduler`, i.e.
+        // `@lunora/scheduler`'s `createScheduler`) already `decodeWire`s every
+        // response at its transport, so the record arriving here holds real
+        // `Date`/`bigint`/bytes values. A second decode is not a no-op on those:
+        // a `Date` has no own enumerable keys, so it re-decodes to `{}` — the
+        // exact corruption the codec exists to prevent, inflicted by decoding
+        // twice instead of not at all.
+        args: (record["args"] as Record<string, unknown> | undefined) ?? {},
         enqueuedAt: typeof record["enqueuedAt"] === "number" ? record["enqueuedAt"] : 0,
         id: typeof record["id"] === "string" ? record["id"] : "",
         scheduledFor: typeof record["scheduledFor"] === "number" ? record["scheduledFor"] : 0,

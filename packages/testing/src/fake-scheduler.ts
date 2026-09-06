@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import { assertScheduleDelay, MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS } from "@lunora/scheduler";
 import type { ScheduledJob, Scheduler } from "@lunora/server";
 
-import { encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 
 /** A pending job entry in the fake scheduler queue. */
 interface FakeScheduledJob extends ScheduledJob {
@@ -164,18 +164,17 @@ const createFakeScheduler = (
     const recordedFailures: ScheduledJobFailure[] = [];
 
     const enqueue = (scheduledFor: number, functionPath: string, args: Record<string, unknown> = {}, requestedId?: string): string => {
-        // Production wire-encodes the args before posting them to the SchedulerDO
-        // (`@lunora/scheduler`'s `createScheduler.runAt` → `encodeWire` → `callDO`),
-        // so an arg the CODEC cannot carry — a cycle, a `RegExp`, a class instance
-        // — throws at SCHEDULE time. Do the same work here rather than accepting
-        // the job and failing only in production.
-        //
-        // Note what this deliberately no longer rejects: a `bigint` or a `Date`.
-        // Raw `JSON.stringify` threw on the first and silently flattened the second,
-        // and mirroring that here made the fake refuse jobs production now accepts.
-        // The encoded value is discarded — the fake dispatches in-process, so the
-        // handler must see what production's decode hands it, which is `args` itself.
-        encodeWire(args);
+        // The production hop, run for real: `@lunora/scheduler`'s `callDO`
+        // `encodeWire`s the envelope, `JSON.stringify` puts it on the wire, the
+        // SchedulerDO stores and re-serialises it, and the consumer `decodeWire`s
+        // it back. Doing all three here means an arg the codec cannot carry (a
+        // cycle, a `RegExp`, a class instance) throws at SCHEDULE time exactly as
+        // it does in production, and the handler sees precisely what production's
+        // decode hands it — including the two places that is NOT `args` itself: an
+        // `undefined` object field is dropped, and a `Date`/`bigint` comes back as
+        // an equal but distinct value rather than the caller's own instance.
+        const json = JSON.stringify(encodeWire(args));
+        const wireArgs = decodeWire(JSON.parse(json)) as Record<string, unknown>;
 
         // A caller-supplied id is honoured exactly as the SchedulerDO honours
         // `RunOptions.id`: `@lunora/server`'s deferred-schedule facade decides the
@@ -186,7 +185,7 @@ const createFakeScheduler = (
         nextId += 1;
 
         pending.set(id, {
-            args,
+            args: wireArgs,
             enqueuedAt: nowMs,
             functionPath,
             id,

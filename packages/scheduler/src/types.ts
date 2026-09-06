@@ -139,6 +139,13 @@ export interface RunOptions {
 }
 
 export interface ScheduleRecord {
+    /**
+     * The arguments the job will be dispatched with. Decoded — every read in
+     * this package comes back through `do-client`'s `requestDO`, which
+     * `decodeWire`s the whole SchedulerDO response — so a `bigint`/`Date`/bytes
+     * arg is that value here, not the tagged wire form. Only the DO's own
+     * storage holds the encoded form.
+     */
     args: Record<string, unknown>;
 
     /**

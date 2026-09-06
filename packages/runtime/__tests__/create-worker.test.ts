@@ -42,6 +42,34 @@ const createShardSpy = (response = new Response("ok", { status: 200 })): ShardSp
     return spy;
 };
 
+/**
+ * Render an args bag by TYPE, so an assertion crossing the worker's JSON
+ * response still proves a real `Date`/`bigint` came back out of `ctx.scheduler`
+ * — a tagged `["$lunora.wire$", …]` array renders as `array`, and an ISO string
+ * as `string`.
+ */
+const describeValue = (value: unknown): string => {
+    if (typeof value === "bigint") {
+        return `bigint:${value.toString()}`;
+    }
+
+    if (value instanceof Date) {
+        return `date:${value.toISOString()}`;
+    }
+
+    return `${typeof value}:${String(value)}`;
+};
+
+const describeArgs = (args: Record<string, unknown> | undefined): Record<string, string> =>
+    Object.fromEntries(Object.entries(args ?? {}).map(([key, value]) => [key, describeValue(value)]));
+
+/** The wire form of a job's args as the SchedulerDO stores it, after the JSON hop it made to get there. */
+const asStoredArgs = (args: Record<string, unknown>): Record<string, unknown> => {
+    const json = JSON.stringify(encodeWire(args));
+
+    return JSON.parse(json) as Record<string, unknown>;
+};
+
 const fakeContext: ExecutionContextLike = {
     passThroughOnException: () => undefined,
     waitUntil: () => undefined,
@@ -1866,6 +1894,102 @@ describe("createWorker — HTTP actions", () => {
 
         expect(decoded.amountCents).toBe(9_007_199_254_740_993n);
         expect(decoded.dueAt).toStrictEqual(dueAt);
+    });
+
+    it("c.var.lunora.scheduler.list/get decode args back out of the wire form", async () => {
+        expect.assertions(2);
+
+        // The read half of the same facade. The SchedulerDO stores the producer's
+        // envelope verbatim — `args` in wire form — so without a decode at the
+        // transport these handed an operator a tagged `["$lunora.wire$", …]`
+        // array where the value belonged.
+        const dueAt = new Date("2026-06-01T12:00:00.000Z");
+        const stored = {
+            args: asStoredArgs({ amountCents: 42n, dueAt }),
+            functionPath: "billing:settle",
+            id: "job-1",
+            scheduledFor: 2,
+        };
+        const scheduler = createShardSpy();
+
+        scheduler.namespace = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) =>
+                        new URL(request.url).pathname === "/get"
+                            ? Response.json({ record: stored }, { status: 200 })
+                            : Response.json({ records: [stored] }, { status: 200 }),
+                };
+            },
+            idFromName: (name: string) => {
+                return { __name: name };
+            },
+        };
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.get("/jobs", async (c) => {
+                    const listed = (await c.var.lunora.scheduler?.list()) ?? [];
+                    const one = await c.var.lunora.scheduler?.get("job-1");
+
+                    return Response.json({
+                        getArgs: describeArgs(one?.["args"] as Record<string, unknown> | undefined),
+                        listArgs: describeArgs(listed[0]?.["args"] as Record<string, unknown> | undefined),
+                        listLength: listed.length,
+                    });
+                }),
+            ),
+            schedulerDO: scheduler.namespace,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/jobs"), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        // Both readers, in one shape: a real `bigint`/`Date` where the wire form
+        // used to leave a tagged array (`object:$lunora.wire$,date,…`).
+        await expect(res.json()).resolves.toStrictEqual({
+            getArgs: { amountCents: "bigint:42", dueAt: "date:2026-06-01T12:00:00.000Z" },
+            listArgs: { amountCents: "bigint:42", dueAt: "date:2026-06-01T12:00:00.000Z" },
+            listLength: 1,
+        });
+    });
+
+    it("c.var.lunora.scheduler.get unwraps the DO envelope and answers null on a miss", async () => {
+        expect.assertions(2);
+
+        // The DO answers `{ record }` and omits `record` on a miss. Handing the
+        // envelope back made a hit read as `{ record: {...} }` (so
+        // `job.scheduledFor` was `undefined`) and a miss read as a truthy `{}`.
+        const scheduler = createShardSpy();
+
+        scheduler.namespace = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) =>
+                        new URL(request.url).searchParams.get("id") === "job-1"
+                            ? Response.json({ record: { functionPath: "billing:settle", id: "job-1", scheduledFor: 2 } }, { status: 200 })
+                            : Response.json({}, { status: 200 }),
+                };
+            },
+            idFromName: (name: string) => {
+                return { __name: name };
+            },
+        };
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.get("/jobs/:id", async (c) => Response.json({ job: (await c.var.lunora.scheduler?.get(c.req.param("id"))) ?? null })),
+            ),
+            schedulerDO: scheduler.namespace,
+            shardDO: shard.namespace,
+        });
+
+        const hit = await worker.fetch(new Request("https://app.example/jobs/job-1"), {}, fakeContext);
+        const miss = await worker.fetch(new Request("https://app.example/jobs/nope"), {}, fakeContext);
+
+        await expect(hit.json()).resolves.toStrictEqual({ job: { functionPath: "billing:settle", id: "job-1", scheduledFor: 2 } });
+        await expect(miss.json()).resolves.toStrictEqual({ job: null });
     });
 
     it("c.var.lunora.storage stores an object through the worker's own R2 binding", async () => {

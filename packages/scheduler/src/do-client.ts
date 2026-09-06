@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import applyJurisdiction from "./jurisdiction";
 import type { DurableObjectNamespaceLike, LunoraSchedulerOptions } from "./types";
 
@@ -67,6 +68,20 @@ const raiseDOFailure = (path: string, status: number, text: string): never => {
     throw new LunoraError("INTERNAL", `@lunora/scheduler: SchedulerDO ${path} failed (${String(status)}): ${text}`);
 };
 
+/**
+ * The single owner of what this package puts on, and takes off, the SchedulerDO
+ * wire — as it already is of the URL, the headers, and the response checks.
+ *
+ * A job's `args` can hold a `bigint`, a `Date` or bytes, none of which survive
+ * raw JSON: the first throws inside `JSON.stringify` before the job is ever
+ * recorded, the second silently arrives as an ISO string. Bracketing the codec
+ * here rather than at each caller is what keeps the two directions in step —
+ * encoding at the producers alone left `list`/`get`/`dead` handing back the
+ * tagged `["$lunora.wire$", …]` form, and every future route would have had to
+ * remember both halves. Both codecs are the identity on pure JSON, so
+ * `functionPath`, `scheduledFor`, `cursor` and friends are unchanged byte for
+ * byte.
+ */
 const requestDO = async <T>(options: LunoraSchedulerOptions, path: string, init: RequestInit): Promise<T> => {
     const stub = schedulerStub(options);
     const response = await stub.fetch(`https://scheduler.internal${path}`, init);
@@ -75,13 +90,13 @@ const requestDO = async <T>(options: LunoraSchedulerOptions, path: string, init:
         raiseDOFailure(path, response.status, await response.text());
     }
 
-    return await response.json();
+    return decodeWire(await response.json()) as T;
 };
 
 /** POST `body` to the SchedulerDO `path`, throwing a shaped `LunoraError` on any non-2xx. */
 const callDO = async <T>(options: LunoraSchedulerOptions, path: string, body: unknown): Promise<T> =>
     requestDO<T>(options, path, {
-        body: JSON.stringify(body),
+        body: JSON.stringify(encodeWire(body)),
         headers: { "content-type": "application/json" },
         method: "POST",
     });

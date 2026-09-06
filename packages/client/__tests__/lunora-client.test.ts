@@ -2810,6 +2810,25 @@ describe("lunoraClient", () => {
             await expect(client.listScheduledJobs()).resolves.toEqual([]);
         });
 
+        it("listScheduledJobs raises WIRE_DECODE_FAILED on args the codec refuses", async () => {
+            expect.assertions(2);
+
+            // `decodeWire` throws a bare `TypeError` on a malformed tag and a
+            // `RangeError` past its depth bound, and can decode to a non-object.
+            // Both used to escape unmapped — and inside `subscribeScheduledJobs`
+            // they landed in a `catch` labelled "a non-JSON frame", which silently
+            // froze the operator's job list.
+            const malformed = [{ args: ["$lunora.wire$", "bigint", "not-a-number"], enqueuedAt: 1, id: "j1", scheduledFor: 2 }];
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ records: malformed }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await expect(client.listScheduledJobs()).rejects.toMatchObject({ code: "WIRE_DECODE_FAILED" });
+            await expect(client.listScheduledJobs()).rejects.toThrow(/j1/u);
+        });
+
         it("cancelScheduledJob POSTs the id and normalises the result", async () => {
             expect.assertions(4);
 
@@ -3489,6 +3508,41 @@ describe("lunoraClient", () => {
 
             expect(seen).toHaveLength(1);
 
+            unsubscribe();
+            client.close();
+        });
+
+        it("surfaces a decode failure instead of swallowing it as a non-JSON frame", () => {
+            expect.assertions(2);
+
+            // The `try` around this handler covers the JSON PARSE and nothing
+            // else. It used to wrap the decode and the consumer callback too,
+            // under a comment claiming "a non-JSON frame" — so a `decodeWire`
+            // throw was discarded and the operator's job list silently stopped
+            // updating with no error anywhere.
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+                wsToken: "adm1n",
+            });
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const seen: string[][] = [];
+            const unsubscribe = client.subscribeScheduledJobs((jobs) => seen.push(jobs.map((job) => job.id)));
+            const socket = latestSocket();
+
+            socket.open();
+            socket.receive({ records: [{ args: ["$lunora.wire$", "bigint", "not-a-number"], enqueuedAt: 1, id: "j1", scheduledFor: 2 }], type: "jobs" });
+
+            // Reaches `openManagedSocket`'s last-resort frame-handler guard —
+            // which reports it — instead of the local `catch` that used to
+            // discard it as a stray frame. The consumer is never called with a
+            // half-decoded list.
+            expect(error).toHaveBeenCalledWith("[lunora] server frame handler threw", expect.objectContaining({ code: "WIRE_DECODE_FAILED" }));
+            expect(seen).toHaveLength(0);
+
+            error.mockRestore();
             unsubscribe();
             client.close();
         });

@@ -1,6 +1,5 @@
 import { LunoraError } from "@lunora/errors";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { ArgsOf, EnqueueOptions, FunctionReference, Workpool, WorkpoolOptions } from "./types";
 import assertScheduleDelay from "./validate-delay";
@@ -54,10 +53,10 @@ const createWorkpool = (options: WorkpoolOptions): Workpool => {
         assertScheduleDelay(delayMs, "workpool.enqueue");
 
         return callDO<{ id: string; scheduledFor: number }>(options, "/schedule", {
-            // Same wire contract as `createScheduler.runAt` — a pooled job takes the
-            // identical `/schedule` route to the identical shard-side `decodeWire`,
-            // so an un-encoded `bigint` arg threw here for the same reason.
-            args: encodeWire(args) as Record<string, unknown>,
+            // Wire-encoded by `callDO`, same as `createScheduler.runAt` — a pooled
+            // job takes the identical `/schedule` route to the identical
+            // shard-side `decodeWire`.
+            args,
             functionPath: function_.__lunoraRef,
             instanceName: options.instanceName ?? "default",
             maxConcurrency: options.maxConcurrency,

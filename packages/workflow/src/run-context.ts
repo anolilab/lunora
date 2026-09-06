@@ -13,6 +13,7 @@ import { LunoraError } from "@lunora/errors";
 import { decodeWire } from "../../../shared/wire-codec";
 import { workflowBindingName } from "./define-workflow";
 import type { NativeNonRetryableErrorConstructor } from "./errors";
+import { raiseNonRetryable } from "./errors";
 import type { WorkflowBindingResolver } from "./fan-out";
 import { createParallel, createSpawn } from "./fan-out";
 import { createRunStep } from "./run-step";
@@ -45,13 +46,33 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
     // instance creation outright and a real `Date` degrades to an ISO string. So
     // the value cannot be decoded any earlier than here and still be intact.
     //
-    // `decodeWire` is identity for pure JSON, so params from every other create
-    // surface (`ctx.parallel`/`ctx.spawn`, a hand-written `env.WORKFLOW_X.create`)
-    // are untouched. It runs before the context is built so `ctx.params` and
-    // `ctx.event.payload` cannot disagree — `params` is documented as an alias of
-    // the payload, and handing one the decoded value and the other a raw tagged
-    // array would make that a lie.
-    const event: WorkflowEventLike<Params> = { ...options.event, payload: decodeWire(options.event.payload) as Readonly<Params> };
+    // `decodeWire` returns the same VALUES for params from every other create
+    // surface (`ctx.parallel`/`ctx.spawn`, a hand-written `env.WORKFLOW_X.create`),
+    // since it is the identity on pure JSON. It is not a no-op on all of them,
+    // though: the codec enforces its own nesting bound, so a pure-JSON payload
+    // deeper than that is refused here rather than reaching the handler. It runs
+    // before the context is built so `ctx.params` and `ctx.event.payload` cannot
+    // disagree — `params` is documented as an alias of the payload, and handing
+    // one the decoded value and the other a raw tagged array would make that a
+    // lie.
+    //
+    // A refusal is NON-retryable: the params are already durable, so every retry
+    // decodes the identical bytes to the identical failure. A bare `RangeError`/
+    // `TypeError` escaping here would instead burn the instance's whole retry
+    // budget re-deriving the same answer.
+    let payload: unknown;
+
+    try {
+        payload = decodeWire(options.event.payload);
+    } catch (error) {
+        raiseNonRetryable(
+            `@lunora/workflow: workflow "${options.exportName}" params could not be decoded — ${error instanceof Error ? error.message : String(error)}`,
+            error,
+            options.nonRetryableErrorClass,
+        );
+    }
+
+    const event: WorkflowEventLike<Params> = { ...options.event, payload: payload as Readonly<Params> };
 
     // `@lunora/dispatch`'s runner is deliberately loose at the boundary (its
     // `ArgsOf` collapses to `Record<string, unknown>`); this package's

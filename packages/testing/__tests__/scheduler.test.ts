@@ -806,6 +806,31 @@ describe("fake scheduler production parity", () => {
         await expect(t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:appendLog", { message: 1n as unknown as string }))).resolves.toMatch(/\S/u);
     });
 
+    it("puts args through the production wire hop, not a by-reference handoff", async () => {
+        expect.assertions(4);
+
+        const t = start();
+        const dueAt = new Date("2026-06-01T12:00:00.000Z");
+
+        // Production's hop is `encodeWire` → `JSON.stringify` → the DO's storage →
+        // `decodeWire`. The fake runs all three, so what the handler sees here is
+        // what it sees in production — including the two places that is NOT the
+        // caller's own object.
+        await t.run(async (ctx) => ctx.scheduler.runAfter(1000, "log:appendLog", { amountCents: 42n, dueAt, message: "x", skipped: undefined }));
+
+        const [job] = await t.run(async (ctx) => ctx.scheduler.list());
+
+        expect(job?.args["amountCents"]).toBe(42n);
+        expect(job?.args["dueAt"]).toStrictEqual(dueAt);
+        // A rebuilt Date, not the caller's instance — a fake that handed `args`
+        // straight through would pass every value assertion and still hide that
+        // production round-trips them.
+        expect(job?.args["dueAt"]).not.toBe(dueAt);
+        // `encodeWire` drops an `undefined` object field exactly as
+        // `JSON.stringify` does, so the handler never sees the key at all.
+        expect(job?.args).not.toHaveProperty("skipped");
+    });
+
     it("gives a scheduled job the advanced clock as ctx.now", async () => {
         expect.assertions(1);
 

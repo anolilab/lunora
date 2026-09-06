@@ -34,6 +34,24 @@ describe("createSystemReader — _scheduled_functions", () => {
         ]);
     });
 
+    it("passes a Date/bigint arg through untouched rather than decoding it a second time", async () => {
+        expect.assertions(2);
+
+        // The source is `ctx.scheduler` — `@lunora/scheduler`'s `createScheduler`,
+        // which `decodeWire`s every SchedulerDO response at its transport. Running
+        // the codec again here is NOT a no-op on what it hands back: a `Date` has
+        // no own enumerable keys, so a second `decodeWire` flattens it to `{}`.
+        const dueAt = new Date("2026-06-01T12:00:00.000Z");
+        const list = vi.fn<() => Promise<Record<string, unknown>[]>>(async () => [scheduledRecord({ args: { amountCents: 42n, dueAt } })]);
+        const scheduler: SystemReaderSchedulerLike = { get: vi.fn<SystemReaderSchedulerLike["get"]>(), list };
+
+        const reader = createSystemReader({ scheduler });
+        const [doc] = await reader.query("_scheduled_functions").collect();
+
+        expect(doc?.args["dueAt"]).toStrictEqual(dueAt);
+        expect(doc?.args["amountCents"]).toBe(42n);
+    });
+
     it("leaves functionPath absent on a workflow-targeted job instead of inventing an empty path", async () => {
         expect.assertions(1);
 

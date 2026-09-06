@@ -3532,6 +3532,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const instanceName = options.schedulerInstanceName ?? "default";
         const stub = (): ResolvedShard => resolveShard(namespace, instanceName);
 
+        // `call`/`post` are the single owner of what this facade puts on, and takes
+        // off, the SchedulerDO wire — mirroring `@lunora/scheduler`'s `do-client`,
+        // the other client of the same routes. A job's `args` can hold a
+        // `bigint`/`Date`/bytes, none of which survive raw JSON; bracketing the
+        // codec at the transport rather than at `schedule` alone is what keeps
+        // `list`/`get` from handing back the tagged `["$lunora.wire$", …]` form.
+        // Both codecs are the identity on pure JSON.
         const call = async <R>(path: string, init: RequestInit): Promise<R> => {
             const response = await stub().fetch(new Request(`https://scheduler.internal${path}`, init));
 
@@ -3542,11 +3549,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 });
             }
 
-            return await response.json();
+            return decodeWire(await response.json()) as R;
         };
 
         const post = async <R>(path: string, body: unknown): Promise<R> =>
-            await call<R>(path, { body: JSON.stringify(body), headers: { "content-type": "application/json" }, method: "POST" });
+            await call<R>(path, { body: JSON.stringify(encodeWire(body)), headers: { "content-type": "application/json" }, method: "POST" });
 
         // A generated `workflows.<name>` / `agents.<name>` reference carries a
         // `binding` and starts a durable instance per fire; a function reference
@@ -3605,14 +3612,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             );
 
         const schedule = async (scheduledFor: number, target: unknown, args: Record<string, unknown> = {}): Promise<string> => {
-            // `encodeWire` for the same reason `@lunora/scheduler`'s own
-            // `createScheduler.runAt` does — this facade is the second producer on
-            // the SAME `/schedule` route, and both its consumers decode. Without it
-            // `post`'s `JSON.stringify` threw on a `bigint` arg before the job was
-            // recorded, and rendered a `Date` as an ISO string the handler read back
-            // as a string. Identity for pure JSON.
             const { id } = await post<{ id: string }>("/schedule", {
-                args: encodeWire(args) as Record<string, unknown>,
+                args,
                 scheduledFor,
                 ...targetFields(target),
             });
@@ -3622,7 +3623,19 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         return {
             cancel: async (id) => await post<{ cancelled: boolean }>("/cancel", { id }),
-            get: async (id) => await call<Record<string, unknown> | null>(`/get?id=${encodeURIComponent(id)}`, { method: "GET" }),
+            // The DO answers `{ record }` and omits `record` on a miss. Handing
+            // that envelope straight back broke the declared
+            // `Record<string, unknown> | null`: a hit read as
+            // `{ record: {...} }`, so `job.scheduledFor` was `undefined`, and a
+            // miss read as a TRUTHY `{}` rather than `null`, so `if (job)` said
+            // a cancelled job was still pending. `@lunora/scheduler`'s `get` —
+            // the other client of this route — has always unwrapped it.
+            get: async (id) => {
+                const body = await call<{ record?: Record<string, unknown> }>(`/get?id=${encodeURIComponent(id)}`, { method: "GET" });
+
+                // eslint-disable-next-line unicorn/no-null -- public contract is `Record<string, unknown> | null`, matching `@lunora/scheduler`'s `get`
+                return body.record ?? null;
+            },
             list: listAll,
             runAfter: async (delayMs, target, args) => {
                 // `@lunora/scheduler`'s `assertScheduleDelay`, restated: this

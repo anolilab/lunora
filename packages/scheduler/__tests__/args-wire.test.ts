@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { decodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import createScheduler from "../src/create-scheduler";
 import createWorkpool from "../src/create-workpool";
 import type { DurableObjectNamespaceLike, DurableObjectStubLike, FunctionReference, WorkflowReference } from "../src/types";
@@ -130,5 +130,85 @@ describe("scheduler args wire codec", () => {
         // the wire as before, and the shard's decode gives the same object back.
         expect(bodies[0]?.args).toStrictEqual(plain);
         expect(decodeWire(overTheWire(bodies[0] as Record<string, unknown>))).toStrictEqual(plain);
+    });
+});
+
+/**
+ * A namespace whose DO answers the READ routes with records exactly as they sit
+ * in its storage: `args` in wire form, everything else plain. That is what the
+ * SchedulerDO actually holds — it stores the producer's envelope and never
+ * inspects `args` — so these drive the other end of the hop the tests above
+ * pin, rather than restating the producer's own invariant.
+ */
+const readOnlyNamespace = (record: Record<string, unknown>): DurableObjectNamespaceLike => {
+    const stub = {
+        fetch: vi.fn<DurableObjectStubLike["fetch"]>(async (input: Request | string) => {
+            const path = new URL(typeof input === "string" ? input : input.url).pathname;
+
+            if (path === "/get") {
+                return Response.json({ record }, { status: 200 });
+            }
+
+            return Response.json({ records: [record] }, { status: 200 });
+        }),
+    };
+
+    return {
+        get: () => stub,
+        idFromName: (name: string) => {
+            return { toString: () => name };
+        },
+    };
+};
+
+/** The wire form of a job's args as it sits in the DO's storage, after the JSON hop it made to get there. */
+const asStored = (args: Record<string, unknown>): Record<string, unknown> => {
+    const json = JSON.stringify(encodeWire(args));
+
+    return JSON.parse(json) as Record<string, unknown>;
+};
+
+const storedRecord = {
+    args: asStored({ amountCents: 42n, dueAt: at }),
+    enqueuedAt: 1,
+    functionPath: "billing:settle",
+    id: "job-1",
+    scheduledFor: 2,
+};
+
+describe("scheduler read-back", () => {
+    it.each(["list", "dead"] as const)("%s() hands back decoded args, not the tagged wire form", async (method) => {
+        expect.assertions(4);
+
+        const scheduler = createScheduler({ namespace: readOnlyNamespace(storedRecord), originUrl: "https://app.test" });
+        const [record] = await scheduler[method]();
+
+        expect(record?.args["dueAt"]).toBeInstanceOf(Date);
+        expect(record?.args["dueAt"]).toStrictEqual(at);
+        expect(record?.args["amountCents"]).toBe(42n);
+        // The codec is the identity on the rest of the record, so the plain
+        // fields are unchanged byte for byte.
+        expect(record?.functionPath).toBe("billing:settle");
+    });
+
+    it("get() hands back decoded args, not the tagged wire form", async () => {
+        expect.assertions(4);
+
+        const scheduler = createScheduler({ namespace: readOnlyNamespace(storedRecord), originUrl: "https://app.test" });
+        const record = await scheduler.get("job-1");
+
+        expect(record?.args["dueAt"]).toBeInstanceOf(Date);
+        expect(record?.args["amountCents"]).toBe(42n);
+        expect(record?.id).toBe("job-1");
+        expect(record?.scheduledFor).toBe(2);
+    });
+
+    it("leaves a plain-JSON record untouched on the way back", async () => {
+        expect.assertions(1);
+
+        const plain = { args: { attempt: 3, userId: "u-1" }, enqueuedAt: 1, functionPath: "billing:settle", id: "job-2", scheduledFor: 2 };
+        const scheduler = createScheduler({ namespace: readOnlyNamespace(plain), originUrl: "https://app.test" });
+
+        await expect(scheduler.get("job-2")).resolves.toStrictEqual(plain);
     });
 });

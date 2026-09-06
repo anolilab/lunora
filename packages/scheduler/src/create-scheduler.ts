@@ -1,7 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
 import { collectPages } from "../../../shared/collect-pages";
-import { encodeWire } from "../../../shared/wire-codec";
 import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { CronTarget, LunoraSchedulerOptions, RunOptions, Scheduler, ScheduleRecord, ScheduleTargetArgs } from "./types";
 import { isWorkflowReference } from "./types";
@@ -41,23 +40,14 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
         // instance. `maxConcurrency` only means anything for a pooled job, so it
         // rides along only when `pool` is set (mirroring `createWorkpool`).
         const base = {
-            // `args` are a WIRE payload from here on, and both consumers now agree
-            // on that. Un-encoded, `callDO`'s `JSON.stringify` THREW on a `bigint`
-            // arg before the job was ever recorded, and silently rendered a `Date`
-            // as an ISO string that the handler then read back as a string.
-            //
-            // The two targets decode in different places, which is why the encode
-            // belongs here rather than at either one. A function target is routed
-            // through the shard, whose dispatch loop already `decodeWire`s
-            // `payload.args`. A workflow target becomes `create({ params })`, and
-            // Cloudflare JSON-serialises workflow `params` into durable storage —
-            // so the tagged wire form is precisely what CAN make that hop (a real
-            // `bigint` fails instance creation outright), and `@lunora/workflow`
-            // decodes at the read, in `run-context.ts`.
-            //
-            // Identity for pure JSON, so an existing caller's payload is unchanged
-            // byte for byte.
-            args: encodeWire(args) as Record<string, unknown>,
+            // `callDO` puts this whole envelope through `encodeWire`, so a
+            // `bigint`/`Date`/bytes arg survives the JSON hop into the DO. The
+            // two targets decode in different places — a function target through
+            // the shard's dispatch loop, a workflow target in
+            // `@lunora/workflow`'s run-context, since Cloudflare JSON-serialises
+            // workflow `params` into durable storage and the tagged form is
+            // precisely what CAN make that hop.
+            args,
             // Pre-minted id, when the caller decided it before the call could be
             // made (see `RunOptions.id`). Absent for an ordinary schedule, and the
             // DO mints one.
