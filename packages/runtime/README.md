@@ -122,7 +122,7 @@ let worker: LunoraWorker | null = null;
 const build = (env: BackupEnv): LunoraWorker =>
     (worker ??= createWorker({
         adminToken: env.LUNORA_ADMIN_TOKEN,
-        backupCron: "0 3 * * *", // must match an entry in wrangler `triggers.crons`, verbatim
+        backupCron: "0 3 * * *", // a literal is written into wrangler `triggers.crons` for you
         backupRetain: 14,
         backupStore: env.BACKUPS, // a bound R2 bucket satisfies `BackupStore`
         queryCoordinator, // the export walks every shard through it
@@ -138,7 +138,7 @@ export default {
 Five things are easy to get wrong, and four of them fail silently:
 
 - **`scheduled` must be wired.** `createWorker` returns it, but a worker that only exports `fetch` never runs a backup, and nothing reports that.
-- **`backupCron` is compared verbatim** against the firing expression. `"0 3 * * *"` and `"0  3 * * *"` are different strings, and the mismatch is silent — the trigger fires, no backup runs.
+- **`backupCron` is compared verbatim** against the firing expression. `"0 3 * * *"` and `"0  3 * * *"` are different strings, and the mismatch is silent — the trigger fires, no backup runs. A literal is discovered by codegen and written into `triggers.crons`; a computed one (`env.NIGHTLY_CRON`, or one supplied via `.extend()`) is not, so that entry is yours to add — the reconciler will not remove it.
 - **`backupStore`, `adminToken` and `queryCoordinator` are all required.** The snapshot is assembled by walking every shard's admin export route, so it needs the coordinator to reach them and a token to authorize itself. Missing any one throws `BACKUP_NOT_CONFIGURED` from inside the scheduled handler — the one failure here that is loud.
 - **`backupRetain` does not delete anything.** It is a reporting window: each run logs how many snapshots sit past the newest N and tells you to run `lunora backup prune`, which is the only thing that removes a backup. A bucket therefore grows until you prune it.
 - **The snapshot is built in memory.** It is capped at 24 MiB and refuses past it, writing nothing — narrow it with `backupTables`, or take that snapshot off-platform with `lunora backup create --bucket`.

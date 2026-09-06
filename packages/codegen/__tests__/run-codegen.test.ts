@@ -1225,6 +1225,84 @@ export default schema;
             expect(withIndex.generated.app).toContain("indexes: this.shardExtras.vectors(env as unknown as Record<string, unknown>),");
         });
 
+        it("adds a worker entry's static backupCron and crons keys to the wrangler trigger set", () => {
+            expect.assertions(4);
+
+            mkdirSync(join(workdir, "src", "server"), { recursive: true });
+            writeFileSync(
+                join(workdir, "src", "server", "index.ts"),
+                `import { createWorker } from "@lunora/runtime";
+
+export default createWorker({
+    backupCron: "0 3 * * *",
+    crons: { "*/15 * * * *": async () => {} },
+});
+`,
+                "utf8",
+            );
+            writeFileSync(
+                join(workdir, "lunora", "crons.ts"),
+                `import { cronJobs } from "@lunora/scheduler";
+import { internal } from "./_generated/api.js";
+const crons = cronJobs();
+crons.cron("ping", "0 * * * *", internal.messages.list, {});
+export default crons;
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            // Declared crons lead, in the order `emitWranglerCronTriggers` renders
+            // them; entry-derived expressions append.
+            expect(result.cronTriggers).toStrictEqual(["0 * * * *", "0 3 * * *", "*/15 * * * *"]);
+            // Neither entry expression names a dispatchable job — `createWorker`
+            // runs those itself — so the generated dispatcher map must not grow one.
+            expect(result.generated.crons).toContain('"0 * * * *"');
+            expect(result.generated.crons).not.toContain("0 3 * * *");
+            expect(result.generated.crons).not.toContain("*/15 * * * *");
+        });
+
+        it("leaves a computed backupCron out of the trigger set, for the ownership record to preserve", () => {
+            expect.assertions(1);
+
+            mkdirSync(join(workdir, "src", "server"), { recursive: true });
+            writeFileSync(
+                join(workdir, "src", "server", "index.ts"),
+                `import { createWorker } from "@lunora/runtime";
+
+export default createWorker({ backupCron: process.env.NIGHTLY_CRON });
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            // Out of reach for any AST scan, which is why `package.json`'s
+            // `lunora.crons` ownership record stays: `reconcileWranglerCrons` keeps
+            // an entry that is in neither the generated set nor that record — see
+            // `@lunora/config`'s reconcile-crons tests.
+            expect(result.cronTriggers).toStrictEqual([]);
+        });
+
+        it("reads a backupCron out of an `.extend()` callback's returned literal", () => {
+            expect.assertions(1);
+
+            mkdirSync(join(workdir, "src", "server"), { recursive: true });
+            writeFileSync(
+                join(workdir, "src", "server", "index.ts"),
+                `import app from "../../lunora/_generated/app.js";
+
+export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            expect(result.cronTriggers).toStrictEqual(["0 4 * * *"]);
+        });
+
         it("does not emit a seed client for a project that doesn't depend on @lunora/seed", () => {
             expect.assertions(1);
 

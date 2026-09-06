@@ -2,7 +2,7 @@ import type { Stats } from "node:fs";
 import { lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, extname, join, relative, sep } from "node:path";
 
-import type { CallExpression, Expression, Project, SourceFile } from "ts-morph";
+import type { Block, CallExpression, Expression, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
@@ -515,6 +515,45 @@ const stringPropertyOf = (object: Node, name: string): string | undefined => {
     return initializer && Node.isStringLiteral(initializer) ? initializer.getLiteralText() : undefined;
 };
 
+/** The sole statement of a single-statement `{ return {...}; }` block, when it returns an object literal. */
+const objectLiteralFromReturnBlock = (block: Block): ObjectLiteralExpression | undefined => {
+    const statements = block.getStatements();
+    const [statement] = statements;
+
+    if (statements.length !== 1 || statement === undefined || !Node.isReturnStatement(statement)) {
+        return undefined;
+    }
+
+    const expression = statement.getExpression();
+
+    return expression !== undefined && Node.isObjectLiteralExpression(expression) ? expression : undefined;
+};
+
+/**
+ * The object literal a callback body evaluates to, covering the concise-body
+ * form (`() => ({...})`, where the parens make the object literal the whole
+ * body) and the block-body form (`() => { return {...}; }`). Anything else
+ * (a variable, a multi-statement block, a conditional) is not analyzable.
+ *
+ * Shared by the two readers of the generated `.extend(fn)` escape hatch —
+ * `discover/config-calls` (which keys) and `discover/worker-entry-crons` (which
+ * cron expressions) — because they must agree on which `.extend()` bodies are
+ * statically readable at all.
+ */
+const objectLiteralFromCallbackBody = (body: Node): ObjectLiteralExpression | undefined => {
+    if (Node.isObjectLiteralExpression(body)) {
+        return body;
+    }
+
+    if (Node.isParenthesizedExpression(body)) {
+        const inner = body.getExpression();
+
+        return Node.isObjectLiteralExpression(inner) ? inner : undefined;
+    }
+
+    return Node.isBlock(body) ? objectLiteralFromReturnBlock(body) : undefined;
+};
+
 /** True when `node` is the literal `ctx` identifier — the anchor a `ctx.flags.*` read starts from. */
 const isContextIdentifier = (node: Node): boolean => Node.isIdentifier(node) && node.getText() === "ctx";
 
@@ -548,6 +587,7 @@ export {
     listLunoraSourceFiles,
     listSecurityScanFiles,
     lunoraRelativePath,
+    objectLiteralFromCallbackBody,
     propertyInitializer,
     readTargetOf,
     stringPropertyFor,
