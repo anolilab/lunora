@@ -475,6 +475,7 @@ interface ShardDOState {
     blockConcurrencyWhile?: <T>(callback: () => Promise<T>) => Promise<T>;
     getWebSockets: (tag?: string) => WebSocket[];
     id?: {
+        jurisdiction?: string;
         name?: string;
     };
     setWebSocketAutoResponse?: (pair: WebSocketRequestResponsePair) => void;

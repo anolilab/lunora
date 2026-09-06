@@ -138,6 +138,15 @@ interface ShardSiblingHost {
     env: () => unknown;
     /** The env binding name holding the shard namespace, so a DO can address a sibling. */
     shardBinding: () => string | undefined;
+
+    /**
+     * The Cloudflare data-residency jurisdiction this DO itself lives in
+     * (`ctx.id.jurisdiction`), or `undefined` when unpinned. A sibling must be
+     * resolved through the SAME jurisdiction subnamespace — the worker pins the
+     * namespace it routes through but stamps the RAW env key as the binding
+     * name, and a pinned subnamespace maps a name to a different DO id.
+     */
+    shardJurisdiction: () => string | undefined;
     /** This DO's SQLite handle. */
     sql: () => SqlExec;
 }
@@ -667,7 +676,7 @@ class ShardReplica {
      */
     private async request(frame: ReplicaFrame): Promise<Response | undefined> {
         const binding = this.host.shardBinding();
-        const stub = siblingStub(this.host.env(), binding, this.ownerKey);
+        const stub = siblingStub(this.host.env(), binding, this.ownerKey, this.host.shardJurisdiction());
 
         if (stub === undefined) {
             return undefined;

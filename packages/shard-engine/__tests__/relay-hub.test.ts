@@ -93,6 +93,7 @@ const ownerFor = (
             return { policies: [] };
         },
         shardBinding: () => "SHARD",
+        shardJurisdiction: () => undefined,
         sql: () => sql,
     } as unknown as RelayHost;
 
@@ -382,6 +383,7 @@ describe("relay hub", () => {
                 getWebSockets: () => [socket],
                 readAttachment: () => attachment,
                 shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
                 // A release also drops this socket's durable cohort memos.
                 sql: () => database.sql,
             } as unknown as RelayHost);
@@ -434,6 +436,7 @@ describe("relay hub", () => {
                 readAttachment: () => attachment,
                 recordShapePokeFanout: (_iterated: number, delivered: number) => fanout.push({ delivered }),
                 shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
                 sql: () => database.sql,
             } as unknown as RelayHost;
 
@@ -631,6 +634,7 @@ describe("relay hub", () => {
                 nextPokeId: () => "poke-1",
                 readAttachment: (ws: ShardSocketLike) => attachments.get(ws),
                 shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
                 sql: () => database.sql,
             } as unknown as RelayHost);
 
@@ -755,6 +759,7 @@ describe("relay hub", () => {
                     return { connectionId: "c-alice" };
                 },
                 shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
                 // A seed memos its cohort baseline durably.
                 sql: () => database.sql,
             } as unknown as RelayHost;
@@ -839,6 +844,7 @@ describe("relay hub", () => {
                 getWebSockets: () => [],
                 readAttachment: (ws: ShardSocketLike) => ({ connectionId: connections.get(ws) }) as unknown as SocketAttachment,
                 shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
                 // A seed memos its cohort baseline durably.
                 sql: () => database.sql,
             } as unknown as RelayHost;

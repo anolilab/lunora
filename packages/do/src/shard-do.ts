@@ -573,8 +573,17 @@ interface ShardDOState {
      */
     blockConcurrencyWhile?: <T>(callback: () => Promise<T>) => Promise<T>;
     getWebSockets: (tag?: string) => WebSocket[];
-    /** Optional pointer to the DO instance id so we can detect `__root__`. */
-    id?: { name?: string };
+
+    /**
+     * Optional pointer to the DO instance id so we can detect `__root__`.
+     *
+     * `jurisdiction` is the Cloudflare data-residency the id was minted under
+     * (`env.SHARD.jurisdiction("eu").idFromName(...)`), preserved on the id
+     * itself. It is the ONLY place a DO can learn its own residency, and the
+     * DO→DO tiers need it: a sibling resolved off the raw namespace binding is
+     * a different object entirely.
+     */
+    id?: { jurisdiction?: string; name?: string };
 
     /**
      * Register a constant ping/pong auto-response so the runtime answers a
@@ -1996,6 +2005,12 @@ abstract class ShardDO {
             doName: () => this.runner.shardKey,
             env: () => this.env,
             shardBinding: () => this.shardBinding,
+            // Read off THIS DO's own id, not off config or a request header: the
+            // id carries the jurisdiction it was minted under, so a shard always
+            // resolves siblings through the same subnamespace it lives in — with
+            // nothing to configure, nothing to transport, and no way for a
+            // request to claim a different one.
+            shardJurisdiction: () => this.state.id?.jurisdiction,
             sql: () => this.sql as SqlExec,
         };
 

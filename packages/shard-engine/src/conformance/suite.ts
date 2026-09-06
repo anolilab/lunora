@@ -373,6 +373,7 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     resolveShape: unreachable("resolveShape"),
                     rlsMetadata: unreachable("rlsMetadata"),
                     shardBinding: () => "SHARD",
+                    shardJurisdiction: () => undefined,
                     // A relay's cohort memos are durable (`__lunora_relay_memos`),
                     // so this runs on the host under test rather than a double:
                     // a relay is evicted between owner pokes as a matter of
@@ -585,6 +586,7 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                         return { policies: [] };
                     },
                     shardBinding: () => "SHARD",
+                    shardJurisdiction: () => undefined,
                     // The owner persists its relay set in `__lunora_relays`, so
                     // this runs on the host under test rather than a double —
                     // a host whose SQL can't carry the set drops relays on every
