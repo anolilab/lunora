@@ -15,6 +15,9 @@ import { createShardDO } from "./shard.js";
 /** Read a value off the per-request `env`. Returns `undefined` to leave the capability unconfigured (its `ctx.*`/admin surface stays a clear-error stub). */
 type Selector<Env, T> = (env: Env) => T | undefined;
 
+/** The generated `createShardDO` config — `.observability()`, `.maxRelationKeys()` and the long-tail `.ai()` / `.kv()` / … methods pass straight through to it. */
+type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
+
 /** `.global(...)` declaration — the D1 binding backing `.global()` tables. Backs cross-tenant `ctx.db` reads/writes AND the studio's global data browser. */
 interface GlobalDeclaration<Env> {
     /** The D1 binding (typically `env.DB`). */
@@ -41,6 +44,9 @@ class AppBuilder<Env extends object> {
     private adminToken?: Selector<Env, string>;
     private cdcEnabled = false;
     private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;
+    private maxRelationKeysLimit?: ShardConfig["maxRelationKeys"];
+    private observabilitySink?: ShardConfig["observability"];
+    private relationExistsPushDownMode?: ShardConfig["relationExistsPushDown"];
     private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];
     private globalDeclaration?: GlobalDeclaration<Env>;
     private httpRouterApp?: HttpRouterLike;
@@ -76,6 +82,31 @@ class AppBuilder<Env extends object> {
      */
     public reactiveCache(config: boolean | { maxBytes?: number; maxEntries?: number } = true): this {
         this.reactiveCacheConfig = config;
+
+        return this;
+    }
+
+    /** Ceiling on the join keys ONE relation-crossing `where` predicate may pre-resolve via semijoin before failing closed. Omit for the engine default. */
+    public maxRelationKeys(limit: NonNullable<ShardConfig["maxRelationKeys"]>): this {
+        this.maxRelationKeysLimit = limit;
+
+        return this;
+    }
+
+    /**
+     * Route the shard's `ctx.log` lines, `ctx.trace` spans and `ctx.metrics` measurements to a telemetry sink.
+     *
+     * The DO half of observability: without it every in-handler signal stays in the shard's local ring buffer (the studio Logs panel) and reaches no collector. The worker half — one `onRpc` event per dispatched RPC — is a `createWorker` option; pass the SAME sink to both via `.extend((env) => ({ observability: sink(env) }))` to correlate them.
+     */
+    public observability(selector: NonNullable<ShardConfig["observability"]>): this {
+        this.observabilitySink = selector;
+
+        return this;
+    }
+
+    /** Resolution policy for a relation-crossing `where` whose child is co-located in this shard: `"auto"` (cost-based, the engine default), `"always"` (inline correlated EXISTS) or `"never"` (universal semijoin). All three return identical rows. */
+    public relationExistsPushDown(mode: NonNullable<ShardConfig["relationExistsPushDown"]>): this {
+        this.relationExistsPushDownMode = mode;
 
         return this;
     }
@@ -132,6 +163,9 @@ class AppBuilder<Env extends object> {
         const ShardDO = createShardDO({
             cdc: this.cdcEnabled,
             reactiveCache: this.reactiveCacheConfig,
+            ...(this.maxRelationKeysLimit === undefined ? {} : { maxRelationKeys: this.maxRelationKeysLimit }),
+            ...(this.observabilitySink === undefined ? {} : { observability: this.observabilitySink }),
+            ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),
             ...(this.globalDeclaration
                 ? {
                       d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string | null }) => {
