@@ -4,22 +4,36 @@
  * A shape names a table + predicate and replicates the matching rows to a
  * client (the local-first sync engine). Unlike a `query`, a shape runs no
  * procedure, so the `.use(rls(...))` middleware never executes and its
- * membership reads would bypass every read policy on the table — leaking rows
- * the caller can't see. This module closes that hole: it collects the project's
- * read policies (hoisted onto each registered function by the procedure builder,
- * keyed by the {@link readRlsTags} the `rls()` middleware stamps) into a
- * table-indexed registry, then — at `resolveShape` time, under the socket's
- * verified identity — evaluates the table's read policies into a base-where and
- * AND-merges it with the shape's own predicate.
+ * membership reads would bypass every read policy the shape is meant to honour.
+ * This module closes that hole: it collects the read policies of the `rls()`
+ * guards a declaration names (keyed by the {@link readRlsTags} the `rls()`
+ * middleware stamps) into a table-indexed registry, then — at `resolveShape`
+ * time, under the socket's verified identity — evaluates them into a base-where
+ * and AND-merges it with the shape's own predicate.
+ *
+ * SCOPE. The registry is built from ONE declaration's guards
+ * (`defineShape({ use })`), never from every registered function in the project.
+ * A project-wide registry is a union, and `resolveReadBaseWhere` treats a group
+ * that grants unrestricted access as unrestricting the whole table — so one
+ * admin-only procedure carrying `rls([{ on: "read", when: () => true }])`
+ * collapsed every tenant shape on that table to "no filter", for every
+ * subscriber. It could not be otherwise: an `rls()` bundle is only half of a
+ * procedure's authorization, the other half being the middlewares around it
+ * (`requireAdmin`) that a shape cannot run. Request-time scope is per-procedure,
+ * so a shape's has to be per-shape.
  *
  * Fail-closed parity with `@lunora/do`'s `guardWriter`: under a
- * `.rls("required")` schema a non-`.public()` table with NO read policy is
- * denied (the shape replicates nothing), never silently unrestricted.
+ * `.rls("required")` schema a non-`.public()` table the shape declares no read
+ * policy for is denied (the shape replicates nothing), never silently
+ * unrestricted. Under an opt-in schema a shape that names no guard is filtered
+ * by its own `where` alone — the same opt-in deal a query without
+ * `.use(rls(...))` gets.
  *
- * The evaluation mirrors the `rls()` middleware's request-time path exactly —
- * the same `computeReadBaseWhere` / `indexRolePermissions` / `permissionName`
- * primitives — so a shape's filter has zero semantic drift from an equivalent
- * `query` guarded by the same policies.
+ * Within that scope the evaluation mirrors the `rls()` middleware's
+ * request-time path — the same `computeReadBaseWhere` / `indexRolePermissions` /
+ * `permissionName` primitives — with ONE documented divergence: roles come from
+ * the identity claim only, because no middleware runs to contribute
+ * `ctx.auth.roles` (see the KNOWN DIVERGENCE note on `evaluateGroupBaseWhere`).
  */
 
 import { computeReadBaseWhere, indexRolePermissions, readIdentityRoles, resolveCan } from "./middleware";
@@ -230,19 +244,26 @@ const resolveReadBaseWhere = (registry: RlsReadRegistry, request: ShapeReadWhere
 };
 
 /**
- * Build the read-policy registry from the registered functions (pass
- * `Object.values(LUNORA_FUNCTIONS)`). Only `on: "read"` policies are collected,
- * grouped per `rls()` middleware so each group keeps its own role→permission map
- * (a `(table, when)` pair is de-duplicated within a tag). A tag reused across
- * several procedures (a shared `const guard = rls(...)`) is folded once. This
- * mirrors the request-time `rls()` path exactly: a policy's `auth.can(...)`
- * resolves against the roles of the middleware that declared it, never a union.
+ * Build the read-policy registry for ONE consumer from the `rls()` guards it
+ * declares — `defineShape({ use })` passes its own list, and `defineShape` calls
+ * this once at declaration time. Accepts either the tagged middlewares
+ * themselves or anything carrying hoisted `fn.rls.tags`.
+ *
+ * Only `on: "read"` policies are collected, grouped per `rls()` middleware so
+ * each group keeps its own role→permission map (a `(table, when)` pair is
+ * de-duplicated within a tag). The same tag listed twice (a shared
+ * `const guard = rls(...)`) is folded once. Within a group this mirrors the
+ * request-time `rls()` path: a policy's `auth.can(...)` resolves against the
+ * roles of the middleware that declared it, never a union.
+ *
+ * Do NOT hand this every registered function in the project — see the SCOPE
+ * paragraph in the module docblock for what that silently did to tenant shapes.
  */
-const buildRlsReadRegistry = (functions: Iterable<unknown>): RlsReadRegistry => {
+const buildRlsReadRegistry = (guards: Iterable<unknown>): RlsReadRegistry => {
     const byTable = new Map<string, ScopedReadPolicies[]>();
     const seenTags = new Set<RlsTag>();
 
-    for (const entry of functions) {
+    for (const entry of guards) {
         for (const tag of readEntryTags(entry)) {
             if (seenTags.has(tag)) {
                 continue;

@@ -534,12 +534,15 @@ describe("composePluginMiddleware", () => {
         await expect(procedure.handler({}, {})).rejects.toThrow(/next\(\) called multiple times/u);
     });
 
-    it("short-circuits later plugins when one returns without calling next()", async () => {
-        expect.assertions(1);
+    it("rejects a plugin that returns without calling next() instead of silently skipping the rest", async () => {
+        expect.assertions(2);
 
-        // `stop` returns its context without calling next() — the composed chain
-        // must not advance to `after`, matching how a `.use()` link that never
-        // calls next() halts the chain.
+        // `stop` returns its context without calling next(). That is NOT a
+        // short-circuit: the chain's terminal is what builds the handler's
+        // context, so letting it through ran the handler with `after` — and, in a
+        // real chain, `rls()`/`mask()` — never applied, while the hoisted `fn.rls`
+        // still advertised the procedure as guarded. It must be a loud error, the
+        // same class as the double-next() tripwire above.
         const ran: string[] = [];
         const stop = definePlugin("stop", {
             middleware: ({ ctx }) => {
@@ -559,7 +562,7 @@ describe("composePluginMiddleware", () => {
         const c = initLunora.dataModel<Record<string, never>>().create();
         const procedure = c.query.use(composePluginMiddleware([stop, after])).query(() => "ok");
 
-        await procedure.handler({}, {});
+        await expect(procedure.handler({}, {})).rejects.toThrow(/resolved without calling next\(\)/u);
 
         expect(ran).toEqual(["stop"]);
     });

@@ -504,4 +504,23 @@ describe("guardWriter — unwrap seam", () => {
 
         expect(RLS_UNWRAP_SYMBOL).toBe(Symbol.for("lunora.ctxdb.rls-unwrap"));
     });
+
+    /**
+     * NON-enumerable, and that is security-relevant. `@lunora/server`'s `rls()`
+     * builds its wrapped writer with `{ ...ctx.db }`; while this property was
+     * enumerable the wrapper re-published the UNGUARDED writer, so a second
+     * `.use(rls(...))` step recovered it, wrapped that instead of the first
+     * wrapper, and silently dropped step one's row filter.
+     */
+    it("hides the raw writer from a spread of the guarded one", () => {
+        expect.assertions(2);
+
+        const raw = createFakeWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId);
+        const republished = { ...(guarded as unknown as Record<PropertyKey, unknown>) };
+
+        expect(Object.getOwnPropertySymbols(republished)).not.toContain(RLS_UNWRAP_SYMBOL);
+
+        expect(Object.propertyIsEnumerable.call(guarded, RLS_UNWRAP_SYMBOL)).toBe(false);
+    });
 });

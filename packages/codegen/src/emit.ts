@@ -4576,20 +4576,26 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
                 ownerField: (schema as unknown as { tables: Record<string, { ownerField?: string }> }).tables[shape.table]?.ownerField,
             }) as unknown as WhereInput;
 
-            // AND-compose with the table's RLS read base-where. A shape runs no
-            // procedure, so the \`.use(rls(...))\` middleware never fires; without
-            // this merge its reads would bypass every read policy on the table
-            // (rows the caller can't see would replicate). \`composeShapeReadWhere\`
-            // evaluates the table's read policies under this same trusted ctx
+            // AND-compose with the read policies this SHAPE declares
+            // (\`defineShape({ use: [guard] })\`, pre-indexed into
+            // \`shape.rlsRegistry\`). A shape runs no procedure, so the
+            // \`.use(rls(...))\` middleware never fires; without this merge its
+            // reads would bypass the read policies it opted into.
+            // \`composeShapeReadWhere\` evaluates them under this same trusted ctx
             // and fails closed under a \`.rls("required")\` schema for a
-            // non-\`.public()\`, policy-less table.
+            // non-\`.public()\` table the shape declared no read policy for.
+            //
+            // The registry is the shape's OWN — never one folded from every
+            // registered function. A project-wide union let one admin-only
+            // procedure's allow-all read policy unrestrict every shape on the
+            // table; see the SCOPE note in \`shape-read-base.ts\`.
             //
             // It is NOT identical to the request-time path, and must not be
             // described as such: roles come from the identity's \`roles\` claim
             // only, because no middleware runs here to contribute
             // \`ctx.auth.roles\`. Derive roles at the identity if a policy gates
             // on them — see \`shape-read-base.ts\`.
-            const effectiveWhere = composeShapeReadWhere(LUNORA_RLS_READ_REGISTRY, {
+            const effectiveWhere = composeShapeReadWhere(shape.rlsRegistry, {
                 ctx,
                 identity: identity?.identity ?? null,
                 rlsRequired: (schema as unknown as { rlsMode?: string }).rlsMode === "required",
@@ -4622,16 +4628,6 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
 `
         : "";
 
-    // Module-scope, built once: the per-table RLS read policies (hoisted from
-    // each function's `.use(rls(...))` chain onto `fn.rls`) the shape resolver
-    // AND-merges into every `defineShape` predicate, so partial replication
-    // honours the table's read policies. Only emitted when the project has shapes.
-    const shapeReadRegistryConst = hasShapes
-        ? `
-/** Per-table RLS read policies (hoisted from \`.use(rls(...))\` chains) the shape resolver AND-merges into each \`defineShape\` predicate so partial replication honours read policies. */
-const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCTIONS));
-`
-        : "";
     /* eslint-enable no-secrets/no-secrets */
 
     // The cross-shard-join guard (`assertShapeShardable`) is a value import,
@@ -4654,7 +4650,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
         // read-registry builder + `composeShapeReadWhere` so `resolveShape` can
         // AND-merge a shape's predicate with the table's read base-where.
         hasShapes
-            ? `import { asBucketStorage, beginDeferredSchedules, buildRlsReadRegistry, composeShapeReadWhere, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "${base.server}";`
+            ? `import { asBucketStorage, beginDeferredSchedules, composeShapeReadWhere, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "${base.server}";`
             : `import { asBucketStorage, beginDeferredSchedules, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "${base.server}";`,
     ];
 
@@ -5400,7 +5396,7 @@ const LUNORA_STORAGE_RULES: StorageRulesResult = ${JSON.stringify(storageRulesDa
 
 /** Which optional package-backed features this app wires up (discovered from imports / \`ctx.*\` reads / schema signals) served via \`__lunora_admin__:studioFeatures\` so the studio hides nav pages whose package isn't enabled. */
 const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = ${JSON.stringify(studioFeaturesData, undefined, 4)};
-${schemaSnapshotConst}${flagsOverrides.constant}${shapeReadRegistryConst}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}${agentSpecs}
+${schemaSnapshotConst}${flagsOverrides.constant}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}${agentSpecs}
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;

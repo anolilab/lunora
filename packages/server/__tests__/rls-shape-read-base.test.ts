@@ -3,16 +3,27 @@
  * security gap).
  *
  * A `defineShape` replicates a table partition to a client but runs NO
- * procedure, so the `.use(rls(...))` middleware never fires. The fix hoists each
- * function's read policies onto `fn.rls` (the procedure builder) and AND-merges
- * the table's read base-where into the shape's predicate at resolve time. These
- * tests pin both halves: the registry build (policy discovery + role union) and
- * the compose (AND-merge, unrestricted pass-through, and fail-closed parity with
- * a `.rls("required")` schema).
+ * procedure, so the `.use(rls(...))` middleware never fires. A shape therefore
+ * names its own guards (`defineShape({ use: [rls(...)] })`), whose read policies
+ * are AND-merged into its predicate at resolve time. These tests pin both
+ * halves: the registry build (policy discovery + per-tag role scoping) and the
+ * compose (AND-merge, unrestricted pass-through, and fail-closed parity with a
+ * `.rls("required")` schema) — plus, at the bottom, that the scope really is
+ * per-shape and not project-wide.
  */
 import { describe, expect, it } from "vitest";
 
-import { buildRlsReadRegistry, composeShapeReadWhere, definePermission, definePolicies, definePolicy, defineRole, initLunora, rls } from "../src/index";
+import {
+    buildRlsReadRegistry,
+    composeShapeReadWhere,
+    definePermission,
+    definePolicies,
+    definePolicy,
+    defineRole,
+    defineShape,
+    initLunora,
+    rls,
+} from "../src/index";
 
 const builders = initLunora.dataModel<unknown>().create();
 
@@ -252,5 +263,79 @@ describe("composeShapeReadWhere", () => {
         });
 
         expect(asUser).toStrictEqual({ AND: [{ ownerId: "u1" }, shapeWhere] });
+    });
+});
+
+/**
+ * A shape's read policies are the ones IT declares, not the project's.
+ *
+ * The registry ORs its groups and treats an unrestricted group as unrestricting
+ * the whole table, so a registry folded from every registered function collapsed
+ * a tenant shape's filter to nothing the moment ANY procedure named the table
+ * with an allow-all read policy — typically an admin listing whose real gate is
+ * a `requireAdmin` middleware a shape cannot run. Every row then replicated to
+ * every socket.
+ */
+describe("defineShape — RLS scope is the shape's own use() guards", () => {
+    const tenantDocs = definePolicy({
+        on: "read",
+        table: "docs",
+        when: ({ auth }) => {
+            return { ownerId: auth.userId };
+        },
+    });
+    const anyDoc = definePolicy({ on: "read", table: "docs", when: () => true });
+
+    const request = { ctx: {}, identity: null, rlsRequired: false, shapeWhere: {}, table: "docs", tablePublic: false, userId: "u1" } as const;
+
+    it("keeps a shape's tenant filter when an unrelated procedure declares an allow-all read policy", () => {
+        expect.assertions(2);
+
+        const tenantGuard = rls(definePolicies([tenantDocs]));
+        const shape = defineShape({
+            table: "docs",
+            use: [tenantGuard],
+            where: () => {
+                return {};
+            },
+        });
+
+        // The project ALSO registers an admin-only listing with an allow-all
+        // policy. Folding both into one registry is what used to happen.
+        const projectWide = buildRlsReadRegistry([guardedQuery(definePolicies([tenantDocs])), guardedQuery(definePolicies([anyDoc]))]);
+
+        expect(composeShapeReadWhere(projectWide, request)).toStrictEqual({});
+
+        expect(composeShapeReadWhere(shape.rlsRegistry, request)).toStrictEqual({ ownerId: "u1" });
+    });
+
+    it("composes several declared guards, and ignores non-rls middlewares in the list", () => {
+        expect.assertions(1);
+
+        const noop = async ({ next }: { next: () => Promise<unknown> }) => next();
+        const shape = defineShape({
+            table: "docs",
+            use: [rls(definePolicies([tenantDocs])), noop as never],
+            where: () => {
+                return { archived: false };
+            },
+        });
+
+        expect(composeShapeReadWhere(shape.rlsRegistry, { ...request, shapeWhere: { archived: false } })).toStrictEqual({
+            AND: [{ ownerId: "u1" }, { archived: false }],
+        });
+    });
+
+    it("replicates nothing under .rls('required') when a shape declares no guard for a protected table", () => {
+        expect.assertions(1);
+
+        const shape = defineShape({
+            table: "docs",
+            where: () => {
+                return {};
+            },
+        });
+
+        expect(composeShapeReadWhere(shape.rlsRegistry, { ...request, rlsRequired: true })).toStrictEqual({ OR: [] });
     });
 });

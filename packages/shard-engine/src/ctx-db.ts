@@ -3670,11 +3670,22 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // The optional fast-path seam the RLS + mask middleware probe for: the
             // writer already knows a row's owning table from its internal index, so
             // the middleware gets `{ row, tableName }` in one round-trip instead of a
-            // `get` plus a `findFirst` probe across every policy table. Shard-local
-            // only — a global row's table isn't resolvable here, so it returns `null`
-            // and the caller keeps its probe fallback. `onRead` fires exactly as in
-            // `get`, so swapping the fallback for this path preserves subscription
-            // dependency tracking (and matches what the write-gate fallback did).
+            // `get` plus a `findFirst` probe across every policy table.
+            //
+            // SHARD-LOCAL ONLY, and `null` here means "not resolvable through this
+            // seam" — NOT "no such row". A `.global()` row lives in D1, so its table
+            // is not resolvable from this DO's index and every global id misses. A
+            // caller MUST therefore fall through to its own `get`/`findFirst` probe
+            // path (which does reach D1 via `globalFallbackFor`) on a miss; treating
+            // the miss as an absent row is what let the RLS write gate classify every
+            // global row as "in no policy-gated table" and skip its update/delete
+            // policy. Deliberately not resolved here: a bare id would have to probe
+            // every global table across the D1 hop, taxing the shard-local hit this
+            // seam exists to make cheap.
+            //
+            // `onRead` fires exactly as in `get`, so swapping the fallback for this
+            // path preserves subscription dependency tracking (and matches what the
+            // write-gate fallback did).
             const located = locateRowById(id, expectedTable);
 
             if (!located) {

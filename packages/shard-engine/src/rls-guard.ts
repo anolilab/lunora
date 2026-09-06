@@ -25,6 +25,11 @@ import type { DatabaseWriterLike } from "./schema-types";
  * (the cross-realm global registry) lets `@lunora/server`'s RLS middleware read
  * it WITHOUT importing this module — both sides reference the same registered
  * symbol by key, dodging a `server → do` dependency.
+ *
+ * The property is NON-ENUMERABLE, which is load-bearing: every consumer that
+ * re-publishes the guarded writer does so with a spread, and an enumerable
+ * escape hatch travels with it (see the `Object.defineProperty` call in
+ * {@link guardWriter}).
  */
 const RLS_UNWRAP_SYMBOL: symbol = Symbol.for("lunora.ctxdb.rls-unwrap");
 
@@ -328,8 +333,6 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, t
 
     const guarded: Record<PropertyKey, unknown> = {
         ...(raw as Record<string, unknown>),
-        [RLS_UNWRAP_SYMBOL]: raw,
-
         delete: async (id: string, expectedTable?: string, options?: { hard?: boolean }) => {
             await guardById(id, expectedTable);
 
@@ -440,6 +443,16 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, t
             return wipeShard.call(base, options);
         };
     }
+
+    // NON-ENUMERABLE on purpose. `@lunora/server`'s `rls()` middleware builds its
+    // wrapped writer with `{ ...ctx.db }`, and an enumerable escape hatch rides
+    // that spread: the wrapper ended up re-publishing the UNGUARDED writer, so a
+    // second `.use(rls(...))` step recovered it, wrapped that instead of the first
+    // wrapper, and silently dropped step one's filter. Defined after the literal
+    // rather than in it because an object literal's computed symbol key is always
+    // enumerable. Direct property reads (the middleware's own lookup, the test
+    // harness's `rawDatabase`) are unaffected.
+    Object.defineProperty(guarded, RLS_UNWRAP_SYMBOL, { configurable: true, enumerable: false, value: raw, writable: false });
 
     return guarded as unknown as W;
 };

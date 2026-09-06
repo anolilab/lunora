@@ -534,6 +534,44 @@ describe("builder middleware", () => {
         await expect(fn.handler({}, {})).rejects.toThrow(/next\(\) called multiple times/u);
     });
 
+    /**
+     * A middleware that resolves without calling `next()` used to look like a
+     * short-circuit but was an authorization bypass: the terminal is what builds
+     * the handler's context, so the handler ran anyway — with every later
+     * `.use()` (`rls()`, `mask()`, `storageRules()`) skipped and `ctx.db` still
+     * the unwrapped writer, while the hoisted `fn.rls` kept advertising the
+     * procedure as guarded to studio and the shape registry. Returning
+     * `undefined` instead only produced a bare `TypeError` deeper in.
+     */
+    it("rejects a middleware that resolves without calling next(), and does not run the handler", async () => {
+        expect.assertions(3);
+
+        const handler = vi.fn<() => string>(() => "secret");
+        const later = vi.fn<() => void>();
+
+        const fn = c.query
+            .use(({ ctx }) => ctx)
+            .use(async ({ next }) => {
+                later();
+
+                return next();
+            })
+            .query(handler);
+
+        await expect(fn.handler({}, {})).rejects.toThrow(/resolved without calling next\(\)/u);
+
+        expect(handler).not.toHaveBeenCalled();
+        expect(later).not.toHaveBeenCalled();
+    });
+
+    it("rejects a middleware that returns undefined with the same clear error, not a TypeError", async () => {
+        expect.assertions(1);
+
+        const fn = c.query.use(() => undefined).query(() => "ok");
+
+        await expect(fn.handler({}, {})).rejects.toThrow(/resolved without calling next\(\)/u);
+    });
+
     it("a middleware that throws aborts before the handler runs", async () => {
         expect.assertions(2);
 
