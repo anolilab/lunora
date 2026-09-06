@@ -121,7 +121,8 @@
             # measuring code that is not the branch's code is worse than no benchmark —
             # every false positive costs a manual disproof.
             - "name": "Build packages"
-              "run": 'pnpm exec vis run build --no-cache --query "tag=type:package"'
+              "run": |
+                  pnpm exec vis run build --no-cache --query "tag=type:package"
 
             # PRs run only the affected benches; pushes run all of them to keep the
             # baseline complete. `--no-cache` forces real execution — a vis cache hit
