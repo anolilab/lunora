@@ -72,9 +72,10 @@ describe("matchesWhere", () => {
         // AND: both must hold.
         expect(matchesWhere(row, [clause("name", "Ada"), clause("age", 99)])).toBe(false);
         // OR clauses are alternatives among THEMSELVES, still ANDed with the AND
-        // group — an OR clause cannot rescue a row that fails an AND clause. See
-        // `where-connector.test.ts` for why (every persistent better-auth adapter
-        // partitions; folding left made this store strictly broader than all of them).
+        // group — an OR clause cannot rescue a row that fails an AND clause. The
+        // clause matrix in `sql-store.test.ts` has the note on why (every
+        // persistent better-auth adapter partitions; folding left made this store
+        // strictly broader than all of them) and pins both stores against it.
         expect(matchesWhere(row, [clause("name", "Ada"), clause("age", 99, "eq", "OR")])).toBe(false);
         expect(matchesWhere(row, [clause("name", "Ada"), clause("age", 30, "eq", "OR")])).toBe(true);
     });

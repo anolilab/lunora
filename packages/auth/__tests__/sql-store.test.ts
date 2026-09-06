@@ -85,8 +85,9 @@ describe("createSqlAuthStore — CRUD over node:sqlite", () => {
         // An all-OR list is a plain disjunction.
         await expect(store.count("users", [clause("id", "u1", "eq", "OR"), clause("age", 20, "eq", "OR")])).resolves.toBe(2);
         // With an AND clause present the OR group is ANDed with it, not folded
-        // into it: `id = u1 AND age = 20` matches nothing. See
-        // `where-connector.test.ts` for why this is not "id = u1 OR age = 20".
+        // into it: `id = u1 AND age = 20` matches nothing. The clause matrix at
+        // the bottom of this file has the note on why this is not
+        // "id = u1 OR age = 20", and pins it against the memory store too.
         await expect(store.count("users", [clause("id", "u1"), clause("age", 20, "eq", "OR")])).resolves.toBe(0);
         await expect(store.count("users", [clause("id", "u1"), clause("age", 30, "eq", "OR")])).resolves.toBe(1);
     });
@@ -264,9 +265,34 @@ describe("memory and SQL stores agree on the clause matrix", () => {
         { expected: ["u1"], name: "eq insensitive", where: [{ ...clause("email", "ada@example.com"), mode: "insensitive" }] },
         { expected: [], name: "eq sensitive (case mismatch)", where: [clause("email", "ada@example.com")] },
         { expected: ["u2"], name: "AND group", where: [clause("role", "user"), clause("age", 20)] },
-        // OR clauses are alternatives among themselves and are still ANDed with
-        // the AND group — `id = u1 AND age = 20` selects nothing, it does not
-        // widen to "u1 or anyone aged 20". See `where-connector.test.ts`.
+
+        /*
+         * How a `connector: "OR"` clause combines with the rest of the list.
+         *
+         * better-auth hands an adapter a FLAT clause list in which each clause
+         * carries its own connector, and every persistent adapter it ships
+         * resolves that the same way: partition into an AND group and an OR
+         * group, then require both — the OR clauses are an alternative among
+         * THEMSELVES, not an escape hatch from the AND clauses.
+         * `@better-auth/kysely-adapter@1.7.1` pushes each group into its own
+         * `.where()` (two `.where()` calls are ANDed), `@better-auth/drizzle-adapter`
+         * ends in `and(andClause, orClause)`, and `@better-auth/prisma-adapter`
+         * emits `{ AND: […], OR: […] }` — Prisma ANDs those too.
+         *
+         * Both Lunora stores used to fold the list left-associatively instead, so
+         * `[A, B(OR), C(OR)]` became `A OR B OR C`: strictly BROADER than every
+         * adapter above. On a credential lookup that is an authentication bypass
+         * in shape — a row failing the primary condition can still be returned
+         * because a secondary one matched. (`@better-auth/memory-adapter` folds
+         * left too, but it is the only one, and it re-evaluates `where[0]` in the
+         * same loop; it is not the contract to mirror.)
+         *
+         * Nothing in better-auth 1.7.1 or in this repo emits `connector: "OR"`
+         * today — every occurrence is `"AND"` — so these pin the semantics before
+         * a plugin that does arrives, not a live break. They belong in this table
+         * rather than a suite of their own because the defect was the two stores
+         * disagreeing, which is exactly what the table exists to catch.
+         */
         { expected: [], name: "OR group under a failing AND clause", where: [clause("id", "u1"), clause("age", 20, "eq", "OR")] },
         {
             expected: ["u2"],
@@ -274,6 +300,7 @@ describe("memory and SQL stores agree on the clause matrix", () => {
             where: [clause("role", "user"), clause("id", "u2", "eq", "OR"), clause("id", "u3", "eq", "OR")],
         },
         { expected: ["u2", "u3"], name: "all-OR list", where: [clause("id", "u2", "eq", "OR"), clause("id", "u3", "eq", "OR")] },
+        { expected: [], name: "all-OR list, no alternative holds", where: [clause("id", "nobody", "eq", "OR"), clause("age", 99, "eq", "OR")] },
     ];
 
     const idsFrom = async (store: AuthStore, where: AuthWhereClause[]): Promise<string[]> => {
