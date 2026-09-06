@@ -111,6 +111,7 @@ const CONFLICT_ERROR_CODE = "CONFLICT";
 
 ```ts
 interface CachedQuery {
+    credential?: string;
     identity: string | null;
     serverCursor?: number;
     serverEpoch?: string;
