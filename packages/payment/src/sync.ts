@@ -108,6 +108,14 @@ const refundedTotalFor = (base: PaymentSession, action: WebhookAction): Money | 
         return undefined;
     }
 
+    // `max` rather than `+` because an absolute total already includes every earlier refund. It does
+    // NOT include a lost-dispute reversal, which is a `"delta"` this same field accumulated: a
+    // dispute lost for 30 followed by a refund of 20 resolves to `max(20, 30) = 30`, understating the
+    // 50 that actually left. Unreachable on Stripe — it refuses to refund a charge with a lost
+    // dispute, so that order never happens, and the reverse (refund 20, then dispute 30) adds to 50
+    // correctly. Kept as a `max` on purpose: the alternative over-counts every ordinary re-delivered
+    // cumulative total, which is reachable. If Stripe ever allows a refund after a lost dispute, this
+    // is the line that has to change.
     const prospective = action.amountKind === "absolute" ? maxMoney(action.amount, base.refundedAmount) : addMoney(base.refundedAmount, action.amount);
 
     if (compareMoney(prospective, base.capturedAmount) > 0) {
