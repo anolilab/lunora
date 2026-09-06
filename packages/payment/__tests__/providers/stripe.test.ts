@@ -267,7 +267,9 @@ describe("stripe adapter", () => {
         const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
 
         const event = {
-            data: { object: { amount_total: 1000, currency: "usd", customer: "cus_1", id: "cs_1", mode: "payment", payment_intent: "pi_1" } },
+            data: {
+                object: { amount_total: 1000, currency: "usd", customer: "cus_1", id: "cs_1", mode: "payment", payment_intent: "pi_1", payment_status: "paid" },
+            },
             id: "evt_cs_paid",
             type: "checkout.session.completed",
         };
@@ -347,6 +349,215 @@ describe("stripe adapter", () => {
 
         expect(session?.state).toBe("captured");
         await expect(store.getPaymentSession("stripe", "cs_1")).resolves.toBeUndefined();
+    });
+
+    it("records an unpaid delayed-notification session as authorized, not captured (regression)", async () => {
+        expect.assertions(4);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+
+        // SEPA/ACH/Boleto/OXXO complete the session with `payment_status: "unpaid"` while the
+        // PaymentIntent is still `processing` — the money has NOT settled. Recording that as
+        // `captured` is irreversible: the FSM has no edge off `captured` except a refund.
+        const completed = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({
+                data: {
+                    object: {
+                        amount_total: 250_000,
+                        currency: "eur",
+                        customer: "cus_1",
+                        id: "cs_sepa",
+                        metadata: { referenceId: "user_1" },
+                        mode: "payment",
+                        payment_intent: "pi_sepa",
+                        payment_status: "unpaid",
+                    },
+                },
+                id: "evt_cs_sepa",
+                type: "checkout.session.completed",
+            }),
+        });
+
+        expect(completed.type).toBe("payment.authorized");
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, completed);
+
+        const session = await store.getPaymentSession("stripe", "pi_sepa");
+
+        expect(session?.state).toBe("authorized");
+        expect(session?.capturedAmount).toStrictEqual(money(0n, "eur"));
+        expect(session?.amount).toStrictEqual(money(250_000n, "eur"));
+    });
+
+    it("captures a delayed-notification session on async_payment_succeeded (regression)", async () => {
+        expect.assertions(3);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const session = {
+            amount_total: 250_000,
+            currency: "eur",
+            customer: "cus_1",
+            id: "cs_sepa",
+            metadata: { referenceId: "user_1" },
+            mode: "payment",
+            payment_intent: "pi_sepa",
+        };
+
+        const completed = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({ data: { object: { ...session, payment_status: "unpaid" } }, id: "evt_cs_sepa", type: "checkout.session.completed" }),
+        });
+
+        // Settlement arrives on its own event; the session is now `paid`.
+        const settled = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({
+                data: { object: { ...session, payment_status: "paid" } },
+                id: "evt_cs_sepa_ok",
+                type: "checkout.session.async_payment_succeeded",
+            }),
+        });
+
+        expect(settled.type).toBe("payment.captured");
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, completed);
+        await applyWebhookAction(store, settled);
+
+        const row = await store.getPaymentSession("stripe", "pi_sepa");
+
+        expect(row?.state).toBe("captured");
+        expect(row?.capturedAmount).toStrictEqual(money(250_000n, "eur"));
+    });
+
+    it("fails a delayed-notification session on async_payment_failed (regression)", async () => {
+        expect.assertions(3);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const session = {
+            amount_total: 250_000,
+            currency: "eur",
+            customer: "cus_1",
+            id: "cs_sepa",
+            metadata: { referenceId: "user_1" },
+            mode: "payment",
+            payment_intent: "pi_sepa",
+            payment_status: "unpaid",
+        };
+
+        const completed = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({ data: { object: session }, id: "evt_cs_sepa", type: "checkout.session.completed" }),
+        });
+
+        // The debit is returned days later. Nothing else reverses this: the session's own
+        // `payment_status` stays `unpaid`, and `charge.refunded` never fires for money that was
+        // never captured.
+        const failed = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({ data: { object: session }, id: "evt_cs_sepa_fail", type: "checkout.session.async_payment_failed" }),
+        });
+
+        expect(failed.type).toBe("payment.failed");
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, completed);
+
+        const result = await applyWebhookAction(store, failed);
+
+        expect(result).toStrictEqual({ applied: true, reason: "ok" });
+        await expect(store.getPaymentSession("stripe", "pi_sepa").then((row) => row?.state)).resolves.toBe("failed");
+    });
+
+    it("does not entitle an unpaid subscription checkout on async_payment_failed (regression)", async () => {
+        expect.assertions(1);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+
+        const failed = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({
+                data: { object: { customer: "cus_1", id: "cs_sub", mode: "subscription", payment_status: "unpaid", subscription: "sub_1" } },
+                id: "evt_cs_sub_fail",
+                type: "checkout.session.async_payment_failed",
+            }),
+        });
+
+        // The first invoice never settled — non-entitling, and an alertable dunning signal.
+        expect(failed.type).toBe("subscription.past_due");
+    });
+
+    it("reverses a captured payment when a chargeback is lost (regression)", async () => {
+        expect.assertions(4);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+
+        const captured = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({
+                data: { object: { amount: 5000, amount_received: 5000, currency: "usd", customer: "cus_1", id: "pi_1", metadata: { referenceId: "user_1" } } },
+                id: "evt_pi_ok",
+                type: "payment_intent.succeeded",
+            }),
+        });
+
+        // Stripe is not merchant-of-record: on a lost dispute the merchant loses the funds, but the
+        // PaymentIntent stays `succeeded` and no refund event is emitted — so neither webhooks nor
+        // `reconcile` would ever move the row off `captured` without this mapping.
+        const lost = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({
+                data: { object: { amount: 5000, charge: "ch_1", currency: "usd", id: "dp_1", payment_intent: "pi_1", status: "lost" } },
+                id: "evt_dispute_lost",
+                type: "charge.dispute.closed",
+            }),
+        });
+
+        expect(lost.type).toBe("payment.refunded");
+        expect(lost.sessionId).toBe("pi_1");
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, captured);
+        await applyWebhookAction(store, lost);
+
+        const row = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(row?.state).toBe("refunded");
+        expect(row?.refundedAmount).toStrictEqual(money(5000n, "usd"));
+    });
+
+    it("leaves a won or still-open dispute alone", async () => {
+        expect.assertions(2);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+
+        const won = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({
+                data: { object: { amount: 5000, currency: "usd", id: "dp_1", payment_intent: "pi_1", status: "won" } },
+                id: "evt_dispute_won",
+                type: "charge.dispute.closed",
+            }),
+        });
+
+        // Funds withdrawn while a dispute is open are provisional — reinstated if it is won.
+        const withdrawn = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify({
+                data: { object: { amount: 5000, currency: "usd", id: "dp_1", payment_intent: "pi_1", status: "under_review" } },
+                id: "evt_dispute_withdrawn",
+                type: "charge.dispute.funds_withdrawn",
+            }),
+        });
+
+        expect(won.type).toBe("unhandled");
+        expect(withdrawn.type).toBe("unhandled");
     });
 
     it("rejects an unsigned webhook", async () => {
