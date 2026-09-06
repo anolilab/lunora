@@ -949,6 +949,13 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
                 "utf8",
             );
             writeFileSync(join(workdir, "lunora", "crons.ts"), CRONS_FIXTURE, "utf8");
+            // Which entries Lunora owns is recorded here, so it survives a fresh
+            // CI clone — the first pass writes it, the second reads it back.
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0", "@lunora/scheduler": "1.0.0", "@lunora/storage": "1.0.0" }, name: "app" }),
+                "utf8",
+            );
 
             const { spawner } = createRecordingSpawner();
             const { logger } = silentLogger();

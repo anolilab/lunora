@@ -1,98 +1,114 @@
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
-import { applyEdits, findNodeAtLocation, modify, parseTree } from "jsonc-parser";
+import type { FormattingOptions } from "jsonc-parser";
+import { applyEdits, modify } from "jsonc-parser";
 
+import join from "../path";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
 /** Shallow structural equality for two string arrays (order-sensitive). */
 const sameTriggers = (a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean => a.length === b.length && a.every((value, index) => value === b[index]);
 
+/** Leading whitespace of the first indented line — the file's own indent unit. */
+const INDENT = /^([\t ]+)"/mu;
+
 /**
- * The ownership marker: a JSONC line comment sitting immediately above
- * `triggers.crons` that records the exact set this reconciler generated last
- * time. Everything in the array that is not in it belongs to the user.
- *
- * It lives in `wrangler.jsonc` — not in gitignored `.lunora/` state — because it
- * has to survive a fresh clone: a CI-only deploy has no local state, and an
- * add-only fallback there would leave a removed cron firing forever.
+ * The file's indentation and line ending, so an inserted key does not fight the
+ * rest of it: a `\n` written into an otherwise-CRLF config shows as a diff on
+ * every Windows checkout, and npm's two-space manifests should not be
+ * re-indented to four.
  */
-const MARKER_PREFIX = "// lunora:crons ";
+const formattingFor = (text: string): FormattingOptions => {
+    const indent = INDENT.exec(text)?.[1] ?? "    ";
 
-const MARKER_SUFFIX = " — generated from lunora/crons.ts; every other entry is yours and is left alone";
+    return { eol: text.includes("\r\n") ? "\r\n" : "\n", insertSpaces: !indent.startsWith("\t"), tabSize: indent.length };
+};
 
-/** Whole marker line (with its newline), for stripping the previous one. */
-const MARKER_LINE = /^[^\S\n]*\/\/ lunora:crons \[[^\]\n]*\][^\n]*\n/gmu;
-
-/** The marker's payload — cron expressions never contain `]`, so a lazy class is enough. */
-const MARKER_VALUE = /^[^\S\n]*\/\/ lunora:crons (\[[^\]\n]*\])/mu;
-
-/** Leading whitespace of a line. */
-const LEADING_SPACE = /^[^\S\n]*/u;
-
-export interface ReconcileResult {
-    /** `true` when `wrangler.jsonc` was rewritten. */
+interface ReconcileResult {
+    /** `true` when the wrangler config's `triggers.crons` was rewritten. */
     changed: boolean;
+
+    /**
+     * Entries left in `triggers.crons` that this reconciler did not generate and
+     * does not own — a hand-written `backupCron` trigger, or anything already
+     * there before ownership was first recorded. Non-empty means the array is
+     * NOT the codegen-derived set, which is the surprising half of what this
+     * does and the one thing worth printing.
+     */
+    preserved: string[];
+
     /** Human-readable reason when reconciliation was skipped (for logging). */
     reason?: string;
+
     /** Resolved wrangler path, or `undefined` when none was found. */
     wranglerPath?: string;
 }
 
-/**
- * The cron set this reconciler wrote on its last pass, or `undefined` when the
- * file carries no marker (a project that predates it, or one nobody has
- * reconciled yet). A malformed marker reads as absent rather than throwing.
- */
-const readManagedCrons = (text: string): string[] | undefined => {
-    const match = MARKER_VALUE.exec(text);
+interface Manifest {
+    /** The manifest's `lunora` value, when it has one and it is an object. */
+    lunora: Record<string, unknown> | undefined;
+    path: string;
+    text: string;
+}
 
-    if (!match?.[1]) {
+/**
+ * The project manifest, or `undefined` when it is missing or is not readable
+ * JSON.
+ *
+ * Unreadable reads as "no ownership recorded" rather than throwing: this runs
+ * inside a deploy and inside every dev-server schema save, where a manifest that
+ * broken already fails for reasons that have nothing to do with cron triggers.
+ */
+const readManifest = (projectRoot: string): Manifest | undefined => {
+    const path = join(projectRoot, "package.json");
+
+    if (!existsSync(path)) {
         return undefined;
     }
 
     try {
-        const parsed: unknown = JSON.parse(match[1]);
+        const text = readFileSync(path, "utf8");
+        const { lunora }: { lunora?: unknown } = JSON.parse(text) as { lunora?: unknown };
+        const isObject = typeof lunora === "object" && lunora !== null && !Array.isArray(lunora);
 
-        return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : undefined;
+        return { lunora: isObject ? (lunora as Record<string, unknown>) : undefined, path, text };
     } catch {
         return undefined;
     }
 };
 
-/**
- * Replace the marker line with one naming `managed`, or drop it when this
- * reconciler owns nothing (so a project with no crons keeps a marker-free
- * config). Positioned by the parsed offset of `triggers.crons` rather than by
- * text search, and inserted at the start of that line so an inline
- * `"triggers": { "crons": [...] }` gets the comment above the whole line
- * instead of inside it.
- */
-const withMarker = (text: string, managed: ReadonlyArray<string>): string => {
-    const stripped = text.replaceAll(MARKER_LINE, "");
+/** The cron set this reconciler wrote on its last pass; `[]` when none is recorded. */
+const readManagedCrons = (manifest: Manifest | undefined): string[] => {
+    const recorded = manifest?.lunora?.["crons"];
 
-    if (managed.length === 0) {
-        return stripped;
-    }
-
-    const root = parseTree(stripped);
-    const node = root === undefined ? undefined : findNodeAtLocation(root, ["triggers", "crons"]);
-    const offset = node?.parent?.offset ?? node?.offset;
-
-    if (offset === undefined) {
-        return stripped;
-    }
-
-    const lineStart = stripped.lastIndexOf("\n", offset) + 1;
-    const prefix = stripped.slice(lineStart, offset);
-    const indent = prefix.trim() === "" ? prefix : (LEADING_SPACE.exec(stripped.slice(lineStart))?.[0] ?? "");
-
-    return `${stripped.slice(0, lineStart)}${indent}${MARKER_PREFIX}${JSON.stringify([...managed])}${MARKER_SUFFIX}\n${stripped.slice(lineStart)}`;
+    return Array.isArray(recorded) ? recorded.filter((value): value is string => typeof value === "string") : [];
 };
 
 /**
- * Reconcile the codegen-derived cron schedules into the project's
- * `wrangler.jsonc` `triggers.crons` array, preserving comments and formatting
- * via `jsonc-parser`'s structural edits.
+ * Record the set this pass generated, dropping the key — and the `lunora` object
+ * with it, when nothing else lives there — once this reconciler owns nothing, so
+ * a project with no crons keeps an unmarked manifest.
+ */
+const recordManagedCrons = (manifest: Manifest, managed: ReadonlyArray<string>): void => {
+    const clearing = managed.length === 0;
+    const path = clearing && Object.keys(manifest.lunora ?? {}).length <= 1 ? ["lunora"] : ["lunora", "crons"];
+    const edits = modify(manifest.text, path, clearing ? undefined : [...managed], { formattingOptions: formattingFor(manifest.text) });
+
+    if (edits.length === 0) {
+        return;
+    }
+
+    const next = applyEdits(manifest.text, edits);
+
+    if (next !== manifest.text) {
+        writeFileSync(manifest.path, next, "utf8");
+    }
+};
+
+/**
+ * Reconcile the codegen-derived cron schedules into the project's wrangler
+ * config `triggers.crons` array, preserving comments and formatting via
+ * `jsonc-parser`'s structural edits.
  *
  * **This does not own the whole array.** Two runtime cron surfaces are invisible
  * to codegen and are documented as needing a hand-written `triggers.crons` entry:
@@ -100,33 +116,57 @@ const withMarker = (text: string, managed: ReadonlyArray<string>): string => {
  * `createWorker({ crons })` (handlers keyed by expression). Replacing the array
  * wholesale deleted both on the next `lunora deploy` or dev-server schema save,
  * silently — the nightly backup simply stopped. So an entry this reconciler did
- * not generate is the user's and is preserved.
+ * not generate is the user's, is kept, and is reported in
+ * {@link ReconcileResult.preserved}.
  *
- * Ownership is recorded in the {@link MARKER_PREFIX} comment above the array,
- * which is why a REMOVED generated cron still gets cleared (it is in the marker
- * and not in `cronTriggers`) while a hand-written one never is. The marker is
- * rewritten on every pass, including one that changes no entry, so a config that
- * predates it becomes precise after a single codegen run; until then unknown
- * entries are treated as the user's, which is the safe direction.
+ * Ownership is recorded in the project's `package.json` under `lunora.crons`,
+ * which is why a REMOVED generated cron still gets cleared (it is in the record
+ * and no longer in `cronTriggers`) while a hand-written one never is. Three
+ * properties pick that location:
  *
- * When both array and marker already match, nothing is written (so we don't
- * churn the file or trip the dev server's file watcher).
+ * COMMITTED, so it survives a fresh clone. Gitignored `.lunora/` state does not:
+ * a CI-only deploy finds none, and falling back to add-only there leaves a
+ * removed cron firing forever.
+ *
+ * VALID JSON, so `wrangler.json` — a supported config name — behaves exactly like
+ * `wrangler.jsonc`. A `//` marker inside the config does not: wrangler tolerates
+ * one in either (both go through its JSONC parser), but the project's own
+ * `JSON.parse`, its deploy wrapper and its editor's JSON schema validation all
+ * break the moment a `.json` grows a comment. Nor can the record be a plain key
+ * in the wrangler config — wrangler reports unknown fields ("Unexpected fields
+ * found in top-level field") on every command.
+ *
+ * READ AND WRITTEN AT ONE ADDRESS. A comment has to be found textually on the way
+ * in and positioned structurally on the way out, and those are not the same
+ * place: a stale duplicate higher in the file was read as the record and deleted
+ * the user's backup trigger.
+ *
+ * The wrangler config is rewritten only when an entry actually moves, so
+ * {@link ReconcileResult.changed} means what a `synced N cron trigger(s)` log
+ * claims it means.
+ *
+ * A project with nothing recorded yet — one predating this, or one with no
+ * manifest — treats every entry as the user's, which is the safe direction: a
+ * wrongly-kept trigger costs one no-op invocation, a wrongly-deleted one
+ * silently ends the backups. It becomes precise after a codegen run that still
+ * declares the cron; upgrading and deleting a cron in the same change records an
+ * empty set, and that orphan is then kept for good.
  *
  * This intentionally writes the SAME `triggers.crons` shape the
- * `@lunora/config` validator accepts, so the wrangler validator never fights
- * the generated value.
+ * `@lunora/config` validator accepts, so the wrangler validator never fights the
+ * generated value.
  */
-export const reconcileWranglerCrons = (projectRoot: string, cronTriggers: ReadonlyArray<string>): ReconcileResult => {
+const reconcileWranglerCrons = (projectRoot: string, cronTriggers: ReadonlyArray<string>): ReconcileResult => {
     const wranglerPath = findWranglerFile(projectRoot);
 
     if (!wranglerPath) {
-        return { changed: false, reason: "wrangler.jsonc not found" };
+        return { changed: false, preserved: [], reason: "wrangler.jsonc not found" };
     }
 
     const { parsed, text } = readWranglerJsonc<{ triggers?: { crons?: unknown } }>(wranglerPath);
 
     if (parsed === undefined) {
-        return { changed: false, reason: `failed to parse ${wranglerPath} as JSONC`, wranglerPath };
+        return { changed: false, preserved: [], reason: `failed to parse ${wranglerPath} as JSONC`, wranglerPath };
     }
 
     const existing = Array.isArray(parsed.triggers?.crons)
@@ -134,33 +174,33 @@ export const reconcileWranglerCrons = (projectRoot: string, cronTriggers: Readon
         : [];
 
     const generated = [...cronTriggers];
-    const managed = readManagedCrons(text) ?? [];
-    // Ours-now first, then the user's — an entry that is neither generated now
-    // nor generated last time was hand-written and stays.
-    const next = [...generated, ...existing.filter((entry) => !generated.includes(entry) && !managed.includes(entry))];
+    const manifest = readManifest(projectRoot);
+    const managed = readManagedCrons(manifest);
+    // An entry that is neither generated now nor generated last time was
+    // hand-written and stays — after the ones we own, in the order codegen emits.
+    const preserved = existing.filter((entry) => !generated.includes(entry) && !managed.includes(entry));
+    const next = [...generated, ...preserved];
 
-    let edited = text;
-
-    if (!sameTriggers(existing, next)) {
-        // Write the array under `triggers.crons`, creating the `triggers` object
-        // if absent. `modify` returns minimal edits that keep surrounding comments.
-        const edits = modify(text, ["triggers", "crons"], next, { formattingOptions: { insertSpaces: true, tabSize: 4 } });
-
-        if (edits.length === 0) {
-            return { changed: false, reason: "no structural edit produced", wranglerPath };
-        }
-
-        edited = applyEdits(text, edits);
+    if (manifest !== undefined) {
+        recordManagedCrons(manifest, generated);
     }
 
-    const nextText = withMarker(edited, generated);
-
-    // Nothing to do: the wrangler value and the ownership marker already match.
-    if (nextText === text) {
-        return { changed: false, reason: "triggers.crons already in sync", wranglerPath };
+    if (sameTriggers(existing, next)) {
+        return { changed: false, preserved, reason: "triggers.crons already in sync", wranglerPath };
     }
 
-    writeFileSync(wranglerPath, nextText, "utf8");
+    // `modify` returns minimal edits that keep surrounding comments, and creates
+    // the `triggers` object when it is absent.
+    const edits = modify(text, ["triggers", "crons"], next, { formattingOptions: formattingFor(text) });
 
-    return { changed: true, wranglerPath };
+    if (edits.length === 0) {
+        return { changed: false, preserved, reason: "no structural edit produced", wranglerPath };
+    }
+
+    writeFileSync(wranglerPath, applyEdits(text, edits), "utf8");
+
+    return { changed: true, preserved, wranglerPath };
 };
+
+export type { ReconcileResult };
+export { reconcileWranglerCrons };

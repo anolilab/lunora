@@ -102,6 +102,11 @@ const reconcileWranglerExtras = (
         if (reconciled.changed) {
             logger.info?.(`${LUNORA_TAG} synced ${cronTriggers.length.toFixed(0)} cron trigger(s) into ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
         }
+
+        // The array is not the codegen-derived set — see the deploy handler.
+        if (reconciled.preserved.length > 0) {
+            logger.info?.(`${LUNORA_TAG} kept ${reconciled.preserved.length.toFixed(0)} hand-written cron trigger(s): ${reconciled.preserved.join(", ")}`);
+        }
     } catch (cronError: unknown) {
         const message = cronError instanceof Error ? cronError.message : String(cronError);
 

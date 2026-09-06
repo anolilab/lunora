@@ -1752,6 +1752,7 @@ interface ReconcileCompatibilityDateResult {
 ```ts
 interface ReconcileResult {
     changed: boolean;
+    preserved: string[];
     reason?: string;
     wranglerPath?: string;
 }
