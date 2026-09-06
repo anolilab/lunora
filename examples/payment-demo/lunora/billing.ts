@@ -84,11 +84,12 @@ export const mySubscriptions = query.query(async ({ ctx }): Promise<Subscription
  * action (which runs at the Worker edge with no `ctx.db`) so the work happens
  * inside the shard, where `ctx.payments` — and its store — exist.
  *
- * The edge forwards the request's headers verbatim rather than one named
- * signature header, so the adapter finds whichever header its provider signs
- * with: `stripe-signature` here, but `creem-signature`, the Standard-Webhooks
+ * The edge forwards every header an adapter can verify with rather than one named
+ * signature header, so the adapter finds whichever one its provider signs with:
+ * `stripe-signature` here, but `creem-signature`, the Standard-Webhooks
  * `webhook-id`/`webhook-timestamp`/`webhook-signature` trio, or `svix-*`
- * elsewhere.
+ * elsewhere. See the allowlist in `http.ts` for why it is those and not the whole
+ * request.
  */
 export const processWebhook = internalAction
     .input({ body: v.string(), headers: v.record(v.string(), v.string()) })

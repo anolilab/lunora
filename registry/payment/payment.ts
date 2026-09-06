@@ -34,10 +34,16 @@
  *      ```ts
  *      import { webhookResponse } from "@lunora/payment";
  *
+ *      // Every header an adapter verifies with; add yours if it signs with another.
+ *      const SIGNATURE_HEADERS = ["creem-signature", "stripe-signature", "svix-id", "svix-signature",
+ *          "svix-timestamp", "webhook-id", "webhook-signature", "webhook-timestamp"];
+ *
  *      app.post("/payment/webhook", httpAction(async (ctx, request) => {
  *          const body = await request.text();
- *          // Forward the headers as they arrived; each provider signs with its own.
- *          const headers = Object.fromEntries(request.headers);
+ *          const headers = Object.fromEntries(SIGNATURE_HEADERS.flatMap((name) => {
+ *              const value = request.headers.get(name);
+ *              return value === null ? [] : [[name, value]];
+ *          }));
  *          return webhookResponse(await ctx.runAction(processWebhook, { body, headers }));
  *      }));
  *      ```
@@ -189,15 +195,18 @@ export const mySubscriptions = query.query(async ({ ctx }): Promise<Subscription
  * action (which runs at the Worker edge with no `ctx.db`) so the work happens
  * inside the shard, where `ctx.payments` — and its store — exist.
  *
- * The HTTP route must forward the raw body and the request's headers here via
- * `ctx.runAction` (`Object.fromEntries(request.headers)`).
- *
- * Every header is forwarded rather than one named signature, because the header
- * that carries the signature is the provider's choice and these functions are
+ * The HTTP route must forward the raw body and every header an adapter can verify
+ * with here via `ctx.runAction` — not one named signature header, because which
+ * one carries the signature is the provider's choice and these functions are
  * provider-agnostic: Stripe signs with `stripe-signature`, Creem with
  * `creem-signature`, Polar and Dodo Payments with the Standard-Webhooks trio
  * (`webhook-id` / `webhook-timestamp` / `webhook-signature`), Autumn with `svix-*`.
  * Forwarding only `stripe-signature` verified Stripe and failed everything else.
+ *
+ * An allowlist of those, not the whole `request.headers`: nothing downstream needs
+ * a hostile POST's `cookie` / `authorization`, and the entity headers
+ * (`content-encoding`, `content-length`) would describe a body that the `text()`
+ * below has already decoded.
  */
 export const processWebhook = internalAction
     .input({ body: v.string(), headers: v.record(v.string(), v.string()) })
