@@ -344,10 +344,14 @@ catalogs:
     # Exact-pinned: `@lunora/browser` tracks a verified-good Playwright-on-Workers
     # release, and bumps are vetted against a live worker.
     #
-    # WARNING: 1.3.5 has only been vetted on types and the local suites (the change from
-    # 1.3.0 is additive, and @lunora/browser never imports the package — it takes
-    # `launch` by injection). The live-worker leg needs a real Browser Rendering binding
-    # on a deployed worker; run it before relying on this in production.
+    # WARNING: 1.3.6 has only been vetted on types and the local suites (@lunora/browser
+    # never imports the package — it takes `launch` by injection, and holds it as a
+    # devDependency plus an optional `>=1.0.0` peer, so the pin reaches types and
+    # fixtures only). The live-worker leg needs a real Browser Rendering binding on a
+    # deployed worker; run it before relying on this in production.
+    #
+    # That leg has never been run — it was outstanding at 1.3.5 too, so 1.3.6 does not
+    # cross a line 1.3.5 was on the safe side of. Types and the 89 local specs pass.
     "@cloudflare/playwright": 1.3.6
     "@cloudflare/vitest-plugin": ^1.1.4
     # PATCHED (patches/@cloudflare__workers-types@5.20260811.1.patch), and the patch
@@ -427,9 +431,18 @@ catalogs:
     # changelog), and its transitive wrangler/miniflare/workerd can be fresher than the
     # minimumReleaseAge gate allows.
     #
-    # To bump: smoke `pnpm --filter "@lunora/vite" dev` against a template, confirm the
-    # dev runner boots and serves, and confirm the transitive wrangler/miniflare/workerd
-    # are past the release-age window. 1.51.2 was vetted that way.
+    # To bump: boot the dev runner and confirm it serves, and confirm the transitive
+    # wrangler/miniflare/workerd are past the release-age window.
+    #
+    # `tests/e2e` is that smoke test — its globalSetup boots the playground exactly
+    # like `pnpm dev`, on one Vite dev server whose embedded `@cloudflare/vite-plugin`
+    # worker is the backend — so `pnpm run e2e` covers it. (There is no
+    # `@lunora/vite dev` script; an earlier revision of this note named one.)
+    #
+    # 1.54.4 vetted that way on 2026-09-08: 31/31 chromium specs, and its
+    # workerd 1.20260903.1 / wrangler 4.129.0 / miniflare 5.20260903.0-alpha are all
+    # past the age gate. The alpha-tagged miniflare is not new — 1.51.2 shipped
+    # 5.20260804.0-alpha — it is how this plugin pins its own runtime.
     "@cloudflare/vite-plugin": 1.54.4
     "@tailwindcss/cli": ^4.3.3
     "@tailwindcss/vite": ^4.3.3
@@ -773,7 +786,11 @@ catalogs:
     # the plugin packages peer on an exact `better-auth`/`@better-auth/core`
     # version — so a caret on one member and not another resolves a split tree.
     #
-    # Held at 1.7.1 (GA). This block sat on `1.7.0-rc.2` for two reasons, both now
+    # Held at 1.7.3 (GA). 1.7.2 and 1.7.3 reverted the `(issuer, accountId)` account
+    # re-keying 1.7.0 introduced — see `packages/auth/src/legacy-issuer.ts`, which drops
+    # the column a 1.7.0-1.7.2 database still carries.
+    #
+    # This block sat on `1.7.0-rc.2` for two reasons, both now
     # discharged: the `@better-auth/scim` security floor (GHSA-j8v8-g9cx-5qf4,
     # HIGH, CWE-639/862 — with the default `providerOwnership.enabled: false` the
     # `userId` owner column was never created, so any signed-in user could
@@ -792,8 +809,14 @@ catalogs:
     # expiry, and permissions. Shipped as its own package in the 1.7 line; there is
     # no `apiKey` in better-auth's own plugin barrel.
     "@better-auth/api-key": 1.7.3
-    # Direct dependency since 1.7: `createLocalAccountIssuer` (needed to link a local
-    # password account) lives in `@better-auth/core/db`, not the `better-auth` barrel.
+    # Direct dependency: the DO/D1 schema builders read better-auth's own table and
+    # index resolution out of `@better-auth/core/db/internal`
+    # (`getAuthTablesWithResolvedIndexes`, `getDatabaseFieldIndexName`), and
+    # `invite-only` takes `defineErrorCodes` from `@better-auth/core/utils/error-codes`.
+    # None of them are on the `better-auth` barrel.
+    #
+    # (This note used to cite `createLocalAccountIssuer`, which 1.7.3 removed along with
+    # the `issuer` column. The dependency outlived its original reason.)
     "@better-auth/core": 1.7.3
     "@better-auth/expo": 1.7.3
     # `mcp` / `withMcpAuth` and `oidcProvider` left better-auth's core barrel in 1.7
@@ -829,8 +852,15 @@ catalogs:
     # h3 stays on v1 to match @lunora/nuxt's declared `h3` peer (`^1.15.0`) — v1 is
     # what Nuxt 4 / Nitro 2 run. `src/runtime/h3-request.ts` carries a v2 branch
     # behind a feature check; widen the peer and this pin together when a stable
-    # h3 v2 ships (2.0.0 itself is deprecated upstream).
-    h3: ^2.0.0
+    # h3 v2 ships.
+    #
+    # There is no such release yet. `2.0.0` is the only non-prerelease on the 2.x
+    # line and upstream deprecated it with "please use 1.x or beta"; the `latest`
+    # dist-tag points at `2.0.1-rc.31`, and the supported v1 line is the `1x` tag
+    # (1.15.11). A `^2.0.0` range therefore resolves to precisely the deprecated
+    # release — a `--latest` sweep put one here, and only the `h3: ^1.15.11`
+    # override in `overrides` kept v1 installed while this entry said otherwise.
+    h3: ^1.15.11
     hono: ^4.13.7
   redact:
     "@visulima/redact": 5.0.0
