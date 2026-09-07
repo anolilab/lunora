@@ -1,3 +1,16 @@
+## @lunora/cli [1.0.0-alpha.233](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.232...@lunora/cli@1.0.0-alpha.233) (2026-09-07)
+
+### Bug Fixes
+
+* **config:** warn when a SchedulerDO has no LUNORA_ORIGIN_URL ([#646](https://github.com/anolilab/lunora/issues/646)) ([e8c55c7](https://github.com/anolilab/lunora/commit/e8c55c7aa493e6684a7a57facc7928c72bb530e0))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.200
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.121
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.101
+
 ## @lunora/cli [1.0.0-alpha.232](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.231...@lunora/cli@1.0.0-alpha.232) (2026-09-06)
 
 
