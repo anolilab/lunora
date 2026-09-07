@@ -60,8 +60,8 @@
 
 import { LunoraError } from "@lunora/errors";
 
-import runMiddlewareChain from "./builder/run-middleware";
-import type { Middleware, MiddlewareNext } from "./builder/types";
+import composeMiddleware from "./builder/compose-middleware";
+import type { Middleware } from "./builder/types";
 import { validateIndexFields } from "./schema";
 import type {
     AggregateIndexDefinition,
@@ -504,15 +504,14 @@ export const composePluginMiddleware = <ContextIn = unknown, const Plugins exten
 ): Middleware<ContextIn, ComposedOut<Plugins> & ContextIn> => {
     const middlewares = plugins.map((plugin) => plugin.middleware).filter((middleware): middleware is Middleware<unknown, unknown> => middleware !== undefined);
 
-    // Reuse the builder's own onion executor so composing N plugin middlewares is
-    // behaviourally identical to chaining N `.use()`s — same shallow-merge, same
-    // double-`next()` guard. The terminal hands the fully widened context to the
-    // surrounding builder's `next`, making the composed unit transparent.
-    return (async ({ ctx, next }) =>
-        runMiddlewareChain(middlewares, ctx, (context) => (next as MiddlewareNext<unknown>)({ ctx: context as Record<string, unknown> }))) as Middleware<
-        ContextIn,
-        ComposedOut<Plugins> & ContextIn
-    >;
+    // `composeMiddleware` reuses the builder's own onion executor — so composing N
+    // plugin middlewares is behaviourally identical to chaining N `.use()`s, same
+    // shallow-merge and same double-`next()` guard — and returns the arrow with
+    // the wrapped middlewares' RLS/mask policy tags already re-stamped on it. That
+    // last part is why the composition is not written inline here: the builder
+    // hoists policy off the DIRECT `.use(...)` elements, so a plugin shipping
+    // `rls(...)` as its middleware would otherwise register with no `fn.rls`.
+    return composeMiddleware<ContextIn, ComposedOut<Plugins> & ContextIn>(middlewares);
 };
 
 /* eslint-enable @typescript-eslint/no-explicit-any */

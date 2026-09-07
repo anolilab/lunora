@@ -1,17 +1,29 @@
 {
-    // Next.js SSR worker — produced by `opennextjs-cloudflare build` (the OpenNext
-    // Cloudflare adapter). This worker handles all page/RSC requests. Lunora
-    // realtime (`/_lunora/*` and ShardDO) lives in a SEPARATE worker; see
-    // `wrangler.lunora.jsonc`.
+    // Lunora worker — owns `/_lunora/*` (RPC + WebSocket) and the ShardDO class.
+    // Built and deployed independently of the Next.js SSR worker
+    // (`wrangler.opennext.jsonc`).
     //
-    // In production set NEXT_PUBLIC_LUNORA_URL (at build time — it is inlined
-    // into the client bundle) to the Lunora worker URL so the RSC loader and the
-    // browser client know where to reach `/_lunora/*`.
+    // This is the ROOT `wrangler.jsonc` on purpose: `lunora verify` / `lunora deploy`
+    // / `lunora dev` probe `wrangler.jsonc|wrangler.json` at the project root and
+    // require the `SHARD`/`ShardDO` binding. With the OpenNext config here instead,
+    // every one of those commands failed on a fresh scaffold with
+    // "durable_objects.bindings must include { name: SHARD, class_name: ShardDO }".
+    //
+    // Deploy with:  wrangler deploy            (or `pnpm run deploy:lunora`)
+    // Develop with: wrangler dev               (or `pnpm run dev:lunora`)
+    //               (then set NEXT_PUBLIC_LUNORA_URL=http://localhost:<port> in .env.local)
+    //
+    // After deploying, set NEXT_PUBLIC_LUNORA_URL to this worker's URL
+    // (e.g. https://{{name}}-lunora.workers.dev) so the RSC loader and the
+    // browser LunoraClient know where to reach `/_lunora/*`.
     "$schema": "node_modules/wrangler/config-schema.json",
-    "name": "{{name}}",
-    "main": ".open-next/worker.js",
+    "name": "{{name}}-lunora",
+    "main": "lunora/server.ts",
     "compatibility_date": "2026-06-10",
     "compatibility_flags": ["nodejs_compat"],
-    "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "observability": { "enabled": true, "head_sampling_rate": 1 },
 }

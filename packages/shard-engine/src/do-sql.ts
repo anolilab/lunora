@@ -17,6 +17,8 @@ import { LunoraError } from "@lunora/errors";
 import type { Name, SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
+import type { KindedValidator } from "../../../shared/effective-kind";
+import { effectiveKind } from "../../../shared/effective-kind";
 import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
@@ -35,7 +37,7 @@ const DOC_COLUMN = "__doc__";
  * ones it can.
  *
  * **Nothing upstream reserves this name.** The only reserved-name enforcement in
- * the stack is `RESERVED_TABLE_NAMES` in `@lunora/codegen`'s `discover-schema`,
+ * the stack is `RESERVED_TABLE_NAMES` in `@lunora/codegen`'s `discover/schema`,
  * which covers TABLE names colliding with `ctx.db` members, and
  * `SYSTEM_INDEX_FIELDS` in `@lunora/server`'s `schema`, which is the two-entry
  * list `["_creationTime", "_id"]` of indexable system fields. Neither prohibits
@@ -246,6 +248,29 @@ const aggUpsertSql = (aggTable: string, key: unknown, value: unknown, count: unk
     dsql`INSERT INTO ${dsql.identifier(aggTable)} (${AGG_KEY}, ${AGG_VALUE}, ${AGG_COUNT}) VALUES (${key}, ${value}, ${count}) ON CONFLICT(${AGG_KEY}) DO UPDATE SET ${set}`;
 
 /**
+ * Reverse one `GROUP BY` group-key value read straight off
+ * `json_extract(__doc__, '$.field')`.
+ *
+ * SQLite has no boolean, so a stored JSON `true` extracts as the INTEGER `1`.
+ * The companion-indexed `groupBy` decodes its key tuple through `decodeWire` and
+ * hands back a real `true`, so the same query answered two different TYPES
+ * depending on whether an aggregate index happened to cover it — and a caller's
+ * `groups.find((group) => group.key.flag === true)` was `undefined` on the scan
+ * path. The declared kind is the only thing that can tell 1-the-boolean from
+ * 1-the-number, so the reversal is driven off it.
+ *
+ * `effectiveKind`, so `v.optional(v.boolean())` answers like `v.boolean()`.
+ * @returns the value in its JS form
+ */
+const decodeGroupKeyValue = (validator: KindedValidator | undefined, value: unknown): unknown => {
+    if (validator === undefined || (value !== 0 && value !== 1) || effectiveKind(validator) !== "boolean") {
+        return value;
+    }
+
+    return value === 1;
+};
+
+/**
  * Memo for {@link tableColumns}, keyed by the definition object itself.
  *
  * A table definition is built once from the schema and never mutated after
@@ -396,6 +421,7 @@ export {
     aggUpsertSql,
     createIndexSql,
     decodeDocJson,
+    decodeGroupKeyValue,
     DOC_COLUMN,
     DOC_ORIGINALS_KEY,
     encodeDocJson,

@@ -6,6 +6,12 @@
 // stay the app's decision — this only maps whichever segment arrives to the card
 // that owns it. An unrecognized segment falls back to sign-in rather than
 // rendering nothing, because a typo'd auth URL should still let someone in.
+//
+// **Tell the provider where you mounted it**: `viewPaths.base` ("/auth" for
+// the route above) is what the links between the screens, `redirects.signIn`,
+// `redirects.twoFactor` and the emailed reset link are all derived from. It
+// defaults to "" — screens on root-level routes — so leaving it unset on a
+// nested mount sends a user with two-factor enabled to a route that isn't there.
 import type { Component } from "vue";
 import { computed } from "vue";
 

@@ -35,6 +35,23 @@ describe("spanBuffer", () => {
         expect(buffer.entries()).not.toBe(buffer.entries());
     });
 
+    it("counts evicted spans so a truncated waterfall reads as truncated", () => {
+        expect.assertions(3);
+
+        const buffer = new SpanBuffer(2);
+
+        for (let index = 0; index < 10; index += 1) {
+            buffer.push(span({ spanId: `s${String(index)}` }));
+        }
+
+        expect(buffer.size).toBe(2);
+        expect(buffer.dropped).toBe(8);
+
+        buffer.clear();
+
+        expect(buffer.dropped).toBe(0);
+    });
+
     it("empties on clear", () => {
         expect.assertions(2);
 
@@ -47,6 +64,35 @@ describe("spanBuffer", () => {
         buffer.clear();
 
         expect(buffer.size).toBe(0);
+    });
+});
+
+describe("spanBuffer capacity normalization", () => {
+    it("falls back to the default for a capacity that would truncate to zero", () => {
+        expect.assertions(2);
+
+        // `> 0` accepted this and `Math.trunc` then made it 0, so the ring
+        // evicted every span it was handed — trace capture silently off.
+        const buffer = new SpanBuffer(0.5);
+
+        buffer.push(span());
+
+        expect(buffer.size).toBe(1);
+        expect(buffer.dropped).toBe(0);
+    });
+
+    it("falls back to the default for a non-finite capacity", () => {
+        expect.assertions(1);
+
+        // Infinity truncates to itself, removing the memory bound the ring
+        // exists to impose on a buffer that lives as long as the DO does.
+        const buffer = new SpanBuffer(Number.POSITIVE_INFINITY);
+
+        for (let index = 0; index < 1200; index += 1) {
+            buffer.push(span({ spanId: String(index) }));
+        }
+
+        expect(buffer.size).toBeLessThan(1200);
     });
 });
 

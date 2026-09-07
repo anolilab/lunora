@@ -7,6 +7,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 
 import { join } from "@visulima/path";
 
+import safe from "./display";
 import parseManifest from "./manifest";
 
 /** One catalog entry as `lunora registry list` reports it. */
@@ -19,17 +20,6 @@ interface CatalogItem {
 interface IndexItem extends CatalogItem {
     title?: string;
 }
-
-/**
- * Strip C0/C1 control bytes (incl. ESC, the lead-in for ANSI/OSC sequences) from
- * a remote catalog string before it is printed to the terminal. A hostile
- * `--source` registry could otherwise embed escape sequences in a `name`/
- * `description` to spoof output, hide text, or trigger dangerous OSC operations.
- */
-// eslint-disable-next-line no-control-regex -- intentionally matches the C0/C1 control range we strip
-const CONTROL_CHARS = /[\u0000-\u001F\u007F-\u009F]/gu;
-
-const stripControlChars = (value: string | undefined): string | undefined => (value === undefined ? undefined : value.replaceAll(CONTROL_CHARS, ""));
 
 /** Names of the subdirectories under `root` that ship a `registry.json`. */
 const listItemDirectories = (root: string): string[] =>
@@ -55,9 +45,10 @@ const collectCatalog = (root: string): CatalogItem[] => {
             return parsed.items
                 .filter((entry): entry is CatalogItem => typeof entry === "object" && entry !== null && typeof (entry as CatalogItem).name === "string")
                 .map((entry) => {
-                    // Strip control bytes from the untrusted remote strings before they
-                    // can reach the terminal (ANSI/OSC escape-injection hardening).
-                    return { description: stripControlChars(entry.description), name: stripControlChars(entry.name) ?? entry.name };
+                    // Sanitize the untrusted remote strings before they can reach the
+                    // terminal: escape/BIDI sequences AND newlines, since each entry
+                    // is one `list` line.
+                    return { description: entry.description === undefined ? undefined : safe(entry.description), name: safe(entry.name) };
                 });
         }
     }
@@ -65,7 +56,11 @@ const collectCatalog = (root: string): CatalogItem[] => {
     return listItemDirectories(root).map((name) => {
         const raw = JSON.parse(readFileSync(join(root, name, "registry.json"), "utf8")) as { description?: string };
 
-        return { description: stripControlChars(raw.description), name };
+        // The directory NAME is as untrusted as the manifest text beside it — a
+        // remote registry is unpacked into this root, and a tarball entry may
+        // carry escape or BIDI bytes in its path. `list` renders it, so it is
+        // sanitized like every other rendered value.
+        return { description: raw.description === undefined ? undefined : safe(raw.description), name: safe(name) };
     });
 };
 

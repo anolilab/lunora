@@ -86,6 +86,45 @@ describe("identity header integration (worker -> real ShardDO)", () => {
         expect(body.result.identity).toStrictEqual({ name: "名前 🎌" });
     });
 
+    it("turns a resolver's `expiresAtMs` into the socket credential-expiry header", async () => {
+        expect.assertions(2);
+
+        const seen: Headers[] = [];
+        const expiresAtMs = Date.now() + 3_600_000;
+        const worker = createWorker({
+            resolveIdentity: (): ResolvedIdentity => {
+                return { expiresAtMs, userId: "user_42" };
+            },
+            shardDO: {
+                get: () => {
+                    return {
+                        fetch: (request: Request) => {
+                            seen.push(request.headers);
+
+                            return Promise.resolve(Response.json({ result: null }));
+                        },
+                    };
+                },
+                idFromName: (name) => name,
+            },
+        });
+
+        await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", { body: JSON.stringify({ args: {}, functionPath: "messages:list" }), method: "POST" }),
+            {},
+            fakeContext,
+        );
+
+        // The far end of the chain the `.auth()` resolvers feed: `@lunora/auth`'s
+        // `resolveIdentity` and the emitted D1 one both answer `expiresAtMs` (epoch
+        // MILLISECONDS, not JWT seconds), and this is the header the DO reads to drop
+        // a subscriber whose session has lapsed. Package boundaries keep the two
+        // halves in separate suites — `@lunora/runtime` does not depend on
+        // `@lunora/auth` — so this pins the field name they have to agree on.
+        expect(seen).toHaveLength(1);
+        expect(seen[0]?.get("x-lunora-identity-exp")).toBe(String(expiresAtMs));
+    });
+
     it("dispatches a non-Latin-1 userId end-to-end and ctx.auth sees it intact", async () => {
         expect.assertions(2);
 

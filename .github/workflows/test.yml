@@ -6,7 +6,7 @@
 "on": # yamllint disable-line rule:truthy
     "pull_request":
         "types": ["opened", "synchronize", "reopened"]
-        "branches": ["main", "alpha", "next", "beta"]
+        "branches": ["main", "alpha", "next", "beta", "feat/**", "fix/**"]
     "merge_group": # yamllint disable-line rule:empty-values
     "workflow_dispatch": # yamllint disable-line rule:empty-values
 
@@ -25,7 +25,6 @@
         "outputs":
             "packages": "${{ steps.changes.outputs.packages }}"
             "e2e": "${{ steps.changes.outputs.e2e }}"
-            "codecov": "${{ steps.changes.outputs.codecov }}"
             "templates": "${{ steps.changes.outputs.templates }}"
             "worker_size": "${{ steps.changes.outputs.worker_size }}"
             "sdks": "${{ steps.changes.outputs.sdks }}"
@@ -147,8 +146,15 @@
             #
             # studio is excluded from the coverage scripts only — its component suite
             # still stalls under v8 coverage (packages/studio/vitest.config.ts) — and is
-            # covered by the dedicated step below. lunora-playground stays excluded
-            # entirely, same hang class as e2e.
+            # covered by the dedicated step below.
+            #
+            # lunora-playground is NOT excluded. It was, on the belief that it hung like
+            # e2e; it does not. Its `runCodegen` smoke test parses the app with ts-morph
+            # and takes ~15s cold, and the app's vitest config used to grant 30s only
+            # when `CI` was set — so a local run tripped a 10s timeout that read as a
+            # hang. The budget is unconditional now (apps/playground/vitest.config.ts)
+            # and the suite runs here, on the leg without coverage. It has no
+            # `test:coverage` script, so the 22.15 leg simply has nothing to run for it.
             - "name": "Run affected tests"
               "shell": "bash"
               "run": |
@@ -212,6 +218,29 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
+            # The matrix is a hand-typed list of 11 packages, duplicated verbatim in
+            # test.yml and nightly.yml, with nothing tying either copy to the packages
+            # that actually declare a `workerd` vitest project. Drop a package from one
+            # and its workerd suites stop running with every check green. Each leg
+            # asserts its own package still declares the project, and that the leg count
+            # equals the number of packages that do — together that makes the matrix and
+            # the filesystem the same set, not merely the same size.
+            - "name": "Assert the matrix matches the packages declaring a workerd project"
+              "run": |
+                  declared="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts | sed 's|packages/||; s|/vitest.config.ts||' | sort)"
+                  count="$(printf '%s\n' "$declared" | wc -l | tr -d ' ')"
+                  if ! printf '%s\n' "$declared" | grep -qx "${{ matrix.package }}"; then
+                    echo "packages/${{ matrix.package }}/vitest.config.ts declares no \`workerd\` project — this leg would run nothing." >&2
+                    echo "Declared: $(printf '%s ' $declared)" >&2
+                    exit 1
+                  fi
+                  if [ "$count" != "${{ strategy.job-total }}" ]; then
+                    echo "$count packages declare a workerd project but the matrix has ${{ strategy.job-total }} legs." >&2
+                    echo "Declared: $(printf '%s ' $declared)" >&2
+                    echo "Fix the matrix in .github/workflows/test.yml AND .github/workflows/nightly.yml." >&2
+                    exit 1
+                  fi
+
             # `vis run build` walks upstream deps via dependsOn, so the package's dist
             # and everything it imports exists. `pnpm --filter "pkg..."` does not build
             # deps reliably.
@@ -224,6 +253,91 @@
                   "LUNORA_WORKERD_TESTS": "1"
               "run": |
                   pnpm --filter "@lunora/${{ matrix.package }}" run test --project workerd
+
+    # `@lunora/hyperdrive`'s MySQL suites — the only gate proving the SQL the store
+    # core renders for a `.global()` MySQL backend actually executes. mysqld comes
+    # from `mysql-memory-server`, provisioned from npm like pglite and workerd
+    # rather than from a service container, so the job needs no `services:` block.
+    #
+    # The point of the job is that the suites cannot report green having run
+    # nothing. They skip when the binary is unobtainable, and no CI job had ever
+    # declared that mysqld was expected — so a suite that had never been observed
+    # to run reported success on every PR. `LUNORA_MYSQL_TESTS=1` turns that skip
+    # into a failure (`__tests__/_helpers/mysql-mem.ts`), and the assertion below
+    # closes the other half: a run that executes zero cases, or skips any, fails
+    # here instead of passing quietly.
+    "test-mysql":
+        "name": "MySQL integration (@lunora/hyperdrive)"
+        "if": "needs.files-changed.outputs.packages == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 20
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  # `mysql-memory-server` fetches mysqld from cdn.mysql.com on first use.
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "test-mysql"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # The run step names its suites by path, so a fourth one added against the
+            # same harness would not be picked up and nothing else would notice — the
+            # same hazard the workerd matrix assertion above exists for.
+            - "name": "Assert the run covers every suite using the MySQL harness"
+              "run": |
+                  declared="$(grep -rl '_helpers/mysql-mem' packages/hyperdrive/__tests__/*.test.ts | sort | tr '\n' ' ')"
+                  expected='packages/hyperdrive/__tests__/create-hyperdrive.test.ts packages/hyperdrive/__tests__/global-collation-parity.test.ts packages/hyperdrive/__tests__/global-mysql.integration.test.ts '
+                  if [ "$declared" != "$expected" ]; then
+                    echo "::error file=.github/workflows/test.yml::Suites using the MySQL harness are [$declared] but this job runs [$expected]. Update the run step below."
+                    exit 1
+                  fi
+
+            - "name": "Build package and dependencies"
+              "run": |
+                  pnpm exec vis run build --query "project=hyperdrive"
+
+            - "name": "Run the MySQL suites against a real mysqld"
+              "env":
+                  "LUNORA_MYSQL_TESTS": "1"
+              "run": |
+                  pnpm --filter "@lunora/hyperdrive" run test \
+                      __tests__/create-hyperdrive.test.ts \
+                      __tests__/global-collation-parity.test.ts \
+                      __tests__/global-mysql.integration.test.ts \
+                      --reporter=default --reporter=json --outputFile.json=test-results/mysql.json
+
+            - "name": "Assert the suites executed their cases"
+              "run": |
+                  node -e '
+                      const { appendFileSync, readFileSync } = require("node:fs");
+
+                      const report = JSON.parse(readFileSync("packages/hyperdrive/test-results/mysql.json", "utf8"));
+                      const passed = report.numPassedTests;
+                      const skipped = report.numPendingTests + report.numTodoTests;
+
+                      appendFileSync(
+                          process.env.GITHUB_STEP_SUMMARY,
+                          `- MySQL parity on \`@lunora/hyperdrive\`: **${passed} cases executed** against a real mysqld (${skipped} skipped).\n`,
+                      );
+
+                      if (passed === 0 || skipped > 0) {
+                          console.error(`::error::The MySQL suites passed ${passed} and skipped ${skipped} cases. This job exists so the gate cannot pass by skipping.`);
+                          process.exit(1);
+                      }
+                  '
 
     "e2e":
         "name": "E2E (Playwright + Miniflare)"
@@ -439,6 +553,23 @@
             - "name": "Git checkout"
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
+            # A fourth hardcoded copy of the language list — `sdks/lint-all.sh`,
+            # `sdks/generated-check.sh` and `sdks/run-all.sh` hold the other three —
+            # and the only one no script can see. A ninth SDK missed here is never
+            # conformance-tested at all, with every leg green. `strategy.job-total` is
+            # this matrix's size, so compare it against what is on disk; the three
+            # scripts reconcile themselves against the same directories.
+            - "name": "Assert the matrix covers every SDK on disk"
+              "run": |
+                  on_disk="$(find sdks -mindepth 1 -maxdepth 1 -type d ! -name smoke | wc -l | tr -d ' ')"
+                  if [ "$on_disk" != "${{ strategy.job-total }}" ]; then
+                    echo "sdks/ holds $on_disk ports but the sdk-conformance matrix has ${{ strategy.job-total }} legs." >&2
+                    echo "Add the missing language to the matrix in .github/workflows/test.yml, and to ALL in" >&2
+                    echo "sdks/lint-all.sh, sdks/generated-check.sh and sdks/run-all.sh." >&2
+                    exit 1
+                  fi
+                  echo "matrix covers all $on_disk SDKs"
+
             - "name": "Setup python"
               "if": "matrix.sdk.language == 'python'"
               "uses": "actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c" # v6.0.0
@@ -616,7 +747,7 @@
     # skipped (so a no-package-change PR with all jobs skipped still passes).
     "test-required-check":
         "name": "Check Test Run"
-        "needs": ["files-changed", "test", "test-workerd", "e2e", "templates", "worker-size", "sdk-conformance"]
+        "needs": ["files-changed", "test", "test-workerd", "test-mysql", "e2e", "templates", "worker-size", "sdk-conformance"]
         "if": "always()"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5

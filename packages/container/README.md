@@ -172,12 +172,12 @@ export const api = defineContainer({
 
 ### Hard timeout
 
-`sleepAfter` caps _idle_ time; `hardTimeout` caps _total_ lifetime — a runaway-cost backstop measured from start, regardless of activity (same grammar as `sleepAfter`). When it elapses the generated class's `onHardTimeoutExpired` hook runs (default: `stop()`); the timer is run-generation-stamped so a stale timer from a slept/crashed run can't kill a fresh one.
+`sleepAfter` caps _idle_ time; `hardTimeout` caps _total_ lifetime — a runaway-cost backstop measured from start, regardless of activity (same grammar as `sleepAfter`). When it elapses the generated class's `onHardTimeoutExpired` hook runs (default: `stop()`, i.e. SIGTERM with no escalation — a container that ignores SIGTERM outlives its cap unless you override the hook and follow up with `destroy()`); the timer is run-generation-stamped so a stale timer from a slept/crashed run can't kill a fresh one.
 
 ```ts
 export const job = defineContainer({
     image: "./containers/job",
-    hardTimeout: "1h", // never run longer than an hour, busy or not
+    hardTimeout: "1h", // stopped after an hour, busy or not
 });
 ```
 

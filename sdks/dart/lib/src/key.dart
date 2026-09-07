@@ -78,13 +78,21 @@ String formatDouble(double value) {
   if (value.isNaN || value.isInfinite) {
     return 'null';
   }
-  // Before the integral branch: `(-0.0).toStringAsFixed(0)` is "-0", while
-  // `String(-0)` in JavaScript is "0".
+  // Before the integral branch. The key is `stableStringify`, NOT `String()`:
+  // it emits the bare token "-0" for a negative zero, precisely so a key cannot
+  // collapse -0 and 0 into one. (`String(-0)` in JavaScript IS "0" — that is
+  // the read this used to make, and it dropped the sign.)
   if (value == 0) {
-    return '0';
+    return value.isNegative ? '-0' : '0';
   }
   if (value == value.truncateToDouble() && value.abs() < 1e21) {
-    return value.toStringAsFixed(0);
+    // `toString` prints the SHORTEST digits that read back as the same double,
+    // which is ECMAScript's rule; `toStringAsFixed(0)` prints the EXACT
+    // expansion, so 2^60 came out as 1152921504606846976 where `String(2**60)`
+    // is 1152921504606847000.
+    final rendered = value.toString();
+
+    return rendered.endsWith('.0') ? rendered.substring(0, rendered.length - 2) : rendered;
   }
 
   final magnitude = value.abs();

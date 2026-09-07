@@ -34,6 +34,7 @@ import {
     emailOTP,
     genericOAuth,
     haveIBeenPwned,
+    inviteOnly,
     jwt,
     lastLoginMethod,
     magicLink,
@@ -104,6 +105,7 @@ behaviour and the full option reference are better-auth's, linked per row.
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | `captcha`        | Gate sensitive auth endpoints with Turnstile, reCAPTCHA, hCaptcha, or captchafox. See [CAPTCHA / Turnstile](#captcha--turnstile). | [better-auth: captcha](https://www.better-auth.com/docs/plugins/captcha)        |
 | `haveIBeenPwned` | Reject passwords found in the Have I Been Pwned breach corpus (k-anonymity check).                                                | [better-auth: HIBP](https://www.better-auth.com/docs/plugins/have-i-been-pwned) |
+| `inviteOnly`     | Create an account only for an address an administrator invited. Lunora's own. See [Invite-only sign-up](#invite-only-sign-up).    | —                                                                               |
 
 <Callout type="warn">
     **Passwordless recovery changed in better-auth 1.7.** Once a magic link or an email OTP proves the user controls the mailbox, better-auth can delete
@@ -147,6 +149,191 @@ use `createAccessControl` (re-exported from `@lunora/auth/plugins`) and pass the
 resulting roles into `admin({ ac, roles })` / `organization({ ac, roles })`.
 It's better-auth's standard access-control builder, unchanged.
 
+## Invite-only sign-up
+
+`inviteOnly()` closes self-serve registration: an account is created only for an
+email address an administrator has invited. It gates **every** path that mints a
+user — `/sign-up/email`, an OAuth callback creating a new account, magic link,
+`admin.createUser`, and Lunora's own `AuthAdmin.createUser` — because it hooks
+`user.create.before` rather than one route.
+
+```ts
+import { createAuth, createSignUpInvitation } from "@lunora/auth";
+import { inviteOnly } from "@lunora/auth/plugins";
+
+export const auth = createAuth({
+    database: env.DB,
+    emailAndPassword: { enabled: true, requireEmailVerification: true },
+    plugins: [inviteOnly()],
+    secret: env.AUTH_SECRET,
+});
+```
+
+Nobody signs up before the first invitation exists, including you — seed it with
+`createSignUpInvitation` from a one-off call at worker init or an internal
+mutation you run once. `inviteOnly({ allowFirstUser: true })` instead admits the
+first account uninvited, at the cost described under
+[bootstrapping](#bootstrapping) below.
+
+Leave `emailAndPassword.disableSignUp` **off**. The invitee still uses the
+ordinary sign-up form; closing it would leave them nothing to submit. The sign-up
+cards in [`@lunora/auth-ui`](/docs/packages/auth-ui) prefill the address from
+`?email=`, so an invitation link can be
+`https://app.example/sign-up?email=ada%40example.com`.
+
+An uninvited attempt is refused with `SIGN_UP_INVITE_REQUIRED` and HTTP **400**.
+That status is deliberate and not a typo: better-auth's sign-up route treats a
+`403` from a create hook as a duplicate-account signal and answers it with a
+fabricated success — a user object it never persisted — whenever
+`requireEmailVerification` or `autoSignIn: false` is set.
+
+### Issuing invitations
+
+Three server-side helpers, exported from `@lunora/auth`:
+
+| Function                                        | What it does                                                                                  |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `createSignUpInvitation(auth, { email, … })`    | Invite an address, or refresh an existing invitation for it. Returns the stored row.          |
+| `listSignUpInvitations(auth, { pendingOnly? })` | The 500 most recent invitations, newest first; `pendingOnly` drops the spent and the expired. |
+| `revokeSignUpInvitation(auth, { email })`       | Withdraw it.                                                                                  |
+| `pruneSignUpInvitations(auth)`                  | Delete invitations that expired unused, and report how many. Nothing calls it for you.        |
+
+```ts
+const invite = await createSignUpInvitation(auth, {
+    email: "ada@example.com",
+    expiresInSeconds: 3 * 24 * 60 * 60, // default 7 days, maximum 1 year
+    invitedBy: ctx.auth.userId,
+});
+
+const link = `https://app.example/sign-up?email=${encodeURIComponent(invite.email)}&invite=${invite.token}`;
+
+await sendInviteEmail(invite.email, link);
+```
+
+`invite.token` is the **only** time that value exists in the clear — the database
+keeps a SHA-256 of it. A link that was never delivered is reissued (call
+`createSignUpInvitation` again), not looked up, and reissuing invalidates the
+previous one. `@lunora/auth-ui` reads both parameters off the URL and submits the
+token with the form, so an invitee just follows the link.
+
+These are trusted server-side calls with **no authorization of their own** — the
+same trust model as [`createAuthAdmin`](#studio-user-dashboard).
+Who counts as an administrator is your application's question, so call them from
+a mutation you already gate. Delivering the invitation is yours too: nothing here
+sends mail, so the returned row is the whole handoff.
+
+The invitations live in a `signUpInvitation` table the plugin declares, so
+`authTables()`, `compileMigrationsSql`, and the Durable-Object DDL all pick it up
+with nothing further to write. Nothing prunes it either — a spent or expired row
+stays until you revoke it, which is also what keeps it a record of who was let in.
+`listSignUpInvitations` is capped rather than paged; past 500 rows, query the
+table directly.
+
+### From the studio
+
+With the plugin installed, the studio's **Users** page grows a **Sign-up
+invitations** section: invite an address, see who is pending / accepted /
+expired and who invited them, and revoke. It is gated on the same
+`capabilities.inviteOnly` flag the rest of the auth panels use, so a deployment
+without the plugin never shows it.
+
+The same three operations sit on the trusted admin plane
+(`AuthAdmin.createSignUpInvitation` / `listSignUpInvitations` /
+`revokeSignUpInvitation`) behind the worker's admin-token gate, and on the client
+as `listAuthSignUpInvitations` / `createAuthSignUpInvitation` /
+`revokeAuthSignUpInvitation`. `@lunora/react` exposes `useSignUpInvitations()`
+for the read. Those hand back timestamps as epoch-ms, like every other admin row;
+the module-level helpers above hand back `Date`s.
+
+Inviting from the studio still sends nothing — delivery is the app's, wherever
+the invitation is issued from.
+
+### Housekeeping
+
+Nothing prunes the table on its own. `pruneSignUpInvitations(auth)` deletes the
+invitations that expired without being used and returns the count. Spent ones
+stay, since they are the record of who was let in, and live ones obviously stay.
+It is bounded per call, so a large backlog takes several passes — put it on a
+cron if you invite at any volume.
+
+### Two checks, because the paths differ
+
+<Callout type="info">
+    An invitation carries a **secret token** — 256 CSPRNG bits, stored only as a SHA-256 — and the sign-up link carries it back as `?invite=`.
+
+    The token is checked on `/sign-up/email` and nowhere else, which is the design rather than an oversight. Every other path that mints an account has already
+    proved the person controls the address before the row is written: an OAuth callback carries a provider-verified email, and magic-link and email-OTP only
+    fire for whoever is holding the mailbox. Password sign-up is the one place where anyone may claim any address.
+
+    So there are two layers. `databaseHooks.user.create.before` is the universal backstop — an unspent, unexpired invitation must exist for the address,
+    whatever created the row. The route hook on `/sign-up/email` additionally requires the token.
+
+</Callout>
+
+Without the token this would be guessable in bulk, and that is not theoretical:
+the common case is inviting a team, where addresses are `first.last@company`. The
+rejection is deliberately uniform for the same reason — a missing token, a wrong
+token, an expired invitation and a never-invited address all answer
+`SIGN_UP_INVITE_INVALID` with one message, so the form cannot be used to sift a
+directory for who is on the list.
+
+What the token does **not** do is make an invitation single-use against a
+simultaneous request, or survive being forwarded. Whoever holds the link can spend
+the seat, so treat it as a bearer credential: send it to the invitee, not to a
+shared inbox. Keep `requireEmailVerification` on — better-auth writes the user row
+before it mails the verification token, so verification is what stops a spent
+invitation from becoming a usable session.
+
+A row with no `tokenHash` — one an OAuth-only deployment never needed, or a
+leftover from before tokens — cannot satisfy password sign-up at all. There is
+nothing to present that matches; re-invite to mint one.
+
+### What an invitation is, and what it is not
+
+<Callout type="warn">
+    **The invitation link is a bearer credential.** Anyone holding it can take that seat, so deliver it to the invitee rather than to a shared or forwarded
+    inbox, and reissue rather than resend if you are unsure where a link went.
+
+    `requireEmailVerification` still matters. better-auth writes the user row before it mails the verification token, so whoever spends an invitation creates a
+    real account immediately; verification is what stops that account from holding a session until someone clicks a link delivered to the address itself.
+    Recovery from a mis-sent link is `AuthAdmin.removeUser` plus a fresh invitation.
+
+</Callout>
+
+The plugin warns on startup when password sign-up runs without
+`requireEmailVerification`, because that is the difference between an attacker
+who guesses an address holding a session immediately and holding none.
+
+### What it refuses that you may not expect
+
+Plugins that mint an account from something other than a real mailbox still
+synthesize an address — `anonymous` writes `temp-<id>@<domain>`, `siwe` writes
+`<wallet>@<domain>`, and `phoneNumber`'s sign-up-on-verification writes a temp
+address of its own. None of them can match an invitation, so the gate **rejects**
+those flows — but only once a user exists. Under `allowFirstUser: true` the
+bootstrap runs before the address is ever compared, so the first anonymous session
+or wallet sign-in is what claims it. Do not combine those plugins with this one.
+
+Lunora's `AuthAdmin.createUser` — the studio's create-user action — mints through
+the same internal adapter, so it is gated too. Issue an invitation first, or call
+`createSignUpInvitation` from the same operator flow.
+
+Revoking is not retroactive, and not atomic against a sign-up already in flight:
+better-auth does not wrap the `before` hook and the user insert in one
+transaction, and the adapter contract offers no conditional consume, so a revoke
+landing between the two lets that one account through. Read
+`revokeSignUpInvitation` as "no further sign-ups", and reach for
+`AuthAdmin.removeUser` to undo one that already happened.
+
+### Bootstrapping
+
+`allowFirstUser` is **off** by default. Turning it on admits the first account
+uninvited so a fresh deployment can be bootstrapped without seeding a row, but
+the check is "the `user` table is empty" — two concurrent sign-ups can both
+observe that, and the window it opens is the gap between deploying and the owner
+signing up. On a deployment whose whole point is that strangers do not get
+accounts, seeding the first invitation is the better trade.
+
 ## CAPTCHA / Turnstile
 
 There are two ways to add a Cloudflare Turnstile (or other CAPTCHA) check, and
@@ -189,32 +376,43 @@ package root:
   (bot / invalid / expired) verdict is **returned**, not thrown; it only throws
   a structural `LunoraError` on transport failure (network error / non-2xx).
 - `verifyTurnstileMiddleware({ secret, token, ... })`: Lunora procedure
-  middleware (`.use()`) that gates any procedure on a Turnstile check. It reads
-  the token from `ctx` via the `token` selector (the token travels in the
-  function `args`, since the procedure context carries no raw `Headers`). Fails
-  **closed** by default; pass `failOpen: true` to admit on a siteverify outage.
+  middleware (`.use()`) that gates any procedure on a Turnstile check. Its
+  `token` selector reads from **`ctx`** — see the caveat below before reaching
+  for it. Fails **closed** by default; pass `failOpen: true` to admit on a
+  siteverify outage.
+
+A Turnstile token arrives in the request body, so it lands in the function
+`args`. Call `verifyTurnstile` directly in the handler, where `args` is in
+scope:
 
 ```ts
 // lunora/contactForm.ts — gate a plain mutation, no auth involved
-import { mutation } from "@/lunora/_generated/server";
-import { verifyTurnstileMiddleware } from "@lunora/auth";
+import { verifyTurnstile } from "@lunora/auth";
+import { LunoraError } from "@lunora/errors";
 
+import { mutation } from "@/lunora/_generated/server";
 import { v } from "lunorash/values";
 
-export const submit = mutation
-    .input({ message: v.string(), turnstileToken: v.string() })
-    // The procedure context carries no raw Headers, so the token rides in args
-    // and the selector reads it back off ctx once it's been surfaced there.
-    .use(
-        verifyTurnstileMiddleware({
-            secret: env.TURNSTILE_SECRET_KEY,
-            token: (ctx) => ctx.turnstileToken,
-        }),
-    )
-    .mutation(async ({ args }) => {
-        /* args.message has passed the Turnstile check */
-    });
+export const submit = mutation.input({ message: v.string(), turnstileToken: v.string() }).mutation(async ({ ctx, args }) => {
+    // `ctx.env` is `Record<string, unknown> | undefined`, so narrow the secret.
+    const secret = String(ctx.env?.TURNSTILE_SECRET_KEY ?? "");
+    // A bot / invalid / expired verdict is RETURNED, not thrown — check it.
+    const verdict = await verifyTurnstile({ secret, token: args.turnstileToken });
+
+    if (!verdict.success) {
+        throw new LunoraError("FORBIDDEN", "turnstile verification failed");
+    }
+
+    /* args.message has passed the Turnstile check */
+});
 ```
+
+<Callout type="warn">
+    **`verifyTurnstileMiddleware`'s `token` selector cannot read the args.** A `.use()` middleware is handed only the context, and the builder never places the
+    parsed `args` onto it — so `token: (ctx) => ctx.turnstileToken` does not type-check, and cast past it reads `undefined` and the middleware throws
+    `FORBIDDEN "turnstile token missing"` on **every** submission. The selector is usable only for a token an earlier `.use()` already put on the context. For a
+    token that arrives in the args, use the in-handler `verifyTurnstile` call above.
+</Callout>
 
 <Callout type="warn">
     **Use the `captcha` plugin for the auth flow.** It hooks better-auth's pipeline and reads the token from the `x-captcha-response` header. The standalone
@@ -284,23 +482,48 @@ only token ever returned is the one from an explicit **Impersonate**.
 `@lunora/auth/middleware` exports a Lunora-style middleware factory that
 surfaces every plugin endpoint on `ctx.authApi`:
 
+It is a **procedure** middleware, so it goes on a `query`/`mutation`/`action`
+builder — `httpAction` is not a builder and has no `.use()`, and its
+`HttpActionCtx` carries no `authApi`:
+
 ```ts
-import { httpAction } from "lunorash/server";
+// lunora/orgs.ts
 import { withAuthPlugins } from "@lunora/auth/middleware";
 
-import { auth } from "./auth.js";
+import { internalAction, v } from "./_generated/server";
+import { auth } from "./auth";
 
 // Compose once with .use(...) and every handler downstream sees authApi.
-export const createOrg = httpAction(async (ctx, request) => {
-    const { name } = await request.json();
+export const createOrg = internalAction
+    .input({ cookie: v.string(), name: v.string() })
+    .use(withAuthPlugins(auth))
+    .action(async ({ ctx, args }) =>
+        ctx.authApi.createOrganization({
+            body: { name: args.name, slug: args.name.toLowerCase().replaceAll(/\s+/gu, "-") },
+            // Rebuilt from the transport — the middleware cannot pre-bind them.
+            headers: new Headers({ cookie: args.cookie }),
+        }),
+    );
+```
 
-    const org = await ctx.authApi.createOrganization({
-        body: { name, slug: name.toLowerCase().replace(/\s+/g, "-") },
-        headers: request.headers,
-    });
+The transport that has the real headers forwards what the endpoint needs:
 
-    return Response.json(org);
-});
+```ts
+// lunora/http.ts
+import { httpAction, httpRouter } from "lunorash/server";
+
+import { internal } from "./_generated/api";
+
+export const app = httpRouter();
+
+app.post(
+    "/orgs",
+    httpAction(async (ctx, request) => {
+        const { name } = (await request.json()) as { name: string };
+
+        return Response.json(await ctx.runAction(internal.orgs.createOrg, { cookie: request.headers.get("cookie") ?? "", name }));
+    }),
+);
 ```
 
 `ctx.authApi` is typed against the plugin set loaded on the auth instance:
@@ -312,30 +535,49 @@ export const createOrg = httpAction(async (ctx, request) => {
 Lunora's procedure context carries the resolved identity (`ctx.auth.userId`,
 `ctx.auth.getIdentity()`) but not the raw inbound `Headers`. Better-auth
 endpoints need the headers to read the caller's session cookie, so the
-middleware does **not** pre-bind them. Pass them through from the transport
-that has them:
+middleware does **not** pre-bind them, and a header-less call is an
+authorization bypass rather than a missing convenience. Route them in from the
+transport that has them:
 
-- **HTTP action**: `request.headers` (as shown above).
-- **WebSocket subscription**: propagated from the upgrade request.
-- **Server-to-server** (cron job, queue consumer): pass `new Headers()` and
-  authenticate via a bearer token or service-key plugin instead.
+- **HTTP action**: `request.headers` — forward what the endpoint needs through
+  the procedure's `args` and rebuild a `Headers` on the far side, as above.
+  A `Headers` object cannot itself cross the RPC boundary.
+- **WebSocket subscription**: propagated from the upgrade request the same way.
+- **Server-to-server** (cron job, queue consumer): there is no caller session,
+  so use the explicit escape hatch — `ctx.authApi.withoutHeaders().<method>(…)`
+  — and authenticate via a bearer token or service-key plugin instead. The
+  runtime guard throws `LunoraAuthHeadersError` on a header-less call otherwise.
 
 ## Migrations
 
-`ensureMigrated(auth)` does a schema diff and applies missing DDL on the
-configured database, which is fine for dev and small deployments:
+`ensureMigrated` does a schema diff and applies missing DDL, which is fine for
+dev and small deployments. It drives better-auth's own migrator, which speaks
+**only** Kysely — so it takes the raw D1 binding as `database` and throws
+(`AUTH_MIGRATOR_UNSUPPORTED`) on `lunoraD1Adapter`. Build a second,
+migration-only instance for it; the adapter stays on the one serving requests:
 
 ```ts
 // src/server/index.ts
-import { ensureMigrated, handleAuthRequest } from "@lunora/auth";
+import { createAuth, ensureMigrated, handleAuthRequest } from "@lunora/auth";
 
 import { buildAuth } from "../../lunora/auth.js";
+
+// Per isolate, not per request: better-auth's migrator emits a bare
+// `CREATE TABLE`, so two concurrent runs against a fresh database leave the
+// loser with `table user already exists`. Holding the PROMISE (not a boolean)
+// is what makes concurrent cold requests share one run; clearing it on failure
+// is what lets a transient error retry.
+let migrated: Promise<void> | null = null;
 
 export default {
     async fetch(request, env, ctx) {
         const auth = buildAuth(env);
 
-        await ensureMigrated(auth); // idempotent, cached per options
+        migrated ??= ensureMigrated(createAuth({ ...authOptions, database: env.DB, secret: env.AUTH_SECRET })).catch((error) => {
+            migrated = null;
+            throw error;
+        });
+        await migrated;
 
         const authResponse = await handleAuthRequest(auth, request);
         if (authResponse) return authResponse;
@@ -347,11 +589,16 @@ export default {
 
 For production, prefer pre-applying the schema at deploy time:
 
+`compileMigrationsSql` still needs a database to diff against — better-auth
+introspects it to decide what is missing. Point it at an empty local SQLite and
+you get the full schema, with no Cloudflare binding involved:
+
 ```bash
 node -e "
-import('@lunora/auth').then(async ({ compileMigrationsSql }) => {
+import('node:sqlite').then(async ({ DatabaseSync }) => {
+    const { compileMigrationsSql } = await import('@lunora/auth');
     const sql = await compileMigrationsSql({
-        database: undefined, // schema-only, no live DB
+        database: new DatabaseSync(':memory:'), // empty ⇒ emits the whole schema
         secret: 'placeholder',
         plugins: [/* same list as runtime */],
     });

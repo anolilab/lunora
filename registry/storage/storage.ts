@@ -9,12 +9,16 @@
  * (i.e. `api.storage.generateUploadUrl` and friends).
  *
  *   - **generateUploadUrl** (action) — mint a short-lived signed `PUT` URL the
- *     browser can upload directly to (R2 never proxies bytes through the Worker).
+ *     browser uploads to. It points at YOUR Worker, not at R2: the `/storage/*`
+ *     route (see the README) verifies the signature and writes the body to R2.
  *   - **getDownloadUrl** (action) — mint a short-lived signed `GET` URL for a
- *     stored object. Gate the matching `GET /storage/:key` route in your Worker
- *     with {@link verifySignedUrl} before streaming the R2 body.
+ *     stored object. The same `/storage/*` route verifies it with
+ *     {@link verifySignedUrl} before streaming the R2 body.
  *   - **deleteObject** (mutation) — delete a stored object by key.
- *   - **listObjects** (query) — list stored objects under an optional prefix.
+ *   - **listObjects** (action) — list stored objects under an optional prefix.
+ *     An action, not a query: R2 is not a reactive source, so a query would never
+ *     update on upload yet would re-issue a billable LIST on every unrelated
+ *     mutation.
  *
  * Every key is scoped per-tenant with {@link scopeKey} so a client-supplied key
  * can't address another user's data (IDOR). Edit the scope to match your tenancy
@@ -31,14 +35,17 @@
  * wrangler.jsonc / .dev.vars on add):
  *   - `env.UPLOADS`                 — the R2 bucket binding.
  *   - `env.STORAGE_SIGNING_SECRET`  — HMAC secret for signed URLs (secret).
- *   - `env.STORAGE_PUBLIC_BASE_URL` — public base URL fronting the bucket.
+ *   - `env.STORAGE_PUBLIC_BASE_URL` — bare origin serving the `/storage/*` route
+ *                                     (no path: the key is verified from the
+ *                                     whole URL pathname).
  */
 import { env } from "cloudflare:workers";
 
+import { LunoraError } from "@lunora/errors";
 import { RateLimiter, rateLimit, createMemoryStore } from "@lunora/ratelimit";
 import { createStorage, scopeKey } from "@lunora/storage";
 import type { Storage } from "@lunora/storage";
-import { action, mutation, query, v } from "#lunora/_generated/server.js";
+import { action, mutation, v } from "#lunora/_generated/server.js";
 
 /** The R2 bucket binding type `createStorage` expects. */
 type StorageBucket = Parameters<typeof createStorage>[0]["bucket"];
@@ -48,6 +55,15 @@ type StorageBucket = Parameters<typeof createStorage>[0]["bucket"];
  * open flood targets. The default store is in-memory (per-isolate, resets on
  * eviction) — run `lunora add ratelimit` for the durable, `ctx.db`-backed store
  * in production, and tune the rate to your upload/download volume.
+ *
+ * The key at every `.use(...)` site below is the authenticated owner, falling
+ * back to the server-trusted `ctx.ip` (Cloudflare's `CF-Connecting-IP`,
+ * forwarded server-side, never read from a client header). The `ctx.ip` hop
+ * matters even though every endpoint requires an owner: middleware runs BEFORE
+ * the handler, so an unauthenticated caller consumes a token *before*
+ * {@link requireOwner} rejects them. Keyed `"anon"` alone, every anonymous
+ * client shares one bucket and a single one exhausts it for all of them — see
+ * the `ratelimit_key_spoofable_or_global` advisor lint.
  */
 const limiter = new RateLimiter({
     config: {
@@ -56,24 +72,46 @@ const limiter = new RateLimiter({
     store: createMemoryStore(),
 });
 
-/** Rate-limit key: the authenticated owner (every endpoint here requires one via {@link requireOwner}). */
-const rateLimitByOwner = rateLimit(limiter, "storage", { key: (ctx) => ctx.auth.userId ?? "anon" });
-
 /**
  * Read a required string env var/secret or throw a clear, actionable error.
  * (`cloudflare:workers`' `env` values are typed `unknown`, so we narrow here —
  * a missing `STORAGE_SIGNING_SECRET` fails loudly instead of producing an opaque
  * HMAC error deep in `@lunora/storage`.)
+ *
+ * `minLength` is the signing secret's floor. HMAC accepts a key of any length,
+ * so a one-character secret signs perfectly well and every URL it mints is
+ * brute-forceable — the documented "min 32 chars" has to be enforced here or it
+ * is only advice.
  */
-const requireEnv = (name: string): string => {
+const requireEnv = (name: string, minLength = 0): string => {
     const value = env[name];
 
     if (typeof value !== "string" || value === "") {
         throw new Error(`@lunora/storage registry item: missing env var \`${name}\` — set it in .dev.vars (and \`wrangler secret put ${name}\` for secrets).`);
     }
 
+    if (value.length < minLength) {
+        throw new Error(
+            `@lunora/storage registry item: \`${name}\` is only ${String(value.length)} characters — use at least ${String(minLength)} so signed URLs are not brute-forceable (generate one with \`openssl rand -base64 32\`).`,
+        );
+    }
+
     return value;
 };
+
+/** Minimum length of the HMAC signing secret. */
+const MIN_SIGNING_SECRET_LENGTH = 32;
+
+/**
+ * Key prefix every object this item stores lives under.
+ *
+ * A worker-signed URL is `${STORAGE_PUBLIC_BASE_URL}/<key>?…` and
+ * `verifySignedUrl` reconstructs the key from the WHOLE pathname — so the base
+ * must be a bare origin and the route that serves the bytes has to match on the
+ * key's own first segment. Prefixing every key with `storage/` is what makes the
+ * documented `/storage/*` route match without a base-path the signer rejects.
+ */
+const KEY_PREFIX = "storage";
 
 /**
  * Build a {@link Storage} bound to the R2 bucket + signing config from the
@@ -90,14 +128,20 @@ const makeStorage = (): Storage => {
 
     return createStorage({
         bucket,
+        // Bound into every signed URL's HMAC, so a URL minted here cannot be
+        // replayed against another bucket sharing the signing secret. Matches the
+        // tag a single-bucket app's bare `ctx.storage` carries.
+        bucketName: "default",
         publicBaseUrl: requireEnv("STORAGE_PUBLIC_BASE_URL"),
-        signingSecret: requireEnv("STORAGE_SIGNING_SECRET"),
+        signingSecret: requireEnv("STORAGE_SIGNING_SECRET", MIN_SIGNING_SECRET_LENGTH),
     });
 };
 
 /**
- * Per-tenant key prefix: one folder per authenticated user, so a client-supplied
- * `key` is always namespaced under the caller (no cross-user IDOR).
+ * Per-tenant key prefix: `storage/<userId>`, one folder per authenticated user,
+ * so a client-supplied `key` is always namespaced under the caller (no
+ * cross-user IDOR) and the minted URL's pathname starts `/storage/` — which is
+ * what the Worker route in the README matches on (see {@link KEY_PREFIX}).
  *
  * Fails closed for unauthenticated callers instead of bucketing them into a
  * shared `public/` namespace. A shared anonymous prefix would let any anonymous
@@ -108,19 +152,22 @@ const makeStorage = (): Storage => {
  */
 const requireOwner = (userId: string | null): string => {
     if (userId === null || userId === undefined) {
-        throw new Error(
+        // Coded, not a bare `Error`: an uncoded throw is redacted to a generic
+        // 500, so the caller sees a server fault instead of "sign in first".
+        throw new LunoraError(
+            "UNAUTHORIZED",
             "@lunora/storage registry item: this endpoint requires an authenticated user. Pass `resolveIdentity` to `createWorker` (see the auth registry item), or add a deliberate public path.",
         );
     }
 
-    return userId;
+    return `${KEY_PREFIX}/${userId}`;
 };
 
 /**
- * Content-Types a client may request for a direct upload. The browser PUTs
- * straight to R2 with the `Content-Type` pinned into the signed URL, so this
- * allowlist is the only place to reject it — `@lunora/storage`'s server-side
- * `upload()` allowlist is never in the path for direct uploads. Deliberately
+ * Content-Types a client may request for an upload. The browser PUTs with the
+ * `Content-Type` pinned into the signed URL and the route stores exactly that
+ * pinned value, so this allowlist is the only place to reject it —
+ * `@lunora/storage`'s server-side `upload()` allowlist is never in the path. Deliberately
  * excludes types a browser may render inline (`text/html`, `image/svg+xml`, …)
  * to avoid stored-XSS if you ever serve these objects same-origin. Edit to taste,
  * and when serving objects set `X-Content-Type-Options: nosniff` +
@@ -129,22 +176,26 @@ const requireOwner = (userId: string | null): string => {
 const ALLOWED_UPLOAD_CONTENT_TYPES: ReadonlySet<string> = new Set(["application/pdf", "image/gif", "image/jpeg", "image/png", "image/webp", "text/plain"]);
 
 /**
- * Mint a short-lived signed `PUT` URL the client uploads directly to. The key is
- * scoped to the caller, so two users uploading `"avatar.png"` never collide.
+ * Mint a short-lived signed `PUT` URL the client uploads to (your `/storage/*`
+ * route, which verifies it and writes to R2). The key is scoped to the caller,
+ * so two users uploading `"avatar.png"` never collide.
  * `contentType` is required and must be in {@link ALLOWED_UPLOAD_CONTENT_TYPES}
  * — it's pinned into the signature, so an unconstrained value would let a caller
  * store renderable HTML/SVG (stored-XSS risk when served same-origin).
  */
 export const generateUploadUrl = action
     .input({
-        contentType: v.string().meta({ schema: { maxLength: 256 } }),
+        contentType: v.string().max(256),
         expiresInSeconds: v.optional(v.number()),
-        key: v.string().meta({ schema: { maxLength: 1024 } }),
+        key: v.string().max(1024),
     })
-    .use(rateLimitByOwner)
+    .use(rateLimit(limiter, "storage", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .action(async ({ args: { contentType, expiresInSeconds, key }, ctx }): Promise<{ key: string; url: string }> => {
         if (!ALLOWED_UPLOAD_CONTENT_TYPES.has(contentType)) {
-            throw new Error(
+            // The value is caller-supplied, so this is a 400 the client can act
+            // on — an uncoded throw would redact it to a generic 500.
+            throw new LunoraError(
+                "BAD_REQUEST",
                 `@lunora/storage registry item: content type \`${contentType}\` is not allowed — permitted: ${[...ALLOWED_UPLOAD_CONTENT_TYPES].join(", ")}. Edit ALLOWED_UPLOAD_CONTENT_TYPES to widen.`,
             );
         }
@@ -156,16 +207,16 @@ export const generateUploadUrl = action
     });
 
 /**
- * Mint a short-lived signed `GET` URL for a stored object. Verify it in your
- * Worker's `GET /storage/:key` route with {@link verifySignedUrl} before
- * streaming the R2 body.
+ * Mint a short-lived signed `GET` URL for a stored object. Your Worker's
+ * `/storage/*` route verifies it with {@link verifySignedUrl} before streaming
+ * the R2 body — without that route the URL 404s on the Lunora catch-all.
  */
 export const getDownloadUrl = action
     .input({
         expiresInSeconds: v.optional(v.number()),
-        key: v.string().meta({ schema: { maxLength: 1024 } }),
+        key: v.string().max(1024),
     })
-    .use(rateLimitByOwner)
+    .use(rateLimit(limiter, "storage", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .action(async ({ args: { expiresInSeconds, key }, ctx }): Promise<{ key: string; url: string }> => {
         const scoped = scopeKey(requireOwner(ctx.auth.userId), key);
         const url = await makeStorage().getSignedUrl(scoped, { expiresInSeconds, method: "GET" });
@@ -175,8 +226,8 @@ export const getDownloadUrl = action
 
 /** Delete a stored object owned by the caller. */
 export const deleteObject = mutation
-    .input({ key: v.string().meta({ schema: { maxLength: 1024 } }) })
-    .use(rateLimitByOwner)
+    .input({ key: v.string().max(1024) })
+    .use(rateLimit(limiter, "storage", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .mutation(async ({ args: { key }, ctx }): Promise<{ ok: true }> => {
         const scoped = scopeKey(requireOwner(ctx.auth.userId), key);
         await makeStorage().delete(scoped);
@@ -195,17 +246,25 @@ interface StorageObject {
 }
 
 /**
- * List the caller's stored objects under an optional sub-prefix. Read-only, so
- * it's a query. Returns the R2 page cursor + `truncated` flag for pagination;
- * keys are returned relative to the caller's tenant prefix.
+ * List the caller's stored objects under an optional sub-prefix. Returns the R2
+ * page cursor + `truncated` flag for pagination; keys are returned relative to
+ * the caller's tenant prefix.
+ *
+ * **An action, not a query** — like {@link generateUploadUrl} and
+ * {@link getDownloadUrl}, and for the same reason. R2 is not a reactive source:
+ * a query here would never re-run when a file is uploaded (so the list would go
+ * stale silently), while Lunora *would* re-evaluate it on every unrelated
+ * mutation to the shard — issuing a billable R2 LIST each time. Refetch it after
+ * an upload/delete instead of subscribing to it.
  */
-export const listObjects = query
+export const listObjects = action
     .input({
-        cursor: v.optional(v.string().meta({ schema: { maxLength: 2048 } })),
+        cursor: v.optional(v.string().max(2048)),
         limit: v.optional(v.number()),
-        prefix: v.optional(v.string().meta({ schema: { maxLength: 1024 } })),
+        prefix: v.optional(v.string().max(1024)),
     })
-    .query(async ({ args: { cursor, limit, prefix }, ctx }): Promise<{ cursor?: string; objects: StorageObject[]; truncated?: boolean }> => {
+    .use(rateLimit(limiter, "storage", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
+    .action(async ({ args: { cursor, limit, prefix }, ctx }): Promise<{ cursor?: string; objects: StorageObject[]; truncated?: boolean }> => {
         const base = requireOwner(ctx.auth.userId);
         const scopedPrefix = prefix === undefined ? `${base}/` : `${scopeKey(base, prefix)}`;
         const stripLength = `${base}/`.length;

@@ -18,8 +18,9 @@ interface Env {
 /**
  * Adapts the real `DurableObjectState` to the `SchedulerDOState` shape the
  * production class is authored against. The Workers runtime's
- * `state.storage.list({ end })` parameter is the inclusive upper bound; the
- * mock honours `key < end` which is the same semantics. Other methods map 1:1.
+ * `state.storage.list({ end })` parameter is the EXCLUSIVE upper bound, which is
+ * what the unit-suite fake (`../fake-state`) now models as `key < end`. Other
+ * methods map 1:1.
  */
 const toSchedulerState = (context: DurableObjectState): SchedulerDOState => {
     return {
@@ -34,7 +35,7 @@ const toSchedulerState = (context: DurableObjectState): SchedulerDOState => {
             deleteAlarm: () => context.storage.deleteAlarm(),
             get: <T = unknown>(key: string) => context.storage.get<T>(key),
             getAlarm: () => context.storage.getAlarm(),
-            list: <T = unknown>(options: { end?: string; limit?: number; prefix?: string } = {}) => context.storage.list<T>(options),
+            list: <T = unknown>(options: { end?: string; limit?: number; prefix?: string; startAfter?: string } = {}) => context.storage.list<T>(options),
             put: <T = unknown>(entries: Record<string, T> | string, value?: T) => {
                 if (typeof entries === "string") {
                     return context.storage.put(entries, value);

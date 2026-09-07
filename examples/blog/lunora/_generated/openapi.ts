@@ -65,62 +65,6 @@ export const openApiSpec: Record<string, unknown> = {
     },
     "openapi": "3.1.0",
     "paths": {
-        "/_lunora/rpc#cleanup:purgeStaleDrafts": {
-            "post": {
-                "description": "Invoke the `mutation` `cleanup:purgeStaleDrafts` over the Lunora RPC envelope (POST /_lunora/rpc).",
-                "operationId": "cleanup:purgeStaleDrafts",
-                "requestBody": {
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "additionalProperties": false,
-                                "properties": {
-                                    "args": {
-                                        "additionalProperties": false,
-                                        "properties": {},
-                                        "required": [],
-                                        "type": "object"
-                                    },
-                                    "functionPath": {
-                                        "const": "cleanup:purgeStaleDrafts",
-                                        "type": "string"
-                                    },
-                                    "shardKey": {
-                                        "description": "Optional shard key; omitted routes to the default shard.",
-                                        "type": "string"
-                                    }
-                                },
-                                "required": [
-                                    "functionPath"
-                                ],
-                                "type": "object"
-                            }
-                        }
-                    },
-                    "required": true
-                },
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
-                                }
-                            }
-                        },
-                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
-                    },
-                    "default": {
-                        "$ref": "#/components/responses/LunoraError"
-                    }
-                },
-                "summary": "mutation: cleanup:purgeStaleDrafts",
-                "tags": [
-                    "cleanup"
-                ],
-                "x-lunora-function-kind": "mutation"
-            }
-        },
         "/_lunora/rpc#drafts:listMine": {
             "post": {
                 "description": "Invoke the `query` `drafts:listMine` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -132,7 +76,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {},
                                         "required": [],
                                         "type": "object"
@@ -188,7 +131,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "id": {
                                                 "description": "Id<\"drafts\">",
@@ -259,7 +201,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "id": {
                                                 "description": "Id<\"posts\">",
@@ -323,7 +264,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {},
                                         "required": [],
                                         "type": "object"
@@ -379,7 +319,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "title": {
                                                 "type": "string"
@@ -448,7 +387,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "contentType": {
                                                 "type": "string"
@@ -510,7 +448,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "text": {
                                                 "type": "string"
@@ -566,10 +503,6 @@ export const openApiSpec: Record<string, unknown> = {
         }
     },
     "tags": [
-        {
-            "description": "Operations declared in `lunora/cleanup`.",
-            "name": "cleanup"
-        },
         {
             "description": "Operations declared in `lunora/drafts`.",
             "name": "drafts"

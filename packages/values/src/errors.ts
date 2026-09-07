@@ -19,7 +19,12 @@ const describeObject = (value: object): string => {
         const constructorName = constructor?.name;
 
         if (constructorName !== undefined && constructorName !== "Object") {
-            return `object ${constructorName}`;
+            // Truncated like every other branch of `describeValue`, and this one
+            // is client-sized: a JSON body carrying its own `constructor`
+            // property (`{"constructor":{"name":"<1MB>"}}`) is a plain object
+            // whose OWN `constructor.name` is whatever was sent, and `received`
+            // goes back on the wire and into logs.
+            return truncate(`object ${constructorName}`);
         }
     } catch {
         return "object";

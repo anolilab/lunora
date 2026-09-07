@@ -4,6 +4,8 @@
  * stub (see `vitest.config.ts`), and the Durable Object context is faked with
  * the surface the upstream `Container` constructor actually touches.
  */
+import { Container } from "@cloudflare/containers";
+import { LunoraError } from "@lunora/errors";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LunoraContainer } from "../src/do/index";
@@ -249,6 +251,56 @@ describe("lunoraContainer lifecycle logging", () => {
         return new LunoraContainer(fakeDurableObjectContext() as never, {}, definition, "transcoder");
     };
 
+    /**
+     * Stub the base's `startAndWaitForPorts` down to the one part that matters
+     * here: `@cloudflare/containers` ends it (and `start()`) with
+     * `blockConcurrencyWhile(async () => { … await this.onStart(); })`
+     * (from both `start()` and `startAndWaitForPorts()`), and workerd treats a *rejecting*
+     * closure there as unrecoverable — it aborts the Durable Object and flattens
+     * the error to a plain `Error`. Pulling the image and waiting for ports is
+     * stubbed; the gate is reproduced, and the double records the abort so a
+     * regression is visible rather than merely differently-worded.
+     * @returns A record whose `aborted` flag flips if the gate saw a rejection.
+     */
+    const baseStartGate = (onContainerStarted?: () => void, syncPendingStoppedEvents?: (self: LunoraContainer) => Promise<void>): { aborted: boolean } => {
+        const record = { aborted: false };
+
+        const gate = async function runGate(this: { onStart: () => Promise<void> }): Promise<void> {
+            // `doStartContainer` ends with `state.setRunning()`, so a start that
+            // reaches the gate has already flipped the container to running. A
+            // double that left the flag alone made every start look like a first
+            // start, which is exactly the case the run-identity logic must tell
+            // apart from a no-op start on a live container.
+            onContainerStarted?.();
+
+            try {
+                await this.onStart();
+            } catch (error) {
+                record.aborted = true;
+
+                // workerd flattens the closure's error to a plain `Error` whose
+                // message is the original's `name: message` and which carries none
+                // of its own properties.
+                throw new Error(String(error), { cause: error });
+            }
+        };
+
+        // The base ends BOTH start entry points this way, and only
+        // `startAndWaitForPorts` syncs the pending `onStop` first — so a test that
+        // stubs only one of them cannot see the difference between the two paths.
+        // That sync is where a previous run's `onStop` is finally delivered, and it
+        // runs INSIDE this call, which is what `syncPendingStoppedEvents` models.
+        vi.spyOn(Container.prototype, "startAndWaitForPorts").mockImplementation(async function runWaitGate(
+            this: LunoraContainer & { onStart: () => Promise<void> },
+        ): Promise<void> {
+            await syncPendingStoppedEvents?.(this);
+            await gate.call(this);
+        });
+        vi.spyOn(Container.prototype, "start").mockImplementation(gate);
+
+        return record;
+    };
+
     it("emits a lunora container event on start", async () => {
         expect.assertions(1);
 
@@ -301,7 +353,7 @@ describe("lunoraContainer lifecycle logging", () => {
         expect(JSON.parse((spy.mock.calls[0]![0] as string) ?? "{}")).toMatchObject({ event: "error", level: "error", message: "crashed" });
     });
 
-    it("gates onStart on readyOn probes until each returns its expected status", async () => {
+    it("gates the start on readyOn probes until each returns its expected status", async () => {
         expect.assertions(3);
 
         vi.spyOn(console, "log").mockImplementation(() => {});
@@ -331,15 +383,17 @@ describe("lunoraContainer lifecycle logging", () => {
         });
         const instance = new LunoraContainer(context as never, {}, definition, "transcoder");
 
-        await expect(instance.onStart()).resolves.toBeUndefined();
+        baseStartGate();
+
+        await expect(instance.startAndWaitForPorts()).resolves.toBeUndefined();
         // `/ready` resolves on the default port; `live` (no leading slash) is
         // normalized and probed on its own port against status 204.
         expect(fetched).toContain("8080:http://container/ready");
         expect(fetched).toContain("9090:http://container/live");
     });
 
-    it("fails onStart when a readyOn check has no port and no defaultPort", async () => {
-        expect.assertions(1);
+    it("fails the start when a readyOn check has no port and no defaultPort", async () => {
+        expect.assertions(2);
 
         vi.spyOn(console, "log").mockImplementation(() => {});
 
@@ -353,12 +407,16 @@ describe("lunoraContainer lifecycle logging", () => {
         });
         const definition = defineContainer({ image: "./app", readyOn: [{ path: "/ready" }] });
         const instance = new LunoraContainer(context as never, {}, definition, "transcoder");
+        const state = baseStartGate();
 
-        await expect(instance.onStart()).rejects.toThrow("has no port");
+        await expect(instance.startAndWaitForPorts()).rejects.toThrow("has no port");
+        // A misconfigured probe is a config error, not grounds for tearing the
+        // object down — it must surface from outside the start gate.
+        expect(state.aborted).toBe(false);
     });
 
     it("aborts a readiness probe that never responds instead of hanging forever, and rejects at the deadline", async () => {
-        expect.assertions(1);
+        expect.assertions(3);
 
         vi.spyOn(console, "log").mockImplementation(() => {});
         // The per-attempt deadline is a JS-land `setTimeout`
@@ -394,16 +452,265 @@ describe("lunoraContainer lifecycle logging", () => {
 
         const definition = defineContainer({ defaultPort: 8080, image: "./app", readyOn: [{ path: "/ready" }] });
         const instance = new LunoraContainer(context as never, {}, definition, "transcoder");
+        const state = baseStartGate();
+
+        let thrown: unknown;
 
         try {
-            // eslint-disable-next-line vitest/valid-expect -- deliberately deferred: `onStart()` only settles once the fake timers below advance, so awaiting the assertion here would deadlock. It IS awaited, three lines down.
-            const assertion = expect(instance.onStart()).rejects.toThrow("did not return 200 within");
+            // The start only settles once the fake timers below advance, so it is
+            // kicked off here and awaited after they do.
+            const pending = instance.startAndWaitForPorts().catch((error: unknown) => {
+                thrown = error;
+            });
 
             await vi.advanceTimersByTimeAsync(30_000);
-            await assertion;
+            await pending;
         } finally {
             vi.useRealTimers();
         }
+
+        // A wedged app is an ordinary, diagnosable failure. Waiting for it inside
+        // the base's `blockConcurrencyWhile` would make workerd abort the Durable
+        // Object and flatten the error to a plain `Error`, so the caller would get
+        // an opaque message instead of the check, the port and the budget — and
+        // the object would lose its in-memory state and its hibernating sockets on
+        // every start attempt. The wait therefore runs outside the gate.
+        expect(state.aborted).toBe(false);
+        expect(thrown).toBeInstanceOf(LunoraError);
+        expect((thrown as Error).message).toContain('readiness check "/ready" (port 8080) did not return 200 within 30000ms');
+    });
+
+    it("does not proxy a request while the readiness probes are still pending", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        // The base commits the healthy state INSIDE its start gate, before our
+        // probes run — so `super.containerFetch` skips the start path entirely and
+        // would proxy to an app that never reported ready. Reproduce exactly that:
+        // healthy, with a probe that never succeeds.
+        const proxied = vi.spyOn(Container.prototype, "containerFetch").mockResolvedValue(new Response("from the app"));
+
+        vi.spyOn(Container.prototype, "getState").mockResolvedValue({ status: "healthy" } as never);
+
+        vi.useFakeTimers();
+
+        // A container that accepts the connection and never answers — the probe
+        // settles only via its abort signal, as with a real wedged app.
+        const context = fakeDurableObjectContext({
+            container: {
+                getTcpPort: () => {
+                    return {
+                        fetch: (_url: string, init?: { signal?: AbortSignal }) =>
+                            new Promise((_resolve, reject) => {
+                                if (init?.signal?.aborted) {
+                                    reject(new Error("aborted"));
+
+                                    return;
+                                }
+
+                                init?.signal?.addEventListener("abort", () => {
+                                    reject(new Error("aborted"));
+                                });
+                            }),
+                    };
+                },
+                running: false,
+            },
+        });
+
+        const definition = defineContainer({ defaultPort: 8080, image: "./app", readyOn: [{ path: "/ready" }] });
+        const instance = new LunoraContainer(context as never, {}, definition, "transcoder");
+
+        let thrown: unknown;
+
+        try {
+            const pending = instance.containerFetch("https://container/").catch((error: unknown) => {
+                thrown = error;
+            });
+
+            await vi.advanceTimersByTimeAsync(30_000);
+            await pending;
+        } finally {
+            vi.useRealTimers();
+        }
+
+        // The request fails on the readiness budget instead of being handed to an
+        // app that never reported ready.
+        expect(proxied).not.toHaveBeenCalled();
+        expect((thrown as Error).message).toContain('readiness check "/ready"');
+    });
+
+    /** The `ctx.container` surface the readiness/start paths touch, with a mutable `running` flag. */
+    interface RunningFlagContainer {
+        getTcpPort: (port?: number) => { fetch: (url: string, init?: RequestInit) => Promise<Response> };
+        monitor: () => Promise<void>;
+        running: boolean;
+    }
+
+    /** A `ctx.container` stub whose `running` flag is mutable, the way the real one is. */
+    const runningFlagContainer = (running: boolean): RunningFlagContainer => {
+        return {
+            getTcpPort: () => {
+                return { fetch: async () => new Response("ok", { status: 200 }) };
+            },
+            // The base attaches a monitor whenever it finds the container already
+            // running; the real one settles when the container exits.
+            monitor: () => new Promise<void>(() => {}),
+            running,
+        };
+    };
+
+    it("re-arms and re-probes when a start follows a run that exited without an onStop", async () => {
+        expect.assertions(3);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const definition = defineContainer({ defaultPort: 8080, hardTimeout: "30s", image: "./app", readyOn: [{ path: "/ready" }] });
+        const container = runningFlagContainer(false);
+        const instance = new LunoraContainer(fakeDurableObjectContext({ container }) as never, {}, definition, "transcoder");
+        const scheduleSpy = vi.spyOn(instance, "schedule").mockResolvedValue(undefined as never);
+        const probes = vi.spyOn(container, "getTcpPort");
+
+        baseStartGate(() => {
+            container.running = true;
+        });
+
+        await instance.startAndWaitForPorts();
+
+        expect(scheduleSpy).toHaveBeenCalledTimes(1);
+
+        // The run ends — a crash, `sleepAfter`, or the hard timeout's own SIGTERM.
+        // The base's monitor callback records the exit and nothing else: `onStop`
+        // is only reached through `syncPendingStoppedEvents`, which `start()` never
+        // calls and the alarm loop can take up to three minutes to reach. So the
+        // next start MUST NOT be handed the finished run's settled gate — that
+        // skips both the hard-timeout re-arm and the `readyOn` probes.
+        container.running = false;
+
+        await instance.start();
+
+        expect(scheduleSpy).toHaveBeenCalledTimes(2);
+        expect(probes).toHaveBeenCalledTimes(2);
+    });
+
+    it("caps the new run when the container exits while the Secrets Store is being resolved", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        // `resolveSecretsStoreEnv` is a real Secrets Store RPC on its first call,
+        // and the run identity was snapshotted BEFORE it. A container that exits
+        // in that window (a crash, `sleepAfter`, the hard timeout's own SIGTERM)
+        // leaves the snapshot saying "already running" while the base goes on to
+        // start a SECOND run — which is then never armed, and runs uncapped.
+        const definition = defineContainer({
+            defaultPort: 8080,
+            hardTimeout: "30s",
+            image: "./app",
+            readyOn: [{ path: "/ready" }],
+            secretsStore: { STRIPE_KEY: "STRIPE_SECRET" },
+        });
+        const container = runningFlagContainer(true);
+        const get = vi.fn<() => Promise<string>>(async () => {
+            container.running = false;
+
+            return "sk_live_123";
+        });
+        const instance = new LunoraContainer(fakeDurableObjectContext({ container }) as never, { STRIPE_SECRET: { get } }, definition, "transcoder");
+        const scheduleSpy = vi.spyOn(instance, "schedule").mockResolvedValue(undefined as never);
+        const probes = vi.spyOn(container, "getTcpPort");
+
+        baseStartGate(() => {
+            container.running = true;
+        });
+
+        await instance.startAndWaitForPorts();
+
+        expect(scheduleSpy).toHaveBeenCalledTimes(1);
+        expect(probes).toHaveBeenCalledTimes(1);
+    });
+
+    it("caps the new run when the base reports the previous run's stop during its own start", async () => {
+        expect.assertions(1);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        // `startAndWaitForPorts` calls `syncPendingStoppedEvents` before it starts
+        // anything, which is what finally delivers the previous run's `onStop`. It
+        // lands INSIDE the base call, after the snapshot: the exit is reported,
+        // the base starts a fresh run, and the snapshot still says "already
+        // running", so the hard timeout is never armed for it.
+        const definition = defineContainer({ defaultPort: 8080, hardTimeout: "30s", image: "./app" });
+        const container = runningFlagContainer(true);
+        const instance = new LunoraContainer(fakeDurableObjectContext({ container }) as never, {}, definition, "transcoder");
+        const scheduleSpy = vi.spyOn(instance, "schedule").mockResolvedValue(undefined as never);
+
+        baseStartGate(
+            () => {
+                container.running = true;
+            },
+            async (self) => {
+                container.running = false;
+
+                await self.onStop({ exitCode: 0, reason: "exit" });
+            },
+        );
+
+        await instance.startAndWaitForPorts();
+
+        expect(scheduleSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not re-arm the hard timeout when a start finds the container already running", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        // The mirror case: an isolate recycled under a live container has no gate
+        // in memory, but the run's hard-timeout schedule row is durable (SQLite)
+        // and still armed. Re-arming stamps a fresh generation, so the row that
+        // would have killed the run is ignored and a periodic "ensure started"
+        // call pushes the "total lifetime" cap out indefinitely.
+        const definition = defineContainer({ defaultPort: 8080, hardTimeout: "30s", image: "./app", readyOn: [{ path: "/ready" }] });
+        const container = runningFlagContainer(true);
+        const instance = new LunoraContainer(fakeDurableObjectContext({ container }) as never, {}, definition, "transcoder");
+        const scheduleSpy = vi.spyOn(instance, "schedule").mockResolvedValue(undefined as never);
+        const probes = vi.spyOn(container, "getTcpPort");
+
+        baseStartGate(() => {
+            container.running = true;
+        });
+
+        await instance.start();
+
+        expect(scheduleSpy).not.toHaveBeenCalled();
+        // Readiness is still established for this isolate — it has no gate on
+        // record and must not proxy on the base's healthy state alone.
+        expect(probes).toHaveBeenCalledTimes(1);
+    });
+
+    it("resolves the Secrets Store env on the startAndWaitForPorts path", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        // The start path `containerFetch` routes through, and the one an app can
+        // call itself. `doStartContainer` reads `this.envVars`, so skipping
+        // resolution here starts the container without its `secretsStore` values.
+        const get = vi.fn<() => Promise<string>>(async () => "sk_live_123");
+        const definition = defineContainer({ image: "./app", secretsStore: { STRIPE_KEY: "STRIPE_SECRET" } });
+        const container = runningFlagContainer(false);
+        const instance = new LunoraContainer(fakeDurableObjectContext({ container }) as never, { STRIPE_SECRET: { get } }, definition, "transcoder");
+
+        baseStartGate(() => {
+            container.running = true;
+        });
+
+        await instance.startAndWaitForPorts();
+
+        expect(get).toHaveBeenCalledTimes(1);
+        expect((instance as unknown as { envVars: Record<string, string> }).envVars).toStrictEqual({ STRIPE_KEY: "sk_live_123" });
     });
 
     it("arms a hard-timeout schedule on start, stamped with the bumped run generation", async () => {
@@ -415,7 +722,9 @@ describe("lunoraContainer lifecycle logging", () => {
         const instance = new LunoraContainer(fakeDurableObjectContext({ storedGeneration: 4 }) as never, {}, definition, "transcoder");
         const scheduleSpy = vi.spyOn(instance, "schedule").mockResolvedValue(undefined as never);
 
-        await instance.onStart();
+        baseStartGate();
+
+        await instance.startAndWaitForPorts();
 
         expect(scheduleSpy).toHaveBeenCalledTimes(1);
         // 30s → 30 seconds; generation 4 → 5 (bumped so a stale schedule is detectable).

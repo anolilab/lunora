@@ -137,6 +137,10 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Run depth exceeded";
     };
+    readonly RUN_KIND_FORBIDDEN: {
+        readonly status: 500;
+        readonly title: "Function kind may not be composed from a query";
+    };
     readonly TRANSACTION_LIMIT_EXCEEDED: {
         readonly hint: readonly [
             "A single mutation may only read and write a bounded amount before it is stopped.",
@@ -167,6 +171,22 @@ const ERROR_CATALOG: {
     readonly SHARD_UNAVAILABLE: {
         readonly status: 503;
         readonly title: "Shard unavailable";
+    };
+    readonly SHARD_TIMEOUT: {
+        readonly status: 504;
+        readonly title: "Shard timeout";
+    };
+    readonly SHARD_HTTP_ERROR: {
+        readonly status: 502;
+        readonly title: "Shard HTTP error";
+    };
+    readonly SUBSCRIPTION_PERSIST_FAILED: {
+        readonly status: 500;
+        readonly title: "Subscription persist failed";
+    };
+    readonly TOO_MANY_SUBSCRIPTIONS: {
+        readonly status: 429;
+        readonly title: "Too many subscriptions";
     };
     readonly OFFLINE_IDENTITY_CHANGED: {
         readonly status: 409;
@@ -220,6 +240,31 @@ const ERROR_CATALOG: {
         readonly status: 502;
         readonly title: "Cloudflare Workflows REST API error";
     };
+    readonly CONFIG_INVALID: {
+        readonly internal: true;
+        readonly status: 500;
+        readonly title: "Payment configuration invalid";
+    };
+    readonly CURRENCY_MISMATCH: {
+        readonly status: 400;
+        readonly title: "Currency mismatch";
+    };
+    readonly PROVIDER_ERROR: {
+        readonly status: 502;
+        readonly title: "Payment provider error";
+    };
+    readonly WEBHOOK_EVENT_ID_MISSING: {
+        readonly status: 400;
+        readonly title: "Webhook event id missing";
+    };
+    readonly WEBHOOK_SIGNATURE_INVALID: {
+        readonly status: 400;
+        readonly title: "Webhook signature invalid";
+    };
+    readonly WEBHOOK_TIMESTAMP_INVALID: {
+        readonly status: 400;
+        readonly title: "Webhook timestamp outside tolerance";
+    };
     readonly ADMIN_FORBIDDEN: {
         readonly status: 403;
         readonly title: "Admin access forbidden";
@@ -227,6 +272,17 @@ const ERROR_CATALOG: {
     readonly ADMIN_TOKEN_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Admin token not configured";
+    };
+    readonly AUTH_MIGRATOR_UNSUPPORTED: {
+        readonly hint: readonly [
+            "better-auth migrates only through its Kysely adapter, so `ensureMigrated` / `compileMigrationsSql` need the raw D1 binding as `database` — a custom adapter (`lunoraD1Adapter`, `lunoraAuthAdapter`, `lunoraDoAdapter`) cannot be migrated through, and neither can an absent `database`.",
+            "",
+            "Build a SECOND, migration-only instance over the raw binding — `createAuth({ ...options, database: env.DB })` — and hand that one to `ensureMigrated`. Keep the adapter on the instance that serves requests: the adapter exists to dodge a dev-runner hang in `$context`, which the migration instance never resolves.",
+            "",
+            "To compile the SQL off-platform (`compileMigrationsSql`), diff against an empty local database — `new DatabaseSync(':memory:')` from `node:sqlite` — rather than passing no `database` at all."
+        ];
+        readonly status: 500;
+        readonly title: "Auth migrator cannot drive the configured database";
     };
     readonly AUTH_NOT_CONFIGURED: {
         readonly status: 400;
@@ -333,6 +389,15 @@ const ERROR_CATALOG: {
     readonly STORAGE_URL_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Storage signed URL not configured";
+    };
+    readonly RAG_DIMENSION_MISMATCH: {
+        readonly hint: readonly [
+            "A stored vector and the query embedding have different widths, so they cannot be compared.",
+            "",
+            "This is what changing a RAG index's `embeddingModel` (or a provider's `dimensions` option) without reindexing looks like. Either put the previous model back, or reindex the namespace under the new one — bump `embeddingModelVersion` so the index rebuilds instead of mixing widths."
+        ];
+        readonly status: 409;
+        readonly title: "Embedding dimension mismatch";
     };
     readonly VECTORS_NOT_CONFIGURED: {
         readonly status: 400;
@@ -444,9 +509,18 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Cross-shard rank() is unsupported";
     };
+    readonly DISPATCH_UNAUTHENTICATED: {
+        readonly hint: "The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER_SECRET` matches on both sides, or that `LUNORA_ADMIN_TOKEN` is set and current.";
+        readonly status: 403;
+        readonly title: "Dispatch caller not authenticated";
+    };
     readonly FORBIDDEN_FANOUT: {
         readonly status: 403;
         readonly title: "Fan-out forbidden";
+    };
+    readonly GLOBAL_SEARCH_SCORES_UNSUPPORTED: {
+        readonly status: 400;
+        readonly title: "collectWithScores() is unsupported on a global table";
     };
     readonly FORBIDDEN_ORIGIN: {
         readonly status: 403;
@@ -464,6 +538,10 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Invalid input";
     };
+    readonly INVALID_SCHEDULE_ID: {
+        readonly status: 400;
+        readonly title: "Invalid schedule id";
+    };
     readonly RATE_LIMITED: {
         readonly status: 429;
         readonly title: "Rate limited";
@@ -476,9 +554,17 @@ const ERROR_CATALOG: {
         readonly status: 421;
         readonly title: "Replica is read-only";
     };
+    readonly SEARCH_INDEX_BUILDING: {
+        readonly status: 503;
+        readonly title: "Search index is still building";
+    };
     readonly SERVICE_UNAVAILABLE: {
         readonly status: 503;
         readonly title: "Service unavailable";
+    };
+    readonly SHAPE_MEMORY_TABLE: {
+        readonly status: 400;
+        readonly title: "Shape over a memory table is unsupported";
     };
     readonly SHAPE_CROSS_SHARD_JOIN: {
         readonly status: 400;
@@ -487,6 +573,14 @@ const ERROR_CATALOG: {
     readonly UNAUTHENTICATED: {
         readonly status: 401;
         readonly title: "Unauthenticated";
+    };
+    readonly WIRE_DECODE_FAILED: {
+        readonly status: 502;
+        readonly title: "Could not decode a server frame";
+    };
+    readonly WIRE_ENCODE_FAILED: {
+        readonly status: 500;
+        readonly title: "Could not encode a return value";
     };
     readonly UNKNOWN_COLUMN: {
         readonly status: 404;
@@ -529,6 +623,10 @@ const ERROR_CATALOG: {
         readonly internal: true;
         readonly status: 500;
         readonly title: "SQL storage unavailable";
+    };
+    readonly STREAM_ID_IN_USE: {
+        readonly status: 409;
+        readonly title: "Stream id already in use";
     };
     readonly STREAM_INTERRUPTED: {
         readonly status: 503;

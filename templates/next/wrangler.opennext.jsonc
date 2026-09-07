@@ -1,0 +1,23 @@
+{
+    // Next.js SSR worker — produced by `opennextjs-cloudflare build` (the OpenNext
+    // Cloudflare adapter). This worker handles all page/RSC requests. Lunora
+    // realtime (`/_lunora/*` and ShardDO) lives in a SEPARATE worker; see the root
+    // `wrangler.jsonc`.
+    //
+    // NOT named `wrangler.jsonc`: that filename is where `lunora verify|deploy|dev`
+    // look for the Lunora worker, and this config has no `SHARD` binding. Every
+    // OpenNext command is passed `--config wrangler.opennext.jsonc` by the scripts
+    // in package.json — `opennextjs-cloudflare build|preview|deploy` all accept it
+    // and forward it to wrangler.
+    //
+    // In production set NEXT_PUBLIC_LUNORA_URL (at build time — it is inlined
+    // into the client bundle) to the Lunora worker URL so the RSC loader and the
+    // browser client know where to reach `/_lunora/*`.
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "{{name}}",
+    "main": ".open-next/worker.js",
+    "compatibility_date": "2026-06-10",
+    "compatibility_flags": ["nodejs_compat"],
+    "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+}

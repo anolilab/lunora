@@ -1,6 +1,7 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,6 +9,8 @@ import { runInitCommand } from "../../src/commands/init/handler";
 import { ADAPTERS } from "../../src/commands/init/overlay/adapters";
 import { applyLunoraOverlay } from "../../src/commands/init/overlay/apply";
 import type { Logger } from "../../src/util/logger";
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 
 const silentLogger = (): Logger => {
     return { error: () => {}, info: () => {}, success: () => {}, warn: () => {} };
@@ -181,8 +184,10 @@ describe("applyLunoraOverlay", () => {
         expect(messages).toContain('rateLimit(limiter, "send"');
         // table_without_insert → `send` writes a row.
         expect(messages).toContain('ctx.db.insert("messages"');
-        // unbounded_string_arg → the string args are length-bounded.
-        expect(messages).toContain("maxLength");
+        // unbounded_string_arg → the string args carry a REAL bound. `.meta({ schema:
+        // { maxLength } })` only annotates the emitted JSON Schema; `.max()` is what
+        // the validator enforces at runtime.
+        expect(messages).toContain("v.string().max(256)");
 
         // The rate limiter the starter imports must be installed.
         const pkg = JSON.parse(readFileSync(join(base, "package.json"), "utf8")) as { dependencies: Record<string, string> };
@@ -190,6 +195,21 @@ describe("applyLunoraOverlay", () => {
         expect(pkg.dependencies["@lunora/ratelimit"]).toBe("alpha");
         // No leftover stub: the demo `list` query reads from `ctx.db`, not `messages: []`.
         expect(messages).not.toContain("messages: []");
+    });
+
+    // The overlay embeds its `lunora/` scaffold as string constants because the CLI
+    // ships without `templates/`. The docblocks on those constants claim they are
+    // byte-identical to the bespoke templates' scaffold; this is what makes the
+    // claim true. If a template file changes, copy it into `overlay/apply.ts`.
+    it.each(["ratelimit/schema.ts", "schema.ts", "messages.ts"])("scaffolds a lunora/%s byte-identical to templates/standalone", async (relativePath) => {
+        expect.assertions(1);
+
+        writeReactBase(base);
+        await applyLunoraOverlay({ adapter: ADAPTERS.react, distTag: "alpha", logger: silentLogger(), name: "my-app", target: base });
+
+        const bespoke = readFileSync(join(REPO_ROOT, "templates", "standalone", "lunora", relativePath), "utf8");
+
+        expect(readFileSync(join(base, "lunora", relativePath), "utf8")).toBe(bespoke);
     });
 
     it("adds the #lunora/* subpath imports mapping so generated/registry modules resolve", async () => {
@@ -236,6 +256,23 @@ describe("applyLunoraOverlay", () => {
         const secondPass = readFileSync(join(base, ".gitignore"), "utf8");
 
         expect(secondPass).toBe(firstPass);
+    });
+
+    it("keeps a base's existing negations below the globs it appends", async () => {
+        expect.assertions(2);
+
+        writeReactBase(base);
+        // A base that already un-ignores its example env file but has never seen
+        // `.env.*`. git is last-match-wins, so appending the glob below the
+        // negation re-ignores a file the project deliberately tracks.
+        write(base, ".gitignore", "node_modules\ndist\n.env\n!.env.example\n");
+
+        await applyLunoraOverlay({ adapter: ADAPTERS.react, distTag: "alpha", logger: silentLogger(), name: "my-app", target: base });
+
+        const lines = readFileSync(join(base, ".gitignore"), "utf8").split(/\r?\n/);
+
+        expect(lines).toContain(".env.*");
+        expect(lines.lastIndexOf("!.env.example")).toBeGreaterThan(lines.lastIndexOf(".env.*"));
     });
 
     it("wires every framework adapter's entry to its Lunora client API", async () => {
@@ -315,6 +352,43 @@ describe("lunora init --vite (overlay, end to end)", () => {
         expect(readFileSync(join(target, "wrangler.jsonc"), "utf8")).toContain('"name": "my-app"');
         expect(readFileSync(join(target, "lunora", "schema.ts"), "utf8")).toContain("defineSchema");
         expect(readFileSync(join(target, "vite.config.ts"), "utf8")).toContain("lunora()");
+    });
+
+    it("never copies a symlink out of the create-vite base into the scaffold", async () => {
+        expect.assertions(3);
+
+        // A base carrying a link to a file OUTSIDE it — the shape a tampered or
+        // malicious upstream base would use to plant (or exfiltrate through) a
+        // path the user never asked for.
+        const secret = join(baseRoot, "id_rsa");
+
+        writeFileSync(secret, "PRIVATE KEY", "utf8");
+        symlinkSync(secret, join(baseRoot, "template-react-ts", "stolen-key"));
+
+        const result = await runInitCommand({ cwd: workdir, logger: silentLogger(), name: "my-app", overlayBaseFrom: baseRoot, vite: "react" });
+
+        expect(result.code).toBe(0);
+
+        const planted = join(workdir, "my-app", "stolen-key");
+
+        expect(existsSync(planted)).toBe(false);
+        // The real files still arrive — the skip is scoped to links, not the copy.
+        expect(readFileSync(join(workdir, "my-app", "src", "App.tsx"), "utf8")).toContain("function App");
+    });
+
+    it("cleans up the half-written project when the overlay apply fails", async () => {
+        expect.assertions(2);
+
+        // The base copies fine, then `patchPackageJson`'s JSON.parse throws —
+        // by which point the overlay has already written several files into the
+        // target. Leaving them there meant the retry (with the problem fixed)
+        // was refused with "target directory not empty".
+        writeFileSync(join(baseRoot, "template-react-ts", "package.json"), "{ not json", "utf8");
+
+        const result = await runInitCommand({ cwd: workdir, logger: silentLogger(), name: "my-app", overlayBaseFrom: baseRoot, vite: "react" });
+
+        expect(result.code).toBe(1);
+        expect(existsSync(join(workdir, "my-app"))).toBe(false);
     });
 
     it("rejects an unknown --vite framework", async () => {

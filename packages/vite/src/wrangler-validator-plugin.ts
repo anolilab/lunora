@@ -63,10 +63,31 @@ const formatError = (wranglerPath: string, problems: ReadonlyArray<string>): Err
  * missing requirements during `configResolved`. Delegates the parsing /
  * validation logic to `@lunora/config` so the rules stay in lockstep with
  * the CLI (`lunora deploy`).
+ *
+ * Provisioning runs BEFORE this, in `bindingsProvisionPlugin`'s `config` hook,
+ * which is the order `lunora dev` uses (infer → reconcile, no validation pass):
+ * the bindings this check requires are the ones Lunora writes itself, so
+ * validating first killed the dev server the first time a project declared a
+ * `.global()` table or a container. That plugin is registered unconditionally and
+ * ahead of this one — the write is not optional the way the check is, and it must
+ * land in `config` to reach the worker at all (see its docblock).
+ *
+ * Skipped under `vite preview`, which resolves with `command: "serve"` and so
+ * runs `apply: "serve"` plugins: previewing a built app must not probe Docker.
  */
 const wranglerValidatorPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
+    let isPreview = false;
+
     return {
+        // `isPreview` is on the config-hook env only — never on the resolved config.
+        config(_userConfig, env) {
+            isPreview = env.isPreview === true;
+        },
         configResolved() {
+            if (isPreview) {
+                return;
+            }
+
             const result = validateWranglerProject({
                 projectRoot: options.projectRoot,
                 schemaDir: options.schemaDir,
@@ -94,6 +115,7 @@ const wranglerValidatorPlugin = (options: ResolvedLunoraPluginOptions): Plugin =
 
             warnWhenDockerMissing(result.wranglerPath);
         },
+        enforce: "pre",
         name: "lunora:wrangler-validator",
     };
 };

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { encodeWire } from "../../../shared/wire-codec";
 import type { FetchLike } from "../src/bridge";
 import { ContainerBridgeError, createContainerBridge } from "../src/bridge";
 
@@ -43,6 +44,27 @@ describe(createContainerBridge, () => {
         expect(calls[0]!.url).toBe("https://app.example.com/_lunora/rpc");
         expect(JSON.parse(calls[0]!.body)).toStrictEqual({ args: { limit: 5 }, functionPath: "messages:list" });
         expect(calls[0]!.headers.authorization).toBe("Bearer svc-token");
+    });
+
+    it("brackets both directions with the wire codec", async () => {
+        expect.assertions(2);
+
+        // This bridge speaks the same `/_lunora/rpc` protocol as `LunoraClient`,
+        // so it owes the same codec: the shard runs `decodeWire` over inbound
+        // `args` and answers `encodeWire(result)`. Un-bracketed, a `bigint` arg
+        // throws inside `JSON.stringify`, a `Date` arg arrives as an ISO string,
+        // and a `v.bigint()` column comes back as a raw tag array instead of a
+        // value.
+        const { calls, fetch } = stubFetch({ result: encodeWire({ at: new Date("2024-01-01T00:00:00.000Z"), views: 9_007_199_254_740_993n }) });
+        const lunora = createContainerBridge({ baseUrl: "https://app.example.com/", fetch });
+
+        const result = await lunora.query("posts:get", { blob: new Uint8Array([1, 2, 3]).buffer, since: 7n });
+
+        expect(result).toStrictEqual({ at: new Date("2024-01-01T00:00:00.000Z"), views: 9_007_199_254_740_993n });
+        expect(JSON.parse(calls[0]!.body)).toStrictEqual({
+            args: encodeWire({ blob: new Uint8Array([1, 2, 3]).buffer, since: 7n }),
+            functionPath: "posts:get",
+        });
     });
 
     it("omits the Authorization header when no token is given", async () => {

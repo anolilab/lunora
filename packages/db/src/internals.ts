@@ -17,17 +17,30 @@ const OUTBOX_DRAIN_INTERVAL_MS = 1000;
  */
 export const OUTBOX_MUTATION_FN_NAME = "__lunora_outbox__";
 
+/**
+ * Provenance stamped on a durable write at enqueue time: the two questions a
+ * replay cannot answer from the persisted row once the write outlives the
+ * session that made it — WHO queued it, and WHICH shard it belongs to.
+ *
+ * Shared so both replay paths (`db.actions.*` and the reserved
+ * `__lunora_outbox__` handler) check the same fields; they drifted apart once
+ * already, and only one of them had the identity guard.
+ */
+export interface WriteProvenance extends Record<string, unknown> {
+    /** Issuing identity fingerprint; a replay drops the write when it no longer matches. */
+    identity: string | null;
+    /** Captured, not re-read at replay: a queued write follows the shard it was made against even if the app reboots pointed at another. */
+    shardKey?: string;
+}
+
 /** The metadata an outbox-routed transaction carries so its replay can call `client.mutation`. */
-export interface OutboxMutationMetadata extends Record<string, unknown> {
+export interface OutboxMutationMetadata extends WriteProvenance {
     args: Record<string, unknown>;
     clientId: string;
     functionPath: string;
     /** Stable `${clientId}:${mutationId}` replay key; passed back as the mutation id so a committed-but-unacked replay is server-idempotent. */
     idempotencyKey: string;
-    /** Issuing identity fingerprint; the replay handler drops the write when it no longer matches. */
-    identity: string | null;
     mutationId: number;
-    shardKey?: string;
 }
 
 /** A committable outbox transaction handle (the `OfflineTransaction` the executor mints). */
@@ -222,11 +235,18 @@ export const toMap = <T extends object>(rows: ReadonlyArray<T>, getKey: (row: T)
  * is kept. Each incoming value is serialized exactly once per tick (for both
  * comparison and cache update), so the previous value is never re-serialized.
  *
- * Lifecycle: `syncedJson` must be owned by the caller at the same scope as any
- * other per-collection state (e.g. outside the `sync.sync` callback), so the
- * cache persists correctly across sync restarts. A new `makeDiffEmit` closure
- * created on restart receives the same map reference and starts from the
- * committed synced state — no spurious diffs on reconnect.
+ * Lifecycle: `syncedJson` is owned by the caller at the same scope as any other
+ * per-collection state (outside the `sync.sync` callback), so one map serves
+ * every `makeDiffEmit` closure the collection creates and a *within-session*
+ * re-delivery of an unchanged snapshot writes nothing.
+ *
+ * It does NOT survive a sync **restart**, and must not: TanStack drops its
+ * synced store on gc cleanup, so the sole caller
+ * ({@link file://./collection-options.ts}'s `sync.sync` teardown) clears the map
+ * on the way out. A restart that kept the map would diff the server's
+ * re-delivered snapshot against rows the store no longer holds, emit zero
+ * writes, and leave the restarted collection permanently empty. The map's job is
+ * incremental-diff state for one live session, not a durable cache.
  */
 export const makeDiffEmit =
     <T extends object>(syncedJson: Map<string, string>, writer: SyncWriter<T>) =>

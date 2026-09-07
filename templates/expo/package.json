@@ -2,6 +2,9 @@
     "name": "{{name}}",
     "version": "0.0.0",
     "private": true,
+    "imports": {
+        "#lunora/*": "./lunora/*"
+    },
     "main": "index.ts",
     "scripts": {
         "start": "expo start",

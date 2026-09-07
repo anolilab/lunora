@@ -1,3 +1,7 @@
+import { rateLimit } from "lunorash/ratelimit";
+
+import { makeRateLimiter } from "./ratelimit/schema.js";
+import type { ActionCtx } from "./_generated/server.js";
 import { action, internalAction, query, v } from "./_generated/server.js";
 
 // A real app keys checkout on the signed-in user (`ctx.auth.userId`); this demo
@@ -6,22 +10,38 @@ import { action, internalAction, query, v } from "./_generated/server.js";
 const DEMO_REFERENCE = "demo-user";
 
 /**
+ * Every public action below performs an outbound call to Stripe on the
+ * deployer's own account. With no sign-in, a rate limit keyed on the caller's
+ * server-trusted `ctx.ip` is the only thing between a deployed instance and a
+ * script running up an API bill — so it is not optional decoration here.
+ *
+ * A real app keys these on `ctx.auth.userId` (falling back to `ctx.ip` for
+ * anonymous callers) and never on anything out of `args`, which a caller can
+ * rotate per request to get a fresh bucket every time.
+ */
+const limiter = (ctx: ActionCtx) => makeRateLimiter(ctx);
+const byCaller = { key: (ctx: { ip?: string }): string => ctx.ip ?? "anon" };
+
+/**
  * Start a Stripe Checkout session and hand the client the redirect URL.
  *
  * `ctx.payments` is the facade codegen wires onto `ActionCtx` when it sees this
  * file reach for it — the store rides this request's `ctx.db`.
  */
-export const checkout = action.input({ priceId: v.string() }).action(async ({ args: { priceId }, ctx }): Promise<{ url: string }> => {
-    const result = await ctx.payments.createCheckout({
-        cancelUrl: "https://example.com/cancel",
-        mode: "subscription",
-        priceId,
-        referenceId: DEMO_REFERENCE,
-        successUrl: "https://example.com/success",
-    });
+export const checkout = action
+    .input({ priceId: v.string().max(256) })
+    .use(rateLimit(limiter, "checkout", byCaller))
+    .action(async ({ args: { priceId }, ctx }): Promise<{ url: string }> => {
+        const result = await ctx.payments.createCheckout({
+            cancelUrl: "https://example.com/cancel",
+            mode: "subscription",
+            priceId,
+            referenceId: DEMO_REFERENCE,
+            successUrl: "https://example.com/success",
+        });
 
-    return { url: result.url };
-});
+        return { url: result.url };
+    });
 
 interface SubscriptionRow {
     providerSubscriptionId: string;
@@ -34,23 +54,23 @@ interface SubscriptionRow {
  * writes the durable ledger (exactly-once by idempotency key) and, since Stripe
  * advertises usage metering, forwards a meter event — best-effort.
  */
-export const recordApiCall = action.action(async ({ ctx }): Promise<{ recorded: boolean }> => {
+export const recordApiCall = action.use(rateLimit(limiter, "meter", byCaller)).action(async ({ ctx }): Promise<{ recorded: boolean }> => {
     const result = await ctx.payments.track({ featureId: "api_calls", referenceId: DEMO_REFERENCE });
 
     return { recorded: result.recorded };
 });
 
 /** Is the demo reference still under its metered `api_calls` allowance this period? */
-export const apiCallsRemaining = action.action(async ({ ctx }): Promise<{ allowed: boolean; balance?: number }> => {
+export const apiCallsRemaining = action.use(rateLimit(limiter, "meter", byCaller)).action(async ({ ctx }): Promise<{ allowed: boolean; balance?: number }> => {
     const result = await ctx.payments.check({ featureId: "api_calls", referenceId: DEMO_REFERENCE });
 
     return { allowed: result.allowed, balance: result.balance };
 });
 
 /** Open the Stripe billing portal for the demo reference (customer derived from the store). */
-export const portal = action.action(async ({ ctx }): Promise<{ url: string }> =>
-    ctx.payments.createPortalSession(DEMO_REFERENCE, "https://example.com/account"),
-);
+export const portal = action
+    .use(rateLimit(limiter, "checkout", byCaller))
+    .action(async ({ ctx }): Promise<{ url: string }> => ctx.payments.createPortalSession(DEMO_REFERENCE, "https://example.com/account"));
 
 /** Reactive read of the webhook-synced subscriptions for the demo reference. */
 export const mySubscriptions = query.query(async ({ ctx }): Promise<SubscriptionRow[]> => {
@@ -63,13 +83,20 @@ export const mySubscriptions = query.query(async ({ ctx }): Promise<Subscription
  * Apply a verified Stripe webhook. Called by the `POST /payment/webhook` HTTP
  * action (which runs at the Worker edge with no `ctx.db`) so the work happens
  * inside the shard, where `ctx.payments` — and its store — exist.
+ *
+ * The edge forwards every header an adapter can verify with rather than one named
+ * signature header, so the adapter finds whichever one its provider signs with:
+ * `stripe-signature` here, but `creem-signature`, the Standard-Webhooks
+ * `webhook-id`/`webhook-timestamp`/`webhook-signature` trio, or `svix-*`
+ * elsewhere. See the allowlist in `http.ts` for why it is those and not the whole
+ * request.
  */
 export const processWebhook = internalAction
-    .input({ body: v.string(), signature: v.string() })
-    .action(async ({ args: { body, signature }, ctx }): Promise<{ applied: boolean; status: number }> => {
+    .input({ body: v.string(), headers: v.record(v.string(), v.string()) })
+    .action(async ({ args: { body, headers }, ctx }): Promise<{ applied: boolean; status: number }> => {
         const request = new Request("https://internal/payment/webhook", {
             body,
-            headers: { "stripe-signature": signature },
+            headers,
             method: "POST",
         });
         const response = await ctx.payments.handleWebhook(request);

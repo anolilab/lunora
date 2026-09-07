@@ -100,6 +100,108 @@ describe("buildSchemaDiffModel", () => {
         expect(model.breakingCount).toBe(1);
     });
 
+    it("flags a repointed foreign key, whose kind and optionality are unchanged", () => {
+        expect.assertions(3);
+
+        // `v.id("users")` → `v.id("orgs")`: same `kind`, same `optional`, so the
+        // old shallow comparison read it as unchanged while the deploy gate
+        // blocks it as `changedFieldShape`.
+        const before = snapshot({ posts: table({ fields: { authorId: { kind: "id", nullable: false, optional: false, ref: "users", unique: false } } }) });
+        const after = snapshot({ posts: table({ fields: { authorId: { kind: "id", nullable: false, optional: false, ref: "orgs", unique: false } } }) });
+        const model = buildSchemaDiffModel(before, after);
+
+        expect(model.tables.find((entry) => entry.name === "posts")?.fieldStatus.authorId).toBe("changed");
+        expect(model.breakingCount).toBe(1);
+
+        // And the cell the row is flagging actually reads differently. Rendered
+        // from `kind` alone both sides say `id`, so the diagram contradicts the
+        // status beside it.
+        expect(model.tables.find((entry) => entry.name === "posts")?.columns.find((column) => column.name === "authorId")?.type).toBe("id(orgs)");
+    });
+
+    it("flags a field that gained `.unique()`", () => {
+        expect.assertions(2);
+
+        const before = snapshot({ users: table({ fields: { email: { kind: "string", nullable: false, optional: false, unique: false } } }) });
+        const after = snapshot({ users: table({ fields: { email: { kind: "string", nullable: false, optional: false, unique: true } } }) });
+        const model = buildSchemaDiffModel(before, after);
+
+        expect(model.tables.find((entry) => entry.name === "users")?.fieldStatus.email).toBe("changed");
+        expect(model.breakingCount).toBe(1);
+    });
+
+    it("flags a swapped union member and a changed array element type", () => {
+        expect.assertions(3);
+
+        const before = snapshot({
+            events: table({
+                fields: {
+                    payload: { kind: "array", nullable: false, of: { kind: "string", optional: false }, optional: false, unique: false },
+                    tag: {
+                        kind: "union",
+                        members: [
+                            { kind: "literal", literal: '"a"', optional: false },
+                            { kind: "literal", literal: '"b"', optional: false },
+                        ],
+                        nullable: false,
+                        optional: false,
+                        unique: false,
+                    },
+                },
+            }),
+        });
+        const after = snapshot({
+            events: table({
+                fields: {
+                    payload: { kind: "array", nullable: false, of: { kind: "bigint", optional: false }, optional: false, unique: false },
+                    tag: {
+                        kind: "union",
+                        members: [
+                            { kind: "literal", literal: '"a"', optional: false },
+                            { kind: "literal", literal: '"c"', optional: false },
+                        ],
+                        nullable: false,
+                        optional: false,
+                        unique: false,
+                    },
+                },
+            }),
+        });
+        const fieldStatus = buildSchemaDiffModel(before, after).tables.find((entry) => entry.name === "events")?.fieldStatus ?? {};
+
+        expect(fieldStatus.payload).toBe("changed");
+        expect(fieldStatus.tag).toBe("changed");
+        expect(buildSchemaDiffModel(before, after).breakingCount).toBe(2);
+    });
+
+    it("keeps a pure reordering of field keys unchanged", () => {
+        expect.assertions(3);
+
+        // The snapshot builder sorts nested records and canonically orders union
+        // members, so a declaration-order change must produce no drift at all —
+        // a deep comparison that compared insertion order would light up here.
+        const fields = {
+            a: { kind: "string", nullable: false, optional: false, unique: false },
+            b: {
+                kind: "union",
+                members: [
+                    { kind: "number", optional: false },
+                    { kind: "string", optional: false },
+                ],
+                nullable: false,
+                optional: false,
+                unique: false,
+            },
+        } as const;
+        const before = snapshot({ users: table({ fields: { a: fields.a, b: fields.b } }) });
+        const after = snapshot({ users: table({ fields: { b: fields.b, a: fields.a } }) });
+        const model = buildSchemaDiffModel(before, after);
+
+        expect(model.changes).toHaveLength(0);
+        expect(model.tables.find((entry) => entry.name === "users")?.fieldStatus.a).toBe("unchanged");
+        expect(model.tables.find((entry) => entry.name === "users")?.fieldStatus.b).toBe("unchanged");
+    });
+
     it("resolves a foreign key by its column, not its accessor name", () => {
         expect.assertions(1);
 

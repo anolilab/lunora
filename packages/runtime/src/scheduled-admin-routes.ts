@@ -12,6 +12,7 @@
  * through the injected {@link ScheduledAdminRouteDeps}, so this module imports no
  * runtime values from `create-worker`.
  */
+import { readLooseJsonBody } from "./body-readers";
 import { LunoraError } from "./errors";
 import type { ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 import { resolveShard } from "./resolve-shard";
@@ -23,6 +24,7 @@ const SCHEDULED_CANCEL_PATH = "/_lunora/admin/scheduled/cancel";
 const SCHEDULED_DEAD_PATH = "/_lunora/admin/scheduled/dead";
 const SCHEDULED_DEAD_RETRY_PATH = "/_lunora/admin/scheduled/dead/retry";
 const SCHEDULED_DEAD_CANCEL_PATH = "/_lunora/admin/scheduled/dead/cancel";
+const SCHEDULED_POOL_RELEASE_PATH = "/_lunora/admin/scheduled/pool/release";
 
 /** The worker internals the scheduled routes reach through injection rather than closure. */
 interface ScheduledAdminRouteDeps {
@@ -40,7 +42,18 @@ interface ScheduledAdminRouteDeps {
 const buildScheduledAdminRoutes = (deps: ScheduledAdminRouteDeps): Record<string, (request: Request) => Promise<Response> | Response> => {
     const { checkWsAdmin, requireSchedulerNamespace, resolveSchedulerStub, schedulerInstanceName } = deps;
 
-    /** Admin-gated GET proxy to one SchedulerDO route; `label` names the endpoint in the 405. */
+    /**
+     * Admin-gated GET proxy to one SchedulerDO route; `label` names the endpoint
+     * in the 405.
+     *
+     * The DO's records are forwarded VERBATIM, `args` still wire-encoded, and
+     * that is deliberate: re-serializing a decoded record here goes through
+     * `JSON.stringify`, which throws on the `bigint` the encode exists to carry —
+     * so decoding on the way through would turn any job with a `bigint` argument
+     * into a 500. `@lunora/client`'s `listScheduledJobs` / `listDeadJobs` /
+     * `subscribeScheduledJobs` decode at the consumer instead, which is also the
+     * only place that covers the `/ws` push.
+     */
     const proxyGet =
         (doPath: string, label: string) =>
         (request: Request): Promise<Response> => {
@@ -48,7 +61,13 @@ const buildScheduledAdminRoutes = (deps: ScheduledAdminRouteDeps): Record<string
                 throw new LunoraError(`${label} endpoint requires GET`, { code: "METHOD_NOT_ALLOWED", status: 405 });
             }
 
-            return resolveSchedulerStub(request).fetch(new Request(`https://scheduler.internal${doPath}`, { method: "GET" }));
+            // Forward the page cursor: `/list` and `/dead` answer one bounded page
+            // plus a `cursor`, so without this the studio could never see past
+            // the first page of a large backlog or dead-letter set.
+            const cursor = new URL(request.url).searchParams.get("cursor");
+            const query = cursor === null || cursor === "" ? "" : `?cursor=${encodeURIComponent(cursor)}`;
+
+            return resolveSchedulerStub(request).fetch(new Request(`https://scheduler.internal${doPath}${query}`, { method: "GET" }));
         };
 
     /**
@@ -66,7 +85,10 @@ const buildScheduledAdminRoutes = (deps: ScheduledAdminRouteDeps): Record<string
             }
 
             const stub = resolveSchedulerStub(request);
-            const body = (await request.json().catch(() => undefined)) as { id?: unknown } | undefined;
+            // Read under the shared byte budget, like every sibling admin route: a
+            // bare `request.json()` drains whatever is sent, so a chunked body slips
+            // the cap the `Content-Length` fast path only loosely enforces.
+            const body = (await readLooseJsonBody(request, label)) as { id?: unknown } | undefined;
 
             if (typeof body?.id !== "string" || body.id === "") {
                 throw new LunoraError(`${label} requires a string \`id\``, { code: "BAD_REQUEST", status: 400 });
@@ -80,6 +102,49 @@ const buildScheduledAdminRoutes = (deps: ScheduledAdminRouteDeps): Record<string
                 }),
             );
         };
+
+    /**
+     * `POST /pool/release { pool, id? }` — release one held workpool concurrency
+     * slot, by proxying the SchedulerDO's `/complete`.
+     *
+     * This is the ONLY shipped way to undo a leaked slot. `releasePoolSlot` in
+     * `create-worker` is best-effort by design (a release failure must not fail
+     * the dispatch the scheduler awaits), there is no lease and nothing
+     * reconciles, so a dispatch that succeeds followed by a failed release —
+     * an isolate evicted at the invocation boundary, a 500, a rotated binding —
+     * holds that slot for the lifetime of the pool. At the default
+     * `maxConcurrency: 1` that wedges the pool permanently while every queued job
+     * re-arms the alarm once a second and never runs. `/status` diagnoses it
+     * exactly (`inFlight` pinned with a growing `backlog`) and, before this
+     * route, offered no way out.
+     *
+     * `id` is OPTIONAL on purpose: `/status` reports slot counts, not the ids
+     * holding them, so an operator staring at a wedged pool usually cannot name
+     * the leaked job. Omitting it takes the DO's best-effort "drop one held slot"
+     * path, which is precisely the recovery wanted here.
+     */
+    const handlePoolRelease = async (request: Request): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new LunoraError("Scheduled pool-release endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const stub = resolveSchedulerStub(request);
+        const body = (await readLooseJsonBody(request, "Scheduled pool-release")) as { id?: unknown; pool?: unknown } | undefined;
+
+        if (typeof body?.pool !== "string" || body.pool === "") {
+            throw new LunoraError("Scheduled pool-release requires a string `pool`", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const id = typeof body.id === "string" && body.id !== "" ? body.id : undefined;
+
+        return stub.fetch(
+            new Request("https://scheduler.internal/complete", {
+                body: JSON.stringify(id === undefined ? { pool: body.pool } : { id, pool: body.pool }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+    };
 
     /**
      * Proxy a browser WebSocket upgrade to the SchedulerDO's `/ws` so the
@@ -111,6 +176,7 @@ const buildScheduledAdminRoutes = (deps: ScheduledAdminRouteDeps): Record<string
         [SCHEDULED_DEAD_PATH]: proxyGet("/dead", "Scheduled dead-letter"),
         [SCHEDULED_DEAD_RETRY_PATH]: proxyPost("/dead/retry", "Scheduled dead-letter action"),
         [SCHEDULED_PATH]: proxyGet("/list", "Scheduled-list"),
+        [SCHEDULED_POOL_RELEASE_PATH]: handlePoolRelease,
         [SCHEDULED_STATUS_PATH]: proxyGet("/status", "Scheduler-status"),
         [SCHEDULED_WS_PATH]: handleScheduledWebSocket,
     };
@@ -124,6 +190,7 @@ export {
     SCHEDULED_DEAD_PATH,
     SCHEDULED_DEAD_RETRY_PATH,
     SCHEDULED_PATH,
+    SCHEDULED_POOL_RELEASE_PATH,
     SCHEDULED_STATUS_PATH,
     SCHEDULED_WS_PATH,
 };

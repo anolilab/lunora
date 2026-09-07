@@ -168,6 +168,9 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 ...base,
                 amount: money(readNumber(object, "amount") ?? 0, currency),
                 referenceId: referenceFromMetadata(object),
+                // The event object IS the refund, so its `id` is this refund's id — the identity the
+                // sync layer matches against the marker `refundPayment` left for its own refund.
+                refundId: readString(object, "id"),
                 sessionId: readString(object, "order_id") ?? readString(object, "id"),
                 type: "payment.refunded",
             };
@@ -298,7 +301,7 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
             const currency = input.amount?.currency ?? order?.currency ?? "usd";
             const amountMinor = input.amount ? Number(input.amount.minorUnits) : (order?.totalAmount ?? 0);
 
-            await client.refunds.create({
+            const refund = await client.refunds.create({
                 amount: amountMinor,
                 orderId: input.sessionId,
                 // `reason` is an open enum; a caller-supplied string is cast onto it (defaults to customer_request).
@@ -315,6 +318,9 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
                 provider: "polar",
                 referenceId: "",
                 refundedAmount,
+                // The same id Polar's confirming `refund.created` carries, which is what lets the sync
+                // layer tell this refund's event from a concurrent refund of the identical amount.
+                refundId: refund.id,
                 state: "refunded",
                 updatedAt: Date.now(),
             };
@@ -323,10 +329,16 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
         reportUsage: async (input: ReportUsageInput) => {
             // Polar event ingestion: one event per usage record, keyed to the customer by its
             // external id (the reference id we set on customer creation). Metadata carries the value.
+            //
+            // `externalId` is Polar's dedupe handle ("your unique identifier for this event"), so the
+            // engine's idempotency key goes there: a reconcile sweep retrying a forward that already
+            // landed must not meter the same usage twice — on a provider that owns entitlements, a
+            // double-counted event bills the customer twice and eats their remaining allowance.
             await client.events.ingest({
                 events: [
                     {
                         externalCustomerId: input.referenceId,
+                        externalId: input.idempotencyKey,
                         metadata: { value: input.quantity },
                         name: input.featureId,
                         timestamp: input.timestamp === undefined ? undefined : new Date(input.timestamp),

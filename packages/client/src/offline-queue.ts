@@ -19,8 +19,14 @@ interface QueuedMutation<T = unknown> {
     /**
      * Issuing identity fingerprint carried through to durable storage (`null` =
      * signed out). Absent on hydrated legacy records, which replay ambiently.
+     *
+     * Mutable so {@link OfflineQueue.restampIdentity} can relabel a still-queued
+     * write when the identity's LABEL changes but the credential does not (the
+     * `setAuthToken(token, userId)` case where the subject resolves a tick after
+     * the token). The value is re-persisted alongside, so the new label survives
+     * a reload and a requeue.
      */
-    readonly identity?: string | null;
+    identity?: string | null;
 
     /**
      * `true` when a live caller is still awaiting this write's `mutation()`
@@ -101,6 +107,15 @@ const nextId: () => string = randomId;
 /**
  * Report a swallowed persistence rejection: hand it to the caller's handler if
  * one is configured, else `console.warn` so it is never fully silent.
+ *
+ * The handler is app-supplied, so it can throw — and every call site here is
+ * either a `.catch()` on a floating promise (where a rethrow becomes an
+ * unhandled rejection) or a compensating cleanup path whose remaining steps
+ * would be skipped (see {@link OfflineQueue.rewriteStamp}, where skipping them
+ * loses the mutation outright). A reporting call must therefore never be able
+ * to change control flow: a throwing handler is contained here and falls back
+ * to the same `console.warn` as no handler at all, so the failure it was meant
+ * to report is still visible.
  */
 const reportPersistenceError = (
     handler: ((context: PersistenceErrorContext) => void) | undefined,
@@ -109,8 +124,13 @@ const reportPersistenceError = (
     mutationId?: string,
 ): void => {
     if (handler) {
-        handler({ error, mutationId, operation });
-        return;
+        try {
+            handler({ error, mutationId, operation });
+
+            return;
+        } catch {
+            /* fall through to the console warning below */
+        }
     }
 
     // eslint-disable-next-line no-console -- last-resort visibility for a swallowed durable-write failure
@@ -284,6 +304,62 @@ class OfflineQueue {
     }
 
     /**
+     * Relabel every queued write stamped `from` to `to`, in memory AND in durable
+     * storage.
+     *
+     * Used when the auth identity's LABEL changes while the credential does not —
+     * `setAuthToken(token, userId)` where the user id resolves a tick after the
+     * token was set. `setAuthToken` documents that this re-stamps in-flight
+     * queued writes rather than dropping them, and that promise only held for the
+     * caller's live in-memory stamp map, which is consumed and deleted on the
+     * first flush attempt. Everything durable still carried the old token hash,
+     * so a reload — or a transient-failure requeue after the token had since been
+     * refreshed — fell back to it, failed the replay identity gate, and rejected
+     * the SAME user's offline write with `OFFLINE_IDENTITY_CHANGED`.
+     *
+     * The durable rewrite goes through `PersistenceAdapter.replace`, the one
+     * operation on the contract that is required to be atomic — see
+     * {@link OfflineQueue.rewriteStamp}.
+     */
+    public restampIdentity(from: string | null, to: string | null): void {
+        for (const item of this.items) {
+            if (item.identity !== from) {
+                continue;
+            }
+
+            item.identity = to;
+
+            const { id } = item;
+
+            if (!this.persistence || id === undefined) {
+                continue;
+            }
+
+            const record: PersistedMutation = {
+                args: item.args,
+                clientId: item.clientId,
+                functionPath: item.functionPath,
+                id,
+                identity: to,
+                shardKey: item.shardKey,
+                ...(this.version === undefined ? {} : { version: this.version }),
+            };
+
+            this.rewriteStamp(id, record).catch((error: unknown) => {
+                // `rewriteStamp` reports and contains every failure of the durable
+                // write itself; what reaches here is a failure of the REPORTING (an
+                // `onPersistenceError` handler that throws and a `console.warn` that
+                // throws after it), plus whatever future edit adds a throw outside
+                // that try. Either way it keeps the fire-and-forget call from
+                // floating — and the operation named is still `replace`, the one
+                // this method performs: an app that routes on `context.operation`
+                // must not be told a write it never issued has failed.
+                reportPersistenceError(this.onPersistenceError, "replace", error, id);
+            });
+        }
+    }
+
+    /**
      * Remove and return queued mutations. With no `predicate`, drains the whole
      * queue. With one, drains only matching entries (preserving FIFO order) and
      * leaves the rest queued — used to flush a single shard's writes when its
@@ -377,6 +453,40 @@ class OfflineQueue {
 
         this.items.length = 0;
         this.notifySize();
+    }
+
+    /**
+     * The durable half of {@link OfflineQueue.restampIdentity}: rewrite the
+     * persisted record under the new identity stamp.
+     *
+     * This used to be `remove` then `append` (because `append` is an insert, not
+     * an upsert) with a compensating re-append on failure, and no arrangement of
+     * those two calls is safe. A process stop between a committed `remove` and
+     * the `append` leaves the mutation in NO durable store while the in-memory
+     * entry has already advanced, so a reload loses the write outright — and
+     * compensation cannot cover a crash, only a rejection. The re-append also
+     * moved the record to the tail, replaying it out of issue order.
+     *
+     * `PersistenceAdapter.replace` is the single atomic operation that removes
+     * both: the swap lands whole or not at all, and the record keeps its place
+     * in FIFO order. A rejection means nothing changed durably — the record
+     * stands under its OLD stamp, which is the documented outcome (a replay
+     * under a stale stamp is refused with `OFFLINE_IDENTITY_CHANGED`, visible
+     * and recoverable, unlike a silent loss) — so there is nothing to
+     * compensate, only to report.
+     */
+    private async rewriteStamp(id: string, record: PersistedMutation): Promise<void> {
+        const store = this.persistence;
+
+        if (!store) {
+            return;
+        }
+
+        try {
+            await store.replace(record);
+        } catch (error: unknown) {
+            reportPersistenceError(this.onPersistenceError, "replace", error, id);
+        }
     }
 
     /**

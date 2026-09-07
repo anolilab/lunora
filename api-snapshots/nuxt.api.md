@@ -14,8 +14,22 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 ```ts
 interface ModuleOptions {
     appEntry: string;
-    prefix: string;
 }
+```
+
+### `ResolvedNuxtPlugin` (interface)
+
+```ts
+interface ResolvedNuxtPlugin {
+    mode?: "all" | "client" | "server";
+    src: string;
+}
+```
+
+### `checkClientOnlyProvider` (const)
+
+```ts
+const checkClientOnlyProvider: (plugins: ReadonlyArray<ResolvedNuxtPlugin>, warn: (message: string) => void) => void;
 ```
 
 ### `checkWorkerEntry` (const)

@@ -23,7 +23,7 @@
  * back to the operator's text exactly and both features agree on what a
  * qualifier means.
  */
-import { splitStatements } from "./split-statements";
+import { splitStatements } from "../../../../../shared/sql-split-statements";
 import type { SqlSchema } from "./sql-autocomplete";
 import { sqlContextOf } from "./sql-context";
 
@@ -153,16 +153,18 @@ const lintDraft = (draft: string, schema: SqlSchema): SqlDiagnostic[] => {
         const { offset, rejection } = statement;
 
         if (rejection !== undefined) {
-            if (rejection.code !== "SQL_EMPTY") {
-                diagnostics.push({
-                    length: rejection.length,
-                    message: rejection.message,
-                    // The gate's offset is statement-relative; shift it onto the draft.
-                    offset: rejection.offset === undefined ? offset : offset + rejection.offset,
-                    severity: "error",
-                    source: "gate",
-                });
-            }
+            // No `SQL_EMPTY` filter: the splitter drops a whitespace/comment-only
+            // part instead of emitting one, so the editor and the Run path — which
+            // never had that filter and DID surface "the query is empty" on a
+            // trailing `-- note` — agree again.
+            diagnostics.push({
+                length: rejection.length,
+                message: rejection.message,
+                // The gate's offset is statement-relative; shift it onto the draft.
+                offset: rejection.offset === undefined ? offset : offset + rejection.offset,
+                severity: "error",
+                source: "gate",
+            });
 
             continue;
         }

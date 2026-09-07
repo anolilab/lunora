@@ -85,18 +85,37 @@ const flattenCdcChange = (change: Record<string, unknown>): ConnectorChange => {
 };
 
 /**
+ * The page size a shard's `cdcSync` actually applies, given the caller's
+ * (optional) `limit`. Mirrors `readCdcChanges` in `@lunora/shard-engine`, which
+ * clamps to `[1, 10000]` and defaults an ABSENT limit to 1000.
+ *
+ * `limit` is optional on every CDC route, so comparing a page's length against
+ * the raw `limit` reports "no more work" for any unlimited request — a shard
+ * that returned its full 1000-row page looked identical to one that returned
+ * everything it had, and a cron poking the route with no limit drained 1000 rows
+ * per tick out of an arbitrarily large backlog while claiming it was caught up.
+ * Compare against this instead.
+ */
+const shardCdcPageSize = (limit: number | undefined): number => Math.max(1, Math.min(limit ?? 1000, 10_000));
+
+/**
  * Fold one source's CDC page (a shard's or the global plane's) into the
  * accumulating connector page: flatten its changes onto `changes` and report
- * whether it filled the requested `limit` (a full page signals more rows likely
- * remain past this cursor). Pure routing — the caller owns cursor bookkeeping.
+ * whether it filled `pageSize` (a full page signals more rows likely remain past
+ * this cursor). Pure routing — the caller owns cursor bookkeeping.
+ *
+ * `pageSize` is the page size the SOURCE applied, not the caller's request: for
+ * a shard that is {@link shardCdcPageSize}. `undefined` means the source's cap
+ * is unknown (a host-supplied `syncGlobals` with no `limit`), which can only be
+ * answered "no full page".
  */
-const foldCdcPage = (changes: ConnectorChange[], pageChanges: ReadonlyArray<Record<string, unknown>>, limit: number | undefined): boolean => {
+const foldCdcPage = (changes: ConnectorChange[], pageChanges: ReadonlyArray<Record<string, unknown>>, pageSize: number | undefined): boolean => {
     for (const change of pageChanges) {
         changes.push(flattenCdcChange(change));
     }
 
-    return limit !== undefined && pageChanges.length >= limit;
+    return pageSize !== undefined && pageChanges.length >= pageSize;
 };
 
 export type { ConnectorCursorState };
-export { decodeConnectorCursor, encodeConnectorCursor, flattenCdcChange, foldCdcPage };
+export { decodeConnectorCursor, encodeConnectorCursor, flattenCdcChange, foldCdcPage, shardCdcPageSize };

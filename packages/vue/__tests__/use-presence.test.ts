@@ -7,9 +7,11 @@ import { createFakeClient } from "./fake-client";
 
 const HEARTBEAT = { __lunoraRef: "presence:heartbeat" } as unknown as HeartbeatReference;
 const LIST_PRESENT = { __lunoraRef: "presence:listPresent" } as unknown as ListPresentReference;
-// `randomSessionId`'s fallback path is unprefixed (shared/random-session-id.ts);
-// this just asserts the no-`crypto` path yields a non-empty id without throwing.
-const SESS_ID_PATTERN = /^[\da-z]+$/;
+// `randomSessionId`'s non-`randomUUID` arm (shared/random-session-id.ts) hex-encodes
+// 16 bytes of `crypto.getRandomValues`, so the id is exactly 32 lowercase hex chars.
+// There is deliberately no arm below that: a runtime with no Web Crypto throws
+// rather than mint a `Date.now()` string two sessions can share.
+const SESS_ID_PATTERN = /^[\da-f]{32}$/;
 
 /**
  * Extend the fake client with a refcounted `acquireConnectionContext` stub that
@@ -157,12 +159,17 @@ describe("usePresence (Vue)", () => {
         scope.stop();
     });
 
-    it("generates fallback session id when crypto is unavailable", () => {
+    it("mints a session id from getRandomValues when crypto.randomUUID is unavailable", () => {
         const fake = createPresenceFakeClient();
         // eslint-disable-next-line n/no-unsupported-features/node-builtins -- accessing globalThis.crypto to save/restore it for the test
         const originalCrypto = globalThis.crypto;
 
-        Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+        // A non-secure origin (a plain-HTTP LAN dev/preview server) leaves
+        // `crypto.randomUUID` undefined while still shipping `getRandomValues`.
+        Object.defineProperty(globalThis, "crypto", {
+            configurable: true,
+            value: { getRandomValues: (array: Uint8Array) => array.fill(171) },
+        });
 
         try {
             const scope = effectScope();
@@ -296,6 +303,40 @@ describe("usePresence (Vue)", () => {
 
         // The session id is still returned so the caller has a stable handle.
         expect(result.sessionId).toBe("sess-fixed");
+
+        scope.stop();
+    });
+
+    // An RLS denial or a session expiry on the `listPresent` subscription used to be
+    // dropped on the floor: `present` simply froze at its last value with nothing to
+    // read and no handler to call. Matches React's `usePresence` error channel.
+    it("surfaces a listPresent subscription error on `error` and through `onError`", async () => {
+        const fake = createPresenceFakeClient();
+        const seen: { code?: string; message: string }[] = [];
+
+        const scope = effectScope();
+        const result = scope.run(() =>
+            fake.provide(() =>
+                usePresence("room-1", {
+                    heartbeat: HEARTBEAT,
+                    listPresent: LIST_PRESENT,
+                    onError: (subscriptionError) => seen.push(subscriptionError),
+                    sessionId: "sess-fixed",
+                }),
+            ),
+        )!;
+
+        await flushAsync();
+
+        const call = fake.subscribeCalls[0]!;
+
+        call.callback([{ sessionId: "sess-fixed" }]);
+        call.options.onError?.({ code: "FORBIDDEN", message: "denied" });
+
+        expect(result.error.value?.message).toBe("denied");
+        expect(seen).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
+        // The last good value is retained — the error is additive, not a reset.
+        expect(result.present.value).toStrictEqual([{ sessionId: "sess-fixed" }]);
 
         scope.stop();
     });

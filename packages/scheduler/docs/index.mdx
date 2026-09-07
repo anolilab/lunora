@@ -34,8 +34,11 @@ export const requestExport = mutation.input({ workspaceId: v.id("workspaces") })
 and return the job id.
 
 Under the hood `ctx.scheduler.runAfter` POSTs to the SchedulerDO's `/schedule`
-endpoint with `functionPath`, `args`, `scheduledFor`, and an `originUrl` it can
-call back into.
+endpoint with `functionPath`, `args` and `scheduledFor`. The origin it is called
+back on is NOT on that request: the DO reads it from its own
+`env.LUNORA_ORIGIN_URL`, because a caller-supplied dispatch target would be an
+SSRF vector. Set that var (in `vars` for local dev, as a secret in production) or
+every schedule is refused with `ORIGIN_NOT_CONFIGURED`.
 
 ### Standalone scheduler
 
@@ -50,18 +53,22 @@ import { api } from "@/lunora/_generated/api";
 
 const scheduler = createScheduler({
     namespace: env.SCHEDULER, // SchedulerDO binding
-    originUrl: "https://app.acme.test", // where the DO dispatches back
 });
 
-const { id, scheduledFor } = await scheduler.runAfter(5 * 60_000, api.email.sendReminder, { userId: "u-1" });
+const id = await scheduler.runAfter(5 * 60_000, api.email.sendReminder, { userId: "u-1" });
 await scheduler.runAt(new Date("2026-06-01T12:00:00Z"), api.cleanup.run, { older: 30 });
 await scheduler.cancel(id);
 ```
 
+`runAfter`/`runAt` resolve the **job id** — the same string `cancel`, `get` and
+`ctx.scheduler` deal in. Read the instant it will fire at back off
+`scheduler.get(id)`.
+
 Pass `instanceName` to isolate a tenant's jobs into a separate DO instance.
 
 Per-job `RunOptions` cover `shardKey` (routing hint) and `retry`, a retry
-policy with `maxAttempts` (default 5), `backoff` (`"exponential"` | `"linear"`),
+policy with `maxAttempts` (default 5 — retries **after** the first dispatch, so
+six deliveries in all), `backoff` (`"exponential"` | `"linear"`),
 `baseMs` (default 30_000), and an optional `maxMs` ceiling. On exhaustion the job
 is parked under a dead-letter key rather than dropped.
 
@@ -96,8 +103,10 @@ function reference (a one-shot dispatch) or a durable workflow reference
 fire, and its `args` are type-checked against the workflow's `params`.
 
 <Callout type="info">
-    `interval` takes exactly one of `{seconds | minutes | hours}`. `hourly`, `daily`, `weekly`, and `monthly` schedule at a fixed UTC wall-clock time. Use
-    `.cron` for the raw 5- or 6-field grammar when the ergonomic forms don't fit.
+    `interval` takes exactly one of `{minutes | hours}`. `{ seconds }` is **rejected at definition time**: Cloudflare Cron Triggers have a one-minute floor,
+    and the 6-field expression it would compile to is refused by `wrangler deploy`. For sub-minute recurrence use `ctx.scheduler.runAfter`/`runAt` (via a
+    workpool for bounded concurrency); `{ minutes: 1 }` is the fastest cron-native cadence. `hourly`, `daily`, `weekly`, and `monthly` schedule at a fixed UTC
+    wall-clock time. Use `.cron` for the raw 5- or 6-field grammar when the ergonomic forms don't fit.
 </Callout>
 
 <Callout type="warn">
@@ -147,7 +156,6 @@ import { internal } from "@/lunora/_generated/api";
 
 const pool = createWorkpool({
     namespace: env.SCHEDULER,
-    originUrl: "https://app.acme.test",
     maxConcurrency: 5,
     name: "stripe-sync",
 });
@@ -188,6 +196,16 @@ status; that's the trade for letting Cloudflare own retries and backoff.
 
 ## Dispatch contract
 
-When the alarm fires the DO POSTs to `${originUrl}/_lunora/scheduler/dispatch`
-with `{ functionPath, args, shardKey, scheduledFor, id }`. The runtime unwraps
-that and runs the function exactly as if it were an RPC call.
+When the alarm fires the DO POSTs to
+`${env.LUNORA_ORIGIN_URL}/_lunora/scheduler/dispatch` with
+`{ functionPath, args, shardKey, scheduledFor, id }`. The runtime unwraps
+that and runs the function on the same code path as an RPC call — with one
+difference: the dispatch is **server-initiated**, so it carries no end-user
+identity. `ctx.auth.userId` is `null` and `ctx.ip` is `undefined`, which is also
+what lets a job target an `internal` function. Pass anything the job needs to
+know about a user in its `args`; never gate a scheduled function on `ctx.auth`.
+
+A **cron trigger** takes a different route: the worker's `scheduled()` handler
+dispatches it straight to the shard, without touching the `SchedulerDO`. So the
+retry ladder, backoff, and dead-letter park above apply to `runAfter`/`runAt`
+jobs only — a failed cron tick is logged as `CRON_JOB_FAILED` and not retried.

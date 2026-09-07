@@ -282,6 +282,83 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
         expect(onList.continueFn).toHaveBeenCalledTimes(1);
         expect(onList.abort).not.toHaveBeenCalled();
     });
+
+    it("continues an allowlisted private sub-resource under allowPrivateTargets (the Tunnel config)", async () => {
+        expect.assertions(6);
+
+        // The documented internal-dashboard config: render an internal host
+        // reached over a Tunnel, pinned to an allowlist. Navigation is gated on
+        // `allowPrivateTargets`, so it succeeds — but the sub-resource guard used
+        // to run `isPrivateHost` ungated, aborting every /app.css, /app.js and
+        // image from the SAME allowlisted host. The returned PNG/PDF came back
+        // unstyled, script-less and image-less, with no error raised anywhere.
+        const harness = makeHarness();
+        const browser = createBrowser({
+            allowedHosts: ["dashboard.internal"],
+            allowPrivateTargets: true,
+            binding,
+            launch: harness.launch,
+        });
+
+        await browser.content("https://dashboard.internal/report");
+
+        const css = makeRoute("https://dashboard.internal/app.css", false);
+        const script = makeRoute("https://dashboard.internal/app.js", false);
+        const logo = makeRoute("https://dashboard.internal/logo.png", false);
+
+        await harness.routeHandler?.(css.route);
+        await harness.routeHandler?.(script.route);
+        await harness.routeHandler?.(logo.route);
+
+        expect(css.continueFn).toHaveBeenCalledTimes(1);
+        expect(css.abort).not.toHaveBeenCalled();
+        expect(script.continueFn).toHaveBeenCalledTimes(1);
+        expect(script.abort).not.toHaveBeenCalled();
+        expect(logo.continueFn).toHaveBeenCalledTimes(1);
+        expect(logo.abort).not.toHaveBeenCalled();
+    });
+
+    it("still aborts an off-allowlist private sub-resource under allowPrivateTargets", async () => {
+        expect.assertions(2);
+
+        // `allowPrivateTargets` relaxes the private-address arm, never the
+        // allowlist: the metadata endpoint is still off-list and still refused.
+        const harness = makeHarness();
+        const browser = createBrowser({
+            allowedHosts: ["dashboard.internal"],
+            allowPrivateTargets: true,
+            binding,
+            launch: harness.launch,
+        });
+
+        await browser.content("https://dashboard.internal/report");
+
+        const metadata = makeRoute("http://169.254.169.254/latest/meta-data/", false);
+
+        await harness.routeHandler?.(metadata.route);
+
+        expect(metadata.abort).toHaveBeenCalledWith("blockedbyclient");
+        expect(metadata.continueFn).not.toHaveBeenCalled();
+    });
+
+    it("fails closed on an unparseable sub-resource URL, as the navigation sibling does", async () => {
+        expect.assertions(2);
+
+        // Contract parity with `validateUrl` / `assertNavigationAllowed`, which
+        // both abort a hop they cannot parse. Playwright's `request.url()` is
+        // always absolute so this is not reachable in practice, but a guard whose
+        // docblock promises fail-closed must not fall open.
+        const harness = makeHarness();
+
+        await defaultBrowser(harness).content("https://example.com/");
+
+        const junk = makeRoute("://not a url", false);
+
+        await harness.routeHandler?.(junk.route);
+
+        expect(junk.abort).toHaveBeenCalledWith("blockedbyclient");
+        expect(junk.continueFn).not.toHaveBeenCalled();
+    });
 });
 
 describe("createBrowser operation timeout (finding #1)", () => {
@@ -419,6 +496,64 @@ describe("session reuse", () => {
 
         expect(harness.launchOptions[0]).toBeUndefined();
         expect(harness.closed).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+        ["zero", 0],
+        ["negative", -5],
+        ["NaN", Number.NaN],
+        ["Infinity", Number.POSITIVE_INFINITY],
+    ])("still always closes when keepAlive is %s", async (_label, keepAlive) => {
+        expect.assertions(2);
+
+        // `keepAlive: 0` is the natural spelling of "do not keep alive", and what
+        // a `Number(...)` over an unset env var yields, so it must take the
+        // always-close path rather than skipping the `finally`
+        // AND sending `keep_alive: 0`/`NaN` — that leaks a billed session. The
+        // sibling numeric inputs (`timeoutMs`, `viewport`) already reject
+        // non-finite values; this one did not.
+        const harness = makeSessionHarness();
+        const browser = createBrowser({ binding, launch: harness.launch });
+
+        await browser.launch(async () => "done", { keepAlive });
+
+        expect(harness.launchOptions[0]).toBeUndefined();
+        expect(harness.closed).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+        ["below the 10s floor", 1],
+        ["just below the floor", 9],
+        ["above the 10min ceiling", 601],
+    ])("rejects a keepAlive %s instead of sending it", async (_label, keepAlive) => {
+        expect.assertions(3);
+
+        // Browser Rendering documents `keep_alive` as 10_000ms–600_000ms, so
+        // `keepAlive: 1` sends 1_000 and the launch fails at Cloudflare with an
+        // error that names none of this. Refuse at the boundary — and never
+        // reach `launch`, since a partially-launched session is the billed leak
+        // the whole surface is built around.
+        const harness = makeSessionHarness();
+        const browser = createBrowser({ binding, launch: harness.launch });
+
+        await expect(browser.launch(async () => "done", { keepAlive })).rejects.toThrow(/keepAlive must be between 10 and 600 seconds/u);
+
+        expect(harness.launchOptions).toHaveLength(0);
+        expect(harness.closed).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ["the floor", 10],
+        ["the ceiling", 600],
+    ])("accepts a keepAlive at %s", async (_label, keepAlive) => {
+        expect.assertions(2);
+
+        const harness = makeSessionHarness();
+        const browser = createBrowser({ binding, launch: harness.launch });
+
+        await expect(browser.launch(async () => "done", { keepAlive })).resolves.toBe("done");
+
+        expect(harness.launchOptions[0]).toStrictEqual({ keep_alive: keepAlive * 1000 });
     });
 
     it("connect re-attaches without closing, unless asked", async () => {

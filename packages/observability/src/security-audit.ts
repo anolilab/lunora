@@ -1,3 +1,5 @@
+import { isEnvDisabled, isEnvEnabled } from "../../../shared/env-flag";
+
 /**
  * Ordering/visual weight of a security finding — mirrors the studio's insight
  * severities so the Security Advisor and the Performance Advisor (Insights) share
@@ -13,7 +15,7 @@ type SecurityFindingLevel = "error" | "info" | "warning";
  *
  * `admin-token-weak`: `LUNORA_ADMIN_TOKEN` is set but short enough to be brute-forceable. (An *unset* token disables admin introspection entirely, so this audit — itself admin-gated — only ever runs with a token present.)
  *
- * `ws-gate-open`: admin HTTP RPCs require the bearer, but `LUNORA_WS_BEARER` is unset so the WebSocket upgrade gate defaults open — live admin subscriptions (Logs, Metrics, …) are reachable without a credential.
+ * `ws-gate-open`: `LUNORA_WS_BEARER` is unset, so the WebSocket upgrade gate defaults open and anyone who can reach the worker can open a socket and run ordinary USER subscriptions (whatever `ctx.auth` / RLS then allows them to read). Admin subscriptions are NOT part of this: they require the socket's `admin` stamp, which the upgrade sets only from `LUNORA_ADMIN_TOKEN` or a minted admin sub-token, so an unset `LUNORA_WS_BEARER` never exposes Logs/Metrics/introspection. Which is why this is a posture finding about the app's own live-query surface, not an admin hole — set the var when subscribers are expected to present a shared credential.
  *
  * `dev-args-unredacted`: the worker reports a development environment, so the durable request log captures raw, un-redacted args and identity (PII). A production deploy mislabeled as dev would persist sensitive payloads.
  *
@@ -71,12 +73,6 @@ const MIN_AUTH_SECRET_LENGTH = 32;
 /** error first, then warning, then info — so the worst findings sort to the top. */
 const LEVEL_ORDER: Record<SecurityFindingLevel, number> = { error: 0, info: 2, warning: 1 };
 
-/** Env values that read as "this security layer is turned off" for the `LUNORA_SECURITY_*` opt-out vars. */
-const DISABLED_ENV_VALUES = new Set(["0", "disabled", "false", "no", "off"]);
-
-/** Truthy env values for a boolean-ish flag like `LUNORA_CORS_ALLOW_CREDENTIALS`. */
-const ENABLED_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
-
 /** Read a string env var, trimmed and lowercased, or `undefined` when absent/non-string. */
 const readFlag = (value: unknown): string | undefined => (typeof value === "string" ? value.trim().toLowerCase() : undefined);
 
@@ -107,7 +103,7 @@ const auditAuthSecret = (env: Record<string, unknown>): SecurityFinding[] => {
  */
 const auditCors = (env: Record<string, unknown>): SecurityFinding[] => {
     const allowedOrigins = readFlag(env["LUNORA_ALLOWED_ORIGINS"]);
-    const corsCredentials = ENABLED_ENV_VALUES.has(readFlag(env["LUNORA_CORS_ALLOW_CREDENTIALS"]) ?? "");
+    const corsCredentials = isEnvEnabled(env["LUNORA_CORS_ALLOW_CREDENTIALS"]);
     const hasWildcard = allowedOrigins?.split(",").some((entry) => entry.trim() === "*") ?? false;
 
     return hasWildcard && corsCredentials ? [{ kind: "cors-wildcard-credentials", level: "error" }] : [];
@@ -127,11 +123,11 @@ const auditSecurityLayers = (env: Record<string, unknown>, dev: boolean): Securi
 
     const findings: SecurityFinding[] = [];
 
-    if (DISABLED_ENV_VALUES.has(readFlag(env["LUNORA_SECURITY_HEADERS"]) ?? "")) {
+    if (isEnvDisabled(env["LUNORA_SECURITY_HEADERS"])) {
         findings.push({ kind: "security-headers-disabled", level: "warning" });
     }
 
-    if (DISABLED_ENV_VALUES.has(readFlag(env["LUNORA_SECURITY_CSRF"]) ?? "")) {
+    if (isEnvDisabled(env["LUNORA_SECURITY_CSRF"])) {
         findings.push({ kind: "csrf-disabled", level: "warning" });
     }
 
@@ -168,9 +164,11 @@ const buildSecurityAudit = (rawEnv: unknown, options: { dev: boolean }): Securit
     const { dev } = options;
 
     if (typeof wsBearer !== "string" || wsBearer === "") {
-        // Open live-subscription gate: a real exposure in production, expected
-        // (and only informational) on a local dev worker.
-        findings.push({ kind: "ws-gate-open", level: dev ? "info" : "error" });
+        // Open USER live-subscription gate — anyone who can reach the worker can
+        // open a socket. Admin subscriptions are gated separately by the socket's
+        // `admin` stamp (`LUNORA_ADMIN_TOKEN`), so nothing privileged is exposed
+        // here. Expected (and only informational) on a local dev worker.
+        findings.push({ kind: "ws-gate-open", level: dev ? "info" : "warning" });
     }
 
     if (dev) {

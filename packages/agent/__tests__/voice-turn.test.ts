@@ -4,7 +4,7 @@ import { encodeIdentityHeader } from "../../../shared/identity-header";
 import { defineAgent } from "../src/define-agent";
 import { agentBindingName, voiceBindingName, voiceClassName } from "../src/naming";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "../src/paths";
-import type { AgentFunctionReference, AgentRunFunction, AgentStreamGenerate } from "../src/types";
+import type { AgentFunctionReference, AgentMessageRow, AgentRunFunction, AgentStreamGenerate } from "../src/types";
 import type { VoiceServerFrame, VoiceSynthesize } from "../src/voice-turn";
 import { parseIdentity, runVoiceTurn } from "../src/voice-turn";
 
@@ -50,6 +50,10 @@ const scriptedStream =
 
         return { text: deltas.join(""), toolCalls: [] };
     };
+
+const HISTORY_DISPATCH_FAILED = /agents:agentMessages failed/u;
+const INSTRUCTIONS_THUNK_BOOM = /instructions thunk boom/u;
+const ANOTHER_OWNER = /another owner/u;
 
 const agent = defineAgent({ instructions: "Be brief.", model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", voice: {} });
 const paths = DEFAULT_AGENT_FUNCTION_PATHS;
@@ -225,8 +229,14 @@ describe(runVoiceTurn, () => {
         });
 
         expect(result).toStrictEqual({ assistantText: "", interrupted: false, userText: "" });
-        expect(store.calls).toHaveLength(0);
         expect(synthesize).not.toHaveBeenCalled();
+
+        // Nothing is persisted — but the owner gate (`ensureThread`) still ran
+        // before the transcription, so the thread it just marked "running" must
+        // be handed back idle rather than wedged.
+        expect(store.calls.filter((call) => call.path === paths.appendMessage)).toStrictEqual([]);
+        expect(store.calls.map((call) => call.path)).toStrictEqual([paths.ensureThread, paths.patchThread]);
+        expect(store.calls.at(-1)?.args).toMatchObject({ key: "t1", status: "idle" });
     });
 
     it("stops teeing output and reports interrupted on a barge-in", async () => {
@@ -341,6 +351,177 @@ describe(runVoiceTurn, () => {
         const patches = store.calls.filter((call) => call.path === paths.patchThread);
 
         expect(patches.at(-1)?.args).toMatchObject({ key: "t1", status: "idle" });
+    });
+});
+
+/** A `run` seam recording every `patchThread` status, with per-path failure injection. */
+const statusRecordingRun = (options: { failPath?: string; history?: ReadonlyArray<AgentMessageRow> } = {}): { run: AgentRunFunction; statuses: string[] } => {
+    const statuses: string[] = [];
+
+    const run: AgentRunFunction = async (reference, args) => {
+        const path = reference["__lunoraRef"];
+
+        if (path === options.failPath) {
+            throw new Error(`dispatch to ${path} failed`);
+        }
+
+        if (path === DEFAULT_AGENT_FUNCTION_PATHS.patchThread) {
+            statuses.push(args?.["status"] as string);
+
+            return undefined;
+        }
+
+        if (path === DEFAULT_AGENT_FUNCTION_PATHS.listMessages) {
+            return options.history ?? [];
+        }
+
+        if (path === DEFAULT_AGENT_FUNCTION_PATHS.ensureThread) {
+            return { outcome: "continued" };
+        }
+
+        return undefined;
+    };
+
+    return { run, statuses };
+};
+
+/** The options every bounded-voice-turn test shares, minus the seams each one varies. */
+const turnOptions = (overrides: Partial<Parameters<typeof runVoiceTurn>[0]>): Parameters<typeof runVoiceTurn>[0] => {
+    return {
+        agent,
+        connectionId: "c1",
+        env,
+        exportName: "support",
+        paths,
+        run: statusRecordingRun().run,
+        send: () => {},
+        sendAudio: () => {},
+        signal: new AbortController().signal,
+        streamGenerate: scriptedStream(["Hi."]),
+        synthesize: async () => new Uint8Array(),
+        text: "hello",
+        threadKey: "t1",
+        transcribe: async () => "unused",
+        turn: 0,
+        ...overrides,
+    };
+};
+
+describe("voice turn thread status", () => {
+    it("resets the shared thread to idle when the history read fails", async () => {
+        const { run, statuses } = statusRecordingRun({ failPath: DEFAULT_AGENT_FUNCTION_PATHS.listMessages });
+
+        // `status: "running"` was set three statements before the try opened, so
+        // the catch that exists to prevent exactly this did not cover the history
+        // dispatch. `agentEnsureThread` treats "running" as live, so one transient
+        // failure rejected every later voice turn AND every durable text run on
+        // the thread for ABANDONED_RUN_MS (13 hours).
+        await expect(runVoiceTurn(turnOptions({ run }))).rejects.toThrow(HISTORY_DISPATCH_FAILED);
+
+        expect(statuses).toStrictEqual(["running", "idle"]);
+    });
+
+    it("resets the shared thread to idle when a dynamic instructions thunk throws", async () => {
+        const { run, statuses } = statusRecordingRun();
+        const thunkAgent = defineAgent({
+            instructions: () => {
+                throw new Error("instructions thunk boom");
+            },
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            voice: {},
+        });
+
+        await expect(runVoiceTurn(turnOptions({ agent: thunkAgent, run }))).rejects.toThrow(INSTRUCTIONS_THUNK_BOOM);
+
+        expect(statuses).toStrictEqual(["running", "idle"]);
+    });
+});
+
+describe("voice turn ownership gate", () => {
+    it("refuses on the thread owner gate BEFORE paying for a transcription", async () => {
+        let transcribed = 0;
+        const run: AgentRunFunction = async (reference) => {
+            if (reference["__lunoraRef"] === DEFAULT_AGENT_FUNCTION_PATHS.ensureThread) {
+                throw new Error('@lunora/agent: thread "t1" belongs to another owner');
+            }
+
+            return undefined;
+        };
+
+        // STT ran BEFORE the ownership check, so a caller the thread refuses
+        // still bought a full paid transcription of whatever it uploaded.
+        await expect(
+            runVoiceTurn(
+                turnOptions({
+                    pcm: new Uint8Array(8 * 1024 * 1024),
+                    run,
+                    text: undefined,
+                    transcribe: async () => {
+                        transcribed += 1;
+
+                        return "my utterance";
+                    },
+                }),
+            ),
+        ).rejects.toThrow(ANOTHER_OWNER);
+
+        expect(transcribed).toBe(0);
+    });
+});
+
+describe("voice turn compaction", () => {
+    it("applies the agent's compaction config — voice and text turns share ONE thread", async () => {
+        const history: AgentMessageRow[] = Array.from({ length: 500 }, (_unused, index) => {
+            return { content: `m${String(index)}`, role: "user" as const, seq: index };
+        });
+        const { run } = statusRecordingRun({ history });
+        const compacting = defineAgent({
+            compaction: { keepRecent: 2, maxMessages: 4 },
+            instructions: "Be brief.",
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            voice: {},
+        });
+        let sent: ReadonlyArray<unknown> = [];
+
+        await runVoiceTurn(
+            turnOptions({
+                agent: compacting,
+                compact: async () => "THE BRIEF",
+                run,
+                streamGenerate: async (options, onDelta) => {
+                    sent = options.messages;
+                    onDelta("Hi.");
+
+                    return { text: "Hi.", toolCalls: [] };
+                },
+            }),
+        );
+
+        // instructions + the compaction brief + the 2 kept rows — not all 500.
+        expect(sent).toHaveLength(4);
+        expect(JSON.stringify(sent)).toContain("THE BRIEF");
+    });
+
+    it("sends the full history when the agent declares no compaction (unchanged)", async () => {
+        const history: AgentMessageRow[] = Array.from({ length: 12 }, (_unused, index) => {
+            return { content: `m${String(index)}`, role: "user" as const, seq: index };
+        });
+        const { run } = statusRecordingRun({ history });
+        let sent: ReadonlyArray<unknown> = [];
+
+        await runVoiceTurn(
+            turnOptions({
+                compact: async () => "unused",
+                run,
+                streamGenerate: async (options) => {
+                    sent = options.messages;
+
+                    return { text: "Hi.", toolCalls: [] };
+                },
+            }),
+        );
+
+        expect(sent).toHaveLength(13);
     });
 });
 

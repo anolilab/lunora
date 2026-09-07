@@ -20,9 +20,17 @@
  * tier bullet, not that the lists are formatted identically — Prettier reflows
  * those bullets on every edit.
  *
+ * It also reconciles the tier lists against `packages/` itself, which neither
+ * document did. Both taxonomies are hand-typed, so a package in NEITHER list is
+ * invisible to both checks and to `api:check` — `@lunora/container` shipped a
+ * changed public surface that way ("api:check had never heard of the package"),
+ * and `@lunora/search-core` was still uncovered. The reconciliation lives here
+ * rather than in `api-snapshot.js` because this runs on every `pnpm install`,
+ * while `api:check` needs a full build first.
+ *
  * Run on every `pnpm install` via the root `postinstall` script.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -80,9 +88,64 @@ const bulletText = (roadmap, lead) => {
     return roadmap.slice(start, afterBullets === -1 ? roadmap.length : afterBullets);
 };
 
+/**
+ * Package directories deliberately outside the tier taxonomy, each with why.
+ *
+ * The check fails if an entry no longer exists, or has since been tiered, so
+ * this cannot quietly grow into a way to drop a package off the guard. Being
+ * `private` is NOT on its own a reason — `@lunora/auth-ui` and
+ * `@lunora/dispatch` are private and tiered, because the registry copies
+ * auth-ui's source verbatim into consumer projects.
+ */
+const UNTIERED = new Map([["search-core", "internal search primitives with no consumer outside @lunora/db — no public surface to promise"]]);
+
+/** Every `packages/<dir>` that carries a manifest, i.e. every real package. */
+const packageDirectories = () =>
+    readdirSync(join(rootDir, "packages"), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && existsSync(join(rootDir, "packages", entry.name, "package.json")))
+        .map((entry) => entry.name)
+        .sort();
+
 const roadmap = readFileSync(join(rootDir, "ROADMAP.md"), "utf8");
 const tiers = readTiers();
 const problems = [];
+
+const tiered = new Map();
+
+for (const [tier, dirs] of Object.entries(tiers)) {
+    for (const dir of dirs) {
+        if (tiered.has(dir)) {
+            problems.push(`  ${dir} — listed in api-snapshot.js twice, as ${tiered.get(dir)} and as ${tier}`);
+        }
+
+        tiered.set(dir, tier);
+    }
+}
+
+const onDisk = new Set(packageDirectories());
+
+for (const dir of onDisk) {
+    if (!tiered.has(dir) && !UNTIERED.has(dir)) {
+        problems.push(
+            `  ${dir} — packages/${dir} exists but is in no TIER_* list in api-snapshot.js, so api:check has never heard of it. ` +
+                `Add it to a tier (and the matching ROADMAP.md bullet), or to UNTIERED here with a reason.`,
+        );
+    }
+}
+
+for (const [dir, reason] of UNTIERED) {
+    if (!onDisk.has(dir)) {
+        problems.push(`  ${dir} — listed in UNTIERED ("${reason}") but packages/${dir} is gone; remove the entry`);
+    } else if (tiered.has(dir)) {
+        problems.push(`  ${dir} — listed in UNTIERED but also in api-snapshot.js as ${tiered.get(dir)}; remove the UNTIERED entry`);
+    }
+}
+
+for (const [dir, tier] of tiered) {
+    if (!onDisk.has(dir)) {
+        problems.push(`  ${dir} — in api-snapshot.js as ${tier} but packages/${dir} does not exist`);
+    }
+}
 
 for (const [tier, dirs] of Object.entries(tiers)) {
     const text = bulletText(roadmap, BULLETS[tier]);
@@ -100,7 +163,7 @@ for (const [tier, dirs] of Object.entries(tiers)) {
 
 if (problems.length > 0) {
     process.stderr.write(
-        `ROADMAP.md and scripts/api-snapshot.js disagree about ${String(problems.length)} package tier(s).\n` +
+        `${String(problems.length)} package tier problem(s) across ROADMAP.md, scripts/api-snapshot.js and packages/.\n` +
             `The roadmap publishes the promise; the script enforces it. Fix the roadmap bullet (or the script's tier list):\n` +
             `${problems.join("\n")}\n`,
     );

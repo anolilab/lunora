@@ -19,6 +19,10 @@ import { lunoraTest } from "../src/index";
 const { mutation, query } = initLunora.dataModel().create();
 
 const schema = defineSchema({
+    memos: defineTable({
+        body: v.string(),
+        visibility: v.string(),
+    }),
     notes: defineTable({
         body: v.string(),
     }),
@@ -47,10 +51,35 @@ const readNotes = definePolicy({
     when: () => true,
 });
 
+/**
+ * RESTRICTIVE read policy — unlike `readNotes` it returns a `WhereInput`, so
+ * the middleware computes a `baseWhere` and the legacy `query()` wrapper takes
+ * its filtering branch instead of the `if (!baseWhere) return reader`
+ * short-circuit.
+ */
+const readPublicMemos = definePolicy({
+    on: "read",
+    table: "memos",
+    when: () => {
+        return { visibility: "public" };
+    },
+});
+
 // Carries a permissive read policy — the middleware recovers the unwrapped
 // writer via the RLS_UNWRAP_SYMBOL seam, so this reaches `notes` even though
 // the table is protected.
 const listGuarded = query.use(rlsForTest(definePolicies([readNotes]))).query(async ({ ctx }) => ctx.db.query("notes").collect());
+
+/**
+ * The legacy iterator-style reader (`ctx.db.query(table)`) can't push a policy
+ * `baseWhere` into SQL, so RLS for this read path is enforced ENTIRELY by the
+ * in-memory `.filter(matchesWhere)` in `rls/middleware.ts`'s `query()`. These
+ * handlers read a table that HOLDS rows the policy hides, so a reader that
+ * forwards unfiltered is observable.
+ */
+const listMemos = query.use(rlsForTest(definePolicies([readPublicMemos]))).query(async ({ ctx }) => ctx.db.query("memos").collect());
+const firstMemo = query.use(rlsForTest(definePolicies([readPublicMemos]))).query(async ({ ctx }) => ctx.db.query("memos").first());
+const takeMemos = query.use(rlsForTest(definePolicies([readPublicMemos]))).query(async ({ ctx }) => ctx.db.query("memos").take(10));
 
 const open: ReturnType<typeof lunoraTest>[] = [];
 
@@ -105,6 +134,41 @@ describe("lunoraTest — RLS enforcement", () => {
         const rows = await t.run(async (ctx) => ctx.db.query("notes").collect());
 
         expect(rows).toHaveLength(1);
+    });
+
+    it("the legacy query() reader drops rows a restrictive read policy hides", async () => {
+        expect.assertions(3);
+
+        const t = start();
+
+        await t.run(async (ctx) => {
+            await ctx.db.insert("memos", { body: "open", visibility: "public" });
+            await ctx.db.insert("memos", { body: "secret", visibility: "private" });
+        });
+
+        const rows = (await t.query(listMemos, {})) as { body: string; visibility: string }[];
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.body).toBe("open");
+        expect(rows.some((row) => row.visibility === "private")).toBe(false);
+    });
+
+    it("the legacy query() reader's first()/take() terminals are filtered too", async () => {
+        expect.assertions(2);
+
+        const t = start();
+
+        // EVERY seeded row is hidden by the policy, so the terminals must come
+        // back empty. Asserting emptiness rather than "the visible row wins"
+        // keeps the oracle independent of the reader's (uuid-keyed, not
+        // insertion-ordered) row order.
+        await t.run(async (ctx) => {
+            await ctx.db.insert("memos", { body: "secret", visibility: "private" });
+            await ctx.db.insert("memos", { body: "classified", visibility: "private" });
+        });
+
+        await expect(t.query(firstMemo, {})).resolves.toBeNull();
+        await expect(t.query(takeMemos, {})).resolves.toEqual([]);
     });
 
     it("enforceRls: false restores the pre-guard permissive behavior", async () => {

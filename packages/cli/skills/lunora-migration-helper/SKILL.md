@@ -239,9 +239,9 @@ add the migration — not to bypass it.
 - [ ] Widened the schema to accept both shapes; `lunora codegen` clean.
 - [ ] Updated reads to handle both shapes; started writing the new shape.
 - [ ] Deployed the widened schema.
-- [ ] Authored a `defineMigration`; previewed with `lunora migrate up --dry-run`.
-- [ ] Ran `lunora migrate up`; `lunora migrate generate` + deploy for `.global()`
-      structural changes.
-- [ ] Verified completion with `lunora migrate status`.
+- [ ] Authored a `defineMigration`; previewed with `lunora migrate up <id> --dry-run`.
+- [ ] Ran `lunora migrate up <id>`; `lunora migrate generate` + deploy for
+      `.global()` structural changes.
+- [ ] Verified completion with `lunora migrate status <id>`.
 - [ ] Narrowed the schema (required / drop old field); removed both-shapes code.
 - [ ] Deployed the final schema; schema-drift gate passed.

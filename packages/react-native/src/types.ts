@@ -49,9 +49,15 @@ export interface CreateLunoraClientOptions extends LunoraClientOptions {
     /**
      * React Native `AsyncStorage` (or any async key/value store with the same
      * `getItem`/`setItem`/`removeItem` surface — Expo `SecureStore`, an in-memory
-     * map in tests). When supplied, the offline mutation queue is persisted here
-     * via `createAsyncStoragePersistence`, so writes made offline survive an app
-     * restart. Ignored when an explicit `persistence` is passed.
+     * map in tests). When supplied it backs two independent caches: the offline
+     * mutation queue (via `createAsyncStoragePersistence`, so writes made offline
+     * survive an app restart) and the durable query cache (via
+     * `createAsyncStorageQueryCache`, so reads repaint before the socket
+     * reconnects).
+     *
+     * Each is opted out of by its own option, not by the other: `persistence`
+     * overrides the queue and `queryCache` overrides the read cache, so
+     * `{ persistence: false, storage }` still writes query results to storage.
      */
     storage?: AsyncStorageLike;
 }

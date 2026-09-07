@@ -79,7 +79,6 @@ describe("schedulerDO", () => {
             post("/schedule", {
                 args: { text: "hi" },
                 functionPath: "messages.send",
-                originUrl: "https://app.test",
                 scheduledFor,
             }),
         );
@@ -102,8 +101,8 @@ describe("schedulerDO", () => {
         const later = Date.now() + 60_000;
         const sooner = Date.now() + 1000;
 
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: later }));
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "b", originUrl: "https://x.test", scheduledFor: sooner }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", scheduledFor: later }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "b", scheduledFor: sooner }));
 
         expect(state.alarm).toBe(sooner);
     });
@@ -116,10 +115,10 @@ describe("schedulerDO", () => {
         const later = Date.now() + 60_000;
         const sooner = Date.now() + 1000;
 
-        const soonerResponse = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "b", originUrl: "https://x.test", scheduledFor: sooner }));
+        const soonerResponse = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "b", scheduledFor: sooner }));
         const soonerBody = await readSchedule(soonerResponse);
 
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: later }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", scheduledFor: later }));
 
         expect(state.alarm).toBe(sooner);
 
@@ -148,8 +147,8 @@ describe("schedulerDO", () => {
         const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
         const now = Date.now();
 
-        await scheduler.fetch(post("/schedule", { args: { x: 1 }, functionPath: "due", originUrl: "https://x.test", scheduledFor: now - 1000 }));
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "later", originUrl: "https://x.test", scheduledFor: now + 60_000 }));
+        await scheduler.fetch(post("/schedule", { args: { x: 1 }, functionPath: "due", scheduledFor: now - 1000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "later", scheduledFor: now + 60_000 }));
 
         await scheduler.alarm();
 
@@ -221,6 +220,32 @@ describe("schedulerDO", () => {
         expect(response.status).toBe(404);
     });
 
+    it("/schedule stores the record under a caller-supplied id", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const scheduledFor = Date.now() + 60_000;
+
+        // `@lunora/server`'s deferred-schedule facade hands a mutation handler the
+        // id synchronously and only makes the call after the transaction commits,
+        // so the id it answered has to be the one the record ends up under.
+        const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "messages.send", id: "pre-minted_1-A", scheduledFor })));
+
+        expect(id).toBe("pre-minted_1-A");
+
+        const hit = await scheduler.fetch(get("/get?id=pre-minted_1-A"));
+        const hitBody = await hit.json<{ record?: ScheduleRecord }>();
+
+        expect(hitBody.record?.functionPath).toBe("messages.send");
+
+        // An id that could corrupt the `id:` / `t:<padded>:<id>` storage keys is
+        // ignored rather than trusted, and the DO mints its own.
+        const rejected = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "messages.send", id: "bad:id", scheduledFor })));
+
+        expect(rejected).not.toBe("bad:id");
+    });
+
     it("/schedule validates required fields", async () => {
         expect.assertions(1);
 
@@ -249,7 +274,7 @@ describe("schedulerDO — live subscriptions", () => {
         // Simulate an already-connected subscriber.
         state.acceptWebSocket?.(createFakeSocket() as never);
 
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: Date.now() + 10_000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", scheduledFor: Date.now() + 10_000 }));
 
         const pushed = state.sockets[0]?.sent ?? [];
 
@@ -263,9 +288,7 @@ describe("schedulerDO — live subscriptions", () => {
         const state = createFakeStateWithSockets();
         const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
-        const scheduled = await scheduler.fetch(
-            post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: Date.now() + 10_000 }),
-        );
+        const scheduled = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", scheduledFor: Date.now() + 10_000 }));
         const { id } = await readSchedule(scheduled);
 
         // Connect after scheduling, then cancel — the cancel should push an empty list.
@@ -284,9 +307,7 @@ describe("schedulerDO — live subscriptions", () => {
         const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
         // No WS hooks on the plain fake — broadcast must be a silent no-op.
-        const response = await scheduler.fetch(
-            post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: Date.now() + 10_000 }),
-        );
+        const response = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", scheduledFor: Date.now() + 10_000 }));
 
         expect(response.status).toBe(200);
     });
@@ -372,7 +393,7 @@ describe("schedulerDO — bounded listing", () => {
         // the wire format both paths emit.)
         state.acceptWebSocket?.(createFakeSocket() as never);
 
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "new", originUrl: "https://x.test", scheduledFor: Date.now() + 10_000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "new", scheduledFor: Date.now() + 10_000 }));
 
         const changeMessage = JSON.parse(state.sockets[0]?.sent.at(-1) ?? "{}") as { records: ScheduleRecord[]; truncated: boolean; type: string };
 
@@ -508,6 +529,67 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
         expect(dead.attempts).toBeGreaterThan(5);
     });
 
+    it("does not requeue a job whose dead-letter row is already durable", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
+        const realDelete = state.storage.delete.bind(state.storage);
+
+        // `parkDead` writes `dead:<id>` and THEN clears the pending rows. Fail
+        // that clear: the park is durable, the error reaches
+        // `drainRecordGuarded`, and re-asserting the time index there dispatched
+        // a job that already has a terminal record — a duplicate run of a
+        // workflow or any other non-idempotent job.
+        state.storage.delete = async (keyOrKeys: string | string[]) => {
+            if (Array.isArray(keyOrKeys) && keyOrKeys.some((key) => key.startsWith("id:"))) {
+                throw new Error("storage unavailable");
+            }
+
+            return realDelete(keyOrKeys);
+        };
+
+        const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 })));
+
+        // Force the re-armed job due, moving the HEADER's `scheduledFor` with the
+        // index key: `alarm()` reads the record off the header, so a rewrite that
+        // touches only the index leaves the claim delete pointing at a key that
+        // no longer exists and the forced entry survives every pass.
+        const forceDue = (): void => {
+            const indexKey = [...state.storageMap.keys()].find((key) => key.startsWith("t:"));
+
+            if (indexKey === undefined) {
+                return;
+            }
+
+            const recordId = String(state.storageMap.get(indexKey));
+            const header = state.storageMap.get(`id:${recordId}`) as ScheduleRecord | undefined;
+
+            state.storageMap.delete(indexKey);
+
+            if (header !== undefined) {
+                state.storageMap.set(`id:${recordId}`, { ...header, scheduledFor: 0 });
+            }
+
+            state.storageMap.set(`t:${"0".padStart(15, "0")}:${recordId}`, recordId);
+        };
+
+        for (let index = 0; index < 7; index += 1) {
+            forceDue();
+
+            // eslint-disable-next-line no-await-in-loop -- sequential alarm fires
+            await scheduler.alarm();
+        }
+
+        const dispatchedByPark = scheduler.attempts;
+
+        await scheduler.alarm();
+
+        expect(state.storageMap.has(`dead:${id}`)).toBe(true);
+        expect(keysWithPrefix(state, "t:")).toHaveLength(0);
+        expect(scheduler.attempts).toBe(dispatchedByPark);
+    });
+
     it("logs a warning when a job is parked in the dead-letter store", async () => {
         expect.assertions(2);
 
@@ -607,9 +689,18 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
 
 describe("schedulerDO — dead-letter admin endpoints", () => {
     /** Schedule a job and drive the alarm until it exhausts its retries and parks under `dead:`. */
-    const parkDeadJob = async (state: ReturnType<typeof createFakeState>, functionPath = "f"): Promise<string> => {
+    const parkDeadJob = async (state: ReturnType<typeof createFakeState>, functionPath = "f", requestedId?: string): Promise<string> => {
         const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
-        const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: { n: 1 }, functionPath, scheduledFor: Date.now() - 1000 })));
+        const id = await scheduledId(
+            await scheduler.fetch(
+                post("/schedule", {
+                    args: { n: 1 },
+                    functionPath,
+                    ...(requestedId === undefined ? {} : { id: requestedId }),
+                    scheduledFor: Date.now() - 1000,
+                }),
+            ),
+        );
 
         for (let index = 0; index < 7; index += 1) {
             const indexKey = [...state.storageMap.keys()].find((key) => key.startsWith("t:"));
@@ -679,6 +770,49 @@ describe("schedulerDO — dead-letter admin endpoints", () => {
         // A fresh time-index entry re-arms the resurrected job at its new due time.
         expect(state.storageMap.has(`t:${String(result.scheduledFor).padStart(15, "0")}:${id}`)).toBe(true);
         expect(state.alarm).toBe(result.scheduledFor);
+    });
+
+    it("refuses a caller-supplied id the workflow engine would reject", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        // Minting over it stored the job under an id the caller never sees, so a
+        // repeated call scheduled a SECOND job rather than answering 409.
+        const response = await scheduler.fetch(
+            post("/schedule", { args: {}, functionPath: "jobs.charge", id: "-daily-2026-09-06", scheduledFor: Date.now() + 60_000 }),
+        );
+
+        expect(response.status).toBe(400);
+        await expect(response.json<{ error: { code: string } }>()).resolves.toMatchObject({ error: { code: "INVALID_SCHEDULE_ID" } });
+        expect([...state.storageMap.keys()]).toStrictEqual([]);
+    });
+
+    it("refuses a caller-supplied id a dead-letter record still holds, so /dead/retry cannot overwrite the new job", async () => {
+        expect.assertions(4);
+
+        const state = createFakeState();
+        const id = await parkDeadJob(state, "f", "invoice-42");
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        expect(id).toBe("invoice-42");
+
+        // A dead record keeps no `id:` header, so a pending-only conflict check
+        // let the id be reused. `/dead/retry` then wrote the revived corpse over
+        // the new job's header and added a second `t:` index under the same id:
+        // the new job was gone and the dead one fired in its place.
+        const reused = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.charge", id: "invoice-42", scheduledFor: Date.now() + 60_000 }));
+
+        expect(reused.status).toBe(409);
+        await expect(reused.json<{ error: { code: string } }>()).resolves.toMatchObject({ error: { code: "DUPLICATE_SCHEDULE_ID" } });
+
+        // The dead record is the only thing that answers to the id — nothing new
+        // was written under it.
+        const listResponse = await scheduler.fetch(get("/list"));
+        const listed = await listResponse.json<{ records: unknown[] }>();
+
+        expect(listed.records).toHaveLength(0);
     });
 
     it("pOST /dead/retry is a no-op for an unknown id", async () => {
@@ -759,9 +893,7 @@ describe("schedulerDO — alarm contract (fake clock)", () => {
 
         // runAt posts /schedule with an absolute time; runAfter is the same path
         // with `Date.now() + delayMs`. Schedule 60s out.
-        await scheduler.fetch(
-            post("/schedule", { args: { text: "hi" }, functionPath: "messages.send", originUrl: "https://app.test", scheduledFor: now + 60_000 }),
-        );
+        await scheduler.fetch(post("/schedule", { args: { text: "hi" }, functionPath: "messages.send", scheduledFor: now + 60_000 }));
 
         // The DO armed the alarm for exactly the scheduled time.
         expect(setAlarmCalls).toEqual([now + 60_000]);
@@ -776,14 +908,38 @@ describe("schedulerDO — alarm contract (fake clock)", () => {
         expect(scheduler.dispatched.map((record) => record.functionPath)).toEqual(["messages.send"]);
     });
 
+    it("refuses a caller-supplied id that is already scheduled, instead of firing the newer job at the older time", async () => {
+        expect.assertions(4);
+
+        const now = 1_700_000_000_000;
+        const { scheduler, fastForwardToAlarm, currentAlarm } = harness((state, env) => new TestScheduler(state, env), now);
+
+        const first = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.remind", id: "reminder-42", scheduledFor: now + 1000 }));
+        // Same id, five seconds later. Accepting it overwrites the `id:` header
+        // while BOTH `t:` index entries survive, so the drain dispatches the
+        // t+5000 record at t+1000 and then deletes the entry it should have
+        // fired at — the job runs four seconds early and never runs again.
+        const second = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.remind", id: "reminder-42", scheduledFor: now + 5000 }));
+
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(409);
+
+        await fastForwardToAlarm();
+
+        // The record that fired is the one that was actually scheduled, at its
+        // own time — and the queue is drained, not left holding a phantom entry.
+        expect(scheduler.dispatched.map((record) => record.scheduledFor)).toStrictEqual([now + 1000]);
+        expect(currentAlarm()).toBeNull();
+    });
+
     it("fires only the due job and re-arms setAlarm to the next pending entry", async () => {
         expect.assertions(4);
 
         const now = 1_700_000_000_000;
         const { scheduler, setAlarmCalls, fastForwardToAlarm, currentAlarm } = harness((state, env) => new TestScheduler(state, env), now);
 
-        await scheduler.fetch(post("/schedule", { args: { x: 1 }, functionPath: "due", originUrl: "https://app.test", scheduledFor: now + 1000 }));
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "later", originUrl: "https://app.test", scheduledFor: now + 60_000 }));
+        await scheduler.fetch(post("/schedule", { args: { x: 1 }, functionPath: "due", scheduledFor: now + 1000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "later", scheduledFor: now + 60_000 }));
 
         // Earliest-pending wins the alarm (armed to the sooner of the two).
         expect(currentAlarm()).toBe(now + 1000);
@@ -803,8 +959,8 @@ describe("schedulerDO — alarm contract (fake clock)", () => {
         const now = 1_700_000_000_000;
         const { scheduler, setAlarmCalls, fastForwardToAlarm, currentAlarm } = harness((state, env) => new TestScheduler(state, env), now);
 
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "first", originUrl: "https://app.test", scheduledFor: now + 1000 }));
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "second", originUrl: "https://app.test", scheduledFor: now + 2000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "first", scheduledFor: now + 1000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "second", scheduledFor: now + 2000 }));
 
         await fastForwardToAlarm();
         await fastForwardToAlarm();
@@ -821,7 +977,7 @@ describe("schedulerDO — alarm contract (fake clock)", () => {
         const now = 1_700_000_000_000;
         const { scheduler, setAlarmCalls, fastForwardToAlarm } = harness((state, env) => new FailingScheduler(state, env, Number.POSITIVE_INFINITY), now);
 
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", originUrl: "https://app.test", scheduledFor: now + 1000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: now + 1000 }));
 
         const { firedAt } = await fastForwardToAlarm();
 
@@ -1192,5 +1348,69 @@ describe("schedulerDO — per-record drain isolation (storage throw)", () => {
         const indexKeys = [...state.storageMap.keys()].filter((key) => key.startsWith("t:") && key.endsWith(`:${id}`));
 
         expect(indexKeys).toHaveLength(0);
+    });
+
+    it("re-fires a job whose time-index claim was deleted by a dispatch its instance did not survive", async () => {
+        expect.assertions(5);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "messages.send", scheduledFor: Date.now() - 1000 })));
+
+        // The eviction. `drainRecordGuarded` deletes the `t:` claim and AWAITS
+        // it — the output gate holds the outbound fetch until that delete is
+        // durable — so a Durable Object lost during the dispatch leaves the
+        // `id:` header behind with no index entry. Nothing re-indexes it:
+        // `rescheduleAlarm` derives the clock from `t:` alone and `alarm()`
+        // reconciles only the inverse orphan.
+        const claimKey = [...state.storageMap.keys()].find((key) => key.startsWith("t:"));
+
+        state.storageMap.delete(claimKey ?? "");
+
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("t:"))).toHaveLength(0);
+        expect(state.storageMap.has(`id:${id}`)).toBe(true);
+
+        // A FRESH instance: the crash ended the one that minted the orphan.
+        const revived = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        await revived.alarm();
+
+        expect(revived.dispatched.map((record) => record.id)).toEqual([id]);
+        // Settled, so both the header and the re-put claim are gone again.
+        expect(state.storageMap.has(`id:${id}`)).toBe(false);
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("t:"))).toHaveLength(0);
+    });
+
+    it("recovers that orphan from the fetch entry point too — the crash left no alarm to recover from", async () => {
+        expect.assertions(5);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "messages.send", scheduledFor: Date.now() - 1000 })));
+
+        // The same eviction as above — but the death happens BEFORE the trailing
+        // `rescheduleAlarm()`, so the alarm the DO would have re-armed was never
+        // written. Recovery reachable only from `alarm()` is therefore recovery
+        // that never runs: nothing will ever deliver one.
+        const claimKey = [...state.storageMap.keys()].find((key) => key.startsWith("t:"));
+
+        state.storageMap.delete(claimKey ?? "");
+        await state.storage.deleteAlarm();
+
+        // A FRESH instance, woken the only way anything can still wake it: a
+        // request. `/status` is a plain read — it schedules nothing.
+        const revived = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const status = await revived.fetch(get("/status"));
+
+        expect(status.status).toBe(200);
+        // The claim is back and an alarm is armed for it, so the runtime will
+        // deliver `alarm()` again on its own.
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("t:"))).toHaveLength(1);
+        await expect(state.storage.getAlarm()).resolves.not.toBeNull();
+
+        await revived.alarm();
+
+        expect(revived.dispatched.map((record) => record.id)).toEqual([id]);
+        expect(state.storageMap.has(`id:${id}`)).toBe(false);
     });
 });

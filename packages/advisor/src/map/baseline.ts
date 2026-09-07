@@ -69,6 +69,29 @@ const checksWorsened = (before: ReadonlyArray<CheckResult>, after: ReadonlyArray
 /** A finite number, i.e. one that can be compared and round-tripped through JSON. */
 const isScore = (value: unknown): boolean => typeof value === "number" && Number.isFinite(value);
 
+/**
+ * Structural check for a `checks` array read off disk — container *and* entries.
+ *
+ * `checksWorsened` is the only thing a baseline's checks reach: it keys a `Map`
+ * on `name` and compares `occurrences` with `>`. Validating just the container
+ * leaves the same defect one level in — a `null` entry throws there, and a
+ * non-numeric `occurrences` makes every comparison `false`, so the growth signal
+ * reads "no regression" for a baseline that is corrupt. `level` and `weight` go
+ * unchecked on purpose: nothing reads them off a baseline, and rejecting a row
+ * over a field the gate never touches would fail runs that can still be verified.
+ */
+const isCheckList = (value: unknown): boolean =>
+    Array.isArray(value) &&
+    value.every((entry: unknown) => {
+        if (typeof entry !== "object" || entry === null) {
+            return false;
+        }
+
+        const check = entry as Record<string, unknown>;
+
+        return typeof check.name === "string" && isScore(check.occurrences);
+    });
+
 /** Structural check for one row of a baseline read off disk. */
 const isProcedureRow = (value: unknown): boolean => {
     if (typeof value !== "object" || value === null) {
@@ -77,7 +100,11 @@ const isProcedureRow = (value: unknown): boolean => {
 
     const row = value as Record<string, unknown>;
 
-    return typeof row.id === "string" && isScore(row.score) && typeof row.coverage === "string" && COVERAGE_VALUES.has(row.coverage);
+    // `checks` is validated for the same reason as the other three:
+    // `compareToBaseline` hands it to `checksWorsened`, which calls `.map` on it.
+    // `?? []` only covers `null`/`undefined`, so a `checks: {}` left by a
+    // truncated or merge-conflicted artifact would throw inside the CI gate.
+    return typeof row.id === "string" && isScore(row.score) && typeof row.coverage === "string" && COVERAGE_VALUES.has(row.coverage) && isCheckList(row.checks);
 };
 
 /** Structural check for the project bucket of a baseline read off disk. */
@@ -88,7 +115,7 @@ const isProjectBucket = (value: unknown): boolean => {
 
     const bucket = value as Record<string, unknown>;
 
-    return Array.isArray(bucket.checks) && isScore(bucket.score);
+    return isCheckList(bucket.checks) && isScore(bucket.score);
 };
 
 /**
@@ -156,10 +183,10 @@ const compareToBaseline = (current: AdvisorMap, baseline: AdvisorMap): BaselineC
  *
  * Validates *shape* — the header and every procedure row — because
  * `compareToBaseline` dereferences `entry.id` / `entry.score` /
- * `entry.coverage`: a truncated or merge-conflicted baseline with a `null` row
- * would otherwise crash the gate, and a row of `{}` would compare as a silent
- * no-op. Non-finite scores are rejected for the same reason — `NaN < 0` is
- * `false`, which reads as "no regression".
+ * `entry.coverage` / `entry.checks`: a truncated or merge-conflicted baseline
+ * with a `null` row would otherwise crash the gate, and a row of `{}` would
+ * compare as a silent no-op. Non-finite scores are rejected for the same
+ * reason — `NaN < 0` is `false`, which reads as "no regression".
  *
  * Version *policy* deliberately lives in {@link compareToBaseline}, not here.
  * Rejecting a mismatch in both places made that function's `comparable: false`

@@ -81,19 +81,8 @@ const StudioAppBody = ({ basePath, chrome, studio }: StudioAppBodyProps): ReactE
 
     return (
         <ErrorBoundary fallbackTitle={t("Studio failed")} label={t("Studio")} retryLabel={t("Try again")}>
-            <Studio
-                basePath={basePath}
-                chrome={chrome}
-                dataEditable={studio?.dataEditable}
-                functions={studio?.functions}
-                initialShardKey={studio?.initialShardKey}
-                openApiSpec={studio?.openApiSpec}
-                openRpcSpec={studio?.openRpcSpec}
-                runAsIdentity={studio?.runAsIdentity}
-                scheduledCancel={studio?.scheduledCancel}
-                scheduledLoad={studio?.scheduledLoad}
-                schemaEditable={studio?.schemaEditable}
-            />
+            {/* eslint-disable-next-line react/jsx-props-no-spreading -- forwarding a closed, typed prop set: the hand-written list this replaces dropped `scheduledCron`, so a host that supplied a cron loader silently got the default fetch. `basePath` follows the spread because the app-level prop is the one that wins. */}
+            <Studio {...studio} basePath={basePath} chrome={chrome} />
         </ErrorBoundary>
     );
 };
@@ -166,7 +155,14 @@ const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rule
     // token doesn't rebuild the LunoraClient (and tear down its WebSocket +
     // reconnect timers) once per keystroke. The raw `token` still drives the
     // controlled input; the client rebuilds at most once per typing pause.
-    const debouncedToken = useDebounced(token, 300);
+    //
+    // The reset key snaps the mirror on the empty↔non-empty transition, which is
+    // exactly where the gate below flips. The gate reads the RAW token, so without
+    // the snap the shell mounts every panel against a credential-less client for the
+    // full delay after a login — a row of 401s and failed WS subscribes — and drops
+    // the credential a delay late on logout. Editing a token that is already set
+    // stays debounced, which is what the delay is for.
+    const debouncedToken = useDebounced(token, 300, token === "");
 
     // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: this is the LunoraClient — a fresh one per render opens a new WebSocket
     const client = useMemo(() => {
@@ -234,9 +230,14 @@ const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rule
     // persisted), render the login page and nothing else — every studio page
     // sits behind it. A token (dev `.dev.vars` auto-inject, a prior paste, or
     // submitting the login) drops straight into the app; clearing it returns here.
+    //
+    // An injected `client` skips the gate entirely: the caller owns that client's
+    // credentials (that is the documented contract — `baseUrl`/`adminToken` are
+    // ignored when it is set), so there is no token here to gate on and the login
+    // form could not affect it anyway.
     return (
         <ThemeProvider>
-            {token === "" ? (
+            {token === "" && injectedClient === undefined ? (
                 <StudioLogin i18n={i18n} onSubmit={setToken} />
             ) : (
                 <StudioShell

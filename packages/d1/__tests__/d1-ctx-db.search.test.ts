@@ -39,6 +39,7 @@ const setupWriter = async (): Promise<DatabaseWriterLike> => {
         `CREATE TABLE "docs" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
+            "_version" INTEGER,
             "body" TEXT,
             "channel" TEXT,
             "title" TEXT

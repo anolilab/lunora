@@ -107,7 +107,7 @@ export interface SubscriptionFilter {
      * subscriptions reached across every internally-walked page (still
      * deliberately left unset by default — it must reach every matched
      * device); the PER-PAGE batch size is a separate, independent knob (see
-     * `CreateNotifyOptions`'s `broadcastPageSize`, default 250) so a caller
+     * `defineNotify`'s `broadcastPageSize`, default 250) so a caller
      * that sets `limit` to bound the audience doesn't also have to reason
      * about page sizing.
      *
@@ -135,6 +135,31 @@ export interface SubscriptionFilter {
 export interface SubscriptionStore {
     /** Remove a subscription by id (idempotent). */
     delete: (id: string) => Promise<void>;
+
+    /**
+     * Remove a subscription by id ONLY if it is owned by `userId`, and report
+     * whether it was.
+     *
+     * Separate from {@link SubscriptionStore.delete} because the caller-facing
+     * `unregister` must not be a read followed by a write: between a `get` that
+     * checks the owner and a `delete` that acts on it, a re-registration can
+     * replace the row, so the check passes for one owner and the removal lands on
+     * another's subscription.
+     *
+     * **The predicate and the removal must be ONE operation.** A store that
+     * cannot do that atomically should say so in its own documentation rather
+     * than implement this as a get-then-delete, which reintroduces the race this
+     * method exists to remove. Both shipped stores manage it: the in-memory one
+     * because a `Map` check-and-delete has no await between the two, and the D1
+     * one with a single `DELETE … WHERE id = ? AND user_id = ? RETURNING id`.
+     *
+     * `userId` is `null` for an anonymous subscription, and matches only a row
+     * that is itself unowned.
+     * @param id The subscription id.
+     * @param userId The owner the row must carry, or `null` for unowned.
+     * @returns `true` when a row was removed.
+     */
+    deleteOwned: (id: string, userId: string | null) => Promise<boolean>;
     /** Read a subscription by id, or `undefined`. */
     get: (id: string) => Promise<StoredSubscription | undefined>;
 
@@ -148,7 +173,34 @@ export interface SubscriptionStore {
     list: (filter?: SubscriptionFilter) => Promise<StoredSubscription[]>;
     /** Record the latest delivery outcome for a subscription (best-effort). */
     markStatus: (id: string, status: SubscriptionStatus, error?: string) => Promise<void>;
-    /** Insert or update a subscription (upsert by id). */
+
+    /**
+     * Insert or update a subscription (upsert by id), refusing to move an
+     * existing row to a DIFFERENT owner.
+     *
+     * The ownership predicate is the same one {@link SubscriptionStore.deleteOwned}
+     * carries, and for the same reason: the id is derived from the endpoint or the
+     * FCM token, so it is a **caller-controlled key**. An unguarded upsert let any
+     * caller who could guess or observe another user's endpoint re-register it
+     * under their own `userId` with keys of their choosing — the victim's device
+     * then fails every send (an encryption failure is not a gone signal, so it is
+     * never pruned either) and the attacker can `unregister` it as their own. The
+     * `unregister` guard alone closed exactly half of that (CWE-639).
+     *
+     * A row with no owner is claimable (the device signed in), and a row the caller
+     * already owns is theirs to refresh — that is the routine service-worker
+     * re-registration. Anything else must REJECT (`FORBIDDEN`), not silently
+     * no-op: unlike `unregister` there is nothing safe to return, since a caller
+     * gets the stored record back and it would be someone else's delivery keys.
+     * A shared device that legitimately changes hands is handled by its current
+     * owner calling `unregister` first.
+     *
+     * **The predicate and the write must be ONE operation**, as for `deleteOwned`:
+     * between a read that checks the owner and the write that acts on it, another
+     * registration can replace the row. The D1 store puts the predicate in the
+     * `ON CONFLICT … DO UPDATE`'s own `WHERE`; the in-memory one has no `await`
+     * between the two.
+     */
     put: (subscription: StoredSubscription) => Promise<StoredSubscription>;
 }
 
@@ -196,7 +248,7 @@ export interface BroadcastPageResult {
  *
  * - `accepted` — the provider took the message (a `Receipt.successful` send).
  * - `failed` — a provider error; the log line carries the `error` text.
- * - `gone` — the endpoint is unregistered (404/410, FCM `UNREGISTERED`) and pruned; push-only.
+ * - `gone` — the endpoint is unregistered (Web Push 404/410, FCM's `NOT_FOUND` for a dead token) and pruned; push-only.
  *
  * Web Push and FCM give no delivery/open receipts, so the vocabulary stops at the
  * send attempt: a `delivered`/`opened` status would be a lie for these channels.
@@ -245,27 +297,29 @@ export interface LunoraPush {
     /**
      * Fan-out a push to every stored subscription matching `filter` (default: all).
      * Reuses the engine's retry/circuit-breaker middleware; prunes subscriptions
-     * the push service reports as gone (HTTP 404/410, FCM `UNREGISTERED`). The `to`
+     * the push service reports as gone (Web Push 404/410, FCM's `NOT_FOUND` for a dead token). The `to`
      * target is derived from each subscription, so it is omitted from the payload.
      *
      * Internally walks the audience in bounded pages (via {@link LunoraPush.broadcastPage},
-     * keyset-paginated on the subscription `id`) so a huge audience is never
-     * materialized wholesale in the isolate — see `CreateNotifyOptions`'s
-     * `broadcastPageSize`. This call still processes the WHOLE matched
-     * audience in one request/queue message; use {@link LunoraPush.broadcastPage}
-     * directly (as `runPushBroadcastJob` does) to bound a single queue message
-     * to one page.
+     * keyset-paginated on the subscription `id`) so the audience ROWS are never
+     * materialized wholesale in the isolate — see `defineNotify`'s
+     * `broadcastPageSize`. The returned `outcomes` ARE whole-audience, though: one
+     * `{ id, status }` per recipient accumulates across every page, so this call is
+     * bounded in rows held but not in outcomes reported. It also processes the WHOLE
+     * matched audience in one request/queue message; use {@link LunoraPush.broadcastPage}
+     * directly (as `runPushBroadcastPage` does) to bound a single queue message —
+     * and its result — to one page.
      */
     broadcast: (payload: PushContent, filter?: SubscriptionFilter) => Promise<BroadcastResult>;
 
     /**
      * Fan-out a push to ONE bounded page of stored subscriptions matching
-     * `filter` (page size: `CreateNotifyOptions`'s `broadcastPageSize`, default
+     * `filter` (page size: `defineNotify`'s `broadcastPageSize`, default
      * 250, capped by `filter.limit` when set). Same delivery semantics as
      * {@link LunoraPush.broadcast} (retry/circuit-breaker, gone-pruning) but
      * scoped to a single page; returns the page's own {@link BroadcastResult}
      * plus a `nextCursor` to fetch the next page (`undefined` when done).
-     * Backs `runPushBroadcastJob` so one queue message does bounded work
+     * Backs `runPushBroadcastPage` so one queue message does bounded work
      * regardless of audience size — most app code should call
      * {@link LunoraPush.broadcast} instead.
      */
@@ -275,16 +329,63 @@ export interface LunoraPush {
      * List stored subscriptions (optionally filtered), with the delivery
      * **secrets** stripped — the Web Push `keys` (RFC 8291 `auth`/`p256dh`) and the
      * FCM `token`. Those, plus the endpoint, are enough to deliver arbitrary push to
-     * a device, so they never cross the app-facing facade; the raw rows are
+     * a device, so no READ on this facade returns them; the raw rows are otherwise
      * reachable only through the internal `SubscriptionStore`.
+     *
+     * {@link LunoraPush.register} is the one exception, and deliberately so: it
+     * echoes back the record the caller just supplied, so it discloses nothing
+     * the caller did not already hold and never another device's row.
      */
     list: (filter?: SubscriptionFilter) => Promise<PushSubscriptionDevice[]>;
-    /** Register (upsert) a device subscription and return the stored record. */
+
+    /**
+     * Register (upsert) a device subscription and return the stored record (the
+     * caller's own row, secrets included).
+     *
+     * Owner-scoped, exactly as {@link LunoraPush.unregister} is: registering an
+     * endpoint that is already another user's row is REFUSED (`FORBIDDEN`) rather
+     * than re-owning it. Pass `ctx.auth?.userId` so the check has something to
+     * separate; an app that registers every device anonymously gets no separation
+     * from it (every row is unowned, and unowned rows stay claimable). A device
+     * that legitimately changes hands — one browser profile, two accounts —
+     * unregisters as its current owner first.
+     */
     register: (input: RegisterInput) => Promise<StoredSubscription>;
     /** Send a push to a single stored subscription (by id or record); `to` is derived from it. */
     send: (target: StoredSubscription | string, payload: PushContent) => Promise<Receipt>;
-    /** Remove a subscription by id (idempotent). */
-    unregister: (id: string) => Promise<void>;
+
+    /**
+     * Remove ONE of `owner`'s subscriptions by id (idempotent).
+     *
+     * `owner` is not optional, and the removal happens only when the stored row
+     * carries that same owner. A subscription id is derived from the endpoint
+     * (`webPushId`) or the FCM token, so it is a **caller-controlled key**: the
+     * intended call is a mutation forwarding `subscribeToPush`'s
+     * `replacedEndpoint` after a VAPID rotation, and nothing about that argument
+     * proves the browser sending it ever held the subscription it names.
+     * Deleting by id alone let any caller that could guess or observe another
+     * user's endpoint silence that device's notifications (CWE-639).
+     *
+     * A row belonging to someone else is left alone SILENTLY rather than
+     * refused, so the call cannot be used to probe which endpoints exist — the
+     * same answer, and the same absence of a write, as an id that was never
+     * registered.
+     *
+     * `{ userId: null }` (or `undefined`, which normalises to it) addresses the
+     * anonymous rows — those registered with no `userId`. An app that registers
+     * every device anonymously therefore gets no separation from this check;
+     * pass `ctx.auth?.userId` and register with it to get any.
+     */
+    unregister: (id: string, owner: PushOwner) => Promise<void>;
+}
+
+/** Who a {@link LunoraPush.unregister} call is acting as. */
+export interface PushOwner {
+    /**
+     * The authenticated caller (`ctx.auth?.userId`), or `null`/`undefined` for
+     * an anonymous registration. Required — see {@link LunoraPush.unregister}.
+     */
+    userId: string | null | undefined;
 }
 
 /** A push payload without its `to` target — the facade derives `to` from the stored subscription. */
@@ -297,7 +398,7 @@ export type PushContent = Omit<PushPayload, "to">;
  * single-channel convenience senders for the edge-safe channels.
  */
 export interface LunoraNotify {
-    /** Send an outbound webhook. */
+    /** Post to a chat channel (Slack/Discord/Teams/Telegram). */
     chat: (payload: ChatPayload) => Promise<Receipt>;
     /** Deliver an in-app inbox notification. */
     inApp: (payload: InAppPayload) => Promise<Receipt>;
@@ -305,7 +406,7 @@ export interface LunoraNotify {
     push: LunoraPush;
     /** Deliver a multi-channel message (one payload per channel). */
     send: (message: NotificationMessage) => Promise<Receipt[]>;
-    /** Post to a chat channel (Slack/Discord/Teams/Telegram). */
+    /** Send an outbound webhook. */
     webhook: (payload: WebhookPayload) => Promise<Receipt>;
 }
 
@@ -337,10 +438,33 @@ export interface NotifyConfig {
     allowedPushOrigins?: string[];
 
     /**
+     * Page size for `push.broadcast`'s internal keyset pagination over the
+     * subscription store (default 250, minimum 1). Each page is fetched,
+     * delivered, and counted before the next page's store round trip, so a huge
+     * audience is never materialized wholesale in the isolate. Also the
+     * per-message bound `push.broadcastPage` (and `runPushBroadcastPage`) uses.
+     *
+     * Declared here, and not only on `createNotify`'s third argument, because
+     * this file is the only handle an app has: the sole production constructor is
+     * codegen's fixed `createNotify(definition, env, { log, metrics })`, so a knob
+     * that lives only on those options is unsettable by every Lunora app —
+     * while {@link SubscriptionFilter.limit}'s own docs point at it as the way to
+     * size pages.
+     */
+    broadcastPageSize?: number;
+
+    /**
      * Optional chat provider factory (Slack/Discord/Teams/Telegram). Wire with a
      * provider from `@visulima/notification/providers/*`. Edge-safe (fetch-based).
      */
     chat?: (env: NotifyEnv) => unknown;
+
+    /**
+     * Max concurrent sends during a `push.broadcast` (default 10, minimum 1).
+     * Same reasoning as {@link NotifyConfig.broadcastPageSize}: this is where an
+     * app can reach it.
+     */
+    concurrency?: number;
     /** FCM (Firebase Cloud Messaging HTTP v1) config. Edge-safe — supply an OAuth2 token. */
     fcm?: FcmConfig | FcmConfigFactory;
     /** Optional in-app inbox provider factory. Edge-safe. */

@@ -96,8 +96,10 @@ function Messages({ channelId }: { channelId: string }) {
 
 ## Mutations
 
-`useMutation(fn)` returns a callable with a `.pending` flag. You pass optimistic
-updates per call, and they roll back automatically if the server rejects.
+`useMutation(fn)` returns `{ mutate, pending, data, error, isError, reset,
+withOptimisticUpdate }` — `mutate` is the callable, the hook result itself is
+not. You pass optimistic updates per call, and they roll back automatically if
+the server rejects.
 
 ```tsx
 import { useMutation } from "@lunora/react";
@@ -105,11 +107,11 @@ import { useMutation } from "@lunora/react";
 import { api } from "@/lunora/_generated/api";
 
 function Composer({ channelId }: { channelId: string }) {
-    const send = useMutation(api.messages.send);
+    const { mutate: send, pending } = useMutation(api.messages.send);
 
     return (
         <button
-            disabled={send.pending}
+            disabled={pending}
             onClick={() => void send({ channelId, text: "hi" }, { optimistic: (current) => [...(current ?? []), { _id: "tmp", text: "hi" }] })}
         >
             Send

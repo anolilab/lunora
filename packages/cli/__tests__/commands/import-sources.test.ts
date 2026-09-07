@@ -1119,4 +1119,50 @@ describe("the live Supabase storage path", () => {
         expect(result.code).toBe(1);
         expect(logs.error.join("\n")).toContain("must be https");
     });
+
+    it("keeps the bucket-list diagnostic instead of replacing it with a resume hint", async () => {
+        expect.assertions(3);
+
+        const root = writeDump({ "t.csv": "id\nx1\n" });
+
+        process.env["SUPABASE_URL"] = "https://project.supabase.co";
+        // The classic operator mistake: the anon key instead of the service-role
+        // key. The bucket list answers 401 and the transfer throws a message naming
+        // exactly that — which a bare `catch {}` discarded, printing only "it will
+        // resume where it stopped" over a run that transferred nothing and has no
+        // checkpoint to resume from.
+        process.env["SUPABASE_SERVICE_ROLE_KEY"] = "anon-key";
+
+        const { logger, logs } = capturingLogger();
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: async (input) =>
+                new URL(input).pathname === "/storage/v1/bucket"
+                    ? {
+                          arrayBuffer: async () => new ArrayBuffer(0),
+                          body: null,
+                          json: async () => {
+                              return {};
+                          },
+                          ok: false,
+                          status: 401,
+                          text: async () => "Invalid JWT",
+                      }
+                    : jsonResponse({ conflicts: 0, errors: [], inserted: {}, received: 0 }),
+            file: root,
+            from: "supabase",
+            logger,
+            token: "t",
+            url: "http://localhost:8787",
+            withStorage: true,
+        });
+
+        const errors = logs.error.join("\n");
+
+        expect(result.code).toBe(1);
+        expect(errors).toContain("service-role key, not the anon key");
+        // And the resume advice no longer promises a checkpoint that may not exist.
+        expect(errors).not.toContain("resume where it stopped");
+    });
 });

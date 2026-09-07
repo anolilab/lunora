@@ -13,9 +13,6 @@ export interface SqliteAdapter {
     /** Execute a SQL statement (with optional bound params). */
     exec: (sql: string, params?: ReadonlyArray<unknown>) => void;
 
-    /** Return the id of the last inserted row. */
-    lastInsertRowId: () => number;
-
     /**
      * Execute a SQL statement and return the result rows.
      * Columns can be accessed by index or by name.

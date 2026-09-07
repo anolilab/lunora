@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { diffSchemaSnapshots, SCHEMA_SNAPSHOT_VERSION, serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
+import { diffSchemaSnapshots, hashSchemaSnapshot, SCHEMA_SNAPSHOT_VERSION, serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 import type { SchemaIR, TableIR } from "../src/ir";
 import { buildSchemaSnapshot, evaluateSchemaDrift, parseSchemaSnapshot, SchemaSnapshotParseError } from "../src/schema-drift";
 
@@ -39,8 +39,8 @@ describe("schema-drift", () => {
 
             // tables sorted alphabetically (messages before users)
             expect(Object.keys(snapshot.tables)).toStrictEqual(["messages", "users"]);
-            expect(snapshot.tables.users?.fields.nickname).toStrictEqual({ kind: "string", optional: true });
-            expect(snapshot.tables.users?.fields.name).toStrictEqual({ kind: "string", optional: false });
+            expect(snapshot.tables.users?.fields.nickname).toStrictEqual({ kind: "string", nullable: false, optional: true, unique: false });
+            expect(snapshot.tables.users?.fields.name).toStrictEqual({ kind: "string", nullable: false, optional: false, unique: false });
             // migration ids sorted
             expect(snapshot.migrationIds).toStrictEqual(["m1", "m2"]);
         });
@@ -127,7 +127,14 @@ describe("schema-drift", () => {
             );
 
             expect(safe.changes).toStrictEqual([
-                { scope: "table", severity: "safe", summary: "added optional field users.bio", table: "users", type: "addedOptionalField" },
+                {
+                    remediation: "none",
+                    scope: "table",
+                    severity: "safe",
+                    summary: "added optional field users.bio",
+                    table: "users",
+                    type: "addedOptionalField",
+                },
             ]);
             expect(breaking.changes.some((c) => c.type === "addedRequiredField" && c.severity === "breaking")).toBe(true);
         });
@@ -160,7 +167,14 @@ describe("schema-drift", () => {
             );
 
             expect(widened.changes).toStrictEqual([
-                { scope: "table", severity: "safe", summary: "field users.name became optional", table: "users", type: "fieldRequiredToOptional" },
+                {
+                    remediation: "none",
+                    scope: "table",
+                    severity: "safe",
+                    summary: "field users.name became optional",
+                    table: "users",
+                    type: "fieldRequiredToOptional",
+                },
             ]);
             expect(newTable.changes.some((c) => c.type === "addedTable" && c.severity === "safe")).toBe(true);
         });
@@ -203,7 +217,7 @@ describe("schema-drift", () => {
             expect.assertions(2);
 
             const current = buildSchemaSnapshot(schema([table("users", { bio: optionalString, name: stringField })]), []);
-            const decision = evaluateSchemaDrift({ baseline, current });
+            const decision = evaluateSchemaDrift({ baseline, current, migrations: [] });
 
             expect(decision.blocked).toBe(false);
             expect(decision.reason).toContain("additive/safe");
@@ -213,29 +227,190 @@ describe("schema-drift", () => {
             expect.assertions(3);
 
             const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), []);
-            const decision = evaluateSchemaDrift({ baseline, current });
+            const decision = evaluateSchemaDrift({ baseline, current, migrations: [] });
 
             expect(decision.blocked).toBe(true);
             expect(decision.reason).toContain("deploy blocked");
             expect(decision.reason).toContain("changed type");
         });
 
-        it("passes breaking drift when a NEW migration id is present", () => {
+        it("names the command that ran, not `deploy`, and offers only the flags that command accepts", () => {
+            expect.assertions(4);
+
+            // `lunora build` reaches this gate through `runDeployCommand({ dryRun: true })`.
+            // It used to report "deploy blocked:" — sending the operator to look for a
+            // deployment that was never attempted — and to offer
+            // `--update-schema-baseline`, which `build` rejects with a raw
+            // `Found unknown option` stack trace. Both halves of its own advice failed.
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), []);
+            const decision = evaluateSchemaDrift({ baseline, command: "build", current, migrations: [] });
+
+            expect(decision.blocked).toBe(true);
+            expect(decision.reason).toContain("build blocked");
+            expect(decision.reason).not.toContain("deploy blocked");
+
+            // `build` publishes nothing, so re-blessing a baseline from it would
+            // advance past a breaking change that never shipped.
+            expect(decision.reason).toContain("`lunora build` does not take that flag");
+        });
+
+        it("passes breaking drift when a NEW migration covers the affected table", () => {
             expect.assertions(3);
 
             const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), ["fix-name-type"]);
-            const decision = evaluateSchemaDrift({ baseline, current });
+            const decision = evaluateSchemaDrift({ baseline, current, migrations: [{ id: "fix-name-type", table: "users" }] });
 
             expect(decision.blocked).toBe(false);
             expect(decision.newMigrationIds).toStrictEqual(["fix-name-type"]);
-            expect(decision.reason).toContain("new migration(s) were added");
+            expect(decision.reason).toContain("covered by");
+        });
+
+        it("blocks when the NEW migration targets a DIFFERENT table than the breaking change", () => {
+            // The hole the per-table match closes: counting new ids alone, a
+            // backfill on `messages` reported the `users` change as
+            // "accompanied by a migration" that would never visit it.
+            expect.assertions(2);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField }), table("messages", { body: stringField })]), [
+                "backfill-messages",
+            ]);
+            const decision = evaluateSchemaDrift({ baseline, current, migrations: [{ id: "backfill-messages", table: "messages" }] });
+
+            expect(decision.blocked).toBe(true);
+            expect(decision.reason).toContain("unresolved breaking schema change");
+        });
+
+        it("blocks a migration whose table codegen could not lift to a literal, and says so", () => {
+            // Failing closed is right; failing closed SILENTLY is not — the
+            // operator wrote exactly the `defineMigration` the message asks for.
+            expect.assertions(2);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), ["dynamic"]);
+            const decision = evaluateSchemaDrift({ baseline, current, migrations: [{ id: "dynamic", table: "" }] });
+
+            expect(decision.blocked).toBe(true);
+            expect(decision.reason).toContain("Migration(s) dynamic declare a non-literal `table`");
+        });
+
+        it("a shard-mode change stays blocked even with a migration on that very table", () => {
+            // `defineMigration` runs inside one shard and can only replace the row
+            // it was handed, so it can never re-home rows. The studio cites this
+            // block to justify not shipping a stranded-rows detector.
+            expect.assertions(3);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: stringField }, { shardMode: { field: "tenantId", kind: "shardBy" } })]), [
+                "rehome-users",
+            ]);
+            const decision = evaluateSchemaDrift({ baseline, current, migrations: [{ id: "rehome-users", table: "users" }] });
+
+            expect(decision.blocked).toBe(true);
+            // …and it must not name the tool that cannot work — neither as a
+            // scaffold line nor as the bullet above it.
+            expect(decision.reason).not.toContain("lunora migrate create");
+            expect(decision.reason).not.toContain("defineMigration");
+        });
+
+        it("a dropped index stays blocked even with a migration on that very table", () => {
+            // Rewriting rows cannot repair a query that named the index. Letting a
+            // same-table migration excuse it would ship a deploy whose callers
+            // still fail at runtime — the flags are the honest escape.
+            expect.assertions(2);
+
+            const indexed = buildSchemaSnapshot(schema([table("users", { name: stringField }, { indexes: [{ fields: ["name"], name: "byName" }] })]), []);
+            const current = buildSchemaSnapshot(schema([table("users", { name: stringField })]), ["touch-users"]);
+            const decision = evaluateSchemaDrift({ baseline: indexed, current, migrations: [{ id: "touch-users", table: "users" }] });
+
+            expect(decision.blocked).toBe(true);
+            expect(decision.reason).toContain("removed index byName");
+        });
+
+        it("offers no migration for a dropped index — that is a code change, not a backfill", () => {
+            // A row transform cannot restore DDL. Offering `migrate create` here
+            // sends the operator to the one tool guaranteed not to work.
+            expect.assertions(3);
+
+            const indexed = buildSchemaSnapshot(schema([table("users", { name: stringField }, { indexes: [{ fields: ["name"], name: "byName" }] })]), []);
+            const current = buildSchemaSnapshot(schema([table("users", { name: stringField })]), []);
+            const { blocked, reason } = evaluateSchemaDrift({ baseline: indexed, current, migrations: [] });
+
+            expect(blocked).toBe(true);
+            expect(reason).toContain("removed index byName");
+            expect(reason).not.toContain("lunora migrate create");
+        });
+
+        it("offers no migration for a dropped table — its rows are unreachable, not transformable", () => {
+            expect.assertions(2);
+
+            const current = buildSchemaSnapshot(schema([table("messages", { body: stringField })]), []);
+            const { blocked, reason } = evaluateSchemaDrift({ baseline, current, migrations: [] });
+
+            expect(blocked).toBe(true);
+            expect(reason).not.toContain("lunora migrate create");
+        });
+
+        it("prints a paste-ready scaffold command for each table still owed a backfill", () => {
+            expect.assertions(3);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), []);
+            const { reason } = evaluateSchemaDrift({ baseline, current, migrations: [] });
+
+            expect(reason).toContain("Scaffold the missing migration(s)");
+            expect(reason).toContain("lunora migrate create backfill_users --table users");
+            // The generated `up` is `(document) => document`, which would clear the
+            // block without backfilling a row. Say so.
+            expect(reason).toContain("identity placeholder you must fill in");
+        });
+
+        it("suppresses the scaffold line for a table name `migrate create` would reject", () => {
+            // Table names are object keys with no identifier constraint; `--table`
+            // requires one. Printing a command that cannot run is worse than none.
+            expect.assertions(2);
+
+            const odd = buildSchemaSnapshot(schema([table("user-profiles", { name: stringField })]), []);
+            const current = buildSchemaSnapshot(schema([table("user-profiles", { name: numberField })]), []);
+            const { blocked, reason } = evaluateSchemaDrift({ baseline: odd, current, migrations: [] });
+
+            expect(blocked).toBe(true);
+            expect(reason).not.toContain("lunora migrate create");
+        });
+
+        it("blocks on only the tables a partial set of migrations left uncovered", () => {
+            expect.assertions(4);
+
+            const twoTables = buildSchemaSnapshot(schema([table("users", { name: stringField }), table("posts", { title: stringField })]), []);
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField }), table("posts", { title: numberField })]), ["fix-users"]);
+            const { blocked, reason } = evaluateSchemaDrift({ baseline: twoTables, current, migrations: [{ id: "fix-users", table: "users" }] });
+
+            expect(blocked).toBe(true);
+            // The covered table is neither listed as a problem nor scaffolded…
+            expect(reason).not.toContain("field users.name changed type");
+            expect(reason).not.toContain("--table users");
+            // …and the uncovered one is.
+            expect(reason).toContain("lunora migrate create backfill_posts --table posts");
+        });
+
+        it("names only the migrations that covered something, not every new id", () => {
+            expect.assertions(2);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), ["fix-users", "unrelated"]);
+            const { blocked, reason } = evaluateSchemaDrift({
+                baseline,
+                current,
+                migrations: [
+                    { id: "fix-users", table: "users" },
+                    { id: "unrelated", table: "messages" },
+                ],
+            });
+
+            expect(blocked).toBe(false);
+            expect(reason).toContain("covered by 1 new migration(s) (fix-users)");
         });
 
         it("passes breaking drift when overridden with allowDrift", () => {
             expect.assertions(2);
 
             const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), []);
-            const decision = evaluateSchemaDrift({ allowDrift: true, baseline, current });
+            const decision = evaluateSchemaDrift({ allowDrift: true, baseline, current, migrations: [] });
 
             expect(decision.blocked).toBe(false);
             expect(decision.reason).toContain("overridden by --allow-schema-drift");
@@ -251,7 +426,7 @@ describe("schema-drift", () => {
             it("offers both flags on deploy", () => {
                 expect.assertions(2);
 
-                const { reason } = evaluateSchemaDrift({ baseline, command: "deploy", current: breaking() });
+                const { reason } = evaluateSchemaDrift({ baseline, command: "deploy", current: breaking(), migrations: [] });
 
                 expect(reason).toContain("--allow-schema-drift");
                 expect(reason).toContain("--update-schema-baseline");
@@ -260,7 +435,7 @@ describe("schema-drift", () => {
             it("offers only --allow-schema-drift on verify, and points at prepare for the other", () => {
                 expect.assertions(3);
 
-                const { reason } = evaluateSchemaDrift({ baseline, command: "verify", current: breaking() });
+                const { reason } = evaluateSchemaDrift({ baseline, command: "verify", current: breaking(), migrations: [] });
 
                 expect(reason).toContain("pass `--allow-schema-drift`");
                 expect(reason).toContain("lunora prepare --update-schema-baseline");
@@ -270,7 +445,7 @@ describe("schema-drift", () => {
             it("falls back to listing both when the caller is unknown", () => {
                 expect.assertions(2);
 
-                const { reason } = evaluateSchemaDrift({ baseline, current: breaking() });
+                const { reason } = evaluateSchemaDrift({ baseline, current: breaking(), migrations: [] });
 
                 expect(reason).toContain("--allow-schema-drift");
                 expect(reason).toContain("--update-schema-baseline");
@@ -281,7 +456,7 @@ describe("schema-drift", () => {
             expect.assertions(1);
 
             const current = buildSchemaSnapshot(schema([table("users", { name: stringField })]), []);
-            const decision = evaluateSchemaDrift({ baseline: undefined, current });
+            const decision = evaluateSchemaDrift({ baseline: undefined, current, migrations: [] });
 
             expect(decision.blocked).toBe(false);
         });
@@ -292,7 +467,7 @@ describe("schema-drift", () => {
             const withMigration = buildSchemaSnapshot(schema([table("users", { name: stringField })]), ["m1"]);
             // breaking change but the only migration id is the same one the baseline already knew.
             const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), ["m1"]);
-            const decision = evaluateSchemaDrift({ baseline: withMigration, current });
+            const decision = evaluateSchemaDrift({ baseline: withMigration, current, migrations: [{ id: "m1", table: "users" }] });
 
             expect(decision.blocked).toBe(true);
         });
@@ -388,6 +563,274 @@ describe("schema-drift", () => {
             const { changes } = diffSchemaSnapshots(undefined, buildSchemaSnapshot(pinned("us"), []));
 
             expect(changes.some((candidate) => candidate.type === "changedJurisdiction")).toBe(false);
+        });
+    });
+
+    /*
+     * A snapshot of only `{ kind, optional }` was byte-identical across every
+     * change INSIDE a validator, so each of these produced zero drift, an
+     * unchanged baseline file, and — because `recordSchemaVersion` keys on the
+     * content hash — no ledger row either.
+     */
+    describe("validator interior", () => {
+        /** The three signals a change has to move: a classified drift change, the serialized bytes, and the content hash. */
+        const compare = (before: TableIR["shape"], after: TableIR["shape"]) => {
+            const baseline = buildSchemaSnapshot(schema([table("users", before)]), []);
+            const current = buildSchemaSnapshot(schema([table("users", after)]), []);
+
+            return {
+                changes: diffSchemaSnapshots(baseline, current).changes,
+                hashMoved: hashSchemaSnapshot(baseline) !== hashSchemaSnapshot(current),
+                serializationMoved: serializeSchemaSnapshot(baseline) !== serializeSchemaSnapshot(current),
+            };
+        };
+
+        it("sees a repointed `v.id()` foreign key", () => {
+            expect.assertions(4);
+
+            const { changes, hashMoved, serializationMoved } = compare(
+                { owner: { kind: "id", tableName: "users" } },
+                { owner: { kind: "id", tableName: "orgs" } },
+            );
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ remediation: "backfill", severity: "breaking", type: "changedFieldShape" });
+            expect(changes[0]?.summary).toContain("id(users) → id(orgs)");
+            expect([hashMoved, serializationMoved]).toStrictEqual([true, true]);
+        });
+
+        it("sees an array element type change (it moves the storage projection)", () => {
+            expect.assertions(3);
+
+            const { changes, hashMoved } = compare(
+                { tags: { inner: { kind: "string" }, kind: "array" } },
+                { tags: { inner: { kind: "bigint" }, kind: "array" } },
+            );
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ severity: "breaking", type: "changedFieldShape" });
+            expect(hashMoved).toBe(true);
+        });
+
+        it("sees an object property and a record value type change", () => {
+            expect.assertions(2);
+
+            const object = compare(
+                { profile: { kind: "object", shape: { a: { kind: "string" } } } },
+                { profile: { kind: "object", shape: { a: { kind: "number" } } } },
+            );
+            const record = compare(
+                { counts: { keyType: { kind: "string" }, kind: "record", valueType: { kind: "string" } } },
+                { counts: { keyType: { kind: "string" }, kind: "record", valueType: { kind: "bigint" } } },
+            );
+
+            expect(object.changes.map((change) => change.severity)).toStrictEqual(["breaking"]);
+            expect(record.changes.map((change) => change.severity)).toStrictEqual(["breaking"]);
+        });
+
+        it("sees a changed literal", () => {
+            expect.assertions(2);
+
+            const { changes, hashMoved } = compare({ tier: { kind: "literal", literalValue: '"a"' } }, { tier: { kind: "literal", literalValue: '"b"' } });
+
+            expect(changes.map((change) => change.type)).toStrictEqual(["changedFieldShape"]);
+            expect(hashMoved).toBe(true);
+        });
+
+        it("flags a swapped union member as breaking but a widened union as safe", () => {
+            expect.assertions(3);
+
+            const swapped = compare(
+                { value: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] } },
+                { value: { kind: "union", members: [{ kind: "string" }, { kind: "boolean" }] } },
+            );
+            const widened = compare({ value: { kind: "string" } }, { value: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] } });
+            const narrowed = compare({ value: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] } }, { value: { kind: "string" } });
+
+            expect(swapped.changes.map((change) => change.severity)).toStrictEqual(["breaking"]);
+            // Widening accepts everything the old shape did, so nothing stored becomes invalid.
+            expect(widened.changes.map((change) => [change.severity, change.type])).toStrictEqual([["safe", "widenedFieldShape"]]);
+            expect(narrowed.changes.map((change) => change.severity)).toStrictEqual(["breaking"]);
+        });
+
+        it("does not call a union widened when a retained member gained a refinement or lost its optional", () => {
+            expect.assertions(2);
+
+            // Both narrow what the column accepts while keeping the member SET
+            // identical. The widening check compared members with their column
+            // flags stripped, so each read as an unchanged member set and was
+            // reported `widenedFieldShape` — "every stored value stays valid" —
+            // for a change that invalidates stored rows.
+            const refined = compare(
+                { value: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] } },
+                { value: { kind: "union", members: [{ hasRefinement: true, kind: "string" }, { kind: "number" }] } },
+            );
+            const deoptionalized = compare(
+                { value: { kind: "union", members: [{ inner: { kind: "string" }, kind: "optional" }, { kind: "number" }] } },
+                { value: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] } },
+            );
+
+            expect(refined.changes.map((change) => change.severity)).toStrictEqual(["breaking"]);
+            expect(deoptionalized.changes.map((change) => change.severity)).toStrictEqual(["breaking"]);
+        });
+
+        it("still reads an added union member as a widening when the column is optional", () => {
+            expect.assertions(1);
+
+            // The column's own `optional` is diffed on its own and is unchanged
+            // here, so it must not stop the shape comparison from matching
+            // `v.string()` against the `string` member it became one of.
+            const { changes } = compare(
+                { value: { inner: { kind: "string" }, kind: "optional" } },
+                { value: { inner: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] }, kind: "optional" } },
+            );
+
+            expect(changes.map((change) => [change.severity, change.type])).toStrictEqual([["safe", "widenedFieldShape"]]);
+        });
+
+        it("reads a refined column folded into a union as a widening, and a member that gained one as not", () => {
+            expect.assertions(3);
+
+            // The column's refinement travels WITH it into the union: the member
+            // it becomes carries the same `.max(10)`, so nothing on disk stops
+            // being valid. Normalizing the old side to `refined: false` made it
+            // unable to match its own member, and a change that invalidates no
+            // stored row demanded a backfill migration.
+            const carried = compare(
+                { value: { hasRefinement: true, kind: "string" } },
+                { value: { kind: "union", members: [{ hasRefinement: true, kind: "string" }, { kind: "number" }] } },
+            );
+            // Only the PRESENCE of a predicate is knowable, so dropping one can
+            // only widen…
+            const dropped = compare(
+                { value: { hasRefinement: true, kind: "string" } },
+                { value: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] } },
+            );
+            // …while gaining one narrows the strings the column still accepts,
+            // however many members were added alongside it.
+            const gained = compare(
+                { value: { kind: "string" } },
+                { value: { kind: "union", members: [{ hasRefinement: true, kind: "string" }, { kind: "number" }] } },
+            );
+
+            expect(carried.changes.map((change) => [change.severity, change.type])).toStrictEqual([
+                ["safe", "widenedFieldShape"],
+                ["safe", "relaxedFieldConstraint"],
+            ]);
+            expect(dropped.changes.map((change) => [change.severity, change.type])).toStrictEqual([
+                ["safe", "widenedFieldShape"],
+                ["safe", "relaxedFieldConstraint"],
+            ]);
+            expect(gained.changes.map((change) => [change.severity, change.type])).toStrictEqual([["breaking", "changedFieldKind"]]);
+        });
+
+        it("treats a reordered union as no change at all — a union is a set", () => {
+            expect.assertions(2);
+
+            const { changes, hashMoved } = compare(
+                { value: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] } },
+                { value: { kind: "union", members: [{ kind: "number" }, { kind: "string" }] } },
+            );
+
+            expect(changes).toStrictEqual([]);
+            expect(hashMoved).toBe(false);
+        });
+
+        it("classifies tightening a constraint as breaking and relaxing it as safe", () => {
+            expect.assertions(4);
+
+            const plain = { kind: "string" } as const;
+            const unique = { column: { notNull: true, unique: true }, kind: "string" } as const;
+            const nullable = { column: { notNull: false }, kind: "string" } as const;
+
+            expect(compare({ email: plain }, { email: unique }).changes.map((change) => [change.severity, change.type])).toStrictEqual([
+                ["breaking", "addedFieldConstraint"],
+            ]);
+            expect(compare({ email: unique }, { email: plain }).changes.map((change) => [change.severity, change.type])).toStrictEqual([
+                ["safe", "relaxedFieldConstraint"],
+            ]);
+            // `.nullable()` removed: every row holding NULL is now invalid.
+            expect(compare({ email: nullable }, { email: plain }).changes.map((change) => change.severity)).toStrictEqual(["breaking"]);
+            expect(compare({ email: plain }, { email: nullable }).changes.map((change) => change.severity)).toStrictEqual(["safe"]);
+        });
+
+        it("reads `.unique()` through `v.optional()` whichever node the chain recorded it on", () => {
+            expect.assertions(2);
+
+            const onInner = buildSchemaSnapshot(
+                schema([table("users", { email: { inner: { column: { notNull: true, unique: true }, kind: "string" }, kind: "optional" } })]),
+                [],
+            );
+            const onWrapper = buildSchemaSnapshot(
+                schema([table("users", { email: { column: { notNull: true, unique: true }, inner: { kind: "string" }, kind: "optional" } })]),
+                [],
+            );
+
+            expect(onInner.tables.users?.fields.email?.unique).toBe(true);
+            expect(onWrapper.tables.users?.fields.email?.unique).toBe(true);
+        });
+
+        it("does not report drift for detail a pre-deepening baseline never recorded", () => {
+            expect.assertions(1);
+
+            /*
+             * The shape a baseline written before the deepening has on disk. Every
+             * app has one, and reporting a breaking change per constrained field on
+             * the first run after upgrading is how `--allow-schema-drift` becomes
+             * reflexive.
+             */
+            const legacy = {
+                jurisdiction: undefined,
+                migrationIds: [],
+                tables: { users: { fields: { email: { kind: "string", optional: false } }, indexes: {}, relations: {}, shardMode: "root" } },
+                version: SCHEMA_SNAPSHOT_VERSION,
+            } as const;
+
+            const current = buildSchemaSnapshot(schema([table("users", { email: { column: { notNull: false, unique: true }, kind: "string" } })]), []);
+
+            expect(diffSchemaSnapshots(legacy, current).changes).toStrictEqual([]);
+        });
+
+        it("keeps the serialization independent of field, index and object-property declaration order", () => {
+            expect.assertions(2);
+
+            const shapeA = { profile: { kind: "object", shape: { a: { kind: "string" }, b: { kind: "number" } } }, zed: { kind: "string" } } as const;
+            const shapeB = { profile: { kind: "object", shape: { b: { kind: "number" }, a: { kind: "string" } } }, zed: { kind: "string" } } as const;
+
+            const first = buildSchemaSnapshot(
+                schema([
+                    table(
+                        "users",
+                        { ...shapeA },
+                        {
+                            indexes: [
+                                { fields: ["zed"], name: "by_zed" },
+                                { fields: ["a"], name: "by_a" },
+                            ],
+                        },
+                    ),
+                ]),
+                [],
+            );
+            const second = buildSchemaSnapshot(
+                schema([
+                    table(
+                        "users",
+                        // Same columns, declared the other way round.
+                        { zed: shapeB.zed, profile: shapeB.profile },
+                        {
+                            indexes: [
+                                { fields: ["a"], name: "by_a" },
+                                { fields: ["zed"], name: "by_zed" },
+                            ],
+                        },
+                    ),
+                ]),
+                [],
+            );
+
+            expect(serializeSchemaSnapshot(first)).toBe(serializeSchemaSnapshot(second));
+            expect(hashSchemaSnapshot(first)).toBe(hashSchemaSnapshot(second));
         });
     });
 });

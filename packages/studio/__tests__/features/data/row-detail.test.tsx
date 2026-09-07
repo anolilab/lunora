@@ -37,6 +37,25 @@ describe("rowDetailDrawer", () => {
         expect(screen.getAllByTestId(/^rd-field-/u)).toHaveLength(COLUMNS.length);
     });
 
+    it("renders a bytes field as its size, not the `{}` an ArrayBuffer pretty-prints to", () => {
+        expect.assertions(1);
+
+        // The grid cell shows `<bytes: n>`; the drawer expands that same row, so
+        // it may not disagree — and `{}` tells the operator nothing.
+        render(
+            <RowDetailDrawer
+                columns={[...COLUMNS, "blob"]}
+                mask={{ columns: new Map(), enabled: false }}
+                onClose={vi.fn<() => void>()}
+                onNavigate={vi.fn<(target: string, id: string) => void>()}
+                refs={DEFAULT_REFS}
+                row={{ ...ROW, blob: Uint8Array.from([1, 2, 3, 4]).buffer }}
+            />,
+        );
+
+        expect(screen.getByTestId("rd-bytes-blob").textContent).toBe("<bytes: 4 B>");
+    });
+
     it("renders a null field with the muted null marker, not an empty cell", () => {
         expect.assertions(1);
 

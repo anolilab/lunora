@@ -14,6 +14,7 @@ import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useDebounced from "../../hooks/use-debounced";
 import { useT } from "../../i18n/i18n-context";
 import { formatTimestamp } from "../../lib/internal";
+import SignUpInvitationsPanel from "./sign-up-invitations-panel";
 import { UserCreateDialog } from "./user-create-dialog";
 import { UserDetailDrawer } from "./user-detail-drawer";
 
@@ -220,6 +221,14 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
                     onCreated={reloadUsers}
                 />
             )}
+
+            {/*
+             * Sits with the users it decides on rather than as its own nav entry:
+             * an invitation is who may *become* a user. Hidden entirely unless the
+             * `inviteOnly` plugin is installed, like every other capability-gated
+             * auth surface.
+             */}
+            {capabilities.inviteOnly && <SignUpInvitationsPanel />}
         </div>
     );
 };

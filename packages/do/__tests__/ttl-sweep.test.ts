@@ -2,7 +2,7 @@ import type { DatabaseWriterLike, SchemaLike, TransactionHeadroomTracker, Transa
 import { ADMIN_FUNCTIONS, createShardCtxDb as createShardContextDatabase, runShardMigrations, selectExpiredIds } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { ShardDOState } from "../src/shard-do";
+import type { RunShardWriteArgs, RunShardWriteResult, ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -42,7 +42,7 @@ class TtlShard extends ShardDO {
         return Promise.reject(new Error("handleRpc must not run"));
     }
 
-    protected override deleteRowThroughWriter(table: string, id: string): Promise<void> {
+    protected override async runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
         const writer = createShardContextDatabase({
             broadcast: (delta) => {
                 this.recordChangedTable(delta.table);
@@ -51,7 +51,9 @@ class TtlShard extends ShardDO {
             sql: this.sql as never,
         });
 
-        return writer.delete(id, table);
+        await writer.delete(args.id ?? "", args.table);
+
+        return { id: args.id ?? null, op: args.op };
     }
 
     // eslint-disable-next-line class-methods-use-this -- resolved TTL policies for this schema (the codegen subclass reads them off the imported schema)
@@ -189,8 +191,8 @@ describe("ttl sweep", () => {
 
         /**
          * Unlike `TtlShard` above, this variant actually forwards the `headroom`
-         * `pollTtlSweeps` threads through `deleteRowThroughWriter` into a REAL
-         * metered writer — proving the value-threading, not just the plumbing.
+         * `pollTtlSweeps` threads through `runShardWrite` into a REAL metered
+         * writer — proving the value-threading, not just the plumbing.
          * `transactionLimits()` is overridden tiny so a sweep can be driven past
          * it deterministically.
          */
@@ -205,7 +207,7 @@ describe("ttl sweep", () => {
                 return this.pollTtlSweeps();
             }
 
-            protected override deleteRowThroughWriter(table: string, id: string, headroom?: TransactionHeadroomTracker): Promise<void> {
+            protected override async runShardWrite(args: RunShardWriteArgs, headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult> {
                 const writer = createShardContextDatabase({
                     broadcast: (delta) => {
                         this.recordChangedTable(delta.table);
@@ -215,7 +217,9 @@ describe("ttl sweep", () => {
                     sql: this.sql as never,
                 });
 
-                return writer.delete(id, table);
+                await writer.delete(args.id ?? "", args.table);
+
+                return { id: args.id ?? null, op: args.op };
             }
 
             // eslint-disable-next-line class-methods-use-this -- resolved TTL policies for this schema

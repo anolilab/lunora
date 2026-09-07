@@ -2,6 +2,7 @@ import type { ConnectionStatus, LunoraClient } from "@lunora/client";
 import type { Readable } from "svelte/store";
 import { readable } from "svelte/store";
 
+import { isBrowser } from "../../../shared/is-browser";
 import { getLunoraClient } from "./context";
 
 /** The shape held by a {@link connectionStatus} store: the latest aggregate live-socket status. */
@@ -18,6 +19,12 @@ export type ConnectionStatusStore = Readable<ConnectionStatus>;
  * `$`-read / `.subscribe()`) and is released by the returned stop function when
  * the last subscriber goes away, so a store that's never read attaches nothing.
  *
+ * Client-only, like every other subscribing primitive here: `$status` in a
+ * template subscribes during `renderToString`, so an unguarded start callback
+ * registers a listener per server render. The store still reports the client's
+ * current status on the server — that value is a plain read, and nothing
+ * transitions during a render.
+ *
  * Pass `client` explicitly, or omit it to resolve the ambient client published
  * by `setLunoraClient` (which must therefore be called during component init,
  * before this runs).
@@ -29,6 +36,10 @@ export const connectionStatus = (client?: LunoraClient): ConnectionStatusStore =
         // Re-read on attach in case the status moved between store creation and
         // the first subscriber.
         set(resolved.connectionStatus());
+
+        if (!isBrowser()) {
+            return () => {};
+        }
 
         return resolved.onConnectionStatus((next) => {
             set(next);

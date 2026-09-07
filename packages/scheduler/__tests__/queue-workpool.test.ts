@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createQueueConsumer, createQueueWorkpool, httpDispatcher } from "../src/queue-workpool";
 import type { FunctionReference, MessageBatchLike, QueueDispatch, QueueJob, QueueLike, QueueMessageLike, QueueSendOptionsLike } from "../src/types";
 
-const fnRef = (ref: string): FunctionReference => {
+const fnRef = (ref: string): FunctionReference<"mutation"> => {
     return { __lunoraRef: ref };
 };
 
@@ -220,6 +220,22 @@ describe("httpDispatcher", () => {
         expect(url).toBe("https://app.example/_lunora/scheduler/dispatch");
         expect((init.headers as Record<string, string>).authorization).toBe("Bearer admintok");
         expect(JSON.parse(init.body as string)).toStrictEqual({ args: { x: 1 }, functionPath: "jobs:a", shardKey: "s1" });
+    });
+
+    it("sends the queue message id as the shard dedup id so a redelivery is applied once", async () => {
+        expect.assertions(1);
+
+        // Regression: the wire body carried no `id`, so a Queues redelivery after
+        // the mutation had already committed re-ran it from scratch (a second
+        // charge). The DO-backed path has always deduped via `id: record.id`.
+        const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 200 }));
+        const dispatch = httpDispatcher({ adminToken: "admintok", fetchImpl: fetchMock, originUrl: "https://app.example/" });
+
+        await dispatch({ args: { x: 1 }, functionPath: "jobs:a" }, "msg-42");
+
+        const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+        expect(JSON.parse(init.body as string)).toStrictEqual({ args: { x: 1 }, functionPath: "jobs:a", id: "msg-42" });
     });
 
     it("throws on a non-2xx dispatch response so the message retries", async () => {

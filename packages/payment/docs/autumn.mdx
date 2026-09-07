@@ -324,6 +324,7 @@ exist. Autumn's canonical headers are `svix-id`, `svix-timestamp`, and
 
 ```ts
 // lunora/http.ts
+import { webhookResponse } from "@lunora/payment";
 import { httpAction, httpRouter } from "lunorash/server";
 import { processWebhook } from "./billing";
 
@@ -334,7 +335,10 @@ app.post(
     httpAction(async (ctx, request) => {
         const body = await request.text();
 
-        return Response.json(
+        // `webhookResponse`, not `Response.json(...)`: only the JSON payload crosses the
+        // `runAction` hop, so building the response by hand collapses the deliberate 500 on an
+        // orphaned (out-of-order) event to a 200 and Autumn never redelivers it.
+        return webhookResponse(
             await ctx.runAction(processWebhook, {
                 body,
                 svixId: request.headers.get("svix-id") ?? "",

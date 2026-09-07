@@ -3,9 +3,15 @@
     "name": "auth-ui-solid-v2",
     "title": "Auth UI — Solid 2",
     "description": "Copy-in, user-owned Solid 2 auth screens on top of the base `auth` item and @lunora/solid: sign in/up, forgot/reset password, magic link, email OTP, two-factor (verify + setup), account & security settings, and organizations. Same framework-agnostic controllers under lunora/auth-ui/core as every other port, with the views written for the Solid 2 line — @solidjs/web JSX, `onSettled`, split-phase effects, context-as-provider — and minimal token-aligned CSS, no Tailwind. Edit anything; upgrades are 3-way merged. For Solid 1.x use `auth-ui-solid`.",
-    "docs": "Import lunora/auth-ui/styles.css once and mount the provider from lunora/auth-ui/solid-v2, passing the authClient from lunora/auth-ui/client.ts plus your router into the nav adapter. Requires Solid 2 (`solid-js@^2` + `@solidjs/web`) and the base `auth` server item (auto-added). Enable optional flows by also running `lunora add auth-magic-link` / `auth-otp` and flipping the matching `plugins` in lunora/auth-ui/client.ts.",
+    "docs": "Import lunora/auth-ui/styles.css once and mount the provider from lunora/auth-ui/solid-v2, passing the authClient from lunora/auth-ui/client.ts plus your router into the nav adapter. Requires Solid 2 (`solid-js@^2`; `@solidjs/web` is added for you). The views use `@solidjs/web` as their JSX import source, so set `\"jsxImportSource\": \"@solidjs/web\"` in your tsconfig (or on the Solid vite plugin) or every .tsx under lunora/auth-ui/solid-v2 fails to compile. Needs the base `auth` server item (auto-added). Enable optional flows by also running `lunora add auth-magic-link` / `auth-otp` and flipping the matching `plugins` in lunora/auth-ui/client.ts.",
     "requires": ["auth"],
-    "deps": { "@lunora/solid": "workspace:*", "@lunora/auth": "workspace:*", "@lunora/errors": "workspace:*", "better-auth": "1.7.1" },
+    "deps": {
+        "@lunora/solid": "workspace:*",
+        "@lunora/auth": "workspace:*",
+        "@lunora/errors": "workspace:*",
+        "@solidjs/web": "^2.0.0-rc.0",
+        "better-auth": "1.7.1"
+    },
     "files": [
         { "from": "client.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/client.ts" },
         { "from": "core/accounts.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/core/accounts.ts" },

@@ -1,21 +1,31 @@
 import { describe, expect, it } from "vitest";
 
-import type { AdvisorFunctionMetrics, AdvisorShardTraffic, LintContext } from "../src";
-import { ALL_LINTS, errorRateOutlier, fanOutBreadth, hotShard, indexUtilization, runAdvisor, RUNTIME_LINTS } from "../src";
+import type { AdvisorShardTraffic, LintContext } from "../src";
+import { ALL_LINTS, fanOutBreadth, hotShard, indexUtilization, runAdvisor, RUNTIME_LINTS } from "../src";
 
-/** A minimal context with an empty schema — runtime lints read only the observed-signal fields. */
+/** A minimal context with an empty schema — no observed signal, so every runtime lint is a no-op against it. */
 const baseContext = (overrides: Partial<LintContext> = {}): LintContext => {
     return { schema: { tables: [] }, ...overrides };
 };
 
 const traffic = (entries: AdvisorShardTraffic[]): LintContext => baseContext({ shardTraffic: entries });
 
-const functionMetrics = (entries: AdvisorFunctionMetrics[]): LintContext => baseContext({ functionMetrics: entries });
-
 /** `count` active shards in one group — breadth is what this lint reads. */
 const shardsInGroup = (group: string, count: number): AdvisorShardTraffic[] =>
     Array.from({ length: count }, (_unused, index) => {
         return { group, requests: 1, shardKey: `${group}-${String(index)}` };
+    });
+
+/**
+ * The shape the shipped feeder actually emits: `{ requests, shardKey }` with no
+ * `group` at all, and `""` for the unnamed root DO. `@lunora/runtime`'s
+ * `ShardTrafficEntry` has no `group` field, and the studio hands
+ * `rollUpShardTraffic`'s rows straight through, so this — not
+ * {@link shardsInGroup} — is what every real run sees.
+ */
+const liveShards = (count: number): AdvisorShardTraffic[] =>
+    Array.from({ length: count }, (_unused, index) => {
+        return { requests: 1, shardKey: index === 0 ? "" : `tenant-${String(index)}` };
     });
 
 describe("fan_out_breadth", () => {
@@ -53,6 +63,25 @@ describe("fan_out_breadth", () => {
         // Two groups of 400: 800 shards live, but no single shard set is wide
         // enough for a fan-out over it to approach the ceiling.
         expect(fanOutBreadth.run(traffic([...shardsInGroup("listRooms", 400), ...shardsInGroup("listUsers", 400)]))).toHaveLength(0);
+    });
+
+    // The shape production emits: no `group` on any row (the runtime's
+    // `ShardTrafficEntry` has no such field) and `""` for the root DO. Every
+    // finding-producing case above supplies a group, so the ungrouped
+    // deployment-wide prose and cacheKey were asserted nowhere.
+    it("flags the ungrouped deployment-wide shard set the shipped feeder emits", () => {
+        expect.assertions(3);
+
+        const findings = fanOutBreadth.run(traffic(liveShards(500)));
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({
+            cacheKey: "fan_out_breadth:",
+            level: "WARN",
+            metadata: { group: "", shards: 500 },
+            name: "fan_out_breadth",
+        });
+        expect(findings[0]?.detail).toContain("This deployment has 500 active shards");
     });
 
     it("finds nothing for a static caller with no traffic feeder", () => {
@@ -145,6 +174,23 @@ describe("hot_shard", () => {
         );
 
         expect(findings[0]).toMatchObject({ cacheKey: "hot_shard:rooms:room-42", metadata: { group: "rooms" } });
+    });
+
+    // `rollUpShardTraffic` reports the unnamed root DO as `shardKey: ""`, and on
+    // the shipped (ungrouped) feed that is the label and cacheKey every real run
+    // would produce for a root-dominant deployment.
+    it("names the unnamed root DO as `the root shard` on the ungrouped feed", () => {
+        expect.assertions(2);
+
+        const findings = hotShard.run(
+            traffic([
+                { requests: 900, shardKey: "" },
+                { requests: 100, shardKey: "tenant-a" },
+            ]),
+        );
+
+        expect(findings[0]).toMatchObject({ cacheKey: "hot_shard::", metadata: { shardKey: "" } });
+        expect(findings[0]?.detail).toContain("the root shard handled 900 of 1000 requests");
     });
 
     it("measures each shard's share against its own group, not the combined total (Finding 5)", () => {
@@ -254,74 +300,11 @@ describe("index_utilization", () => {
     });
 });
 
-describe("error_rate_outlier", () => {
-    it("flags a function whose error rate clears the threshold", () => {
-        expect.assertions(2);
-
-        const findings = errorRateOutlier.run(functionMetrics([{ calls: 100, errors: 15, maxDurationMs: 50, path: "payments:charge" }]));
-
-        expect(findings).toHaveLength(1);
-        expect(findings[0]).toMatchObject({
-            categories: ["PERFORMANCE"],
-            cacheKey: "error_rate_outlier:payments:charge",
-            level: "WARN",
-            metadata: { calls: 100, errors: 15, path: "payments:charge", rate: 0.15 },
-            name: "error_rate_outlier",
-        });
-    });
-
-    it("does not flag a healthy function below the error-rate threshold", () => {
-        expect.assertions(1);
-
-        const findings = errorRateOutlier.run(functionMetrics([{ calls: 200, errors: 2, maxDurationMs: 40, path: "posts:list" }]));
-
-        expect(findings).toHaveLength(0);
-    });
-
-    it("stays quiet below the minimum-calls floor, even at 100% errors", () => {
-        expect.assertions(1);
-
-        // 3 of 3 calls failed, but 3 total calls is too sparse to trust the rate.
-        const findings = errorRateOutlier.run(functionMetrics([{ calls: 3, errors: 3, maxDurationMs: 10, path: "new:endpoint" }]));
-
-        expect(findings).toHaveLength(0);
-    });
-
-    it("finds nothing when no function metrics are supplied (static caller)", () => {
-        expect.assertions(1);
-
-        expect(errorRateOutlier.run(baseContext())).toHaveLength(0);
-    });
-
-    it("flags each over-threshold function independently", () => {
-        expect.assertions(1);
-
-        const findings = errorRateOutlier.run(
-            functionMetrics([
-                { calls: 100, errors: 20, maxDurationMs: 50, path: "a" },
-                { calls: 100, errors: 5, maxDurationMs: 50, path: "b" },
-                { calls: 100, errors: 30, maxDurationMs: 50, path: "c" },
-            ]),
-        );
-
-        expect(findings.map((finding) => finding.metadata["path"]).toSorted((left, right) => String(left).localeCompare(String(right)))).toStrictEqual([
-            "a",
-            "c",
-        ]);
-    });
-});
-
 describe("runtime lint registration", () => {
     it("includes all runtime lints, sourced runtime", () => {
         expect.assertions(3);
 
-        expect(RUNTIME_LINTS.map((lint) => lint.name)).toStrictEqual([
-            "hot_shard",
-            "index_utilization",
-            "constraint_validator",
-            "error_rate_outlier",
-            "fan_out_breadth",
-        ]);
+        expect(RUNTIME_LINTS.map((lint) => lint.name)).toStrictEqual(["hot_shard", "index_utilization", "fan_out_breadth"]);
         expect(RUNTIME_LINTS.every((lint) => lint.source === "runtime")).toBe(true);
         expect(ALL_LINTS).toContain(hotShard);
     });

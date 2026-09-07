@@ -3,7 +3,7 @@
  *
  * Declare durable, long-running workflows with `defineWorkflow`. Codegen
  * discovers exports from this file and generates:
- *   - Typed `ctx.workflows.<name>.start(params)` on mutation/action ctx
+ *   - A typed `ctx.workflows.get("<name>")` overload on mutation/action ctx
  *   - A generated WorkflowEntrypoint subclass in the Worker entry
  *   - wrangler.jsonc workflows[] entries (auto-reconciled)
  *
@@ -11,8 +11,8 @@
  * processing, onboarding flows, data pipelines, and multi-step actions.
  *
  * Usage (from a mutation):
- *   const handle = await ctx.workflows.orderPipeline.start({ orderId: "ord_123" });
- *   const status = await handle.status();
+ *   const instance = await ctx.workflows.get("orderPipeline").create({ params: { orderId: "ord_123" } });
+ *   const status = await instance.status();
  */
 import { defineWorkflow } from "@lunora/workflow";
 

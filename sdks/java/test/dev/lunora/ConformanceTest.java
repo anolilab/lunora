@@ -37,12 +37,14 @@ public final class ConformanceTest {
         wireCodecRoundTrip();
         undefinedIsDistinctFromNull();
         overLongBigIntRejected();
-        malformedBytesRejected();
+        malformedValuesRejected();
         depthCapEnforced();
+        exactIntegerRangeEnforced();
         stableWireKeyFixtures();
         formatNumberMatchesEcmaScript();
         keyOrderMatchesUtf16();
         stringEscapingMatchesJsonStringify();
+        emptyShardKeyIsOmitted();
         rpcRequestBodies();
         rpcResponses();
         non2xxWithoutEnvelopeThrows();
@@ -50,6 +52,7 @@ public final class ConformanceTest {
         serverFrameConsumer();
         subscriptionStreamYieldsFrameValuesInOrder();
         shapeSubscribeFrame();
+        shapeSubscriptionsResendAfterReconnect();
         pokeSequenceMaterialisesRows();
         pokePartsDoNotApplyBeforePokeEnd();
         resetPokeReplacesShapeMembership();
@@ -143,6 +146,17 @@ public final class ConformanceTest {
         return Key.stableStringify(value);
     }
 
+    /**
+     * Renders a value the way {@link Client} puts it on the socket, with {@link Json#write}.
+     * Separate from {@link #canonical}, which is free to normalise: {@code stableStringify} spells
+     * every number the ECMAScript way, so {@code 1.0} and {@code 1} compare EQUAL through it — the
+     * divergence a round-trip case exists to catch. Dart's dates went out as {@code
+     * 1700000000000.0} for exactly that reason, on a green suite.
+     */
+    private static String wireText(Object value) {
+        return Json.write(value);
+    }
+
     @SuppressWarnings("unchecked")
     private static void wireCodecRoundTrip() throws IOException {
         covers("wire_codec_round_trip");
@@ -155,10 +169,21 @@ public final class ConformanceTest {
             Map<String, Object> testCase = (Map<String, Object>) entry;
             Object encoded = testCase.get("encoded");
             Object roundTripped = Wire.encode(Wire.decode(encoded));
+            // A handful of shapes are legitimately not fixed points — a bare
+            // [TAG] array is escaped on the way out, an UNDEFINED object field
+            // is dropped — and carry the expected re-encoding.
+            Object expected =
+                    testCase.containsKey("reencoded") ? testCase.get("reencoded") : encoded;
 
             check(
-                    canonical(roundTripped).equals(canonical(encoded)),
+                    canonical(roundTripped).equals(canonical(expected)),
                     "round-trip mismatch for " + testCase.get("name"));
+            // And again as the BYTES the transport sends: a round-trip
+            // assertion measured on a string the transport never sends cannot
+            // see the divergence it exists to catch.
+            check(
+                    wireText(roundTripped).equals(wireText(expected)),
+                    "wire-text mismatch for " + testCase.get("name"));
         }
     }
 
@@ -211,18 +236,38 @@ public final class ConformanceTest {
      * Wire.decode} throw out of the frame dispatcher would crash whatever thread runs the caller's
      * socket read loop instead of surfacing a recoverable error.
      */
-    private static void malformedBytesRejected() throws IOException {
-        covers("malformed_bytes_rejected");
+    @SuppressWarnings("unchecked")
+    private static void malformedValuesRejected() throws IOException {
+        covers("malformed_values_rejected");
 
-        check(
-                throwsWireError(List.of(Wire.TAG, "bytes", "not@@base64!!")),
-                "malformed base64 in a bytes tag must be rejected");
+        // The list is data (protocol/fixtures/wire-codec.json), not a per-suite
+        // invention: a rejection each port hard-codes for itself is a rejection
+        // only some ports have, which is how one of them ended up accepting a
+        // truncated base64 payload as valid short bytes.
+        List<Object> rejected = (List<Object>) fixture("wire-codec.json").get("rejected");
+
+        check(rejected != null && !rejected.isEmpty(), "the fixture must carry a rejection list");
+
+        for (Object entry : rejected) {
+            Map<String, Object> testCase = (Map<String, Object>) entry;
+
+            check(
+                    throwsWireError(testCase.get("encoded")),
+                    testCase.get("name") + " must be rejected");
+        }
 
         Object decoded = Wire.decode(List.of(Wire.TAG, "bytes", "AQID"));
 
         check(
                 decoded instanceof byte[] bytes && bytes.length == 3,
                 "well-formed bytes must still decode");
+
+        // A bare [TAG] is NOT malformed: it is the forward-compat shape, and the
+        // reference hands it back as an ordinary array.
+        check(
+                Wire.decode(List.of(Wire.TAG)) instanceof List<?> passthrough
+                        && passthrough.size() == 1,
+                "a bare tag array must decode as an ordinary array");
 
         Client client = new Client("https://app.example", null);
 
@@ -241,22 +286,123 @@ public final class ConformanceTest {
 
         String kind = client.handleFrame(Json.write(frame));
 
-        check("data".equals(kind), "handleFrame must return normally rather than throw");
+        // "error", not "data": the frame was NOT delivered, and the other seven
+        // ports say so. This test used to pin the divergence it was meant to
+        // catch by asserting "data" and never looking at the code.
+        check("error".equals(kind), "a frame that would not decode is reported as an error");
         check(seen.isEmpty(), "a malformed value must not reach onData");
         check(errors.size() == 1, "a malformed value must surface via onError");
+        check(
+                Client.CODE_INVALID_FRAME.equals(errors.get(0).code()),
+                "the error carries the shared INVALID_FRAME code, not null");
     }
 
+    /**
+     * Only {@link Wire.WireFormatException} counts as a rejection.
+     *
+     * <p>This used to catch {@link RuntimeException}, which hid that the codec let the JDK's own
+     * unwrapped {@code IllegalArgumentException}, {@code IndexOutOfBoundsException} and {@code
+     * ClassCastException} escape {@code Wire.decode} — so a caller catching the codec's own error
+     * type caught none of them.
+     */
     private static boolean throwsWireError(Object value) {
         try {
             Wire.decode(value);
 
             return false;
-        } catch (RuntimeException error) {
-            // Wire.decode's own bounds (bigint length, depth) throw its typed
-            // WireFormatException; a nested decoder (Base64 on a malformed bytes
-            // tag) throws its own unwrapped RuntimeException. Both are a rejection.
+        } catch (Wire.WireFormatException error) {
             return true;
         }
+    }
+
+    /**
+     * An integer a {@code double} cannot hold exactly must not silently become a different integer
+     * on the wire. A Java {@code long} holds integers a {@code double} does not, so narrowing one
+     * here changed its value with neither end able to tell.
+     */
+    private static void exactIntegerRangeEnforced() {
+        covers("exact_integer_range_enforced");
+
+        check(
+                Double.valueOf(9007199254740991.0).equals(Wire.encode(Wire.MAX_EXACT_INTEGER)),
+                "the largest exact integer must encode");
+        check(
+                throwsOnEncode(Wire.MAX_EXACT_INTEGER + 1),
+                "an integer past the exact range must be refused");
+        check(
+                throwsOnEncode(-Wire.MAX_EXACT_INTEGER - 1),
+                "an integer past the exact range must be refused");
+        check(
+                throwsOnEncode(
+                        java.math.BigInteger.valueOf(Wire.MAX_EXACT_INTEGER)
+                                .add(java.math.BigInteger.ONE)),
+                "a BigInteger past the exact range must be refused too");
+
+        // WireBigInt is the way across, and it keeps every digit.
+        check(
+                canonical(
+                                Wire.encode(
+                                        new Wire.WireBigInt(
+                                                new java.math.BigInteger("9007199254740992"))))
+                        .equals(canonical(List.of(Wire.TAG, "bigint", "9007199254740992"))),
+                "WireBigInt carries the value the number range refuses");
+    }
+
+    private static boolean throwsOnEncode(Object value) {
+        try {
+            Wire.encode(value);
+
+            return false;
+        } catch (Wire.WireFormatException error) {
+            return true;
+        }
+    }
+
+    /**
+     * An EMPTY shard key is absent, not the shard named {@code ""}.
+     *
+     * <p>The runtime takes any string as a named shard and gives {@code ""} its own Durable Object,
+     * while this client treats {@code ""} and null as one shard wherever it matches a subscription
+     * or drains the queue. Sending it split those two views: a single-call replay of a queued write
+     * landed on one Durable Object and a BATCHED replay of that same write on another, with the
+     * optimistic overlay tracking neither. Both builders that carry a shard key are asserted,
+     * because normalising one and not the other is the same split.
+     */
+    private static void emptyShardKeyIsOmitted() {
+        covers("empty_shard_key_is_omitted");
+
+        for (String absent : new String[] {null, ""}) {
+            check(
+                    !Client.buildRpcBody(
+                                    "messages:send", new LinkedHashMap<String, Object>(), absent)
+                            .containsKey("shardKey"),
+                    "an empty or absent shard key must not reach the RPC body");
+        }
+
+        check(
+                "room-1"
+                        .equals(
+                                Client.buildRpcBody(
+                                                "messages:send",
+                                                new LinkedHashMap<String, Object>(),
+                                                "room-1")
+                                        .get("shardKey")),
+                "a real shard key still rides the body");
+
+        Client client = new Client("https://app.example", null);
+
+        for (String absent : new String[] {null, ""}) {
+            check(
+                    !client.wsUrl(absent, null).contains("shard="),
+                    "an empty or absent shard key must not name a shard on the socket");
+        }
+
+        check(
+                client.wsUrl("", null).equals(client.wsUrl(null, null)),
+                "an empty shard key is byte-identical to sending none");
+        check(
+                client.wsUrl("room-1", null).contains("shard="),
+                "a real shard key still rides the socket URL");
     }
 
     private static void depthCapEnforced() {
@@ -269,6 +415,35 @@ public final class ConformanceTest {
         }
 
         check(throwsWireError(nested), "decoding past the depth cap must be rejected");
+
+        // The PARSER's cap is counted from the document root, and every payload
+        // arrives inside an envelope — so charging the envelope against the wire
+        // value's own budget refused a frame whose payload the reference encodes
+        // happily. A value nested exactly MAX_DEPTH deep must still reach onData.
+        Object deepest = "leaf";
+
+        for (int depth = 0; depth < Wire.MAX_DEPTH; depth++) {
+            deepest = List.of(deepest);
+        }
+
+        Client client = new Client("https://app.example", null);
+
+        client.attachSocket(frame -> {});
+
+        List<Object> seen = new ArrayList<>();
+
+        client.subscribe("messages:list", null, seen::add, null, null);
+
+        Map<String, Object> envelope = new LinkedHashMap<>();
+
+        envelope.put("type", "data");
+        envelope.put("id", "sub_1");
+        envelope.put("data", deepest);
+
+        check(
+                "data".equals(client.handleFrame(Json.write(envelope))),
+                "a MAX_DEPTH value must survive its frame envelope");
+        check(seen.size() == 1, "and reach onData");
     }
 
     @SuppressWarnings("unchecked")
@@ -300,9 +475,22 @@ public final class ConformanceTest {
         covers("format_number_matches_ecmascript");
 
         Object[][] cases = {
-            {0.0, "0"}, {3.0, "3"}, {1.5, "1.5"}, {-2.5, "-2.5"},
-            {1e-5, "0.00001"}, {1e-6, "0.000001"}, {1e-7, "1e-7"}, {1.5e-7, "1.5e-7"},
-            {1e-21, "1e-21"}, {1e20, "100000000000000000000"}, {1e21, "1e+21"},
+            {0.0, "0"},
+            {3.0, "3"},
+            {1.5, "1.5"},
+            {-2.5, "-2.5"},
+            {1e-5, "0.00001"},
+            {1e-6, "0.000001"},
+            {1e-7, "1e-7"},
+            {1.5e-7, "1.5e-7"},
+            {1e-21, "1e-21"},
+            {1e20, "100000000000000000000"},
+            {1e21, "1e+21"},
+            // An integral double past 2^53 keeps ECMAScript's shortest-digits
+            // spelling rather than the exact expansion 1152921504606846976.
+            {1.152921504606847e18, "1152921504606847000"},
+            // Negative zero keeps its sign; every integer conversion drops it.
+            {-0.0, "-0"},
         };
 
         for (Object[] testCase : cases) {
@@ -553,6 +741,63 @@ public final class ConformanceTest {
                                         "shape_1", "roomMessages", args, null, null))
                         .equals(canonical(shape.get("shape-subscribe-cold"))),
                 "shape-subscribe-cold");
+    }
+
+    /**
+     * A reconnect re-subscribes SHAPES as well as queries, each carrying its resume checkpoint.
+     *
+     * <p>A resend that walks only the query registry leaves every shape view subscribed to a socket
+     * that no longer exists — silently, and for the rest of the process's life, because a shape
+     * only ever hears from the server through a poke.
+     */
+    @SuppressWarnings("unchecked")
+    private static void shapeSubscriptionsResendAfterReconnect() {
+        covers("shape_subscriptions_resend_after_reconnect");
+
+        Client client = new Client("https://app.example", null);
+        Map<String, Object> args = new LinkedHashMap<>();
+
+        args.put("room", "general");
+        client.attachSocket(frame -> {});
+        client.subscribe("messages:list", new LinkedHashMap<>(), value -> {}, null, null);
+        client.subscribeShape("roomMessages", args, rows -> {}, null);
+
+        // The cursors a resume carries are written by the frame handler, so they have to exist
+        // before the resend is built.
+        client.handleFrame(
+                "{\"cursor\":9,\"data\":[],\"epoch\":\"e1\",\"id\":\"sub_1\",\"type\":\"data\"}");
+        client.handleFrame("{\"epoch\":\"e1\",\"pokeId\":\"poke-1\",\"type\":\"pokeStart\"}");
+        client.handleFrame(
+                "{\"pokeId\":\"poke-1\",\"reset\":true,\"rowsPatch\":[],\"shapeId\":\"shape_1\",\"type\":\"pokePart\"}");
+        client.handleFrame(
+                "{\"checkpoint\":5,\"epoch\":\"e1\",\"pokeId\":\"poke-1\",\"type\":\"pokeEnd\"}");
+
+        List<Map<String, Object>> resent = new ArrayList<>();
+
+        client.attachSocket(resent::add);
+        client.resendSubscriptions();
+
+        check(resent.size() == 2, "both registries are walked");
+        check("subscribe".equals(resent.get(0).get("type")), "the query frame goes out first");
+        check(
+                ((Number) ((Map<String, Object>) resent.get(0).get("query")).get("sinceSeq"))
+                                .intValue()
+                        == 9,
+                "carrying the tracked query cursor");
+
+        Map<String, Object> frame = resent.get(1);
+        Map<String, Object> shape = (Map<String, Object>) frame.get("shape");
+
+        check("shape_subscribe".equals(frame.get("type")), "and the shape frame after it");
+        check("shape_1".equals(frame.get("id")), "addressed at the live shape id");
+        check("roomMessages".equals(shape.get("name")), "naming the shape it subscribed to");
+        check(
+                canonical(shape.get("args")).equals(canonical(Wire.encode(args))),
+                "with the args it subscribed under");
+        check(
+                ((Number) frame.get("sinceCheckpoint")).intValue() == 5,
+                "resuming from the tracked checkpoint");
+        check("e1".equals(frame.get("sinceEpoch")), "and the tracked epoch");
     }
 
     @SuppressWarnings("unchecked")

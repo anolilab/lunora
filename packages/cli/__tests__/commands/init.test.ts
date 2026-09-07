@@ -1,11 +1,11 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { isTemplate, resolveTemplateSource, runInitCommand } from "../../src/commands/init/handler";
+import { isTemplate, resolveTemplateFlag, resolveTemplateSource, runInitCommand } from "../../src/commands/init/handler";
 import type { Logger } from "../../src/util/logger";
 import { resolveDistTag } from "../../src/util/source-ref";
 import { createRecordingSpawner } from "../../src/util/spawn";
@@ -42,6 +42,34 @@ describe("lunora init", () => {
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
         vi.unstubAllGlobals();
+    });
+
+    describe("--template resolution", () => {
+        it("routes the four overlay framework names to the overlay path", () => {
+            expect.assertions(4);
+
+            // These are the values the docs table documents for `-t`; they used to
+            // be dropped as "unknown template" and silently scaffold React.
+            for (const framework of ["react", "solid", "svelte", "vue"]) {
+                expect(resolveTemplateFlag(framework)).toStrictEqual({ vite: framework });
+            }
+        });
+
+        it("errors on an unrecognised --template instead of silently scaffolding React", () => {
+            expect.assertions(2);
+
+            const resolved = resolveTemplateFlag("nextjs");
+
+            expect(resolved).toHaveProperty("error");
+            expect((resolved as { error: string }).error).toContain('unknown --template "nextjs"');
+        });
+
+        it("passes a bespoke template id straight through", () => {
+            expect.assertions(2);
+
+            expect(resolveTemplateFlag("react-router")).toStrictEqual({ templateType: "react-router" });
+            expect(resolveTemplateFlag(undefined)).toStrictEqual({});
+        });
     });
 
     /** Stub the registry so `resolveTagVersion` resolves every dist-tag to `version` (deterministic, offline). */
@@ -444,7 +472,7 @@ describe("lunora init", () => {
         });
 
         it("next template scaffolds app router + two-worker entries", async () => {
-            expect.assertions(12);
+            expect.assertions(13);
 
             const result = await runInitCommand({
                 cwd: workdir,
@@ -463,9 +491,13 @@ describe("lunora init", () => {
             expect(existsSync(join(target, "app", "layout.tsx"))).toBe(true);
             expect(existsSync(join(target, "app", "page.tsx"))).toBe(true);
             expect(existsSync(join(target, "lunora", "schema.ts"))).toBe(true);
-            // Two-worker split: Next SSR worker config + standalone Lunora worker.
+            // Two-worker split. The ROOT `wrangler.jsonc` is the LUNORA worker — that is
+            // where `lunora verify|deploy|dev` look, and they require the SHARD binding —
+            // and the Next SSR worker config sits beside it, passed to every OpenNext
+            // command with `--config`.
             expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
-            expect(existsSync(join(target, "wrangler.lunora.jsonc"))).toBe(true);
+            expect(existsSync(join(target, "wrangler.opennext.jsonc"))).toBe(true);
+            expect(readFileSync(join(target, "wrangler.jsonc"), "utf8")).toContain('"class_name": "ShardDO"');
             expect(existsSync(join(target, "lunora", "server.ts"))).toBe(true);
 
             const pkg = readFileSync(join(target, "package.json"), "utf8");
@@ -596,6 +628,73 @@ describe("lunora init", () => {
             expect(existsSync(join(workdir, "  padded-app  "))).toBe(false);
         });
 
+        it("fails instead of reporting success when the template directory holds no files", async () => {
+            expect.assertions(3);
+
+            // A template subdirectory that exists but is empty — what a bad
+            // `--ref` / `--source` / template-name typo produces remotely, since
+            // giget drops every entry outside the requested subdir without
+            // throwing. This used to copy 0 files and exit 0 with
+            // "Project initialized!" over an empty project directory.
+            const emptySource = join(workdir, "empty-templates");
+
+            mkdirSync(join(emptySource, "tanstack-start-react"), { recursive: true });
+
+            const errors: string[] = [];
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: emptySource,
+                logger: { ...silentLogger(), error: (message) => errors.push(message) },
+                name: "hollow",
+                templateType: "tanstack-start-react",
+            });
+
+            expect(result.code).toBe(1);
+            expect(errors.join("\n")).toContain("no files");
+            expect(existsSync(join(workdir, "hollow"))).toBe(false);
+        });
+
+        it("refuses a project name wrangler will reject as a worker name", async () => {
+            expect.assertions(3);
+
+            // wrangler's own `isValidName` is /^$|^[a-z0-9_][a-z0-9-_]*$/ and a
+            // hard error, so `MyApp` scaffolds fine and then fails every
+            // `wrangler dev` / `deploy` on the substituted `name` field.
+            const errors: string[] = [];
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: { ...silentLogger(), error: (message) => errors.push(message) },
+                name: "MyApp",
+                templateType: "tanstack-start-react",
+            });
+
+            expect(result.code).toBe(1);
+            expect(errors.join("\n")).toContain("my-app");
+            expect(existsSync(join(workdir, "MyApp"))).toBe(false);
+        });
+
+        it("does not let a $-pattern in the name corrupt {{name}} substitution", async () => {
+            expect.assertions(2);
+
+            // `String.replaceAll` interprets `$&` / `$'` in a STRING replacement,
+            // so a name carrying one used to splice the matched text back in.
+            const errors: string[] = [];
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: { ...silentLogger(), error: (message) => errors.push(message) },
+                name: "app-$&-x",
+                templateType: "tanstack-start-react",
+            });
+
+            expect(result.code).toBe(1);
+            expect(errors.join("\n")).toContain("lowercase");
+        });
+
         it("--from with missing template reports a helpful error", async () => {
             expect.assertions(2);
 
@@ -680,6 +779,97 @@ describe("lunora init", () => {
             expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
             // {{name}} is substituted into the app manifest.
             expect(appJson).toContain('"slug": "expo-app"');
+        });
+    });
+
+    describe("scaffold cleanup", () => {
+        // A local template root the test fully controls, so a copy can be made
+        // to fail part-way without touching the real templates.
+        const writeLocalTemplate = (): string => {
+            const root = join(workdir, "local-templates", "tanstack-start-react");
+
+            mkdirSync(root, { recursive: true });
+            writeFileSync(join(root, "a.txt"), "first\n", "utf8");
+            writeFileSync(join(root, "z.txt"), "second\n", "utf8");
+
+            return join(workdir, "local-templates");
+        };
+
+        it("removes a partially-written scaffold when the copy throws part-way", async () => {
+            expect.assertions(2);
+
+            // `copyTemplate` writes sequentially and can throw after earlier
+            // writes (a read error on a later template file here; ENOSPC / EMFILE
+            // in the wild). The exception propagated out of `runInitCommand` with
+            // the half-written target still on disk, and the retry — with the
+            // cause fixed — was then refused with "target directory not empty".
+            const from = writeLocalTemplate();
+
+            chmodSync(join(from, "tanstack-start-react", "z.txt"), 0o000);
+
+            const target = join(workdir, "broken-app");
+
+            try {
+                await expect(
+                    runInitCommand({ cwd: workdir, from, logger: silentLogger(), name: "broken-app", templateType: "tanstack-start-react" }),
+                    // The read failure is surfaced, not swallowed — cleanup runs
+                    // on the way out and the original cause still reaches the user.
+                ).rejects.toThrow(/EACCES|permission denied/iu);
+
+                expect(existsSync(target)).toBe(false);
+            } finally {
+                chmodSync(join(from, "tanstack-start-react", "z.txt"), 0o600);
+            }
+        });
+
+        it("keeps a completed scaffold when something after the copy throws", async () => {
+            expect.assertions(2);
+
+            // The other half of the same guard: once the copy is done the project
+            // is real, so a throw from anything AFTER it (the success logging
+            // here) must abort the command WITHOUT deleting the finished
+            // scaffold. Cleanup covers an interrupted copy, not a completed one.
+            const from = writeLocalTemplate();
+            const logger = {
+                ...silentLogger(),
+                success: () => {
+                    throw new Error("logging blew up");
+                },
+            };
+
+            await expect(runInitCommand({ cwd: workdir, from, logger, name: "kept-app", templateType: "tanstack-start-react" })).rejects.toThrow(
+                /logging blew up/u,
+            );
+
+            expect(existsSync(join(workdir, "kept-app", "a.txt"))).toBe(true);
+        });
+
+        it("refuses a target that is a symlink, without following it", async () => {
+            expect.assertions(3);
+
+            // `existsSync` follows symlinks, so `cwd/<name>` pointing at an empty
+            // directory elsewhere passed the emptiness check and became the
+            // scaffold target — writes landed outside `cwd`, and the cleanup
+            // path (which empties a pre-existing target back out) would delete
+            // files there that this run never wrote.
+            const outside = join(workdir, "outside");
+
+            mkdirSync(outside, { recursive: true });
+            symlinkSync(outside, join(workdir, "linked-app"), "dir");
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: writeLocalTemplate(),
+                logger: silentLogger(),
+                name: "linked-app",
+                templateType: "tanstack-start-react",
+            });
+
+            expect(result.code).toBe(1);
+            // Nothing was written through the link…
+            expect(readdirSync(outside)).toHaveLength(0);
+            // …and the link itself is still the user's to deal with.
+            expect(lstatSync(join(workdir, "linked-app")).isSymbolicLink()).toBe(true);
         });
     });
 

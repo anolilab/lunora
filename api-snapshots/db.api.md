@@ -286,14 +286,12 @@ interface OutboxExecutor {
 ### `OutboxMutationMetadata` (interface)
 
 ```ts
-interface OutboxMutationMetadata extends Record<string, unknown> {
+interface OutboxMutationMetadata extends WriteProvenance {
     args: Record<string, unknown>;
     clientId: string;
     functionPath: string;
     idempotencyKey: string;
-    identity: string | null;
     mutationId: number;
-    shardKey?: string;
 }
 ```
 
@@ -471,12 +469,6 @@ const releaseShardCheckpoints: (client: LunoraClient) => void;
 
 ```ts
 const runOutboxMutation: (mutate: () => Promise<unknown>) => Promise<void>;
-```
-
-### `shardCheckpointStats` (const)
-
-```ts
-const shardCheckpointStats: (client: LunoraClient) => Record<string, CheckpointRegistryStats>;
 ```
 
 ### `toMap` (const)

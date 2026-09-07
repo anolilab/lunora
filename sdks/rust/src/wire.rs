@@ -15,6 +15,7 @@
 //!
 //! See `protocol/README.md` §2 for the normative grammar.
 
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use serde_json::{Map, Number, Value};
@@ -30,6 +31,29 @@ pub const MAX_DEPTH: usize = 64;
 /// unbounded digit string from an untrusted peer is a denial of service.
 /// Applied only on decode — the untrusted direction.
 pub const MAX_BIGINT_DIGITS: usize = 1024;
+
+/// Largest epoch a `Date` holds (ECMAScript TimeClip). Past this, and for any
+/// non-finite epoch, `new Date(v)` is an Invalid Date.
+pub const MAX_TIME_VALUE: f64 = 8.64e15;
+
+/// Bytes per element for the typed-array views the codec round-trips. A view
+/// whose payload is not a whole number of elements is not a view the reference
+/// can rebuild — `new Float32Array(buffer)` raises a `RangeError` there — so
+/// accepting it would hand the consumer bytes it cannot reconstruct.
+/// `ArrayBuffer` is absent deliberately: it is untyped, so nothing to align.
+const TYPED_ARRAY_ELEMENT_SIZES: &[(&str, usize)] = &[
+    ("BigInt64Array", 8),
+    ("BigUint64Array", 8),
+    ("Float32Array", 4),
+    ("Float64Array", 8),
+    ("Int16Array", 2),
+    ("Int32Array", 4),
+    ("Int8Array", 1),
+    ("Uint16Array", 2),
+    ("Uint32Array", 4),
+    ("Uint8Array", 1),
+    ("Uint8ClampedArray", 1),
+];
 
 /// Every value the Lunora wire can carry.
 ///
@@ -129,19 +153,87 @@ fn base64_encode(data: &[u8]) -> String {
     out
 }
 
+/// Whether an href carries a URL scheme, per RFC 3986: an ASCII letter followed
+/// by letters, digits, `+`, `-` or `.`, then `:`.
+///
+/// The reference builds a real `URL`, which throws on anything unparseable,
+/// while every port stored the string verbatim and accepted `"not a url"` — a
+/// frame that kills a JS peer's subscription and is waved through here.
+/// Reproducing WHATWG URL parsing in eight languages is not on offer (their own
+/// parsers disagree with it in the deep end), so the contract, and
+/// `protocol/README.md` §2.1, is the floor of it: an href must be ABSOLUTE.
+fn is_absolute_href(href: &str) -> bool {
+    let Some(scheme) = href.split(':').next().filter(|scheme| scheme.len() < href.len()) else {
+        return false;
+    };
+
+    scheme.starts_with(|first: char| first.is_ascii_alphabetic()) && scheme.chars().all(|char| char.is_ascii_alphanumeric() || matches!(char, '+' | '-' | '.'))
+}
+
+/// Decode base64, then require that it was CANONICAL.
+///
+/// The permissive half mirrors `atob`, i.e. WHATWG "forgiving base64": ASCII
+/// whitespace is stripped, up to two `=` are removed from the end of a
+/// multiple-of-four input, and a remaining length of 1 mod 4 — or any other
+/// character outside the alphabet — is a hard error.
+///
+/// The first version of this function skipped `=`, `\n` and `\r` wherever they
+/// appeared and discarded the trailing bits, so `"AQIDA"` (a truncated payload)
+/// and `"AQ=ID"` (a corrupted one) both decoded to a perfectly ordinary
+/// `[1, 2, 3]`. Seven ports rejected both; this one handed short, valid-looking
+/// bytes to application code, which is the single outcome the `bytes` tag
+/// exists to prevent.
+///
+/// The forgiving decode is still what parses, but the result is now re-encoded
+/// and compared, so what survives is exactly what a conforming encoder would
+/// have written: no missing padding, no embedded whitespace, and no non-zero
+/// trailing bits in a short final quantum. That last one is a silent rewrite
+/// rather than mere leniency — `"AQJ="` decodes to 01 02 and re-encodes as
+/// `"AQI="`, different bytes than the peer wrote.
 fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    // No whitespace stripping: the canonicity compare at the end of this
+    // function tests the ORIGINAL `text`, so a payload wrapped across lines can
+    // never match a re-encode regardless of what happens here. The reference
+    // rejects it too (`bytes-base64-newline`), and stripping first would only
+    // decode bytes for the compare to throw away.
+    let cleaned: &[u8] = text.as_bytes();
+
+    let mut end = cleaned.len();
+
+    // Padding is only padding at the end of a whole quantum. An `=` anywhere
+    // else stays in `body` and is rejected by the alphabet match below. This
+    // loop is load-bearing, not a leniency: without it every correctly padded
+    // payload hits that same rejection.
+    if end.is_multiple_of(4) {
+        for _ in 0..2 {
+            if end > 0 && cleaned[end - 1] == b'=' {
+                end -= 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    let body = &cleaned[..end];
+
+    // A single leftover character carries 6 bits: not a byte, and not a
+    // legitimate encoding of anything. This is the check that makes a truncated
+    // payload an error instead of a shorter one.
+    if body.len() % 4 == 1 {
+        return None;
+    }
+
     let mut accumulator: u32 = 0;
     let mut bits = 0;
-    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let mut out = Vec::with_capacity(body.len() / 4 * 3);
 
-    for byte in text.bytes() {
+    for &byte in body {
         let value = match byte {
             b'A'..=b'Z' => byte - b'A',
             b'a'..=b'z' => byte - b'a' + 26,
             b'0'..=b'9' => byte - b'0' + 52,
             b'+' => 62,
             b'/' => 63,
-            b'=' | b'\n' | b'\r' => continue,
             _ => return None,
         } as u32;
 
@@ -154,7 +246,44 @@ fn base64_decode(text: &str) -> Option<Vec<u8>> {
         }
     }
 
+    // Re-encode and compare: the payload must be exactly the string a
+    // conforming encoder would have written for these bytes.
+    if base64_encode(&out) != text {
+        return None;
+    }
+
     Some(out)
+}
+
+/// The largest integer an `f64` holds exactly (2^53 - 1). JSON numbers are
+/// `f64`, so an integer past this cannot cross the wire as a number without
+/// changing value — `v.bigint()` and its tag exist for that case.
+pub const MAX_EXACT_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+/// A finite `f64` onto the wire.
+///
+/// An integral value is written as a JSON integer, because that is what the
+/// reference writes: `JSON.stringify(1)` is `1`, while serialising through
+/// `f64` alone spelled it `1.0`. Nothing caught the difference, because the
+/// conformance comparison normalises both sides through `stable_stringify`,
+/// which formats numbers the ECMAScript way — so the two sides agreed on the
+/// comparison and disagreed on the bytes actually sent.
+fn encode_number(value: f64) -> Value {
+    // A negative zero keeps its f64 nature, so this renders `-0.0` on the wire
+    // where the reference renders `0`. Deliberate, and the lesser of the two
+    // divergences the Rust value model forces: `Value::Number` decides its
+    // rendering from the i64/f64 variant, while a JS number has no such split,
+    // so narrowing here is the only place the sign can be dropped — and
+    // `stableStringify` reads the ENCODED tree, spelling a negative zero `-0`
+    // (its own explicit `Object.is(value, -0)` branch, distinct from `0`).
+    // Narrowing would hand `{ "a": -0.0 }` the same cache key as `{ "a": 0 }`
+    // and serve one the other's data; `-0.0` and `0` are the same number to
+    // every JSON reader, so the wire spelling costs nothing.
+    if value.fract() == 0.0 && value.abs() <= MAX_EXACT_INTEGER && !(value == 0.0 && value.is_sign_negative()) {
+        return Value::Number(Number::from(value as i64));
+    }
+
+    Number::from_f64(value).map_or(Value::Null, Value::Number)
 }
 
 /// Encode a [`WireValue`] into a JSON tree, tagging the leaves JSON cannot carry.
@@ -174,7 +303,7 @@ fn encode_at(value: &WireValue, depth: usize) -> WireResult<Value> {
         WireValue::NaN => tagged(vec![tag_value(), Value::String("nan".into())]),
         WireValue::Infinity => tagged(vec![tag_value(), Value::String("inf".into())]),
         WireValue::NegInfinity => tagged(vec![tag_value(), Value::String("-inf".into())]),
-        WireValue::Number(inner) => Number::from_f64(*inner).map_or(Value::Null, Value::Number),
+        WireValue::Number(inner) => encode_number(*inner),
         WireValue::String(inner) => Value::String(inner.clone()),
         WireValue::BigInt(digits) => tagged(vec![tag_value(), Value::String("bigint".into()), Value::String(digits.clone())]),
         WireValue::Date(epoch) => tagged(vec![tag_value(), Value::String("date".into()), encode_at(epoch, depth + 1)?]),
@@ -288,6 +417,45 @@ fn decode_at(value: &Value, depth: usize) -> WireResult<WireValue> {
     })
 }
 
+/// A map key's collapse identity, or `None` when it never collapses.
+///
+/// The reference's `Map` compares keys by SameValueZero: primitives by value
+/// (`NaN` equal to itself), everything else by reference — so two structurally
+/// identical `Date`/bytes keys stay two entries there and must stay two here.
+fn map_key_identity(key: &WireValue) -> Option<String> {
+    Some(match key {
+        WireValue::Null => "null".to_owned(),
+        WireValue::Undefined => "undefined".to_owned(),
+        WireValue::Bool(value) => format!("bool:{value}"),
+        // `+ 0.0` clears the sign of a zero and changes nothing else: SameValueZero
+        // holds -0 equal to 0, while `{}` on an f64 keeps the sign ("-0").
+        WireValue::Number(value) => format!("num:{}", value + 0.0),
+        WireValue::NaN => "num:nan".to_owned(),
+        WireValue::Infinity => "num:inf".to_owned(),
+        WireValue::NegInfinity => "num:-inf".to_owned(),
+        WireValue::String(value) => format!("str:{value}"),
+        // The digits are carried verbatim, so `01` and `1` are one key to the
+        // reference (`BigInt("01") === 1n`) and must be one here.
+        WireValue::BigInt(digits) => format!("big:{}", normalise_bigint(digits)),
+        _ => return None,
+    })
+}
+
+/// Strip a bigint literal's leading zeros and a sign that only reaches zero.
+fn normalise_bigint(digits: &str) -> String {
+    let (sign, body) = match digits.strip_prefix('-') {
+        Some(rest) => ("-", rest),
+        None => ("", digits),
+    };
+    let trimmed = body.trim_start_matches('0');
+
+    if trimmed.is_empty() {
+        return "0".to_owned();
+    }
+
+    format!("{sign}{trimmed}")
+}
+
 fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
     let name = items.get(1).and_then(Value::as_str).unwrap_or("");
 
@@ -303,41 +471,136 @@ fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
                 return Err(WireError::InvalidBigInt);
             }
 
-            WireValue::BigInt(raw.to_string())
+            // Canonicalise on the way in. The reference decodes to a real
+            // `bigint` and re-encodes with `toString()`, so `"007"` and `"-0"`
+            // leave it as `"7"` and `"0"`. Carrying the digits verbatim
+            // re-encoded a spelling the reference never emits, and two peers
+            // keyed a subscription differently on the same value.
+            WireValue::BigInt(normalise_bigint(raw))
         }
-        "date" => WireValue::Date(Box::new(decode_at(items.get(2).ok_or(WireError::Malformed("date"))?, depth + 1)?)),
-        "url" => WireValue::Url(items.get(2).and_then(Value::as_str).ok_or(WireError::Malformed("url"))?.to_string()),
+        "date" => {
+            // Epoch milliseconds, and nothing else. The payload is DECODED first
+            // (a nested `[TAG, "nan"]` is how an invalid date travels), then
+            // checked: `null` or a string would otherwise become a `Date` holding
+            // a value no epoch arithmetic can use, re-encoded as a
+            // legitimate-looking date tag.
+            let epoch = decode_at(items.get(2).ok_or(WireError::Malformed("date"))?, depth + 1)?;
+
+            // TimeClip, exactly as `new Date(epoch)` applies it: truncate toward
+            // zero, and turn anything non-finite or past +-8.64e15 into an
+            // Invalid Date. Kept verbatim, an out-of-range epoch re-encoded as a
+            // date tag the reference — whose own `Date` can never hold that
+            // value — refuses to produce.
+            // TimeClip is ToIntegerOrInfinity, not truncation, and the two
+            // differ on exactly one window: an epoch in (-1, 0] gives +0 there
+            // and -0 under `trunc`, which keeps the sign of zero. The window is
+            // one value wide, and the stable subscription key spells -0 as the
+            // bare token `-0`, distinct from `0` — so `+ 0.0` here is what keeps
+            // a Date built from -0.5 on the same subscription as the TS client.
+            let clipped = match epoch {
+                WireValue::Number(epoch) if epoch.abs() <= MAX_TIME_VALUE => WireValue::Number(epoch.trunc() + 0.0),
+                WireValue::Number(_) | WireValue::NaN | WireValue::Infinity | WireValue::NegInfinity => WireValue::NaN,
+                _ => return Err(WireError::Malformed("date")),
+            };
+
+            WireValue::Date(Box::new(clipped))
+        }
+        "url" => {
+            let href = items.get(2).and_then(Value::as_str).ok_or(WireError::Malformed("url"))?;
+
+            if !is_absolute_href(href) {
+                return Err(WireError::Malformed("url"));
+            }
+
+            WireValue::Url(href.to_string())
+        }
         "map" => {
             let raw = items.get(2).and_then(Value::as_array).ok_or(WireError::Malformed("map"))?;
-            let mut entries = Vec::with_capacity(raw.len());
+            let mut entries: Vec<(WireValue, WireValue)> = Vec::with_capacity(raw.len());
+            let mut seen: HashMap<String, usize> = HashMap::new();
 
             for pair in raw {
                 let pair = pair.as_array().ok_or(WireError::Malformed("map entry"))?;
-                let key = pair.first().ok_or(WireError::Malformed("map entry"))?;
-                let item = pair.get(1).ok_or(WireError::Malformed("map entry"))?;
 
-                entries.push((decode_at(key, depth + 1)?, decode_at(item, depth + 1)?));
+                let [key, item] = pair.as_slice() else {
+                    return Err(WireError::Malformed("map entry"));
+                };
+
+                let key = decode_at(key, depth + 1)?;
+                let item = decode_at(item, depth + 1)?;
+
+                // Last write wins, at the FIRST occurrence's position — the
+                // reference builds a real Map, and `Map.prototype.set` on a key
+                // already present overwrites the value in place rather than
+                // appending. Keeping both entries left two peers of one
+                // deployment reading a different value from identical bytes.
+                if let Some(identity) = map_key_identity(&key) {
+                    if let Some(&index) = seen.get(&identity) {
+                        // Only the VALUE. `Map.prototype.set` on a key already
+                        // present keeps the key it holds, so a later `-0` never
+                        // replaces the `0` stored under it.
+                        entries[index].1 = item;
+
+                        continue;
+                    }
+
+                    seen.insert(identity, entries.len());
+                }
+
+                entries.push((key, item));
             }
 
             WireValue::Map(entries)
         }
         "set" => {
             let raw = items.get(2).and_then(Value::as_array).ok_or(WireError::Malformed("set"))?;
+            let mut entries: Vec<WireValue> = Vec::with_capacity(raw.len());
+            let mut seen: HashSet<String> = HashSet::new();
 
-            WireValue::Set(raw.iter().map(|item| decode_at(item, depth + 1)).collect::<WireResult<_>>()?)
+            // The reference builds a real Set, which de-duplicates by
+            // SameValueZero and keeps the FIRST occurrence's position — the same
+            // rule as a Map's keys, so the same identity helper decides it.
+            // Carrying both copies re-encoded a set the reference never emits.
+            for item in raw {
+                let item = decode_at(item, depth + 1)?;
+
+                if let Some(identity) = map_key_identity(&item) {
+                    if !seen.insert(identity) {
+                        continue;
+                    }
+                }
+
+                entries.push(item);
+            }
+
+            WireValue::Set(entries)
         }
         "error" => {
+            // The props slot is NOT optional, NOT nullable and NOT a primitive:
+            // the reference reads it with `Object.keys`, which throws on a null
+            // or missing slot and ENUMERATES a string/number/boolean/array — so
+            // `[TAG,"error","E","m","ab"]` would decode there with the invented
+            // props {0:"a",1:"b"} while quietly substituting an empty map
+            // accepted the same frame here.
             let props = match items.get(4) {
                 Some(Value::Object(fields)) => fields
                     .iter()
                     .map(|(key, item)| Ok((key.clone(), decode_at(item, depth + 1)?)))
                     .collect::<WireResult<Vec<_>>>()?,
-                _ => Vec::new(),
+                _ => return Err(WireError::Malformed("error")),
             };
 
+            // Both label slots are type-CHECKED, like every other slot.
+            // Substituting "" for a non-string accepted the frame while erasing
+            // the error's identity, and the ports did not even agree on that:
+            // two carried the non-string through verbatim. A slot that must hold
+            // a string and does not is a malformed frame.
+            let name = items.get(2).and_then(Value::as_str).ok_or(WireError::Malformed("error"))?;
+            let message = items.get(3).and_then(Value::as_str).ok_or(WireError::Malformed("error"))?;
+
             WireValue::Error {
-                name: items.get(2).and_then(Value::as_str).unwrap_or("").to_string(),
-                message: items.get(3).and_then(Value::as_str).unwrap_or("").to_string(),
+                name: name.to_string(),
+                message: message.to_string(),
                 props,
                 cause: match items.get(5) {
                     Some(inner) => Some(Box::new(decode_at(inner, depth + 1)?)),
@@ -354,8 +617,20 @@ fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
             // view keeps its constructor name.
             if ctor == "Uint8Array" {
                 WireValue::Bytes(data)
-            } else {
+            } else if ctor == "ArrayBuffer" {
                 WireValue::TypedBytes { data, ctor: ctor.to_string() }
+            } else {
+                match TYPED_ARRAY_ELEMENT_SIZES.iter().find(|(name, _)| *name == ctor) {
+                    // An UNKNOWN ctor name decodes to raw bytes, dropping the
+                    // name — the forward-compat rule in protocol/README.md §2.1.
+                    // Keeping it re-encoded a 4-element form the reference emits
+                    // as 3, so the same value relayed through JS and through here
+                    // produced different bytes, and therefore different stable
+                    // subscription keys.
+                    None => WireValue::Bytes(data),
+                    Some((_, size)) if data.len() % size != 0 => return Err(WireError::Malformed("typed-array bytes")),
+                    Some(_) => WireValue::TypedBytes { data, ctor: ctor.to_string() },
+                }
             }
         }
         "arr" => {
@@ -366,6 +641,24 @@ fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
         // Unknown tag (forward compatibility): an ordinary array.
         _ => WireValue::Array(items.iter().map(|item| decode_at(item, depth + 1)).collect::<WireResult<_>>()?),
     })
+}
+
+/// Whether `number` is an integer an `f64` cannot hold exactly.
+///
+/// Only integers — a float like `1e300` is a perfectly good JSON number and is
+/// left alone; it is the integer that changes VALUE when narrowed.
+fn is_inexact_integer(number: &Number) -> bool {
+    const LIMIT: i64 = 9_007_199_254_740_991;
+
+    if let Some(value) = number.as_i64() {
+        return !(-LIMIT..=LIMIT).contains(&value);
+    }
+
+    if let Some(value) = number.as_u64() {
+        return value > LIMIT as u64;
+    }
+
+    false
 }
 
 /// Whether `raw` is an optionally-negative run of ASCII digits. Deliberately not
@@ -458,6 +751,12 @@ pub fn from_json(value: &Value) -> WireValue {
     match value {
         Value::Null => WireValue::Null,
         Value::Bool(inner) => WireValue::Bool(*inner),
+        // An i64/u64 past the exact-f64 range keeps its digits as a bigint
+        // rather than being narrowed. `as_f64` alone rounded it silently, so a
+        // generated model holding 9007199254740993 sent 9007199254740992 and
+        // nothing on either end could tell. A bigint tag against a `v.number()`
+        // field is a validation error the server reports; a wrong number is not.
+        Value::Number(inner) if is_inexact_integer(inner) => WireValue::BigInt(inner.to_string()),
         Value::Number(inner) => WireValue::Number(inner.as_f64().unwrap_or(f64::NAN)),
         Value::String(inner) => WireValue::String(inner.clone()),
         Value::Array(items) => WireValue::Array(items.iter().map(from_json).collect()),

@@ -19,6 +19,25 @@ import java.util.Map;
  * Object>} (insertion ordered, because object field order must survive a round trip).
  */
 public final class Json {
+    /**
+     * Levels of ENVELOPE a wire value can sit under before its own nesting starts. Every payload
+     * arrives wrapped: {@code {"result": V}} is one, and the two deepest — a batch response {@code
+     * {"results":[{"result": V}]}} and a poke part {@code {"rowsPatch":[{"value": V}]}} — are
+     * three.
+     */
+    private static final int MAX_ENVELOPE_DEPTH = 3;
+
+    /**
+     * The parser's own nesting cap, counted from the DOCUMENT root.
+     *
+     * <p>It cannot be {@link Wire#MAX_DEPTH} directly: that bounds a wire VALUE, whose root is
+     * already {@link #MAX_ENVELOPE_DEPTH} levels into the frame carrying it, so charging the
+     * envelope against the value's budget refused frames whose payload the reference encodes
+     * happily. The cap is here to keep a hostile frame off the stack, and a few extra levels cost
+     * nothing against that.
+     */
+    static final int MAX_DEPTH = Wire.MAX_DEPTH + MAX_ENVELOPE_DEPTH;
+
     private Json() {}
 
     public static Object parse(String text) {
@@ -117,9 +136,9 @@ public final class Json {
             // nested frame overflows the stack — and StackOverflowError is an
             // Error, which Client.handleFrame's `catch (RuntimeException)`
             // cannot catch, so it escapes onto the socket reader thread.
-            if (depth > Wire.MAX_DEPTH) {
+            if (depth > MAX_DEPTH) {
                 throw new IllegalArgumentException(
-                        "json: nesting exceeds the " + Wire.MAX_DEPTH + "-level limit");
+                        "json: nesting exceeds the " + MAX_DEPTH + "-level limit");
             }
 
             char character = text.charAt(offset);

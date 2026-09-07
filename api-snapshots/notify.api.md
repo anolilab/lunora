@@ -121,7 +121,7 @@ interface LunoraPush {
     list: (filter?: SubscriptionFilter) => Promise<PushSubscriptionDevice[]>;
     register: (input: RegisterInput) => Promise<StoredSubscription>;
     send: (target: StoredSubscription | string, payload: PushContent) => Promise<Receipt>;
-    unregister: (id: string) => Promise<void>;
+    unregister: (id: string, owner: PushOwner) => Promise<void>;
 }
 ```
 
@@ -134,7 +134,9 @@ Re-exported from `@visulima/notification` — signature tracked at its source.
 ```ts
 interface NotifyConfig {
     allowedPushOrigins?: string[];
+    broadcastPageSize?: number;
     chat?: (env: NotifyEnv) => unknown;
+    concurrency?: number;
     fcm?: FcmConfig | FcmConfigFactory;
     inApp?: (env: NotifyEnv) => unknown;
     store?: (env: NotifyEnv) => SubscriptionStore;
@@ -191,7 +193,26 @@ type NotifySkipReason = "channel-not-configured" | "no-subscriptions-matched";
 interface PushBroadcastJob {
     filter?: SubscriptionFilter;
     payload: PushContent;
+    retryIds?: string[];
     type: "lunora.push.broadcast";
+}
+```
+
+### `PushBroadcastPageOutcome` (interface)
+
+```ts
+interface PushBroadcastPageOutcome {
+    failedIds: string[];
+    nextFilter?: SubscriptionFilter;
+    result: BroadcastResult;
+}
+```
+
+### `PushOwner` (interface)
+
+```ts
+interface PushOwner {
+    userId: string | null | undefined;
 }
 ```
 
@@ -317,6 +338,7 @@ type SubscriptionStatus = "expired" | "failed" | "ok";
 ```ts
 interface SubscriptionStore {
     delete: (id: string) => Promise<void>;
+    deleteOwned: (id: string, userId: string | null) => Promise<boolean>;
     get: (id: string) => Promise<StoredSubscription | undefined>;
     list: (filter?: SubscriptionFilter) => Promise<StoredSubscription[]>;
     markStatus: (id: string, status: SubscriptionStatus, error?: string) => Promise<void>;
@@ -396,7 +418,7 @@ const fcmId: (token: string) => string;
 ### `isGoneError` (const)
 
 ```ts
-const isGoneError: (message: string | undefined) => boolean;
+const isGoneError: (message: string | undefined, kind?: StoredSubscription["kind"]) => boolean;
 ```
 
 ### `isNotifyDefinition` (const)
@@ -423,10 +445,10 @@ const normalizeRegisterInput: (input: RegisterInput, now?: number, options?: Nor
 const routingPushProvider: (options: RoutingPushOptions) => Provider<unknown, PushPayload>;
 ```
 
-### `runPushBroadcastJob` (const)
+### `runPushBroadcastPage` (const)
 
 ```ts
-const runPushBroadcastJob: (push: LunoraPush, job: PushBroadcastJob) => Promise<BroadcastPageResult>;
+const runPushBroadcastPage: (push: LunoraPush, job: PushBroadcastJob) => Promise<PushBroadcastPageOutcome>;
 ```
 
 ### `targetOf` (const)
@@ -472,6 +494,15 @@ interface SubscribeToPushOptions {
 }
 ```
 
+### `SubscribeToPushResult` (interface)
+
+```ts
+interface SubscribeToPushResult {
+    replacedEndpoint?: string;
+    subscription: SerializedPushSubscription;
+}
+```
+
 ### `isPushSupported` (const)
 
 ```ts
@@ -481,7 +512,7 @@ const isPushSupported: () => boolean;
 ### `subscribeToPush` (const)
 
 ```ts
-const subscribeToPush: (options: SubscribeToPushOptions) => Promise<SerializedPushSubscription>;
+const subscribeToPush: (options: SubscribeToPushOptions) => Promise<SubscribeToPushResult>;
 ```
 
 ### `unsubscribeFromPush` (const)

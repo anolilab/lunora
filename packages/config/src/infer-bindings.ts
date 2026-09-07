@@ -64,19 +64,6 @@ type DurableObjectClass = keyof typeof DURABLE_OBJECT_BINDINGS;
 
 const DURABLE_OBJECT_CLASSES = Object.keys(DURABLE_OBJECT_BINDINGS) as DurableObjectClass[];
 
-/**
- * Matches a *type-only* export of each DO class — `export type ShardDO` or the
- * inline `export { type ShardDO }` form. `es-module-lexer` lists the class name
- * as an export in both cases even though it compiles away, so a candidate name
- * is only treated as a real runtime export when this pattern does NOT match.
- * Without this, a binding would reference a class wrangler can't find at deploy.
- */
-const TYPE_ONLY_EXPORT_PATTERNS: Record<DurableObjectClass, RegExp> = {
-    SchedulerDO: /\btype\s+SchedulerDO\b/,
-    SessionDO: /\btype\s+SessionDO\b/,
-    ShardDO: /\btype\s+ShardDO\b/,
-};
-
 const ENV_DB_PATTERN = /\benv\s*\.\s*DB\b/;
 const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
 // Pipelines ships from `@lunora/bindings/pipelines` but is codegen-wired onto
@@ -85,11 +72,16 @@ const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
 // pipelines binding hint. So detect the `ctx.pipelines` access directly,
 // mirroring the codegen feature probe.
 const CTX_PIPELINES_PATTERN = /\bctx\s*\.\s*pipelines\b/;
+// R2 SQL is the same shape as pipelines: `@lunora/bindings/r2sql` is codegen-wired
+// onto ActionCtx, so apps reach it as `ctx.r2sql` and never import the subpath.
+// Its three `R2_SQL_*` secrets had neither a flag nor a registry entry, so
+// `ctx.r2sql` failed silently on the deployed worker.
+const CTX_R2SQL_PATTERN = /\bctx\s*\.\s*r2sql\b/;
 const TYPE_ONLY_IMPORT_PATTERN = /^\s*import\s+type\b/;
 
 /**
  * The specifiers the batteries-included `browserTool` sandbox detector treats
- * as `@lunora/agent` — mirrors `discover-sandbox.ts`'s identical constant
+ * as `@lunora/agent` — mirrors `discover/sandbox.ts`'s identical constant
  * exactly (both the main entry and the `/sandbox` subpath re-export the tool).
  */
 const SANDBOX_MODULE_SPECIFIERS = new Set(["@lunora/agent", "@lunora/agent/sandbox"]);
@@ -116,7 +108,7 @@ const extractImportSpecifierList = (statementText: string): string => {
 /**
  * A specifier-level `{ type browserTool }` inside an otherwise-value import —
  * compiles away even though the import declaration itself is a value import
- * (e.g. alongside `containerTool`). Mirrors `discover-sandbox.ts`'s
+ * (e.g. alongside `containerTool`). Mirrors `discover/sandbox.ts`'s
  * `named.isTypeOnly()` guard. Tested against the extracted specifier list, not
  * the whole statement.
  */
@@ -138,7 +130,7 @@ const SANDBOX_BROWSER_TOOL_FALLBACK_PATTERN = /import\s+\{[^}]*\bbrowserTool\b[^
 /**
  * True when the sliced text of a SINGLE import declaration is a VALUE
  * (non-type-only) named import of `browserTool` — mirrors
- * `discover-sandbox.ts`'s `declaration.isTypeOnly()` (whole import) and
+ * `discover/sandbox.ts`'s `declaration.isTypeOnly()` (whole import) and
  * `named.isTypeOnly()` (single specifier) guards exactly.
  */
 const isValueBrowserToolImport = (statementText: string): boolean => {
@@ -159,7 +151,7 @@ const isValueBrowserToolImport = (statementText: string): boolean => {
  * browserTool } from "@lunora/agent";`) is never parsed as a declaration at
  * all, so it can never match, and a `type`-prefixed specifier is rejected by
  * {@link isValueBrowserToolImport}. This is what makes the detector agree with
- * `discover-sandbox.ts`'s AST-based one on the same fixture matrix.
+ * `discover/sandbox.ts`'s AST-based one on the same fixture matrix.
  */
 const hasSandboxBrowserToolImport = (code: string): boolean => {
     try {
@@ -199,12 +191,20 @@ const CAPABILITY_SOURCES = {
     usesImages: { pattern: /\bfrom\s+["']@lunora\/bindings\/images["']/, source: "@lunora/bindings/images" },
     usesKv: { pattern: /\bfrom\s+["']@lunora\/bindings\/kv["']/, source: "@lunora/bindings/kv" },
     usesMail: { pattern: /\bfrom\s+["']@lunora\/mail["']/, source: "@lunora/mail" },
+    // No Cloudflare binding of its own — like `@lunora/mail`, this exists so the
+    // package's declared secrets (the VAPID trio + the two FCM keys) reach
+    // `.dev.vars.example` and the missing-secret pre-flight. `packageNamesFromBindings`
+    // can only emit a source named here, so without this entry those five were
+    // declared and consumed by nothing.
+    usesNotify: { pattern: /\bfrom\s+["']@lunora\/notify["']/, source: "@lunora/notify" },
     usesPayment: { pattern: /\bfrom\s+["']@lunora\/payment["']/, source: "@lunora/payment" },
     // Keyed off the `ctx.pipelines` access (not an import) — see CTX_PIPELINES_PATTERN.
     // Pipelines is codegen-wired onto ActionCtx, so apps reach it via `ctx.pipelines`
     // rather than importing `@lunora/bindings/pipelines`; `source` names that subpath
     // for the hint message.
     usesPipelines: { pattern: CTX_PIPELINES_PATTERN, source: "@lunora/bindings/pipelines" },
+    // Keyed off the `ctx.r2sql` access, not an import — see CTX_R2SQL_PATTERN.
+    usesR2sql: { pattern: CTX_R2SQL_PATTERN, source: "@lunora/bindings/r2sql" },
     usesScheduler: { pattern: /\bfrom\s+["']@lunora\/scheduler["']/, source: "@lunora/scheduler" },
     usesStorage: { pattern: /\bfrom\s+["']@lunora\/storage["']/, source: "@lunora/storage" },
     // x402 rails are opt-in add-on subpaths (not part of the `lunorash` umbrella),
@@ -313,10 +313,14 @@ interface InferredBindings {
     usesKv: boolean;
     /** `@lunora/mail` is imported (Resend API key must be set in `.dev.vars`; no binding). */
     usesMail: boolean;
+    /** `@lunora/notify` is imported (Web Push needs VAPID/FCM secrets in `.dev.vars`; no binding). */
+    usesNotify: boolean;
     /** `@lunora/payment` is imported (provider secrets must be set in `.dev.vars`; no binding). */
     usesPayment: boolean;
     /** `ctx.pipelines` is used (binding needs an un-mintable remote pipeline name; hint-only). */
     usesPipelines: boolean;
+    /** `ctx.r2sql` is used (needs the `R2_SQL_*` secrets in `.dev.vars`; no binding). */
+    usesR2sql: boolean;
     /** `@lunora/scheduler` is imported. */
     usesScheduler: boolean;
     /** `@lunora/storage` is imported (R2 bucket binding name is user-defined). */
@@ -421,13 +425,14 @@ const capabilitiesFromSource = (code: string): Capabilities => {
     // NOTE: `usesBrowser`'s sandbox-`browserTool` half is intentionally NOT
     // folded in here — see `scanSandboxBrowserToolUsage` below. Unlike every
     // other probe, it must be scoped to EXACTLY the `lunora/` file set
-    // `discover-sandbox.ts` scans (never `src/`), so it runs as a separate,
+    // `discover/sandbox.ts` scans (never `src/`), so it runs as a separate,
     // lunora-only pass in `inferLunoraBindings` instead.
     return mergeCapabilities(capabilities, {
         ...NO_CAPABILITIES,
         needsD1: ENV_DB_PATTERN.test(code),
         usesAi: ENV_AI_PATTERN.test(code),
         usesPipelines: CTX_PIPELINES_PATTERN.test(code),
+        usesR2sql: CTX_R2SQL_PATTERN.test(code),
     });
 };
 
@@ -466,8 +471,67 @@ interface InferOptions {
     schemaDir?: string;
 }
 
-/** Read the worker entry path from `wrangler.main`, or probe known fallbacks. */
-const resolveWorkerEntry = (projectRoot: string): string | undefined => {
+/* eslint-disable no-secrets/no-secrets -- false positive: `frameworkComposePlugin` is a function name in prose, not a credential */
+
+/**
+ * The virtual module id `@lunora/vite`'s `frameworkComposePlugin` resolves to a
+ * COMPOSED class-A worker entry. Every class-A template sets `wrangler.main` to
+ * it and ships no entry file at all, so an fs probe can never find one.
+ *
+ * Duplicated (not imported) from `@lunora/vite`: `@lunora/vite` depends on
+ * `@lunora/config`, so importing back would be a cycle. The literal is the
+ * public contract a template's `wrangler.jsonc` writes by hand anyway.
+ */
+const LUNORA_WORKER_VIRTUAL_ID = "virtual:lunora/worker";
+
+/* eslint-enable no-secrets/no-secrets -- re-enable after the LUNORA_WORKER_VIRTUAL_ID doc block */
+
+/**
+ * What the project's `wrangler.main` (or the fallback probe) resolves to.
+ *
+ * `composed` is the class-A case: there is no file to lex, and treating that as
+ * "no worker entry" is what made every container/workflow/agent read
+ * `exported: false` and get filtered out of reconcile — the app then deployed
+ * green and failed at runtime on a missing binding. The composed entry's exports
+ * are known statically instead (see {@link COMPOSED_ENTRY_DURABLE_OBJECTS} and
+ * `@lunora/vite`'s `GENERATED_CLASS_MODULES`).
+ */
+interface WorkerEntry {
+    /** `true` when `wrangler.main` is `virtual:lunora/worker` — `@lunora/vite` composes the entry. */
+    composed: boolean;
+    /** Absolute path to a hand-written entry file, or `undefined` for the composed entry / no entry at all. */
+    path?: string;
+}
+
+/**
+ * The Durable Object classes the composed class-A entry exports. It emits
+ * exactly one — `export const ShardDO = app.ShardDO` off the generated
+ * `defineApp()` builder — plus star
+ * re-exports of the generated container/workflow/agent modules (handled by
+ * {@link detectClassExports}). `SchedulerDO`/`SessionDO` are NOT composed in, so
+ * they stay unprovisioned, which is honest: binding them would name a class the
+ * bundle does not export and `wrangler deploy` would reject it.
+ */
+const COMPOSED_ENTRY_DURABLE_OBJECTS: DurableObjectClass[] = ["ShardDO"];
+
+/**
+ * The class-B composed entry. `lunora deploy` passes this file to wrangler as
+ * the positional script whenever it exists, overriding `wrangler.main` — so it
+ * is what actually gets bundled and what wrangler checks its DO/Workflow
+ * bindings against. `main` in a class-B project names the framework adapter's
+ * build output (`.svelte-kit/cloudflare/_worker.js`, `dist/_worker.js`), which
+ * exists after `vite build` and exports only the SSR fetch handler. Lexing that
+ * instead read every declared class as unexported: nothing provisioned, plus a
+ * "add `export * from …`" warning the user cannot silence.
+ *
+ * Exported, not documented-as-duplicated: the CLI's `resolveComposedWorkerEntry`
+ * imports this constant, so the deploy's positional entry and the file this
+ * module lexes for exported classes cannot drift apart.
+ */
+const COMPOSED_WORKER_ENTRY = "src/worker.ts";
+
+/** Read the worker entry from `wrangler.main`, or probe known fallbacks. */
+const resolveWorkerEntry = (projectRoot: string): WorkerEntry => {
     for (const candidate of WRANGLER_FILES) {
         const wranglerPath = join(projectRoot, candidate);
 
@@ -478,8 +542,22 @@ const resolveWorkerEntry = (projectRoot: string): string | undefined => {
         const { parsed } = readWranglerJsonc<{ main?: string }>(wranglerPath);
         const main = parsed?.main;
 
+        // The class-A composed entry: no file exists (nor ever will), and the
+        // fallback probe below must NOT run — `src/index.ts` in a class-A app is
+        // the client entry, not the worker, so probing it would read the wrong
+        // file's exports.
+        if (main === LUNORA_WORKER_VIRTUAL_ID) {
+            return { composed: true };
+        }
+
+        const composedPath = join(projectRoot, COMPOSED_WORKER_ENTRY);
+
+        if (existsSync(composedPath)) {
+            return { composed: false, path: composedPath };
+        }
+
         if (typeof main === "string" && existsSync(join(projectRoot, main))) {
-            return join(projectRoot, main);
+            return { composed: false, path: join(projectRoot, main) };
         }
 
         break;
@@ -489,46 +567,15 @@ const resolveWorkerEntry = (projectRoot: string): string | undefined => {
         const fullPath = join(projectRoot, fallback);
 
         if (existsSync(fullPath)) {
-            return fullPath;
+            return { composed: false, path: fullPath };
         }
     }
 
-    return undefined;
+    return { composed: false };
 };
 
-/**
- * The Durable Object classes the worker entry exports. Uses `es-module-lexer`'s
- * export list so every form is covered (`export const ShardDO`, `export {
- * SchedulerDO } from "./do"`, aliases). These are the only DO classes safe to
- * bind, since wrangler validates that a binding's `class_name` is exported.
- */
-const detectExportedDurableObjects = (entryPath: string): DurableObjectSpec[] => {
-    const code = readFileSync(entryPath, "utf8");
-    let exportedNames: Set<string>;
-
-    try {
-        const [, exports] = lexModule(code);
-
-        exportedNames = new Set(exports.map((entry) => entry.n));
-    } catch {
-        exportedNames = new Set(DURABLE_OBJECT_CLASSES.filter((className) => new RegExp(String.raw`\bexport\b[^\n;]*\b${className}\b`).test(code)));
-    }
-
-    // A candidate counts only when it is exported as a runtime value — an
-    // inline `export { type ShardDO }` lists the name but compiles away, and
-    // binding it would make `wrangler deploy` fail on the missing class.
-    return DURABLE_OBJECT_CLASSES.filter((className) => exportedNames.has(className) && !TYPE_ONLY_EXPORT_PATTERNS[className].test(code)).map((className) => {
-        return {
-            binding: DURABLE_OBJECT_BINDINGS[className],
-            className,
-        };
-    });
-};
-
-/** A discovered definition whose generated class may or may not be exported by the worker entry. */
-interface ClassExportable {
-    className: string;
-}
+/** The inline `type` qualifier immediately before an export entry's local name (`export { type Foo }`). Module-scoped so it compiles once, not per export entry. */
+const INLINE_TYPE_QUALIFIER = /(?:^|[\s,{])type$/u;
 
 /**
  * PRIMARY (lexer-based, per-entry) type-only-export detector. Whether a lexer
@@ -539,14 +586,12 @@ interface ClassExportable {
  * entry's LOCAL name, so we test the source right before `entry.ls` (falling back
  * to `entry.s` when there is no `as` rename). Deciding this PER ENTRY is what keeps
  * a real value export from being suppressed by an unrelated type-only export
- * elsewhere in the entry file.
+ * elsewhere in the entry file — or, as the DO classes used to suffer, by a
+ * type-only IMPORT of the same name somewhere else in the entry.
  *
  * The imprecise whole-file counterpart used only when the lexer can't parse the
  * file is {@link isTypeOnlyExportRegexFallback}.
  */
-/** The inline `type` qualifier immediately before an export entry's local name (`export { type Foo }`). Module-scoped so it compiles once, not per export entry. */
-const INLINE_TYPE_QUALIFIER = /(?:^|[\s,{])type$/u;
-
 const isTypeOnlyExportEntry = (code: string, entry: { readonly ls: number; readonly s: number }): boolean => {
     const localStart = entry.ls >= 0 ? entry.ls : entry.s;
 
@@ -558,9 +603,9 @@ const isTypeOnlyExportEntry = (code: string, entry: { readonly ls: number; reado
  * counterpart to {@link isTypeOnlyExportEntry}, used ONLY when `es-module-lexer`
  * cannot parse a mid-edit file. Matches a *type-only* export of `className` —
  * `export type Foo`, the separate `export type { … Foo … }`, or the inline
- * `export { type Foo }`. Generalizes {@link TYPE_ONLY_EXPORT_PATTERNS} (built for
- * the fixed DO class set) to an arbitrary generated class name. The class name is
- * escaped and every pattern carries the `u` flag. The primary (lexer) path decides
+ * `export { type Foo }`. Every arm is anchored on `export`, so a type-only
+ * IMPORT of the same name is not mistaken for one; the class name is escaped and
+ * every pattern carries the `u` flag. The primary (lexer) path decides
  * type-only-ness per export entry instead — this blind whole-file sweep cannot tell
  * which `export` a repeated name came from, so a value + separate type export of
  * the same name still (conservatively) reads type-only here; acceptable for the
@@ -575,6 +620,55 @@ const isTypeOnlyExportRegexFallback = (code: string, className: string): boolean
         new RegExp(String.raw`\bexport\s+\{[^}]*\btype\s+${name}\b`, "u").test(code)
     );
 };
+
+/* eslint-disable no-secrets/no-secrets -- false positive: the two detector names in prose below, not credentials */
+
+/**
+ * The Durable Object classes the worker entry exports. Uses `es-module-lexer`'s
+ * export list so every form is covered (`export const ShardDO`, `export {
+ * SchedulerDO } from "./do"`, aliases). These are the only DO classes safe to
+ * bind, since wrangler validates that a binding's `class_name` is exported.
+ *
+ * Type-only-ness is decided by the same two detectors the generated classes use
+ * ({@link isTypeOnlyExportEntry} per lexer entry, {@link isTypeOnlyExportRegexFallback}
+ * when the file will not parse). The core classes used to get a weaker,
+ * unanchored whole-file `\btype\s+ShardDO\b` instead, which an ordinary
+ * `import { type ShardDO, createShardDO }` satisfied — so reconcile refused the
+ * SHARD binding and `wrangler-validator` then failed the deploy telling the user
+ * their dev server auto-reconciles this on startup.
+ */
+/* eslint-enable no-secrets/no-secrets -- re-enable after the detector doc block */
+const detectExportedDurableObjects = (entryPath: string): DurableObjectSpec[] => {
+    const code = readFileSync(entryPath, "utf8");
+    let exportedNames: Set<string>;
+
+    // A candidate counts only when it is exported as a runtime VALUE — an
+    // inline `export { type ShardDO }` lists the name but compiles away, and
+    // binding it would make `wrangler deploy` fail on the missing class.
+    try {
+        const [, exports] = lexModule(code);
+
+        exportedNames = new Set(exports.filter((entry) => !isTypeOnlyExportEntry(code, entry)).map((entry) => entry.n));
+    } catch {
+        exportedNames = new Set(
+            DURABLE_OBJECT_CLASSES.filter(
+                (className) => new RegExp(String.raw`\bexport\b[^\n;]*\b${className}\b`, "u").test(code) && !isTypeOnlyExportRegexFallback(code, className),
+            ),
+        );
+    }
+
+    return DURABLE_OBJECT_CLASSES.filter((className) => exportedNames.has(className)).map((className) => {
+        return {
+            binding: DURABLE_OBJECT_BINDINGS[className],
+            className,
+        };
+    });
+};
+
+/** A discovered definition whose generated class may or may not be exported by the worker entry. */
+interface ClassExportable {
+    className: string;
+}
 
 /**
  * Whether the worker entry exports each definition's generated class: a named
@@ -593,7 +687,7 @@ const isTypeOnlyExportRegexFallback = (code: string, className: string): boolean
  * same lexer-then-regex-fallback shape as `detectExportedDurableObjects`.
  */
 const detectClassExports = <Definition extends ClassExportable>(
-    entryPath: string | undefined,
+    entry: WorkerEntry,
     definitions: ReadonlyArray<Definition>,
     generatedModule: string,
 ): (Definition & { exported: boolean })[] => {
@@ -601,13 +695,23 @@ const detectClassExports = <Definition extends ClassExportable>(
         return [];
     }
 
-    if (entryPath === undefined) {
+    // The composed class-A entry star-re-exports `_generated/{agents,containers,
+    // workflows}` for every kind the project declares (`@lunora/vite`'s
+    // `GENERATED_CLASS_MODULES`), so every declaration IS exported. There is no
+    // file to lex — reading it as "unexported" is the bug this branch fixes.
+    if (entry.composed) {
+        return definitions.map((definition) => {
+            return { ...definition, exported: true };
+        });
+    }
+
+    if (entry.path === undefined) {
         return definitions.map((definition) => {
             return { ...definition, exported: false };
         });
     }
 
-    const code = readFileSync(entryPath, "utf8");
+    const code = readFileSync(entry.path, "utf8");
     const starReexport = new RegExp(String.raw`\bexport\s*\*\s*from\s*["'][^"']*_generated\/${generatedModule}(?:\.js)?["']`).test(code);
 
     // The names exported as a runtime VALUE — the only ones safe to bind, since
@@ -624,10 +728,10 @@ const detectClassExports = <Definition extends ClassExportable>(
         // What remains are the real value exports — so a value `export class Foo {}`
         // is NOT suppressed by an unrelated `export type { Foo }` elsewhere in the
         // entry (the prior unanchored whole-file regex's bug).
-        // NB: coupling — `isTypeOnlyExportEntry` reads the source at `entry.ls`/`entry.s`,
+        // NB: coupling — `isTypeOnlyExportEntry` reads the source at `exportEntry.ls`/`exportEntry.s`,
         // the byte offsets `es-module-lexer` reports for THIS `code`, so it must be
         // passed the same `code` these `exports` were lexed from.
-        valueExportedNames = new Set(exports.filter((entry) => !isTypeOnlyExportEntry(code, entry)).map((entry) => entry.n));
+        valueExportedNames = new Set(exports.filter((exportEntry) => !isTypeOnlyExportEntry(code, exportEntry)).map((exportEntry) => exportEntry.n));
     } catch {
         // Fallback for an unparseable (mid-edit) entry: a blind whole-file sweep for
         // an `export … <className>` that is not a type-only export. Less precise than
@@ -683,7 +787,7 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
 
 /**
  * Scan ONLY the `lunora/` tree (never `src/`) for a value `browserTool`
- * import — mirrors `discover-sandbox.ts`'s `listLunoraSourceFiles` file set
+ * import — mirrors `discover/sandbox.ts`'s `listLunoraSourceFiles` file set
  * exactly. Kept as a separate pass from {@link scanCapabilities} (which also
  * walks `src/`) so config never auto-writes a `BROWSER` binding codegen will
  * never wire — a `src/`-only `browserTool` import never registers the
@@ -812,7 +916,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     // A sandbox `browserTool` import provisions BROWSER even without a direct
     // `@lunora/browser` import (the browser op runs on the dispatcher's ctx) —
     // but ONLY when the import lives in `lunora/`, the exact file set
-    // `discover-sandbox.ts` scans; a `src/`-only import never registers the
+    // `discover/sandbox.ts` scans; a `src/`-only import never registers the
     // sandbox dispatcher, so it must not provision the binding either. Folded
     // into `capabilities` here (not `scanCapabilities`) so both the returned
     // `usesBrowser` flag AND the provenance signal line agree.
@@ -820,14 +924,23 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         ...scannedCapabilities,
         usesBrowser: scannedCapabilities.usesBrowser || scanSandboxBrowserToolUsage(options.projectRoot, schemaDirectory),
     };
-    const entryPath = resolveWorkerEntry(options.projectRoot);
-    const durableObjects = entryPath ? detectExportedDurableObjects(entryPath) : [];
+    const entry = resolveWorkerEntry(options.projectRoot);
+    let durableObjects: DurableObjectSpec[];
+
+    if (entry.composed) {
+        durableObjects = COMPOSED_ENTRY_DURABLE_OBJECTS.map((className) => {
+            return { binding: DURABLE_OBJECT_BINDINGS[className], className };
+        });
+    } else {
+        durableObjects = entry.path === undefined ? [] : detectExportedDurableObjects(entry.path);
+    }
+
     const needsD1 = capabilities.needsD1 || schemaNeedsD1(options.projectRoot, schemaDirectory);
-    const containers = detectClassExports(entryPath, discoverContainerInfo(options.projectRoot, schemaDirectory).containers, "containers");
-    const workflows = detectClassExports(entryPath, discoverWorkflowInfo(options.projectRoot, schemaDirectory).workflows, "workflows");
+    const containers = detectClassExports(entry, discoverContainerInfo(options.projectRoot, schemaDirectory).containers, "containers");
+    const workflows = detectClassExports(entry, discoverWorkflowInfo(options.projectRoot, schemaDirectory).workflows, "workflows");
     // Agents compile onto Cloudflare Workflows, so — like workflows — only an
     // exported agent WorkflowEntrypoint class is safe to reconcile into `workflows[]`.
-    const agents = detectClassExports(entryPath, discoverAgentInfo(options.projectRoot, schemaDirectory).agents, "agents");
+    const agents = detectClassExports(entry, discoverAgentInfo(options.projectRoot, schemaDirectory).agents, "agents");
     // Queues need no worker-entry export (their `queue()` handler rides
     // `createWorker`), so the discovered list is reconcilable as-is.
     const queues = [...discoverQueueInfo(options.projectRoot, schemaDirectory).queues];
@@ -890,9 +1003,32 @@ const packageNamesFromBindings = (bindings: InferredBindings): string[] => {
     return names;
 };
 
-export type { DurableObjectClass, DurableObjectSpec, InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow };
-// `resolveWorkerEntry` + `isTypeOnlyExportEntry` are shared with the wrangler
-// validator's exported-class check, which answers the same question
-// ("which classes does the entry export as runtime values?") synchronously.
-// Exported rather than copied — the copy that existed drifted immediately.
-export { inferLunoraBindings, isTypeOnlyExportEntry, packageNamesFromBindings, resolveWorkerEntry, WORKER_ENTRY_FALLBACKS };
+export type {
+    DurableObjectClass,
+    DurableObjectSpec,
+    InferOptions,
+    InferredAgent,
+    InferredBindings,
+    InferredContainer,
+    InferredQueue,
+    InferredWorkflow,
+    WorkerEntry,
+};
+// `COMPOSED_WORKER_ENTRY`, `WORKER_ENTRY_FALLBACKS` and `isTypeOnlyExportEntry`
+// are shared with the wrangler validator's exported-class check, which answers
+// the same question ("which classes does the entry export as runtime values?")
+// against the same file. The validator keeps its own path resolver because it
+// resolves `main` from the `--env` view relative to the config file, which this
+// one (deliberately projectRoot-relative, and reading the top level) does not.
+// `resolveWorkerEntry` returns a {@link WorkerEntry}, not a path: the class-A
+// composed entry (`main: "virtual:lunora/worker"`) has no file, and reading that
+// as "no worker entry" is what left every container/workflow/agent unprovisioned.
+export {
+    COMPOSED_WORKER_ENTRY,
+    inferLunoraBindings,
+    isTypeOnlyExportEntry,
+    LUNORA_WORKER_VIRTUAL_ID,
+    packageNamesFromBindings,
+    resolveWorkerEntry,
+    WORKER_ENTRY_FALLBACKS,
+};

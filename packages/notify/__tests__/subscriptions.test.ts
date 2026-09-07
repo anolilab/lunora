@@ -53,6 +53,60 @@ describe("normalizeRegisterInput", () => {
         expect(stored).toMatchObject({ id: fcmId("device-token-1"), kind: "fcm", token: "device-token-1" });
         expect(() => normalizeRegisterInput({ kind: "fcm", token: "" })).toThrow(/non-empty `token`/u);
     });
+
+    it("discriminates on `kind`, not on the mere presence of a `token` key", () => {
+        expect.hasAssertions();
+
+        // `RegisterInput` declares `kind` as the discriminator, but the runtime
+        // branched on `"token" in input`. A web-push registration spread from an
+        // object with an optional token field (`{ ...form, token: undefined }`)
+        // carries the KEY, so it was routed to FCM and rejected as a missing
+        // token — a registration the declared type says is valid.
+        const stored = normalizeRegisterInput({ subscription: webPushSub, token: undefined }, 1000);
+
+        expect(stored.kind).toBe("web-push");
+        expect(stored.id).toBe(webPushId(webPushSub.endpoint));
+    });
+});
+
+describe("normalizeRegisterInput field caps (NOTIFY-02)", () => {
+    it("rejects an oversized web-push endpoint", () => {
+        expect.hasAssertions();
+
+        // `metadata` is capped because a client controls it end-to-end and it
+        // lands in the row unbounded. `endpoint`, `token` and `keys` are exactly
+        // as client-controlled and land in the SAME row — a 1 MB endpoint was
+        // accepted while a 4 KB metadata blob was refused.
+        const endpoint = `https://push.example/${"a".repeat(5000)}`;
+
+        expect(() => normalizeRegisterInput({ subscription: { ...webPushSub, endpoint } })).toThrow(/`endpoint` is \d+ bytes/u);
+    });
+
+    it("rejects oversized web-push keys", () => {
+        expect.hasAssertions();
+
+        expect(() => normalizeRegisterInput({ subscription: { ...webPushSub, keys: { auth: "a".repeat(5000), p256dh: "P256KEY" } } })).toThrow(
+            /`keys\.auth` is \d+ bytes/u,
+        );
+        expect(() => normalizeRegisterInput({ subscription: { ...webPushSub, keys: { auth: "AUTHKEY", p256dh: "p".repeat(5000) } } })).toThrow(
+            /`keys\.p256dh` is \d+ bytes/u,
+        );
+    });
+
+    it("rejects an oversized FCM token", () => {
+        expect.hasAssertions();
+
+        expect(() => normalizeRegisterInput({ kind: "fcm", token: "t".repeat(5000) })).toThrow(/`token` is \d+ bytes/u);
+    });
+
+    it("still accepts realistically-sized values", () => {
+        expect.hasAssertions();
+
+        // A real FCM registration token is ~160 chars and a real push endpoint
+        // ~200; the cap must not be tight enough to refuse a live device.
+        expect(() => normalizeRegisterInput({ kind: "fcm", token: "t".repeat(512) })).not.toThrow();
+        expect(() => normalizeRegisterInput({ subscription: { ...webPushSub, endpoint: `https://push.example/${"a".repeat(800)}` } })).not.toThrow();
+    });
 });
 
 describe("normalizeRegisterInput metadata validation (NOTIFY-02)", () => {
@@ -197,6 +251,13 @@ describe("targetOf / ids / isGoneError", () => {
         // 64-bit digest = 16 hex chars, behind the `wp2_`/`fcm2_` version prefix.
         expect(webPushId("https://push.example/abc")).toMatch(/^wp2_[\da-f]{16}$/u);
         expect(fcmId("device-token-1")).toMatch(/^fcm2_[\da-f]{16}$/u);
+
+        // The EXACT digests, not just the shape. These ids are persisted primary
+        // keys: if `shared/fnv1a`'s `fnv1a64Hex` ever changes, every stored
+        // subscription silently re-keys — the old row goes dark and the device
+        // re-registers as a duplicate. A shape-only assertion cannot see that.
+        expect(webPushId("https://push.example/abc")).toBe("wp2_ebdefb71ba92d7d5");
+        expect(fcmId("device-token-1")).toBe("fcm2_3d944cc157b58d75");
     });
 
     it("does not collide across a large synthetic-endpoint sample", () => {
@@ -218,8 +279,12 @@ describe("targetOf / ids / isGoneError", () => {
         // Web Push structured status: HTTP 410 (Gone) / 404 (Not Found) → gone.
         expect(isGoneError("Subscription gone (HTTP 410) — remove this subscription")).toBe(true);
         expect(isGoneError("HTTP 404: Not Found")).toBe(true);
-        // FCM canonical unregistered codes → gone.
-        expect(isGoneError("FCM push failed: UNREGISTERED")).toBe(true);
+        // FCM canonical unregistered codes → gone. The FIRST of these is what the
+        // `@visulima/notification` FCM provider actually emits for a dead token: it
+        // forwards `body.error.message` only, and FCM HTTP v1 puts the `UNREGISTERED`
+        // code in `error.details[].errorCode`, which the provider drops — so the
+        // human-readable `NOT_FOUND` prose is the ONLY signal that reaches us.
+        expect(isGoneError("[@visulima/notification] [fcm] Requested entity was not found.")).toBe(true);
         expect(isGoneError("NotRegistered")).toBe(true);
         expect(isGoneError("registration-token-not-registered")).toBe(true);
         // Prose fallback still prunes an explicit "subscription expired/gone".
@@ -233,6 +298,30 @@ describe("targetOf / ids / isGoneError", () => {
         expect(isGoneError("HTTP 400: invalid token")).toBe(false);
         expect(isGoneError("503 transient upstream error")).toBe(false);
         expect(isGoneError(undefined)).toBe(false);
+    });
+
+    it("does not apply the FCM-only codes to a web-push failure", () => {
+        expect.hasAssertions();
+
+        // The web-push provider echoes the push service's response BODY into
+        // `HTTP ${status}: ${body}`, so a 4xx whose prose happens to contain
+        // "not registered" matched the FCM-only pattern and permanently deleted
+        // a live subscription. The patterns are documented as provider-specific;
+        // pass the kind so they are applied that way.
+        expect(isGoneError("HTTP 403: sender not registered for this endpoint", "web-push")).toBe(false);
+        expect(isGoneError("HTTP 400: UNREGISTERED sender id", "web-push")).toBe(false);
+
+        // The FCM codes still prune an FCM device, and the shared HTTP 404/410
+        // status still prunes either kind (FCM HTTP v1 answers 404 for a dead token).
+        expect(isGoneError("[@visulima/notification] [fcm] Requested entity was not found.", "fcm")).toBe(true);
+        expect(isGoneError("NotRegistered", "fcm")).toBe(true);
+        expect(isGoneError("HTTP 404: Not Found", "fcm")).toBe(true);
+
+        // …and the NOT_FOUND prose stays FCM-scoped: the web-push provider echoes the
+        // push service's body into `HTTP ${status}: ${body}`, so a transient 5xx whose
+        // prose says "not found" must not delete a live browser subscription.
+        expect(isGoneError("HTTP 502: upstream route was not found", "web-push")).toBe(false);
+        expect(isGoneError("HTTP 410: Gone", "web-push")).toBe(true);
     });
 });
 
@@ -356,6 +445,25 @@ describe("legacy-id migration eviction (memory + D1)", () => {
         expect(current.id).not.toBe(legacyId);
         // The legacy row is evicted → only ONE row survives, so a `broadcast` (no id
         // filter, lists all) delivers to this device exactly once, not twice.
+        await expect(store.get(legacyId)).resolves.toBeUndefined();
+        await expect(store.list()).resolves.toHaveLength(1);
+    });
+
+    it.each(stores)("still evicts an UNOWNED legacy row when the device signs in (%s)", async (_name, makeStore) => {
+        expect.hasAssertions();
+
+        // The eviction's owner predicate is the CLAIM one, not `deleteOwned`'s
+        // exact match: a device registered anonymously under the old scheme and
+        // re-registered by a signed-in user must still lose its legacy row, or the
+        // migration leaves two rows and `broadcast` delivers to it twice forever.
+        const store = makeStore();
+        const { endpoint } = webPushSub;
+        const legacyId = legacyWebPushId(endpoint);
+
+        await store.put({ createdAt: 1, endpoint, id: legacyId, keys: webPushSub.keys, kind: "web-push", lastSeenAt: 1, userId: null });
+
+        await store.put(normalizeRegisterInput({ subscription: webPushSub, userId: "u1" }, 2));
+
         await expect(store.get(legacyId)).resolves.toBeUndefined();
         await expect(store.list()).resolves.toHaveLength(1);
     });
@@ -529,5 +637,76 @@ describe("re-register status parity (memory + D1)", () => {
         expect(again.createdAt).toBe(100);
         expect(again.lastStatus).toBe("failed");
         expect(again.lastError).toBe("boom");
+    });
+});
+
+describe("put ownership parity (memory + D1)", () => {
+    const stores: ReadonlyArray<readonly [string, () => ReturnType<typeof memorySubscriptionStore>]> = [
+        ["memory", () => memorySubscriptionStore()],
+        ["d1", () => d1SubscriptionStore(fakeD1())],
+    ];
+
+    it.each(stores)("refuses to move a row to a different owner (%s)", async (_name, makeStore) => {
+        expect.hasAssertions();
+
+        const store = makeStore();
+        const owned = await store.put(normalizeRegisterInput({ subscription: webPushSub, userId: "victim" }, 100));
+
+        await expect(store.put(normalizeRegisterInput({ subscription: webPushSub, userId: "attacker" }, 200))).rejects.toThrow(
+            /registered to a different user/u,
+        );
+
+        // Refused means UNCHANGED, not partially applied: the owner, the delivery
+        // keys and the first-seen time all still describe the victim's device.
+        await expect(store.get(owned.id)).resolves.toMatchObject({ createdAt: 100, keys: webPushSub.keys, userId: "victim" });
+    });
+
+    it.each(stores)("refuses an anonymous put over an owned row (%s)", async (_name, makeStore) => {
+        expect.hasAssertions();
+
+        const store = makeStore();
+
+        await store.put(normalizeRegisterInput({ subscription: webPushSub, userId: "u1" }, 100));
+
+        await expect(store.put(normalizeRegisterInput({ subscription: webPushSub }, 200))).rejects.toThrow(/registered to a different user/u);
+    });
+
+    it.each(stores)("still claims an unowned row and still upserts for the same owner (%s)", async (_name, makeStore) => {
+        expect.hasAssertions();
+
+        const store = makeStore();
+        const anonymous = await store.put(normalizeRegisterInput({ subscription: webPushSub }, 100));
+
+        const claimed = await store.put(normalizeRegisterInput({ subscription: webPushSub, userId: "u1" }, 200));
+
+        expect(claimed.userId).toBe("u1");
+
+        const refreshed = await store.put(normalizeRegisterInput({ subscription: webPushSub, userId: "u1" }, 300));
+
+        expect(refreshed).toMatchObject({ createdAt: 100, id: anonymous.id, userId: "u1" });
+    });
+
+    it.each(stores)("does not evict a legacy-id row belonging to someone else (%s)", async (_name, makeStore) => {
+        expect.hasAssertions();
+
+        // The legacy row has its own primary key, so the guarded upsert cannot
+        // reach it — the migration eviction is a separate DELETE, and unscoped it
+        // silences the victim's device exactly as a re-own would.
+        const store = makeStore();
+        const legacyId = legacyWebPushId(webPushSub.endpoint);
+
+        await store.put({
+            createdAt: 1,
+            endpoint: webPushSub.endpoint,
+            id: legacyId,
+            keys: webPushSub.keys,
+            kind: "web-push",
+            lastSeenAt: 1,
+            userId: "victim",
+        });
+
+        await store.put(normalizeRegisterInput({ subscription: webPushSub, userId: "attacker" }, 200));
+
+        await expect(store.get(legacyId)).resolves.toMatchObject({ userId: "victim" });
     });
 });

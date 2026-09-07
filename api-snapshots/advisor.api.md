@@ -214,17 +214,6 @@ interface AdvisorFlagSecurityDefault {
 }
 ```
 
-### `AdvisorFunctionMetrics` (interface)
-
-```ts
-interface AdvisorFunctionMetrics {
-    calls: number;
-    errors: number;
-    maxDurationMs: number;
-    path: string;
-}
-```
-
 ### `AdvisorGeoIndexUsage` (interface)
 
 ```ts
@@ -335,6 +324,7 @@ interface AdvisorKvKeyAccess {
     file: string;
     line: number;
     method: string;
+    visibility?: "internal" | "public";
 }
 ```
 
@@ -746,7 +736,6 @@ interface AdvisorTable {
     indexes: ReadonlyArray<AdvisorIndex>;
     isPublic?: boolean;
     name: string;
-    optionalFields?: ReadonlySet<string>;
     relations: ReadonlyArray<AdvisorRelation>;
     shardKind?: "global" | "root" | "shardBy";
     softDelete?: {
@@ -756,18 +745,6 @@ interface AdvisorTable {
         after?: number;
         field: string;
     };
-}
-```
-
-### `AdvisorTableSample` (interface)
-
-```ts
-interface AdvisorTableSample {
-    readonly cap: number;
-    readonly existingIds: ReadonlySet<string>;
-    readonly rows: ReadonlyArray<Record<string, unknown>>;
-    readonly table: string;
-    readonly truncated: boolean;
 }
 ```
 
@@ -966,7 +943,6 @@ interface LintContext {
     failOpenGuards?: ReadonlyArray<AdvisorFailOpenGuard>;
     flagReads?: ReadonlyArray<AdvisorFlagRead>;
     flagSecurityDefaults?: ReadonlyArray<AdvisorFlagSecurityDefault>;
-    functionMetrics?: ReadonlyArray<AdvisorFunctionMetrics>;
     geoIndexUsages?: ReadonlyArray<AdvisorGeoIndexUsage>;
     httpActionGuards?: ReadonlyArray<AdvisorHttpActionGuard>;
     httpHeaderWrites?: ReadonlyArray<AdvisorHttpHeaderWrite>;
@@ -1004,7 +980,6 @@ interface LintContext {
     staleMigrationImports?: ReadonlyArray<AdvisorStaleMigrationImport>;
     storageKeyAccesses?: ReadonlyArray<AdvisorStorageKeyAccess>;
     storageUploads?: ReadonlyArray<AdvisorStorageUpload>;
-    tableSamples?: ReadonlyArray<AdvisorTableSample>;
     tableScans?: ReadonlyArray<AdvisorTableScan>;
     unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
     vectorNamespaceAccesses?: ReadonlyArray<AdvisorVectorNamespaceAccess>;
@@ -1253,12 +1228,6 @@ const commitOrderedHardDelete: Lint;
 const compareToBaseline: (current: AdvisorMap, baseline: AdvisorMap) => BaselineComparison;
 ```
 
-### `constraintValidator` (const)
-
-```ts
-const constraintValidator: Lint;
-```
-
 ### `containerInstanceKeyFromUserInput` (const)
 
 ```ts
@@ -1305,12 +1274,6 @@ const duplicateIndex: Lint;
 
 ```ts
 const emptyIndex: Lint;
-```
-
-### `errorRateOutlier` (const)
-
-```ts
-const errorRateOutlier: Lint;
 ```
 
 ### `errorWithoutCatalog` (const)

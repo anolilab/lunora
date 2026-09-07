@@ -132,22 +132,32 @@ const readLimit = (raw: unknown): number => {
  * after one decode means double-encoding (`%252e`) — rejected too, since no
  * documented slug contains a percent sign.
  *
+ * DECODE FIRST, SPLIT SECOND. Splitting the raw string on `/` and decoding each
+ * piece only sees the separators that arrived literally, so a traversal whose
+ * separator is itself encoded (`%2e%2e%2fapi`) is one "segment" that decodes to
+ * `../api` — never equal to `..`, and waved straight through. The URL parser at
+ * fetch time decodes and splits in that order, so this must too.
+ *
  * A decoded backslash is rejected outright: `normalizeDocUrl` has already
  * folded literal backslashes into `/` (they are path separators to the URL
  * parser), so one surviving here arrived percent-encoded, and no documented
  * slug contains a backslash.
  */
 const assertNoDotSegments = (value: string, raw: string): void => {
-    for (const segment of value.split("/")) {
-        let decoded: string;
+    let decoded: string;
 
-        try {
-            decoded = decodeURIComponent(segment);
-        } catch {
-            throw new RangeError(`"url" contains a malformed percent-escape: ${raw}`);
-        }
+    try {
+        decoded = decodeURIComponent(value);
+    } catch {
+        throw new RangeError(`"url" contains a malformed percent-escape: ${raw}`);
+    }
 
-        if (decoded === ".." || decoded === "." || decoded.includes("%") || decoded.includes("\\")) {
+    if (decoded.includes("%") || decoded.includes("\\")) {
+        throw new RangeError(`"url" must not contain ".." or encoded segments: ${raw}`);
+    }
+
+    for (const segment of decoded.split("/")) {
+        if (segment === ".." || segment === ".") {
             throw new RangeError(`"url" must not contain ".." or encoded segments: ${raw}`);
         }
     }

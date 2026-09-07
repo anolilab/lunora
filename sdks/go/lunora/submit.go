@@ -9,7 +9,11 @@ package lunora
 // typed wrapper must keep returning a typed result. Submit is the write path that
 // survives a dropped socket.
 
-import "errors"
+import (
+	"encoding/json"
+	"errors"
+	"time"
+)
 
 // TransientErrorCodes are the coded errors a replay must NOT treat as the
 // server's final word.
@@ -20,11 +24,35 @@ import "errors"
 // would only re-trigger the same failure, which is a poison-message loop.
 var TransientErrorCodes = map[string]bool{"SHARD_ERROR": true, "SHARD_UNAVAILABLE": true}
 
+// RateLimitErrorCodes are the codes that say "not now" rather than "no".
+//
+// A rate-limited replay is the one verdict a durable queue must never honour:
+// the write is perfectly valid and the server is asking for it later, so
+// dropping it loses data for being punctual. The delay comes from the envelope's
+// data.retryAfterMs (see protocol/fixtures/rpc.json's responseError.with-data).
+var RateLimitErrorCodes = map[string]bool{"RATE_LIMITED": true, "TOO_MANY_REQUESTS": true}
+
+// CodePayloadTooLarge is the worker's answer to a body over its cap. Coded, so
+// it arrives as a whole-batch envelope — which every other coded envelope is a
+// verdict on every entry, and this one is not.
+const CodePayloadTooLarge = "PAYLOAD_TOO_LARGE"
+
 // MaxBatchEntries is the hard cap on entries in one batch, matching the server's
 // own (shared/batch-wire.ts). A Durable Object is single-threaded and replays a
 // batch's entries sequentially, so an unbounded one could pin a shard for tens
 // of thousands of dispatches. A flush with a larger backlog chunks itself.
 const MaxBatchEntries = 500
+
+// MaxBatchBytes is the byte budget for one batch body: the worker's own 1 MiB
+// body cap (packages/runtime/src/body-readers.ts) less 64 KiB of headroom for
+// the request line, the headers and the JSON framing this estimate does not
+// weigh. Written as the subtraction so the derivation stays visible.
+//
+// The entry cap alone is blind to size: 500 writes carrying bytes or long text
+// exceed a megabyte, the worker answers 413 PAYLOAD_TOO_LARGE, and a whole-batch
+// coded envelope is terminal for every entry — so a count-only chunker settles
+// 500 durable writes rejected that would each have committed alone.
+const MaxBatchBytes = 1048576 - 65536
 
 // MutationStatus is what Submit did with a write.
 type MutationStatus string
@@ -75,6 +103,11 @@ type FlushReport struct {
 	Requeued []string
 	// Conflicted are the ids dropped because their precondition no longer held.
 	Conflicted []string
+	// RetryAfterMs is how long the server asked the caller to wait before
+	// flushing again, when a replay came back rate-limited. Zero otherwise. The
+	// client enforces it too — a flush inside the window is a no-op — so this is
+	// for a caller that schedules its own retry.
+	RetryAfterMs int
 }
 
 // SubmitOptions describes one offline-capable write.
@@ -264,7 +297,17 @@ func (c *Client) FlushOfflineQueue(shardKey string) FlushReport {
 	c.mu.Lock()
 	queue := c.offline
 	identity := c.identity
+	remaining := time.Until(c.flushNotBefore)
 	c.mu.Unlock()
+
+	// A server that answered "not now" gets waited out. Without this the caller's
+	// own reconnect loop replays the identical burst immediately and earns the
+	// same 429, indefinitely.
+	if remaining > 0 {
+		report.RetryAfterMs = int(remaining/time.Millisecond) + 1
+
+		return report
+	}
 
 	conflicted := c.dropStalePreconditions(queue)
 
@@ -328,22 +371,21 @@ func (c *Client) FlushOfflineQueue(shardKey string) FlushReport {
 
 	var toRequeue []*QueuedMutation
 
-	for start := 0; start < len(replayable); start += MaxBatchEntries {
-		end := start + MaxBatchEntries
-		if end > len(replayable) {
-			end = len(replayable)
-		}
+	chunks := chunkBatches(replayable)
 
+	for index, chunk := range chunks {
 		// Chunks replay sequentially, which is what preserves FIFO across a flush
 		// longer than one batch.
-		requeue, stop := c.replayBatched(queue, replayable[start:end], &report)
+		requeue, stop := c.replayBatched(queue, chunk, &report)
 		toRequeue = append(toRequeue, requeue...)
 
 		if stop {
 			// A whole-chunk transport failure. Leave every write not yet sent
 			// queued, in order, rather than sending on into a connection that
 			// just failed.
-			toRequeue = append(toRequeue, replayable[end:]...)
+			for _, later := range chunks[index+1:] {
+				toRequeue = append(toRequeue, later...)
+			}
 
 			break
 		}
@@ -362,6 +404,115 @@ func (c *Client) FlushOfflineQueue(shardKey string) FlushReport {
 	return report
 }
 
+// entryBytes estimates a batch entry's contribution to the request body.
+//
+// The args dominate and are the only part that can be large; the constant covers
+// the entry's fixed keys and the comma joining it to the next one. Encoding twice
+// (here and in replayBatched) is deliberate — the flush is the slow path, and
+// carrying the encoded form through the chunker would put a second
+// representation of every queued write in memory. An args set that will not
+// encode costs its fixed part only; the caller already partitioned those out.
+func entryBytes(item *QueuedMutation) int {
+	size := 0
+
+	if encoded, err := EncodeWire(argsOrEmpty(item.Args)); err == nil {
+		if payload, err := json.Marshal(encoded); err == nil {
+			size = len(payload)
+		}
+	}
+
+	return size + len(item.FunctionPath) + len(item.ID) + 160
+}
+
+// chunkBatches splits a flush into batch bodies the worker will accept.
+//
+// By BYTES as well as by count: the worker reads a batch body under a 1 MiB
+// budget and answers 413 PAYLOAD_TOO_LARGE past it, so 500 writes carrying bytes
+// or long text are one request the server refuses whole. A single write over the
+// budget still forms its own chunk — splitting cannot help it, and replayBatched
+// settles it on the answer.
+func chunkBatches(items []*QueuedMutation) [][]*QueuedMutation {
+	var (
+		chunks  [][]*QueuedMutation
+		current []*QueuedMutation
+		size    int
+	)
+
+	for _, item := range items {
+		cost := entryBytes(item)
+
+		if len(current) > 0 && (len(current) >= MaxBatchEntries || size+cost > MaxBatchBytes) {
+			chunks = append(chunks, current)
+			current = nil
+			size = 0
+		}
+
+		current = append(current, item)
+		size += cost
+	}
+
+	if len(current) > 0 {
+		chunks = append(chunks, current)
+	}
+
+	return chunks
+}
+
+// MaxRetryAfterMs caps the delay a rate limit can impose on the next flush. A
+// server (or a proxy in front of one) that names an hour would otherwise park a
+// queue of durable writes for an hour; the reference client clamps at the same
+// minute.
+const MaxRetryAfterMs = 60_000
+
+// retryAfterMs is how long a rate-limited replay asks to wait, if the envelope
+// said, clamped at MaxRetryAfterMs. Zero when the server named no delay — the
+// caller then decides its own backoff rather than hammering.
+//
+// Only the envelope's data.retryAfterMs is read. protocol/README.md §4.3 allows
+// the Retry-After HEADER as the alternative hint, and this port cannot honour
+// that half: the injected HTTPPoster surfaces (status, body, err) and no
+// response headers, and widening that contract for one optional hint would
+// change every consumer's transport.
+func retryAfterMs(err error) int {
+	var apiError APIError
+
+	if !errors.As(err, &apiError) || !RateLimitErrorCodes[apiError.Code] {
+		return 0
+	}
+
+	data, ok := apiError.Data.(map[string]any)
+	if !ok {
+		return 0
+	}
+
+	// encoding/json decodes every number as float64.
+	delay, ok := data["retryAfterMs"].(float64)
+	if !ok || delay <= 0 {
+		return 0
+	}
+
+	return min(int(delay), MaxRetryAfterMs)
+}
+
+// noteRetryAfter records a rate limit's delay and holds the next flush off until
+// it passes.
+func (c *Client) noteRetryAfter(report *FlushReport, err error) {
+	delay := retryAfterMs(err)
+	if delay == 0 {
+		return
+	}
+
+	report.RetryAfterMs = delay
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	deadline := time.Now().Add(time.Duration(delay) * time.Millisecond)
+	if deadline.After(c.flushNotBefore) {
+		c.flushNotBefore = deadline
+	}
+}
+
 // replaySequential replays writes one at a time. FIFO is preserved by the loop.
 func (c *Client) replaySequential(queue *OfflineQueue, replayable []*QueuedMutation, report *FlushReport) {
 	for index, item := range replayable {
@@ -375,6 +526,8 @@ func (c *Client) replaySequential(queue *OfflineQueue, replayable []*QueuedMutat
 		}
 
 		if isTransient(err) {
+			c.noteRetryAfter(report, err)
+
 			// Nothing after this write may go out ahead of it: replaying out of
 			// order is how a durable queue corrupts the data it was protecting.
 			c.mu.Lock()
@@ -459,9 +612,41 @@ func (c *Client) replayBatched(queue *OfflineQueue, items []*QueuedMutation, rep
 		return items, true
 	}
 
+	batchError := batchSlotError(envelope, "batch rejected")
+
+	// The body was too big, not wrong — every entry in it would have committed
+	// alone. Halve and retry; the estimate chunkBatches used cannot see the
+	// framing the worker actually measured, and only the answer can.
+	if batchError.Code == CodePayloadTooLarge && len(items) > 1 {
+		middle := len(items) / 2
+		left, stop := c.replayBatched(queue, items[:middle], report)
+
+		requeue := make([]*QueuedMutation, 0, len(items))
+		requeue = append(requeue, left...)
+
+		if stop {
+			// The left half stopped the flush, so the right half is re-queued
+			// unsent, in order, rather than sent past a failure.
+			return append(requeue, items[middle:]...), true
+		}
+
+		right, stop := c.replayBatched(queue, items[middle:], report)
+
+		return append(requeue, right...), stop
+	}
+
+	// A shard blip or a rate limit is not a verdict on the batch's contents.
+	// Requeue it whole and stop the flush, exactly as the single-call path does
+	// for the same codes.
+	if isTransient(batchError) {
+		c.noteRetryAfter(report, batchError)
+
+		return items, true
+	}
+
 	for _, item := range items {
 		c.unpersist(queue, item.ID)
-		c.settleRejected(item, batchSlotError(envelope, "batch rejected"))
+		c.settleRejected(item, batchError)
 		report.Rejected = append(report.Rejected, item.ID)
 	}
 
@@ -501,19 +686,24 @@ func (c *Client) settleBatchSlots(queue *OfflineQueue, items []*QueuedMutation, 
 		}
 
 		if envelope, failed := payload["error"].(map[string]any); failed {
-			code, _ := envelope["code"].(string)
+			slotError := batchSlotError(envelope, "request failed")
 
-			// A transient shard failure is the batch's counterpart of an uncoded
-			// error on the single-call path: the server never reached a verdict, so
-			// the write goes back on the queue rather than being reported as failed.
-			if TransientErrorCodes[code] {
+			// The SAME predicate the whole-batch and single-call paths use, not a
+			// second code set: a durable write's fate must not depend on how many
+			// siblings were queued alongside it. The server reached no verdict on
+			// this entry — it could not reach the shard, or a limiter refused to
+			// look — so the write goes back on the queue rather than being reported
+			// as failed, and a rate limit's hint defers the next flush.
+			if isTransient(slotError) {
+				c.noteRetryAfter(report, slotError)
+
 				requeue = append(requeue, item)
 
 				continue
 			}
 
 			c.unpersist(queue, item.ID)
-			c.settleRejected(item, batchSlotError(envelope, "request failed"))
+			c.settleRejected(item, slotError)
 			report.Rejected = append(report.Rejected, item.ID)
 
 			continue
@@ -662,7 +852,7 @@ func isTransient(err error) bool {
 	var apiError APIError
 
 	if errors.As(err, &apiError) {
-		return TransientErrorCodes[apiError.Code]
+		return apiError.Transient || TransientErrorCodes[apiError.Code] || RateLimitErrorCodes[apiError.Code]
 	}
 
 	return true

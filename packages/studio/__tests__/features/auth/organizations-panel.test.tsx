@@ -11,7 +11,7 @@ import { createMockClient } from "../../mock-client";
 /** An `AuthConfigInfo` with the organization plugin toggled on/off — the panel gates on `config.capabilities.organization`. */
 const authConfig = (organization: boolean): AuthConfigInfo => {
     return {
-        capabilities: { accounts: true, admin: true, organization, passkey: false, twoFactor: false },
+        capabilities: { accounts: true, admin: true, inviteOnly: false, organization, passkey: false, twoFactor: false },
         emailAndPassword: true,
         organization: { enabled: organization, roles: false, teams: false },
         plugins: organization ? ["organization"] : [],

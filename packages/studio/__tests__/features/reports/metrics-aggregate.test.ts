@@ -73,6 +73,25 @@ describe("aggregateMetrics", () => {
         expect(aggregateMetrics([ok("a", snapshot({ cache: null }))]).hitRate).toBeNull();
     });
 
+    it("tolerates a shard whose payload carries no cache key at all", () => {
+        expect.assertions(4);
+
+        // NOT `cache: null` — the key is genuinely absent, which is what an older
+        // shard (or any pre-field response) sends. `undefined !== null` took the
+        // "present" branch and threw, and since this runs synchronously during the
+        // panel's render, ONE such shard killed the whole rollup.
+        const noCacheKey: ShardMetrics = { databaseSize: 1000, errors: 1, requests: 10, shard: "s", sinceMs: 0, uptimeMs: 0 };
+
+        expect("cache" in noCacheKey).toBe(false);
+
+        const agg = aggregateMetrics([ok("a", noCacheKey), ok("b", snapshot({ cache: { bytes: 0, entries: 0, evictions: 0, hits: 90, misses: 10 } }))]);
+
+        expect(agg.reachable).toBe(2);
+        expect(agg.totalRequests).toBe(20);
+        // Only the shard that reported a cache contributes to the rate.
+        expect(agg.hitRate).toBeCloseTo(0.9, 5);
+    });
+
     it("skips null databaseSize shards in the size total", () => {
         expect.assertions(1);
 

@@ -25,12 +25,29 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-global-shape-snapshot" mirrors its parent "ctx-db.ts" (the established public module name). */
 
+import { LunoraError } from "@lunora/errors";
 import { sql as dsql } from "drizzle-orm";
 
 import type { SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
 
 const GLOBAL_SHAPE_SNAPSHOT_TABLE = "__global_shape_snapshot";
+
+/**
+ * Largest `members` blob this table will store, in UTF-16 code units.
+ *
+ * The whole membership goes in as ONE `JSON.stringify` TEXT value, and the only
+ * bound above it was a 50,000-ROW cap — which says nothing about bytes, since a
+ * row's projected value is arbitrary width. A wide-enough shape therefore built a
+ * value past the Durable Object's per-value SQLite limit, and the write threw
+ * from inside the storage layer. Refusing it here instead makes the refusal
+ * deterministic and named, so the caller can log the shape that needs narrowing
+ * rather than swallowing an opaque storage error.
+ *
+ * Deliberately well under the platform's own limit: an approximate ceiling that
+ * fails early is the point, not one calibrated to the last byte.
+ */
+const GLOBAL_SHAPE_SNAPSHOT_MAX_CHARS = 1_000_000;
 
 /**
  * Create the `__global_shape_snapshot` table. Keyed by `(connection_id, sub_id)`;
@@ -53,11 +70,20 @@ const migrateGlobalShapeSnapshot = (sql: SqlExec): void => {
 
 /**
  * Read a socket's last poked membership for a global shape as a `key → valueJson`
- * map, or an empty map when none is stored (an unseen subscription, or a snapshot
- * that predates this table). A malformed/non-object blob is treated as empty so a
- * corrupt row degrades to a full re-seed rather than throwing.
+ * map, or `undefined` when NO row is stored. A malformed/non-object blob is
+ * treated as an empty membership so a corrupt row degrades rather than throwing.
+ *
+ * The absent case is `undefined` rather than an empty map because the two mean
+ * opposite things to the diff that consumes this. An empty map is a real
+ * baseline — "this socket has been poked, and holds nothing" — and diffing
+ * against it emits an `insert` per row. A MISSING row means the baseline was
+ * lost (the subscription was seeded but its snapshot never persisted, and the
+ * in-memory copy went with a hibernation eviction), and diffing against it emits
+ * those same inserts while being unable to emit a single `delete` — so a row that
+ * left the shape while the DO slept survives on the client forever. Only the
+ * caller can tell those apart, and only if this says which one it found.
  */
-const readGlobalShapeSnapshot = (sql: SqlExec, connectionId: string, subId: string): Map<string, string> => {
+const readGlobalShapeSnapshot = (sql: SqlExec, connectionId: string, subId: string): Map<string, string> | undefined => {
     const rows = runDrizzle<{ members: string }>(
         sql,
         dsql`SELECT members FROM ${dsql.identifier(GLOBAL_SHAPE_SNAPSHOT_TABLE)} WHERE connection_id = ${connectionId} AND sub_id = ${subId} LIMIT 1`,
@@ -66,7 +92,7 @@ const readGlobalShapeSnapshot = (sql: SqlExec, connectionId: string, subId: stri
     const raw = rows[0]?.members;
 
     if (raw === undefined) {
-        return new Map<string, string>();
+        return undefined;
     }
 
     try {
@@ -85,10 +111,19 @@ const readGlobalShapeSnapshot = (sql: SqlExec, connectionId: string, subId: stri
 /**
  * Upsert a socket's membership snapshot for a global shape. The map is serialized
  * to a JSON object; the `(connection_id, sub_id)` primary key keeps one row per
- * subscription.
+ * subscription. A snapshot past {@link GLOBAL_SHAPE_SNAPSHOT_MAX_CHARS} is
+ * refused with a typed error naming the subscription, rather than handed to the
+ * storage layer to reject as an opaque per-value limit.
  */
 const writeGlobalShapeSnapshot = (sql: SqlExec, connectionId: string, subId: string, snapshot: Map<string, string>): void => {
     const members = JSON.stringify(Object.fromEntries(snapshot));
+
+    if (members.length > GLOBAL_SHAPE_SNAPSHOT_MAX_CHARS) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `global shape snapshot for subscription "${subId}" is ${String(members.length)} characters, past the ${String(GLOBAL_SHAPE_SNAPSHOT_MAX_CHARS)}-character cap for one durable baseline row; narrow the shape with a predicate or an RLS read policy`,
+        );
+    }
 
     runDrizzle(
         sql,
@@ -110,6 +145,7 @@ const deleteGlobalShapeSnapshotsForConnection = (sql: SqlExec, connectionId: str
 export {
     deleteGlobalShapeSnapshot,
     deleteGlobalShapeSnapshotsForConnection,
+    GLOBAL_SHAPE_SNAPSHOT_MAX_CHARS,
     GLOBAL_SHAPE_SNAPSHOT_TABLE,
     migrateGlobalShapeSnapshot,
     readGlobalShapeSnapshot,

@@ -4,8 +4,6 @@ description: Unique, non-null and foreign-key integrity declared on the schema a
 related:
     - to: /docs/concepts/schema
       note: "declaring tables, validators, indexes and relations"
-    - to: /docs/concepts/advisors
-      note: "the `constraint_validator` lint that samples existing rows for violations"
     - to: /docs/concepts/rls
       note: "server-side authorization over which rows a procedure may read or write"
 ---
@@ -51,12 +49,6 @@ export default defineSchema({
 | Unique (multi-field)  | `.index(name, [..], { unique: true })`              | Write time (`UNIQUE` index)                | `ConflictError` (`CONFLICT`, 409)                |
 | Non-null (`NOT NULL`) | default on every column; opt out with `.nullable()` | Write time (column validator parse)        | `ValidationError`                                |
 | Foreign-key delete    | `r.one(table, { field, onDelete })`                 | Delete time on the referenced (parent) row | `ConflictError` (`CONFLICT`, 409) for `restrict` |
-
-<Callout type="info">
-    The advisor [`constraint_validator`](/docs/concepts/advisors) lint is a _complementary_ check: it samples existing rows and flags ones that already violate
-    a declared constraint (data inserted before the constraint existed: a migration, a raw import, a past bug). Write-time enforcement guards new writes; the
-    advisor catches the backlog.
-</Callout>
 
 ## Unique
 
@@ -127,10 +119,9 @@ defineTable({
 `onDelete` actions resolve **before** the physical delete commits, so a
 `restrict` aborts cleanly and cascaded child deletes still fire their own
 `before`/`after` triggers and broadcasts per row. There is no insert-time FK
-enforcement: an `insert` does not verify that the referenced row exists, and a
-non-null FK pointing at a missing row only surfaces via the advisor
-`constraint_validator` lint (which reports the dangling reference as a sampled
-finding).
+enforcement: an `insert` does not verify that the referenced row exists, so a
+non-null FK pointing at a missing row is not detected — nothing samples existing
+rows for dangling references.
 
 <Callout type="warn">
     **Cross-backend caveat.** When a cascade crosses storage backends (a sharded Durable Object holder of a `.global()` D1 parent, or vice-versa) the cascade is

@@ -112,9 +112,11 @@ const SQL = await initSqlJs();
 const adapter = createSqlJsAdapter(new SQL.Database());
 const mirror = new LocalMirror({ db: adapter });
 
+// A diff is `{ table, timestamp, changes }` (plus an optional stable `id`).
+// `createTableDiff("todos", changes)` fills the timestamp and id for you.
 mirror.applyDiff({
     table: "todos",
-    schema: "1.0",
+    timestamp: Date.now(),
     changes: [{ type: "insert", data: { id: "1", title: "hello", done: false } }],
 });
 
@@ -140,7 +142,9 @@ machine, and pushes the resulting diffs to the mirror:
 import { EventsSync } from "@lunora/replica";
 
 const sync = new EventsSync({
-    fetchEventsSince: (seq) => eventLogClient.getSince(seq),
+    // `getSince` answers ONE bounded page; EventsSync keeps calling with the
+    // advanced watermark until the log is exhausted.
+    fetchEventsSince: async (seq) => (await eventLogClient.getSince(seq)).entries,
     applyEvents: (events) => {
         /* feed events into your state machine */
     },
@@ -160,15 +164,23 @@ See the [EventsSync JSDoc](src/sync-events.ts) for full API details.
 
 ### useLocalQuery (React)
 
-Live-updating hook that re-queries the mirror whenever a diff is applied.
-Returns `undefined` when the query fails (e.g. table doesn't exist yet),
-and the result rows otherwise.
+Live-updating hook that re-queries the mirror whenever a diff is applied. It
+returns a discriminated union — `{ data }` on success, `{ error }` when the
+query fails (malformed SQL, or the table doesn't exist yet because no matching
+diff has been applied). A failure is never collapsed to `undefined`, so check
+`error` explicitly rather than reading a missing `data` as "still loading".
 
 ```tsx
 import { useLocalQuery } from "@lunora/replica/react";
 
 function TodoList() {
-    const todos = useLocalQuery<{ id: string; title: string; done: boolean }>(mirror, "SELECT id, title, done FROM todos WHERE done = ?", [false]);
+    const { data: todos, error } = useLocalQuery<{ id: string; title: string; done: boolean }>(mirror, "SELECT id, title, done FROM todos WHERE done = ?", [
+        false,
+    ]);
+
+    if (error) {
+        return <p>Query failed: {error.message}</p>;
+    }
 
     if (todos === undefined) {
         return <p>Waiting for data…</p>;
@@ -189,14 +201,47 @@ React 18+ concurrent features and Suspense-based frameworks (Next.js, Remix).
 
 ## EventLogDO
 
-A Durable Object that persists the event log to DO SQLite storage:
+A Durable Object that persists the event log to DO SQLite storage.
+
+Re-export the class from your worker entry so Wrangler can find it:
 
 ```ts
+// src/worker.ts
 export { EventLogDO } from "@lunora/replica";
+```
 
-const client = new EventLogDOClient({ namespace: "my-app" });
-await client.append({ type: "order:placed", payload: { orderId: "123" } });
-const events = await client.query({ type: "order:placed", limit: 10 });
+Then declare the binding in `wrangler.jsonc`. The DO uses `state.storage.sql`,
+so its migration **must** use `new_sqlite_classes` — `new_classes` gives the
+instance a key-value store with no `.sql`, and every request fails at the first
+statement:
+
+```jsonc
+{
+    "durable_objects": {
+        "bindings": [{ "name": "EVENT_LOG_DO", "class_name": "EventLogDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["EventLogDO"] }],
+}
+```
+
+`EventLogDOClient` wraps the DO's `fetch()` RPC surface. Its only option is
+`fetch` — a function that dispatches a request to the instance you want, which
+is where the namespace and instance id are chosen:
+
+```ts
+const client = new EventLogDOClient({
+    fetch: (request) => env.EVENT_LOG_DO.get(env.EVENT_LOG_DO.idFromName("my-app")).fetch(request),
+});
+
+// Append takes an ARRAY of events and returns them with their assigned `seq`s.
+const [entry] = await client.append([{ type: "order:placed", payload: { orderId: "123" } }]);
+
+// Read back by sequence number — the log is append-only and ordered, so
+// there is no filter-by-type query. Every read is ONE bounded page (500
+// entries by default, 1000 max): walk `cursor` while `truncated` is true.
+const { entries, truncated, cursor } = await client.getSince(entry.seq);
+const page = await client.getSince(0, 50);
+const size = await client.getSize();
 ```
 
 ## Custom adapters

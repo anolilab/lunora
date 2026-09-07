@@ -23,6 +23,7 @@ import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format"
 import type { DurableObjectSpec, InferredAgent, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow } from "../infer-bindings";
 import { applyModify } from "../jsonc-edit";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
+import { objectBindingEntries, stringEntries } from "./wrangler-validator";
 
 /**
  * Placeholder `database_id` written for an auto-provisioned `DB` binding. It is
@@ -37,9 +38,18 @@ interface DurableObjectBinding {
     name?: string;
 }
 
+/**
+ * One `migrations[]` record as READ BACK from a hand-edited `wrangler.jsonc` —
+ * so every list may hold a `null` (a trailing comma in a JSONC array parses to
+ * one). The nullability is in the type on purpose: it was absent, the replay
+ * below trusted it, and a stray `null` threw a raw `TypeError` out of a step
+ * that runs on every dev-server start.
+ */
 interface MigrationEntry {
-    new_classes?: ReadonlyArray<string>;
-    new_sqlite_classes?: ReadonlyArray<string>;
+    deleted_classes?: ReadonlyArray<string | null | undefined>;
+    new_classes?: ReadonlyArray<string | null | undefined>;
+    new_sqlite_classes?: ReadonlyArray<string | null | undefined>;
+    renamed_classes?: ReadonlyArray<{ from?: string; to?: string } | null | undefined>;
     tag?: string;
 }
 
@@ -88,7 +98,7 @@ interface WranglerShape {
     images?: { binding?: string };
     // Hint-only: the namespace `id` is a remote KV resource Lunora can't mint — warned, never written.
     kv_namespaces?: ReadonlyArray<{ binding?: string; id?: string }>;
-    migrations?: ReadonlyArray<MigrationEntry>;
+    migrations?: ReadonlyArray<MigrationEntry | null | undefined>;
     name?: string;
     observability?: { enabled?: boolean; head_sampling_rate?: number; logs?: { enabled?: boolean; head_sampling_rate?: number } };
     // Hint-only: the `pipeline` name is a remote resource Lunora can't mint — warned, never written.
@@ -180,12 +190,25 @@ interface ReconcileStep {
  * present so a wired-up project starts the dev server clean. Self-describing
  * bindings (browser/images/analytics) are auto-written instead; see reconcile.
  */
+/** The one Pipelines binding name codegen resolves — `emitPipelinesFragments`'s `env.PIPELINES` fallback, which has no `defineApp` override. */
+const PIPELINES_BINDING = "PIPELINES";
+
 const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: WranglerShape): string[] => {
     // A Flagship binding-mode provider needs a matching `flagship[]` entry; the
     // warning keys on the *binding name* (an app can wire several Flagship apps),
     // not array length, and carries the specific name + app_id remediation.
     const flagshipBindingMissing =
         inferred.flagshipBinding !== undefined && !(parsed?.flagship ?? []).some((entry) => entry.binding === inferred.flagshipBinding);
+
+    // Keyed on the binding NAME for the same reason Flagship is, and one more:
+    // codegen resolves ONE fixed name (`config.pipelines?.(env) ?? env.PIPELINES`)
+    // and `pipelines` has no `defineApp` override to point elsewhere. So a
+    // `{ "binding": "EVENTS" }` entry satisfies the array-length test and the
+    // wrangler validator while `ctx.pipelines.send()` still throws at runtime —
+    // with nothing before that ever naming PIPELINES. The KV and Hyperdrive
+    // rules above stay on length: those bindings are passed to `createKv()` /
+    // the Hyperdrive client by the app, so any name the app chose is correct.
+    const pipelinesBindingMissing = inferred.usesPipelines && !(parsed?.pipelines ?? []).some((entry) => entry.binding === PIPELINES_BINDING);
 
     const rules: ReadonlyArray<[boolean, string]> = [
         [
@@ -197,8 +220,8 @@ const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: Wrangle
             "@lunora/hyperdrive is used but no hyperdrive binding exists; run 'wrangler hyperdrive create' and add a 'hyperdrive' binding ({ binding, id }) — the id can't be auto-provisioned.",
         ],
         [
-            inferred.usesPipelines && (parsed?.pipelines?.length ?? 0) === 0,
-            "ctx.pipelines is used but no pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, pipeline }) — the pipeline resource can't be auto-provisioned.",
+            pipelinesBindingMissing,
+            `ctx.pipelines is used but no "${PIPELINES_BINDING}" pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding: "${PIPELINES_BINDING}", pipeline }) — codegen resolves this one name, and the pipeline resource can't be auto-provisioned.`,
         ],
         [
             flagshipBindingMissing,
@@ -250,6 +273,92 @@ const unexportedDeclarationWarnings = (
             (declaration) =>
                 `${kind} "${declaration.exportName}" is declared but ${declaration.className} is not exported by the worker entry; add \`export * from "./lunora/_generated/${module}"\` so its binding can be provisioned.`,
         );
+
+/** Workflow/agent `class_name` entries the emitted bundle no longer exports. */
+const orphanedWorkflowWarnings = (inferred: InferredBindings, parsed: WranglerShape): string[] => {
+    const declaredClasses = new Set([...inferred.workflows, ...inferred.agents].map((declaration) => declaration.className));
+
+    if (declaredClasses.size === 0) {
+        return [];
+    }
+
+    // `flatMap` with an in-body guard rather than `filter().map()`: a filter
+    // predicate does not narrow the element type for the map that follows, so the
+    // template literal would still see `string | undefined`.
+    return (parsed.workflows ?? []).flatMap((entry) => {
+        const className = entry.class_name;
+
+        return className === undefined || declaredClasses.has(className)
+            ? []
+            : [
+                  `wrangler.jsonc declares workflows[] entry "${className}" but no defineWorkflow/defineAgent export generates that class — a leftover from a rename will fail the deploy (wrangler rejects a class_name the worker does not export). Remove it if it is not hand-wired.`,
+              ];
+    });
+};
+
+/** Queue consumer/producer entries no `defineQueue` export declares. */
+const orphanedQueueWarnings = (inferred: InferredBindings, parsed: WranglerShape): string[] => {
+    if (inferred.queues.length === 0) {
+        return [];
+    }
+
+    const declaredNames = new Set(inferred.queues.map((queue) => queue.name));
+    const declaredBindings = new Set(inferred.queues.map((queue) => queue.bindingName));
+
+    return [
+        ...(parsed.queues?.consumers ?? []).flatMap((consumer) => {
+            const { queue } = consumer;
+
+            return queue === undefined || declaredNames.has(queue)
+                ? []
+                : [
+                      `wrangler.jsonc subscribes queues.consumers[] to "${queue}" but no defineQueue export declares that queue — a leftover from a rename keeps delivering batches this worker has no handler for (they retry to exhaustion, then drop or dead-letter). Remove it if it is not hand-wired.`,
+                  ];
+        }),
+        ...(parsed.queues?.producers ?? []).flatMap((producer) => {
+            const { binding } = producer;
+
+            return binding === undefined || declaredBindings.has(binding)
+                ? []
+                : [
+                      `wrangler.jsonc declares queues.producers[] binding "${binding}" but no defineQueue export declares it — a leftover from a rename. Remove it if it is not hand-wired.`,
+                  ];
+        }),
+    ];
+};
+
+/**
+ * The `workflows[]` / `queues` entries in `wrangler.jsonc` that no longer match
+ * any declaration — the leftovers a rename produces, since every reconcile step
+ * here is **add-only** (it computes what is missing and appends it; it never
+ * removes).
+ *
+ * Warned about rather than deleted, deliberately. Nothing in `wrangler.jsonc`
+ * records which entries this tool wrote, so "unmatched" and "hand-written" are
+ * indistinguishable — a project can export a Workflow class or handle a queue
+ * itself without a `defineWorkflow` / `defineQueue` declaration, and silently
+ * dropping those is exactly the over-eager clear the cron reconciler had to be
+ * pulled back from. Establishing ownership needs a marker in the file, which is
+ * a larger change than this.
+ *
+ * Each kind is inspected only when the project declares at least one of that
+ * kind: with zero declarations there is no rename to infer, only a config this
+ * tool has never had a reason to touch, and warning there would fire on every
+ * dev-server boot of a hand-wired project. So a rename is caught and a
+ * delete-the-last-one is not — stated here because it is the limit of what can
+ * be told apart without ownership.
+ *
+ * Left behind, a stale `queues.consumers[]` subscription keeps delivering
+ * batches to a worker that has no handler for that queue name
+ * (`@lunora/queue`'s dispatch throws `no push handler is registered`, so the
+ * batch retries to exhaustion and is then dropped or dead-lettered), and a
+ * stale `workflows[]` entry names a `class_name` the bundle no longer exports,
+ * which wrangler rejects at deploy.
+ */
+const orphanedEntryWarnings = (inferred: InferredBindings, parsed: WranglerShape): string[] => [
+    ...orphanedWorkflowWarnings(inferred, parsed),
+    ...orphanedQueueWarnings(inferred, parsed),
+];
 
 /**
  * Hints for capabilities used but not safely auto-provisionable — only emitted
@@ -347,12 +456,16 @@ const collectWarnings = (inferred: InferredBindings, projectRoot: string, parsed
 
     warnings.push(...collectX402Warnings(inferred), ...collectHintBindingWarnings(inferred, parsed));
 
+    if (parsed !== undefined) {
+        warnings.push(...orphanedEntryWarnings(inferred, parsed));
+    }
+
     return warnings;
 };
 
 /** Compute the lowest free `vN` `migrations` tag (`v1`, `v2`, …). */
-const nextMigrationTag = (migrations: ReadonlyArray<MigrationEntry>): string => {
-    const used = new Set(migrations.map((migration) => migration.tag));
+const nextMigrationTag = (migrations: ReadonlyArray<MigrationEntry | null | undefined>): string => {
+    const used = new Set(objectBindingEntries(migrations).map((migration) => migration.tag));
     let index = 1;
 
     while (used.has(`v${String(index)}`)) {
@@ -360,6 +473,49 @@ const nextMigrationTag = (migrations: ReadonlyArray<MigrationEntry>): string => 
     }
 
     return `v${String(index)}`;
+};
+
+/**
+ * The Durable Object classes the `migrations` list already declares, replayed
+ * in order exactly the way wrangler's own `getDeclaredDOClassNames` does:
+ * `deleted_classes` removes, `renamed_classes` moves `from` → `to`, and the two
+ * `new_*` lists add.
+ *
+ * Counting only the `new_*` lists made a class introduced by a rename look
+ * unregistered, so reconcile appended a second `new_sqlite_classes` entry for
+ * it — which wrangler then refuses ("Cannot apply new_sqlite_classes migration
+ * to existing class X"), permanently, because the append is written to the
+ * committed config with no rollback on the dev / prepare paths.
+ */
+const declaredClassNames = (migrations: ReadonlyArray<MigrationEntry | null | undefined>): Set<string> => {
+    const declared = new Set<string>();
+
+    // Normalised the same way (and with the same helpers) as the validator's
+    // `foldMigrationClassKinds`, which folds this identical hand-edited list:
+    // a bare walk threw a raw `TypeError` on a `null` record or rename entry,
+    // and a non-array `"new_classes": "ShardDO"` folded in one CHARACTER per
+    // iteration instead of the class name.
+    for (const migration of objectBindingEntries(migrations)) {
+        for (const className of stringEntries(migration.deleted_classes)) {
+            declared.delete(className);
+        }
+
+        for (const { from, to } of objectBindingEntries(migration.renamed_classes)) {
+            if (from !== undefined) {
+                declared.delete(from);
+            }
+
+            if (to !== undefined) {
+                declared.add(to);
+            }
+        }
+
+        for (const className of [...stringEntries(migration.new_classes), ...stringEntries(migration.new_sqlite_classes)]) {
+            declared.add(className);
+        }
+    }
+
+    return declared;
 };
 
 /** Add any missing Durable Object bindings + their migration classes. Pure. */
@@ -384,8 +540,7 @@ const reconcileDurableObjects = (text: string, parsed: WranglerShape, required: 
     }
 
     const migrations = parsed.migrations ?? [];
-    const registered = new Set(migrations.flatMap((migration) => [...(migration.new_sqlite_classes ?? []), ...(migration.new_classes ?? [])]));
-    const missingClasses = required.map((object) => object.className).filter((className) => !registered.has(className));
+    const missingClasses = required.map((object) => object.className).filter((className) => !declaredClassNames(migrations).has(className));
 
     if (missingClasses.length > 0) {
         const nextMigrations = [...migrations, { new_sqlite_classes: missingClasses, tag: nextMigrationTag(migrations) }];
@@ -577,7 +732,11 @@ const workflowEntryFor = (workflow: InferredAgent | InferredWorkflow): Record<st
  * second step rewriting `workflows[]` off the now-stale `parsed`). Workflows and
  * agents are NOT Durable Objects, so — unlike containers — this writes ONLY the
  * `workflows[]` array: no `durable_objects` binding, no `migrations` class, no
- * `observability` toggle. Pure.
+ * `observability` toggle.
+ *
+ * Add-only: an entry whose `class_name` no declaration generates is left in
+ * place and reported by {@link orphanedEntryWarnings} instead — see there for
+ * why removal needs ownership this file cannot establish. Pure.
  */
 const reconcileWorkflows = (
     text: string,
@@ -611,7 +770,11 @@ const reconcileWorkflows = (
  * `queues.consumers[]` (matched by queue name) from the declared `defineQueue`
  * exports. Every queue gets a producer; push queues add a worker consumer, pull
  * queues add a `type: "http_pull"` consumer. Like workflows, queues are NOT
- * Durable Objects — this writes only the `queues` block. Pure.
+ * Durable Objects — this writes only the `queues` block.
+ *
+ * Add-only: a producer or consumer no `defineQueue` export declares is left in
+ * place and reported by {@link orphanedEntryWarnings} instead — see there for
+ * why removal needs ownership this file cannot establish. Pure.
  */
 const reconcileQueues = (text: string, parsed: WranglerShape, queues: ReadonlyArray<InferredQueue>): ReconcileStep => {
     const existing = parsed.queues ?? {};

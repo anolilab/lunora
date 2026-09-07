@@ -663,6 +663,45 @@ describe(".nullable() runtime parsing", () => {
         expect(validator.parse(7)).toBe(7);
         expect(() => validator.parse("7")).toThrow(ValidationError);
     });
+
+    it("chain order decides whether a refinement sees null, and the type says which", () => {
+        expect.assertions(3);
+
+        // `.nullable().check(p)` refines the WIDENED type, so `p` runs on null —
+        // and its parameter is typed `string | null`, which is what makes that
+        // safe to rely on. A predicate that dereferences the value here is a
+        // compile error, not a runtime surprise:
+        //
+        //     v.string().nullable().check((s) => s.length > 0)
+        //     //                                 ^ TS18047: 's' is possibly 'null'
+        const seen: unknown[] = [];
+
+        expect(
+            v
+                .string()
+                .nullable()
+                .check((value) => {
+                    seen.push(value);
+
+                    return true;
+                })
+                .parse(null),
+        ).toBeNull();
+        expect(seen).toStrictEqual([null]);
+
+        // `.check(p).nullable()` wraps the refined parser instead, so null
+        // short-circuits ahead of `p`. Same two calls, opposite semantics —
+        // pick the order that states the invariant you mean.
+        expect(
+            v
+                .string()
+                .check(() => {
+                    throw new Error("predicate must not run for null");
+                })
+                .nullable()
+                .parse(null),
+        ).toBeNull();
+    });
 });
 
 describe("v.optional() standalone parsing", () => {
@@ -729,6 +768,32 @@ describe("v.union() edge cases", () => {
         // The inner number validator's message, not a union-miss message.
         expect(result.error.expected).toBe("number");
         expect(result.error.message).not.toMatch(/union of/u);
+    });
+
+    it("a union miss never echoes a value one of its members redacted", () => {
+        expect.hasAssertions();
+
+        // Alone, the refined member reports `received string` — `.check()` failures
+        // redact so a password never reaches the 400 body. The union's own
+        // diagnostic wraps the same miss and must withhold the same literal,
+        // whichever position the refined member sits in.
+        const strong = v.string().check((value) => value.length >= 12, "strong password");
+
+        for (const schema of [v.union(strong, v.number()), v.union(v.number(), strong)]) {
+            const result = schema.safeParse("hunter2");
+
+            assertOk(!result.ok, "expected parse to fail");
+
+            expect(result.error.message).not.toContain("hunter2");
+            expect(result.error.received).toBe("string");
+        }
+
+        // A plain type miss keeps its literal: nothing redacted it.
+        const plain = v.union(v.literal("draft"), v.literal("published")).safeParse("Draft");
+
+        assertOk(!plain.ok, "expected parse to fail");
+
+        expect(plain.error.received).toBe('string "Draft"');
     });
 
     it("a single-member union accepts a valid value", () => {

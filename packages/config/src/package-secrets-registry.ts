@@ -26,6 +26,8 @@
  * scaffold-dev-variables).
  */
 
+import { isSecretKeyName } from "../../../shared/secret-key";
+
 /** A single secret variable required by a package. */
 interface SecretEntry {
     /** One sentence describing what this secret is and how to obtain it. */
@@ -64,6 +66,21 @@ const CORE_SECRETS: ReadonlyArray<SecretEntry> = [
 ];
 
 /**
+ * Secret keys Lunora mints locally that no PACKAGE declares, so
+ * {@link MINTABLE_SECRET_KEYS} cannot derive them from the map below: they
+ * arrive with a copy-in registry item (`lunora registry add storage`) or under a
+ * dependency's own env-var name. Keep this list next to the map — a key Lunora
+ * scaffolds but never lists here is one nothing will ever fill in.
+ */
+const EXTRA_MINTABLE_SECRET_KEYS: ReadonlyArray<string> = [
+    // better-auth reads its signing secret under its own name in projects that
+    // configure it directly rather than through `AUTH_SECRET`.
+    "BETTER_AUTH_SECRET",
+    // `registry/storage` — the HMAC secret for signed R2 URLs.
+    "STORAGE_SIGNING_SECRET",
+];
+
+/**
  * The canonical registry of per-package secret requirements.
  *
  * Keys are exact npm package names (e.g. `"@lunora/auth"`). Values are
@@ -87,6 +104,32 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             docsUrl: "https://lunora.sh/docs/packages/auth#secrets",
             key: "AUTH_URL",
             placeholderValue: "http://localhost:8787",
+        },
+    ],
+    // Keyed by the SUBPATH, because that is what `CAPABILITY_SOURCES` emits for
+    // `ctx.r2sql` (the surface is codegen-wired onto ActionCtx; nothing imports
+    // the package). Without these three the emitted ctx-builder fell through to
+    // `r2sqlStub` and every `ctx.r2sql` call threw on the deployed worker, with
+    // nothing in `.dev.vars.example` or the pre-flight to say why.
+    "@lunora/bindings/r2sql": [
+        {
+            description:
+                "Cloudflare API token with R2 SQL read access, for `ctx.r2sql`. Create at https://dash.cloudflare.com/profile/api-tokens with the R2 SQL permission.",
+            docsUrl: "https://lunora.sh/docs/packages/bindings#r2-sql",
+            key: "R2_SQL_TOKEN",
+            placeholderValue: "<your-r2-sql-api-token>",
+        },
+        {
+            description: "Cloudflare account id the R2 SQL queries run against. Falls back to CLOUDFLARE_ACCOUNT_ID when unset.",
+            docsUrl: "https://lunora.sh/docs/packages/bindings#r2-sql",
+            key: "R2_SQL_ACCOUNT_ID",
+            placeholderValue: "<your-cloudflare-account-id>",
+        },
+        {
+            description: "Name of the R2 bucket holding the Iceberg tables `ctx.r2sql` queries.",
+            docsUrl: "https://lunora.sh/docs/packages/bindings#r2-sql",
+            key: "R2_SQL_BUCKET",
+            placeholderValue: "<your-r2-sql-bucket>",
         },
     ],
     "@lunora/mail": [
@@ -205,6 +248,26 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
  * unknown package names are silently ignored — this makes the call site resilient
  * to future capability flags whose packages have no secrets.
  */
+
+/**
+ * Every secret key Lunora can mint a value for locally (a random 32-byte hex,
+ * like `openssl rand -hex 32`) — the registry entries whose placeholder is that
+ * marker rather than an angle-bracket `<your-…>` one (which means the value comes
+ * from a provider's dashboard), plus {@link EXTRA_MINTABLE_SECRET_KEYS}.
+ *
+ * This set, not a key's NAME, is what makes a value safe to generate. A
+ * secret-LOOKING key nothing here declares (`OPENAI_API_KEY`, a project's own
+ * `*_CLIENT_SECRET`) is provider-issued as far as Lunora knows: minting for it
+ * writes a value the provider rejects at runtime and hides the gap from
+ * `lunora env doctor`, whose job is to report it as unfilled.
+ */
+const MINTABLE_SECRET_KEYS: ReadonlySet<string> = new Set([
+    ...EXTRA_MINTABLE_SECRET_KEYS,
+    ...[...CORE_SECRETS, ...Object.values(PACKAGE_SECRETS_REGISTRY).flat()]
+        .filter((entry) => isSecretKeyName(entry.key) && !entry.placeholderValue.startsWith("<"))
+        .map((entry) => entry.key),
+]);
+
 const secretsForPackages = (packageNames: ReadonlyArray<string>): SecretEntry[] => {
     const result: SecretEntry[] = [];
 
@@ -220,4 +283,4 @@ const secretsForPackages = (packageNames: ReadonlyArray<string>): SecretEntry[] 
 };
 
 export type { SecretEntry };
-export { CORE_SECRETS, PACKAGE_SECRETS_REGISTRY, secretsForPackages };
+export { CORE_SECRETS, MINTABLE_SECRET_KEYS, PACKAGE_SECRETS_REGISTRY, secretsForPackages };

@@ -4,7 +4,7 @@
  *
  * Reads are wired from each table's `list` query; sharded tables get a `scopeBy`.
  * The insert mutation for each table is attributed by **behavior** — the function
- * that calls `ctx.db.insert("<table>", …)` (see `discover-inserts`) — not by
+ * that calls `ctx.db.insert("<table>", …)` (see `discover/inserts`) — not by
  * naming convention. When the generated `api.ts` is present, that mutation's real
  * argument names produce a complete, compiling `insert` binding; otherwise the
  * binding is emitted as a commented template referencing the discovered mutation.

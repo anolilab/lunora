@@ -69,13 +69,27 @@ export const report = httpAction(
 );
 ```
 
-**Settlement order:** the HTTP-action rail settles **after** the handler runs
-(the handler's response is passed to settlement as transport context). A
-settlement failure on this path cannot undo a handler that already ran, so a
-handler gated with `withX402` **must be idempotent or compensatable** if it has
-side effects: a retried/duplicate charge attempt (or a settlement failure
-after the handler already committed something) must not double-apply that
-effect.
+**Settlement order:** the HTTP-action rail settles **before** the handler runs
+(`createChargeMiddleware`'s `settleBeforeHandler` default). A payment that
+passes `verify` but fails `/settle` — an underfunded wallet, a facilitator
+refusal — therefore never reaches the handler's side effects at all. Once
+settlement succeeds the payment is final on-chain, so a handler failure after
+that point is an ordinary application error, not a payment to unwind.
+
+Settle-**after** is the opt-in: it passes the handler's response to settlement
+as transport context (`responseHeaders`, read by some schemes for settlement
+overrides) and releases a verified-but-unsettled payment when the handler
+throws. `withX402` does not expose it — build the middleware directly when you
+need it, and note that settlement can still fail after the handler already ran,
+so such a handler **must be idempotent or compensatable**:
+
+```ts
+import { createChargeMiddleware } from "@lunora/x402/charge";
+
+const charge = await createChargeMiddleware(config, undefined, { settleBeforeHandler: false });
+
+export const report = httpAction(async (ctx, request) => charge.handle(request, () => handler(ctx, request)));
+```
 
 ### Gate a procedure
 
@@ -96,6 +110,14 @@ Each paid function bakes its own price and its `functionPath` as the challenge
 `resource`. Internal functions have no `.x402`: they are server-to-server and
 never client-reachable, so there is nothing to charge.
 
+**The worker must carry the function registry.** The `.x402` tags live on
+`createWorker({ functions })` — `defineApp()` supplies it, a hand-rolled
+`createWorker({ shardDO })` or a bare `createLunoraHandler()` does not. Without it
+the origin cannot see that a procedure is paid, so it charges nothing; the shard
+refuses that dispatch with `MISCONFIGURED` rather than serving the paid result
+free. If a paid procedure starts answering `500`, the worker is missing
+`functions`.
+
 **Settlement order:** the procedure gate settles **before** dispatching the
 function (settle-first), because dispatch is what commits a paid mutation's
 writes. A settlement failure therefore means the function never runs at all;
@@ -103,6 +125,16 @@ there is no window where a paid mutation's write commits without the payment
 having settled. Once settlement succeeds the payment is final (on-chain); a
 function failure after that point is a normal application error, not a payment
 to unwind.
+
+**A lost response is paid twice.** Settle-first (both rails) consumes the
+payment's nonce before the handler runs, so if the response never reaches the
+client — a dropped connection, a timeout — re-sending the same `X-PAYMENT` fails
+verification and earns a fresh `402`; `@x402/fetch` then signs a new payload and
+pays again. Where a double charge matters, make the handler idempotent (key it on
+something the client controls, e.g. an `Idempotency-Key` header or a client-minted
+id in the args) and cache the receipt client-side so a retry replays the result
+rather than the payment — or, on the HTTP-action rail, opt into settle-after,
+which never settles until the handler has produced a response.
 
 ### Paid MCP tools
 
@@ -116,19 +148,29 @@ const mcp = createPaidMcpServer({ charge: { network: "base", recipient: { evm: e
 mcp.paidTool({ name: "premium_report", description: "the paid report", inputSchema: { properties: {}, type: "object" }, price: "$0.05" }, async () =>
     text(await buildReport()),
 );
+
+export default { fetch: mcp.fetchHandler };
 ```
+
+`fetchHandler` takes the Worker's `(request, env, ctx)` triple, so mounting it as
+the default export is what wires `ctx.waitUntil` through to the charge
+middleware — see Receipts below.
 
 ### Receipts
 
 `onReceipt` is an opt-in, one-way telemetry sink fired once per settled
 payment: best-effort, never blocking the paid response. Use it (with
 `toPaymentEventRow`) to mirror x402 revenue into a durable table or
-`@lunora/payment`'s `events` table so it surfaces in Studio. On Workers, wire
-the request's `ctx.waitUntil` to the gate's `deps.waitUntil` (where the caller
-has one to give, e.g. `@lunora/runtime`'s `x402Charge` seam) so the sink is
-registered with `waitUntil` and survives past the response; otherwise
-workerd cancels the in-flight sink promise at isolate teardown once the
-response returns, before an async sink (e.g. a database insert) resolves.
+`@lunora/payment`'s `events` table so it surfaces in Studio. On Workers, the
+request's `ctx.waitUntil` has to reach the gate's `deps.waitUntil` so the sink is
+registered with it and survives past the response; otherwise workerd cancels the
+in-flight sink promise at isolate teardown once the response returns, before an
+async sink (e.g. a database insert) resolves. Every rail wires this for you as
+long as it can see the execution context — `withX402` reads it off the action
+`ctx`, `@lunora/runtime`'s `x402Charge` seam forwards the request's, and
+`createPaidMcpServer`'s `fetchHandler` takes it as its third argument, so mount
+it as `export default { fetch: mcp.fetchHandler }` rather than calling it with a
+bare `Request`.
 
 ## The pay rail: buy a resource
 

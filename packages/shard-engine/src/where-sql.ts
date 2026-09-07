@@ -28,8 +28,19 @@ import { RELATION_EXISTS_KEY } from "./where-types";
 /** Maps a logical field name to its dialect SQL reference (already a drizzle `SQL`). */
 type FieldRefSql<T> = (field: string) => T;
 
-/** Maps a JS value to its bound storage form (boolean → 1/0, etc.). */
-type SerializeValue = (value: unknown) => unknown;
+/**
+ * Maps a JS value to its bound storage form (boolean → 1/0, etc.).
+ *
+ * `field` is the column the value is being compared against, because on a
+ * column-per-field store the storage form is not a pure function of the value:
+ * a number written to a `v.any()`/`v.union()`/`v.from()` column is stored in a
+ * self-describing marked form (that column is TEXT on every engine, which would
+ * otherwise coerce `42` to `"42.0"` with no type left to reverse it with). A
+ * kind-blind binding then bound a bare `42` against a marked column and matched
+ * nothing — every `where` and every keyset cursor over such a column. The
+ * document-blob stores ignore the argument; their storage form IS value-only.
+ */
+type SerializeValue = (value: unknown, field: string) => unknown;
 
 interface WhereSqlStrategy<T = SQL> {
     /**
@@ -111,13 +122,27 @@ const isOperatorObject = (value: unknown): value is FieldOperators => {
  * literally, so a client-supplied `%` or `a%b%c%…` is just text rather than a
  * live pattern.
  */
-const compileContains = <T>(reference: T, value: unknown, strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T => {
-    const term = fragments.value(strategy.serialize(value));
+const compileContains = <T>(field: string, reference: T, value: unknown, strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T => {
+    const term = fragments.value(strategy.serialize(value, field));
 
     return strategy.containsExpr ? strategy.containsExpr(reference, term) : fragments.contains(reference, term);
 };
 
+/**
+ * SQL NULL is `null` here and ONLY `null`.
+ *
+ * `undefined` is deliberately not folded into it. A JS absence in a predicate is
+ * a mistake — a dropped variable, a typo'd destructure, an RLS policy that built
+ * `{ ownerId: undefined }` — and folding it would turn that into `ownerId IS
+ * NULL`, quietly matching every ownerless row instead of failing. It binds a
+ * placeholder the driver rejects, so the mistake surfaces where it was made.
+ *
+ * The keyset cursor is the one place a legitimately absent value exists;
+ * `encodeCursor` collapses it to `null` at the source so this shared compiler
+ * needs no `undefined` awareness at all.
+ */
 const compileComparator = <T>(
+    field: string,
     reference: T,
     operator: string,
     comparator: string,
@@ -125,23 +150,71 @@ const compileComparator = <T>(
     strategy: WhereSqlStrategy<T>,
     fragments: WhereFragments<T>,
 ): T => {
-    // `= NULL` / `<> NULL` never match; map null comparisons to IS [NOT] NULL.
+    // user's `where: { col: { eq: undefined } }` still fails loudly at the driver instead of quietly matching every null row.
     if (value === null) {
-        return fragments.nullCheck(reference, operator === "ne");
+        // `= NULL` / `<> NULL` never match, so THOSE two map to IS [NOT] NULL.
+        if (operator === "eq" || operator === "ne") {
+            return fragments.nullCheck(reference, operator === "ne");
+        }
+
+        // Every other comparator is UNKNOWN against NULL — `x > NULL` matches
+        // nothing — and that is what this emits. It used to fold the range
+        // comparators into `IS NULL` too, which is not a weaker answer but the
+        // OPPOSITE one: `col > NULL` matched every null row instead of none. A
+        // keyset seek over a nullable ordered column (`buildSeekWhere` emits
+        // `{ gt: <cursor value> }`, and a nullable column puts `null` there) then
+        // produced a page-2 predicate subsumed by its own first disjunct, so page
+        // 2 repeated page 1 forever and every non-null row was unreachable.
+        return fragments.constant(false);
     }
 
-    return fragments.binary(reference, comparator, strategy.serialize(value));
+    return fragments.binary(reference, comparator, strategy.serialize(value, field));
 };
 
-const compileInList = <T>(reference: T, keyword: "IN" | "NOT IN", value: unknown, strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T => {
-    const items = Array.isArray(value) ? value : [];
+/**
+ * Compile `in` / `notIn`, refusing anything that is not a list.
+ *
+ * A non-array used to fall back to the empty list, and the two directions then
+ * failed in OPPOSITE ways: `in` matched nothing, `notIn` matched everything. The
+ * second is the dangerous one — an RLS policy `{ role: { notIn: deniedRoles } }`
+ * whose `deniedRoles` arrived as a single string (a scalar from a config file, a
+ * one-element list collapsed by a caller, a JSON body that wasn't validated)
+ * compiled to `1 = 1` and dropped the restriction entirely, with nothing to
+ * signal it.
+ *
+ * Refused rather than widened to a one-element list, which would also have
+ * matched the "correct" rows here: `WhereInput` types both operators as arrays,
+ * so a scalar reaching this point is a mistake upstream, and quietly repairing
+ * it leaves the caller a predicate whose meaning depends on a coercion they
+ * never asked for. `BAD_REQUEST`, not `INTERNAL` — the value usually originates
+ * with the caller, and the runtime renders it as a 400 they can act on.
+ *
+ * An explicitly EMPTY list is untouched. It is a real predicate that says
+ * something, and it says it in both directions.
+ */
+const compileInList = <T>(
+    field: string,
+    reference: T,
+    keyword: "IN" | "NOT IN",
+    value: unknown,
+    strategy: WhereSqlStrategy<T>,
+    fragments: WhereFragments<T>,
+): T => {
+    if (!Array.isArray(value)) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `\`${keyword === "IN" ? "in" : "notIn"}\` on "${field}" expects an array of values, received ${value === null ? "null" : typeof value}`,
+        );
+    }
+
+    const items: unknown[] = value;
 
     if (items.length === 0) {
         // `IN ()` is a syntax error: an empty set matches nothing, its complement everything.
         return fragments.constant(keyword === "NOT IN");
     }
 
-    const serialized = items.map((item) => strategy.serialize(item));
+    const serialized = items.map((item) => strategy.serialize(item, field));
     const negated = keyword === "NOT IN";
 
     return strategy.inList ? strategy.inList(reference, serialized, negated) : fragments.inList(reference, serialized, negated, IN_LIST_DEFAULT_BUDGET);
@@ -157,7 +230,7 @@ const literalInList = (reference: SQL, items: ReadonlyArray<unknown>, negated: b
     return negated ? sql`${reference} NOT IN (${list})` : sql`${reference} IN (${list})`;
 };
 
-const compileFieldOperators = <T>(reference: T, operators: FieldOperators, strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T[] => {
+const compileFieldOperators = <T>(field: string, reference: T, operators: FieldOperators, strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T[] => {
     const record = operators as Record<string, unknown>;
     const clauses: T[] = [];
 
@@ -170,13 +243,13 @@ const compileFieldOperators = <T>(reference: T, operators: FieldOperators, strat
         const comparator = BINARY_COMPARATORS[operator];
 
         if (comparator) {
-            clauses.push(compileComparator(reference, operator, comparator, value, strategy, fragments));
+            clauses.push(compileComparator(field, reference, operator, comparator, value, strategy, fragments));
         } else if (operator === "isNull") {
             clauses.push(fragments.nullCheck(reference, !value));
         } else if (operator === "contains") {
-            clauses.push(compileContains(reference, value, strategy, fragments));
+            clauses.push(compileContains(field, reference, value, strategy, fragments));
         } else {
-            clauses.push(compileInList(reference, operator === "in" ? "IN" : "NOT IN", value, strategy, fragments));
+            clauses.push(compileInList(field, reference, operator === "in" ? "IN" : "NOT IN", value, strategy, fragments));
         }
     }
 
@@ -188,14 +261,14 @@ const compileField = <T>(field: string, value: unknown, strategy: WhereSqlStrate
     const reference = strategy.fieldRef(field);
 
     if (isOperatorObject(value)) {
-        return compileFieldOperators(reference, value, strategy, fragments);
+        return compileFieldOperators(field, reference, value, strategy, fragments);
     }
 
     if (value === null) {
         return [fragments.nullCheck(reference, false)];
     }
 
-    return [fragments.binary(reference, "=", strategy.serialize(value))];
+    return [fragments.binary(reference, "=", strategy.serialize(value, field))];
 };
 
 /**
@@ -310,32 +383,60 @@ const compileNode = <T>(where: WhereInput, strategy: WhereSqlStrategy<T>, fragme
  */
 const WHERE_LIST_PARAM_BUDGET = WORKERD_SQLITE_LIMITS.boundParams / 2;
 
-/** Count the `in` / `notIn` operators anywhere in the tree, so the budget above can be split evenly between them. */
-const countLists = (node: unknown): number => {
+/**
+ * What the tree spends: how many `in`/`notIn` lists it holds (so the budget above
+ * can be split between them) and how many placeholders everything ELSE binds.
+ *
+ * The scalar count is what stops the budget from being a fiction. It was a fixed
+ * half of the cap, which assumed the other half covered "the comparators, the
+ * cursor, the limit" — but a keyset seek is not a fixed cost. It binds `2k-1`
+ * placeholders for `k` sort columns and `paginateWhere` can AND two of them, so a
+ * page over a wide `orderBy` spends far more than a lists-only budget accounts
+ * for, and the two together overrun the per-statement cap.
+ *
+ * Deliberately approximate, and only ever in the direction that TIGHTENS the
+ * list budget: `isNull` binds nothing but is counted as one, and a
+ * `__relationExists` marker counts as one rather than recursing into the
+ * subquery it compiles to. An over-count narrows a list; an under-count would be
+ * the failure this exists to prevent.
+ */
+const countParams = (node: unknown): { lists: number; scalars: number } => {
+    let lists = 0;
+    let scalars = 0;
+
+    const absorb = (branch: unknown): void => {
+        const nested = countParams(branch);
+
+        lists += nested.lists;
+        scalars += nested.scalars;
+    };
+
     if (Array.isArray(node)) {
-        return node.reduce<number>((total, branch) => total + countLists(branch), 0);
+        for (const branch of node) {
+            absorb(branch);
+        }
+
+        return { lists, scalars };
     }
 
     if (node === null || typeof node !== "object") {
-        return 0;
+        return { lists, scalars };
     }
-
-    let total = 0;
 
     for (const [key, value] of Object.entries(node)) {
         if (key === "in" || key === "notIn") {
-            total += 1;
-        } else if (key === "AND" || key === "NOT" || key === "OR") {
-            total += countLists(value);
+            lists += 1;
         }
-        // Anything else is a field whose value is either an equality literal or
-        // an operator object; only the latter can hold a list.
-        else if (isOperatorObject(value)) {
-            total += countLists(value);
+        // A structural branch, or a field whose value is an operator object —
+        // both recurse. Anything else is a field bound to one literal.
+        else if (key === "AND" || key === "NOT" || key === "OR" || isOperatorObject(value)) {
+            absorb(value);
+        } else {
+            scalars += 1;
         }
     }
 
-    return total;
+    return { lists, scalars };
 };
 
 /**
@@ -353,7 +454,7 @@ export const compileWhereSql = <T = SQL>(
         return undefined;
     }
 
-    const listCount = countLists(where);
+    const { lists: listCount, scalars } = countParams(where);
 
     if (listCount === 0) {
         return compileNode(where, strategy, fragments);
@@ -365,7 +466,12 @@ export const compileWhereSql = <T = SQL>(
     // `where` from computing a 0-placeholder budget; past 50 lists the
     // one-placeholder floor per list is itself the ceiling, and `maxInValues` /
     // the procedure's own arg validation is what bounds that.
-    const perList = Math.max(1, Math.floor(WHERE_LIST_PARAM_BUDGET / listCount));
+    //
+    // `Math.min` against what the rest of the tree has NOT already spent: the
+    // half-cap is a ceiling, never a floor, so this only ever tightens. A page
+    // whose keyset seek is wide gets a correspondingly narrower list budget
+    // instead of the two overrunning the cap between them.
+    const perList = Math.max(1, Math.floor(Math.min(WHERE_LIST_PARAM_BUDGET, WORKERD_SQLITE_LIMITS.boundParams - scalars) / listCount));
 
     // Rebinding `inList` is how the per-list budget reaches the leaf. A strategy
     // that supplied its own hook keeps it (bound to the budget); one that did not

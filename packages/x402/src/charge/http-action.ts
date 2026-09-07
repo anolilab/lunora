@@ -25,6 +25,10 @@
  * Settlement runs BEFORE the handler (`createChargeMiddleware`'s default), so a
  * payment that passes `verify` but fails `/settle` — an underfunded wallet, a
  * facilitator refusal — never reaches the handler's side effects.
+ *
+ * When the context carries a `waitUntil` (the request's `ctx.waitUntil`), it is
+ * forwarded to the middleware so the `onReceipt` sink survives the response —
+ * the same seam the procedure and REST rails hand through.
  */
 import type { X402ChargeConfig } from "../config";
 import type { ChargeMiddleware } from "./middleware";
@@ -54,6 +58,25 @@ export const withX402 = <Context>(config: X402ChargeConfig, handler: HttpActionH
 
         const middleware = await pending;
 
-        return middleware.handle(request, () => handler(context, request));
+        // Structural read: the wrapper has no `@lunora/server` dependency, so it
+        // duck-types the context's `waitUntil` rather than naming the ctx type.
+        //
+        // Invoked THROUGH the context, never as a detached function. Cloudflare's
+        // `ExecutionContext.waitUntil` is receiver-bound and throws
+        // `TypeError: Illegal invocation` when called unbound — and
+        // `reportReceipt` swallows that throw, so the paid response still lands
+        // while the receipt promise is never registered and an asynchronous
+        // `onReceipt` sink is cancelled with the request.
+        const host = context as { waitUntil?: (promise: Promise<unknown>) => void };
+        const deps =
+            typeof host.waitUntil === "function"
+                ? {
+                      waitUntil: (promise: Promise<unknown>): void => {
+                          host.waitUntil?.(promise);
+                      },
+                  }
+                : undefined;
+
+        return middleware.handle(request, () => handler(context, request), deps);
     };
 };

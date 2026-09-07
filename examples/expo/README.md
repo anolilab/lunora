@@ -73,5 +73,10 @@ pnpm wrangler secret put AUTH_SECRET
 pnpm deploy                             # wrangler deploy
 ```
 
-Set `AUTH_URL` in `wrangler.jsonc` (and `EXPO_PUBLIC_LUNORA_URL` in the app) to
-the deployed worker URL.
+Point the app at the deployed worker with `EXPO_PUBLIC_LUNORA_URL`. Leave
+`AUTH_URL` unset in production — better-auth resolves the origin from each
+request over HTTPS, and `@lunora/auth` keys `useSecureCookies` (and the
+weak-secret guard) off the absence of an explicit `http://` baseURL. Pin it
+only if you must, and only as a secret holding the deployed HTTPS URL:
+`npx wrangler secret put AUTH_URL`. `.dev.vars` carries the localhost value
+for `wrangler dev`.

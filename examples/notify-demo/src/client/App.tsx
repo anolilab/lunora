@@ -35,9 +35,12 @@ export const App = (): ReactElement => {
 
     const enablePush = async (): Promise<void> => {
         try {
-            const subscription = await subscribeToPush({ serviceWorkerUrl: "/sw.js", vapidPublicKey: VAPID_PUBLIC_KEY });
+            // `replacedEndpoint` is set only after a VAPID rotation: the stale
+            // subscription is dropped for a new one under a new endpoint, so the
+            // server row keyed on the old endpoint is orphaned until we say so.
+            const { replacedEndpoint, subscription } = await subscribeToPush({ serviceWorkerUrl: "/sw.js", vapidPublicKey: VAPID_PUBLIC_KEY });
 
-            await registerDevice({ subscription });
+            await registerDevice({ replacedEndpoint, subscription });
             setStatus("Device registered for push.");
         } catch (error) {
             setStatus(`Could not enable push: ${error instanceof Error ? error.message : String(error)}`);

@@ -5,6 +5,7 @@ tested against)."""
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import unittest
@@ -22,9 +23,20 @@ from lunora.client import (
     build_unsubscribe_frame,
     parse_rpc_response,
 )
-from lunora.wire import decode_wire, encode_wire, stable_wire_key
+from lunora.wire import decode_wire, encode_wire, stable_stringify, stable_wire_key
 from tests._fixtures import load
 from tests._manifest import covers
+
+
+def wire_text(value):
+    """Render a value the way ``client.py`` puts it on the socket, with ``json.dumps``.
+
+    Separate from ``stable_stringify``, which is free to normalise: it spells every number the
+    ECMAScript way, so ``1.0`` and ``1`` compare EQUAL through it — the divergence a round-trip case
+    exists to catch. Dart's dates went out as ``1700000000000.0`` for exactly that reason, on a
+    green suite.
+    """
+    return json.dumps(value)
 
 
 class TestWireCodecFixtures(unittest.TestCase):
@@ -36,7 +48,17 @@ class TestWireCodecFixtures(unittest.TestCase):
         for case in cases:
             with self.subTest(case=case["name"]):
                 encoded = case["encoded"]
-                self.assertEqual(encode_wire(decode_wire(encoded)), encoded)
+                # A handful of shapes are legitimately not fixed points — a bare
+                # [TAG] array is escaped on the way out, an `undefined` object
+                # field is dropped — and carry the expected re-encoding.
+                expected = case.get("reencoded", encoded)
+                round_tripped = encode_wire(decode_wire(encoded))
+
+                self.assertEqual(stable_stringify(round_tripped), stable_stringify(expected))
+                # And again as the BYTES the transport sends: a round-trip
+                # assertion measured on a string the transport never sends
+                # cannot see the divergence it exists to catch.
+                self.assertEqual(wire_text(round_tripped), wire_text(expected))
 
 
 class TestStableKeyFixtures(unittest.TestCase):
@@ -55,6 +77,32 @@ class TestStableKeyFixtures(unittest.TestCase):
         for case in data["typed"]:
             with self.subTest(case=case["name"]):
                 self.assertEqual(stable_wire_key(decode_wire(case["wireArgs"])), case["key"])
+
+
+class TestShardKey(unittest.TestCase):
+    def test_empty_shard_key_is_omitted(self):
+        covers("empty_shard_key_is_omitted")
+
+        # `""` is ABSENT on the wire, not "the shard named empty string". The
+        # runtime takes any string as a named shard and gives `""` its own
+        # Durable Object, while this client treats `""` and None as one shard
+        # everywhere it matches a subscription or drains the queue. A port that
+        # sent it replayed a single queued write to one Durable Object and a
+        # BATCHED replay of that same write to another, with the optimistic
+        # overlay tracking neither.
+        for absent in (None, ""):
+            with self.subTest(shard_key=absent):
+                self.assertNotIn("shardKey", build_rpc_body("messages:list", {}, absent))
+
+        self.assertEqual(build_rpc_body("messages:list", {}, "tenant_a")["shardKey"], "tenant_a")
+
+        client = LunoraClient("https://app.example")
+
+        for absent in (None, ""):
+            with self.subTest(ws_shard_key=absent):
+                self.assertNotIn("shard=", client.ws_url_for(absent, None))
+
+        self.assertIn("shard=tenant_a", client.ws_url_for("tenant_a", None))
 
 
 class TestRpcFixtures(unittest.TestCase):
@@ -108,6 +156,36 @@ class TestWsFrameBuilders(unittest.TestCase):
 
         shape = load("ws-frames.json")["shape"]
         self.assertEqual(build_shape_subscribe_frame("shape_1", "roomMessages", {"room": "general"}), shape["shape-subscribe-cold"])
+
+    def test_shape_subscriptions_resend_after_reconnect(self):
+        covers("shape_subscriptions_resend_after_reconnect")
+
+        client = LunoraClient("https://app.example")
+        client.attach_socket(lambda _frame: None)
+        client.subscribe("messages:list", {"channel": "general"}, lambda _rows: None)
+        client.subscribe_shape("roomMessages", {"room": "general"}, lambda _rows: None)
+
+        # The cursors a resume carries are written by the frame handler, so they
+        # have to exist before the resend is built.
+        client.handle_frame({"cursor": 9, "data": [], "epoch": "e1", "id": "sub_1", "type": "data"})
+        client.handle_frame({"epoch": "e1", "pokeId": "poke-1", "type": "pokeStart"})
+        client.handle_frame({"pokeId": "poke-1", "reset": True, "rowsPatch": [], "shapeId": "shape_1", "type": "pokePart"})
+        client.handle_frame({"checkpoint": 5, "epoch": "e1", "pokeId": "poke-1", "type": "pokeEnd"})
+
+        resent: list = []
+        client.attach_socket(resent.append)
+        client.resend_subscriptions()
+
+        # BOTH registries. A resend that walks only the queries leaves every
+        # shape view subscribed to a socket that no longer exists — silently, and
+        # for the rest of the process's life.
+        self.assertEqual([frame["type"] for frame in resent], ["subscribe", "shape_subscribe"])
+        self.assertEqual(resent[0]["query"]["sinceSeq"], 9)
+        self.assertEqual(resent[1]["id"], "shape_1")
+        self.assertEqual(resent[1]["shape"]["name"], "roomMessages")
+        self.assertEqual(resent[1]["shape"]["args"], {"room": "general"})
+        self.assertEqual(resent[1]["sinceCheckpoint"], 5)
+        self.assertEqual(resent[1]["sinceEpoch"], "e1")
 
 
 class TestWsFrameConsumer(unittest.TestCase):

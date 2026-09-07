@@ -34,7 +34,7 @@
 
 ---
 
-The Lunora code generator. It parses your `lunora/schema.ts` plus every function file under `lunora/`, then writes `lunora/_generated/` so the rest of your app gets typed access to its own backend. The core outputs are `api.ts` (the `api` / `internal` function references), `server.ts` (the `query` / `mutation` / `action` / `internalQuery` / `internalMutation` / `internalAction` / `definePolicy` procedure builders bound to your schema), and `dataModel.ts` (the `Doc` / `Id` types). It also emits `app.ts`, `functions.ts`, `shard.ts`, Drizzle schemas, and — when the relevant features are used — `crons.ts`, `containers.ts`, `workflows.ts`, `vectors.ts`, `seed.ts`, and OpenAPI/OpenRPC specs.
+The Lunora code generator. It parses your `lunora/schema.ts` plus every function file under `lunora/`, then writes `lunora/_generated/` so the rest of your app gets typed access to its own backend. The core outputs are `api.ts` (the `api` / `internal` function references), `server.ts` (the `query` / `mutation` / `action` / `internalQuery` / `internalMutation` / `internalAction` / `definePolicy` procedure builders bound to your schema), and `dataModel.ts` (the `Doc` / `Id` types). It also emits `app.ts`, `functions.ts`, `shard.ts`, the Drizzle schemas (`drizzle.shard.ts` / `drizzle.global.ts` — your tables as Drizzle `sqliteTable` objects, split by whether they are `.global()`, for when you need raw Drizzle rather than `ctx.db`), and — when the relevant features are used — `crons.ts`, `containers.ts`, `workflows.ts`, `vectors.ts`, `seed.ts`, and OpenAPI/OpenRPC specs.
 
 Most apps never call this package directly — the `lunora codegen` CLI command and the `@lunora/vite` plugin invoke it for you.
 

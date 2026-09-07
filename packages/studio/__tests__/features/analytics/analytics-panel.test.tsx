@@ -13,12 +13,12 @@ const result = (rows: Record<string, unknown>[], columns: { name: string; type: 
 };
 
 describe("analyticsPanel", () => {
-    it("renders the config-needed empty state and makes no query without a token", () => {
+    it("renders the not-wired empty state and makes no query without a runner", () => {
         expect.assertions(2);
 
         const runQuery = vi.fn<(sql: string) => Promise<AnalyticsSqlResult>>();
 
-        // No config and no runQuery override → degrade gracefully, never fetch.
+        // No runQuery → degrade gracefully, never fetch.
         render(<AnalyticsPanel />);
 
         expect(screen.getByTestId("analytics-not-configured")).toBeDefined();

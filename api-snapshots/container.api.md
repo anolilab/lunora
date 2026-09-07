@@ -414,6 +414,7 @@ class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerProxyOpti
 class LunoraContainer<Env = unknown> extends Container<Env> {
     constructor(context: DurableObjectContext, env: Env, definition: ContainerDefinition, exportName?: string, jurisdiction?: DurableObjectJurisdiction);
     override containerFetch(...args: Parameters<Container<Env>["containerFetch"]>): Promise<Response>;
+    override startAndWaitForPorts(...args: Parameters<Container<Env>["startAndWaitForPorts"]>): Promise<void>;
     override start(...args: Parameters<Container<Env>["start"]>): Promise<void>;
     override onActivityExpired(): Promise<void>;
     override onError(error: unknown): unknown;

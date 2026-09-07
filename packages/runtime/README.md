@@ -88,20 +88,62 @@ export { ShardDO };
 
 ### Workers Cache
 
-When `cache: { enabled: true }` is present in `wrangler.jsonc` and `compatibility_date >= "2026-05-01"`, the runtime forwards the Worker's `ExecutionContext.cache` into action handlers as `ctx.cache`. This lets you purge cache by tag from HTTP action handlers:
+When `cache: { enabled: true }` is present in `wrangler.jsonc` and `compatibility_date >= "2026-05-01"`, the runtime forwards the Worker's `ExecutionContext.cache` into the **HTTP action** context as `ctx.cache`. This lets you purge cache by tag from an `httpRouter()` handler:
 
 ```ts
-export const refreshProducts = action.action(async ({ ctx }) => {
-    if (!ctx.cache) {
-        throw new Error("Workers Cache is not enabled in wrangler.jsonc");
-    }
+app.post(
+    "/admin/refresh-products",
+    httpAction(async (ctx) => {
+        if (!ctx.cache) {
+            return new Response("Workers Cache is not enabled in wrangler.jsonc", { status: 501 });
+        }
 
-    await ctx.cache.purge({ tags: ["products"] });
-    return { ok: true };
-});
+        await ctx.cache.purge({ tags: ["products"] });
+
+        return Response.json({ ok: true });
+    }),
+);
 ```
 
-The `ctx.cache` binding is only available in **action** handlers (not query/mutation), because actions run in the Worker while queries/mutations run inside the Durable Object. Cache header declarations on `httpRoute` (`.cacheControl()`, `.cacheTag()`, `.vary()`) are attached by `@lunora/server` before the response leaves the handler.
+The `ctx.cache` binding reaches **HTTP action handlers only**. Queries, mutations, and RPC actions all run inside the Durable Object, which has no cache binding, so `ctx.cache` is `undefined` for every one of them — always branch on it. Cache header declarations on `httpRoute` (`.cacheControl()`, `.cacheTag()`, `.vary()`) are attached by `@lunora/server` before the response leaves the handler.
+
+### Scheduled backups
+
+The worker can take its own NDJSON snapshots on a Cron Trigger, writing them to an R2 bucket in your account — the same format and key layout `lunora backup list|restore` reads, so cron-written and hand-taken snapshots share one history.
+
+```ts
+interface BackupEnv extends Env {
+    BACKUPS: R2Bucket;
+    LUNORA_ADMIN_TOKEN: string;
+}
+
+let worker: LunoraWorker | null = null;
+
+const build = (env: BackupEnv): LunoraWorker =>
+    (worker ??= createWorker({
+        adminToken: env.LUNORA_ADMIN_TOKEN,
+        backupCron: "0 3 * * *", // a literal is written into wrangler `triggers.crons` for you
+        backupRetain: 14,
+        backupStore: env.BACKUPS, // a bound R2 bucket satisfies `BackupStore`
+        queryCoordinator, // the export walks every shard through it
+        shardDO: env.SHARD,
+    }));
+
+export default {
+    fetch: (request: Request, env: BackupEnv, ctx: ExecutionContext) => build(env).fetch(request, env, ctx),
+    scheduled: (controller: ScheduledController, env: BackupEnv, ctx: ExecutionContext) => build(env).scheduled(controller, env, ctx),
+};
+```
+
+Five things are easy to get wrong, and four of them fail silently:
+
+- **`scheduled` must be wired.** `createWorker` returns it, but a worker that only exports `fetch` never runs a backup, and nothing reports that.
+- **`backupCron` is compared verbatim** against the firing expression. `"0 3 * * *"` and `"0  3 * * *"` are different strings, and the mismatch is silent — the trigger fires, no backup runs. A literal is discovered by codegen and written into `triggers.crons`; a computed one (`env.NIGHTLY_CRON`, or one supplied via `.extend()`) is not, so that entry is yours to add — the reconciler will not remove it.
+- **`backupStore`, `adminToken` and `queryCoordinator` are all required.** The snapshot is assembled by walking every shard's admin export route, so it needs the coordinator to reach them and a token to authorize itself. Missing any one throws `BACKUP_NOT_CONFIGURED` from inside the scheduled handler — the one failure here that is loud.
+- **`backupRetain` does not delete anything.** It is a reporting window: each run logs how many snapshots sit past the newest N and tells you to run `lunora backup prune`, which is the only thing that removes a backup. A bucket therefore grows until you prune it.
+- **The snapshot is built in memory.** It is capped at 24 MiB and refuses past it, writing nothing — narrow it with `backupTables`, or take that snapshot off-platform with `lunora backup create --bucket`.
+
+`backupPrefix` (default `"backups/"`) sets the key prefix, and `backupTables` narrows the snapshot to an allowlist. The 24 MiB cap is smaller than the 32 MiB one on `lunora backup create --bucket`, which travels through the checksum-verified upload route instead of being held in an isolate.
 
 ## Related
 

@@ -39,7 +39,7 @@ export const leaderboard = query.query(async ({ ctx }): Promise<Doc<"profiles">[
  */
 export const claim = mutation
     .use(rateLimit(mutationLimiter, "write", byPlayer))
-    .input({ displayName: v.optional(v.string().meta({ schema: { maxLength: 80 } })) })
+    .input({ displayName: v.optional(v.string().max(80)) })
     .mutation(async ({ args: { displayName }, ctx }): Promise<void> => {
         if (!ctx.auth.userId) {
             throw new LunoraError("UNAUTHENTICATED", "sign in first");

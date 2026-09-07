@@ -30,6 +30,23 @@ const binding = (body: unknown, init: { status?: number } = {}): { calls: Record
 };
 
 describe("createServiceClient", () => {
+    // `encodeWire` rejects any non-plain object (a `RegExp`, a `Headers`, a class
+    // instance, one with a working `toJSON()`) where `JSON.stringify` swallowed it
+    // into `{}`. Its own message names only the type, so the caller and the target
+    // function have to be attached here or the throw is untraceable.
+    it("labels an unencodable argument with the surface and the function path", async () => {
+        expect.assertions(2);
+
+        const service = binding({ result: null });
+        const client = createServiceClient(service);
+
+        await expect(client.query(reference<"query", { pattern: RegExp }, never>("threads:list"), { pattern: /nope/u })).rejects.toThrow(
+            /@lunora\/client\/service: cannot encode args for 'threads:list' — /,
+        );
+        // Rejected before the hop, so the binding is never called.
+        expect(service.calls).toHaveLength(0);
+    });
+
     it("posts the RPC envelope the worker route documents", async () => {
         expect.assertions(4);
 

@@ -17,7 +17,7 @@ import { useState } from "react";
  * after hydration.
  *
  * Two-worker split: NEXT_PUBLIC_LUNORA_URL points at the standalone Lunora
- * worker (see `wrangler.lunora.jsonc`). It is inlined at build time; the
+ * worker (see the root `wrangler.jsonc`). It is inlined at build time; the
  * localhost fallback matches `wrangler dev`'s default port during local dev.
  * The fallback is development-only on purpose — in a production build an unset
  * value would otherwise point every visitor's browser at their own machine, so

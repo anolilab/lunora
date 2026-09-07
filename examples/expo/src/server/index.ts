@@ -56,7 +56,9 @@ const ensureAuthReady = (env: Env): Promise<ReturnType<typeof buildAuth>> => {
  * no cookie jar, so the client sends the session in the `Authorization` header
  * on HTTP RPC and as `?token=` on the WebSocket upgrade (a browser can't set
  * headers on a WS handshake). We fold that `?token=` into an `Authorization`
- * header so better-auth's `bearer` plugin resolves both via `getSession`. A
+ * header — only on a request carrying `Upgrade: websocket`, so a URL-borne
+ * credential never authenticates a plain HTTP call — so better-auth's `bearer`
+ * plugin resolves both via `getSession`. A
  * bearer avoids the `Cookie` header the runtime's CSRF guard rejects on an
  * `Origin`-less native request.
  *
@@ -80,9 +82,15 @@ export default {
                 resolveIdentity: async (identityRequest) => {
                     // HTTP RPC carries `Authorization: Bearer <token>`; the WS
                     // upgrade can't set headers, so the client sends the same token
-                    // as `?token=`. Fold it into the header the `bearer` plugin reads.
+                    // as `?token=`. Fold it into the header the `bearer` plugin reads
+                    // — but ONLY on the upgrade. Accepting a query-string credential
+                    // on ordinary HTTP requests too would make every URL a bearer
+                    // token: session tokens would land in access logs, `Referer`
+                    // headers and shared links, and the request would be
+                    // authenticated by a value a cross-origin link can set.
                     const headers = new Headers(identityRequest.headers);
-                    const wsToken = new URL(identityRequest.url).searchParams.get("token");
+                    const isUpgrade = headers.get("upgrade")?.toLowerCase() === "websocket";
+                    const wsToken = isUpgrade ? new URL(identityRequest.url).searchParams.get("token") : null;
 
                     if (wsToken !== null && !headers.has("authorization")) {
                         headers.set("authorization", `Bearer ${wsToken}`);

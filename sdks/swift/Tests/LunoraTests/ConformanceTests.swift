@@ -6,6 +6,12 @@ import XCTest
 /// Protocol-conformance tests: drive the Swift SDK against the shared golden
 /// fixtures in `protocol/fixtures/`, the same files the TypeScript client and
 /// the Python, Go and Ruby ports are tested against.
+/// The golden fixtures are not optional: without them this suite asserts
+/// nothing, so their absence is a failure rather than a reason to skip.
+struct FixturesUnreachable: Error, CustomStringConvertible {
+    var description: String { "could not locate protocol/fixtures" }
+}
+
 final class ConformanceTests: XCTestCase {
     /// Walks up from this source file to the repo's `protocol/fixtures`.
     ///
@@ -20,7 +26,13 @@ final class ConformanceTests: XCTestCase {
             if parent.path == directory.path { break }
             directory = parent
         }
-        throw XCTSkip("could not locate protocol/fixtures")
+        // NOT `XCTSkip`: a skipped test still exits 0, and this helper is what
+        // the manifest driver calls, so unreachable fixtures would have printed
+        // `Executed 11 tests, with 2 skipped` — a PASS with 0 of the 40 manifest
+        // cases run. Every sibling port raises here (Python FileNotFoundError,
+        // Go error, Ruby raise, Rust panic, JVM IllegalStateException, Dart
+        // StateError); a thrown Error fails the test the same way.
+        throw FixturesUnreachable()
     }
 
     func fixture(_ name: String) throws -> [String: Any] {
@@ -32,6 +44,23 @@ final class ConformanceTests: XCTestCase {
     /// Re-serialises so two structures compare as text with a canonical key
     /// order, independent of the order the fixture file happens to use.
     func canonical(_ value: Any?) -> String { Wire.stableStringify(value) }
+
+    /// Renders a value the way `Client.swift` puts it on the socket, with
+    /// `JSONSerialization`. Separate from `canonical`, which is free to
+    /// normalise: `stableStringify` spells every number the ECMAScript way, so
+    /// `1.0` and `1` compare EQUAL through it — the divergence a round-trip case
+    /// exists to catch. Dart's dates went out as `1700000000000.0` for exactly
+    /// that reason, on a green suite. Keys are sorted because a Swift dictionary
+    /// carries no order of its own; both sides go through the same writer, so
+    /// only the SPELLING of a value can differ.
+    func wireText(_ value: Any?) throws -> String {
+        let data = try JSONSerialization.data(
+            withJSONObject: value ?? NSNull(),
+            options: [.fragmentsAllowed, .sortedKeys]
+        )
+
+        return try XCTUnwrap(String(data: data, encoding: .utf8))
+    }
 
     // MARK: - Manifest coverage
 
@@ -56,12 +85,14 @@ final class ConformanceTests: XCTestCase {
             case "wire_codec_round_trip": try caseWireCodecRoundTrip()
             case "undefined_is_distinct_from_null": try caseUndefinedIsDistinctFromNull()
             case "over_long_bigint_rejected": caseOverLongBigIntRejected()
-            case "malformed_bytes_rejected": try caseMalformedBytesRejected()
+            case "malformed_values_rejected": try caseMalformedValuesRejected()
             case "depth_cap_enforced": caseDepthCapEnforced()
+            case "exact_integer_range_enforced": caseExactIntegerRangeEnforced()
             case "stable_wire_key_fixtures": try caseStableWireKeyFixtures()
             case "format_number_matches_ecmascript": caseFormatDoubleMatchesEcmaScript()
             case "key_order_matches_utf16": caseKeyOrderMatchesUTF16()
             case "string_escaping_matches_json_stringify": caseStringEscapingMatchesJSONStringify()
+            case "empty_shard_key_is_omitted": try caseEmptyShardKeyIsOmitted()
             case "rpc_request_bodies": try caseRPCRequestBodies()
             case "rpc_responses": try caseRPCResponses()
             case "non_2xx_without_error_envelope_fails": caseNon2xxWithoutErrorEnvelopeThrows()
@@ -69,6 +100,7 @@ final class ConformanceTests: XCTestCase {
             case "server_frame_consumer": try caseServerFrameConsumer()
             case "subscription_stream_yields_frame_values_in_order": try caseSubscriptionStreamYieldsFrameValuesInOrder()
             case "shape_subscribe_frame": try caseShapeSubscribeFrame()
+            case "shape_subscriptions_resend_after_reconnect": try caseShapeSubscriptionsResendAfterReconnect()
             case "poke_sequence_materialises_rows": try casePokeSequenceMaterialisesRows()
             case "poke_parts_do_not_apply_before_poke_end": try casePokePartsDoNotApplyBeforePokeEnd()
             case "shape_reset_poke_replaces_membership": try testResetPokeReplacesShapeMembership()
@@ -85,9 +117,11 @@ final class ConformanceTests: XCTestCase {
             case "offline_queue_identity_gate_rejects_replay": try caseOfflineQueueIdentityGateRejectsReplay()
             case "offline_flush_replays_and_confirms_optimistic": try caseOfflineFlushReplaysAndConfirmsOptimistic()
             case "offline_flush_batches_multiple_writes": try caseOfflineFlushBatchesMultipleWrites()
+            case "offline_flush_batch_splits_on_payload_too_large": try caseOfflineFlushBatchSplitsOnPayloadTooLarge()
             case "optimistic_cursorless_frame_preserves_cursor": try caseOptimisticCursorlessFramePreservesCursor()
             case "offline_queue_hydrate_overflow_settles_discarded": try caseOfflineQueueHydrateOverflowSettlesDiscarded()
             case "offline_flush_unencodable_write_settles_terminal": try caseOfflineFlushUnencodableWriteSettlesTerminal()
+            case "batch_entry_cap_matches_protocol": try caseBatchEntryCapMatchesProtocol()
             default:
                 XCTFail("protocol/conformance-cases.json requires case \(name), which this suite does not implement")
             }
@@ -104,7 +138,15 @@ final class ConformanceTests: XCTestCase {
             let name = testCase["name"] as? String ?? "?"
             let encoded = testCase["encoded"]
             let roundTripped = try Wire.encode(Wire.decode(encoded))
-            XCTAssertEqual(canonical(roundTripped), canonical(encoded), "round-trip mismatch for \(name)")
+            // A handful of shapes are legitimately not fixed points — a bare
+            // [tag] array is escaped on the way out, an `undefined` object field
+            // is dropped — and carry the expected re-encoding.
+            let expected = testCase["reencoded"] ?? encoded
+            XCTAssertEqual(canonical(roundTripped), canonical(expected), "round-trip mismatch for \(name)")
+            // And again as the BYTES the transport sends: a round-trip
+            // assertion measured on a string the transport never sends cannot
+            // see the divergence it exists to catch.
+            XCTAssertEqual(try wireText(roundTripped), try wireText(expected), "wire-text mismatch for \(name)")
         }
     }
 
@@ -128,11 +170,74 @@ final class ConformanceTests: XCTestCase {
         XCTAssertNoThrow(try Wire.decode([Wire.tag, "bigint", "-42"]))
     }
 
-    func caseMalformedBytesRejected() throws {
-        XCTAssertThrowsError(try Wire.decode([Wire.tag, "bytes", "not@@base64!!"]))
+    /// Walks the shared rejection list.
+    ///
+    /// The list is data (`protocol/fixtures/wire-codec.json`), not a per-suite
+    /// invention: a rejection each port hard-codes for itself is a rejection
+    /// only some ports have, which is how one of them ended up accepting a
+    /// truncated base64 payload as valid short bytes.
+    func caseMalformedValuesRejected() throws {
+        let rejected = try XCTUnwrap(fixture("wire-codec.json")["rejected"] as? [[String: Any]])
+        XCTAssertFalse(rejected.isEmpty, "the fixture must carry a rejection list")
+
+        for testCase in rejected {
+            let name = testCase["name"] as? String ?? "?"
+            XCTAssertThrowsError(try Wire.decode(testCase["encoded"]), name)
+        }
 
         let decoded = try Wire.decode([Wire.tag, "bytes", "AQID"])
         XCTAssertEqual(try XCTUnwrap(decoded as? Data), Data([1, 2, 3]))
+
+        // A bare [tag] is NOT malformed: it is the forward-compat shape, and the
+        // reference hands it back as an ordinary array.
+        XCTAssertEqual(try XCTUnwrap(Wire.decode([Wire.tag]) as? [Any]).count, 1)
+    }
+
+    /// An integer a `Double` cannot hold exactly must not silently become a
+    /// different integer on the wire. Swift's `Int` is 64-bit, so passing one
+    /// through left the SERVER's own `JSON.parse` to round it.
+    func caseExactIntegerRangeEnforced() {
+        let maximum = 9_007_199_254_740_991
+
+        XCTAssertNoThrow(try Wire.encode(maximum))
+        XCTAssertNoThrow(try Wire.encode(-maximum))
+        XCTAssertThrowsError(try Wire.encode(maximum + 1))
+        XCTAssertThrowsError(try Wire.encode(-maximum - 1))
+
+        // WireBigInt is the way across, and it keeps every digit.
+        XCTAssertEqual(
+            canonical(try? Wire.encode(WireBigInt("9007199254740992"))),
+            canonical([Wire.tag, "bigint", "9007199254740992"])
+        )
+    }
+
+    /// An EMPTY shard key is absent, not the shard named `""`.
+    ///
+    /// The runtime takes any string as a named shard and gives `""` its own
+    /// Durable Object, while this client treats `""` and nil as one shard
+    /// wherever it matches a subscription or drains the queue. Sending it split
+    /// those two views: a single-call replay of a queued write landed on one
+    /// Durable Object and a BATCHED replay of that same write on another, with
+    /// the optimistic overlay tracking neither. Both builders that carry a shard
+    /// key are asserted, because normalising one and not the other is the same
+    /// split.
+    func caseEmptyShardKeyIsOmitted() throws {
+        for absent in [nil, ""] as [String?] {
+            let body = try LunoraClient.buildRPCBody(functionPath: "messages:send", args: [String: Any](), shardKey: absent)
+            XCTAssertNil(body["shardKey"], "shard key \(String(describing: absent))")
+        }
+
+        let named = try LunoraClient.buildRPCBody(functionPath: "messages:send", args: [String: Any](), shardKey: "room-1")
+        XCTAssertEqual(named["shardKey"] as? String, "room-1")
+
+        let client = LunoraClient(url: "https://app.example")
+
+        for absent in [nil, ""] as [String?] {
+            XCTAssertFalse(client.wsURL(shardKey: absent).contains("shard="), "ws shard key \(String(describing: absent))")
+        }
+
+        XCTAssertEqual(client.wsURL(shardKey: ""), client.wsURL(shardKey: nil))
+        XCTAssertTrue(client.wsURL(shardKey: "room-1").contains("shard="))
     }
 
     func caseDepthCapEnforced() {
@@ -166,6 +271,12 @@ final class ConformanceTests: XCTestCase {
             (0, "0"), (3, "3"), (1.5, "1.5"), (-2.5, "-2.5"),
             (1e-5, "0.00001"), (1e-6, "0.000001"), (1e-7, "1e-7"), (1.5e-7, "1.5e-7"),
             (1e-21, "1e-21"), (1e20, "100000000000000000000"), (1e21, "1e+21"),
+            // An integral double past 2^53: ECMAScript prints the SHORTEST
+            // digits that read back as the same double and zero-pads, so this
+            // is not the exact expansion 1152921504606846976 that %.0f writes.
+            (1.152_921_504_606_847e18, "1152921504606847000"),
+            // Negative zero keeps its sign in a key.
+            (-0.0, "-0"),
         ]
         for (value, want) in cases {
             XCTAssertEqual(Wire.formatDouble(value), want, "formatDouble(\(value))")
@@ -352,6 +463,78 @@ final class ConformanceTests: XCTestCase {
         let shape = try XCTUnwrap(fixture("ws-frames.json")["shape"] as? [String: Any])
         let frame = try LunoraClient.buildShapeSubscribeFrame(id: "shape_1", name: "roomMessages", args: ["room": "general"])
         XCTAssertEqual(canonical(frame), canonical(shape["shape-subscribe-cold"]))
+    }
+
+    /// A reconnect re-subscribes the SHAPE registry too.
+    ///
+    /// Walking only the queries leaves every shape view attached to a socket that
+    /// no longer exists — silently, and for the rest of the process's life.
+    func caseShapeSubscriptionsResendAfterReconnect() throws {
+        let client = LunoraClient(url: "https://app.example")
+
+        client.attachSocket { _ in }
+        client.subscribe("messages:list", args: ["channel": "general"], onData: { _ in })
+        client.subscribeShape("roomMessages", args: ["room": "general"], onRows: { _ in })
+
+        // The cursors a resume carries are written by the frame handler, so they
+        // have to exist before the resend is built.
+        for frame in [
+            ["cursor": 9, "data": [], "epoch": "e1", "id": "sub_1", "type": "data"] as [String: Any],
+            ["epoch": "e1", "pokeId": "poke-1", "type": "pokeStart"],
+            ["pokeId": "poke-1", "reset": true, "rowsPatch": [], "shapeId": "shape_1", "type": "pokePart"],
+            ["checkpoint": 5, "epoch": "e1", "pokeId": "poke-1", "type": "pokeEnd"],
+        ] {
+            let raw = try JSONSerialization.data(withJSONObject: frame)
+
+            try client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+        }
+
+        var resent: [[String: Any]] = []
+
+        client.attachSocket { resent.append($0) }
+        client.resendSubscriptions()
+
+        XCTAssertEqual(resent.map { $0["type"] as? String }, ["subscribe", "shape_subscribe"])
+        XCTAssertEqual((resent[0]["query"] as? [String: Any])?["sinceSeq"] as? Int, 9)
+
+        let shape = try XCTUnwrap(resent[1]["shape"] as? [String: Any])
+
+        XCTAssertEqual(resent[1]["id"] as? String, "shape_1")
+        XCTAssertEqual(shape["name"] as? String, "roomMessages")
+        XCTAssertEqual(canonical(shape["args"]), canonical(["room": "general"]))
+        XCTAssertEqual(resent[1]["sinceCheckpoint"] as? Int, 5)
+        XCTAssertEqual(resent[1]["sinceEpoch"] as? String, "e1")
+    }
+
+    /// A payload the codec refuses is that subscription's error, not the socket's.
+    ///
+    /// Throwing out of `handleFrame` ends the caller's read loop, which takes
+    /// every OTHER subscription on the client down with it.
+    func testARefusedPayloadStaysScopedToItsSubscription() throws {
+        let client = LunoraClient(url: "https://app.example")
+
+        client.attachSocket { _ in }
+
+        var errors: [LunoraSubscriptionError] = []
+        var delivered: [Any] = []
+
+        client.subscribe("messages:list", args: ["channel": "a"], onData: { _ in }, onError: { errors.append($0) })
+        client.subscribe("messages:list", args: ["channel": "b"], onData: { delivered.append($0) })
+
+        let refused = try JSONSerialization.data(
+            withJSONObject: ["data": ["amount": [Wire.tag, "bigint", "not-a-number"]], "id": "sub_1", "type": "data"]
+        )
+        var kind: String?
+
+        XCTAssertNoThrow(kind = try client.handleFrame(try XCTUnwrap(String(data: refused, encoding: .utf8))))
+        XCTAssertEqual(kind, "error", "the frame is reported, not thrown")
+        XCTAssertEqual(errors.first?.code, "INVALID_FRAME")
+
+        let good = try JSONSerialization.data(withJSONObject: ["data": ["ok": true], "id": "sub_2", "type": "data"])
+
+        try client.handleFrame(try XCTUnwrap(String(data: good, encoding: .utf8)))
+
+        XCTAssertEqual(delivered.count, 1, "the other subscription is still live")
     }
 
     func casePokeSequenceMaterialisesRows() throws {

@@ -9,7 +9,15 @@
  * imports, named exports, no `.js` extensions.
  */
 
-/** The `::relay::` infix that marks a DO name as a relay for an owner shard. Reserved — a user shard key can't contain it (only the runtime mints relay names). */
+/**
+ * The `::relay::` infix that marks a DO name as a relay for an owner shard.
+ * Reserved: only the runtime mints relay names, and `assertShardAuthorized` in
+ * `@lunora/runtime` — the one gate every client-originated shard key crosses —
+ * refuses a key containing this infix or `::replica::`. That enforcement is what
+ * makes the reservation true; it was once asserted here and enforced only on the
+ * replica path, so a WS upgrade could name `<other-shard>::relay::0` and reach a
+ * DO that then read its own name as another shard's relay.
+ */
 const RELAY_NAME_INFIX = "::relay::";
 
 /** Build a relay DO name for `ownerKey`'s relay number `index` — the deterministic name any worker/DO can compute without shared state. */

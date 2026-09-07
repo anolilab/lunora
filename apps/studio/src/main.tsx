@@ -15,9 +15,13 @@ import { mountStudio } from "@lunora/studio/mount";
 // to target a different worker in dev, change `LUNORA_DEV_PROXY`, not this.
 const baseUrl = import.meta.env.PROD ? (import.meta.env.VITE_LUNORA_URL as string | undefined) : undefined;
 
-// `VITE_LUNORA_ADMIN_TOKEN` pre-fills the admin token in dev; in production
-// leave it unset and paste the token into the header field at runtime so it's
-// never baked into the bundle.
-const adminToken = (import.meta.env.VITE_LUNORA_ADMIN_TOKEN as string | undefined) ?? undefined;
+// `VITE_LUNORA_ADMIN_TOKEN` pre-fills the admin token in dev ONLY. A production
+// `vite build` inlines every `VITE_*` var it can see (shell env or a `.env`
+// file), so reading it unconditionally would bake `LUNORA_ADMIN_TOKEN` — the
+// credential gating every `/_lunora/admin/*` route — into a shipped static SPA
+// for anyone who views source. The `DEV` gate is what makes that impossible:
+// in a production build the branch is statically false and the var is never
+// read, so the token is pasted into the header field at runtime instead.
+const adminToken = import.meta.env.DEV ? ((import.meta.env.VITE_LUNORA_ADMIN_TOKEN as string | undefined) ?? undefined) : undefined;
 
 mountStudio({ adminToken, baseUrl });

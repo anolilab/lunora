@@ -1,12 +1,14 @@
 import { LunoraError } from "@lunora/errors";
 
+import { encodeArgsOrThrow } from "../../../shared/wire-codec";
 import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { ArgsOf, EnqueueOptions, FunctionReference, Workpool, WorkpoolOptions } from "./types";
+import assertScheduleDelay from "./validate-delay";
 
 /**
  * Bounded-concurrency action queue — the Lunora equivalent of
  * `@convex-dev/workpool`. Mirrors `createScheduler`'s `namespace` /
- * `originUrl` / `instanceName` options and is built on the SAME `SchedulerDO`:
+ * `instanceName` options and is built on the SAME `SchedulerDO`:
  * a workpool is just a NAMED logical pool inside that DO (concurrency counter
  * keyed by {@link WorkpoolOptions.name} under the `pool:<name>` storage key).
  * It needs no extra Durable Object or wrangler binding beyond the SchedulerDO
@@ -17,7 +19,7 @@ import type { ArgsOf, EnqueueOptions, FunctionReference, Workpool, WorkpoolOptio
  * draining them as the runtime reports completions (`POST /complete`).
  *
  * ```ts
- * const pool = createWorkpool({ namespace: env.SCHEDULER, originUrl, maxConcurrency: 5 });
+ * const pool = createWorkpool({ namespace: env.SCHEDULER, maxConcurrency: 5 });
  * await pool.enqueue(internal.stripe.sync, { invoiceId }, { retry: { maxAttempts: 3 } });
  * ```
  *
@@ -49,16 +51,15 @@ const createWorkpool = (options: WorkpoolOptions): Workpool => {
     ): Promise<{ id: string; scheduledFor: number }> => {
         const delayMs = options_.delayMs ?? 0;
 
-        if (!Number.isFinite(delayMs) || delayMs < 0) {
-            throw new LunoraError("INTERNAL", "@lunora/scheduler: `delayMs` must be a non-negative finite number");
-        }
+        assertScheduleDelay(delayMs, "workpool.enqueue");
 
         return callDO<{ id: string; scheduledFor: number }>(options, "/schedule", {
-            args,
+            // Wire-encoded on the same hop as `ctx.scheduler.runAt`; see
+            // `create-scheduler.ts`.
+            args: encodeArgsOrThrow("workpool.enqueue", function_.__lunoraRef, args),
             functionPath: function_.__lunoraRef,
             instanceName: options.instanceName ?? "default",
             maxConcurrency: options.maxConcurrency,
-            originUrl: options.originUrl,
             pool: name,
             retry: options_.retry,
             scheduledFor: Date.now() + delayMs,

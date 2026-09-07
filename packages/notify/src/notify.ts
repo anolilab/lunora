@@ -17,6 +17,7 @@ import type {
     NotifyLogger,
     NotifyMetrics,
     PushContent,
+    PushOwner,
     PushSubscriptionDevice,
     RegisterInput,
     StoredSubscription,
@@ -40,15 +41,16 @@ const receiptError = (receipt: Receipt): string | undefined => (receipt.successf
 
 /**
  * Map a push send's receipt to the observability {@link NotifyDeliveryStatus}:
- * `accepted` on success, `gone` when the endpoint is unregistered (404/410, FCM
- * `UNREGISTERED` — the subscription is pruned), else `failed`.
+ * `accepted` on success, `gone` when the endpoint is unregistered (Web Push
+ * 404/410, or FCM's `NOT_FOUND` answer for a dead token — the subscription is
+ * pruned), else `failed`.
  */
-const pushDeliveryStatus = (receipt: Receipt, error: string | undefined): NotifyDeliveryStatus => {
+const pushDeliveryStatus = (receipt: Receipt, error: string | undefined, kind: StoredSubscription["kind"]): NotifyDeliveryStatus => {
     if (receipt.successful) {
         return "accepted";
     }
 
-    return isGoneError(error) ? "gone" : "failed";
+    return isGoneError(error, kind) ? "gone" : "failed";
 };
 
 /** Run `task` over `items` with a bounded number in flight (order-independent). */
@@ -133,15 +135,19 @@ export interface CreateNotifyOptions {
     /**
      * Page size for `push.broadcast`'s internal keyset pagination over the
      * subscription store (default {@link DEFAULT_BROADCAST_PAGE_SIZE}, 250).
-     * Each page is fetched, delivered, and counted independently before the
-     * next page's store round trip, so a huge audience is never materialized
-     * wholesale in the isolate. Also the per-message bound `push.broadcastPage`
-     * (and so `runPushBroadcastJob`) uses. A test/tuning seam — most apps never
-     * need to set this.
+     *
+     * A test/tuning seam only. **Apps set `broadcastPageSize` on `defineNotify`
+     * instead** — the sole production call is codegen's fixed
+     * `createNotify(definition, env, { log, metrics })`, so nothing an app writes
+     * reaches this object. Set here it wins over the definition's value.
      */
     broadcastPageSize?: number;
 
-    /** Max concurrent sends during a `broadcast` (default 10). */
+    /**
+     * Max concurrent sends during a `broadcast` (default 10). Test/tuning seam;
+     * apps set `concurrency` on `defineNotify` — see
+     * {@link CreateNotifyOptions.broadcastPageSize}.
+     */
     concurrency?: number;
 
     /**
@@ -224,8 +230,11 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
     }
 
     const subscriptionStore = store;
-    const concurrency = Math.max(1, options.concurrency ?? 10);
-    const broadcastPageSize = Math.max(1, options.broadcastPageSize ?? DEFAULT_BROADCAST_PAGE_SIZE);
+    // `definition` before the defaults, `options` before both: the app's
+    // `defineNotify` is the only seam an app has (codegen's call passes just
+    // `{ log, metrics }`), while `options` stays the test/tuning override.
+    const concurrency = Math.max(1, options.concurrency ?? definition.concurrency ?? 10);
+    const broadcastPageSize = Math.max(1, options.broadcastPageSize ?? definition.broadcastPageSize ?? DEFAULT_BROADCAST_PAGE_SIZE);
     const { log, metrics } = options;
 
     /**
@@ -329,7 +338,7 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         try {
             receipt = await engine.sendToChannel("push", { ...payload, to: targetOf(subscription) });
             error = receiptError(receipt);
-            status = pushDeliveryStatus(receipt, error);
+            status = pushDeliveryStatus(receipt, error, subscription.kind);
         } catch (error_) {
             // A THROW from the send path — a transient provider/store error, or the
             // push router's raw throw for a target whose channel (`webPush`/`fcm`)
@@ -570,7 +579,18 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
 
             return receipt;
         },
-        unregister: (id: string): Promise<void> => subscriptionStore.delete(id),
+        unregister: async (id: string, owner: PushOwner): Promise<void> => {
+            // Ownership is checked HERE rather than pushed into the store: the
+            // store is an app-implementable interface, and a scope parameter an
+            // implementation is free to ignore is not a check. The internal
+            // gone-pruning path (`deliver`) keeps calling `store.delete`
+            // directly — it acts on a delivery receipt, not on a caller's key.
+            // One conditional delete, not a read then a write: between a `get`
+            // that checks the owner and a `delete` that acts on it, a
+            // re-registration can replace the row, so the check would pass for
+            // one owner and the removal land on another's subscription.
+            await subscriptionStore.deleteOwned(id, owner.userId ?? null);
+        },
     };
 
     const sendToChannel = async (channel: "chat" | "inapp" | "webhook", payload: unknown): Promise<Receipt> => {

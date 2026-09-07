@@ -3,7 +3,8 @@
  *
  * Written when a dev server starts (by `lunora dev` for the wrangler
  * orchestration, or by `@lunora/vite`'s dev-state plugin when the project runs
- * through Vite) and removed on shutdown. It doubles as a lockfile: a second
+ * through Vite) and removed on shutdown. `readyAt` lands separately, once the
+ * server actually answers — see {@link DevServerState.readyAt}. It doubles as a lockfile: a second
  * `lunora dev` finds a live record and reports the existing instance instead of
  * spawning a conflicting server, and `lunora dev stop|status|logs` resolve the
  * running instance from it. This is what lets AI agents manage a long-running
@@ -29,6 +30,16 @@ const DEV_STATE_FILE: string = join(DEV_STATE_DIR, "dev.json");
 
 /** Log file a backgrounded dev server's output is captured to, relative to the project root. */
 const DEV_LOG_FILE: string = join(DEV_STATE_DIR, "dev.log");
+
+/**
+ * Where `lunora dev` writes the binding manifest by default, relative to the
+ * project root.
+ *
+ * A fixed path so a supervisor can read it without being told one, and next to
+ * the state record because the two are read together: this says what the Worker
+ * needs and where it will serve, `dev.json` says whether it is serving yet.
+ */
+const DEV_BINDINGS_FILE: string = join(DEV_STATE_DIR, "dev-bindings.json");
 
 /**
  * Marker env `lunora dev --background` sets on the detached server process
@@ -65,6 +76,28 @@ interface DevServerState {
     mode: DevServerMode;
     /** PID of the process to signal for shutdown (the orchestrating CLI or the Vite process). */
     pid: number;
+
+    /**
+     * ISO-8601 stamp marking when the server at {@link DevServerState.url} was
+     * first observed accepting requests — absent until then.
+     *
+     * The rest of this record exists as soon as the server is STARTING: `url` is
+     * the origin it intends to serve on and `pid` is a process that exists, both
+     * written before anything is listening. That is enough to find and stop a
+     * server, and not enough for a task runner deciding when to start the next
+     * thing — which is what this field is for. Poll it rather than sleeping.
+     *
+     * Deliberately a claim about `url` and nothing else. `lunora dev` observes it
+     * by probing; `@lunora/vite` observes it from the listen callback, since its
+     * record is only written once Vite has resolved that URL. Both are honest
+     * about the one origin this record advertises — neither says anything about a
+     * sidecar on another port.
+     *
+     * Absent forever is a legitimate outcome: a server that never binds, or one
+     * slower than the probe was willing to wait. Treat missing as "not ready
+     * yet", never as "will never be ready".
+     */
+    readyAt?: string;
     /** ISO-8601 stamp written at startup, purely informational (drives `status` uptime). */
     startedAt?: string;
     /** The embedded studio server's URL, when it runs. */
@@ -208,6 +241,7 @@ const readDevServerState = (projectRoot: string): DevServerState | undefined => 
         logFile: stringField(parsed, "logFile"),
         mode: parsed["mode"] === "vite" ? "vite" : "cli",
         pid: parsed["pid"],
+        readyAt: stringField(parsed, "readyAt"),
         startedAt: stringField(parsed, "startedAt"),
         studioUrl: stringField(parsed, "studioUrl"),
         url,
@@ -238,11 +272,21 @@ const writeDevServerState = (projectRoot: string, state: DevServerState): string
  * Merge `patch` into the existing state record, when one exists. Used by the
  * CLI to stamp `background`/`logFile` onto the record the Vite plugin wrote.
  * Returns the merged record, or `undefined` when there was nothing to update.
+ *
+ * Pass `expectedPid` to patch only while the record still belongs to that
+ * process — the counterpart to {@link clearDevServerState}'s guard, and needed
+ * by any patch that can land LATE. A readiness stamp is the case in point: this
+ * process's server can answer after a newer one has replaced the record, and an
+ * unguarded merge would mark that newer server ready on the old one's behalf.
  */
-const updateDevServerState = (projectRoot: string, patch: Partial<DevServerState>): DevServerState | undefined => {
+const updateDevServerState = (projectRoot: string, patch: Partial<DevServerState>, options?: { expectedPid?: number }): DevServerState | undefined => {
     const existing = readDevServerState(projectRoot);
 
     if (existing === undefined) {
+        return undefined;
+    }
+
+    if (options?.expectedPid !== undefined && existing.pid !== options.expectedPid) {
         return undefined;
     }
 
@@ -252,6 +296,13 @@ const updateDevServerState = (projectRoot: string, patch: Partial<DevServerState
 
     return merged;
 };
+
+/**
+ * Whether a record reports a server that is accepting requests, as opposed to
+ * one that has merely started. Lives here so the CLI's `status`, its JSON
+ * output, and any future reader cannot each invent their own answer.
+ */
+const isDevServerReady = (state: Pick<DevServerState, "readyAt"> | undefined): boolean => state?.readyAt !== undefined;
 
 /**
  * Remove `.lunora/dev.json`. Idempotent and never throws. When `expectedPid`
@@ -378,12 +429,14 @@ export type { ClaimDevServerStateResult, DevServerMode, DevServerState };
 export {
     claimDevServerState,
     clearDevServerState,
+    DEV_BINDINGS_FILE,
     DEV_DAEMON_ENV,
     DEV_HANDOFF_ENV,
     DEV_LOG_FILE,
     DEV_LOG_FILE_ENV,
     DEV_STATE_DIR,
     DEV_STATE_FILE,
+    isDevServerReady,
     isProcessAlive,
     isRecordedProcessCurrent,
     readDevServerState,

@@ -61,6 +61,15 @@ public final class Offline {
     public static final String OFFLINE_WRITE_UNENCODABLE = "OFFLINE_WRITE_UNENCODABLE";
 
     /**
+     * A restored record's args are not readable as wire values — the store was corrupted, or
+     * written by an incompatible build.
+     *
+     * <p>Purged and REPORTED rather than replayed with substitute args: a record hydrated as empty
+     * args replays SUCCESSFULLY with the wrong arguments, which is corruption rather than failure.
+     */
+    public static final String OFFLINE_WRITE_UNDECODABLE = "OFFLINE_WRITE_UNDECODABLE";
+
+    /**
      * Whether two shard keys name the same shard: an ABSENT key and an EMPTY one do.
      *
      * <p>A consumer that submits with {@code shardKey: ""} means the default shard, the same one
@@ -82,6 +91,25 @@ public final class Offline {
     public static final Set<String> TRANSIENT_ERROR_CODES =
             Set.of("SHARD_ERROR", "SHARD_UNAVAILABLE");
 
+    /**
+     * Codes that say "not now" rather than "no".
+     *
+     * <p>A rate-limited replay is the one verdict a durable queue must never honour: the write is
+     * perfectly valid and the server is asking for it later, so dropping it loses data for being
+     * punctual. The delay comes from the envelope's {@code data.retryAfterMs} (see {@code
+     * protocol/fixtures/rpc.json}'s {@code responseError.with-data}).
+     */
+    public static final Set<String> RATE_LIMIT_ERROR_CODES =
+            Set.of("RATE_LIMITED", "TOO_MANY_REQUESTS");
+
+    /**
+     * The longest delay a rate-limit hint is honoured for, matching the reference client's own
+     * clamp. A server (or a proxy inventing one) that names an hour would otherwise park a durable
+     * queue for an hour with nothing able to shorten it — the caller can always flush again sooner
+     * once this window passes.
+     */
+    public static final long MAX_RETRY_AFTER_MS = 60_000L;
+
     /** Bounds the queue when no capacity is configured. */
     public static final int DEFAULT_MAX_ITEMS = 1000;
 
@@ -93,6 +121,25 @@ public final class Offline {
      * backlog chunks itself.
      */
     public static final int MAX_BATCH_ENTRIES = 500;
+
+    /**
+     * Byte budget for one batch body, under the worker's own 1 MiB body cap ({@code
+     * packages/runtime/src/body-readers.ts}).
+     *
+     * <p>The entry cap alone is blind to size: 500 writes carrying bytes or long text exceed a
+     * megabyte, the worker answers {@code 413 PAYLOAD_TOO_LARGE}, and a whole-batch coded envelope
+     * is terminal for every entry — so a count-only chunker settles 500 durable writes {@code
+     * rejected} that would each have committed alone. Written as the subtraction it is: the cap
+     * minus 64 KiB of headroom for the request line, the headers and the JSON framing this estimate
+     * does not weigh.
+     */
+    public static final int MAX_BATCH_BYTES = 1_048_576 - 65_536;
+
+    /**
+     * The worker's answer to a body over its cap. Coded, so it arrives as a whole-batch envelope —
+     * which every other coded envelope is a verdict on every entry, and this one is not.
+     */
+    public static final String PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE";
 
     /** A coded, queue-scoped failure. */
     public static final class OfflineException extends RuntimeException {
@@ -243,11 +290,22 @@ public final class Offline {
             this.shardKey = shardKey;
         }
 
-        /** The durable form. Callback fields are deliberately not persisted. */
+        /**
+         * The durable form. Callback fields are deliberately not persisted.
+         *
+         * <p>{@code args} is the WIRE form, not the native one. A real adapter serialises — a file,
+         * a SQLite text column, a preferences store — and the native form carries the codec's own
+         * wrappers, so a queued write with a bigint, bytes, date or map argument either fails to
+         * serialise (and is reported "queued" while nothing durable was written) or serialises as
+         * whatever the adapter makes of an opaque object and replays after a restart with CORRUPTED
+         * args. Encoding here also throws for args outside the codec entirely, which {@link
+         * OfflineQueue#enqueue} reports as the failed append it is — the write stays in memory with
+         * its real args and settles terminally on the next flush, never persisted as a substitute.
+         */
         public Map<String, Object> record(String version) {
             Map<String, Object> record = new LinkedHashMap<>();
 
-            record.put("args", args);
+            record.put("args", Wire.encode(args == null ? new LinkedHashMap<>() : args));
             record.put("functionPath", functionPath);
             record.put("id", id);
 
@@ -276,12 +334,17 @@ public final class Offline {
          * <p>The restored entry carries no resolve/reject: the caller that submitted it did not
          * survive the restart. A missing {@code identity} key restores as absent (a legacy record)
          * while a stored null restores as signed out — the distinction the identity gate turns on.
+         *
+         * <p>Throws {@link Wire.WireFormatException} when the stored args are not wire values.
+         * Never substitutes: a record hydrated as empty args replays SUCCESSFULLY with the wrong
+         * arguments, which is corruption rather than failure. {@link OfflineQueue#hydrate} settles
+         * such a record terminally instead.
          */
         public static QueuedMutation fromRecord(Map<String, Object> record) {
             QueuedMutation entry =
                     new QueuedMutation(
                             record.get("functionPath") instanceof String path ? path : "",
-                            record.get("args"),
+                            Wire.decode(record.get("args")),
                             record.get("shardKey") instanceof String shard ? shard : null,
                             record.get("id") instanceof String id ? id : "");
 
@@ -459,6 +522,7 @@ public final class Offline {
             }
 
             List<QueuedMutation> restored = new ArrayList<>();
+            List<Discarded> undecodable = new ArrayList<>();
 
             for (Map<String, Object> record : persistence.load()) {
                 String id = record.get("id") instanceof String text ? text : "";
@@ -475,14 +539,38 @@ public final class Offline {
                     continue;
                 }
 
-                restored.add(QueuedMutation.fromRecord(record));
+                try {
+                    restored.add(QueuedMutation.fromRecord(record));
+                } catch (RuntimeException error) {
+                    // Purged and REPORTED, never replayed with substitute args: a record whose args
+                    // do not decode has no correct replay, and sending it with an empty argument
+                    // object would commit a different write than the one the caller made.
+                    persist("remove", id, () -> persistence.remove(id));
+
+                    QueuedMutation husk =
+                            new QueuedMutation(
+                                    record.get("functionPath") instanceof String path ? path : "",
+                                    null,
+                                    record.get("shardKey") instanceof String shard ? shard : null,
+                                    id);
+
+                    undecodable.add(
+                            new Discarded(
+                                    husk,
+                                    OFFLINE_WRITE_UNDECODABLE,
+                                    "offline mutation restored from storage cannot be wire-decoded:"
+                                            + " "
+                                            + error.getMessage()));
+                }
             }
 
             items.addAll(0, restored);
 
             // A store holding more than maxItems (the cap was lowered between sessions, or writes
             // piled up across restarts) must not bypass it.
-            List<Discarded> evicted = evictOverflow();
+            List<Discarded> evicted = new ArrayList<>(undecodable);
+
+            evicted.addAll(evictOverflow());
 
             notifySize();
 

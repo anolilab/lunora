@@ -8,13 +8,24 @@ related:
 ---
 
 `@lunora/react-native` is the React Native / Expo entry to Lunora. It
-**re-exports the entire [`@lunora/react`](/docs/packages/react) surface**: the
+**re-exports the whole [`@lunora/react`](/docs/packages/react) surface**: the
 hooks are `react-dom`-free and touch no browser-only global, so `useQuery`,
 `useMutation`, `useSubscription`, `useAuth`, `useConnectionStatus` and the rest
 run unchanged on native. On top of that it adds the two things a native app
 needs that a browser gives you for free: an `AsyncStorage`-backed offline queue,
 and credentialed requests (React Native has no cookie jar, so the session has to
 be attached to every HTTP RPC call and the WebSocket upgrade explicitly).
+
+`CheckoutButton`, `CustomerPortalButton`, and `useCheckout` are not part of that
+surface: they render a DOM `<button>` and navigate via `globalThis.location`, so
+they ship from the browser-only `@lunora/react/payment` subpath instead of the
+`@lunora/react` root — there is nothing to strip out here. Drive purchases
+through the platform's own purchase flow, or a WebView pointed at the web
+checkout URL.
+
+`useVoiceAgent` _is_ re-exported, but its defaults are Web APIs (`getUserMedia`,
+Web Audio, `WebSocket`) — on native, supply your own `createMicrophone` /
+`createSpeaker` implementations.
 
 See the [React Native / Expo guide](/docs/frameworks/react-native) for the
 task-oriented walkthrough.
@@ -44,16 +55,19 @@ plus two React-Native conveniences:
 
 - **`storage`**: React Native `AsyncStorage` (or any `getItem`/`setItem`/`removeItem`
   store). Wires `createAsyncStoragePersistence` so the offline mutation queue
-  survives an app restart. The browser client auto-probes IndexedDB, which React
-  Native lacks, so without this the queue stays in memory.
+  survives an app restart, **and** `createAsyncStorageQueryCache` so query
+  results repaint before the socket reconnects. The browser client auto-probes
+  IndexedDB, which React Native lacks, so without this both stay in memory.
+  Each is opted out of separately — `persistence: false` disables the queue and
+  leaves the query cache writing to `storage`; pass `queryCache: false` for that.
 - **`getAuthHeaders`**: `() => Record<string, string> | undefined`. A generic
   escape hatch for a **custom** credential header (an API-gateway key, a proxy
   token) attached to every HTTP RPC request **and** the WebSocket upgrade. For
   better-auth sessions prefer a bearer token (below); a `Cookie` header here
   would be rejected by the runtime's CSRF guard on an `Origin`-less native request.
 
-An explicit `persistence`, `fetch`, or `WebSocket` takes precedence over the
-convenience derived from `storage` / `getAuthHeaders`.
+An explicit `persistence`, `queryCache`, `fetch`, or `WebSocket` takes precedence
+over the convenience derived from `storage` / `getAuthHeaders`.
 
 ## Hooks & provider
 

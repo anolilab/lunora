@@ -40,9 +40,12 @@ type ReadShapeCdcKeys = (sql: SqlExec, table: string, sinceSeq: number, upTo: nu
  * A key the probe returned is a member, so its current document is upserted
  * (projected to the shape's columns). A key it did not return is either a row
  * that left the set or a row that is gone: emit `delete(key)` — except for a key
- * whose latest op is an `insert` that never matched the predicate, which was
- * never replicated to anyone, so emitting a delete for it would spam every
- * subscriber on the table with a no-op key.
+ * whose op is `insert`, which {@link readCdcChangeKeys} reports only for a key
+ * whose insert was its SOLE op in the range. Such a key was created and never
+ * matched the predicate, so it was never replicated to anyone, and emitting a
+ * delete for it would spam every subscriber on the table with a no-op key. (A
+ * key that was deleted and re-inserted in one range comes back as `update`
+ * precisely so it does not land in that exemption — it HAD been replicated.)
  *
  * **The `value` shipped is the row's CURRENT one, not its post-image at `seq`.**
  * That is a real change from the drain this replaced, which read values out of
@@ -86,10 +89,12 @@ const buildShapeDiff = (
         const memberDocument = members.get(change.id);
 
         if (memberDocument === undefined) {
-            // Not a member now. An `insert` that never matched the predicate was
-            // never replicated to anyone, so emit nothing. An `update` that left
-            // the set, or a `delete`, DOES need a delete: we conservatively tell
-            // the client to drop the key (a no-op if it never held it).
+            // Not a member now. An `insert` — which `readCdcChangeKeys` reports
+            // only when it was the key's sole op in the range — never matched the
+            // predicate and was never replicated to anyone, so emit nothing. An
+            // `update` that left the set, or a `delete`, DOES need a delete: we
+            // conservatively tell the client to drop the key (a no-op if it never
+            // held it).
             if (change.op !== "insert") {
                 ops.push({ key: change.id, op: "delete", table: resolved.table });
             }

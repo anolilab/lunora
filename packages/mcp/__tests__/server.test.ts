@@ -62,14 +62,24 @@ describe("resolveClient", () => {
         expect(setAuthToken).toHaveBeenCalledWith("admin-token");
     });
 
-    it("does not call setAuthToken when no token is given", () => {
-        expect.assertions(1);
+    // Every tool reaches admin-gated `/_lunora/admin/*` routes — introspection,
+    // the `assertRunnable` allowlist precheck, and the observability reads — so a
+    // tokenless server has no working surface at all. It used to construct fine
+    // and advertise a read-only tool list that 403s on first use, while the five
+    // privileged tools were hidden by a `token.length > 0` proxy for adminness.
+    it("refuses a url with no token instead of advertising tools that can only 403", () => {
+        expect.assertions(2);
 
         const setAuthToken = vi.spyOn(LunoraClient.prototype, "setAuthToken").mockImplementation(() => undefined);
 
-        createLunoraMcpServer({ url: "https://example.workers.dev" });
-
+        expect(() => createLunoraMcpServer({ url: "https://example.workers.dev" })).toThrow(/requires a `token`/);
         expect(setAuthToken).not.toHaveBeenCalled();
+    });
+
+    it("refuses an empty-string token the same way", () => {
+        expect.assertions(1);
+
+        expect(() => createLunoraMcpServer({ token: "", url: "https://example.workers.dev" })).toThrow(/requires a `token`/);
     });
 });
 
@@ -115,10 +125,22 @@ describe("createLunoraMcpServer request handlers", () => {
         expect(result.tools.some((tool) => tool.name.startsWith("lunora_get_") && tool.name !== "lunora_get_function_schema")).toBe(false);
     });
 
-    it("listTools includes the observability tools once a token is configured", async () => {
-        expect.assertions(2);
+    // The admin bearer is what EVERY tool needs, so deriving the privileged
+    // reads from it put production log lines and grouped error messages on the
+    // default surface of every server. They are their own opt-in now.
+    it("listTools omits the observability tools when only a token is configured", async () => {
+        expect.assertions(1);
 
         const server = createLunoraMcpServer({ client: mockClient().asClient, token: "admin-token" });
+        const result = (await handlerFor(server, ListToolsRequestSchema.shape.method.value)({})) as ListToolsResult;
+
+        expect(result.tools.map((tool) => tool.name)).not.toContain("lunora_get_logs");
+    });
+
+    it("listTools includes the observability tools once allowObservability is set", async () => {
+        expect.assertions(2);
+
+        const server = createLunoraMcpServer({ allowObservability: true, client: mockClient().asClient, token: "admin-token" });
         const result = (await handlerFor(server, ListToolsRequestSchema.shape.method.value)({})) as ListToolsResult;
 
         expect(result.tools.map((tool) => tool.name)).toContain("lunora_get_logs");
@@ -127,12 +149,12 @@ describe("createLunoraMcpServer request handlers", () => {
         expect(result.tools.find((tool) => tool.name === "lunora_get_logs")?.outputSchema).toBeDefined();
     });
 
-    it("refuses an observability call fail-closed when no token was configured", async () => {
+    it("refuses an observability call fail-closed when it was not opted in", async () => {
         expect.assertions(2);
 
         const mock = mockClient();
         // The tool isn't advertised, but a client could still name it — dispatch must refuse.
-        const server = createLunoraMcpServer({ client: mock.asClient });
+        const server = createLunoraMcpServer({ client: mock.asClient, token: "admin-token" });
 
         const result = (await handlerFor(
             server,
@@ -152,7 +174,7 @@ describe("createLunoraMcpServer request handlers", () => {
 
         mock.query.mockResolvedValueOnce({ entries: [{ level: "info", message: "hello", timestamp: 1 }] });
 
-        const server = createLunoraMcpServer({ client: mock.asClient, token: "admin-token" });
+        const server = createLunoraMcpServer({ allowObservability: true, client: mock.asClient, token: "admin-token" });
         const result = (await handlerFor(
             server,
             CallToolRequestSchema.shape.method.value,
@@ -161,7 +183,7 @@ describe("createLunoraMcpServer request handlers", () => {
         })) as CallToolResult;
 
         expect(mock.query).toHaveBeenCalledTimes(1);
-        expect(result.structuredContent).toStrictEqual({ entries: [{ level: "info", message: "hello", timestamp: 1 }], total: 1 });
+        expect(result.structuredContent).toStrictEqual({ dropped: 0, entries: [{ level: "info", message: "hello", timestamp: 1 }], total: 1 });
         expect(JSON.parse((result.content[0] as { text: string }).text)).toStrictEqual(result.structuredContent);
     });
 

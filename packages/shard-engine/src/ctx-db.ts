@@ -55,7 +55,7 @@ import { decodeWire } from "../../../shared/wire-codec";
 import { aggregateSqlFunction, normalizeCountArgument, throwingScheduler } from "./aggregate-sql";
 import { aggregateTableName, encodeAggregateKey, readAggregateValue } from "./aggregate-tally";
 import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates";
-import { backfillSearchIndexesForTable } from "./ctx-db-backfill";
+import { backfillSearchIndexesForTable, searchIndexCoversTable } from "./ctx-db-backfill";
 import type { CdcChange } from "./ctx-db-cdc";
 import { appendCdcChange } from "./ctx-db-cdc";
 import { allocateCommitSeq, COMMIT_SEQ_FIELD } from "./ctx-db-commit-seq";
@@ -69,6 +69,7 @@ import {
     AGG_COUNT,
     AGG_KEY,
     AGG_VALUE,
+    decodeGroupKeyValue,
     DOC_COLUMN,
     encodeDocJson,
     geoTableName,
@@ -92,12 +93,15 @@ import {
     buildSeekWhere,
     decodeCursor,
     encodeCursor,
+    equalityPinnedFields,
     normalizeOrderKeys,
     softDeleteScope,
     tiebreakDirectionFor,
+    uniqueIndexFields,
 } from "./query-args";
-import { encodePartitionKey, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
+import { encodePartitionKey, RANK_TIEBREAK, rankPivotConditionSql, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 import type { ReactiveCache } from "./reactive-cache";
+import { UNVOUCHABLE_DEP } from "./read-footprint";
 import type { IndexKeyEntry, KeyRange } from "./read-write-set";
 import { buildIndexRange, indexKeysForRow } from "./read-write-set";
 import type { RelationExistsMarker } from "./relation-predicates";
@@ -127,7 +131,7 @@ import type {
     TableDefinitionLike,
     TableReaderLike,
 } from "./schema-types";
-import { isProjectedKind } from "./sql-projection";
+import { mayHoldProjectedValue } from "./sql-projection";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
 import { createSystemReader } from "./system-reader";
 import { ConflictError } from "./transaction";
@@ -1030,14 +1034,29 @@ const runPlainFetch = (
 const doWhereSqlStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, serialize: serializeSqlValue };
 
 /**
- * Whether `field` is stored as an order-preserving sort key rather than as its
- * value — the condition SQL cannot reduce or group.
- * @returns `true` when the column is projected (a `v.bigint()` / `v.bytes()` kind)
+ * Whether `field` MAY be stored as an order-preserving sort key rather than as
+ * its value — the condition SQL cannot reduce or group.
+ *
+ * The test is `mayHoldProjectedValue`, not `isProjectedKind`: the projection
+ * dispatches on the RUNTIME type, so a `bigint`/bytes written into a `v.any()`
+ * / `v.union()` / `v.from()` column is stored as the same padded key a declared
+ * one gets. Reading the declared kind saw only `"any"` and waved the scan
+ * through — `sum` of two small amounts came back as `2e+39`, `max` as the
+ * 40-character key, and `groupBy` keyed on the padding. The write side has used
+ * the wide test since a declared-kind gate wrote ~1e39 into a companion
+ * (`ctx-db-companions.ts`); this is the read side matching it.
+ *
+ * Refusing per COLUMN over-matches: an untyped column that only ever holds
+ * plain numbers is refused too. That is the deliberate side to be wrong on —
+ * the declared-kind version returned a confident wrong number instead, and the
+ * escape hatch (a declared `aggregateIndex`, which the error names) answers
+ * both cases exactly. `count()` passes SQL no field at all and is unaffected.
+ * @returns `true` when the column is projected, or is declared loosely enough to hold a projected value
  */
 const isProjectedField = (definition: TableDefinitionLike, field: string | undefined): boolean => {
     const validator = field === undefined ? undefined : definition.shape[field];
 
-    return validator !== undefined && isProjectedKind(validator);
+    return validator !== undefined && mayHoldProjectedValue(validator);
 };
 
 /**
@@ -1087,7 +1106,7 @@ const assertReducibleBySql = (definition: TableDefinitionLike, field: string, la
     if (isProjectedField(definition, field)) {
         throw new LunoraError(
             "BAD_REQUEST",
-            `${label}: "${field}" is stored as an order-preserving key, which SQL cannot reduce or group — declare an aggregateIndex covering this (by, field, op) so the maintained companion answers it`,
+            `${label}: "${field}" may hold an order-preserving key rather than a value SQL can reduce or group — declare an aggregateIndex covering this (by, field, op) so the maintained companion answers it instead (its running total is a REAL, so it stays exact only while the total is inside 2^53)`,
         );
     }
 };
@@ -1216,17 +1235,76 @@ const compileOrderBySql = (keys: OrderKey[]): SQL => {
 /** Invert the reader's staged SQL comparators back into `where`-tree operators. */
 const COMPARATOR_TO_OPERATOR: Record<string, string> = { "<": "lt", "<=": "lte", "=": "eq", ">": "gt", ">=": "gte" };
 
-/** Order keys for a paginated stage: the staged index, else creation order, in the staged direction. */
-const paginateOrderKeys = (stage: QueryStage): OrderKey[] => {
-    const direction = stage.order;
+/** The staged index fields an `.eq()` fixes to one value — a range (`.gt()`/`.lte()`) pins nothing. */
+const pinnedIndexFields = (stage: QueryStage): ReadonlySet<string> =>
+    new Set(stage.sqlConditions.filter((condition) => condition.comparator === "=").map((condition) => condition.field));
 
-    if (stage.indexFields.length > 0) {
-        return stage.indexFields.map((field) => {
-            return { direction, field };
-        });
+/**
+ * The index fields a staged read still has to ORDER BY: `indexFields` minus the
+ * LEADING run the range builder pins with `.eq()`.
+ *
+ * A pinned column holds one value across every row the read can return, so
+ * ordering by it is semantically a no-op — but SQLite does not treat it as one.
+ * It will not drop an equality-pinned term from an ORDER BY over an EXPRESSION
+ * index, so `WHERE json_extract(...) = ? ORDER BY json_extract(...), _creationTime, id`
+ * still sorts every match into a temp B-tree even though the index is built in
+ * exactly that order. Measured on `node:sqlite`, 50k rows, 1k per key:
+ *
+ * ```
+ * ORDER BY <expr> ASC, _creationTime ASC, id ASC   63.4us  SEARCH (<expr>=?) | USE TEMP B-TREE FOR ORDER BY
+ * ORDER BY _creationTime ASC, id ASC               11.2us  SEARCH (<expr>=?)
+ * ORDER BY <expr> DESC, _creationTime DESC, id DESC 266.0us SEARCH (<expr>=?) | USE TEMP B-TREE FOR ORDER BY
+ * ORDER BY _creationTime DESC, id DESC              16.1us SEARCH (<expr>=?)
+ * ```
+ *
+ * Only a LEADING run is dropped: `.withIndex("by_channel_author", q => q.eq("channelId", c))`
+ * over a two-field index leaves `authorId` unpinned, and the order across
+ * distinct authors is the caller's, so it has to stay in the clause.
+ *
+ * A range (`.gt()`/`.lte()`) pins nothing — its column takes many values within
+ * the read — so it does not qualify.
+ */
+const unpinnedIndexFields = (stage: QueryStage): ReadonlyArray<string> => {
+    const pinned = pinnedIndexFields(stage);
+    let start = 0;
+
+    while (start < stage.indexFields.length && pinned.has(stage.indexFields[start] ?? "")) {
+        start += 1;
     }
 
-    return [{ direction, field: "_creationTime" }];
+    return stage.indexFields.slice(start);
+};
+
+/**
+ * Order keys for a paginated stage: the staged index, else creation order, in the
+ * staged direction.
+ *
+ * `shape` is the table's declared columns; it decides each key's `nullable`, which
+ * is what gates the seek's `OR col IS NULL` arm (see `pivotCondition`). Routed
+ * through `normalizeOrderKeys` so the fluent reader and the object-form `findMany`
+ * answer that question the same way.
+ */
+const paginateOrderKeys = (stage: QueryStage, definition: TableDefinitionLike): OrderKey[] => {
+    const direction = stage.order;
+    const orderFields = unpinnedIndexFields(stage);
+    const { shape } = definition;
+
+    if (orderFields.length > 0) {
+        // The `.eq()`-pinned leading run is already gone from `orderFields`, so
+        // `pinned` is handed over purely to complete the unique-index cover test:
+        // a `.withIndex("by_a_b", (q) => q.eq("a", …))` over a UNIQUE `(a, b)`
+        // index still orders its rows totally on `b` alone, so that read needs no
+        // `_creationTime` tiebreak either.
+        return normalizeOrderKeys(
+            orderFields.map((field) => {
+                return { [field]: direction };
+            }),
+            shape,
+            { pinned: pinnedIndexFields(stage), uniqueBy: uniqueIndexFields(definition.indexes, shape) },
+        );
+    }
+
+    return normalizeOrderKeys([{ _creationTime: direction }], shape);
 };
 
 /**
@@ -1295,6 +1373,8 @@ const scanDocs = (rows: Record<string, unknown>[], filters: QueryStage["inMemory
 const paginateStage = (
     sql: SqlExec,
     tableName: string,
+    /** The paged table — its shape decides which ordered keys are nullable, its indexes which sorts need no `_creationTime` tiebreak. */
+    definition: TableDefinitionLike,
     stage: QueryStage,
     options: PaginationOptions,
     scopeCondition?: TextFragment,
@@ -1302,7 +1382,7 @@ const paginateStage = (
     onScanned: (count: number) => void = () => undefined,
 ): QueryPage => {
     const numberItems = Math.max(0, Math.floor(options.numItems));
-    const orderKeys = paginateOrderKeys(stage);
+    const orderKeys = paginateOrderKeys(stage, definition);
     // A cursor is always a non-empty base64 string, so truthiness distinguishes
     // a bounded page (endCursor set) from the legacy open-ended one (null/omitted).
     const bounded = typeof options.endCursor === "string";
@@ -1463,7 +1543,45 @@ const buildReader = (
         // `.filter()` runs on top, which narrows *within* that window rather than
         // widening the read.
         const engineLimit = resolveSearchScan(filtered ? undefined : limit);
-        const scored = isFtsAvailable(sql)
+        const viaFts = isFtsAvailable(sql);
+
+        // Refuse rather than answer from a half-built index. A NEW search index
+        // declared over a table that already holds rows covers a growing PREFIX
+        // of it (`id ASC`) until its backfill finishes, and every layout below
+        // queries the companion regardless — so a matching document past the
+        // cursor is simply absent from a result set that looks complete. That is
+        // the one outcome the search contract promises against.
+        //
+        // Only that case. An index REBUILDING under a changed analyzer profile
+        // holds every row throughout — the re-walk rewrites each one in place —
+        // and refusing there would take the table's search offline for the whole
+        // rebuild, which on a large table is thousands of reads and on an
+        // analyzer-version bump is every table at once. It serves, some rows
+        // still analyzed by the previous rules. `searchIndexCoversTable` is where
+        // the two are told apart.
+        //
+        // Not the LIKE fallback below: it is only equivalent while the candidate
+        // set fits `MAX_SEARCH_SCAN`, taking the newest window of a larger table
+        // and scoring that (its own comment says so, on the grounds that it never
+        // runs in a Durable Object). Routing a mid-backfill read onto it would
+        // swap one silent partial answer — the oldest rows — for another — the
+        // newest 1024 — on exactly the large tables the backfill is paged for.
+        //
+        // One `__lunora_search_state` primary-key read per search call — a second
+        // one only where the first says the walk is unfinished, which is the path
+        // that is about to refuse or serve a rebuild. Placed after the page above
+        // so it sees the progress this very read just made.
+        // Coverage is a property of the index, not of a row or a hit, so it is
+        // never asked per row or per result. A table small enough to index in one
+        // page is complete from its first migration and never reaches here.
+        if (viaFts && !searchIndexCoversTable(sql, tableName, search.definition)) {
+            throw new LunoraError(
+                "SEARCH_INDEX_BUILDING",
+                `search index "${search.indexName}" on table "${tableName}" is still backfilling and currently covers only part of the table — retry once it finishes, or run the backfillSearch admin operation to complete it now`,
+            );
+        }
+
+        const scored = viaFts
             ? searchViaFts(sql, tableName, search, engineLimit, scopeCondition)
             : searchViaScan(sql, tableName, search, engineLimit, scopeCondition);
 
@@ -1496,33 +1614,25 @@ const buildReader = (
         return finishSearchPage(runSearchFetch(searchPageScan(plan)), plan);
     };
 
-    const buildOrderClause = (): SQL => {
-        const orderFields = stage.indexFields.length > 0 ? stage.indexFields : ["_creationTime"];
-        const orderDirection = stage.order === "desc" ? "DESC" : "ASC";
-        const parts = orderFields.map((field) => dsql`${jsonPathSql(field)} ${dsql.raw(orderDirection)}`);
-
-        // Fall through to creation order, then id, for rows sharing every indexed
-        // value — the same total order `compileOrderBySql` gives the object-form
-        // read, and the same order the declared index is physically built in
-        // (`<fields>, _creationTime, id`), so it stays an index walk.
+    const buildOrderClause = (): SQL =>
+        // Literally the key list `paginateOrderKeys` builds, not a restatement of
+        // it. `.collect()` and `.paginate()` must agree on the order of tied rows
+        // or a page boundary skips or repeats them, and the tiebreak rule
+        // (`<index fields>, _creationTime, id`, minus the `.eq()`-pinned leading
+        // run) is already owned by `normalizeOrderKeys` — which is also where
+        // `buildSeek` reads it. Spelling it out again here is how the seek and
+        // the sort drift apart: the hand-rolled version used the stage direction
+        // for the tiebreak where `normalizeOrderKeys` derives it from
+        // `tiebreakDirectionFor`, which agree only because a staged read happens
+        // to have a uniform direction.
         //
-        // Without it the order of tied rows is whatever the engine returns, which
-        // is not stable: two messages written in the same millisecond and read
-        // back with `.withIndex("by_channel").order("asc")` came out in the order
-        // of their RANDOM server-minted ids. It looked deterministic only while
-        // the index could not satisfy the ORDER BY and SQLite sorted into a temp
-        // B-tree whose input order it happened to preserve.
-        if (!orderFields.includes("_creationTime")) {
-            parts.push(dsql`${jsonPathSql("_creationTime")} ${dsql.raw(orderDirection)}`);
-        }
-
-        if (!orderFields.some((field) => field === "_id" || field === "id")) {
-            // Same direction as everything above it — see `tiebreakDirectionFor`.
-            parts.push(dsql`${jsonPathSql("id")} ${dsql.raw(orderDirection)}`);
-        }
-
-        return dsql.join(parts, dsql`, `);
-    };
+        // Without any tiebreak the order of tied rows is whatever the engine
+        // returns, which is not stable: two messages written in the same
+        // millisecond and read back with `.withIndex("by_channel").order("asc")`
+        // came out in the order of their RANDOM server-minted ids. That looked
+        // deterministic only while the index could not satisfy the ORDER BY and
+        // SQLite sorted into a temp B-tree whose input order it preserved.
+        compileOrderBySql(paginateOrderKeys(stage, tableDefinition));
 
     /**
      * Report this read's dependency footprint, once per terminal.
@@ -1640,6 +1750,31 @@ const buildReader = (
          */
         // eslint-disable-next-line generator-star-spacing -- prettier owns this spacing and formats it as `async *[…]`; the rule wants `async* […]`, and prettier runs last
         async *[Symbol.asyncIterator]() {
+            // A SEARCH stage is read unbounded, exactly as `collect()` reads it,
+            // rather than paged.
+            //
+            // Paging cannot terminate honestly here: a page is capped at
+            // `MAX_SEARCH_SCAN` and a page sized to the cap cannot fetch the
+            // probe row that tells "exactly that many matches" from "ten times
+            // as many", so `planSearchPage` refuses it rather than report a
+            // false `isDone`. With `ITERATOR_PAGE_SIZE` dividing the cap exactly
+            // (1024 / 128 = 8), a walk of 897–1023 matches landed on the cap
+            // every time and died with a `BAD_REQUEST` naming a `numItems` the
+            // caller never passed — while `.collect()` on the same query
+            // returned every row. The D1 twin moved its iterator off paging for
+            // this reason and documented it; the shard reader was never given
+            // the same treatment.
+            //
+            // Nothing is given up: the page size was the cap, so the loop
+            // already read the whole window in one query and a `break` saved
+            // nothing. A scored search has to rank its whole window before it
+            // knows which row is first.
+            if (stage.search) {
+                yield* runFetch(undefined);
+
+                return;
+            }
+
             const predicates = [...stage.inMemoryFilters];
             let cursor: string | undefined;
 
@@ -1717,7 +1852,7 @@ const buildReader = (
                 throw new LunoraError("INTERNAL", "pagination is not supported on geo queries; use .take(n) or .collect()");
             }
 
-            const page = paginateStage(sql, tableName, stage, options, scopeConditionText, (count) => {
+            const page = paginateStage(sql, tableName, tableDefinition, stage, options, scopeConditionText, (count) => {
                 scanned = count;
             });
 
@@ -1911,6 +2046,32 @@ const assertNoExplicitUndefined = (op: "patch" | "replace", document: Record<str
 const UNIQUE_VIOLATION_RE = /unique constraint failed/i;
 const isUniqueViolation = (error: unknown): boolean => error instanceof Error && UNIQUE_VIOLATION_RE.test(error.message);
 
+/**
+ * SQLite phrases `SQLITE_TOOBIG` as "string or blob too big"; the same wording
+ * reaches us from workerd and `node:sqlite` alike. Matches the recogniser the
+ * solutions catalog keys `lunora-row-too-big` on (`@lunora/errors`).
+ */
+const ROW_TOO_BIG_RE = /string or blob too big/iu;
+
+/**
+ * Row-size overflow is the one storage-engine limit a caller can act on, so it
+ * must survive the wire. A raw `SQLITE_TOOBIG` is not a `LunoraError`, and
+ * `toErrorBody` redacts every foreign throw to `INTERNAL` / "Internal error" /
+ * 500 — leaving the operator a redacted 500 for a document they can simply move
+ * to R2. `PAYLOAD_TOO_LARGE` is catalogued non-internal (413), so this message
+ * reaches the client with the limit named.
+ */
+const throwIfRowTooBig = (error: unknown, table: string): void => {
+    if (!(error instanceof Error) || !ROW_TOO_BIG_RE.test(error.message)) {
+        return;
+    }
+
+    throw new LunoraError(
+        "PAYLOAD_TOO_LARGE",
+        `document is too large to store in "${table}": a single row cannot exceed the storage engine's per-row ceiling (2 MB on a Durable Object's SQLite). The limit is on the STORED bytes, which are UTF-8, and v.bytes()/v.bigint() columns are stored twice on a shard-local table. Keep the payload in R2 (ctx.storage) and store a reference on the row.`,
+    );
+};
+
 /** Run a write, remapping a UNIQUE-index breach to a {@link ConflictError} (code `CONFLICT`, 409). */
 
 /**
@@ -1929,6 +2090,8 @@ const runWrite = (sql: SqlExec, table: string, text: string, params: ReadonlyArr
         if (isUniqueViolation(error)) {
             throw new ConflictError(`unique constraint violation on "${table}"`, "unique");
         }
+
+        throwIfRowTooBig(error, table);
 
         throw error;
     }
@@ -1969,7 +2132,9 @@ const runGuardedWrite = (sql: SqlExec, table: string, text: string, params: Read
  * (k0 < v0)
  * OR (k0 = v0 AND k1 < v1)
  * OR (k0 = v0 AND k1 = v1 AND __id__ < rowId)
- * where `<` flips to `>` for desc keys.
+ * where `<` flips to `>` for desc keys. Each pivot comparison comes from
+ * {@link rankPivotConditionSql}, which is where the NULL cases live — a sort
+ * column genuinely holds NULL and no comparator reaches either side of one.
  */
 const countRankBefore = (
     sql: SqlExec,
@@ -1983,30 +2148,36 @@ const countRankBefore = (
     const beforeBranches: SQL[] = [];
 
     for (let pivot = 0; pivot < sortColumns.length + 1; pivot += 1) {
+        const column = sortColumns[pivot];
+        const sortKey = sortBy[pivot];
+        // The `__id__` ASC tiebreak closes the tuple; ids are minted by the
+        // store, so that one is never NULL.
+        const direction = sortKey?.direction === "desc" ? "desc" : "asc";
+        const pivotCondition =
+            column === undefined || sortKey === undefined
+                ? dsql`${dsql.identifier(RANK_TIEBREAK)} < ${rowId}`
+                : rankPivotConditionSql(column, serializedSortValues[pivot], direction, false);
+
+        // A NULL pivot with nothing sorting before it makes the whole branch
+        // unsatisfiable — drop it rather than emit an always-false disjunct.
+        if (pivotCondition === undefined) {
+            continue;
+        }
+
         const conditions: SQL[] = [];
 
         for (let prefix = 0; prefix < pivot; prefix += 1) {
             conditions.push(dsql`${dsql.identifier(sortColumns[prefix] as string)} IS ${serializedSortValues[prefix]}`);
         }
 
-        const column = sortColumns[pivot];
-        const sortKey = sortBy[pivot];
-
-        if (column !== undefined && sortKey !== undefined) {
-            const operator = sortKey.direction === "desc" ? ">" : "<";
-
-            conditions.push(dsql`${dsql.identifier(column)} ${dsql.raw(operator)} ${serializedSortValues[pivot]}`);
-        } else {
-            // Final pivot is the `__id__` ASC tiebreak.
-            conditions.push(dsql`${dsql.identifier(RANK_TIEBREAK)} < ${rowId}`);
-        }
+        conditions.push(pivotCondition);
 
         const [firstCondition] = conditions;
 
         beforeBranches.push(conditions.length === 1 && firstCondition !== undefined ? firstCondition : dsql`(${dsql.join(conditions, dsql` AND `)})`);
     }
 
-    const beforeWhere = dsql.join(beforeBranches, dsql` OR `);
+    const beforeWhere = beforeBranches.length > 0 ? dsql.join(beforeBranches, dsql` OR `) : dsql`1 = 0`;
     const beforeRow = runDrizzle<{ c: number }>(
         sql,
         dsql`SELECT COUNT(*) AS c FROM ${dsql.identifier(rankTable)} WHERE ${dsql.identifier("__partition__")} = ${partitionKey} AND (${beforeWhere})`,
@@ -2166,15 +2337,53 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     };
 
     const reportRead = options.onRead ?? (() => undefined);
+
+    /**
+     * Stamp {@link UNVOUCHABLE_DEP} when a read touched a `.memory()` table.
+     *
+     * `recordCdc` deliberately skips memory tables, so `__cdc_log` holds no
+     * record of them — and `cdcCanVouchFor` (see `ctx-db-cdc.ts`) defines the
+     * vouchable set as "a table of that name exists in this DO's SQLite", which
+     * a memory table satisfies. Migrations create it; only its rows are cleared.
+     * So a read-set of `{presence}` was fully vouchable, `cdcTouchesTables` found
+     * nothing for it in the log, and a client that disconnected while presence
+     * churned reconnected to `resumable: true` with no snapshot — keeping its
+     * pre-disconnect roster for the life of the subscription.
+     *
+     * The sentinel is exactly the missing stamp: a name no table can carry, so it
+     * can only ever fall to "cannot vouch". Cost is one re-snapshot per reconnect
+     * for a subscription that read a memory table, which is what such a
+     * subscription needs anyway — a memory table is emptied by the very eviction
+     * that most often precedes the reconnect.
+     *
+     * Stamped alongside the real table dep rather than in place of it: the live
+     * refresh path still invalidates on the memory table's own name (its writes
+     * DO reach `broadcast`/the changed-table set), and `UNVOUCHABLE_DEP` never
+     * appears in a written-table set, so `setsIntersect`/`writeTouchesMemo` step
+     * straight past it.
+     */
+    const reportMemoryRead = (table: string): void => {
+        if (isMemoryTable(schema.tables[table])) {
+            // The sentinel doubles as its own id marker so the RPC path's hook
+            // does not coalesce it to `SCAN_DEP` and file `!unvouchable` in the
+            // request log's scanned-table readout as if it were a real table.
+            reportRead(UNVOUCHABLE_DEP, UNVOUCHABLE_DEP);
+        }
+    };
+
     // An unwired host must degrade to the whole-table dep, NOT to silence: the
     // terminal reports either a range or a scan, so dropping the range would
     // leave an indexed read with no dependency at all — it would never
     // invalidate, which is the one failure this whole design must not have.
-    const onReadRange =
+    const reportReadRange =
         options.onReadRange ??
         ((range: KeyRange) => {
             reportRead(range.table, SCAN_DEP);
         });
+    const onReadRange = (range: KeyRange): void => {
+        reportMemoryRead(range.table);
+        reportReadRange(range);
+    };
 
     /**
      * Charge reads as they are stamped. The object-form readers (`get`,
@@ -2189,6 +2398,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             headroom?.recordRead(1);
         }
 
+        reportMemoryRead(table);
         reportRead(table, idOrScan);
     };
     const onIndexUse = options.onIndexUse ?? (() => undefined);
@@ -2252,11 +2462,25 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const recordCdc = (table: string, id: string, op: CdcChange["op"], doc?: Record<string, unknown>): void => {
         // A `.memory()` table never reaches the changelog. Its rows do not
         // survive the next eviction, so a CDC consumer replaying them would
-        // materialize state the shard itself no longer believes in — and the log
-        // is append-only with no `trimCdcChanges` caller in `ShardDO`, so a
-        // heartbeat-rate presence table would grow it without bound for the life
-        // of the shard. Live queries are unaffected: subscription refresh is
-        // driven by the changed-table set, not by CDC.
+        // materialize state the shard itself no longer believes in — and log
+        // retention is opt-in (`LUNORA_CDC_LOG_RETENTION`; without it
+        // `CdcRetentionRunner.sweep` returns before trimming anything), so on a
+        // default deployment a heartbeat-rate presence table would grow the log
+        // without bound for the life of the shard.
+        //
+        // What this costs, stated because two call sites got it wrong by
+        // assuming otherwise:
+        //
+        // - LIVE refresh is unaffected — it is driven by the changed-table set,
+        //   which `broadcast` populates for a memory table like any other.
+        // - RESUME is affected, and is handled: a read of a memory table stamps
+        //   `UNVOUCHABLE_DEP` (see `reportMemoryRead` above), because
+        //   `cdcCanVouchFor` would otherwise vouch for a table this log has no
+        //   record of.
+        // - SHAPES cannot work off a table that never enters this log, and
+        //   nothing here can synthesize one. The combination is refused at shape
+        //   registration instead — see `assertShapeShardable` in
+        //   `relation-predicates.ts`.
         if (cdcEnabled && !isMemoryTable(schema.tables[table])) {
             appendCdcChange(sql, clock(), table, id, op, doc);
         }
@@ -2650,14 +2874,33 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * by-id facade pins it), the probe below is scoped to that one table so a
      * foreign id can never resolve cross-table — closing an IDOR where a
      * branded `Id<"posts">` carrying another table's id would otherwise
-     * read/mutate that other table. An unknown/global `expectedTable` narrows
-     * the probe to nothing, so the global fallback handles it.
+     * read/mutate that other table. A `.global()` `expectedTable` narrows the
+     * probe to nothing because those rows live in D1, not this DO — see
+     * {@link globalFallbackFor}, which picks them up. An unknown
+     * `expectedTable` narrows it to nothing too and nothing picks it up: the
+     * id reads as absent, which is the point.
      */
     const nonGlobalTableNames = (expectedTable?: string): string[] =>
         Object.entries(schema.tables)
             .filter(([, definition]) => definition.shardMode?.kind !== "global")
             .map(([tableName]) => tableName)
             .filter((tableName) => expectedTable === undefined || tableName === expectedTable);
+
+    /**
+     * The D1-backed writer a by-id op falls through to when the shard-local
+     * probe found nothing — or `undefined` when it must not fall through.
+     *
+     * A `.global()` row's id never lives in this DO, so an unpinned lookup
+     * always falls through. A facade-pinned one falls through only when the
+     * pinned table is itself `.global()`: pinning a shard-local table and then
+     * reaching a global row would be exactly the cross-table read/mutate the
+     * pin exists to stop (IDOR). Every caller forwards `expectedTable` on to
+     * the global writer as well, so the pin is re-applied over there — its
+     * `resolveTableName` treats an id owned by another table as absent, which
+     * is what keeps one `.global()` facade out of another `.global()` table.
+     */
+    const globalFallbackFor = (expectedTable?: string): DatabaseWriterLike | undefined =>
+        expectedTable === undefined || isGlobalTable(expectedTable) ? globalDb : undefined;
 
     /**
      * Locate a row by id and return both the owning table and the decoded
@@ -2992,12 +3235,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = locateRowById(id, expectedTable);
 
             if (!located) {
-                // A global row's id never lives in this DO; fall back to D1
-                // (both backends are silent on a genuinely-absent id). But when
-                // the by-id facade pinned a (non-global) table, a global row is
-                // by definition a different table — skip the fallback so a
-                // non-global facade can't reach a `.global()` row (IDOR).
-                const global = expectedTable === undefined ? globalDb : undefined;
+                // A global row's id never lives in this DO; fall back to the
+                // D1 writer when this call is allowed to reach one (both
+                // backends are silent on a genuinely-absent id) — see
+                // `globalFallbackFor`, which also re-applies the facade's pin
+                // over there.
+                const global = globalFallbackFor(expectedTable);
 
                 if (global) {
                     // A delete carries no document, so it costs a row and no
@@ -3010,7 +3253,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // entirely, however many rows it removed.
                     meterWrite(undefined);
 
-                    await global.delete(id, undefined, deleteOptions);
+                    await global.delete(id, expectedTable, deleteOptions);
                 }
 
                 return;
@@ -3296,7 +3539,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 onRead(tableName);
             }
 
-            const orderKeys = normalizeOrderKeys(args.orderBy);
+            const orderKeys = normalizeOrderKeys(args.orderBy, findManyDefinition.shape, {
+                pinned: equalityPinnedFields(args.where),
+                uniqueBy: uniqueIndexFields(findManyDefinition.indexes, findManyDefinition.shape),
+            });
             const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
 
             // RLS (3.2) / aggregates (3.1) inject a `baseWhere` we AND-merge
@@ -3416,13 +3662,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = locateRowById(id, expectedTable);
 
             if (!located) {
-                // A global row's id never lives in this DO; fall back to D1 —
-                // but only when no table is pinned: a (non-global) by-id facade
-                // must never reach a `.global()` row (IDOR).
-                const global = expectedTable === undefined ? globalDb : undefined;
+                // A global row's id never lives in this DO; fall back to the
+                // D1 writer when this call is allowed to reach one — see
+                // `globalFallbackFor`, which also re-applies the facade's pin
+                // over there.
+                const global = globalFallbackFor(expectedTable);
 
                 if (global) {
-                    return global.get(id);
+                    return global.get(id, expectedTable);
                 }
 
                 // eslint-disable-next-line unicorn/no-null -- DatabaseWriterLike.get is `Promise<Record | null>`: null is the documented "no such row" result
@@ -3439,11 +3686,22 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // The optional fast-path seam the RLS + mask middleware probe for: the
             // writer already knows a row's owning table from its internal index, so
             // the middleware gets `{ row, tableName }` in one round-trip instead of a
-            // `get` plus a `findFirst` probe across every policy table. Shard-local
-            // only — a global row's table isn't resolvable here, so it returns `null`
-            // and the caller keeps its probe fallback. `onRead` fires exactly as in
-            // `get`, so swapping the fallback for this path preserves subscription
-            // dependency tracking (and matches what the write-gate fallback did).
+            // `get` plus a `findFirst` probe across every policy table.
+            //
+            // SHARD-LOCAL ONLY, and `null` here means "not resolvable through this
+            // seam" — NOT "no such row". A `.global()` row lives in D1, so its table
+            // is not resolvable from this DO's index and every global id misses. A
+            // caller MUST therefore fall through to its own `get`/`findFirst` probe
+            // path (which does reach D1 via `globalFallbackFor`) on a miss; treating
+            // the miss as an absent row is what let the RLS write gate classify every
+            // global row as "in no policy-gated table" and skip its update/delete
+            // policy. Deliberately not resolved here: a bare id would have to probe
+            // every global table across the D1 hop, taxing the shard-local hit this
+            // seam exists to make cheap.
+            //
+            // `onRead` fires exactly as in `get`, so swapping the fallback for this
+            // path preserves subscription dependency tracking (and matches what the
+            // write-gate fallback did).
             const located = locateRowById(id, expectedTable);
 
             if (!located) {
@@ -3625,7 +3883,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
                 for (const field of groupOptions.by) {
                     // eslint-disable-next-line unicorn/no-null -- GroupByEntry.key tuple: a NULL group value surfaces as null in the returned key, matching the wire shape
-                    key[field] = row[field] ?? null;
+                    key[field] = decodeGroupKeyValue(definition.shape[field], row[field] ?? null);
                 }
 
                 const { value } = row as { value: unknown };
@@ -3911,10 +4169,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = locateRowById(id, expectedTable);
 
             if (!located) {
-                // A global row's id never lives in this DO; fall back to D1 —
-                // but only when no table is pinned: a (non-global) by-id facade
-                // must never reach a `.global()` row (IDOR).
-                const global = expectedTable === undefined ? globalDb : undefined;
+                // A global row's id never lives in this DO; fall back to the
+                // D1 writer when this call is allowed to reach one — see
+                // `globalFallbackFor`, which also re-applies the facade's pin
+                // over there.
+                const global = globalFallbackFor(expectedTable);
 
                 if (global) {
                     // Same reason as the global `insert` branch. The DELTA is
@@ -3927,11 +4186,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // actually sends.
                     meterWrite(patch);
 
-                    await global.patch(id, patch);
+                    await global.patch(id, patch, expectedTable);
                     return;
                 }
 
-                throw new LunoraError("INTERNAL", `document not found: ${id}`);
+                throw new LunoraError("NOT_FOUND", `document not found: ${id}`);
             }
 
             const { docJson: existingJson, row: existing, tableName } = located;
@@ -4283,15 +4542,15 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = locateRowById(id, expectedTable);
 
             if (!located) {
-                const global = expectedTable === undefined ? globalDb : undefined;
+                const global = globalFallbackFor(expectedTable);
 
                 if (global?.restore) {
-                    await global.restore(id);
+                    await global.restore(id, expectedTable);
 
                     return;
                 }
 
-                throw new LunoraError("INTERNAL", `document not found: ${id}`);
+                throw new LunoraError("NOT_FOUND", `document not found: ${id}`);
             }
 
             const field = schema.tables[located.tableName]?.softDeleteMode?.field;
@@ -4331,10 +4590,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = locateRowById(id, expectedTable);
 
             if (!located) {
-                // A global row's id never lives in this DO; fall back to D1 —
-                // but only when no table is pinned: a (non-global) by-id facade
-                // must never reach a `.global()` row (IDOR).
-                const global = expectedTable === undefined ? globalDb : undefined;
+                // A global row's id never lives in this DO; fall back to the
+                // D1 writer when this call is allowed to reach one — see
+                // `globalFallbackFor`, which also re-applies the facade's pin
+                // over there.
+                const global = globalFallbackFor(expectedTable);
 
                 if (global) {
                     // Same reason as the global `patch` branch — and here the
@@ -4342,11 +4602,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // exact rather than a delta.
                     meterWrite(document);
 
-                    await global.replace(id, document, undefined, replaceOptions);
+                    await global.replace(id, document, expectedTable, replaceOptions);
                     return;
                 }
 
-                throw new LunoraError("INTERNAL", `document not found: ${id}`);
+                throw new LunoraError("NOT_FOUND", `document not found: ${id}`);
             }
 
             const { docJson: existingJson, row: previous, tableName } = located;
@@ -4513,6 +4773,7 @@ export { IDEMPOTENCY_TABLE, readIdempotent, trimIdempotent, writeIdempotent } fr
 export { runShardMigrations } from "./ctx-db-migrations";
 export { SEARCH_STATE_TABLE } from "./ctx-db-search-state";
 export type { ShapeRow } from "./ctx-db-shapes";
+export { assertNoExplicitUndefined };
 export { selectShapeMembers, selectShapeRows } from "./ctx-db-shapes";
 export {
     type BroadcastDelta,

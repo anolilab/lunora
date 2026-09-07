@@ -39,10 +39,9 @@ export default defineSchema({
 ### Mutation (`lunora/todos.ts`)
 
 ```ts
-export const add = mutation({
-    args: { text: v.string() },
-    handler: async (ctx, { text }) => ctx.db.insert("todos", { text, done: false, createdAt: Date.now() }),
-});
+export const add = mutation
+    .input({ text: v.string() })
+    .mutation(async ({ args: { text }, ctx }) => ctx.db.insert("todos", { text, done: false, createdAt: Date.now() }));
 ```
 
 ### Optimistic client update (`src/client/App.tsx`)

@@ -28,7 +28,7 @@ const initCommand: Command = {
             // For React/Vue/Solid/Svelte SPAs use `--vite <framework>` (overlay);
             // `-t` selects a bespoke template.
             description:
-                "Bespoke template (standalone | astro | next | nuxt | solid-v2 | sveltekit | tanstack-start-react | tanstack-start-solid | vinext | vinext-pages). For a Solid 1.x / React / Vue / Svelte SPA use --vite react|vue|solid|svelte.",
+                "Template: analog | astro | expo | next | nuxt | react-router | solid-v2 | standalone | sveltekit | tanstack-start-react | tanstack-start-solid | vinext | vinext-pages. Also accepts an overlay framework (react | vue | solid | svelte), same as --vite.",
             name: "template",
             type: String,
         },

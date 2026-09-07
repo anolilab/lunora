@@ -30,18 +30,6 @@ interface ClassAWiring {
 type CloudflarePluginOptions = Record<string, unknown>;
 ```
 
-### `DEV_WORKER_ENV_VALUE` (const)
-
-```ts
-const DEV_WORKER_ENV_VALUE = "development";
-```
-
-### `DEV_WORKER_ENV_VAR` (const)
-
-```ts
-const DEV_WORKER_ENV_VAR = "WORKER_ENV";
-```
-
 ### `DetectedFramework` (type)
 
 Re-exported from `@lunora/config` — signature tracked at its source.
@@ -53,6 +41,22 @@ Re-exported from `@lunora/config` — signature tracked at its source.
 ### `FrameworkDetection` (interface)
 
 Re-exported from `@lunora/config` — signature tracked at its source.
+
+### `GENERATED_CLASS_MODULES` (const)
+
+```ts
+const GENERATED_CLASS_MODULES: readonly [
+    "agents",
+    "containers",
+    "workflows"
+];
+```
+
+### `GeneratedClassModule` (type)
+
+```ts
+type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
+```
 
 ### `LUNORA_API_UPDATED_EVENT` (const)
 
@@ -73,10 +77,10 @@ interface LunoraPluginOptions {
     allowUnauthenticatedShardAccess?: boolean;
     apiSpec?: CodegenOptions["apiSpec"];
     cloudflare?: boolean | CloudflarePluginOptions;
-    generatedDir?: string;
     overlay?: boolean | OverlayPluginOptions;
     projectRoot?: string;
     schemaDir?: string;
+    shard?: LunoraShardConfig;
     studio?: boolean;
     target?: string;
     validateWrangler?: boolean;
@@ -87,6 +91,20 @@ interface LunoraPluginOptions {
 
 ```ts
 type LunoraPlugins = Plugin[];
+```
+
+### `LunoraShardConfig` (interface)
+
+```ts
+interface LunoraShardConfig {
+    cdc?: boolean;
+    maxRelationKeys?: number;
+    reactiveCache?: boolean | {
+        maxBytes?: number;
+        maxEntries?: number;
+    };
+    relationExistsPushDown?: "always" | "auto" | "never";
+}
 ```
 
 ### `OverlayPluginOptions` (type)
@@ -121,6 +139,7 @@ interface ResolvedLunoraPluginOptions {
     overlay: false | OverlayPluginOptions;
     projectRoot: string;
     schemaDir: string;
+    shard: LunoraShardConfig;
     studio: boolean;
     target: string;
     validateWrangler: boolean;
@@ -187,7 +206,7 @@ const buildStudioUrl: (input: {
 ### `buildWorkerEntrySource` (const)
 
 ```ts
-const buildWorkerEntrySource: (framework: DetectedFramework, generatedImportBase: string, hasContainers?: boolean, useUmbrella?: boolean, allowUnauthenticatedShardAccess?: boolean) => string;
+const buildWorkerEntrySource: (framework: DetectedFramework, generatedImportBase: string, classModules?: ReadonlyArray<GeneratedClassModule>, allowUnauthenticatedShardAccess?: boolean, shard?: LunoraShardConfig) => string;
 ```
 
 ### `checkLunoraProxy` (const)
@@ -206,15 +225,6 @@ const codegenPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
 
 ```ts
 const containerLogsPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
-```
-
-### `createCommandProbe` (const)
-
-```ts
-const createCommandProbe: () => {
-    isServe: () => boolean;
-    plugin: Plugin;
-};
 ```
 
 ### `detectFramework` (const)
@@ -291,16 +301,10 @@ const proxyCheckPlugin: () => Plugin;
 
 Re-exported from `@lunora/config` — signature tracked at its source.
 
-### `remoteBindingsCleanupPlugin` (const)
+### `remoteBindingsPlugin` (const)
 
 ```ts
-const remoteBindingsCleanupPlugin: (cleanup: () => void) => Plugin;
-```
-
-### `remoteBindingsConfigPlugin` (const)
-
-```ts
-const remoteBindingsConfigPlugin: (options: CloudflarePluginOptions, plan: ViteRemotePlan) => Plugin;
+const remoteBindingsPlugin: (options: CloudflarePluginOptions | undefined, planOptions: PlanViteRemoteOptions) => Plugin;
 ```
 
 ### `resolveOverlayOption` (const)
@@ -312,13 +316,7 @@ const resolveOverlayOption: (overlay: LunoraPluginOptions["overlay"]) => false |
 ### `studioPlugin` (const)
 
 ```ts
-const studioPlugin: () => Plugin;
-```
-
-### `withDevWorkerEnv` (const)
-
-```ts
-const withDevWorkerEnv: (options: CloudflarePluginOptions, isServe: () => boolean) => CloudflarePluginOptions;
+const studioPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
 ```
 
 ### `withRemoteBindings` (const)

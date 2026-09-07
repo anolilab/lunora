@@ -7,6 +7,7 @@
 require "minitest/autorun"
 
 require_relative "../lib/lunora"
+require_relative "fixtures"
 require_relative "manifest"
 
 class TestFormatNumber < Minitest::Test
@@ -24,7 +25,11 @@ class TestFormatNumber < Minitest::Test
     1.5e-7 => "1.5e-7",
     1e-21 => "1e-21",
     1e20 => "100000000000000000000",
-    1e21 => "1e+21"
+    1e21 => "1e+21",
+    # An integral double past 2**53: ECMAScript prints the SHORTEST digits that
+    # read back as the same double and zero-pads, so this is not the exact
+    # expansion 1152921504606846976 that Float#to_i yields.
+    2.0**60 => "1152921504606847000"
   }.freeze
 
   def test_matches_ecmascript
@@ -33,6 +38,10 @@ class TestFormatNumber < Minitest::Test
     CASES.each do |value, want|
       assert_equal want, Lunora.format_number(value), "format_number(#{value})"
     end
+
+    # Negative zero keeps its sign in a key, and every integer conversion drops
+    # it. Not in CASES: -0.0.eql?(0.0), so a Hash cannot hold both.
+    assert_equal "-0", Lunora.format_number(-0.0)
   end
 end
 
@@ -66,6 +75,8 @@ class TestStringEscaping < Minitest::Test
 end
 
 class TestWireEdgeCases < Minitest::Test
+  include FixtureLoader
+
   def test_over_long_bigint_rejected
     ConformanceManifest.covers("over_long_bigint_rejected")
 
@@ -79,15 +90,39 @@ class TestWireEdgeCases < Minitest::Test
     assert_equal(-42, decoded.value)
   end
 
-  def test_malformed_bytes_rejected
-    ConformanceManifest.covers("malformed_bytes_rejected")
+  # The rejection list is data (protocol/fixtures/wire-codec.json), not a
+  # per-suite invention: a rejection each port hard-codes for itself is a
+  # rejection only some ports have, which is how one of them ended up accepting
+  # a truncated base64 payload as valid short bytes.
+  def test_malformed_values_rejected
+    ConformanceManifest.covers("malformed_values_rejected")
 
-    # The lenient MIME decoder discards characters outside the alphabet
-    # instead of raising — a corrupted bytes payload silently became
-    # different, wrong data instead of a loud failure.
-    assert_raises(Lunora::WireFormatError) { Lunora.decode_wire([Lunora::TAG, "bytes", "not@@base64!!"]) }
+    fixture("wire-codec.json").fetch("rejected").each do |entry|
+      assert_raises(Lunora::WireFormatError, entry["name"]) { Lunora.decode_wire(entry["encoded"]) }
+    end
 
     assert_equal "\x01\x02\x03".b, Lunora.decode_wire([Lunora::TAG, "bytes", "AQID"])
+
+    # A bare [TAG] is NOT malformed: it is the forward-compat shape, and the
+    # reference hands it back as an ordinary array.
+    assert_equal [Lunora::TAG], Lunora.decode_wire([Lunora::TAG])
+  end
+
+  # An integer a float64 cannot hold exactly must not silently become a
+  # different integer on the wire — Ruby's Integer is arbitrary-precision, so
+  # passing one through left the SERVER's own JSON.parse to round it.
+  def test_exact_integer_range_enforced
+    ConformanceManifest.covers("exact_integer_range_enforced")
+
+    assert_equal Lunora::MAX_EXACT_INTEGER, Lunora.encode_wire(Lunora::MAX_EXACT_INTEGER)
+    assert_equal(-Lunora::MAX_EXACT_INTEGER, Lunora.encode_wire(-Lunora::MAX_EXACT_INTEGER))
+
+    assert_raises(Lunora::WireFormatError) { Lunora.encode_wire(Lunora::MAX_EXACT_INTEGER + 1) }
+    assert_raises(Lunora::WireFormatError) { Lunora.encode_wire(-Lunora::MAX_EXACT_INTEGER - 1) }
+
+    # WireBigInt is the way across, and it keeps every digit.
+    assert_equal [Lunora::TAG, "bigint", "9007199254740992"],
+                 Lunora.encode_wire(Lunora::WireBigInt.new(Lunora::MAX_EXACT_INTEGER + 1))
   end
 
   def test_depth_cap_enforced

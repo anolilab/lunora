@@ -25,7 +25,7 @@ describe("memoryInboxStore (plan 241 spike — read half prototype)", () => {
         await store.append({ payload: { body: "two" }, userId: "u1" });
         await store.append({ payload: { body: "three" }, userId: "u1" });
 
-        await store.markRead(first.id);
+        await store.markRead("u1", first.id);
 
         await expect(store.unreadCount("u1")).resolves.toBe(2);
 
@@ -40,12 +40,12 @@ describe("memoryInboxStore (plan 241 spike — read half prototype)", () => {
         const store = memoryInboxStore();
         const item = await store.append({ payload: { body: "one" }, userId: "u1" });
 
-        await store.markRead(item.id);
+        await store.markRead("u1", item.id);
 
         const [afterFirst] = await store.list("u1");
         const firstReadAt = afterFirst?.readAt;
 
-        await store.markRead(item.id);
+        await store.markRead("u1", item.id);
 
         const [afterSecond] = await store.list("u1");
 
@@ -53,12 +53,26 @@ describe("memoryInboxStore (plan 241 spike — read half prototype)", () => {
         await expect(store.unreadCount("u1")).resolves.toBe(0);
     });
 
+    it("markRead cannot mark another user's item", async () => {
+        expect.hasAssertions();
+
+        // Every sibling operation is `userId`-scoped; an unscoped `markRead(id)`
+        // lets any caller holding (or guessing) an id clear someone else's
+        // notification — the id is the whole authorisation.
+        const store = memoryInboxStore();
+        const theirs = await store.append({ payload: { body: "theirs" }, userId: "u2" });
+
+        await store.markRead("u1", theirs.id);
+
+        await expect(store.unreadCount("u2")).resolves.toBe(1);
+    });
+
     it("markRead on an unknown id is a safe no-op", async () => {
         expect.hasAssertions();
 
         const store = memoryInboxStore();
 
-        await expect(store.markRead("inbox_does_not_exist")).resolves.toBeUndefined();
+        await expect(store.markRead("u1", "inbox_does_not_exist")).resolves.toBeUndefined();
     });
 
     it("listInbox returns newest-first", async () => {
@@ -120,7 +134,7 @@ describe("memoryInboxStore (plan 241 spike — read half prototype)", () => {
         const first = await store.append({ payload: { body: "one" }, userId: "u1" });
 
         await store.append({ payload: { body: "two" }, userId: "u1" });
-        await store.markRead(first.id);
+        await store.markRead("u1", first.id);
 
         const unread = await store.list("u1", { unreadOnly: true });
 

@@ -1,28 +1,6 @@
-/** The registered function kinds a {@link FunctionReference} can describe. `stream` is a query that yields multiple frames over the WS. */
-export type FunctionKind = "action" | "mutation" | "query" | "stream";
+import type { FunctionReference } from "../../../shared/function-reference";
 
-/**
- * Opaque reference to a registered function emitted by `@lunora/codegen`.
- *
- * At runtime it carries the `<file>:<function>` identifier in `__lunoraRef`.
- * Generated declarations decorate this with phantom type parameters so the
- * client can infer args / return values per call site.
- */
-export interface FunctionReference<Kind extends FunctionKind = FunctionKind, Args = unknown, Return = unknown> {
-    /**
-     * Phantom marker carrying the `Kind`/`Args`/`Return` type parameters for
-     * inference. Never present at runtime; declared as a covariant (output)
-     * position so a concrete reference stays assignable to a widened one.
-     */
-    readonly __lunoraPhantom?: { args: Args; kind: Kind; returns: Return };
-    readonly __lunoraRef: string;
-}
-
-/** Extract the args type from a {@link FunctionReference}. */
-export type ArgsOf<F> = F extends FunctionReference<infer _K, infer A, infer _R> ? A : never;
-
-/** Extract the return type from a {@link FunctionReference}. */
-export type ReturnOf<F> = F extends FunctionReference<infer _K, infer _A, infer R> ? R : never;
+export type { ArgsOf, FunctionKind, FunctionReference, ReturnOf } from "../../../shared/function-reference";
 
 /**
  * Typed reference to an HTTP-SSE stream route (`httpRoute.<verb>(path).stream()`)
@@ -105,7 +83,7 @@ export interface ReconnectOptions {
 }
 
 /** Which durable-storage operation failed, passed to {@link OfflineQueueOptions.onPersistenceError}. */
-export type PersistenceOperation = "append" | "clear" | "load" | "remove";
+export type PersistenceOperation = "append" | "clear" | "load" | "remove" | "replace";
 
 /** Context handed to a persistence-error handler. */
 export interface PersistenceErrorContext {
@@ -196,6 +174,23 @@ export interface PersistenceAdapter {
     load: () => Promise<PersistedMutation[]>;
     /** Remove a mutation by id once it has been replayed (resolved or rejected). */
     remove: (id: string) => Promise<void>;
+
+    /**
+     * Overwrite an already-persisted mutation IN PLACE, keeping its position in
+     * FIFO order. Used when a queued write's identity stamp is rewritten after a
+     * sign-in / sign-out.
+     *
+     * Must be atomic: a `remove` + `append` pair has a window where a process
+     * stop leaves the mutation in no durable store at all, and the in-memory
+     * entry has already advanced, so a reload loses the write outright. It also
+     * moved the record to the BACK of the queue, replaying it out of the order
+     * it was issued in. Implementations do the whole swap under one transaction
+     * (or one serialized blob write).
+     *
+     * A mutation whose id is not present is left alone — the record was drained
+     * concurrently and re-inserting it would replay a settled write.
+     */
+    replace: (mutation: PersistedMutation) => Promise<void>;
 }
 
 /**
@@ -240,6 +235,21 @@ export interface OutboxSink {
  * needed to render offline on reload and to resume the live subscription.
  */
 export interface CachedQuery {
+    /**
+     * Token-hash fingerprint of the bearer the value was cached under, when the
+     * entry was written by the identity the client currently advertises.
+     *
+     * The second half of the identity gate, and the half that makes the cache
+     * usable at all for a bearer-token app. `identity` settles on the resolved
+     * subject (`subj:<id>`) once the session resolves, but on the NEXT reload
+     * every adapter can only offer the stored token first — the subject arrives
+     * a round trip later, and offline it never arrives at all. Matching the
+     * credential the entry was written under is what lets the seed happen before
+     * (or without) that round trip. Absent when signed out, or when the value
+     * arrived over a socket authenticated as someone else.
+     */
+    credential?: string;
+
     /**
      * Issuing identity fingerprint (same shape the offline queue stamps). A
      * cached value only hydrates when it matches the current identity, so a
@@ -351,13 +361,38 @@ export interface LunoraClientOptions {
     connectTimeoutMs?: number;
 
     /**
-     * When `true`, tabs sharing the same origin coordinate via BroadcastChannel
-     * so only one tab (the "leader") opens WebSocket connections to the server.
-     * Follower tabs receive subscription data through the channel instead.
+     * When `true`, tabs sharing the same origin (and the same signed-in identity)
+     * coordinate via BroadcastChannel so only one tab — the "leader" — opens
+     * WebSocket connections to the server. Reduces simultaneous WS connections,
+     * bandwidth, and cross-tab state drift. Requires `BroadcastChannel`
+     * (browser-only); silently ignored otherwise. Defaults to `false`.
      *
-     * Reduces simultaneous WS connections, bandwidth, and cross-tab state drift.
-     * Requires `BroadcastChannel` (browser-only); silently ignored otherwise.
-     * Defaults to `false`.
+     * **The channel is one-directional: leader → follower.** The leader
+     * broadcasts the values, errors, checkpoints and connection status of the
+     * subscriptions *it* holds; there is no frame with which a follower can ask
+     * the leader for anything.
+     *
+     * `subscribe` works on a follower and is how the relay delivers: the
+     * registration is what the leader's broadcast key is matched against, so a
+     * follower sees a value while the leader independently holds the same
+     * `(fn, args, shardKey)`.
+     *
+     * Nothing else is served, because the leader broadcasts nothing for it and a
+     * follower cannot ask. `subscribeShape` and `acquireConnectionContext` are
+     * inert on a follower — framework code (`@lunora/db`'s shape sync, every
+     * `usePresence` adapter) calls them from an effect the app cannot opt out
+     * of, so throwing would unwind the tab rather than degrade one feature.
+     * `whisper`, `whisperSubscribe`, `setConnectionContext` and `stream` are
+     * only ever called by app code, which can handle a failure, so those throw
+     * `NOT_IMPLEMENTED` rather than returning a handle that never fires. (The
+     * brief window every tab spends claiming leadership at startup is not a
+     * follower state: a lone tab self-promotes and its registered subscriptions
+     * are sent then.) HTTP surfaces — `query`, `mutation`, `action`, the offline
+     * queue's replay — are unaffected on every tab.
+     *
+     * So: enable this when your tabs run the SAME app views over plain
+     * `subscribe`, and leave it off if tabs can sit on different routes or you
+     * use shapes, whispers, streams, or connection context.
      */
     crossTabSync?: boolean;
     fetch?: typeof fetch;
@@ -372,10 +407,17 @@ export interface LunoraClientOptions {
     heartbeatIntervalMs?: number;
 
     /**
-     * When `true` and a `queryCache` is active, framework hooks (React, Vue, …)
-     * wait for the durable cache to finish hydrating before their first render
-     * with an enabled subscription, so users see cached data instead of an
-     * undefined flash before the socket round-trip. Defaults to `false`.
+     * When `true` and a `queryCache` is active, React's `useQuery` holds its
+     * TanStack query disabled until the durable cache has finished loading
+     * (`whenReady()`), so its first enabled render can seed the cached value
+     * instead of issuing an HTTP read that the cache would immediately
+     * overwrite. Defaults to `false`.
+     *
+     * It is ONLY React's `useQuery` that defers — the Vue, Svelte, Solid and
+     * Angular hooks subscribe at mount regardless of this flag, and so does
+     * React's own subscription registry. They do not need the gate: a
+     * subscription opened before the load completes is seeded by the load
+     * itself, so a cached value reaches the first subscriber either way.
      *
      * Requires `queryCache` to be set (not `false`); silently ignored otherwise.
      */
@@ -881,9 +923,27 @@ export interface User {
 }
 
 /**
+ * Per-job retry policy carried on a {@link ScheduleRecord}. Mirrors
+ * `@lunora/scheduler`'s `RetryPolicy`; absent means the scheduler's defaults.
+ */
+export interface ScheduleRetryPolicy {
+    /** Backoff growth across attempts. Default `"exponential"`. */
+    backoff?: "exponential" | "linear";
+    /** Base delay in milliseconds for the first retry. Default `30_000`. */
+    baseMs?: number;
+    /** Maximum number of dispatch attempts before dead-lettering. Default `5`. */
+    maxAttempts?: number;
+    /** Optional ceiling clamping the computed backoff delay. */
+    maxMs?: number;
+}
+
+/**
  * One pending scheduled function, as returned by the worker's
- * `GET /_lunora/admin/scheduled` endpoint. Mirrors `@lunora/scheduler`'s
- * `ScheduleRecord` structurally so the client carries no dependency on it.
+ * `GET /_lunora/admin/scheduled` endpoint. The route is a byte-for-byte proxy of
+ * the SchedulerDO's own `/list`, so this mirrors `@lunora/scheduler`'s
+ * `ScheduleRecord` field-for-field — structurally, so the client carries no
+ * dependency on it. `packages/client/__tests__/structural-mirrors.test.ts` fails
+ * when the two drift.
  */
 export interface ScheduleRecord {
     args: Record<string, unknown>;
@@ -896,12 +956,30 @@ export interface ScheduleRecord {
      */
     attempts?: number;
     enqueuedAt: number;
-    functionPath: string;
+
+    /**
+     * The `ns:fn` path dispatched on fire. Absent when the job targets a durable
+     * workflow/agent instead — exactly one of `functionPath` /
+     * {@link ScheduleRecord.workflow} is set, so a view rendering a job's target
+     * must fall back to `workflow` rather than assuming a path.
+     */
+    functionPath?: string;
     id: string;
+    /** Scheduler/workpool instance the job was enqueued through. Absent for the default instance. */
+    instanceName?: string;
     /** Logical workpool the job is routed to (concurrency-gated), when any. */
     pool?: string;
+    /** Per-job retry policy; absent means the scheduler's built-in defaults. */
+    retry?: ScheduleRetryPolicy;
     scheduledFor: number;
     shardKey?: string;
+
+    /**
+     * The `WORKFLOW_*`/`AGENT_*` binding a fresh durable instance is started from
+     * on fire (the {@link ScheduleRecord.args} become its `params`). Set instead
+     * of {@link ScheduleRecord.functionPath}.
+     */
+    workflow?: string;
 }
 
 /**

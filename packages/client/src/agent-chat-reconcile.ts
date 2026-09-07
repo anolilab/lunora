@@ -10,7 +10,7 @@
 /**
  * The durable-message shape the reconcile reads: a structural subset of each
  * adapter's `AgentChatMessage` (itself a client-safe mirror of `@lunora/agent`'s
- * `AgentMessageRow`). Only `content`, `role`, and the globally-monotonic `seq` are
+ * `AgentMessageRow`). Only `content`, `role`, and the per-thread-monotonic `seq` are
  * consulted; adapters pass their fuller row type, which is assignable to this.
  */
 interface ReconcileDurableMessage {
@@ -32,8 +32,15 @@ interface OptimisticMessage {
      * The highest durable `seq` present when this row was sent. The reconcile
      * retires the row when a durable `user` row with matching `content` lands at a
      * STRICTLY GREATER `seq` (i.e. after the send) — window-independent because
-     * `seq` is globally monotonic, not a positional count. Also the age baseline for
-     * the {@link RETIRE_AFTER_DURABLE_SEQ_ADVANCE} fallback.
+     * `seq` is monotonic, not a positional count. Also the age baseline for the
+     * {@link RETIRE_AFTER_DURABLE_SEQ_ADVANCE} fallback.
+     *
+     * `seq` is monotonic PER THREAD, not globally (`@lunora/agent` assigns it from
+     * the thread's own message count), so a baseline captured in one thread is
+     * meaningless in another: an optimistic row carried across a thread switch can
+     * never be retired by the new thread's history until its `seq` happens to pass
+     * the old thread's. Adapters therefore drop their optimistic rows whenever the
+     * resolved thread key changes.
      */
     maxDurableSeqAtSend: number;
 }
@@ -64,8 +71,8 @@ const maxSeq = (messages: ReadonlyArray<{ seq: number }>): number => {
  * This covers the pathological "identical content already present at send time"
  * case, where no user row with a STRICTLY GREATER `seq` than the send-time max will
  * ever appear for the primary content match to consume (e.g. the acknowledging row
- * was evicted by a bounded `limit` before reconcile could see it). `seq` is globally
- * monotonic, so it keeps climbing even when the visible user-row COUNT does not.
+ * was evicted by a bounded `limit` before reconcile could see it). `seq` is monotonic
+ * within the thread, so it keeps climbing even when the visible user-row COUNT does not.
  *
  * The `2` is a heuristic threshold, NOT an invariant about turn shape. It is
  * tempting to read it as "one turn == a user row and an assistant row (+2)", but

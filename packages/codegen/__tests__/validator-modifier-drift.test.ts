@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { Project } from "ts-morph";
 import { describe, expect, it } from "vitest";
 
-import { COLUMN_MODIFIERS, METADATA_MODIFIERS, REFINEMENT_MODIFIERS } from "../src/parse-validator";
+import { COLUMN_MODIFIERS, METADATA_MODIFIERS, PARSE_BEHAVIOR_MODIFIERS, REFINEMENT_MODIFIERS } from "../src/parse-validator";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const VALIDATOR_SOURCE = join(here, "..", "..", "values", "src", "v.ts");
@@ -62,7 +62,7 @@ describe("validator modifier drift", () => {
     it("knows every modifier `@lunora/values` publishes", () => {
         expect.assertions(1);
 
-        const known = new Set([...COLUMN_MODIFIERS, ...REFINEMENT_MODIFIERS, ...METADATA_MODIFIERS]);
+        const known = new Set([...COLUMN_MODIFIERS, ...REFINEMENT_MODIFIERS, ...METADATA_MODIFIERS, ...PARSE_BEHAVIOR_MODIFIERS]);
         const unknown = [...publishedModifiers()].filter((name) => !known.has(name)).toSorted((a, b) => a.localeCompare(b));
 
         // Anything listed here aborts `lunora codegen` the moment an app uses it.

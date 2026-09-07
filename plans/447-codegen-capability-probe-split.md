@@ -5,10 +5,17 @@
 > next step. If anything in the "STOP conditions" section occurs, stop and
 > report — do not improvise. Your reviewer maintains `plans/README.md`.
 >
-> **Drift check (run first)**: `git diff --stat 207be1b63..HEAD -- packages/codegen/src/discover-feature-usage.ts packages/codegen/src/platform-target.ts packages/codegen/src/declaration-surface.ts packages/codegen/src/run-codegen.ts packages/codegen/src/capabilities.ts`
+> **Drift check (run first)**: `git diff --stat 207be1b63..HEAD -- packages/codegen/src/discover/feature-usage.ts packages/codegen/src/discover/studio-features.ts packages/codegen/src/platform-target.ts packages/codegen/src/declaration-surface.ts packages/codegen/src/run-codegen.ts packages/codegen/src/capabilities.ts`
 > If any changed since this plan was written, compare the "Current state"
 > excerpts against the live code before proceeding; on a mismatch, treat it as
 > a STOP condition.
+>
+> **Layout note (2026-08-28)**: the feeders moved to `packages/codegen/src/discover/`
+> with the `discover-` prefix stripped, and `discover-feature-usage.ts` was split —
+> `discoverFeatureUsage` / `contextPropertiesRead` / `FeatureUsage` stayed in
+> `discover/feature-usage.ts`, `buildStudioFeatures` is now `discover/studio-features.ts`,
+> and `hasPaymentStoreTables` is `discover/payment-store-tables.ts`. Paths below are
+> updated; line numbers in the excerpts are from before the move, so locate by symbol.
 
 ## Status
 
@@ -43,7 +50,7 @@ one added inherits it silently.
 
 ## Current state
 
-### The uniform probe — `packages/codegen/src/discover-feature-usage.ts:132-147`
+### The uniform probe — `packages/codegen/src/discover/feature-usage.ts:132-147`
 
 ```ts
 for (const capability of CAPABILITIES) {
@@ -63,7 +70,7 @@ for (const capability of CAPABILITIES) {
 }
 ```
 
-`FeatureUsage` is `Record<CapabilityKey, boolean>` (`discover-feature-usage.ts:29`).
+`FeatureUsage` is `Record<CapabilityKey, boolean>` (`discover/feature-usage.ts`).
 
 ### The gate — `packages/codegen/src/platform-target.ts:221-262`
 
@@ -134,7 +141,7 @@ deliberately rather than applied with a find-and-replace.
   table; `CapabilityKey` is derived from it, so a record keyed by capability gets
   exhaustiveness checking for free. Any new signal must be keyed off it the same way
   `FeatureUsage` already is — do not introduce a hand-maintained parallel list.
-- **`contextPropertiesRead(sourceFile)`** (`discover-feature-usage.ts:84-110`) already
+- **`contextPropertiesRead(sourceFile)`** (`discover/feature-usage.ts`) already
   computes the per-file `ctx.*` read set in one pass. The ctx signal is already
   separately computed inside the loop; it is only the _storage_ of the two signals that
   is collapsed.
@@ -197,13 +204,13 @@ would churn every call site for no behaviour change. Add the new signal beside i
 
 **In scope**:
 
-- `packages/codegen/src/discover-feature-usage.ts` — return both signals
+- `packages/codegen/src/discover/feature-usage.ts` — return both signals
 - `packages/codegen/src/platform-target.ts` — `gatePlatformFeatures` / `gateAgainstMatrix`
   gate on the ctx-read signal
 - `packages/codegen/src/declaration-surface.ts` — thread the second signal through
 - `packages/codegen/src/run-codegen.ts` — thread the second signal through; keep every
   `has*` flag on the import-inclusive signal
-- `packages/codegen/__tests__/discover-feature-usage.test.ts`
+- `packages/codegen/__tests__/discover/feature-usage.test.ts`
 - `packages/codegen/__tests__/platform-target.test.ts`
 
 **Out of scope**:
@@ -224,7 +231,7 @@ would churn every call site for no behaviour change. Add the new signal beside i
 
 ### Step 1: Add the second signal to the probe
 
-In `packages/codegen/src/discover-feature-usage.ts`, keep the existing `FeatureUsage`
+In `packages/codegen/src/discover/feature-usage.ts`, keep the existing `FeatureUsage`
 record and add a second `Record<CapabilityKey, boolean>` populated only from the
 `contextProperties.has(capability.contextProperty)` arm. Both are built with the same
 `Object.fromEntries(CAPABILITIES.map(...))` construction, so both stay exhaustive.
@@ -236,7 +243,7 @@ Two details the current loop's shape will fight you on, and both must be handled
    signals, a capability whose import was already seen must still be checked for a ctx
    read in later files. Either drop the short-circuits or make them require **both**
    signals set.
-2. `mail` is import-only by design (`discover-feature-usage.ts:23-27`: "it has no
+2. `mail` is import-only by design (`discover/feature-usage.ts`: "it has no
    `ctx.mail` helper"). Its ctx-read signal will therefore always be `false`. Since
    `mail` IS in `CAPABILITY_TO_FEATURE`, gating on ctx-read alone would make `mail`
    ungateable. Decide and document: either exempt capabilities with no
@@ -247,7 +254,7 @@ Two details the current loop's shape will fight you on, and both must be handled
 
 ### Step 2: Update the tests' `ALL_OFF` literals
 
-Both `packages/codegen/__tests__/discover-feature-usage.test.ts:14-34` and
+Both `packages/codegen/__tests__/discover/feature-usage.test.ts:14-34` and
 `packages/codegen/__tests__/platform-target.test.ts:13` declare an `ALL_OFF: FeatureUsage`
 object literal listing all 19 keys explicitly:
 
@@ -319,7 +326,7 @@ Add to `packages/codegen/__tests__/platform-target.test.ts`:
    diagnostic (the existing behaviour, now proven to be preserved).
 3. The `mail` case from Step 1, asserting whichever behaviour you chose and documented.
 
-And to `packages/codegen/__tests__/discover-feature-usage.test.ts`: an import-only source
+And to `packages/codegen/__tests__/discover/feature-usage.test.ts`: an import-only source
 sets `imported.storage` but not `contextRead.storage`.
 
 **Verify**: `pnpm --filter "@lunora/codegen" run test` → all pass, including the 4 new cases.
@@ -329,7 +336,7 @@ sets `imported.storage` but not `contextRead.storage`.
 - **Exemplar files**: `packages/codegen/__tests__/platform-target.test.ts` (gate
   behaviour against an explicit matrix — `gateAgainstMatrix` is exported precisely so it
   can be exercised against any matrix without the registry) and
-  `packages/codegen/__tests__/discover-feature-usage.test.ts` (probe behaviour, writes
+  `packages/codegen/__tests__/discover/feature-usage.test.ts` (probe behaviour, writes
   real source files into a `mkdtempSync` workdir and runs a real ts-morph `Project`).
 - 4 new cases as above.
 - Golden fixtures unchanged — the strongest single assertion that emitted output did not move.
@@ -359,7 +366,7 @@ stops being gated.
 - [ ] `grep -n "featureUsage.images" packages/codegen/src/run-codegen.ts` still resolves
       to the import-inclusive signal (provisioning did not narrow)
 - [ ] Both signals are built from `CAPABILITIES` (no hand-maintained key list):
-      `grep -n "CAPABILITIES.map" packages/codegen/src/discover-feature-usage.ts` → 2 matches
+      `grep -n "CAPABILITIES.map" packages/codegen/src/discover/feature-usage.ts` → 2 matches
 
 ## STOP conditions
 

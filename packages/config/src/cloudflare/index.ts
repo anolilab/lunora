@@ -6,10 +6,10 @@
  * `DeployDriver` that ties them together for `--target cloudflare`.
  *
  * Split out from the package root so `@lunora/config` itself stays
- * provider-neutral. The root keeps what any target needs — the `ResourceGraph`
- * and `DeployDriver` contracts, the driver registry, project config and target
- * resolution, `.dev.vars` grammar, binding *inference* — while emission and
- * validation, which are wrangler-shaped by definition, live behind this subpath.
+ * provider-neutral. The root keeps what any target needs — the `DeployDriver`
+ * contract, the driver registry, project config and target resolution,
+ * `.dev.vars` grammar, binding *inference* — while emission and validation,
+ * which are wrangler-shaped by definition, live behind this subpath.
  * Plan 114 §5.3 (D6): a package carrying real provider code isolates it behind a
  * subpath rather than relocating wholesale.
  */
@@ -22,7 +22,7 @@ export { collectExportGaps, reconcileWranglerBindings } from "./reconcile-bindin
 export type { ReconcileCompatibilityDateResult } from "./reconcile-compatibility-date";
 export { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-date";
 export type { ReconcileResult as ReconcileCronsResult } from "./reconcile-crons";
-export { reconcileWranglerCrons } from "./reconcile-crons";
+export { describePreservedCrons, reconcileWranglerCrons } from "./reconcile-crons";
 export type { MaterializeOptions, MaterializeResult, RemoteBindingPlan, RemoteEnableInputs, RemoteWranglerShape } from "./remote-bindings";
 export {
     injectRemoteFlags,
@@ -43,12 +43,14 @@ export type {
     TailConsumer,
     WranglerConfig,
     WranglerContainerEntry,
+    WranglerEnvironmentMerge,
     WranglerProjectValidationOptions,
     WranglerProjectValidationResult,
     WranglerValidationReport,
     WranglerWorkflowEntry,
 } from "./wrangler-validator";
 export {
+    mergeWranglerEnvironment,
     REQUIRED_COMPATIBILITY_DATE,
     REQUIRED_FLAG,
     validateWrangler,

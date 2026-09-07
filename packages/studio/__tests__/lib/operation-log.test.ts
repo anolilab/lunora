@@ -38,6 +38,70 @@ describe("summariseArgs", () => {
         expect(summary).not.toContain("hunter2");
     });
 
+    it("distinguishes a predicate-free bulk delete from a targeted one", () => {
+        expect.assertions(3);
+
+        // A `deleteRows` with neither filters nor a search term deletes EVERY row —
+        // identical to `clearTable`. The old summariser rendered the filter count
+        // only when it was non-zero, so a whole-table delete and a targeted one
+        // both read as just the table name and the tape could not tell them apart.
+        const wholeTable = summariseArgs("__lunora_admin__:deleteRows", { filters: [], table: "orders" });
+        const targeted = summariseArgs("__lunora_admin__:deleteRows", { filters: [{ column: "status" }], table: "orders" });
+
+        expect(wholeTable).toBe("orders no predicate");
+        expect(targeted).toBe("orders 1 filters");
+        expect(targeted).not.toContain("no predicate");
+    });
+
+    it("names the table a clearTable truncated", () => {
+        expect.assertions(1);
+
+        // Unmapped, this fell through to the KEY fallback and read "table" — the
+        // argument name, not which table was emptied.
+        expect(summariseArgs("__lunora_admin__:clearTable", { table: "orders" })).toBe("orders whole table");
+    });
+
+    it("records a PITR restore's target time, and only the presence of a bookmark", () => {
+        expect.assertions(3);
+
+        const summary = summariseArgs("__lunora_admin__:pitrRestore", {
+            bookmark: "00000185-0000-0000-0000-000000000000",
+            restart: true,
+            time: "2026-06-01T00:00:00.000Z",
+        });
+
+        expect(summary).toContain("to 2026-06-01T00:00:00.000Z");
+        expect(summary).toContain("restart now");
+        expect(summary).not.toContain("00000185");
+    });
+
+    it("records an import's row count and target tables, never the row DATA", () => {
+        expect.assertions(3);
+
+        const summary = summariseArgs("__lunora_admin__:importShard", {
+            rows: [
+                { doc: { email: "alice@example.com" }, table: "users" },
+                { doc: { total: 42 }, table: "orders" },
+            ],
+        });
+
+        expect(summary).toContain("2 rows");
+        expect(summary).toContain("into orders, users");
+        expect(summary).not.toContain("alice@example.com");
+    });
+
+    it("survives a malformed row instead of throwing before the RPC runs", () => {
+        expect.assertions(2);
+
+        // `operationLog.start` runs BEFORE dispatch, so a `null` row never reaches
+        // server validation: reading `.table` off it threw a TypeError here and
+        // took the whole operation down instead of the RPC's own error.
+        const summary = summariseArgs("__lunora_admin__:importShard", { rows: [null, { doc: {}, table: "users" }, "nonsense"] });
+
+        expect(summary).toContain("3 rows");
+        expect(summary).toContain("into users");
+    });
+
     it("renders an empty summary for a no-arg call", () => {
         expect.assertions(1);
 

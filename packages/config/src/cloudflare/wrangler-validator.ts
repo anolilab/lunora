@@ -14,7 +14,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { WORKER_ENTRY_FALLBACKS } from "../infer-bindings";
+import { isEnvEnabled } from "../../../../shared/env-flag";
+import { COMPOSED_WORKER_ENTRY, WORKER_ENTRY_FALLBACKS } from "../infer-bindings";
 import join from "../path";
 import type { SchemaInfo } from "../schema-info";
 import { discoverSchemaInfo } from "../schema-info";
@@ -168,7 +169,7 @@ interface WranglerConfig {
     pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string; stream?: string } | null | undefined>;
     // Smart Placement (`{ mode: "smart" }` — the only documented mode). See
     // `validatePlacement`.
-    placement?: { mode?: string };
+    placement?: { host?: string; hostname?: string; mode?: string; region?: string };
     // Cloudflare Queues — producer bindings (`env.<BINDING>.send(...)`) and
     // push/pull consumers. Lunora reconciles both from `lunora/queues.ts`; the
     // entries are parsed from untrusted JSONC, so `validateQueues` guards shape.
@@ -233,6 +234,7 @@ interface WranglerValidationReport {
  * state it explicitly (or to contradict this).
  */
 const NON_INHERITABLE_KEYS = [
+    "containers",
     "d1_databases",
     "durable_objects",
     "kv_namespaces",
@@ -415,9 +417,9 @@ const validateInstanceType = (entry: WranglerContainerEntry, label: string, erro
 /** Shared lookups + sinks for one `containers[]` entry validation pass. */
 interface ContainerEntryChecks {
     boundClasses: ReadonlySet<string | undefined>;
+    /** Storage kind per class, folded from the migration history. */
+    classKinds: ReadonlyMap<string, MigrationClassKind>;
     errors: string[];
-    nonSqliteClasses: ReadonlySet<string>;
-    sqliteClasses: ReadonlySet<string>;
     warnings: string[];
 }
 
@@ -429,7 +431,7 @@ interface ContainerEntryChecks {
  * {@link validateContainers} to keep its cognitive complexity bounded.
  */
 const validateContainerEntry = (entry: WranglerContainerEntry | null | undefined, label: string, checks: ContainerEntryChecks): void => {
-    const { boundClasses, errors, nonSqliteClasses, sqliteClasses, warnings } = checks;
+    const { boundClasses, classKinds, errors, warnings } = checks;
 
     if (!entry || typeof entry !== "object" || typeof entry.class_name !== "string" || entry.class_name.length === 0) {
         errors.push(`${label} must have a non-empty "class_name" naming its container-enabled Durable Object class`);
@@ -443,13 +445,15 @@ const validateContainerEntry = (entry: WranglerContainerEntry | null | undefined
 
     if (!boundClasses.has(entry.class_name)) {
         errors.push(
-            `${label} class "${entry.class_name}" has no matching durable_objects binding — run \`lunora dev\` to auto-reconcile wrangler.jsonc, or add { "name": "...", "class_name": "${entry.class_name}" }`,
+            `${label} class "${entry.class_name}" has no matching durable_objects binding — your dev server auto-reconciles this on startup; add { "name": "...", "class_name": "${entry.class_name}" } to fix it by hand`,
         );
     }
 
-    if (!sqliteClasses.has(entry.class_name)) {
+    const classKind = classKinds.get(entry.class_name);
+
+    if (classKind !== "sqlite") {
         errors.push(
-            nonSqliteClasses.has(entry.class_name)
+            classKind === "classic"
                 ? `${label} class "${entry.class_name}" is registered via "new_classes" but containers require SQLite-backed DOs — move it to "new_sqlite_classes"`
                 : `${label} class "${entry.class_name}" is missing from migrations — add a migration entry with "new_sqlite_classes": ["${entry.class_name}"]`,
         );
@@ -484,8 +488,14 @@ const objectBindingEntries = <T>(value: ReadonlyArray<T | null | undefined> | un
 const stringEntries = (value: unknown): string[] => (Array.isArray(value) ? (value as unknown[]).filter((entry) => isNonEmptyString(entry)) : []);
 
 /**
- * Fold `wrangler.migrations[]` IN ORDER into the set of Durable Object classes
- * that currently exist, applying each entry's `new_classes` +
+ * How a Durable Object class is stored — `sqlite` (`new_sqlite_classes`) or the
+ * legacy key-value `classic` (`new_classes`). Containers require `sqlite`.
+ */
+type MigrationClassKind = "classic" | "sqlite";
+
+/**
+ * Fold `wrangler.migrations[]` IN ORDER into the Durable Object classes that
+ * currently exist and how each is stored, applying each entry's `new_classes` +
  * `new_sqlite_classes` (add), then its `renamed_classes` (from → to), then its
  * `deleted_classes` (remove) — in that order, one entry at a time.
  *
@@ -495,22 +505,28 @@ const stringEntries = (value: unknown): string[] => (Array.isArray(value) ? (val
  * "does this class appear anywhere in migrations" check gets both cases
  * wrong. See plan 353.
  */
-const foldMigrationClasses = (migrations: WranglerConfig["migrations"]): ReadonlySet<string> => {
-    const classes = new Set<string>();
+const foldMigrationClassKinds = (migrations: WranglerConfig["migrations"]): ReadonlyMap<string, MigrationClassKind> => {
+    const classes = new Map<string, MigrationClassKind>();
 
     for (const migration of objectBindingEntries(migrations)) {
         for (const name of stringEntries(migration.new_classes)) {
-            classes.add(name);
+            classes.set(name, "classic");
         }
 
         for (const name of stringEntries(migration.new_sqlite_classes)) {
-            classes.add(name);
+            classes.set(name, "sqlite");
         }
 
         for (const rename of objectBindingEntries(migration.renamed_classes)) {
             if (isNonEmptyString(rename.from) && isNonEmptyString(rename.to)) {
+                // A rename carries the storage kind across. Renaming a class no
+                // entry ever registered is not something wrangler accepts, so the
+                // kind is unknowable — assume `sqlite` rather than invent a
+                // "move it to new_sqlite_classes" error for it.
+                const kind = classes.get(rename.from) ?? "sqlite";
+
                 classes.delete(rename.from);
-                classes.add(rename.to);
+                classes.set(rename.to, kind);
             }
         }
 
@@ -521,6 +537,9 @@ const foldMigrationClasses = (migrations: WranglerConfig["migrations"]): Readonl
 
     return classes;
 };
+
+/** The class names {@link foldMigrationClassKinds} says currently exist, without their storage kind. */
+const foldMigrationClasses = (migrations: WranglerConfig["migrations"]): ReadonlySet<string> => new Set(foldMigrationClassKinds(migrations).keys());
 
 /**
  * Every `durable_objects.bindings[]` entry whose class lives in THIS script
@@ -539,7 +558,7 @@ const validateDurableObjectMigrations = (wrangler: WranglerConfig, errors: strin
             errors.push(
                 `durable_objects.bindings declares class "${binding.class_name}" but it is missing from migrations — ` +
                     `add a migration entry with "new_sqlite_classes": ["${binding.class_name}"] (or "new_classes" for a non-SQLite-backed class), ` +
-                    "or run `lunora dev` to auto-reconcile wrangler.jsonc",
+                    "or let the dev server auto-reconcile it on the next start",
             );
         }
     }
@@ -570,12 +589,14 @@ const validateContainers = (wrangler: WranglerConfig, errors: string[], warnings
     }
 
     const boundClasses = new Set(objectBindingEntries(wrangler.durable_objects?.bindings).map((binding) => binding.class_name));
-    const migrations = wrangler.migrations ?? [];
-    const sqliteClasses = new Set(migrations.flatMap((migration) => [...(migration?.new_sqlite_classes ?? [])]));
-    const nonSqliteClasses = new Set(migrations.flatMap((migration) => [...(migration?.new_classes ?? [])]));
+    // The SAME fold the Durable Object check uses — a flat scan of
+    // `new_sqlite_classes` would report a renamed container class as missing and
+    // would still count one a later entry deleted, and it throws a raw
+    // `TypeError` on a hand-written `"new_sqlite_classes": {}`.
+    const classKinds = foldMigrationClassKinds(wrangler.migrations);
 
     for (const [index, entry] of entries.entries()) {
-        validateContainerEntry(entry, `containers[${String(index)}]`, { boundClasses, errors, nonSqliteClasses, sqliteClasses, warnings });
+        validateContainerEntry(entry, `containers[${String(index)}]`, { boundClasses, classKinds, errors, warnings });
     }
 
     if (wrangler.observability?.enabled !== true) {
@@ -810,15 +831,21 @@ const SELF_DESCRIBING_BINDING_RULES = [
     { key: "images", message: 'images must be an object with a non-empty "binding" (e.g. { "binding": "IMAGES" })' },
 ] as const satisfies ReadonlyArray<{ key: keyof WranglerConfig; message: string }>;
 
-/** Validate one self-describing `{ binding }` object against its rule (pure shape check). */
+/**
+ * Validate one self-describing `{ binding }` object against its rule (pure shape
+ * check). Read as `unknown`: `WranglerConfig` describes a WELL-FORMED config, but
+ * the value here comes from hand-edited JSONC, where `"browser": null` is what a
+ * user writes to disable a binding — and `typeof null === "object"` made the
+ * property read throw a TypeError out of the whole validator.
+ */
 const validateSelfDescribingBinding = (wrangler: WranglerConfig, rule: (typeof SELF_DESCRIBING_BINDING_RULES)[number], errors: string[]): void => {
-    const value = wrangler[rule.key];
+    const value: unknown = wrangler[rule.key];
 
     if (value === undefined) {
         return;
     }
 
-    if (typeof value !== "object" || Array.isArray(value) || !isNonEmptyString((value as { binding?: unknown }).binding)) {
+    if (typeof value !== "object" || value === null || Array.isArray(value) || !isNonEmptyString((value as { binding?: unknown }).binding)) {
         errors.push(rule.message);
     }
 };
@@ -963,26 +990,39 @@ const validateLogpush = (wrangler: WranglerConfig, errors: string[]): void => {
 };
 
 /**
- * `placement` is Smart Placement config — `{ "mode": "smart" }` is the only
- * documented shape. Recognizing it catches a typo'd mode (`"smrat"`) wrangler
- * would silently drop. Smart Placement is opt-in only and never auto-injected
- * (it can regress geo-distributed latency for a DO/D1-centric app).
+ * The `placement.mode` values wrangler's own config schema accepts:
+ * `"smart"` opts into Smart Placement, `"targeted"` pins the Worker to a
+ * region/host/hostname, and `"off"` disables placement for a Worker that
+ * would otherwise inherit an account default. Anything else is a typo
+ * wrangler drops silently.
+ */
+const PLACEMENT_MODES = new Set(["off", "smart", "targeted"]);
+
+/**
+ * `placement` is Smart/targeted Placement config. Recognizing the mode catches a
+ * typo (`"smrat"`) wrangler would silently drop, without hard-blocking the two
+ * non-smart modes wrangler accepts. Placement is opt-in only and never
+ * auto-injected (it can regress geo-distributed latency for a DO/D1-centric app).
  */
 const validatePlacement = (wrangler: WranglerConfig, errors: string[]): void => {
-    const { placement } = wrangler;
+    // `unknown`, for the same reason as `validateSelfDescribingBinding`: this is
+    // hand-edited JSONC, not a value TypeScript has vouched for.
+    const { placement }: { placement?: unknown } = wrangler;
 
     if (placement === undefined) {
         return;
     }
 
-    if (typeof placement !== "object" || Array.isArray(placement)) {
+    if (typeof placement !== "object" || placement === null || Array.isArray(placement)) {
         errors.push('placement must be an object (e.g. { "mode": "smart" })');
 
         return;
     }
 
-    if (placement.mode !== undefined && placement.mode !== "smart") {
-        errors.push('placement.mode must be "smart" (the only supported Smart Placement mode)');
+    const { mode } = placement as { mode?: unknown };
+
+    if (mode !== undefined && (typeof mode !== "string" || !PLACEMENT_MODES.has(mode))) {
+        errors.push(`placement.mode must be one of ${[...PLACEMENT_MODES].map((value) => `"${value}"`).join(", ")}`);
     }
 };
 
@@ -1173,9 +1213,6 @@ const withTailConsumer = (wrangler: WranglerConfig, consumer: TailConsumer): Wra
     return { ...wrangler, tail_consumers: [...existing, consumer] };
 };
 
-/** Env values that read as "on" for a boolean-ish `LUNORA_*` flag — mirrors the DO security audit. */
-const TRUTHY_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
-
 /**
  * Reject the one CORS combination the worker cannot enforce: a `*` wildcard
  * origin paired with credentials. The runtime's `resolveSecurity` throws on the
@@ -1195,13 +1232,61 @@ const validateCorsVariables = (wrangler: WranglerConfig, errors: string[]): void
     const allowCredentials = vars["LUNORA_CORS_ALLOW_CREDENTIALS"];
 
     const hasWildcard = typeof allowedOrigins === "string" && allowedOrigins.split(",").some((entry) => entry.trim() === "*");
-    const credentialsOn = typeof allowCredentials === "string" && TRUTHY_ENV_VALUES.has(allowCredentials.trim().toLowerCase());
+    const credentialsOn = isEnvEnabled(allowCredentials);
 
     if (hasWildcard && credentialsOn) {
         errors.push(
             'vars.LUNORA_ALLOWED_ORIGINS includes a "*" wildcard while vars.LUNORA_CORS_ALLOW_CREDENTIALS is on — browsers reject this combination and it defeats the allowlist; name explicit origins or drop credentials',
         );
     }
+};
+
+/** The `vars` key the SchedulerDO reads its dispatch origin from — see {@link validateSchedulerOrigin}. */
+const SCHEDULER_ORIGIN_VAR = "LUNORA_ORIGIN_URL";
+
+/**
+ * A declared `SchedulerDO` with no `LUNORA_ORIGIN_URL` cannot dispatch anything.
+ *
+ * The DO takes its callback origin from its OWN env — never from the schedule
+ * request, which would be an SSRF vector — and refuses to enqueue without it
+ * (`ORIGIN_NOT_CONFIGURED`). Nothing provisions the var: `reconcileDurableObjects`
+ * writes the SCHEDULER binding off a bare `export { SchedulerDO }` and writes no
+ * `vars`, and no scaffolder produces this key. So an app reaches production with
+ * every `ctx.scheduler.runAfter` failing, discovered only when some unrelated
+ * procedure first schedules — nowhere near the cause.
+ *
+ * A WARNING, and for the same reason as the unexported-class check below: `vars`
+ * is a PARTIAL view of the Worker env. It cannot see a `wrangler secret put`
+ * value (which `lunora deploy` itself recommends for this key), a var set in the
+ * dashboard, or another Worker's env. Each of those fails CLOSED, so erroring
+ * would block a deploy that works — or kill the dev server on the very run in
+ * which Lunora auto-wrote the binding. The reported problem was silence, not
+ * permissiveness, and a warning ends the silence.
+ *
+ * A binding carrying `script_name` names a class in ANOTHER Worker, whose env
+ * owns the var; same carve-out as the migration and unexported-class checks.
+ */
+const validateSchedulerOrigin = (wrangler: WranglerConfig, environment: string | undefined, warnings: string[]): void => {
+    const declaresScheduler = objectBindingEntries(wrangler.durable_objects?.bindings).some(
+        (binding) => binding.class_name === "SchedulerDO" && binding.script_name === undefined,
+    );
+
+    if (!declaresScheduler || isNonEmptyString(wrangler.vars?.[SCHEDULER_ORIGIN_VAR])) {
+        return;
+    }
+
+    // `vars` is non-inheritable, so under `--env <name>` the top-level block is
+    // NOT what wrangler ships — naming the bare key would send the reader to a
+    // `vars` block that already has it.
+    const scope = environment === undefined ? "vars" : `env.${environment}.vars`;
+    // Secrets are non-inheritable exactly like `vars`, so the fallback remedy has
+    // to name the same environment the warning is about — an unscoped
+    // `secret put` writes the top-level worker and leaves this one untouched.
+    const secretPut = environment === undefined ? "" : ` --env ${environment}`;
+
+    warnings.push(
+        `durable_objects.bindings declares the SchedulerDO but ${scope}.${SCHEDULER_ORIGIN_VAR} is unset — the DO reads its dispatch origin from its own env and refuses to schedule without it, so every ctx.scheduler.runAfter/runAt fails with ORIGIN_NOT_CONFIGURED. Set ${scope}.${SCHEDULER_ORIGIN_VAR} to the worker's public URL, or \`wrangler secret put ${SCHEDULER_ORIGIN_VAR}${secretPut}\` (ignore this if it is already set as a secret or in the dashboard).`,
+    );
 };
 
 /**
@@ -1264,7 +1349,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
 
     if (!shardBinding) {
         errors.push(
-            'durable_objects.bindings must include { "name": "SHARD", "class_name": "ShardDO" } — run `lunora dev` to auto-reconcile wrangler.jsonc, or add the binding manually',
+            'durable_objects.bindings must include { "name": "SHARD", "class_name": "ShardDO" } — your dev server auto-reconciles this on startup, or add the binding manually',
         );
     }
 
@@ -1303,7 +1388,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
 
         if (!databaseBinding) {
             errors.push(
-                'schema declares .global() tables; d1_databases must include a binding named "DB" — run `lunora dev` to auto-reconcile wrangler.jsonc, or add the binding manually',
+                'schema declares .global() tables; d1_databases must include a binding named "DB" — your dev server auto-reconciles this on startup, or add the binding manually',
             );
         }
     }
@@ -1340,6 +1425,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
     validateCache(wrangler, errors);
     validateExports(wrangler, errors);
     validateCorsVariables(wrangler, errors);
+    validateSchedulerOrigin(wrangler, environment, warnings);
 
     return { errors, valid: errors.length === 0, warnings };
 };
@@ -1370,6 +1456,17 @@ interface WranglerProjectValidationResult {
 }
 
 /**
+ * The entries of a config array that TypeScript believes is an array but JSONC
+ * does not guarantee. `WranglerConfig` describes a WELL-FORMED config; a
+ * hand-written `"containers": {}` / `"workflows": {}` is reported by the shape
+ * validator, but the FS-aware checks below run regardless and a bare `for…of`
+ * over the object threw `is not iterable` out of `validateWranglerProject` —
+ * a stack trace instead of the diagnostic, on every deploy/prepare/verify and
+ * every `lunora dev` start.
+ */
+const iterableEntries = <T>(value: ReadonlyArray<T> | undefined): ReadonlyArray<T> => (Array.isArray(value) ? (value as ReadonlyArray<T>) : []);
+
+/**
  * FS-aware existence check for local-path container images: every `./`, `../`,
  * `/`, or `Dockerfile`-bearing image must resolve to an existing file (wrangler
  * resolves it relative to the config file). Registry references are skipped.
@@ -1381,7 +1478,7 @@ const collectContainerImageErrors = (
 ): string[] => {
     const errors: string[] = [];
 
-    for (const entry of containers) {
+    for (const entry of iterableEntries(containers)) {
         const image = entry?.image;
 
         if (typeof image !== "string" || !(image.startsWith("./") || image.startsWith("../") || image.startsWith("/") || image.includes("Dockerfile"))) {
@@ -1398,8 +1495,19 @@ const collectContainerImageErrors = (
     return errors;
 };
 
-/** Resolve the worker entry: `wrangler.main` (relative to the config file) if it exists, else the conventional fallbacks. */
+/**
+ * Resolve the worker entry the way `lunora deploy` bundles it: the class-B
+ * composed entry when present (it is passed to wrangler as the positional
+ * script, overriding `main`), else `wrangler.main` relative to the config file,
+ * else the conventional fallbacks.
+ */
 const resolveWorkerEntryPath = (main: string | undefined, projectRoot: string, wranglerPath: string): string | undefined => {
+    const composed = join(projectRoot, COMPOSED_WORKER_ENTRY);
+
+    if (existsSync(composed)) {
+        return composed;
+    }
+
     if (typeof main === "string" && main.length > 0) {
         const resolved = join(dirname(wranglerPath), main);
 
@@ -1630,7 +1738,7 @@ const collectUnexportedClassErrors = (wrangler: WranglerConfig, projectRoot: str
         }
     }
 
-    for (const entry of wrangler.workflows ?? []) {
+    for (const entry of iterableEntries(wrangler.workflows)) {
         // Same `script_name` carve-out as the durable-object bindings above:
         // Cloudflare lets a workflow binding target a class in ANOTHER Worker,
         // which that script exports, not this entry.
@@ -1757,9 +1865,30 @@ export type {
     TailConsumer,
     WranglerConfig,
     WranglerContainerEntry,
+    WranglerEnvironmentMerge,
     WranglerProjectValidationOptions,
     WranglerProjectValidationResult,
     WranglerValidationReport,
     WranglerWorkflowEntry,
 };
-export { REQUIRED_COMPATIBILITY_DATE, REQUIRED_FLAG, validateWrangler, validateWranglerConfig, validateWranglerProject, withTailConsumer };
+// `mergeWranglerEnvironment` is exported so `lunora deploy`'s read-only
+// preflights (D1 placeholder, localhost origin, container Docker) inspect the
+// same `--env` view wrangler will deploy. Reading the top level there let an
+// env-scoped placeholder / loopback origin ship silently, and falsely blocked
+// the reverse layout.
+//
+// `objectBindingEntries` / `stringEntries` are exported for `reconcile-bindings`,
+// which replays the same hand-edited `migrations` list this validator folds and
+// hit the same raw `TypeError` on a `null` entry. Package-internal only — the
+// `./cloudflare` barrel re-exports by name and deliberately does not list them.
+export {
+    mergeWranglerEnvironment,
+    objectBindingEntries,
+    REQUIRED_COMPATIBILITY_DATE,
+    REQUIRED_FLAG,
+    stringEntries,
+    validateWrangler,
+    validateWranglerConfig,
+    validateWranglerProject,
+    withTailConsumer,
+};

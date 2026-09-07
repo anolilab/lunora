@@ -15,6 +15,12 @@ const AGENT_RULES_HINT_ENV = "LUNORA_RULES_HINT_SHOWN";
  * The Lunora agent skills shipped by `@lunora/cli`. The first entry (`lunora`)
  * is the router skill — its presence is what {@link detectAgentRules} treats as
  * "rules installed", since every other skill is reachable through it.
+ *
+ * `lunora rules install` enumerates `@lunora/cli`'s `skills/` directory rather
+ * than reading this list, so a skill missing here still installs — but
+ * `lunora rules check` counts against it, and reported "9/9 skills" with an
+ * empty "Missing:" line for a project holding all 14. The CLI's rules test
+ * pins the two together, since this package cannot see that directory.
  */
 const LUNORA_SKILL_NAMES: ReadonlyArray<string> = [
     "lunora",
@@ -22,6 +28,11 @@ const LUNORA_SKILL_NAMES: ReadonlyArray<string> = [
     "lunora-functions",
     "lunora-realtime",
     "lunora-setup-auth",
+    "lunora-setup-hyperdrive",
+    "lunora-setup-hyperdrive-global",
+    "lunora-setup-mail",
+    "lunora-setup-scheduler",
+    "lunora-setup-storage",
     "lunora-create-package",
     "lunora-migration-helper",
     "lunora-deploy",

@@ -139,6 +139,31 @@ export const formatBytes = (bytes: null | number | undefined): string => {
 };
 
 /**
+ * `JSON.stringify` replacer for row data.
+ *
+ * `LunoraClient` decodes the wire codec on the way in, so a `v.bigint()` column
+ * reaches the studio as a real `bigint` and a `v.bytes()` column as an
+ * `ArrayBuffer`. `JSON.stringify` **throws** on the former and flattens the
+ * latter to `{}` — so any surface that serializes a row (the JSON view, the JSON
+ * export) dies or loses data on a table like `paymentSessions`. Both render
+ * exactly as {@link formatCell} renders them; JSON has no bigint, so a decimal
+ * string is the honest form.
+ *
+ * Only those two kinds are touched — every other value serializes unchanged.
+ */
+export const jsonRowReplacer = (_key: string, value: unknown): unknown => {
+    if (typeof value === "bigint") {
+        return value.toString();
+    }
+
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+        return `<bytes: ${formatBytes(value.byteLength)}>`;
+    }
+
+    return value;
+};
+
+/**
  * Render a single table-cell value as text without throwing on objects or null.
  * Shared by the shard and global data browsers so cell rendering can't drift
  * between them.
@@ -174,25 +199,14 @@ export const formatCell = (value: unknown): string => {
                 return `<bytes: ${formatBytes(value.byteLength)}>`;
             }
 
-            return JSON.stringify(value);
+            // A NESTED bigint/bytes cell would throw / flatten here for exactly
+            // the reasons {@link jsonRowReplacer} exists, so route through it.
+            // That keeps `formatCell` total over every value a decoded document
+            // can hold — which the CSV and SQL exports rely on.
+            return JSON.stringify(value, jsonRowReplacer);
         }
     }
 };
-
-/**
- * `JSON.stringify` replacer for row data.
- *
- * `LunoraClient` decodes the wire codec on the way in, so a `v.bigint()` column
- * reaches the studio as a real `bigint` and a `v.bytes()` column as an
- * `ArrayBuffer`. `JSON.stringify` **throws** on the former and flattens the
- * latter to `{}` — so any surface that serializes a row (the JSON view, the JSON
- * export) dies or loses data on a table like `paymentSessions`. Render both the
- * way a cell does; JSON has no bigint, so a decimal string is the honest form.
- *
- * Only those two kinds are touched — every other value serializes unchanged.
- */
-export const jsonRowReplacer = (_key: string, value: unknown): unknown =>
-    typeof value === "bigint" || value instanceof ArrayBuffer || ArrayBuffer.isView(value) ? formatCell(value) : value;
 
 /**
  * Fire a promise without awaiting it, so an event handler or effect can kick one

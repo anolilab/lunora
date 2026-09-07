@@ -14,4 +14,4 @@ It consumes the provider-neutral host contracts from `@lunora/platform` (`ShardH
 
 ## Status
 
-Phase 2 of plan 114. The engine is being extracted from `@lunora/do`; `@lunora/do` will shrink to the Cloudflare host binding that wires `ShardHost`/`SocketHost` to Durable Objects.
+The extraction from `@lunora/do` is complete. This package owns the engine; `@lunora/do` is the Cloudflare host binding that wires `ShardHost`/`SocketHost` to Durable Objects and re-exports only the names codegen emits against.

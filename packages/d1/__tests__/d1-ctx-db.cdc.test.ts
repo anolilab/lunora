@@ -35,6 +35,7 @@ const setupWriter = (cdc: boolean, retentionMs?: number): DatabaseWriterLike => 
         `CREATE TABLE "todos" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
+            "_version" INTEGER,
             "text" TEXT
         )`,
     );

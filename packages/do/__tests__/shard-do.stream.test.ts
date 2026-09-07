@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
 import { encodeWire } from "../../../shared/wire-codec";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
@@ -57,15 +58,46 @@ const waitForTerminator = async (ws: FakeWebSocket, deadlineMs = 200): Promise<v
 };
 
 /**
+ * Park a stream generator until its `AbortSignal` fires, so the stream stays
+ * in-flight (and so occupies a canceller slot) for as long as the test needs.
+ */
+const parkUntilAborted = async (signal: AbortSignal): Promise<void> => {
+    if (signal.aborted) {
+        return;
+    }
+
+    await new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => {
+            resolve();
+        });
+    });
+};
+
+/**
  * Test ShardDO that wires `executeStream` to user-supplied async generators
  * keyed by functionPath. Lets the suite swap the iterator per case without
  * recompiling the class.
  */
 class StreamShard extends ShardDO {
+    /** Exposes the protected per-socket stream cap so the suite pins the real constant, not a copy of it. */
+    public static cap(): number {
+        return StreamShard.MAX_STREAMS_PER_SOCKET;
+    }
+
     public registered = new Map<string, (args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>>();
 
-    // eslint-disable-next-line class-methods-use-this -- override stub; the streaming tests never dispatch a plain RPC
+    /** Function paths this shard reports as `.x402`-paid; stands in for the codegen registry lookup. */
+    public readonly paidPaths = new Set<string>();
+
+    /** The identity handed to `executeStream`, in call order — what the stream handler's ctx is built from. */
+    public readonly streamIdentities: ({ identity?: Record<string, unknown>; userId?: string } | undefined)[] = [];
+
+    /** When set, `handleRpc` parks on this promise, holding a dispatch open across an interleaved stream frame. */
+    public rpcGate: Promise<void> | undefined;
+
     public override async handleRpc(): Promise<unknown> {
+        await this.rpcGate;
+
         return null;
     }
 
@@ -82,13 +114,22 @@ class StreamShard extends ShardDO {
         ws.serializeAttachment(attachment);
     }
 
+    protected override isPaidFunction(functionPath: string): boolean {
+        return this.paidPaths.has(functionPath);
+    }
+
     /**
      * @returns the stream iterator for the registered function, or `null` when the path is unknown
      */
     protected override executeStream(
         functionPath: string,
         args: Record<string, unknown>,
+        identity?: { identity?: Record<string, unknown>; userId?: string },
     ): null | { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
+        // Records what the codegen override forwards into `buildCtx` — the
+        // identity the stream handler's `ctx.auth`/`rls()` actually evaluates.
+        this.streamIdentities.push(identity);
+
         const fn = this.registered.get(functionPath);
 
         if (!fn) {
@@ -175,6 +216,47 @@ describe("shardDO streaming queries", () => {
 
         expect(received?.cursor).toBe(42n);
         expect([...(received?.seed as Uint8Array)]).toEqual([9, 8, 7]);
+    });
+
+    it("malformed wire args error the stream instead of killing the socket", async () => {
+        expect.assertions(4);
+
+        const shard = new StreamShard(state, {});
+
+        shard.registered.set("metrics:echo", async function* echoGen() {
+            yield { ok: true };
+        });
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { subs: {} });
+
+        // Past `MAX_BIGINT_DIGITS`, so `decodeWire` throws a `RangeError`. It used
+        // to be called during ARGUMENT EVALUATION of `handleStream(...)` — before
+        // the promise existed, so the trailing `.catch()` could not see it — and
+        // neither `handleWebSocketMessage` nor `webSocketMessage` wraps this, so
+        // one malformed frame was fatal to the whole hibernatable socket.
+        const overlong = { cursor: ["$lunora.wire$", "bigint", "1".repeat(2000)] };
+
+        await expect(
+            shard.driveMessage(ws, {
+                id: "stream_bad",
+                query: { args: overlong, functionPath: "metrics:echo" },
+                type: "stream",
+            } as never),
+        ).resolves.toBeUndefined();
+
+        const errors = parseFrames(ws).filter((frame) => frame.type === "error");
+
+        expect(errors).toHaveLength(1);
+        // The same answer the `subscribe` / `shape_subscribe` branches give.
+        expect((errors[0]?.error as { code?: string } | undefined)?.code).toBe("BAD_SUBSCRIPTION_ARGS");
+
+        // And the socket is still live: a well-formed stream on it still runs.
+        await shard.driveMessage(ws, { id: "stream_ok", query: { functionPath: "metrics:echo" }, type: "stream" });
+        await waitForTerminator(ws);
+
+        expect(parseFrames(ws).some((frame) => frame.type === "complete")).toBe(true);
     });
 
     it("client unsubscribe mid-stream aborts the iterator and stops further chunks", async () => {
@@ -348,5 +430,221 @@ describe("shardDO streaming queries", () => {
         expect(errorSpy).toHaveBeenCalledWith("[@lunora/do] unhandled stream error:", expect.anything());
 
         errorSpy.mockRestore();
+    });
+
+    // -----------------------------------------------------------------------
+    // A `.stream()` handler runs under the SOCKET's identity — never the shared
+    // per-request fields, which a concurrently in-flight `/rpc` owns.
+    // -----------------------------------------------------------------------
+    const socketAttachment: SocketAttachment = {
+        connectionId: "c1",
+        identity: { roles: ["member"], userId: "socket-user" },
+        subs: {},
+        userId: "socket-user",
+    };
+
+    it("threads the socket's identity into executeStream when nothing else is in flight", async () => {
+        expect.assertions(1);
+
+        const shard = new StreamShard(state, {});
+
+        shard.registered.set("chat:answer", async function* answer() {
+            yield { token: "hi" };
+        });
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { ...socketAttachment, subs: {} });
+        await shard.driveMessage(ws, { id: "s1", query: { functionPath: "chat:answer" }, type: "stream" });
+        await waitForTerminator(ws);
+
+        // Without the explicit thread the ctx falls back to the per-request
+        // fields, which no dispatch has set here: an `rls()`-scoped stream
+        // would evaluate as nobody and return an empty result.
+        expect(shard.streamIdentities).toEqual([{ identity: { roles: ["member"], userId: "socket-user" }, userId: "socket-user" }]);
+    });
+
+    it("does not let a concurrently in-flight /rpc's identity reach a stream handler", async () => {
+        expect.assertions(2);
+
+        const shard = new StreamShard(state, {});
+
+        shard.registered.set("chat:answer", async function* answer() {
+            yield { token: "hi" };
+        });
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { ...socketAttachment, subs: {} });
+
+        // Park an `/rpc` for a DIFFERENT, privileged user mid-handler. The
+        // stream frame below interleaves with it: the shared per-request
+        // identity fields are stamped with `rpc-user`/`admin` right now.
+        let releaseRpc!: () => void;
+
+        shard.rpcGate = new Promise<void>((resolve) => {
+            releaseRpc = resolve;
+        });
+
+        const rpc = shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "notes:list" }),
+                headers: {
+                    "content-type": "application/json",
+                    "x-lunora-identity": encodeIdentityHeader({ roles: ["admin"], userId: "rpc-user" }),
+                    "x-lunora-userid": encodeUserIdHeader("rpc-user"),
+                },
+                method: "POST",
+            }),
+        );
+
+        await shard.driveMessage(ws, { id: "s2", query: { functionPath: "chat:answer" }, type: "stream" });
+        await waitForTerminator(ws);
+
+        releaseRpc();
+        await rpc;
+
+        expect(shard.streamIdentities).toHaveLength(1);
+        expect(shard.streamIdentities[0]).toEqual({ identity: { roles: ["member"], userId: "socket-user" }, userId: "socket-user" });
+    });
+
+    it("refuses a paid (.x402) stream instead of serving it free", async () => {
+        expect.assertions(3);
+
+        const shard = new StreamShard(state, {});
+
+        shard.paidPaths.add("reports:generate");
+        shard.registered.set("reports:generate", async function* generate() {
+            yield { row: 1 };
+        });
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { subs: {} });
+        await shard.driveMessage(ws, { id: "s3", query: { functionPath: "reports:generate" }, type: "stream" });
+
+        // The paywall lives at the origin worker, which a WS frame never
+        // crosses — mirrors the `subscribe` refusal.
+        expect(parseFrames(ws)).toEqual([
+            {
+                code: "BAD_REQUEST",
+                error: {
+                    code: "BAD_REQUEST",
+                    message: 'paid (`.x402`) function "reports:generate" cannot be streamed; call it individually over /_lunora/rpc',
+                },
+                id: "s3",
+                type: "error",
+            },
+        ]);
+        expect(shard.streamIdentities).toHaveLength(0);
+        expect(ws.sent).toHaveLength(1);
+    });
+
+    it("tears a long-running stream down when the socket's credential lapses mid-run", async () => {
+        expect.assertions(3);
+
+        const shard = new StreamShard(state, {});
+        let yielded = 0;
+
+        shard.registered.set("metrics:tick", async function* tickGen(_args, signal) {
+            for (let index = 0; index < 200 && !signal.aborted; index += 1) {
+                yielded += 1;
+                yield index;
+                // eslint-disable-next-line no-await-in-loop -- intentional per-yield event-loop turn
+                await new Promise<void>((resolve) => {
+                    setTimeout(resolve, 1);
+                });
+            }
+        });
+
+        const ws = createFakeWebSocket();
+
+        // Live at the inbound check that started the stream, lapsed a few chunks
+        // in — the window the one-shot inbound check structurally cannot see.
+        shard.registerSocket(ws, { expiresAt: Date.now() + 25, subs: {} });
+        await shard.driveMessage(ws, { id: "tick", query: { functionPath: "metrics:tick" }, type: "stream" });
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 150);
+        });
+
+        const frames = parseFrames(ws);
+
+        expect(frames.some((f) => f.code === "TOKEN_EXPIRED")).toBe(true);
+        expect(frames.map((f) => f.type)).not.toContain("complete");
+        expect(yielded).toBeLessThan(200);
+    });
+
+    it("caps concurrent streams per socket at MAX_STREAMS_PER_SOCKET", async () => {
+        expect.assertions(3);
+
+        const cap = StreamShard.cap();
+        const shard = new StreamShard(state, {});
+        let started = 0;
+
+        shard.registered.set("metrics:hold", async function* holdGen(_args, signal) {
+            started += 1;
+            yield { open: true };
+            await parkUntilAborted(signal);
+        });
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { subs: {} });
+
+        for (let index = 0; index < cap + 1; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- each frame must register its canceller before the next is sent
+            await shard.driveMessage(ws, { id: `hold_${String(index)}`, query: { functionPath: "metrics:hold" }, type: "stream" });
+        }
+
+        const errors = parseFrames(ws).filter((f) => f.type === "error");
+
+        expect(started).toBe(cap);
+        expect(errors).toHaveLength(1);
+        expect(errors[0]?.error).toStrictEqual({ code: "TOO_MANY_STREAMS", message: `stream cap of ${String(cap)} reached on this socket` });
+
+        await shard.driveClose(ws);
+    });
+
+    it("refuses a duplicate stream id instead of running a second pump under one cap slot", async () => {
+        expect.assertions(4);
+
+        const cap = StreamShard.cap();
+        const shard = new StreamShard(state, {});
+        let started = 0;
+        let aborted = 0;
+
+        shard.registered.set("metrics:hold", async function* holdGen(_args, signal) {
+            started += 1;
+            yield { open: true };
+            await parkUntilAborted(signal);
+            aborted += 1;
+        });
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { subs: {} });
+
+        // The cap reads `cancellers.size` and the id is client-chosen, so without a
+        // dedup every one of these frames lands in the SAME map entry: all of them
+        // pass the cap and each runs its own pump.
+        for (let index = 0; index < cap + 4; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- each frame must register its canceller before the next is sent
+            await shard.driveMessage(ws, { id: "same", query: { functionPath: "metrics:hold" }, type: "stream" });
+        }
+
+        const errors = parseFrames(ws).filter((f) => f.type === "error");
+
+        expect(started).toBe(1);
+        expect(errors).toHaveLength(cap + 3);
+        expect(errors[0]?.error).toStrictEqual({ code: "STREAM_ID_IN_USE", message: `stream id "same" is already live on this socket` });
+
+        // The other half of the same bug: a second `set` under one id orphaned the
+        // incumbent controller, so `unsubscribe` reached only the newest pump.
+        await shard.driveMessage(ws, { id: "same", type: "unsubscribe" });
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 10);
+        });
+
+        expect(aborted).toBe(1);
     });
 });

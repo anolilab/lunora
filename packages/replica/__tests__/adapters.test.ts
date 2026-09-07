@@ -7,6 +7,7 @@ import { createSqliteWasmAdapter } from "../src/adapters/sqlite-wasm";
 import { createSqlJsAdapter } from "../src/adapters/sqljs";
 import type { SqliteAdapter } from "../src/adapters/types";
 import { LocalMirror } from "../src/local-mirror";
+import { subscribeToMirror } from "../src/subscribe-mirror";
 import { createTableDiff } from "../src/table-diff";
 
 // ── Real-engine fixtures ────────────────────────────────────────────────
@@ -35,8 +36,7 @@ const makeBetterSqlite3 = (): SqliteAdapter => createBetterSqlite3Adapter(new Da
  * REPLICA-01 STOP: this fixture matches the DOCUMENTED real `oo1.DB` wire
  * shape — `exec({ returnValue: "resultRows", rowMode: "object" })` returns
  * rows directly (`Record<string, unknown>[]`, NOT sql.js's
- * `{ columns, values }[]`), and `selectValue()` returns a single scalar — but
- * it is backed by a REAL sql.js engine underneath (every statement is still
+ * `{ columns, values }[]`) — but it is backed by a REAL sql.js engine underneath (every statement is still
  * parsed/executed by real SQLite), with a thin re-shaping layer translating
  * sql.js's native result shape into the oo1 shape. This closes the adapter's
  * API-SHAPE gap the bug was about, but — since the real driver could not be
@@ -71,18 +71,17 @@ const makeSqliteWasm = (): SqliteAdapter => {
         },
         exec: (sql, options) => {
             if (options?.returnValue === "resultRows" && options.rowMode === "object") {
-                return toRowObjects(engine.exec(sql, options.bind));
+                // `useBigInt` stands in for the real driver's `bigIntEnabled`:
+                // both decode an INTEGER column through a 64-bit path instead of
+                // a double. sql.js widens every integer where the real driver
+                // widens only the out-of-range ones, which the adapter's own
+                // narrowing reconciles either way.
+                return toRowObjects(engine.exec(sql, options.bind, { useBigInt: true }));
             }
 
             engine.run(sql, options?.bind);
 
             return undefined;
-        },
-        selectValue: (sql, bind) => {
-            const result = engine.exec(sql, bind);
-            const first = result[0];
-
-            return first?.values[0]?.[0];
         },
     });
 };
@@ -169,21 +168,6 @@ describe.each(engines)("sqliteAdapter contract (%s)", (_name, makeAdapter) => {
         // The insert before the throw must not survive.
         expect(database.query("SELECT id FROM t")).toStrictEqual([]);
     });
-
-    it("reports the last inserted rowid", () => {
-        expect.assertions(2);
-
-        const database = makeAdapter();
-
-        database.exec("CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT)");
-        database.exec("INSERT INTO t (v) VALUES (?)", ["first"]);
-
-        expect(database.lastInsertRowId()).toBe(1);
-
-        database.exec("INSERT INTO t (v) VALUES (?)", ["second"]);
-
-        expect(database.lastInsertRowId()).toBe(2);
-    });
 });
 
 // ── LocalMirror on real engines ─────────────────────────────────────────
@@ -225,6 +209,34 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
         mirror.applyDiff(createTableDiff("todos", [{ data: { id: "1", title: "v2" }, type: "insert" }]));
 
         expect(mirror.query("SELECT id, title FROM todos")).toStrictEqual([{ id: "1", title: "v2" }]);
+    });
+
+    it("derives a primary key for an un-keyed insert rather than rolling the whole diff back", () => {
+        expect.assertions(3);
+
+        const mirror = new LocalMirror({ db: makeAdapter() });
+
+        // `subscribeToMirror` pushes an un-keyed insert on purpose for any row
+        // whose primary key it cannot read — an aggregate or a projection that
+        // does not select `id`. It is appended BEFORE the keyed upserts, and the
+        // whole diff is one transaction, so a pk-less INSERT failing the mirror's
+        // `PRIMARY KEY NOT NULL` discarded every well-keyed row in the frame too.
+        const diff = createTableDiff("todos", [
+            { data: { title: "no key at all" }, type: "insert" },
+            { data: { id: "1", title: "keyed, must survive" }, type: "insert" },
+        ]);
+
+        mirror.applyDiff(diff);
+
+        expect(mirror.query("SELECT id, title FROM todos WHERE id = '1'")).toStrictEqual([{ id: "1", title: "keyed, must survive" }]);
+        expect(mirror.query<{ title: string }>("SELECT title FROM todos WHERE id <> '1'")).toStrictEqual([{ title: "no key at all" }]);
+
+        // Deterministic, like the in-memory apply path (REPLICA-05): re-applying
+        // the SAME diff re-derives the same id and upserts rather than
+        // accumulating a second copy of the row.
+        mirror.applyDiff(diff);
+
+        expect(mirror.query<{ n: number }>("SELECT COUNT(*) AS n FROM todos")).toStrictEqual([{ n: 2 }]);
     });
 
     it("evolves the schema when a later diff carries new columns", () => {
@@ -744,29 +756,122 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
     });
 });
 
-describe(createSqliteWasmAdapter, () => {
-    it("falls back to -1 when the engine returns no rowid result", () => {
-        expect.assertions(1);
+// ── Regressions the adapter/mirror contract has to keep ─────────────────
 
-        const adapter = createSqliteWasmAdapter({
-            close: () => undefined,
-            exec: () => undefined,
-            selectValue: () => undefined,
-        });
+describe.each(engines)("int64 round-trip (%s)", (_name, makeAdapter) => {
+    // `local-mirror.ts` declares a `bigint` column INTEGER and `diff-applier.ts`
+    // binds a `bigint` straight through, so a value past 2^53 is a first-class
+    // path into every adapter. A driver decoding it through a double loses the
+    // low bits — silently, and for a primary key too, so the row goes missing.
+    const beyondDouble = 9_007_199_254_740_993n;
 
-        expect(adapter.lastInsertRowId()).toBe(-1);
+    it("reads an INTEGER past 2^53 back exactly, and still matches it by equality", () => {
+        expect.assertions(2);
+
+        const database = makeAdapter();
+
+        database.exec("CREATE TABLE big (id INT PRIMARY KEY NOT NULL, n INTEGER)");
+        database.exec("INSERT INTO big (id, n) VALUES (?, ?)", [beyondDouble, beyondDouble]);
+
+        expect(database.query<{ n: bigint }>("SELECT n FROM big")).toStrictEqual([{ n: beyondDouble }]);
+        expect(database.query("SELECT id FROM big WHERE id = ?", [beyondDouble])).toHaveLength(1);
     });
 
-    it("returns a bigint rowid as a number", () => {
+    it("keeps an ordinary integer a `number`", () => {
         expect.assertions(1);
 
-        const adapter = createSqliteWasmAdapter({
-            close: () => undefined,
-            exec: () => undefined,
-            selectValue: () => 42n,
-        });
+        const database = makeAdapter();
 
-        expect(adapter.lastInsertRowId()).toBe(42);
+        database.exec("CREATE TABLE small (id TEXT PRIMARY KEY NOT NULL, n INTEGER)");
+        database.exec("INSERT INTO small (id, n) VALUES (?, ?)", ["a", 5]);
+
+        expect(database.query<{ c: number; n: number }>("SELECT n, COUNT(*) AS c FROM small")).toStrictEqual([{ c: 1, n: 5 }]);
+    });
+});
+
+describe.each(engines)("column affinity when the first observed value is null (%s)", (_name, makeAdapter) => {
+    // The affinity is inferred once, at CREATE. A column whose first frame
+    // carried `null` used to fall back to TEXT and stayed TEXT forever, so every
+    // later number was coerced to text: `ORDER BY` compared "10" < "5" and a
+    // range predicate compared strings.
+    const seedThenNumbers = (mirror: LocalMirror): void => {
+        mirror.applyDiff(createTableDiff("readings", [{ data: { id: "a", n: null }, type: "insert" }]));
+        mirror.applyDiff(
+            createTableDiff("readings", [
+                { data: { id: "b", n: 5 }, type: "insert" },
+                { data: { id: "c", n: 10 }, type: "insert" },
+            ]),
+        );
+    };
+
+    it("orders the later numbers numerically", () => {
+        expect.assertions(1);
+
+        const mirror = new LocalMirror({ db: makeAdapter() });
+
+        seedThenNumbers(mirror);
+
+        expect(mirror.query<{ id: string }>("SELECT id FROM readings WHERE n IS NOT NULL ORDER BY n ASC")).toStrictEqual([{ id: "b" }, { id: "c" }]);
+    });
+
+    it("answers a range predicate numerically", () => {
+        expect.assertions(1);
+
+        const mirror = new LocalMirror({ db: makeAdapter() });
+
+        seedThenNumbers(mirror);
+
+        expect(mirror.query<{ id: string }>("SELECT id FROM readings WHERE n > 6")).toStrictEqual([{ id: "c" }]);
+    });
+
+    it("does the same for a column added by schema evolution", () => {
+        expect.assertions(1);
+
+        const mirror = new LocalMirror({ db: makeAdapter() });
+
+        mirror.applyDiff(createTableDiff("late", [{ data: { id: "a" }, type: "insert" }]));
+        mirror.applyDiff(createTableDiff("late", [{ data: { id: "b", n: null }, type: "insert" }]));
+        mirror.applyDiff(
+            createTableDiff("late", [
+                { data: { id: "c", n: 5 }, type: "insert" },
+                { data: { id: "d", n: 10 }, type: "insert" },
+            ]),
+        );
+
+        expect(mirror.query<{ id: string }>("SELECT id FROM late WHERE n > 6")).toStrictEqual([{ id: "d" }]);
+    });
+});
+
+describe.each(engines)("subscribeToMirror after clearData (%s)", (_name, makeAdapter) => {
+    it("re-seeds the table when the next frame is identical to the one clearData wiped", () => {
+        expect.assertions(2);
+
+        const mirror = new LocalMirror({ db: makeAdapter() });
+        let push: ((data: unknown) => void) | undefined;
+
+        const client = {
+            subscribe: (_reference: { __lunoraRef: string }, _arguments: Record<string, unknown>, onData: (data: unknown) => void) => {
+                push = onData;
+
+                return () => undefined;
+            },
+        };
+
+        subscribeToMirror(client, mirror, { __lunoraRef: "todos/list" }, {});
+
+        const frame = [{ id: "1", title: "a" }];
+
+        push?.(frame);
+
+        expect(mirror.query("SELECT id, title FROM fn_todos_list")).toStrictEqual([{ id: "1", title: "a" }]);
+
+        mirror.clearData();
+        // The server has nothing new to say, so the next frame is byte-identical
+        // to the last applied one. Without the clear reset it diffed clean and
+        // the table stayed empty until some row's content happened to change.
+        push?.(frame);
+
+        expect(mirror.query("SELECT id, title FROM fn_todos_list")).toStrictEqual([{ id: "1", title: "a" }]);
     });
 });
 

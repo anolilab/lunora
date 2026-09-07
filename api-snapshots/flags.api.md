@@ -147,7 +147,7 @@ interface FlagshipBindingOptions {
 interface FlagshipHttpOptions {
     accountId?: string;
     appId?: string;
-    authToken?: string;
+    authToken?: ((env: Record<string, unknown>) => unknown) | string;
     baseUrl?: string;
     cacheMaxSize?: number;
     cacheTtl?: number;

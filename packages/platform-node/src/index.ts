@@ -17,15 +17,26 @@
  * TCK, `@lunora/shard-engine/conformance`'s engine suite, and its own
  * lifecycle/global-store tests.
  *
- * **Still missing**, and rated accordingly in `NODE_CAPABILITIES`
- * (`@lunora/platform`): a dev server — so `lunora dev --target node` does not
- * exist yet — plus most Cloudflare product bindings (Queues, Vectorize, Workers
- * AI, Browser Rendering, Containers, Analytics Engine, Pipelines, Secrets Store,
- * Hyperdrive). R2 buckets are emulated over the local filesystem
- * (`./node-r2-bucket`) and Workflows over the `@visulima/workflow` engine
- * (`./node-workflow-host`). Cross-shard fan-out is emulated via
- * `@lunora/runtime`'s query coordinator over the in-process shard registry, and
- * a `@lunora/config` deploy driver makes `--target node` resolve. See
+ * **Emulated here**, and rated accordingly in `NODE_CAPABILITIES`
+ * (`@lunora/platform`): queues over a durable table (`./node-queue-host`), R2
+ * buckets over the local filesystem (`./node-r2-bucket`), workflows over the
+ * `@visulima/workflow` engine (`./node-workflow-host`), and cross-shard fan-out
+ * via `@lunora/runtime`'s query coordinator over the in-process shard registry.
+ * `createNodePlatform` binds all three declarations (`queues`, `workflows`,
+ * `objectStorageDirectory`) — a capability rated `emulated` with nothing bound
+ * is the one combination that fails at runtime with no diagnostic before it.
+ *
+ * **Still missing:** a dev server. There is no `lunora dev --target node`, and
+ * nothing here owns a timer, so queue delivery is driven by an explicit
+ * `poll()`. Also absent are the Cloudflare product bindings with no local
+ * equivalent — Vectorize, Workers AI, Browser Rendering, Containers, Analytics
+ * Engine, Pipelines, Secrets Store, Hyperdrive.
+ *
+ * `@lunora/config` ships a `node` **deploy** driver, so `--target node` resolves
+ * for `provision` — which reports, once, which declared features this target
+ * cannot serve, and writes nothing: there is no hosted control plane to deploy
+ * to and no `wrangler`-equivalent to shell out to. A deploy driver is not a dev
+ * server, which is why both statements above hold at once. See
  * `plans/234-node-host-findings.md`.
  */
 

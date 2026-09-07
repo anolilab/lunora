@@ -11,6 +11,19 @@
  * server render of an auth screen produces "no parameter" instead of a crash.
  */
 
+/**
+ * Whether there is a browser URL to read at all.
+ *
+ * "No parameter" and "nowhere to read a parameter from" are different answers,
+ * and a controller that consumes a link's token at construction has to tell
+ * them apart. Off the browser it must render the *pending* state — the same one
+ * the client paints while the token is in flight — because acting on the absent
+ * parameter server-side bakes the failure state into the SSR markup and React
+ * throws the whole server tree away on hydration. Same reasoning as
+ * `lastLoginMethodStore` in `last-login-method.ts`, one layer down.
+ */
+const isBrowser = (): boolean => (globalThis as { location?: unknown }).location !== undefined;
+
 /** One query parameter from the current URL, or undefined off the browser. */
 const queryParameter = (name: string): string | undefined => {
     const search = (globalThis as { location?: { search?: string } }).location?.search;
@@ -29,4 +42,4 @@ const currentPath = (): string => {
     return location === undefined ? "/" : `${location.pathname ?? "/"}${location.search ?? ""}`;
 };
 
-export { currentPath, queryParameter };
+export { currentPath, isBrowser, queryParameter };

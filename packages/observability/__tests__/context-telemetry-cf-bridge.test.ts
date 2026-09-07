@@ -215,4 +215,57 @@ describe("createTracer cloudflare custom-spans bridge", () => {
         expect(result).toBe("safe");
         expect(recorded).toHaveLength(1);
     });
+
+    it("still runs the body when resolving host tracing rejects", async () => {
+        expect.assertions(3);
+
+        const body = vi.fn<() => string>(() => "ran");
+        const { recorded, trace } = setup({
+            fuseHostSpans: true,
+            resolveHostTracing: async () => {
+                throw new Error("tracing probe exploded");
+            },
+        });
+
+        // `runRecorded` is the ARGUMENT to `enterSpan`: an unguarded probe failure
+        // means the handler body never executes and the caller sees a telemetry
+        // error instead of their result.
+        await expect(trace("span", body)).resolves.toBe("ran");
+        expect(body).toHaveBeenCalledTimes(1);
+        expect(recorded).toHaveLength(1);
+    });
+
+    it("still runs the body when enterSpan throws before invoking it", async () => {
+        expect.assertions(2);
+
+        const body = vi.fn<() => string>(() => "ran");
+        const { recorded, trace } = setup({
+            fuseHostSpans: true,
+            resolveHostTracing: async () => {
+                return {
+                    enterSpan: () => {
+                        throw new Error("enterSpan down");
+                    },
+                };
+            },
+        });
+
+        await expect(trace("span", body)).resolves.toBe("ran");
+        expect(recorded).toHaveLength(1);
+    });
+
+    it("re-throws the body's own error without re-running it", async () => {
+        expect.assertions(2);
+
+        const body = vi.fn<() => string>(() => {
+            throw new Error("handler blew up");
+        });
+        const { trace } = setup({
+            fuseHostSpans: true,
+            resolveHostTracing: async () => makeFakeTracing(makeFakeSpan()),
+        });
+
+        await expect(trace("span", body)).rejects.toThrow("handler blew up");
+        expect(body).toHaveBeenCalledTimes(1);
+    });
 });

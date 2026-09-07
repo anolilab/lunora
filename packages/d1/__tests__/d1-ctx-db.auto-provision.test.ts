@@ -62,11 +62,14 @@ describe("d1 ctx-db auto-provisions .global() tables", () => {
 
         expect(fetched?.["name"]).toBe("general");
 
-        // The physical table now exists with the framework + field columns.
+        // The physical table now exists with the framework + field columns —
+        // `_version` among them, the optimistic-concurrency row version the
+        // guarded-write CAS compares on (it is never decoded into a document).
         const columns = await harness.exec.all(`PRAGMA table_info("channels")`, []);
 
         expect(columns.map((column) => String(column["name"])).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
             "_creationTime",
+            "_version",
             "createdAt",
             "id",
             "name",

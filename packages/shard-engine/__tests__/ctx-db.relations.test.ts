@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
+import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import { resolveWith } from "../src/relations";
 import createSqliteExec from "./_helpers/node-sqlite";
@@ -217,6 +217,212 @@ describe("ctx-db relations", () => {
             const reactions = page[0]!["reactions"] as Record<string, unknown>[];
 
             expect(reactions).toHaveLength(1);
+        });
+
+        it("bounds the FETCH by a nested limit, and still gives every parent its own n", async () => {
+            expect.assertions(3);
+
+            // `nested.limit` used to be a post-fetch `slice`: a page of parents
+            // asking for n children each read EVERY child of ALL of them and threw
+            // the rest away — unbounded in exactly the way a `limit` reads as
+            // preventing. It is now one bounded read per parent key.
+            //
+            // Fanning out is what makes the bound possible at all: a single
+            // batched `IN (...)` read has no per-parent `LIMIT`, so one parent's
+            // children would eat the budget and the rest would come back empty.
+            const seen: string[] = [];
+            const recording: SqlExec = {
+                exec: (query: string, ...parameters: unknown[]) => {
+                    seen.push(query);
+
+                    return harness.sql.exec(query, ...parameters);
+                },
+            };
+
+            runShardMigrations(recording, schema);
+
+            const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: recording });
+
+            await seed(writer);
+            seen.length = 0;
+
+            const { page } = await writer.findMany("messages", {
+                orderBy: [{ _id: "asc" }],
+                with: { reactions: { limit: 1, orderBy: [{ emoji: "asc" }] } },
+            });
+
+            // m1 has two reactions and m2 one: both get exactly their own 1,
+            // and each is the first under the nested `orderBy` (🎉 sorts before
+            // 👍), which a global `LIMIT 1` over the batch could not have given.
+            expect(ids(page[0]!["reactions"] as Record<string, unknown>[])).toEqual(["r2"]);
+            expect(ids(page[1]!["reactions"] as Record<string, unknown>[])).toEqual(["r3"]);
+
+            // The bound in the emitted SQL. Every read of the child table is
+            // limited; before, the one child read had no LIMIT at all.
+            const childReads = seen.filter((query) => query.includes(`FROM "reactions"`) && query.includes("ORDER BY"));
+
+            expect(childReads.every((query) => /\bLIMIT\b/u.test(query))).toBe(true);
+        });
+
+        it("stops fanning out past the read budget and falls back to one batched read", async () => {
+            expect.assertions(3);
+
+            // The fan-out costs one read per parent key, and on a `fetcher`
+            // backed by D1 or Hyperdrive each of those is a Workers SUBREQUEST
+            // against a hard per-request cap. Past `MAX_FANOUT_READS` parents the
+            // loader goes back to one batched read plus the post-fetch slice, so
+            // a wide page runs at all rather than failing on the budget.
+            const seen: string[] = [];
+            const recording: SqlExec = {
+                exec: (query: string, ...parameters: unknown[]) => {
+                    seen.push(query);
+
+                    return harness.sql.exec(query, ...parameters);
+                },
+            };
+
+            runShardMigrations(recording, schema);
+
+            const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: recording });
+
+            // 40 parents — comfortably over the 32-read budget — each with two
+            // children, so the cap is doing real work in both branches.
+            const parentCount = 40;
+
+            for (let index = 0; index < parentCount; index += 1) {
+                const messageId = `w${String(index)}`;
+
+                // eslint-disable-next-line no-await-in-loop -- sequential seeding: one SQLite handle, and the row order is the fixture
+                await writer.insert("messages", { _id: messageId, authorId: "u1", body: "wide" }, { allowExplicitId: true });
+                // eslint-disable-next-line no-await-in-loop -- same handle
+                await writer.insert("reactions", { _id: `${messageId}-a`, emoji: "🎉", messageId }, { allowExplicitId: true });
+                // eslint-disable-next-line no-await-in-loop -- same handle
+                await writer.insert("reactions", { _id: `${messageId}-b`, emoji: "👍", messageId }, { allowExplicitId: true });
+            }
+
+            seen.length = 0;
+
+            const { page } = await writer.findMany("messages", {
+                limit: parentCount,
+                orderBy: [{ _id: "asc" }],
+                with: { reactions: { limit: 1, orderBy: [{ emoji: "asc" }] } },
+            });
+
+            const childReads = seen.filter((query) => query.includes(`FROM "reactions"`));
+
+            // One read for all 40 parents, not 40. Without the budget this is
+            // `parentCount`, which is the subrequest spend the cap exists to stop.
+            expect(childReads).toHaveLength(1);
+
+            // The fallback still answers correctly: every parent gets its own n,
+            // sliced from the batched read rather than bounded by it.
+            expect(page).toHaveLength(parentCount);
+            expect(page.every((row) => (row["reactions"] as Record<string, unknown>[]).length === 1)).toBe(true);
+        });
+
+        it("spends the fan-out budget across nested levels, not per level", async () => {
+            expect.assertions(3);
+
+            // A per-LEVEL cap bounds nothing. Each level-1 fan-out read resolves
+            // its own nested `with` inside its own fetcher call, seeing only its
+            // own `cap` parents — under any per-level threshold — so the levels
+            // multiply instead of falling back. The budget is therefore a total,
+            // shared by reference across every level of one read.
+            const seen: string[] = [];
+            const recording: SqlExec = {
+                exec: (query: string, ...parameters: unknown[]) => {
+                    seen.push(query);
+
+                    return harness.sql.exec(query, ...parameters);
+                },
+            };
+
+            runShardMigrations(recording, schema);
+
+            const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: recording });
+
+            // 20 users, each with 3 messages, each message with 3 reactions.
+            // Level 1 spends 20 of the 32, leaving 12 — far fewer than the 60
+            // distinct messages level 2 would need, so level 2 goes batched.
+            for (let user = 0; user < 20; user += 1) {
+                const userId = `u${String(user)}`;
+
+                // eslint-disable-next-line no-await-in-loop -- sequential seeding on one SQLite handle
+                await writer.insert("users", { _id: userId, name: "n" }, { allowExplicitId: true });
+
+                for (let message = 0; message < 3; message += 1) {
+                    const messageId = `${userId}-m${String(message)}`;
+
+                    // eslint-disable-next-line no-await-in-loop -- same handle
+                    await writer.insert("messages", { _id: messageId, authorId: userId, body: "b" }, { allowExplicitId: true });
+
+                    for (let reaction = 0; reaction < 3; reaction += 1) {
+                        // eslint-disable-next-line no-await-in-loop -- same handle
+                        await writer.insert("reactions", { _id: `${messageId}-r${String(reaction)}`, emoji: "🎉", messageId }, { allowExplicitId: true });
+                    }
+                }
+            }
+
+            seen.length = 0;
+
+            const { page } = await writer.findMany("users", {
+                limit: 20,
+                orderBy: [{ _id: "asc" }],
+                with: { messages: { limit: 2, orderBy: [{ _id: "asc" }], with: { reactions: { limit: 2, orderBy: [{ _id: "asc" }] } } } },
+            });
+
+            // A fan-out read pins one parent key with `=`; the batched fallback
+            // asks for them all with `IN (...)`. That is what separates budgeted
+            // reads from the unbudgeted fallback in the recorded SQL.
+            const childReads = seen.filter((query) => query.includes(`FROM "messages"`) || query.includes(`FROM "reactions"`));
+            const fannedOut = childReads.filter((query) => !query.includes("IN (")).length;
+
+            // The invariant: fan-out spend is a TOTAL across levels. 20 goes at
+            // level 1 and the remaining 12 at level 2, after which level 2 falls
+            // back. Bounded per level instead, level 2 alone would fan out 40
+            // more (2 per level-1 read) and nothing would stop a third level.
+            expect(fannedOut).toBe(32);
+            expect(fannedOut).toBeLessThanOrEqual(32);
+
+            // And the caps still hold in the batched branch.
+            const messages = page[0]!["messages"] as Record<string, unknown>[];
+
+            expect(messages.every((row) => (row["reactions"] as Record<string, unknown>[]).length === 2)).toBe(true);
+        });
+
+        it("does not spend fan-out budget on a relation that reads nothing", async () => {
+            expect.assertions(2);
+
+            // `limit: 0` is answered without a single read, so charging the
+            // shared budget for it lets a zero-limit relation exhaust the
+            // allowance and push a LATER capped relation onto the unbounded
+            // batched path — the exact over-fetch the budget exists to prevent.
+            const seen: string[] = [];
+            const recording: SqlExec = {
+                exec: (query: string, ...parameters: unknown[]) => {
+                    seen.push(query);
+
+                    return harness.sql.exec(query, ...parameters);
+                },
+            };
+
+            runShardMigrations(recording, schema);
+
+            const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: recording });
+
+            await seed(writer);
+            seen.length = 0;
+
+            const { page } = await writer.findMany("messages", {
+                orderBy: [{ _id: "asc" }],
+                with: { reactions: { limit: 0 } },
+            });
+
+            // Nothing is read for the relation at all...
+            expect(seen.filter((query) => query.includes(`FROM "reactions"`))).toHaveLength(0);
+
+            // ...and every parent still gets its (empty) array.
+            expect(page.every((row) => (row["reactions"] as Record<string, unknown>[]).length === 0)).toBe(true);
         });
 
         it("_count attaches per-parent aggregate without loading rows", async () => {

@@ -18,7 +18,8 @@ deliveries safe by construction, and synced into a durable store that rides the
 request's `ctx.db`. Switching providers is a configuration change: the provider
 is a stateless translator; the store owns all state.
 
-Outbound calls carry idempotency keys (no double-charge), and every mutation is
+Outbound calls carry idempotency keys wherever the provider accepts one (no
+double-charge), and every mutation is
 authorized per-caller. Each adapter takes the provider's SDK client by injection.
 The provider SDKs are **optional peer dependencies**, so you install (and bundle) only
 the providers you actually use.
@@ -221,17 +222,27 @@ const dodo = createDodoPaymentsAdapter({
 Call the facade from an action. Every method authorizes the caller against the
 `referenceId` first.
 
-| Method                                         | Returns            | What it does                                                                    |
-| ---------------------------------------------- | ------------------ | ------------------------------------------------------------------------------- |
-| `createCheckout(input)`                        | `CheckoutResult`   | Start a hosted checkout (`mode: "payment" \| "subscription"`); returns a `url`. |
-| `attach(input)`                                | `CheckoutResult`   | Plan alias of `createCheckout` with `mode` defaulting to `"subscription"`.      |
-| `createPortalSession(referenceId, returnUrl)`  | `{ url }`          | Open the provider billing portal; customer derived from the store (no IDOR).    |
-| `cancelSubscription(subscriptionId, options?)` | `Subscription`     | Cancel now or `atPeriodEnd`; persists the result.                               |
-| `listSubscriptions(referenceId)`               | `Subscription[]`   | Synced subscriptions for a reference.                                           |
-| `check(input)`                                 | `CheckResult`      | Is a reference allowed something now? Pass `featureId` or `priceId`.            |
-| `listBalances(referenceId)`                    | `FeatureBalance[]` | Resolve every configured feature's allowance in one call.                       |
-| `track(input)`                                 | `TrackResult`      | Record metered usage (exactly-once by idempotency key).                         |
-| `handleWebhook(request)`                       | `Response`         | Verify + normalize + apply a provider webhook.                                  |
+| Method                                         | Returns            | What it does                                                                       |
+| ---------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------- |
+| `createCheckout(input)`                        | `CheckoutResult`   | Start a hosted checkout (`mode: "payment" \| "subscription"`); returns a `url`.    |
+| `attach(input)`                                | `CheckoutResult`   | Plan alias of `createCheckout` with `mode` defaulting to `"subscription"`.         |
+| `createPortalSession(referenceId, returnUrl)`  | `{ url }`          | Open the provider billing portal; customer derived from the store (no IDOR).       |
+| `cancelSubscription(subscriptionId, options?)` | `Subscription`     | Cancel now or `atPeriodEnd`; persists the result.                                  |
+| `refundPayment(input)`                         | `PaymentSession`   | Refund the caller's own captured payment, in full or in part; persists the result. |
+| `capturePayment(input)`                        | `PaymentSession`   | Capture the caller's own authorized payment; persists the result.                  |
+| `cancelPayment(sessionId, options?)`           | `PaymentSession`   | Cancel the caller's own uncaptured payment; persists the result.                   |
+| `listSubscriptions(referenceId)`               | `Subscription[]`   | Synced subscriptions for a reference.                                              |
+| `check(input)`                                 | `CheckResult`      | Is a reference allowed something now? Pass `featureId` or `priceId`.               |
+| `listBalances(referenceId)`                    | `FeatureBalance[]` | Resolve every configured feature's allowance in one call.                          |
+| `track(input)`                                 | `TrackResult`      | Record metered usage (exactly-once by idempotency key).                            |
+| `handleWebhook(request)`                       | `Response`         | Verify + normalize + apply a provider webhook.                                     |
+
+<Callout type="warn">
+    `ctx.payments.adapter` is the raw provider client, exposed for the surfaces the facade does not wrap (`updateSubscription`, `resumeSubscription`,
+    provider-specific extras). **Do not move money through it.** `adapter.refundPayment` / `capturePayment` / `cancelPayment` skip everything the facade methods
+    above do first: the caller authorization, the over-refund guard, the local refund ledger (the only thing stopping a retry from issuing a second real refund
+    on a provider whose API takes no idempotency key), the derived idempotency key, and the store write. The facade ends in the same provider call.
+</Callout>
 
 ```ts
 import { action, query, v } from "./_generated/server";
@@ -285,11 +296,17 @@ export const apiCallsRemaining = action.action(async ({ ctx }): Promise<{ allowe
 });
 ```
 
-`track` writes a durable, append-only usage ledger (exactly-once by idempotency
-key) that `check` sums over the current billing period. When the provider
-advertises usage metering, the event is also forwarded to its metering API. That
-forward is best-effort: a reporting failure is observed, never thrown, and the
-local ledger `check` reads is always updated.
+`track` writes a durable, append-only usage ledger that `check` folds over the
+current billing period. When the provider advertises usage metering, the event
+is also forwarded to its metering API. That forward is best-effort: a reporting
+failure is observed, never thrown, and the local ledger `check` reads is always
+updated.
+
+<Callout type="warn">
+    **Deduping a retry is opt-in.** Pass your own `idempotencyKey` — a unique index over `(provider, idempotencyKey)` then makes the append exactly-once, so a
+    retried call records once. Omit it (as the example above does) and `track` mints a fresh `crypto.randomUUID()` per call, which means "always record": the
+    same call retried after a timeout counts twice. Derive the key from whatever identifies the unit of work — the request id, the message id, the job id.
+</Callout>
 
 ## Webhooks
 
@@ -300,6 +317,7 @@ store exist:
 
 ```ts
 // lunora/http.ts
+import { webhookResponse } from "@lunora/payment";
 import { httpAction, httpRouter } from "lunorash/server";
 import { processWebhook } from "./billing";
 
@@ -311,7 +329,10 @@ app.post(
         const body = await request.text();
         const signature = request.headers.get("stripe-signature") ?? "";
 
-        return Response.json(await ctx.runAction(processWebhook, { body, signature }));
+        // `webhookResponse`, not `Response.json(...)`: only the JSON payload crosses the
+        // `runAction` boundary, so the status has to be re-applied on this side or every
+        // outcome — including the deliberate 500 below — answers 200.
+        return webhookResponse(await ctx.runAction(processWebhook, { body, signature }));
     }),
 );
 ```
@@ -337,10 +358,31 @@ export const processWebhook = internalAction
 
 `handleWebhook` verifies the signature, normalizes the event into a
 `WebhookAction` (e.g. `subscription.active`, `payment.captured`,
-`payment.refunded`), and applies it through the state machine. Once verified it
-always returns `200` so the provider stops retrying; a duplicate or no-op event
-is acknowledged, not re-applied. The inbound provider event id keys an
-append-only `events` log for idempotency and audit.
+`payment.refunded`), and applies it through the state machine. A duplicate or
+no-op event is acknowledged with `200`, not re-applied. The inbound provider
+event id keys an append-only `events` log for idempotency and audit.
+
+There is one deliberate non-200. An **orphaned** event — one that patches a row
+whose create event has not arrived yet, which is how providers deliver
+out-of-order — returns `500` so the provider retries it, and the update applies
+once the create lands. Do not "fix" that by always answering `200`: swallowing
+the retry is how an out-of-order delivery is lost for good. That is also why the
+route must return `webhookResponse(result)` rather than `Response.json(result)` —
+the status does not survive the `runAction` hop on its own. Malformed deliveries
+(a missing provider event id) likewise surface as a `5xx` rather than a `400`,
+so every provider retries them instead of some treating a `400` as "stop".
+
+The orphan retry is **bounded to exactly one**. The row may never appear at all —
+a subscription created before the integration existed, a store reset, a
+completed-but-unpaid checkout whose create event never arrives — and an event
+retried forever makes the provider hammer the endpoint until it disables it,
+taking every other event down with it. So the first sighting answers `500` and
+the second is acknowledged `200` with `reason: "unhandled"`. That budget is spent
+in wall-clock order, not on a schedule: a sender that retries immediately
+(svix-backed providers such as Polar and Dodo do) can burn it seconds after the
+first delivery, while the create event is still in flight. If the create event
+can lag that far behind, do not lean on the webhook retry — sweep non-terminal
+rows with `reconcile` as below.
 
 <Callout type="warn">
     Webhooks are eventually-but-not-guaranteed: an endpoint down past the provider's retry window can drop an event for good. `reconcile` re-fetches the
@@ -357,13 +399,22 @@ in `@lunora/payment`'s exported `paymentTables` (the canonical column reference
 the store reads/writes). Declaring them locally also lets you chain `.global()`
 on read-heavy tables (e.g. `subscriptions`) for cross-region reads from D1.
 
-`paymentTables` covers: `products`, `prices`, `customers`, `subscriptions`,
-`checkouts`, `paymentSessions`, `payments`, `captures`, `refunds`, `invoices`,
-`events` (the append-only webhook log), and `usageEvents` (the metered-usage
-ledger). Money is stored as `(amountMinor: bigint, currency: string)` columns;
-every row carries a `provider` discriminator so multiple providers can coexist
-during a migration. Captures and refunds are append-only records linked to a
-payment, not booleans.
+`paymentTables` is exactly **five** tables — mirror only these:
+
+| Table             | Holds                                                                                   |
+| ----------------- | --------------------------------------------------------------------------------------- |
+| `customers`       | one row per `(provider, referenceId)`, carrying the provider's customer id              |
+| `subscriptions`   | one row per provider subscription: price, quantity, state, current period               |
+| `paymentSessions` | one row per payment: `amountMinor`, `capturedMinor`, `refundedMinor`, `currency`, state |
+| `events`          | the append-only webhook log — inbound idempotency, audit, debugging                     |
+| `usageEvents`     | the append-only metered-usage ledger `check` folds over                                 |
+
+Money is stored as `(amountMinor: bigint, currency: string)` columns; every row
+carries a `provider` discriminator so multiple providers can coexist during a
+migration. A **capture or refund is not its own table**: both fold into the
+payment's `paymentSessions` row as `capturedMinor` / `refundedMinor` plus a
+state (`refunded` / `partially_refunded`). Products, prices, checkouts and
+invoices stay with the provider — the store does not mirror them.
 
 ### Backfilling money columns written before the storage fix
 

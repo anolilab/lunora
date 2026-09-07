@@ -3,10 +3,18 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { inferLunoraBindings } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { execute, runCodegenCommand } from "../../src/commands/codegen/handler";
 import type { Logger } from "../../src/util/logger";
+
+// eslint-disable-next-line vitest/prefer-import-in-mock -- the import form type-checks the mock against the module's full type, which this partial re-export doesn't satisfy
+vi.mock("@lunora/config", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("@lunora/config")>();
+
+    return { ...actual, inferLunoraBindings: vi.fn<typeof actual.inferLunoraBindings>(actual.inferLunoraBindings) };
+});
 
 /** Run `body` while capturing everything written to `process.stdout`. */
 const captureStdout = (body: () => void): string => {
@@ -327,6 +335,50 @@ describe("lunora codegen", () => {
             );
 
             await expect(runExecute()).resolves.not.toMatch(/is not exported by the worker entry/u);
+        });
+
+        it("teaches the project's linter to skip the generated output", async () => {
+            expect.assertions(2);
+
+            // `init` offers this and `add` re-applies it, which covers a project
+            // Lunora scaffolded. A project that adopted Lunora INTO an existing
+            // codebase never runs either, so nothing told its linter about
+            // `_generated/` and the first lint buried real findings under
+            // thousands of generated-file errors. Every project runs codegen.
+            seedWorkflow('import { createShardDO } from "../lunora/_generated/shard.js";\nexport const ShardDO = createShardDO();\n');
+            // A linter already configured, and nothing that ever ran `lunora init`
+            // to tell it about `_generated/` — what an existing codebase adopting
+            // Lunora looks like. Detected from the config file rather than a
+            // manifest, so this fixture does not also have to satisfy codegen's
+            // required-add-on check.
+            writeFileSync(join(workdir, ".prettierrc"), JSON.stringify({ semi: true }), "utf8");
+            writeFileSync(join(workdir, ".prettierignore"), "dist\n", "utf8");
+
+            await runExecute();
+
+            const ignored = readFileSync(join(workdir, ".prettierignore"), "utf8");
+
+            expect(ignored).toContain("_generated");
+            // Idempotent: the pre-existing entry is preserved, not replaced.
+            expect(ignored).toContain("dist");
+        });
+
+        it("says so when the check itself could not run, instead of reading as clean", async () => {
+            expect.assertions(2);
+
+            // Inference is best-effort here — the commands that GATE on export
+            // gaps own its failures. But returning silently made a skipped check
+            // indistinguishable from a passing one, so a project whose entry
+            // could not be resolved read `lunora codegen` as proof its workflows
+            // were wired and found out at deploy.
+            seedWorkflow('import { createShardDO } from "../lunora/_generated/shard.js";\nexport const ShardDO = createShardDO();\n');
+
+            vi.mocked(inferLunoraBindings).mockRejectedValueOnce(new Error("cannot resolve the worker entry"));
+
+            const output = await runExecute();
+
+            expect(output).toMatch(/could not check whether declared containers\/workflows\/agents are re-exported/u);
+            expect(output).toContain("cannot resolve the worker entry");
         });
     });
 });

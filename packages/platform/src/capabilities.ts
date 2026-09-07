@@ -3,9 +3,74 @@
  * Lunora features a target platform supports natively, emulates, or cannot
  * support at all.
  *
- * Codegen consumes this matrix to omit unsupported `ctx.*` surfaces from
- * emitted types and to emit diagnostics for features that need emulation.
- * Docs and Studio also read it to show parity per target.
+ * # Who reads it
+ *
+ * **`@lunora/codegen` is the only consumer.** `gateAgainstMatrix`
+ * (`packages/codegen/src/platform-target.ts`) intersects an app's detected
+ * feature usage with the target's matrix and diagnoses exactly two states:
+ * `unsupported` (`platform_unsupported_feature`) and a key missing from the
+ * matrix altogether (`platform_undeclared_feature`, the fail-closed arm).
+ * `native` and `emulated` are emitted identically, with no diagnostic between
+ * them — that distinction exists for honest parity reporting, not for codegen.
+ *
+ * Nothing in `@lunora/studio` imports this package, and the per-feature table
+ * in `packages/platform-node/docs/index.mdx` is a hand-written copy held
+ * verbatim by `pnpm run lint:node-capabilities-docs`: change a rating or a note
+ * here first, then that table, or the check fails.
+ *
+ * # Gate-bearing keys
+ *
+ * A rating only gates something if `@lunora/codegen` reads it — either through a
+ * usage key mapped onto the feature (`CAPABILITY_ROWS` + `CAPABILITY_TO_FEATURE`,
+ * for an app-imported `ctx.*` module) or through a `PlatformSignals` entry (for
+ * something the app declares in its schema or a declaration file). The
+ * gate-bearing keys are:
+ *
+ * `agents`, `ai`, `analytics`, `browser`, `commitOrderedTables`, `containers`,
+ * `cronTriggers`, `crossShardFanout`, `durableStreams`, `globalTables`,
+ * `hyperdrive`, `images`, `keyValueStore`, `mail`, `objectStorage`,
+ * `pipelines`, `queues`, `scheduler`, `secrets`, `vectorStore`, `workflows`.
+ *
+ * Every other key here — `httpCache`, `identityProxy`,
+ * `localSql`, `memoryTables`, `objectStorageBackups`,
+ * `objectStorageCdcArchive`, `serverReactors`, `shardAlarms`, `shardedState`,
+ * `shardPlacement`, `shardReadReplicas`, `websocketHibernation` — is
+ * **advisory**: rating one `unsupported` omits no surface and warns nobody. It
+ * still records parity honestly, which is its job; it is not a gate.
+ *
+ * # Advisory is not one thing — there are two reasons, and only one is final
+ *
+ * Most advisory keys are advisory *by nature*: the feature is engine-internal
+ * (`shardAlarms`, `shardedState`, `shardPlacement`, `shardReadReplicas`,
+ * `websocketHibernation`, `localSql`, `serverReactors`) or degrades honestly on
+ * its own (`httpCache` falls back to headers-only, `identityProxy` to header
+ * verification). There is nothing an app declares for codegen to notice, so
+ * there is nothing to gate. These stay ratings, permanently.
+ *
+ * The rest are advisory only because nobody wired them, and they are the ones
+ * to watch: an app DOES declare the feature, codegen CAN see the declaration,
+ * and the rating is still consulted by nothing. Codegen already has the shape
+ * for exactly this — `PlatformSignals` in `platform-target.ts`, the second gate
+ * pass that diagnoses app-declared features with no `ctx.*` capability row
+ * (`agents`, `commitOrderedTables`, `cronTriggers`, `crossShardFanout`,
+ * `durableStreams`, `globalTables`, `queues`, `secrets`, `vectorStore`).
+ * Promoting one is three lines there: a `PlatformSignals` field, plus its entry
+ * in that module's signal-key list and its human-readable label — and then
+ * setting the signal from the IR.
+ *
+ * `commitOrderedTables` was promoted that way: `TableIR.commitOrdered` sits in
+ * the same IR that feeds `globalTables`, and until it was read a host rating it
+ * `unsupported` emitted the full `.commitOrdered()` surface with no diagnostic
+ * and silently lost commit ordering — the one guarantee the feature is.
+ * `memoryTables`, `objectStorageBackups` and `objectStorageCdcArchive` remain
+ * weaker instances of the same shape, still unpromoted.
+ *
+ * **Adding a feature key is therefore half a change.** The other half is a row
+ * in `CAPABILITY_ROWS` and an entry in `CAPABILITY_TO_FEATURE` (for an
+ * app-imported `ctx.*` module), or a `PlatformSignals` entry (for something the
+ * app declares in its schema), or a deliberate decision that the key is advisory
+ * by nature — recorded here. Silence means the rating ships as documentation
+ * while the surface it describes is emitted anyway.
  */
 
 /** Support level for a single feature on a target platform. */
@@ -26,6 +91,18 @@ export interface Capability {
 export interface PlatformCapabilities {
     /** Feature-level capabilities. */
     features: {
+        /**
+         * Durable agents — a `defineAgent` export in `lunora/agents.ts`.
+         *
+         * Its own key rather than a facet of `workflows` or `ai`, because an
+         * agent needs BOTH and neither implies the other: the generated class
+         * compiles onto the host's workflow engine under an `AGENT_*` binding
+         * the emitted context resolves off `env`, and the loop it runs there
+         * calls model inference. A host that emulates workflows but has no
+         * inference (or no way to mount a generated class into its engine) can
+         * rate `workflows` honestly and still not run an agent.
+         */
+        agents?: Capability;
         /** AI inference (Workers AI / Bedrock / OpenAI). */
         ai?: Capability;
         /** Analytics / observability sinks. */
@@ -45,6 +122,12 @@ export interface PlatformCapabilities {
          * interleave their allocations. A host that offers neither can still
          * create the counter and hand out increasing numbers — they just would
          * not order commits, which is the whole contract.
+         *
+         * Gate-bearing: `TableIR.commitOrdered` feeds the `PlatformSignals`
+         * pass off the same IR the `globalTables` signal reads, so a host
+         * rating this `unsupported` refuses the app rather than emitting the
+         * full `.commitOrdered()` surface and silently dropping the ordering
+         * guarantee — which is the only thing the feature is.
          */
         commitOrderedTables?: Capability;
 
@@ -59,6 +142,19 @@ export interface PlatformCapabilities {
          */
         containers?: Capability;
 
+        /**
+         * DECLARED cron triggers — the `cronJobs()` registrations codegen lifts
+         * into `LUNORA_CRONS`, dispatched by whatever the host wakes on a
+         * schedule.
+         *
+         * Separate from {@link PlatformCapabilities.features.scheduler}, which
+         * rates the imperative surface (`ctx.scheduler.runAfter/runAt`, a job
+         * the app enqueues at runtime). The two are genuinely independent: a
+         * host can dispatch enqueued jobs perfectly and still walk nothing into
+         * its declared crons, in which case an app's `crons.daily(...)` never
+         * fires. One rating covering both is how that shipped as green.
+         */
+        cronTriggers?: Capability;
         /** Cross-shard fan-out queries. */
         crossShardFanout?: Capability;
 
@@ -152,6 +248,24 @@ export interface PlatformCapabilities {
          */
         objectStorageBackups?: Capability;
 
+        /**
+         * The CDC changelog's cold tier: rows a retention sweep is about to
+         * destroy are written to an object-storage bucket first
+         * (`LUNORA_CDC_ARCHIVE`), and a consumer whose cursor has fallen below
+         * the retained window is served from there instead of being told to
+         * re-seed.
+         *
+         * Distinct from `objectStorage` because it needs the bucket to do one
+         * thing a plain byte store need not: resume a key-ordered listing from a
+         * position (`list({ startAfter })`). Without it the read-back re-lists
+         * the prefix from the front every time and stops finding the range it
+         * needs once enough segments precede the cursor — which fails as a
+         * refusal rather than a gap, but fails permanently and silently, so a
+         * host that cannot seek should say `unsupported` here rather than
+         * inherit `objectStorage`'s rating.
+         */
+        objectStorageCdcArchive?: Capability;
+
         /** Pipelines / streaming data. */
         pipelines?: Capability;
         /** Queue-backed workpools. */
@@ -243,10 +357,22 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         queues: { level: "native", note: "Cloudflare Queues" },
         workflows: { level: "native", note: "Cloudflare Workflows" },
         scheduler: { level: "emulated", note: "SchedulerDO (Lunora, on DO alarms) + declarative Cron Triggers; no runtime cron registration" },
+        cronTriggers: {
+            level: "native",
+            note: "wrangler triggers.crons, reconciled from the declared crons at build time, delivered to the worker's scheduled() handler — which is the one cron dispatch that ships: it walks the generated LUNORA_CRONS map itself",
+        },
+        agents: {
+            level: "emulated",
+            note: "The durable agent loop is Lunora's: each defineAgent compiles onto a Cloudflare Workflow under an AGENT_* binding (a voice-enabled agent additionally gets a VoiceSessionDO), and the loop drives Workers AI. Cloudflare supplies the workflow engine, the Durable Object and the inference; the agent is built on them, not consumed as a product",
+        },
         objectStorage: { level: "native", note: "R2" },
         objectStorageBackups: {
-            level: "native",
-            note: "`lunora backup create|list|restore --bucket` writes NDJSON snapshots + a manifest sidecar per snapshot through the admin storage routes (checksum-verified upload, admin-gated object read), and `backupCron`/`backupStore` runs the same layout unattended on a Cron Trigger. Both are bounded by what a single request body / a Worker isolate can hold, not by R2",
+            level: "emulated",
+            note: "`lunora backup create|list|restore --bucket` writes NDJSON snapshots + a manifest sidecar per snapshot through the admin storage routes (checksum-verified upload, admin-gated object read), and `backupCron`/`backupStore` runs the same layout unattended on a Cron Trigger. Both are bounded by what a single request body / a Worker isolate can hold, not by R2. `emulated` because every part of that is Lunora's — R2 supplies a bucket, and Cloudflare has no backup product being consumed here; the snapshot format, the manifest, the checksum gate and the retention report are all ours",
+        },
+        objectStorageCdcArchive: {
+            level: "emulated",
+            note: "R2 supplies the bucket and the `startAfter` listing the segment keys are indexed on; everything above that is Lunora's — the segment format, the archive-before-trim ordering the sweep defers behind `waitUntil`, and the de-overlapping read-back. The platform has no notion of a changelog to tier, so this is not a product being consumed",
         },
         keyValueStore: { level: "native", note: "Workers KV" },
         vectorStore: {
@@ -323,7 +449,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
     id: "node",
     name: "Node",
     features: {
-        shardedState: { level: "emulated", note: "One better-sqlite3 database per shard key, one process — no distributed placement or failover" },
+        shardedState: {
+            level: "emulated",
+            note: "One better-sqlite3 database per shard key, one process — no distributed placement or failover. Shard keys are percent-encoded into basenames with A-Z escaped, so `Tenant` and `tenant` stay two databases on a case-insensitive volume (APFS, NTFS) rather than folding into one. There is also no input gate: Cloudflare defers every other dispatch for the span of a mutation, whereas this host can only refuse — SQL issued from another task while a transaction is open throws a retryable `SHARD_UNAVAILABLE` (503) rather than reading rows that are about to roll back, so a read that merely arrived mid-mutation is retried instead of failing the request",
+        },
         globalTables: {
             level: "emulated",
             note: "The @lunora/sql-store core on its own SQLite file via the reference sqliteDialect — full store semantics, but one node with no replication",
@@ -334,7 +463,7 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         durableStreams: {
             level: "unsupported",
-            note: "The transcript store is host-neutral (@lunora/shard-engine), but the attach/produce state machine lives in @lunora/do and nothing in this host mounts it — a durable stream declared here would silently behave as an ephemeral one",
+            note: "The transcript store is host-neutral (@lunora/shard-engine), but the attach/produce state machine lives in @lunora/do and nothing in this host mounts it. Gate-bearing: codegen refuses an app that declares a durable stream on this target, rather than emitting one that silently behaves as an ephemeral stream",
         },
         commitOrderedTables: {
             level: "emulated",
@@ -351,7 +480,7 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         shardAlarms: {
             level: "emulated",
-            note: "setTimeout over a durable row, dispatched to onAlarm and re-armed on construction, so an alarm survives a restart and one whose time elapsed while the process was down fires late rather than never",
+            note: "setTimeout over a durable row, dispatched to onAlarm and re-armed on construction, so an alarm survives a restart and one whose time elapsed while the process was down fires late rather than never. Delivery is at-least-once as it is on workerd: a handler that throws is re-delivered with exponential backoff (6 attempts, from 100ms) and then abandoned, and an alarm set or deleted inside a transaction is armed only if that transaction commits",
         },
         shardPlacement: { level: "unsupported", note: "One process — every shard lives where the process does, so a location hint has nowhere to place it" },
         shardReadReplicas: {
@@ -368,19 +497,31 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         workflows: {
             level: "emulated",
-            note: "createNodeWorkflowHost (@lunora/platform-node) compiles defineWorkflow handlers onto the @visulima/workflow engine (createRuntime): step/sleep/waitForEvent are durable + replay-safe, status maps to complete/errored/waiting/terminated, create({ id }) is honoured through a durable alias row (so ctx.spawn resolves and a retried create is one run), and runs survive a restart when backed by createNodeWorkflowStore (a SQLite WorkflowStore; the store is required, so no caller silently gets in-process-only state). Gaps: no pause/restart; terminate is not a barrier, so an activation already in flight overwrites the tombstone; ctx.run dispatches to an endpoint no Node HTTP server serves; ctx.parallel's synchronous join cannot interleave within one trigger activation",
+            note: "createNodeWorkflowHost (@lunora/platform-node) compiles defineWorkflow handlers onto the @visulima/workflow engine (createRuntime): step/sleep/waitForEvent are durable + replay-safe, status maps to complete/errored/waiting/terminated, create({ id }) is honoured through a durable alias row (so ctx.spawn resolves and a retried create is one run), and runs survive a restart when backed by createNodeWorkflowStore (a SQLite WorkflowStore; the store is required, so no caller silently gets in-process-only state). terminate is a barrier within the process: a terminated run's writes are dropped, so an activation already in flight cannot overwrite the tombstone — it is not a barrier across processes, which would need the lease rather than a set. Gaps: no pause/restart; ctx.run dispatches to an endpoint no Node HTTP server serves; ctx.parallel's synchronous join cannot interleave within one trigger activation",
         },
         scheduler: {
             level: "emulated",
-            note: "SQLite job table dispatched to onDispatch and re-armed on construction, with retry backoff and a dead-letter queue; the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer",
+            note: "SQLite job table dispatched to onDispatch and re-armed on construction, with retry backoff and a dead-letter queue. It is also the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer — but nothing walks an app's DECLARED crons into that method, which is why cronTriggers is rated separately and unsupported here. This rating covers the imperative surface only: ctx.scheduler.runAfter/runAt do dispatch on this host",
+        },
+        cronTriggers: {
+            level: "unsupported",
+            note: "No runtime walks the generated LUNORA_CRONS map into SchedulerHost.cron, so the conformance suite is that method's only caller and a declared cron does not fire on this host. Gate-bearing: codegen refuses an app that declares one here rather than letting it deploy green and never run. Schedule the work explicitly with ctx.scheduler.runAfter/runAt instead",
+        },
+        agents: {
+            level: "unsupported",
+            note: "Nothing here mounts the generated agent classes: createNodeWorkflowHost compiles defineWorkflow handlers onto the @visulima/workflow engine, and an agent is a generated WorkflowEntrypoint resolved off an AGENT_ prefixed env binding this host never provides. The loop's inference has no home either — ai is unsupported on this target",
         },
         objectStorageBackups: {
             level: "emulated",
             note: "The commands work unchanged, but the bucket underneath is createNodeR2Bucket — a directory on the same machine the CLI runs on, so a bucket-backed backup here is not the separate failure domain it is on Cloudflare. The scheduled half additionally needs this host's scheduler, which exists but is not a shipping target",
         },
+        objectStorageCdcArchive: {
+            level: "emulated",
+            note: "createNodeR2Bucket implements the `startAfter` seek the segment index needs, so the read-back behaves as it does on R2. Same caveat as the backups above: the bucket is a directory on the machine running the host, so archiving the changelog here moves it off SQLite but not off the disk that would take the shard with it",
+        },
         objectStorage: {
             level: "emulated",
-            note: "createNodeR2Bucket (@lunora/platform-node) — an R2BucketLike over the local filesystem (fs/promises, head/list/range). One file per object with the metadata in a trailer, so the single rename that publishes the bytes publishes their checksum and content-type with them, and a get reads body and metadata through one handle rather than reopening the path. put streams into the staged file and .body streams the requested range; .arrayBuffer()/.text() still allocate the range they return. The body is single-use, as R2's is. Keys fold the way the host filesystem folds them, so `A` and `a` are one object on a case-insensitive volume where real R2 keeps two. No multipart uploads, no presigned URLs",
+            note: "createNodeR2Bucket (@lunora/platform-node) — an R2BucketLike over the local filesystem (fs/promises, head/list/range). One file per object with the metadata in a trailer, so the single rename that publishes the bytes publishes their checksum and content-type with them, and a get reads body and metadata through one handle rather than reopening the path. put streams into the staged file and .body streams the requested range; .arrayBuffer()/.text() still allocate the range they return. The body is single-use, as R2's is. Keys are percent-escaped per path segment (`%`, `A-Z`, `:`, and a trailing `.` or space), so `A` and `a` stay two objects on a case-insensitive volume exactly as they are on R2, and a lowercase key containing no `%` or `:` and no segment ending in `.` or a space still maps to a byte-identical filename. No multipart uploads, no presigned URLs",
         },
         keyValueStore: { level: "emulated", note: "better-sqlite3 table behind the ShardKvStore API — not a dedicated KV product" },
         vectorStore: { level: "unsupported", note: "No Vectorize-equivalent binding implemented" },
@@ -393,8 +534,14 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         analytics: { level: "unsupported", note: "No Analytics Engine-equivalent binding implemented" },
         pipelines: { level: "unsupported", note: "No Pipelines-equivalent binding implemented" },
-        mail: { level: "unsupported", note: "@lunora/mail's queue-backed sends need a queues binding, which this target does not provide" },
-        secrets: { level: "unsupported", note: "No Secrets Store-equivalent binding implemented (a real host would likely map this to env vars)" },
+        mail: {
+            level: "unsupported",
+            note: "The queue tier this host lacked when the rating was written now exists (createNodeQueueHost), but nothing here composes a @lunora/mail transport or the queued-send consumer, so a send would be accepted and never delivered",
+        },
+        secrets: {
+            level: "unsupported",
+            note: "No Secrets Store-equivalent binding implemented (a real host would likely map this to env vars). Gate-bearing, and it has to be: ctx.secrets is a core built-in spliced into every context, so codegen refuses an app that reads it on this target instead of emitting a surface that throws on first use",
+        },
         hyperdrive: { level: "unsupported", note: "No connection-pooling binding implemented" },
         httpCache: {
             level: "unsupported",

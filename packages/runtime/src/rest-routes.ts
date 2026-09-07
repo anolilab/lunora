@@ -25,6 +25,7 @@ import { assertArgsObject } from "./assert-args-object";
 import { methodGuard } from "./method-guard";
 import { applyRestCache } from "./rest-cache";
 import { restEdgeCacheFor, VARY_KEY_PARAM } from "./rest-edge-cache";
+import { trustedClientIp } from "./trusted-client-ip";
 
 /** The bits of a registered function the REST router reads: its kind and its `.expose` tag. */
 interface RestRegistryEntry {
@@ -241,26 +242,87 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
 
 /** Structural view of a `@lunora/ratelimit` `RateLimiter` — only the `.limit()` call, so the runtime needs no hard dependency. */
 interface RateLimiterLike {
-    limit: (name: string, args?: { key?: string }) => Promise<{ ok: boolean; retryAfter: number }>;
+    limit: (name: string, args?: { key?: string }) => Promise<{ ok: boolean; reason?: string; retryAfter: number }>;
 }
+
+/**
+ * What a caller is told when the limit has nobody to charge.
+ *
+ * A per-caller limit whose key cannot be resolved has exactly two shapes, and
+ * both are worse than a refusal. Charging with no `key` uses the limiter's
+ * UNKEYED bucket — the one a deliberately-global charge uses — so one caller
+ * drains an app-wide limit for everybody. Charging a shared named bucket bounds
+ * that blast radius to the keyless callers, which off the Cloudflare edge means
+ * EVERY caller: the limit inverts into a one-request-per-period lever anyone can
+ * pull for the whole deployment. `@lunora/ratelimit`'s middleware already
+ * treats the identical state as a configuration bug and throws `INTERNAL`; this
+ * gate now agrees, so the two cannot be read as sanctioning opposite postures on
+ * the same facts.
+ */
+const unresolvedCallerKeyRefusal = (): Response =>
+    Response.json(
+        {
+            error: {
+                code: "INTERNAL",
+                message:
+                    "REST rate limit: no caller key could be resolved. Declare `trustedClientIpHeader` (a header your proxy stamps and callers cannot write), or pass `key` to identify callers by something unforgeable.",
+            },
+        },
+        { headers: { "content-type": "application/json" }, status: 500 },
+    );
 
 /**
  * Adapt a `@lunora/ratelimit` limiter into a {@link RestRateLimit} gate for the
  * public REST surface (plan 167). Pass the limiter and the rate name to charge;
- * `key` isolates the limit per caller (IP / user / API key — defaults to the
- * `cf-connecting-ip` header, else a shared bucket). A denied request becomes a
- * `429` with a `Retry-After` header (seconds, ceil of the limiter's ms). The
- * runtime imports nothing from `@lunora/ratelimit` — build the limiter in the
- * worker entry and pass it here.
+ * `key` isolates the limit per caller (IP / user / API key — defaults to
+ * {@link trustedClientIp}).
+ *
+ * That default resolves an IP only ON Cloudflare, where the edge stamps
+ * `cf-connecting-ip` over anything the client sent. On any other host it is a
+ * header the caller types, so trusting it would give an attacker a fresh bucket
+ * per request and the limit would stop applying to exactly the traffic it exists
+ * to stop. Those deployments resolve no key at all and every request is refused
+ * with a `500` naming the fix — see {@link unresolvedCallerKeyRefusal} for why a
+ * shared bucket is not the safer answer it looks like.
+ *
+ * An origin fronted by a proxy that stamps a client address can declare that
+ * header as `trustedClientIpHeader` and get per-IP buckets, at the cost of
+ * asserting the header is unwritable by callers — the same assertion, and the
+ * same consequence for getting it wrong, as `WorkerOptions.trustedClientIpHeader`
+ * (which governs `ctx.ip`). Declare it in both places or the two disagree about
+ * who a request came from.
+ *
+ * A rate rejection becomes a `429` with a `Retry-After` header (seconds, ceil of
+ * the limiter's ms). A deny-list hit becomes a `403` and no `Retry-After` —
+ * matching both `@lunora/ratelimit` entry points, and the only honest answer for
+ * a denial that never clears: its `retryAfter` is `Infinity`, which renders as
+ * the header value `"Infinity"` and invites a client to retry forever.
+ *
+ * The runtime imports nothing from `@lunora/ratelimit` — build the limiter in
+ * the worker entry and pass it here.
  */
 const createRestRateLimit =
-    (limiter: RateLimiterLike, options: { key?: (request: Request, functionPath: string) => string | undefined; name: string }): RestRateLimit =>
+    (
+        limiter: RateLimiterLike,
+        options: { key?: (request: Request, functionPath: string) => string | undefined; name: string; trustedClientIpHeader?: string },
+    ): RestRateLimit =>
     async (request, functionPath) => {
-        const key = options.key ? options.key(request, functionPath) : (request.headers.get("cf-connecting-ip") ?? undefined);
-        const status = await limiter.limit(options.name, key === undefined ? {} : { key });
+        const key = options.key ? options.key(request, functionPath) : trustedClientIp(request.headers, options.trustedClientIpHeader);
+
+        // `""` is refused alongside `undefined`: an empty key is a bucket name every
+        // caller shares, which is the state this refusal exists to prevent.
+        if (key === undefined || key === "") {
+            return unresolvedCallerKeyRefusal();
+        }
+
+        const status = await limiter.limit(options.name, { key });
 
         if (status.ok) {
             return undefined;
+        }
+
+        if (status.reason === "deny") {
+            return Response.json({ error: { code: "FORBIDDEN", message: "Request denied" } }, { headers: { "content-type": "application/json" }, status: 403 });
         }
 
         const retryAfterSeconds = Math.max(1, Math.ceil(status.retryAfter / 1000));
@@ -275,4 +337,4 @@ const createRestRateLimit =
     };
 
 export type { RateLimiterLike, RestInvoke, RestRateLimit, RestRegistryEntry, RestRegistryLike, RestRoute, RestRouteDeps };
-export { argsFromQuery, buildRestRoutes, createRestRateLimit, readShardKey, restSurfaceFromRegistry };
+export { argsFromQuery, buildRestRoutes, createRestRateLimit, restSurfaceFromRegistry };

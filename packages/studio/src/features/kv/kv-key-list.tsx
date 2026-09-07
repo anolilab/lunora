@@ -70,8 +70,22 @@ const keyListReducer = (state: KeyListState, action: KeyListAction): KeyListStat
         }
         case "applyFilter": {
             // Clear the current page too — otherwise the previous prefix's rows stay
-            // rendered as if authoritative until the new page resolves.
-            return { ...state, appliedPrefix: state.prefixInput, bulk: [], bulkError: null, cursor: null, keys: null, listComplete: false, selectedKey: null };
+            // rendered as if authoritative until the new page resolves. The nonce is
+            // what guarantees a page comes back: re-filtering on an UNCHANGED prefix
+            // (the first click, or any repeat) leaves `appliedPrefix` referentially
+            // equal, so the load effect would not re-run and the cleared list would
+            // stay empty for the rest of the session.
+            return {
+                ...state,
+                appliedPrefix: state.prefixInput,
+                bulk: [],
+                bulkError: null,
+                cursor: null,
+                keys: null,
+                listComplete: false,
+                reloadNonce: state.reloadNonce + 1,
+                selectedKey: null,
+            };
         }
         case "bulkDeleted": {
             // Prune only the keys that actually deleted; any that failed stay

@@ -5,14 +5,18 @@ import {
     createShardCtxDb as createShardContextDatabase,
     minCdcReplayableSeq,
     minCdcSeq,
+    readCdcArchivedThrough,
     readCdcChangeKeys,
+    readCdcChanges,
     readCdcCursor,
     runShardMigrations,
 } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { cdcArchiveBucket } from "../src/cdc-retention";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
+import { createFakeR2Bucket } from "./_helpers/fake-r2";
 import messagesSchema from "./_helpers/messages-schema";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -95,6 +99,11 @@ class ProbeCountingShard extends ShardDO {
     /** The changelog page a streaming-export / read-replica consumer pulls, exposed so a test can assert what it refuses. */
     public syncCdc(sinceSeq: number): { changes: CdcChange[]; cursor: number } {
         return this.runShardCdcSync({ sinceSeq });
+    }
+
+    /** The same page as {@link ProbeCountingShard.syncCdc}, but through the admin dispatch's archive-backed path. */
+    public syncCdcArchived(sinceSeq: number): Promise<{ changes: CdcChange[]; cursor: number }> {
+        return this.cdcSyncPage({ sinceSeq });
     }
 
     /** Hard-delete through the ctx-db writer, so the changelog records a `delete` (post-image NULL by design). */
@@ -534,6 +543,147 @@ describe("delta-sync read path", () => {
             // not handed the surviving tail with an advanced cursor — that loses
             // the trimmed range permanently and reports nothing.
             expect(() => shard.syncCdc(0)).toThrow(/trimmed/u);
+        });
+    });
+
+    describe("changelog archive", () => {
+        it("treats a missing or non-R2 binding as archiving off", () => {
+            expect.assertions(4);
+
+            expect(cdcArchiveBucket(undefined)).toBeUndefined();
+            expect(cdcArchiveBucket({})).toBeUndefined();
+            expect(cdcArchiveBucket({ LUNORA_CDC_ARCHIVE: "not-a-bucket" })).toBeUndefined();
+            // A binding shaped like R2 but missing one of the three methods used
+            // is still off — half a bucket would fail mid-sweep, after the trim
+            // decision had already been made on the strength of it being there.
+            expect(cdcArchiveBucket({ LUNORA_CDC_ARCHIVE: { get: () => undefined, put: () => undefined } })).toBeUndefined();
+        });
+
+        /**
+         * The sweep with a cold tier attached. `waitUntil` is captured rather
+         * than ignored because the archive-then-destroy step deliberately runs
+         * off the write path — a test that did not await it would assert against
+         * a log the sweep had not finished touching.
+         */
+        const sweepWithArchive = async (environment: Record<string, unknown>, rows: number): Promise<ProbeCountingShard> => {
+            const pending: Promise<unknown>[] = [];
+            const sockets: FakeWebSocket[] = [];
+            const state: ShardDOState = {
+                ...makeState(sockets),
+                waitUntil: (promise: Promise<unknown>) => {
+                    pending.push(promise);
+                },
+            };
+            const shard = new ProbeCountingShard(state, environment);
+
+            for (let index = 0; index < rows; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- sequential writes build the changelog range the sweep acts on
+                await shard.seed(`m${String(index)}`, "c1");
+            }
+
+            await shard.fetch(write("messages:send", { _id: "trigger", channelId: "c1" }));
+            await Promise.all(pending);
+
+            return shard;
+        };
+
+        it("serves a trimmed range from the archive instead of demanding a re-seed", async () => {
+            expect.assertions(3);
+
+            const bucket = createFakeR2Bucket();
+            const shard = await sweepWithArchive({ LUNORA_CDC_ARCHIVE: bucket, LUNORA_CDC_LOG_RETENTION: "5" }, 20);
+
+            // The rows really did leave SQLite — this is not a sweep that quietly
+            // did nothing because a bucket was configured.
+            expect(minCdcSeq(harness.sql) ?? 0).toBeGreaterThan(1);
+
+            // The live log still refuses the consumer below its floor…
+            expect(() => shard.syncCdc(0)).toThrow(/trimmed/u);
+
+            // …and the archive answers it, starting at the very next change.
+            const page = await shard.syncCdcArchived(0);
+
+            expect(page.changes[0]?.seq).toBe(1);
+        });
+
+        it("destroys nothing it has not archived", async () => {
+            expect.assertions(1);
+
+            const bucket = createFakeR2Bucket();
+
+            // A bucket whose `put` always fails: the sweep must skip its
+            // destructive half entirely rather than delete rows into a void.
+            const failing = {
+                ...bucket,
+                put: async () => {
+                    throw new Error("r2 down");
+                },
+            };
+
+            await sweepWithArchive({ LUNORA_CDC_ARCHIVE: failing, LUNORA_CDC_LOG_RETENTION: "5" }, 20);
+
+            expect(minCdcSeq(harness.sql)).toBe(1);
+        });
+
+        it("archives above the watermark, so survivors are never re-uploaded", async () => {
+            expect.assertions(3);
+
+            const bucket = createFakeR2Bucket();
+
+            // Payload window narrower than the row window is the configuration
+            // that produces survivors: the archive reads through the payload
+            // cutoff, the trim stops at the lower row cutoff, and the rows in
+            // between stay in the log having already been uploaded.
+            await sweepWithArchive({ LUNORA_CDC_ARCHIVE: bucket, LUNORA_CDC_LOG_RETENTION: "12", LUNORA_CDC_PAYLOAD_RETENTION: "4" }, 20);
+
+            const archivedThrough = readCdcArchivedThrough(harness.sql);
+            const survivors = readCdcChanges(harness.sql, { sinceSeq: 0 }).changes.filter((entry) => entry.seq <= archivedThrough);
+
+            // Survivors exist, so the next sweep has something it could wrongly
+            // re-archive; without them this test would prove nothing.
+            expect(survivors.length).toBeGreaterThan(0);
+
+            // The watermark is what stops it. Reading from the oldest live row
+            // instead would rebuild a batch ending at the same `seq` — and since
+            // a segment's key IS its last seq, that put overwrites the segment
+            // holding the rows already deleted from SQLite, with a shorter range
+            // whose payloads compaction has since stripped.
+            expect(archivedThrough).toBeGreaterThanOrEqual(survivors.at(-1)?.seq ?? 0);
+            expect(bucket.keys()).toHaveLength(1);
+        });
+
+        it("does not archive when only payload retention is configured", async () => {
+            expect.assertions(2);
+
+            const bucket = createFakeR2Bucket();
+
+            await sweepWithArchive({ LUNORA_CDC_ARCHIVE: bucket, LUNORA_CDC_PAYLOAD_RETENTION: "5" }, 20);
+
+            // Compaction keeps every key, so nothing is lost and there is nothing
+            // to soften. Uploading anyway would also never terminate: with no
+            // trim advancing the window, each sweep re-reads the same oldest rows
+            // and re-uploads the same segment forever.
+            expect(bucket.keys()).toHaveLength(0);
+            expect(minCdcReplayableSeq(harness.sql) ?? 0).toBeGreaterThan(1);
+        });
+
+        it("still refuses a range the archive was turned on too late to hold", async () => {
+            expect.assertions(1);
+
+            // Trim first with no bucket — seq 1..N are gone for good — then bind
+            // one. The fallback must re-throw the original refusal rather than
+            // treat an empty archive as an empty page, which would advance the
+            // consumer's cursor past changes nobody has.
+            //
+            // The env object is held by reference and read on every sweep and
+            // every page, so turning the archive on later is a plain mutation of
+            // what was passed in — no test-only setter on the production class.
+            const environment: Record<string, unknown> = { LUNORA_CDC_LOG_RETENTION: "5" };
+            const shard = await sweepWithArchive(environment, 20);
+
+            environment["LUNORA_CDC_ARCHIVE"] = createFakeR2Bucket();
+
+            await expect(shard.syncCdcArchived(0)).rejects.toThrow(/trimmed/u);
         });
     });
 });

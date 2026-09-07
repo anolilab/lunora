@@ -43,6 +43,34 @@ const FRAMEWORKS = [
     { item: "auth-ui-angular", view: "angular" },
 ];
 
+/**
+ * Directories under `packages/auth-ui/src/` that are not a framework view. An
+ * explicit list rather than a marker-file heuristic, for the same reason the SDK
+ * scripts use one: a marker SKIPS what it does not match, so a seventh port that
+ * forgot it would be absent from both this list and FRAMEWORKS — no drift, and
+ * silently never mirrored into `registry/`.
+ */
+const NON_VIEW_SRC_DIRS = new Set(["core", "emails", "styles"]);
+
+const declaredViews = new Set(FRAMEWORKS.map(({ view }) => view));
+const viewDrift = readdirSync(SRC, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !NON_VIEW_SRC_DIRS.has(entry.name) && !declaredViews.has(entry.name))
+    .map((entry) => entry.name);
+
+if (viewDrift.length > 0) {
+    process.stderr.write(
+        `packages/auth-ui/src holds ${String(viewDrift.length)} view director(y|ies) with no FRAMEWORKS row, so \`lunora add auth-ui\`
+` +
+            `would never distribute them and this gate would stay green: ${viewDrift.join(", ")}
+` +
+            `Add a { item, view } row in scripts/sync-auth-ui-registry.mjs, create registry/<item>/registry.json, and
+` +
+            `teach detectAuthUiItem (packages/cli/src/commands/add/features.ts) to pick it.
+`,
+    );
+    process.exit(1);
+}
+
 // Item-local files that are hand-authored (not synced from src) — kept as-is and
 // still listed in files[].
 const HAND_AUTHORED = new Set(["registry.json", "README.md", "client.ts"]);
@@ -93,15 +121,21 @@ const emit = (absolutePath, content) => {
 const syncTree = (srcDir, itemDir, subdir) => {
     const files = walk(srcDir);
 
-    // In write mode, drop stale files that no longer exist in src.
+    // Drop files that no longer exist in src. The sweep runs in BOTH modes: an
+    // orphan is drift, and gating it on write mode made `--check` blind to the one
+    // kind of staleness `emit` cannot see (it only compares files that still exist
+    // in src). Check mode records the orphan instead of deleting it.
     const targetDir = join(itemDir, subdir);
 
-    if (!CHECK && existsSync(targetDir)) {
-        for (const existing of walk(targetDir)) {
-            if (!files.includes(existing)) {
-                rmSync(join(targetDir, existing));
-                pending.push(relative(ROOT, join(targetDir, existing)));
-            }
+    for (const existing of existsSync(targetDir) ? walk(targetDir) : []) {
+        if (files.includes(existing)) {
+            continue;
+        }
+
+        pending.push(relative(ROOT, join(targetDir, existing)));
+
+        if (!CHECK) {
+            rmSync(join(targetDir, existing));
         }
     }
 

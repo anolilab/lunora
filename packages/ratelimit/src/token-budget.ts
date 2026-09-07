@@ -24,6 +24,7 @@
  * The unit is whatever the limit's `capacity` counts. Tokens are the obvious
  * choice; cents work identically if you would rather budget money.
  */
+import { enforcedCapacity } from "./algorithms";
 import type { RateLimiter } from "./rate-limiter";
 import type { RateLimitStatus } from "./types";
 
@@ -89,6 +90,12 @@ const tokenBudget = <Names extends string>(limiter: RateLimiter<Names>, name: Na
             // the one call the budget exists to catch would escape it entirely.
             // Charging the whole bucket is the strongest true statement available.
             //
+            // The ceiling is per ALGORITHM (`enforcedCapacity`), not `capacity`:
+            // a sliding window ignores `capacity` and enforces `rate`, so a config
+            // like `{ kind: "sliding window", rate: 10_000, capacity: 50_000 }`
+            // clamped to `capacity` still hands the limiter a count it throws on —
+            // the exact outcome this clamp exists to prevent.
+            //
             // `getValue` reports the RAW config, while a sharded limit enforces
             // `capacity / shards` on the one bucket this key routes to. Clamping
             // to the raw value would still throw on a sharded budget, so the cap
@@ -100,7 +107,7 @@ const tokenBudget = <Names extends string>(limiter: RateLimiter<Names>, name: Na
             // unusable by ANY caller — `check` throws on it too — so that is a
             // configuration error to fix at the limit, not something a charge
             // made after the fact can absorb.
-            const capacity = Math.max(1, Math.floor((config.capacity ?? config.rate) / (config.shards ?? 1)));
+            const capacity = Math.max(1, Math.floor(enforcedCapacity(config) / (config.shards ?? 1)));
 
             return limiter.limit(name, { count: Math.min(Math.ceil(tokens), capacity), key, reserve: true });
         },

@@ -132,9 +132,9 @@ describe("expectPolicy harness", () => {
         const policies = definePolicies([definePolicy({ on: "delete", table: "posts", when: ({ auth }) => auth.can(deletePosts) })]);
         const harness = expectPolicy(policies, { roles: [admin] });
 
-        expect(harness.as({ roles: ["admin"], userId: "a" }).can("delete", "posts", { id: "p1" })).toBe(true);
+        expect(harness.as({ identity: { roles: ["admin"] }, userId: "a" }).can("delete", "posts", { id: "p1" })).toBe(true);
         // A role not registered in the harness grants nothing — fail closed.
-        expect(harness.as({ roles: ["editor"], userId: "b" }).can("delete", "posts", { id: "p1" })).toBe(false);
+        expect(harness.as({ identity: { roles: ["editor"] }, userId: "b" }).can("delete", "posts", { id: "p1" })).toBe(false);
     });
 
     it("exposes ctx and identity to policies", () => {
@@ -169,6 +169,39 @@ describe("expectPolicy harness", () => {
         ]);
 
         expect(() => expectPolicy(policies).as({ userId: "ada" }).can("insert", "docs", { ownerId: "ada" })).toThrow(/relation predicates are not supported/u);
+    });
+
+    // SECURITY (regression): the harness used to take a `roles` array of its own,
+    // so a policy whose DENY branch was gated on a role passed its unit test while
+    // the runtime — which had no `ctx.auth.roles` to populate — never took that
+    // branch and let a suspended caller through. Roles now come off the identity
+    // claims in BOTH places, so the harness cannot express a world production
+    // cannot produce.
+    it("sources roles from the identity claim, exactly like the request path", () => {
+        expect.assertions(3);
+
+        const policies = definePolicies([
+            definePolicy({
+                on: "read",
+                table: "docs",
+                when: ({ auth }) => (auth.roles.includes("suspended") ? false : { ownerId: auth.userId }),
+            }),
+        ]);
+
+        const suspended = expectPolicy(policies).as({ identity: { roles: ["suspended"] }, userId: "ada" });
+
+        // The deny branch is reachable — pre-fix `auth.roles` was always `[]`.
+        expect(suspended.can("read", "docs", { ownerId: "ada" })).toBe(false);
+
+        // The same caller with no `roles` claim keeps their own rows.
+        expect(expectPolicy(policies).as({ userId: "ada" }).can("read", "docs", { ownerId: "ada" })).toBe(true);
+
+        // A comma-separated claim (better-auth's `admin()` plugin shape) resolves too.
+        expect(
+            expectPolicy(policies)
+                .as({ identity: { roles: "user,suspended" }, userId: "ada" })
+                .can("read", "docs", { ownerId: "ada" }),
+        ).toBe(false);
     });
 
     it("defaults an omitted identity to the anonymous caller (userId null)", () => {

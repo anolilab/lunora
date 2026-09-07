@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 import { defaultHttpCache, VARY_KEY_PARAM } from "../src/rest-edge-cache";
-import { argsFromQuery } from "../src/rest-routes";
+import { argsFromQuery, createRestRateLimit } from "../src/rest-routes";
 import { fakeCache } from "./helpers/edge-cache";
 
 /**
@@ -384,5 +384,69 @@ describe("argsFromQuery", () => {
         const args = argsFromQuery(new URL("https://app.example/x?shardKey=team-1&limit=5"));
 
         expect(args).toEqual({ limit: 5 });
+    });
+});
+
+describe("createRestRateLimit — an unresolvable caller key", () => {
+    const limiter = {
+        limit: async (_name: string, _arguments?: { key?: string }) => {
+            return { ok: true, retryAfter: 0 };
+        },
+    };
+
+    afterEach(() => {
+        Reflect.deleteProperty(globalThis, "navigator");
+    });
+
+    it("refuses the request rather than pooling every caller into one bucket", async () => {
+        expect.assertions(2);
+
+        // Off the Cloudflare edge with no `trustedClientIpHeader` declared there is
+        // no address to key on — the exact state `@lunora/platform-node` ships in.
+        // Pooling turns the limit into a one-request-per-period lever any single
+        // caller can pull for everybody.
+        const gate = createRestRateLimit(limiter, { name: "rest" });
+        const response = await gate(new Request("https://app.test/_lunora/rest/a/b", { headers: { "x-forwarded-for": "203.0.113.4" } }), "a:b");
+
+        expect(response?.status).toBe(500);
+        await expect(response?.json()).resolves.toMatchObject({ error: { code: "INTERNAL" } });
+    });
+
+    it("keys per caller on the edge, where the address cannot be forged", async () => {
+        expect.assertions(1);
+
+        Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: "Cloudflare-Workers" } });
+
+        const keys: (string | undefined)[] = [];
+        const capturing = {
+            limit: async (_name: string, arguments_?: { key?: string }) => {
+                keys.push(arguments_?.key);
+
+                return { ok: true, retryAfter: 0 };
+            },
+        };
+
+        const gate = createRestRateLimit(capturing, { name: "rest" });
+
+        await gate(new Request("https://app.test/_lunora/rest/a/b", { headers: { "cf-connecting-ip": "203.0.113.4" } }), "a:b");
+
+        expect(keys).toStrictEqual(["203.0.113.4"]);
+    });
+
+    it("accepts an explicit `key` resolver as the way out", async () => {
+        expect.assertions(1);
+
+        const gate = createRestRateLimit(limiter, { key: () => "api-key-7", name: "rest" });
+
+        await expect(gate(new Request("https://app.test/_lunora/rest/a/b"), "a:b")).resolves.toBeUndefined();
+    });
+
+    it("refuses when a caller-supplied `key` resolver returns nothing, matching @lunora/ratelimit", async () => {
+        expect.assertions(1);
+
+        const gate = createRestRateLimit(limiter, { key: () => undefined, name: "rest" });
+        const response = await gate(new Request("https://app.test/_lunora/rest/a/b"), "a:b");
+
+        expect(response?.status).toBe(500);
     });
 });

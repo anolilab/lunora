@@ -1,8 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, resolve } from "node:path";
-
-import type { ManifestConfigShape } from "@lunora/config/cloudflare";
-import { buildBindingManifest, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
+import { resolve } from "node:path";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
@@ -22,6 +18,16 @@ import type { BuildOptions } from "./index";
 const DEFAULT_OUT_DIR = ".lunora/build";
 
 interface BuildCommandOptions {
+    /**
+     * Per-run override for the schema-drift gate. `build` runs the same gate
+     * `deploy` does (it IS `deploy --dry-run` underneath), so the blocked-drift
+     * message it prints tells the operator to pass this — and it used to be
+     * rejected as an unknown option by the command that had just printed it.
+     *
+     * Per-run only: a build publishes nothing, so it never advances the
+     * committed baseline (see `schema-drift-gate.ts`).
+     */
+    allowSchemaDrift?: boolean;
     /** Which API spec(s) codegen emits. */
     apiSpec?: ApiSpec;
     cwd?: string;
@@ -37,6 +43,14 @@ interface BuildCommandOptions {
     /** Directory the bundled worker is written to (default `.lunora/build`). */
     outDir?: string;
     spawner?: Spawner;
+
+    /**
+     * Fail the build on ERROR-level codegen advisories. `undefined` leaves the
+     * CI-vs-local default (`resolveStrictAdvisories`) in charge. `build` runs the
+     * same gate `deploy` does and prints the same remediation, so it has to take
+     * the same opt-out — the gate named a flag `build` rejected.
+     */
+    strictAdvisories?: boolean;
 
     /**
      * Deploy target the artifact is built for. Defaults to `"target"` in
@@ -70,50 +84,6 @@ const stderrOnlySpawner: Spawner = async (descriptor) => defaultSpawner({ ...des
 const kib = (bytes: number): string => `${(bytes / 1024).toFixed(1)} KiB`;
 
 /**
- * Write the binding manifest for the project at `projectRoot`.
- *
- * Runs AFTER the pre-deploy pipeline, deliberately: that pipeline is what infers
- * the app's requirements and reconciles them into `wrangler.jsonc`, so the config
- * is only the resolved answer once it has finished. Reading it earlier would
- * describe the requirements the project happened to have written down, not the
- * ones the bundle actually has.
- *
- * A project with no `wrangler.jsonc` at all is a hard error rather than an empty
- * manifest: an empty requirements document reads as "this Worker needs nothing",
- * which an IaC program would act on by provisioning nothing.
- */
-const writeBindingManifest = (projectRoot: string, target: string, logger: Logger): { error?: string } => {
-    const wranglerPath = findWranglerFile(projectRoot);
-    const parsed = wranglerPath === undefined ? undefined : readWranglerJsonc<ManifestConfigShape>(wranglerPath).parsed;
-
-    if (parsed === undefined) {
-        return {
-            error: `--emit-bindings found no readable wrangler config in ${projectRoot}. The manifest is derived from it, and an empty one would tell a deployer this Worker needs nothing.`,
-        };
-    }
-
-    const manifest = buildBindingManifest(parsed);
-    const destination = isAbsolute(target) ? target : resolve(projectRoot, target);
-
-    mkdirSync(dirname(destination), { recursive: true });
-    writeFileSync(destination, `${JSON.stringify(manifest, undefined, 2)}\n`, "utf8");
-
-    logger.success(`binding manifest written to ${destination} (${manifest.bindings.length.toString()} bindings, ${manifest.crons.length.toString()} crons)`);
-
-    // Not an error: the bundle is fine and the manifest is still usable. But a
-    // consumer acting on it would silently under-provision, so say which section
-    // was not carried rather than leaving them to notice at runtime.
-    if (manifest.unknown.length > 0) {
-        logger.warn(
-            `binding manifest does not model these wrangler sections: ${manifest.unknown.join(", ")}. ` +
-                `Anything they bind must be provisioned by hand — please report them so the manifest can cover them.`,
-        );
-    }
-
-    return {};
-};
-
-/**
  * Build the Worker without deploying: this is `deploy` in its dry-run +
  * `--outdir` mode, so it reuses the entire pre-deploy pipeline (codegen, the
  * schema-drift gate, binding provisioning, container preflight, wrangler
@@ -145,14 +115,25 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
     }
 
     const result = await runDeployCommand({
+        allowSchemaDrift: options.allowSchemaDrift,
         apiSpec: options.apiSpec,
+        // So the drift gate names `build` and offers only the flags `build`
+        // registers — it does NOT accept `--update-schema-baseline`, because it
+        // publishes nothing and re-blessing a baseline for an artifact that never
+        // shipped is what lets a breaking change through on the retry.
+        commandName: "build",
         cwd: options.cwd,
         dryRun: true,
+        // The requirements document has to describe the PROVISIONED config, so
+        // deploy writes it inside its own dry-run rollback window rather than
+        // handing it back here, where the committed config is already restored.
+        emitBindings: options.emitBindings,
         format: undefined,
         interactive: jsonMode ? false : undefined,
         logger,
         outDir: outDirectory,
         spawner: options.spawner ?? (jsonMode ? stderrOnlySpawner : undefined),
+        strictAdvisories: options.strictAdvisories,
         target: options.target,
     });
 
@@ -175,28 +156,20 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
         );
     }
 
-    if (options.emitBindings !== undefined) {
-        const { error } = writeBindingManifest(options.cwd ?? process.cwd(), options.emitBindings, logger);
-
-        if (error !== undefined) {
-            logger.error(error);
-
-            return emit({ ...result, bundle, code: 1 });
-        }
-    }
-
     return emit({ ...result, bundle });
 };
 
 /** `lunora build` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions>(async ({ cwd, logger, options }) => {
     const result = await runBuildCommand({
+        allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         emitBindings: options.emitBindings,
         format: options.format,
         logger,
         outDir: options.outDir,
+        strictAdvisories: options.strictAdvisories,
         target: options.target,
     });
 

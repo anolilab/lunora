@@ -54,8 +54,8 @@ unsubscribe := client.Subscribe("messages:list", args, onData, onError, "")
 ```
 
 `HandleFrame(raw)` is what you call with each inbound WebSocket message;
-`ResendSubscriptions()` re-subscribes everything after a reconnect, carrying each
-subscription's resume cursor.
+`ResendSubscriptions()` re-subscribes everything after a reconnect — queries and
+shape views alike — carrying each one's resume cursor or checkpoint.
 
 ## Optimistic updates and offline writes
 

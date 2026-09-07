@@ -1,8 +1,44 @@
+import { LunoraError } from "@lunora/errors";
 import { getMigrations } from "better-auth/db/migration";
 
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { resolveAuthOptions } from "./create-auth";
 import { isD1Database, withD1IndexIntrospection } from "./d1-index-introspection";
+
+/**
+ * Reject a `database` better-auth's migrator cannot drive, *before* handing it
+ * over. better-auth only migrates through Kysely, and its own guard does not
+ * throw — it calls `process.exit(1)`, which in a Workers isolate kills the whole
+ * worker (every route, not just `/api/auth/*`) after a single 500.
+ *
+ * Two shapes reach that guard, and both are things people actually write. An
+ * **adapter factory** (`lunoraD1Adapter` / `lunoraAuthAdapter` /
+ * `lunoraDoAdapter`, or any other better-auth adapter) is a function, never a
+ * Kysely dialect or database. And **nothing at all** (`database: undefined`) —
+ * which `createKyselyAdapter` answers with `{ kysely: null }` exactly like an
+ * adapter does, verified against better-auth 1.7.1.
+ *
+ * Anything else — a raw D1 binding, a dialect, a `{ db }` / `{ dialect }` pair —
+ * is left for better-auth to resolve, which is the only place that knows the
+ * full list.
+ */
+const assertMigratableDatabase = (options: LunoraAuthOptions): void => {
+    // Widened to `unknown`: better-auth types `database` as a union whose adapter
+    // arm the linter reads as an error type, so destructuring it as-is trips
+    // `no-unsafe-assignment`. All this guard needs is truthy-and-not-a-function.
+    const { database } = options as { database?: unknown };
+
+    if (database && typeof database !== "function") {
+        return;
+    }
+
+    throw new LunoraError(
+        "AUTH_MIGRATOR_UNSUPPORTED",
+        database
+            ? "@lunora/auth: this auth instance's `database` is a custom adapter, which better-auth's migrator cannot drive."
+            : "@lunora/auth: this auth instance has no `database`, so better-auth's migrator has nothing to introspect.",
+    );
+};
 
 /**
  * Swap a D1 binding for one that can answer better-auth's index introspection.
@@ -47,6 +83,8 @@ const migrating = new WeakMap<object, Promise<void>>();
 export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOptions }): Promise<void> => {
     const { options } = auth;
 
+    assertMigratableDatabase(options);
+
     const inFlight = migrating.get(options);
 
     if (inFlight) {
@@ -87,7 +125,11 @@ export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOpt
  * a table the migration never created.
  */
 export const compileMigrationsSql = async (options: LunoraAuthOptions): Promise<string> => {
-    const { compileMigrations } = await getMigrations(withD1MigrationSupport(resolveAuthOptions(options)));
+    const resolved = resolveAuthOptions(options);
+
+    assertMigratableDatabase(resolved);
+
+    const { compileMigrations } = await getMigrations(withD1MigrationSupport(resolved));
 
     return compileMigrations();
 };

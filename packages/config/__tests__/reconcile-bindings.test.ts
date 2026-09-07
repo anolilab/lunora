@@ -29,8 +29,10 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         usesImages: false,
         usesKv: false,
         usesMail: false,
+        usesNotify: false,
         usesPayment: false,
         usesPipelines: false,
+        usesR2sql: false,
         usesScheduler: false,
         usesStorage: false,
         usesX402Charge: false,
@@ -177,6 +179,94 @@ describe("reconcileWranglerBindings", () => {
         expect(config.migrations.flatMap((migration: { new_sqlite_classes?: string[] }) => migration.new_sqlite_classes ?? [])).toContain("SchedulerDO");
     });
 
+    it("treats a class introduced by renamed_classes as already registered", () => {
+        expect.assertions(2);
+
+        // wrangler's own `getDeclaredDOClassNames` applies deleted_classes and
+        // renamed_classes alongside the new_* lists. Appending a second
+        // `new_sqlite_classes: ["ShardDO"]` here makes miniflare throw
+        // "Cannot apply new_sqlite_classes migration to existing class ShardDO",
+        // and the write persists in the committed config.
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["OldShardDO"] },
+        { "tag": "v2", "renamed_classes": [{ "from": "OldShardDO", "to": "ShardDO" }] }
+    ],
+}
+`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred());
+
+        expect(result.changed).toBe(false);
+        expect(readConfig().migrations).toHaveLength(2);
+    });
+
+    it("re-registers a class a later deleted_classes migration removed", () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ShardDO"] },
+        { "tag": "v2", "deleted_classes": ["ShardDO"] }
+    ],
+}
+`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred());
+
+        expect(result.changed).toBe(true);
+        expect(readConfig().migrations.at(-1)).toEqual({ new_sqlite_classes: ["ShardDO"], tag: "v3" });
+    });
+
+    // `wrangler.jsonc` is hand-edited, so a stray `null` (a trailing comma in a
+    // JSONC array parses to one) reaches the replay. Reconcile must still return
+    // a report — the malformed shape is the validator's error to describe, not a
+    // raw TypeError out of a provisioning step that runs on every dev start.
+    it("reconciles past null entries in migrations, renamed_classes and the class lists", () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [
+        null,
+        { "tag": "v1", "new_sqlite_classes": ["OldShardDO", null] },
+        { "tag": "v2", "renamed_classes": [null, { "from": "OldShardDO", "to": "ShardDO" }] },
+        { "tag": "v3", "deleted_classes": [null] }
+    ],
+}
+`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred());
+
+        // `ShardDO` IS declared (by the rename), so nothing is appended — the
+        // null entries must not hide that and trigger a duplicate migration.
+        expect(result.changed).toBe(false);
+        expect(readConfig().migrations).toHaveLength(4);
+    });
+
     it("adds the DB binding when a global schema is inferred, and warns about the placeholder id", () => {
         expect.assertions(3);
 
@@ -269,6 +359,50 @@ describe("reconcileWranglerBindings", () => {
 
         expect(result.warnings.join(" ")).toMatch(/r2_buckets/u);
         expect(readConfig().r2_buckets).toBeUndefined();
+    });
+
+    it("keeps warning about pipelines until the binding codegen resolves actually exists", () => {
+        expect.assertions(3);
+
+        // Codegen resolves ONE fixed name — `config.pipelines?.(env) ?? env.PIPELINES`
+        // — and `pipelines` has no `defineApp` override, so a differently-named
+        // entry satisfies the wrangler validator while `ctx.pipelines.send()`
+        // still throws at runtime. Keying the hint on array length silenced it
+        // for exactly that config, and nothing before runtime ever named
+        // PIPELINES.
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "pipelines": [{ "binding": "EVENTS", "pipeline": "events" }],
+}
+`,
+            "utf8",
+        );
+
+        const wrongName = reconcileWranglerBindings(root, baseInferred({ usesPipelines: true }));
+
+        expect(wrongName.warnings.join(" ")).toMatch(/PIPELINES/u);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "pipelines": [{ "binding": "PIPELINES", "pipeline": "events" }],
+}
+`,
+            "utf8",
+        );
+
+        expect(reconcileWranglerBindings(root, baseInferred({ usesPipelines: true })).warnings.join(" ")).not.toMatch(/pipelines binding/u);
+        // The pipeline resource is un-mintable, so nothing is auto-written either way.
+        expect(readConfig().pipelines).toStrictEqual([{ binding: "PIPELINES", pipeline: "events" }]);
     });
 
     it("warns when Flagship binding mode is used but no flagship binding exists, without writing one", () => {
@@ -852,6 +986,83 @@ describe("reconcileWranglerBindings", () => {
             const second = reconcileWranglerBindings(root, baseInferred({ agents: [SUPPORT] }));
 
             expect(second.added).toEqual([]);
+        });
+    });
+
+    // Every step here is add-only, so a renamed `defineQueue`/`defineWorkflow`
+    // export leaves the previous entry behind. Removing it would mean deleting
+    // config this tool cannot prove it wrote, so the orphan is named in
+    // `warnings` instead.
+    describe("orphaned workflows[] / queues entries", () => {
+        const RECEIPT_QUEUE = { bindingName: "QUEUE_RECEIPT", exportName: "receiptQueue", mode: "push" as const, name: "receipt-queue", tuning: {} };
+        const SEND_RECEIPT = {
+            bindingName: "WORKFLOW_SEND_RECEIPT",
+            className: "SendReceiptWorkflow",
+            exported: true,
+            exportName: "sendReceipt",
+            name: "send-receipt",
+            steps: [],
+        };
+
+        /** Seed the config with the pre-rename entries, then reconcile the renamed declarations onto it. */
+        const seed = (block: string): void => {
+            writeFileSync(join(root, "wrangler.jsonc"), `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}${block}}\n`, "utf8");
+        };
+
+        it("warns about a queues.consumers[] subscription no defineQueue export declares", () => {
+            expect.assertions(3);
+
+            seed(`    "queues": {
+        "producers": [{ "binding": "QUEUE_EMAIL", "queue": "email-queue" }],
+        "consumers": [{ "queue": "email-queue" }],
+    },
+`);
+
+            const result = reconcileWranglerBindings(root, baseInferred({ queues: [RECEIPT_QUEUE] }));
+
+            expect(result.warnings.join("\n")).toContain(`queues.consumers[] to "email-queue"`);
+            expect(result.warnings.join("\n")).toContain(`queues.producers[] binding "QUEUE_EMAIL"`);
+            // The orphan is reported, not deleted: removal would also drop a hand-wired subscription.
+            expect(readConfig().queues.consumers.map((entry: { queue: string }) => entry.queue)).toStrictEqual(["email-queue", "receipt-queue"]);
+        });
+
+        it("warns about a workflows[] entry no defineWorkflow/defineAgent export generates", () => {
+            expect.assertions(2);
+
+            seed(`    "workflows": [{ "binding": "WORKFLOW_ORDER_PIPELINE", "class_name": "OrderPipelineWorkflow", "name": "order-pipeline" }],
+`);
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workflows: [SEND_RECEIPT] }));
+
+            expect(result.warnings.join("\n")).toContain(`workflows[] entry "OrderPipelineWorkflow"`);
+            expect(readConfig().workflows.map((entry: { class_name: string }) => entry.class_name)).toStrictEqual([
+                "OrderPipelineWorkflow",
+                "SendReceiptWorkflow",
+            ]);
+        });
+
+        it("stays quiet when the project declares no queue/workflow at all", () => {
+            expect.assertions(1);
+
+            seed(`    "queues": { "producers": [{ "binding": "QUEUE_EMAIL", "queue": "email-queue" }], "consumers": [{ "queue": "email-queue" }] },
+    "workflows": [{ "binding": "WORKFLOW_ORDER_PIPELINE", "class_name": "OrderPipelineWorkflow", "name": "order-pipeline" }],
+`);
+
+            // Nothing declared means nothing to compare against: a hand-wired
+            // config this tool has never touched must not be flagged.
+            const result = reconcileWranglerBindings(root, baseInferred());
+
+            expect(result.warnings).toStrictEqual([]);
+        });
+
+        it("stays quiet once the entries match the declarations", () => {
+            expect.assertions(1);
+
+            reconcileWranglerBindings(root, baseInferred({ queues: [RECEIPT_QUEUE], workflows: [SEND_RECEIPT] }));
+
+            const second = reconcileWranglerBindings(root, baseInferred({ queues: [RECEIPT_QUEUE], workflows: [SEND_RECEIPT] }));
+
+            expect(second.warnings).toStrictEqual([]);
         });
     });
 });

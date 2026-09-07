@@ -74,7 +74,6 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "additionalProperties": false,
                                     "properties": {
                                         "channelId": {
                                             "description": "Id<\"channels\">",
@@ -173,7 +172,6 @@ export const openApiSpec: Record<string, unknown> = {
                     "content": {
                         "application/json": {
                             "schema": {
-                                "additionalProperties": false,
                                 "properties": {
                                     "text": {
                                         "type": "string"
@@ -214,7 +212,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "channelId": {
                                                 "description": "Id<\"channels\">",
@@ -281,7 +278,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "channelId": {
                                                 "description": "Id<\"channels\">",
@@ -305,6 +301,9 @@ export const openApiSpec: Record<string, unknown> = {
                                             },
                                             "tags": {
                                                 "additionalProperties": {
+                                                    "type": "string"
+                                                },
+                                                "propertyNames": {
                                                     "type": "string"
                                                 },
                                                 "type": "object"

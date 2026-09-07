@@ -73,7 +73,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {},
                     "required": [],
                     "type": "object"
@@ -129,7 +128,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "priceId": {
                         "type": "string"
@@ -191,7 +189,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {},
                     "required": [],
                     "type": "object"
@@ -247,7 +244,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {},
                     "required": [],
                     "type": "object"
@@ -303,7 +299,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {},
                     "required": [],
                     "type": "object"

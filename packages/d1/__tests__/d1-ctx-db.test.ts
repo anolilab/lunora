@@ -47,6 +47,7 @@ const setupTodos = (): DatabaseWriterLike => {
         `CREATE TABLE "todos" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
+            "_version" INTEGER,
             "archived" INTEGER,
             "priority" TEXT,
             "projectId" TEXT,
@@ -418,6 +419,7 @@ describe("d1 ctx-db", () => {
             `CREATE TABLE "items" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
+            "_version" INTEGER,
             "rev" INTEGER,
             "seq" INTEGER,
             "slug" TEXT UNIQUE,
@@ -590,9 +592,11 @@ describe("d1 ctx-db", () => {
 
         const setupRelations = (action?: "cascade" | "restrict" | "set null"): DatabaseWriterLike => {
             // FK columns stay nullable so `set null` can clear them.
-            harness.ddl(`CREATE TABLE "users" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "name" TEXT)`);
-            harness.ddl(`CREATE TABLE "messages" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "authorId" TEXT, "body" TEXT)`);
-            harness.ddl(`CREATE TABLE "reactions" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "messageId" TEXT, "emoji" TEXT)`);
+            harness.ddl(`CREATE TABLE "users" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "name" TEXT)`);
+            harness.ddl(`CREATE TABLE "messages" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "authorId" TEXT, "body" TEXT)`);
+            harness.ddl(
+                `CREATE TABLE "reactions" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "messageId" TEXT, "emoji" TEXT)`,
+            );
 
             return createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema: buildRelSchema(action) });
         };
@@ -784,7 +788,7 @@ describe("d1 ctx-db", () => {
                 },
             };
 
-            harness.ddl(`CREATE TABLE "users" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "name" TEXT)`);
+            harness.ddl(`CREATE TABLE "users" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "name" TEXT)`);
             // No D1 messages table — they live on shards in the real topology;
             // the cascade must refuse before we'd reach the missing table.
 
@@ -798,7 +802,7 @@ describe("d1 ctx-db", () => {
 
     describe("triggers", () => {
         const messagesDdl = (): void => {
-            harness.ddl(`CREATE TABLE "messages" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "body" TEXT, "locked" INTEGER)`);
+            harness.ddl(`CREATE TABLE "messages" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "body" TEXT, "locked" INTEGER)`);
         };
 
         it("before/after insert fire in order with the new doc", async () => {
@@ -929,7 +933,7 @@ describe("d1 ctx-db", () => {
             };
 
             messagesDdl();
-            harness.ddl(`CREATE TABLE "audit" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "row" TEXT, "table" TEXT)`);
+            harness.ddl(`CREATE TABLE "audit" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "row" TEXT, "table" TEXT)`);
 
             const writer = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
 
@@ -1007,6 +1011,13 @@ describe("d1 ctx-db", () => {
             expect.assertions(3);
 
             let raced = false;
+            // Assigned below, once the schema it needs exists: the competing
+            // writer is a SECOND store over the same database — which is what a
+            // concurrent mutation actually is, another isolate running this same
+            // code against the shared D1 — rather than hand-rolled SQL. The CAS
+            // compares the row version every guarded write bumps, so a competitor
+            // that does not go through the store is not what it detects.
+            let competitor: undefined | ReturnType<typeof createD1ContextDatabase>;
 
             // A before-update trigger spans an `await`, giving a competing writer
             // a window to commit. The handler directly mutates the same row on the
@@ -1031,7 +1042,7 @@ describe("d1 ctx-db", () => {
                                     raced = true;
 
                                     // Competing writer commits during the window.
-                                    await harness.exec.run(`UPDATE "todos" SET "seq" = ? WHERE "id" = ?`, [999, "t1"]);
+                                    await competitor?.patch("t1", { seq: 999 });
                                 },
                                 op: "update",
                                 timing: "before",
@@ -1045,6 +1056,7 @@ describe("d1 ctx-db", () => {
                 `CREATE TABLE "todos" (
                 "id" TEXT PRIMARY KEY,
                 "_creationTime" INTEGER NOT NULL,
+                "_version" INTEGER,
                 "archived" INTEGER,
                 "priority" TEXT,
                 "projectId" TEXT,
@@ -1053,6 +1065,8 @@ describe("d1 ctx-db", () => {
             );
 
             const writer = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+
+            competitor = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
 
             await writer.insert("todos", { _id: "t1", archived: false, priority: "high", projectId: "p1", seq: 1 }, { allowExplicitId: true });
 

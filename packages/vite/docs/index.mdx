@@ -23,16 +23,40 @@ export default defineConfig({
 
 ## Options
 
-| Option             | Default               | Purpose                                                                                              |
-| ------------------ | --------------------- | ---------------------------------------------------------------------------------------------------- |
-| `schemaDir`        | `"lunora"`            | Directory containing `schema.ts` + function files                                                    |
-| `generatedDir`     | `"lunora/_generated"` | Where to emit `api.ts`, `server.ts`, `dataModel.ts`                                                  |
-| `apiSpec`          | `"openapi"`           | API spec emitted into `_generated/`: `"openapi"`/`"openrpc"`/`"both"`/`"none"`                       |
-| `studio`           | `true`                | Serve the Lunora studio at `/__lunora` during dev, or `false` to skip                                |
-| `cloudflare`       | `true`                | Pass options to `@cloudflare/vite-plugin`, or `false` to skip                                        |
-| `overlay`          | `true`                | Inject `@visulima/vite-overlay` for runtime errors; `false` to skip, or an options object to forward |
-| `validateWrangler` | `true`                | Cross-check `wrangler.jsonc` bindings against the schema                                             |
-| `projectRoot`      | `process.cwd()`       | Override for monorepo setups                                                                         |
+| Option                            | Default         | Purpose                                                                                                                    |
+| --------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `schemaDir`                       | `"lunora"`      | Directory containing `schema.ts` + function files                                                                          |
+| `apiSpec`                         | `"openapi"`     | API spec emitted into `_generated/`: `"openapi"`/`"openrpc"`/`"both"`/`"none"`                                             |
+| `target`                          | `"cloudflare"`  | Deploy target the emitted `ctx.*` surface is tailored to; defaults to `target` in `lunora.json`                            |
+| `studio`                          | `true`          | Serve the Lunora studio at `/__lunora` during dev, or `false` to skip                                                      |
+| `cloudflare`                      | `true`          | Pass options to `@cloudflare/vite-plugin`, or `false` to skip                                                              |
+| `overlay`                         | `true`          | Inject `@visulima/vite-overlay` for runtime errors; `false` to skip, or an options object to forward                       |
+| `validateWrangler`                | `true`          | Cross-check `wrangler.jsonc` bindings against the schema                                                                   |
+| `allowUnauthenticatedShardAccess` | `false`         | Let the composed class-A worker serve a client-named non-default shard / fan-out without an `authorizeShard` callback      |
+| `shard`                           | `{}`            | Shard DO config baked into the composed class-A entry: `cdc`, `reactiveCache`, `maxRelationKeys`, `relationExistsPushDown` |
+| `projectRoot`                     | `process.cwd()` | Override for monorepo setups                                                                                               |
+
+Generated files always land in `<schemaDir>/_generated`.
+
+### `shard` — class-A only
+
+A class-A app (TanStack Start, vinext, React Router, SolidStart) has no
+hand-written worker entry, so it never calls the generated `defineApp()` builder
+and has no `createShardDO(config)` of its own. `shard` is how it configures the
+shard Durable Object instead — the plugin bakes it into the entry it composes:
+
+```ts
+lunora({
+    shard: {
+        cdc: true, // record a post-image to __cdc_log on every write
+        reactiveCache: true, // or { maxEntries, maxBytes } to tune the caps
+    },
+});
+```
+
+Ignored for class B/C, which pass their own config through `defineApp()` (or
+`createShardDO`) in their worker entry — an explicit argument there is
+unaffected by this option.
 
 ## Codegen lifecycle
 

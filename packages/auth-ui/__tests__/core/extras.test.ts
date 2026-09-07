@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CAPTCHA_HEADER, captchaHeaders, dismissToast, getToasts, pushToast, resetToasts, setCaptchaToken, subscribeToasts } from "../../src/core";
+import {
+    CAPTCHA_HEADER,
+    captchaHeaders,
+    dismissToast,
+    getToasts,
+    LAST_LOGIN_METHOD_COOKIE,
+    pushToast,
+    readLastLoginMethod,
+    resetToasts,
+    setCaptchaToken,
+    subscribeToasts,
+} from "../../src/core";
 
 // One cross-suite teardown hook, deliberately at the top level.
 let restoreLocation: (() => void) | undefined;
@@ -269,6 +280,108 @@ describe("redirectTo reaches every sign-in transport", () => {
 
         expect(oneTap).toHaveBeenCalledWith(expect.objectContaining({ callbackURL: "/invite/xyz" }));
     });
+
+    /*
+     * The three doors below finish client-side with `nav.replace` rather than
+     * handing a callbackURL to better-auth, and each one dropped the parameter:
+     * the invitee signed in and landed on `/` with the invitation forgotten,
+     * which is precisely the failure `redirect-to.ts` exists to prevent.
+     */
+    it("navigates email-OTP sign-in to the on-origin redirectTo", async () => {
+        expect.assertions(1);
+
+        const { createEmailOtpController, resolveContext } = await import("../../src/core");
+
+        globalThis.history.pushState({}, "", `/auth/email-otp?${new URLSearchParams({ redirectTo: "/invite/xyz" }).toString()}`);
+
+        const replace = vi.fn();
+        const context = resolveContext({
+            authClient: {
+                emailOtp: { sendVerificationOtp: () => Promise.resolve({ data: {}, error: null }) },
+                getSession: vi.fn(),
+                signIn: { emailOtp: () => Promise.resolve({ data: {}, error: null }) },
+            } as never,
+            nav: { navigate: vi.fn(), replace },
+            redirects: { afterSignIn: "/app" },
+        });
+
+        const controller = createEmailOtpController(context);
+
+        controller.actions.setEmail("ada@example.com");
+        await controller.actions.sendCode();
+        controller.actions.setCode("123456");
+        await controller.actions.verify();
+
+        expect(replace).toHaveBeenCalledWith("/invite/xyz");
+    });
+
+    it("navigates anonymous sign-in to the on-origin redirectTo", async () => {
+        expect.assertions(1);
+
+        const { createAnonymousController, resolveContext } = await import("../../src/core");
+
+        globalThis.history.pushState({}, "", "/sign-in?redirectTo=%2Finvite%2Fxyz");
+
+        const replace = vi.fn();
+        const context = resolveContext({
+            authClient: { getSession: vi.fn(), signIn: { anonymous: () => Promise.resolve({ data: {}, error: null }) } } as never,
+            nav: { navigate: vi.fn(), replace },
+            redirects: { afterSignIn: "/app" },
+        });
+
+        await createAnonymousController(context).actions.signIn();
+
+        expect(replace).toHaveBeenCalledWith("/invite/xyz");
+    });
+
+    it("navigates phone-OTP sign-in to the on-origin redirectTo", async () => {
+        expect.assertions(1);
+
+        const { createPhoneVerifyController, resolveContext } = await import("../../src/core");
+
+        globalThis.history.pushState({}, "", `/auth/phone?${new URLSearchParams({ redirectTo: "/invite/xyz" }).toString()}`);
+
+        const replace = vi.fn();
+        const context = resolveContext({
+            authClient: {
+                getSession: vi.fn(),
+                phoneNumber: {
+                    sendOtp: () => Promise.resolve({ data: {}, error: null }),
+                    verify: () => Promise.resolve({ data: {}, error: null }),
+                },
+            } as never,
+            nav: { navigate: vi.fn(), replace },
+            redirects: { afterSignIn: "/app" },
+        });
+
+        const controller = createPhoneVerifyController(context);
+
+        await controller.actions.send("+15551234567");
+        await controller.actions.verify("123456");
+
+        expect(replace).toHaveBeenCalledWith("/invite/xyz");
+    });
+
+    it("falls back to the configured default on a client-side door when redirectTo would leave the origin", async () => {
+        expect.assertions(1);
+
+        const { createAnonymousController, resolveContext } = await import("../../src/core");
+
+        const offOrigin = new URLSearchParams({ redirectTo: "https://evil.example" });
+
+        globalThis.history.pushState({}, "", `/sign-in?${offOrigin.toString()}`);
+
+        const replace = vi.fn();
+        const context = resolveContext({
+            authClient: { getSession: vi.fn(), signIn: { anonymous: () => Promise.resolve({ data: {}, error: null }) } } as never,
+            nav: { navigate: vi.fn(), replace },
+            redirects: { afterSignIn: "/app" },
+        });
+
+        await createAnonymousController(context).actions.signIn();
+
+        expect(replace).toHaveBeenCalledWith("/app");
+    });
 });
 
 /**
@@ -414,6 +527,51 @@ describe("oauth-provider consent", () => {
 
         expect(replace).toHaveBeenCalledWith("/done");
         expect(assign).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        // eslint-disable-next-line no-script-url -- asserting these exact strings never reach `location.assign`.
+        ["javascript:alert(document.cookie)"],
+        // Leading whitespace/newlines are stripped by the URL parser and by the
+        // browser, so a prefix check on the raw string would let this through.
+        ["\n\t JavaScript:alert(1)"],
+        ["data:text/html,<script>alert(1)</script>"],
+    ])("refuses to hand %j to the browser", async (redirectURI: string) => {
+        expect.assertions(3);
+
+        const { createConsentController, resolveContext } = await import("../../src/core");
+
+        const assign = stubLocationAssign();
+        const replace = vi.fn();
+        const context = resolveContext({
+            authClient: {
+                getSession: vi.fn(),
+                oauth2: {
+                    consent: vi.fn(() => Promise.resolve({ data: { redirectURI }, error: null })),
+                    getConsent: vi.fn(() => Promise.resolve({ data: { clientName: "Acme", scope: "openid" }, error: null })),
+                },
+            } as never,
+            nav: { navigate: vi.fn(), replace },
+            plugins: { oauthProvider: true },
+        });
+
+        const controller = createConsentController(context, { consentId: "c1" });
+
+        await vi.waitFor(() => {
+            if (controller.getState().loading) {
+                throw new Error("still loading");
+            }
+        });
+
+        await controller.actions.accept();
+
+        // `location.assign` runs in the AUTH app's origin, so a non-http(s)
+        // `redirectURI` is script execution against the very session the consent
+        // screen is deciding for. The authorization server vets the redirect
+        // HOST against the client's registration; nothing there vets the SCHEME.
+        expect(assign).not.toHaveBeenCalled();
+        expect(replace).not.toHaveBeenCalled();
+        expect(controller.getState().error).toBeDefined();
     });
 });
 
@@ -602,5 +760,38 @@ describe("theme mode", () => {
         });
 
         expect(applied).toStrictEqual([]);
+    });
+});
+
+describe("readLastLoginMethod", () => {
+    const withCookie = (cookie: string): void => {
+        vi.stubGlobal("document", { cookie });
+    };
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it("returns undefined for a malformed percent-escape instead of throwing", () => {
+        expect.assertions(2);
+
+        // The cookie is unsigned and attacker-writable (the module says so), and
+        // every port reads it during render — a URIError here takes the whole
+        // sign-in card down to decorate a label.
+        withCookie(`${LAST_LOGIN_METHOD_COOKIE}=%zz`);
+
+        expect(readLastLoginMethod()).toBeUndefined();
+
+        withCookie(`${LAST_LOGIN_METHOD_COOKIE}=%`);
+
+        expect(readLastLoginMethod()).toBeUndefined();
+    });
+
+    it("still decodes a well-formed escaped value", () => {
+        expect.assertions(1);
+
+        withCookie(`${LAST_LOGIN_METHOD_COOKIE}=${encodeURIComponent("magic-link")}`);
+
+        expect(readLastLoginMethod()).toBe("magic-link");
     });
 });

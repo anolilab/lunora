@@ -2,6 +2,10 @@ import { isLunoraError, LunoraError } from "@lunora/errors";
 import type { EmbeddingModel } from "ai";
 import { embed as aiEmbed, embedMany as aiEmbedMany, jsonSchema, tool } from "ai";
 
+// Repo-root inlined helper (see shared/stable-key.ts) — the canonical
+// code-point-stable, recursively-sorted encoder, used here to give a source's
+// `metadata` one canonical form to hash (see `sourceIdentity`).
+import { stableStringify } from "../../../../shared/stable-key";
 import { estimateModelCost } from "../pricing";
 import fixedWindowChunks from "./chunk";
 import { concurrentMap, INDEX_CONCURRENCY } from "./concurrent";
@@ -176,8 +180,56 @@ const parseChunkVectorId = (id: string, namespace: string | undefined): { chunkI
 
 const sha256Hex = async (text: string): Promise<string> => contentHash(new TextEncoder().encode(text));
 
-/** Keep only chunks scoring at or above `minScore`. */
-const aboveScore = (chunks: ReadonlyArray<RetrievedChunk>, minScore: number): RetrievedChunk[] => chunks.filter((chunk) => chunk.score >= minScore);
+/**
+ * The canonical encoding of everything an `index()` call writes onto a source's
+ * vectors — its body, its `metadata`, and its `importance`.
+ *
+ * The re-index short-circuit compares a hash of this, not of `text` alone.
+ * `metadata` is what scopes a document: `rlsFilter` and `metadataFilter` both
+ * evaluate against it, so hashing the body only made a tenant move over an
+ * unchanged body (`{ orgId: "org-a" }` → `{ orgId: "org-b" }`) report
+ * `{ unchanged: true }` while every vector kept the OLD `orgId` — the previous
+ * tenant kept retrieving the document forever and the new one never saw it.
+ * `importance` is written onto every chunk and multiplied into its score, so it
+ * belongs here for the same reason.
+ *
+ * `stableStringify` sorts object keys at every depth, so re-syncing the same
+ * metadata written in a different key order is still the cheap no-op it was. It
+ * throws on a value it cannot faithfully encode (a `Date`, a `bigint`, a cycle);
+ * that is not a reason to refuse the index, so it returns `undefined` and the
+ * caller skips the short-circuit — the source re-indexes, exactly as it would
+ * under `reindex: true`.
+ */
+const sourceIdentity = (input: IndexInput): string | undefined => {
+    try {
+        // An array, not an object: `stableStringify` skips `undefined` object
+        // fields (so an absent `metadata` would collide with a present one) but
+        // encodes it positionally inside an array.
+        return stableStringify([input.text, input.metadata, input.importance]);
+    } catch {
+        return undefined;
+    }
+};
+
+/**
+ * Split `chunks` into those at or above `minScore` and the ids of those below
+ * it. The rejected ids are kept because a chunk the vector leg SCORED and
+ * rejected must not be handed back by the lexical leg (see `retrieve`).
+ */
+const partitionByScore = (chunks: ReadonlyArray<RetrievedChunk>, minScore: number): { kept: RetrievedChunk[]; rejectedIds: string[] } => {
+    const kept: RetrievedChunk[] = [];
+    const rejectedIds: string[] = [];
+
+    for (const chunk of chunks) {
+        if (chunk.score >= minScore) {
+            kept.push(chunk);
+        } else {
+            rejectedIds.push(chunk.id);
+        }
+    }
+
+    return { kept, rejectedIds };
+};
 
 /** Split stored metadata into the caller's fields (internal `__rag*` keys stripped). */
 const userMetadataOf = (metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
@@ -498,16 +550,6 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
          */
         const embedCache = new Map<string, ReadonlyArray<number>>();
 
-        /**
-         * Embeddings produced by the in-flight `index()` batch. Deliberately
-         * UNBOUNDED and separate from {@link embedCache}: the batch seeds one
-         * entry per chunk of the document being indexed, and the per-chunk
-         * `embed` callbacks `store.upsert` invokes must all hit it — otherwise
-         * every chunk is embedded a second time and the batch is pure cost.
-         * Cleared when `index()` returns, so it never grows past one document.
-         */
-        const batchEmbeddings = new Map<string, ReadonlyArray<number>>();
-
         /** Evict oldest-first once the cache passes its bound (insertion-ordered Map). */
         const rememberEmbedding = (text: string, embedding: ReadonlyArray<number>): void => {
             if (cacheLimit === 0) {
@@ -528,7 +570,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         };
 
         const embedText = async (text: string): Promise<ReadonlyArray<number>> => {
-            const cached = embedCache.get(text) ?? batchEmbeddings.get(text);
+            const cached = embedCache.get(text);
 
             if (cached !== undefined) {
                 return cached;
@@ -619,20 +661,30 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         };
 
         /**
-         * Embed `texts` in one batched call and seed {@link batchEmbeddings}, so
-         * the per-chunk `embed` callbacks that follow resolve without further
-         * I/O.
+         * Embed `texts` in one batched call and return the resulting map, so the
+         * per-chunk `embed` callbacks that follow resolve without further I/O.
+         *
+         * The map belongs to ONE `index()` call and is deliberately UNBOUNDED and
+         * separate from {@link embedCache}: it seeds one entry per chunk of the
+         * document being indexed, and the per-chunk `embed` callbacks
+         * `store.upsert` invokes must all hit it — otherwise every chunk is
+         * embedded a second time and the batch is pure cost. Returning it rather
+         * than sharing one map across the bound context is what makes it
+         * request-scoped in fact: `defineRagSource` drives up to `concurrency`
+         * index() calls through one bound `Rag`, and a shared map was wiped by
+         * whichever sibling finished first, mid-flight.
          *
          * Best-effort: a provider that rejects the batch (or an AI SDK build
-         * without `embedMany`) leaves the map empty and every chunk falls back
+         * without `embedMany`) returns an empty map and every chunk falls back
          * to its own single embed — the pre-existing path. A batching
          * optimisation must never be the reason indexing fails.
          */
-        const prefillEmbeddings = async (texts: ReadonlyArray<string>): Promise<void> => {
-            const pending = [...new Set(texts.filter((text) => !embedCache.has(text) && !batchEmbeddings.has(text)))];
+        const prefillEmbeddings = async (texts: ReadonlyArray<string>): Promise<Map<string, ReadonlyArray<number>>> => {
+            const batch = new Map<string, ReadonlyArray<number>>();
+            const pending = [...new Set(texts.filter((text) => !embedCache.has(text)))];
 
             if (pending.length < 2) {
-                return;
+                return batch;
             }
 
             model ??= resolveEmbeddingModel(config.embeddingModel, context.ai);
@@ -641,7 +693,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 const { embeddings } = await aiEmbedMany({ model, values: pending });
 
                 if (embeddings.length !== pending.length) {
-                    return;
+                    return batch;
                 }
 
                 const [first] = embeddings;
@@ -651,7 +703,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 }
 
                 for (const [position, text] of pending.entries()) {
-                    batchEmbeddings.set(text, embeddings[position] as ReadonlyArray<number>);
+                    batch.set(text, embeddings[position] as ReadonlyArray<number>);
                 }
             } catch (error) {
                 // A dimension breach is a real configuration error and must
@@ -660,6 +712,8 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                     throw error;
                 }
             }
+
+            return batch;
         };
 
         const checkNamespace = (namespace: string | undefined): void => {
@@ -679,7 +733,26 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             }
         };
 
-        /** Read chunk #0's bookkeeping metadata (content hash + chunk count) for a source. */
+        /**
+         * Read chunk #0's bookkeeping metadata (content hash + chunk count) for a source.
+         *
+         * EVENTUALLY CONSISTENT, and both callers below inherit that. Vectorize
+         * applies mutations asynchronously, so a head written moments ago may not
+         * be readable yet and this returns `{}`. The consequences differ by caller:
+         *
+         * `index()` treats an invisible head as "changed" and re-indexes, which is
+         * idempotent — a wasted embed, nothing worse. `remove()` and the
+         * shrink-on-reindex path instead use `chunks` to decide HOW MANY chunks to
+         * delete, so an invisible head means `remove()` deletes only chunk #0 and a
+         * shrinking reindex leaves its trailing chunks searchable — silently, since
+         * both report success.
+         *
+         * So a `remove()` (or a shrinking `index({ reindex: true })`) issued in
+         * the same request as the `index()` that created the source can under-
+         * delete. Re-issue it once the write has settled; a repeat is idempotent.
+         * A store with read-after-write consistency (`sqliteVectorStore`, whose
+         * `exec` is synchronous) has no such window.
+         */
         const readHead = async (sourceId: string, namespace?: string): Promise<{ chunks?: number; hash?: string }> => {
             const [head] = await store.getByIds([chunkVectorId(namespace, sourceId, 0)], namespace);
             const hash = head?.metadata?.[HASH_KEY];
@@ -711,14 +784,19 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             }
 
             const effectiveNamespace = withModelTag(input.namespace);
-            const hash = await sha256Hex(input.text);
+            // Hashes the whole stored identity (body + metadata + importance),
+            // not just the body — see {@link sourceIdentity}. An identity that
+            // cannot be encoded still needs a stored hash, so it falls back to
+            // the body and forfeits only the short-circuit below.
+            const identity = sourceIdentity(input);
+            const hash = await sha256Hex(identity ?? input.text);
             const previous = await readHead(input.id, effectiveNamespace);
 
             // Unchanged content is a no-op re-sync: skip chunking, embedding,
             // and every write. (Vectorize applies mutations asynchronously, so
             // a hash written moments ago may not be visible yet — the worst
             // case is a redundant, idempotent re-index.)
-            if (input.reindex !== true && previous.hash === hash && previous.chunks !== undefined) {
+            if (input.reindex !== true && identity !== undefined && previous.hash === hash && previous.chunks !== undefined) {
                 return {
                     chunks: previous.chunks,
                     ids: Array.from({ length: previous.chunks }, (_, chunkIndex) => chunkVectorId(effectiveNamespace, input.id, chunkIndex)),
@@ -777,56 +855,54 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // endpoint still fans out internally, so this is never worse — and
             // with one it collapses a 200-chunk document from 200 round-trips to
             // a handful.
-            await prefillEmbeddings(pieces);
+            const batch = await prefillEmbeddings(pieces);
+            // This call's OWN batch first, then the shared per-context paths
+            // (cache, then a single embed). Scoped to the call so a sibling
+            // `index()` on the same bound Rag can neither read it nor drop it.
+            const embedChunk = async (text: string): Promise<ReadonlyArray<number>> => batch.get(text) ?? (await embedText(text));
 
-            try {
-                await concurrentMap(pieces, INDEX_CONCURRENCY, async (piece, chunkIndex) => {
-                    const id = ids[chunkIndex] as string;
-                    const metadata: Record<string, unknown> = {
-                        ...input.metadata,
-                        [CHUNK_INDEX_KEY]: chunkIndex,
-                        [SOURCE_KEY]: input.id,
-                    };
+            await concurrentMap(pieces, INDEX_CONCURRENCY, async (piece, chunkIndex) => {
+                const id = ids[chunkIndex] as string;
+                const metadata: Record<string, unknown> = {
+                    ...input.metadata,
+                    [CHUNK_INDEX_KEY]: chunkIndex,
+                    [SOURCE_KEY]: input.id,
+                };
 
-                    if (!textStore) {
-                        metadata[TEXT_KEY] = piece;
+                if (!textStore) {
+                    metadata[TEXT_KEY] = piece;
+                }
+
+                if (input.importance !== undefined) {
+                    metadata[IMPORTANCE_KEY] = input.importance;
+                }
+
+                // Chunk #0 carries the source's bookkeeping so re-index and
+                // remove() need no external record of the previous state.
+                if (chunkIndex === 0) {
+                    metadata[HASH_KEY] = hash;
+                    metadata[COUNT_KEY] = pieces.length;
+
+                    if (modelTag !== undefined) {
+                        metadata[MODEL_KEY] = modelTag;
                     }
+                }
 
-                    if (input.importance !== undefined) {
-                        metadata[IMPORTANCE_KEY] = input.importance;
-                    }
+                assertMetadataFits(metadata, chunkIndex, input.id, store.capabilities.maxMetadataBytes);
 
-                    // Chunk #0 carries the source's bookkeeping so re-index and
-                    // remove() need no external record of the previous state.
-                    if (chunkIndex === 0) {
-                        metadata[HASH_KEY] = hash;
-                        metadata[COUNT_KEY] = pieces.length;
-
-                        if (modelTag !== undefined) {
-                            metadata[MODEL_KEY] = modelTag;
-                        }
-                    }
-
-                    assertMetadataFits(metadata, chunkIndex, input.id, store.capabilities.maxMetadataBytes);
-
-                    // Vector upsert
-                    await store.upsert({
-                        embed: embedText,
-                        id,
-                        input: piece,
-                        metadata,
-                        namespace: effectiveNamespace,
-                    });
-
-                    // Progress callback — fires after the upsert so callers see a
-                    // consistent state when the callback runs.
-                    input.onChunk?.({ chunkIndex, id, text: piece, total: pieces.length });
+                // Vector upsert
+                await store.upsert({
+                    embed: embedChunk,
+                    id,
+                    input: piece,
+                    metadata,
+                    namespace: effectiveNamespace,
                 });
-            } finally {
-                // Request-scoped by construction: one document's worth of
-                // embeddings, released the moment its upserts are done.
-                batchEmbeddings.clear();
-            }
+
+                // Progress callback — fires after the upsert so callers see a
+                // consistent state when the callback runs.
+                input.onChunk?.({ chunkIndex, id, text: piece, total: pieces.length });
+            });
 
             // A shrinking re-index leaves stale trailing chunks behind — delete
             // them so they cannot keep matching. New chunks are already written,
@@ -948,7 +1024,14 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         /** Resolve a named filter or pass a literal filter through. */
         const resolveFilter = (filter: Record<string, unknown> | string | undefined): Record<string, unknown> | undefined => {
             if (typeof filter === "string") {
-                const resolved = config.filters?.[filter];
+                // `Object.hasOwn`, not a plain index: `config.filters?.["constructor"]`
+                // (or `toString`, `valueOf`, …) resolves to an inherited
+                // `Object.prototype` member, which is truthy, so the NOT_FOUND guard
+                // was skipped and `resolved.filter` came back `undefined` — an
+                // UNFILTERED retrieval, in a package whose `matchesMetadataFilter`
+                // otherwise fails closed. Siblings here already do it this way (see
+                // `pricing.ts`, `source.ts`).
+                const resolved = config.filters !== undefined && Object.hasOwn(config.filters, filter) ? config.filters[filter] : undefined;
 
                 if (!resolved) {
                     throw new LunoraError(
@@ -1062,6 +1145,15 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
             const minScore = options?.minScore;
 
+            // Chunks the vector leg SCORED and rejected for `minScore`. The
+            // lexical leg must not hand them back: a lexical-only hit the vector
+            // leg never scored is legitimately not gated (its BM25 score is not
+            // on the cosine scale — see `hybridRank`'s docs), but re-admitting
+            // one that failed the caller's threshold contradicts an explicit
+            // instruction about that exact chunk, and made `minScore` unreachable
+            // for the whole retrieval the moment a `lexicalStore` was attached.
+            const belowMinScore = new Set<string>();
+
             const runVectorLeg = async (searchQuery: string): Promise<RetrievedChunk[]> => {
                 const vectorResult = await store.query({
                     embed: embedText,
@@ -1083,7 +1175,17 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 // random. Filtering each leg before fusion is also the stricter
                 // reading: a chunk too weak to pass on its own does not get in
                 // by being surfaced twice.
-                return minScore === undefined ? legChunks : aboveScore(legChunks, minScore);
+                if (minScore === undefined) {
+                    return legChunks;
+                }
+
+                const { kept, rejectedIds } = partitionByScore(legChunks, minScore);
+
+                for (const id of rejectedIds) {
+                    belowMinScore.add(id);
+                }
+
+                return kept;
             };
 
             // Multi-query expansion: each rewrite is its own ranking, fused by
@@ -1099,8 +1201,8 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
             // Hybrid search: also rank via the lexical (BM25) leg and fuse the
             // two rankings with RRF — recovering exact-term matches the embedding
-            // misses. Lexical-only hits carry no stored metadata/importance; a hit
-            // shared with the vector leg keeps the (richer) vector chunk in RRF.
+            // misses. A hit shared with the vector leg keeps the (richer) vector
+            // chunk in RRF; a lexical-only hit is hydrated below.
             if (config.lexicalStore) {
                 const lexicalMatches = await config.lexicalStore.search(primaryQuery, {
                     filter: effectiveFilter,
@@ -1108,14 +1210,35 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                     topK: config.lexicalTopK ?? candidateK,
                 });
 
-                const lexicalChunks: RetrievedChunk[] = lexicalMatches.map((match) => {
+                const fusedIds = new Set(chunks.map((chunk) => chunk.id));
+                // A chunk the vector leg rejected for `minScore` stays rejected —
+                // unless another leg kept it, in which case it is already in
+                // `chunks` and this is only an RRF boost. See `belowMinScore`.
+                const admissible = lexicalMatches.filter((match) => !belowMinScore.has(match.id) || fusedIds.has(match.id));
+
+                // `importance` and the caller `metadata` live on the VECTOR record —
+                // `LexicalMatch` carries neither, and `StoredRagChunk.metadata`
+                // deliberately excludes the internal `__rag*` keys that hold
+                // importance. Hard-coding `importance: 1, metadata: undefined` gave a
+                // source demoted to `importance: 0` full weight on every keyword hit
+                // (the case hybrid retrieval exists to create) and blanked
+                // `sources[].metadata`. One `getByIds` over the lexical-only ids
+                // recovers both from the single source of truth; ids the vector leg
+                // already returned need no round trip.
+                const unhydratedIds = admissible.map((match) => match.id).filter((id) => !fusedIds.has(id));
+                const lexicalRecords = unhydratedIds.length === 0 ? [] : await store.getByIds(unhydratedIds, effectiveNamespace);
+                const metadataById = new Map(lexicalRecords.map((record) => [record.id, record.metadata]));
+
+                const lexicalChunks: RetrievedChunk[] = admissible.map((match) => {
                     const parsed = parseChunkVectorId(match.id, effectiveNamespace);
+                    const fullMetadata = metadataById.get(match.id);
+                    const rawImportance = fullMetadata?.[IMPORTANCE_KEY];
 
                     return {
                         chunkIndex: parsed.chunkIndex,
                         id: match.id,
-                        importance: 1,
-                        metadata: undefined,
+                        importance: typeof rawImportance === "number" && rawImportance >= 0 && rawImportance <= 1 ? rawImportance : 1,
+                        metadata: userMetadataOf(fullMetadata),
                         score: match.score,
                         sourceId: parsed.sourceId,
                         text: match.text,

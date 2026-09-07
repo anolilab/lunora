@@ -60,7 +60,6 @@ const foldCheck = (existing: CheckResult | undefined, level: Finding["level"], n
 const attributeFindings = (
     procedures: ReadonlyArray<AdvisorProcedureProtection>,
     findings: ReadonlyArray<Finding>,
-    weightOf: (finding: Finding) => number,
 ): { byProcedure: Map<string, CheckResult[]>; project: CheckResult[] } => {
     const checksById = new Map<string, Map<string, CheckResult>>();
 
@@ -76,7 +75,7 @@ const attributeFindings = (
         const owner = file !== undefined && exportName !== undefined ? checksById.get(procedureId(file, exportName)) : undefined;
         const bucket = owner ?? projectChecks;
 
-        bucket.set(finding.name, foldCheck(bucket.get(finding.name), finding.level, finding.name, weightOf(finding)));
+        bucket.set(finding.name, foldCheck(bucket.get(finding.name), finding.level, finding.name, weightFor(finding.level)));
     }
 
     return {
@@ -141,7 +140,7 @@ const scoreAdvisor = (
     options: ScoreAdvisorOptions = {},
 ): AdvisorMap => {
     const exempt = new Set(options.exempt);
-    const attributed = attributeFindings(procedures, findings, (finding) => weightFor(finding.level));
+    const attributed = attributeFindings(procedures, findings);
 
     const scored: ProcedureScore[] = procedures
         .map((procedure) => {

@@ -1,4 +1,4 @@
-import type { ConnectionStatus, FunctionReference, LunoraClient, Unsubscribe, User } from "@lunora/client";
+import type { ConnectionStatus, FunctionReference, LunoraClient, SubscriptionError, SubscriptionErrorCallback, Unsubscribe, User } from "@lunora/client";
 import { vi } from "vitest";
 
 interface MockClientHooks {
@@ -7,6 +7,7 @@ interface MockClientHooks {
     asClient: LunoraClient;
     close: ReturnType<typeof vi.fn>;
     connectionStatus: ReturnType<typeof vi.fn>;
+    currentIdentity: ReturnType<typeof vi.fn>;
 
     /**
      * Manually push a value to active subscribers for `ref`. When `predicate` is
@@ -15,6 +16,13 @@ interface MockClientHooks {
      * that share one reserved channel ref.
      */
     emit: (ref: string, value: unknown, predicate?: (args: unknown) => boolean) => void;
+
+    /**
+     * Fire the subscribe-time `onError` sink for active subscribers of `ref` — the
+     * server-pushed, subscription-scoped error channel (an RLS denial, a query that
+     * starts failing server-side), as opposed to an attach throw.
+     */
+    emitError: (ref: string, error: SubscriptionError, predicate?: (args: unknown) => boolean) => void;
     getAuthToken: ReturnType<typeof vi.fn>;
     getCurrentUser: ReturnType<typeof vi.fn>;
     mutation: ReturnType<typeof vi.fn>;
@@ -33,6 +41,7 @@ interface MockClientHooks {
 interface SubEntry {
     args: unknown;
     callback: (value: unknown) => void;
+    onError: SubscriptionErrorCallback | undefined;
     ref: string;
 }
 
@@ -45,19 +54,30 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
     );
     const mutationFunction = vi.fn<() => Promise<unknown>>(async () => undefined);
     const actionFunction = vi.fn<() => Promise<unknown>>(async () => undefined);
-    const subscribeFunction = vi.fn<(reference: FunctionReference, args: unknown, callback: (value: unknown) => void) => Unsubscribe>(
-        (reference: FunctionReference, args: unknown, callback: (value: unknown) => void): Unsubscribe => {
-            const entry: SubEntry = { args, callback, ref: reference.__lunoraRef };
+    const subscribeFunction = vi.fn<
+        (reference: FunctionReference, args: unknown, callback: (value: unknown) => void, options?: { onError?: SubscriptionErrorCallback }) => Unsubscribe
+    >((reference: FunctionReference, args: unknown, callback: (value: unknown) => void, options?: { onError?: SubscriptionErrorCallback }): Unsubscribe => {
+        const entry: SubEntry = { args, callback, onError: options?.onError, ref: reference.__lunoraRef };
 
-            subs.add(entry);
+        subs.add(entry);
 
-            return () => {
-                subs.delete(entry);
-            };
-        },
-    );
+        return () => {
+            subs.delete(entry);
+        };
+    });
     const authListeners = new Set<(token: string | null) => void>();
-    const setAuthTokenFunction = vi.fn<(token: string | null) => void>((token: string | null) => {
+    // Mirrors the real client's identity fingerprint: the SUBJECT when one was
+    // supplied, else the token itself. A same-subject JWT refresh therefore
+    // changes the token (firing the listeners) without moving the identity —
+    // exactly the distinction consumers of `currentIdentity()` branch on.
+    let authSubject: string | null | undefined;
+    const setAuthTokenFunction = vi.fn<(token: string | null, subject?: string | null) => void>((token: string | null, subject?: string | null) => {
+        if (subject !== undefined) {
+            authSubject = subject;
+        } else if (token === null) {
+            authSubject = undefined;
+        }
+
         if (authToken === token) {
             return;
         }
@@ -69,6 +89,7 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         }
     });
     const getAuthTokenFunction = vi.fn<() => string | null>(() => authToken);
+    const currentIdentityFunction = vi.fn<() => string | null>(() => authSubject ?? authToken);
     const onAuthTokenChangeFunction = vi.fn<(listener: (token: string | null) => void) => Unsubscribe>(
         (listener: (token: string | null) => void): Unsubscribe => {
             authListeners.add(listener);
@@ -122,19 +143,32 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         }
     };
 
+    const emitError = (ref: string, error: SubscriptionError, predicate?: (args: unknown) => boolean): void => {
+        for (const entry of subs) {
+            if (entry.ref === ref && (predicate === undefined || predicate(entry.args))) {
+                entry.onError?.(error);
+            }
+        }
+    };
+
     const asClient = {
         acquireConnectionContext: acquireConnectionContextFunction,
         action: actionFunction,
         close: closeFunction,
         connectionStatus: connectionStatusFunction,
+        currentIdentity: currentIdentityFunction,
         getAuthToken: getAuthTokenFunction,
         getCurrentUser: getCurrentUserFunction,
         mutation: mutationFunction,
         onAuthTokenChange: onAuthTokenChangeFunction,
         onConnectionStatus: onConnectionStatusFunction,
+        // The PUBLIC getter the hooks read (`client.isReady`), not the private
+        // `readyResolved` field behind it — this object is a plain literal cast
+        // to `LunoraClient`, so naming the backing field left every consumer
+        // reading `undefined` and the hydrated branch permanently untaken.
+        isReady: true,
         peekHydratedQuery: () => undefined,
         query: queryFunction,
-        readyResolved: true,
         setAuthToken: setAuthTokenFunction,
         setConnectionContext: setConnectionContextFunction,
         subscribe: subscribeFunction,
@@ -147,7 +181,9 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         asClient,
         close: closeFunction,
         connectionStatus: connectionStatusFunction,
+        currentIdentity: currentIdentityFunction,
         emit,
+        emitError,
         getAuthToken: getAuthTokenFunction,
         getCurrentUser: getCurrentUserFunction,
         mutation: mutationFunction,

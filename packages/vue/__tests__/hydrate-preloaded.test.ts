@@ -1,4 +1,4 @@
-import type { FunctionReference, Preloaded } from "@lunora/client";
+import type { FunctionReference, Preloaded, SubscriptionError } from "@lunora/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { effectScope, nextTick, ref } from "vue";
 
@@ -159,6 +159,58 @@ describe(subscribeToQuery, () => {
     });
 });
 
+describe("hydratePreloaded return type", () => {
+    beforeEach(() => {
+        Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
+    });
+
+    afterEach(() => {
+        Reflect.deleteProperty(globalThis, "window");
+    });
+
+    it("forwards onError so a server-pushed subscription error reaches the caller", () => {
+        // Regression: the live subscription behind the SSR seed had no error
+        // channel, so a session expiry after hydration was fanned to nobody and
+        // the snapshot kept rendering as if it were live.
+        const fake = createFakeClient();
+        const errors: SubscriptionError[] = [];
+        const scope = effectScope();
+
+        scope.run(() => {
+            fake.provide(() => {
+                hydratePreloaded(makePreloaded(["seed"]), { onError: (error) => errors.push(error) });
+            });
+        });
+
+        fake.subscribeCalls[0]?.options.onError?.({ code: "UNAUTHORIZED", message: "session expired" });
+
+        expect(errors).toStrictEqual([{ code: "UNAUTHORIZED", message: "session expired" }]);
+
+        scope.stop();
+    });
+
+    it("is Ref<T>, not Ref<T | undefined> — the seed makes undefined unreachable", () => {
+        const fake = createFakeClient();
+        const scope = effectScope();
+
+        scope.run(() => {
+            fake.provide(() => {
+                const data = hydratePreloaded(makePreloaded(["hello"]));
+
+                // Regression: this assignment did not compile while the return type
+                // inherited `| undefined` from `subscribeToQuery` (which widens only
+                // because it also serves the unseeded `useQuery` case), forcing every
+                // Vue consumer to guard a state the primitive's contract forbids.
+                const rows: string[] = data.value;
+
+                expect(rows).toStrictEqual(["hello"]);
+            });
+        });
+
+        scope.stop();
+    });
+});
+
 describe(useQuery, () => {
     // `useQuery` gates its subscription on a browser `window` (SSR guard);
     // the vitest env is `node` (no `window`), so define one for these
@@ -252,6 +304,9 @@ describe(useQuery, () => {
         channelId.value = "b";
         await nextTick();
 
+        // The previous args' value must not render under the new args until the
+        // new subscription's first frame lands.
+        expect(data?.value).toBeUndefined();
         expect(fake.unsubscribeSpy).toHaveBeenCalledTimes(1);
         expect(fake.subscribeCalls).toHaveLength(2);
         expect(fake.subscribeCalls[1]?.args).toStrictEqual({ channelId: "b" });
@@ -318,6 +373,28 @@ describe(useQuery, () => {
 
         expect(fake.subscribeCalls).toHaveLength(0);
         expect(data?.value).toBeUndefined();
+
+        scope.stop();
+    });
+
+    it("forwards onError so a server-pushed subscription error reaches the caller", () => {
+        // Regression: `client.subscribe` accepts `onError` and
+        // `createQuerySubscription` forwards it, but `useQuery` never exposed one —
+        // an RLS denial or a query that starts failing server-side left the ref
+        // frozen at its last good value with nothing surfaced.
+        const fake = createFakeClient();
+        const scope = effectScope();
+        const errors: SubscriptionError[] = [];
+
+        scope.run(() => {
+            fake.provide(() => {
+                useQuery(listMessages, { channelId: "c1" }, { onError: (error) => errors.push(error) });
+            });
+        });
+
+        fake.subscribeCalls[0]?.options.onError?.({ code: "FORBIDDEN", message: "row-level security denied the read" });
+
+        expect(errors).toStrictEqual([{ code: "FORBIDDEN", message: "row-level security denied the read" }]);
 
         scope.stop();
     });

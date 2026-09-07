@@ -43,8 +43,8 @@ val unsubscribe = client.subscribe("messages:list", args, onData = ::render)
 ```
 
 `client.handleFrame(raw)` is what you call with each inbound WebSocket message;
-`client.resendSubscriptions()` re-subscribes everything after a reconnect,
-carrying each subscription's resume cursor.
+`client.resendSubscriptions()` re-subscribes everything after a reconnect —
+queries and shapes alike — carrying each one's resume cursor or checkpoint.
 
 ## Optimistic updates and offline writes
 
@@ -83,9 +83,15 @@ writes when its socket returns, and `client.hydrateOfflineQueue()` restores what
 a prior session persisted, returning the shard keys to flush.
 
 A queued write whose args cannot be wire-encoded settles terminally on the first
-flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and every
-discard — including one the capacity cap evicts out of a _restored_ queue, which
-has no caller left to tell — reaches `client.onMutationSettled`.
+flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and a
+restored record whose args cannot be wire-_decoded_ is purged and settled
+(`OFFLINE_WRITE_UNDECODABLE`) rather than replayed with substitute arguments.
+Every discard — including one the capacity cap evicts out of a _restored_ queue,
+which has no caller left to tell — reaches `client.onMutationSettled`.
+
+A replay the server rate-limits is re-queued, not dropped: `FlushReport.retryAfterMs`
+carries the delay the envelope named, and the next flush is a no-op until it has
+passed.
 
 `client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write

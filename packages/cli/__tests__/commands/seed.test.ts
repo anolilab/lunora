@@ -204,6 +204,43 @@ describe("lunora seed", () => {
         expect(remoteResult.code).toBe(1);
     });
 
+    it("--reset does not wipe when there is nothing to seed", async () => {
+        expect.assertions(2);
+
+        writeSchema();
+
+        const statePath = join(workDir, ".wrangler", "state");
+
+        mkdirSync(statePath, { recursive: true });
+        writeFileSync(join(statePath, "live.sqlite"), "data", "utf8");
+
+        const result = await runSeedCommand({ count: 0, cwd: workDir, logger: silentLogger(), reset: true, yes: true });
+
+        expect(result.generated).toBe(0);
+        // The wipe used to run first, so `--count 0` destroyed the dev database
+        // and then warned there was nothing to insert.
+        expect(existsSync(join(statePath, "live.sqlite"))).toBe(true);
+    });
+
+    it("--reset requires the same confirmation `lunora reset` does", async () => {
+        expect.assertions(3);
+
+        writeSchema();
+
+        const statePath = join(workDir, ".wrangler", "state");
+
+        mkdirSync(statePath, { recursive: true });
+        writeFileSync(join(statePath, "live.sqlite"), "data", "utf8");
+
+        const errors: string[] = [];
+        // Non-TTY and no --yes: `reset` refuses rather than deleting.
+        const result = await runSeedCommand({ count: 2, cwd: workDir, logger: { ...silentLogger(), error: (m) => errors.push(m) }, reset: true });
+
+        expect(result.code).toBe(1);
+        expect(existsSync(join(statePath, "live.sqlite"))).toBe(true);
+        expect(errors.join("\n")).toContain("--yes");
+    });
+
     it("wipes local .wrangler/state before seeding when --reset is set", async () => {
         expect.assertions(2);
 
@@ -232,6 +269,7 @@ describe("lunora seed", () => {
             reset: true,
             token: "t",
             url: "http://localhost:8787",
+            yes: true,
         });
 
         expect(result.code).toBe(0);

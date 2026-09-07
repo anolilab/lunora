@@ -46,6 +46,14 @@ describe("toCsv", () => {
 
         expect(toCsv(["n"], [{ n: -5 }])).toBe("n\n-5");
     });
+
+    it("renders a bytes cell the way the grid does, not as the `{}` an ArrayBuffer stringifies to", () => {
+        expect.assertions(2);
+
+        expect(toCsv(["blob"], [{ blob: Uint8Array.from([1, 2, 3, 4]).buffer }])).toBe("blob\n<bytes: 4 B>");
+        // And a nested bigint no longer throws mid-export.
+        expect(toCsv(["meta"], [{ meta: { amount: 42n } }])).toBe('meta\n"{""amount"":""42""}"');
+    });
 });
 
 describe("toJson", () => {
@@ -86,6 +94,12 @@ describe("toSql", () => {
         const sql = toSql("query-result", ['we"ird'], [{ 'we"ird': "O'Brien" }]);
 
         expect(sql).toBe('INSERT INTO "query-result" ("we""ird") VALUES\n  (\'O\'\'Brien\');');
+    });
+
+    it("renders a bytes cell as its grid rendering rather than the empty `'{}'` an ArrayBuffer stringifies to", () => {
+        expect.assertions(1);
+
+        expect(toSql("t", ["blob"], [{ blob: Uint8Array.from([1, 2, 3, 4]).buffer }])).toBe('INSERT INTO "t" ("blob") VALUES\n  (\'<bytes: 4 B>\');');
     });
 
     it("returns an empty string when there are no columns or no rows", () => {

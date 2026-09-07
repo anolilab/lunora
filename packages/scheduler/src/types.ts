@@ -1,19 +1,12 @@
 /**
- * Opaque reference to a Lunora function. Mirrors the `FunctionReference` shape
- * emitted by `@lunora/codegen` (and consumed by `@lunora/client`). We avoid a
- * direct dependency to keep this package usable from the codegen pipeline
- * itself.
- *
- * The runtime identifier lives in `__lunoraRef` — this MUST stay in lockstep
- * with the codegen emit + `@lunora/client`'s `FunctionReference`.
+ * The registered function kinds a {@link FunctionReference} can describe.
+ * Mirrors `@lunora/client`'s `FunctionKind`.
  */
-export interface FunctionReference {
-    readonly __lunoraRef: string;
-    /** Marker phantom type — discriminates queries / mutations / actions. */
-    readonly _kind?: "query" | "mutation" | "action";
-}
 
-export type ArgsOf<F extends FunctionReference> = F extends { _args?: infer A } ? A : Record<string, unknown>;
+import type { ArgsOf, FunctionKind, FunctionReference } from "../../../shared/function-reference";
+
+// Re-exported so consumers keep naming these through this package.
+export type { ArgsOf, FunctionKind, FunctionReference } from "../../../shared/function-reference";
 
 /**
  * Typed reference to a Lunora durable workflow — either the generated
@@ -42,22 +35,34 @@ export interface WorkflowReference<Params = Record<string, unknown>> {
     readonly name?: string;
 }
 
+/**
+ * A function reference a scheduler or workpool may target.
+ *
+ * `stream` is excluded deliberately, and the exclusion is load-bearing rather
+ * than tidiness: a scheduled job is dispatched as an ordinary `/rpc` call, and
+ * the function runner cannot execute a stream function (see
+ * `create-worker.ts`'s registry note). Accepting one compiles a job that is
+ * guaranteed to fail when its alarm fires, long after the call site that
+ * scheduled it.
+ */
+export type SchedulableReference<Args = unknown, Return = unknown> = FunctionReference<Exclude<FunctionKind, "stream">, Args, Return>;
+
 /** A cron job's target: either a one-shot function dispatch or a durable workflow start. */
-export type CronTarget = FunctionReference | WorkflowReference;
+export type CronTarget = SchedulableReference | WorkflowReference;
 
 /** The arguments a cron's target accepts: a workflow's inferred `params`, else an open record (function args aren't inferred). */
 export type CronTargetArgs<T extends CronTarget> = T extends WorkflowReference<infer Params> ? Params : Record<string, unknown>;
 
 /**
  * The arguments a one-shot schedule target ({@link Scheduler.runAfter} /
- * {@link Scheduler.runAt}) accepts. Unlike {@link CronTargetArgs} it preserves a
- * {@link FunctionReference}'s inferred `args` (via {@link ArgsOf}) as well as a
- * {@link WorkflowReference}'s inferred `params`, so scheduling a plain function
- * keeps its today's arg checking while scheduling a workflow/agent infers its
- * `params`.
+ * {@link Scheduler.runAt}) accepts. Unlike {@link CronTargetArgs} it resolves a
+ * {@link FunctionReference}'s `args` through {@link ArgsOf} as well as a
+ * {@link WorkflowReference}'s `params`, so scheduling a generated function
+ * reference is arg-checked against that function's validator while scheduling a
+ * workflow/agent is checked against its `params`.
  */
 export type ScheduleTargetArgs<T extends CronTarget> =
-    T extends WorkflowReference<infer Params> ? Params : T extends FunctionReference ? ArgsOf<T> : Record<string, unknown>;
+    T extends WorkflowReference<infer Params> ? Params : T extends SchedulableReference ? ArgsOf<T> : Record<string, unknown>;
 
 /** Narrow a {@link CronTarget} to a {@link WorkflowReference} by its runtime brand. */
 export const isWorkflowReference = (target: unknown): target is WorkflowReference =>
@@ -81,13 +86,50 @@ export interface RetryPolicy {
     backoff?: "exponential" | "linear";
     /** Base delay in milliseconds for the first retry. Default `30_000`. */
     baseMs?: number;
-    /** Maximum number of dispatch attempts before dead-lettering. Default `5`. */
+
+    /**
+     * Maximum number of **retries** after the initial dispatch. Default `5`, so
+     * a job that keeps failing is dispatched 6 times in total before it is
+     * dead-lettered (the park happens once `attempts > maxAttempts`).
+     */
     maxAttempts?: number;
     /** Optional ceiling clamping the computed backoff delay. */
     maxMs?: number;
 }
 
 export interface RunOptions {
+    /**
+     * Job id to store the record under, instead of one the SchedulerDO mints.
+     *
+     * Exists for `@lunora/server`'s deferred-schedule facade: inside a mutation a
+     * `runAfter`/`runAt` is buffered until the transaction commits, but the
+     * handler is handed the id synchronously, so the id has to be decided before
+     * the call is made. Callers that are not deferring should leave it unset and
+     * take the minted id from the return value. Anything that is not a plain
+     * `[A-Za-z0-9_-]` id of at most 64 characters, or that LEADS with `-`, is
+     * REFUSED (`400 INVALID_SCHEDULE_ID`) rather than replaced: the id is handed
+     * to `WorkflowBinding.create({ id })` verbatim for a workflow target, and the
+     * engine's instance-id grammar (`^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`) refuses that
+     * first character. Minting over it would mean two calls naming the same bad
+     * id ran the job twice instead of the second answering `409`.
+     *
+     * **Not an idempotency key.** An id that is already scheduled is REFUSED
+     * (`409 DUPLICATE_SCHEDULE_ID`), not replaced or de-duplicated: the time
+     * index is keyed by time as well as id, so an overwrite would fire the new
+     * job at the old job's instant and drop the slot it was actually scheduled
+     * for. Cancel the existing job first if you mean to reschedule it. The id
+     * is free again once the job has fired or been cancelled.
+     */
+    id?: string;
+
+    /**
+     * Cap for the {@link RunOptions.pool} this job joins, applied when the pool
+     * is first created and refreshed on every enqueue that carries one. Ignored
+     * without `pool`. A pool created by a `runAfter`/`runAt` that omits it caps
+     * at 1 — {@link Workpool} is the usual way to set it.
+     */
+    maxConcurrency?: number;
+
     /**
      * Logical workpool this job belongs to. When set, the SchedulerDO gates the
      * job behind the pool's `maxConcurrency` (see {@link WorkpoolOptions}).
@@ -180,20 +222,24 @@ export interface Scheduler {
      * `agents.<name>` ref — which starts a fresh instance on fire (args become
      * its `params`). {@link ScheduleTargetArgs} infers the accepted args from
      * whichever target was passed.
+     *
+     * **Resolves the job id, a bare string** — the same value `cancel`/`get`
+     * take, and the same value the `ctx.scheduler` surface promises. This object
+     * IS `ctx.scheduler` on the shard side (codegen installs it behind
+     * `SchedulerLike`, whose `runAfter`/`runAt` are declared `Promise<string>`),
+     * so resolving a `{ id, scheduledFor }` record here handed mutations an
+     * object where every other gate — `@lunora/server`'s `Scheduler`,
+     * `@lunora/shard-engine`'s `SchedulerLike`, `@lunora/runtime`'s httpAction
+     * ctx, and the docs — said string. Nothing caught it, because the install is
+     * a cast: apps wrote the object into a string column and `cancel(id)`
+     * answered `{ cancelled: false }` with no error anywhere.
+     *
+     * The fire instant is not lost: `runAt` was handed it, and a caller that
+     * needs it back reads `scheduledFor` off {@link Scheduler.get}.
      */
-    runAfter: <T extends CronTarget>(
-        delayMs: number,
-        target: T,
-        args: ScheduleTargetArgs<T>,
-        options?: RunOptions,
-    ) => Promise<{ id: string; scheduledFor: number }>;
-    /** Like {@link Scheduler.runAfter} but fires at an absolute `date`/timestamp. */
-    runAt: <T extends CronTarget>(
-        date: Date | number,
-        target: T,
-        args: ScheduleTargetArgs<T>,
-        options?: RunOptions,
-    ) => Promise<{ id: string; scheduledFor: number }>;
+    runAfter: <T extends CronTarget>(delayMs: number, target: T, args: ScheduleTargetArgs<T>, options?: RunOptions) => Promise<string>;
+    /** Like {@link Scheduler.runAfter} but fires at an absolute `date`/timestamp. Resolves the job id. */
+    runAt: <T extends CronTarget>(date: Date | number, target: T, args: ScheduleTargetArgs<T>, options?: RunOptions) => Promise<string>;
 }
 
 /**
@@ -234,14 +280,15 @@ export interface LunoraSchedulerOptions {
      * un-pinned global namespace.
      */
     jurisdiction?: DurableObjectJurisdiction;
-    /** Binding to the `SchedulerDO` durable object namespace. */
-    namespace: DurableObjectNamespaceLike;
 
     /**
-     * Origin where the Worker is mounted. SchedulerDO uses this base URL when
-     * dispatching scheduled functions back to the Worker on alarm fire.
+     * Binding to the `SchedulerDO` durable object namespace.
+     *
+     * The origin the DO dispatches back to is NOT passed here: it reads
+     * `env.LUNORA_ORIGIN_URL` off its own binding at fire time, because a
+     * caller-supplied dispatch target would be an SSRF vector.
      */
-    originUrl: string;
+    namespace: DurableObjectNamespaceLike;
 }
 
 /** Per-enqueue options for a {@link Workpool}. Extends {@link RunOptions} minus the implicit `pool` (the pool sets that). */
@@ -256,7 +303,7 @@ export interface EnqueueOptions {
 
 /**
  * Options for `createWorkpool`. Mirrors {@link LunoraSchedulerOptions}
- * (same `namespace` / `originUrl` / `instanceName`) plus the bounded-concurrency
+ * (same `namespace` / `instanceName`) plus the bounded-concurrency
  * controls. A workpool is a NAMED logical pool inside the existing SchedulerDO —
  * it needs no extra Durable Object or wrangler binding beyond the SchedulerDO
  * the scheduler already uses.
@@ -291,7 +338,7 @@ export interface Workpool {
      * and the time it was scheduled for (it may not run immediately if the pool
      * is at capacity).
      */
-    enqueue: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: EnqueueOptions) => Promise<{ id: string; scheduledFor: number }>;
+    enqueue: <F extends SchedulableReference>(function_: F, args: ArgsOf<F>, options?: EnqueueOptions) => Promise<{ id: string; scheduledFor: number }>;
     /** The pool's name (the `pool:<name>` storage key suffix). */
     readonly name: string;
     /** Inspect the pool's current state — `inFlight` slots used and the configured `maxConcurrency`. */
@@ -349,6 +396,13 @@ export interface MessageBatchLike<Body = unknown> {
 
 /** The wire payload Lunora puts on the queue: a function dispatch. */
 export interface QueueJob {
+    /**
+     * The call's arguments in WIRE form (`shared/wire-codec`), so a `bigint`,
+     * `Date` or bytes survives the queue's own JSON serialisation. The producers
+     * encode; the shard's dispatch loop is the single decoder. A custom
+     * {@link QueueDispatch} must forward this untouched — decoding it here and
+     * letting the shard decode again flattens a `Date` to `{}`.
+     */
     args?: Record<string, unknown>;
     functionPath: string;
     /** Routing hint forwarded to the Worker so the call lands on the right shard. */
@@ -377,7 +431,7 @@ export interface QueueWorkpoolOptions {
  */
 export interface QueueWorkpool {
     /** Enqueue a single `fn(args)` dispatch. */
-    enqueue: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: QueueEnqueueOptions) => Promise<void>;
+    enqueue: <F extends SchedulableReference>(function_: F, args: ArgsOf<F>, options?: QueueEnqueueOptions) => Promise<void>;
     /** Enqueue many dispatches in one `sendBatch`. Each job names its function `ref`. */
     enqueueBatch: (
         jobs: ReadonlyArray<{ args?: Record<string, unknown>; ref: FunctionReference; shardKey?: string }>,

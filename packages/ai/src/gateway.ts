@@ -13,7 +13,11 @@
  */
 
 /** Read a string env var, treating empty/non-string as absent. */
-const readEnv = (env: Record<string, unknown>, key: string): string | undefined => {
+const readEnv = (env: Record<string, unknown> | undefined, key: string): string | undefined => {
+    if (env === undefined) {
+        return undefined;
+    }
+
     const value = env[key];
 
     return typeof value === "string" && value.length > 0 ? value : undefined;
@@ -122,6 +126,32 @@ export interface ResolvedAiGateway {
     headers: Record<string, string>;
 }
 
+/**
+ * Env var carrying the default Workers AI **language** model id, used by
+ * `ctx.ai.model()` when it is called with no argument.
+ *
+ * This exists because `env` is the only configuration seam `ctx.ai` has. The
+ * generated shard constructs the facade as `createAi({ binding, env, metadata })`
+ * with those three fields fixed, so `LunoraAiOptions.defaultModel` — the field
+ * `model()` reads — was unreachable from an app: `ctx.ai.model()` with no
+ * argument threw, always. Reading the default off `env` puts it back in the
+ * app's hands (a wrangler `vars` entry or `.dev.vars` line) without a new
+ * constructor argument codegen would have to learn to emit.
+ *
+ * An explicit `defaultModel` option still wins — the env var is
+ * the fallback, exactly as with the gateway vars above.
+ */
+export const AI_DEFAULT_MODEL_ENV = "LUNORA_AI_DEFAULT_MODEL";
+
+/**
+ * Env var carrying the default Workers AI **embedding** model id, used by
+ * `ctx.ai.embeddingModel()` with no argument — and so by `defineRag`, whose
+ * `embeddingModel` is documented as optional and resolves through exactly that
+ * call. Separate from {@link AI_DEFAULT_MODEL_ENV} because a language-model id
+ * and an embedding-model id are never interchangeable.
+ */
+export const AI_DEFAULT_EMBEDDING_MODEL_ENV = "LUNORA_AI_DEFAULT_EMBEDDING_MODEL";
+
 /** Env var naming the Cloudflare account that owns the gateway. */
 export const AI_GATEWAY_ACCOUNT_ID_ENV = "LUNORA_AI_GATEWAY_ACCOUNT_ID";
 
@@ -204,4 +234,4 @@ export const resolveAiGateway = (
     };
 };
 
-export { buildAiGatewayMetadataFields };
+export { buildAiGatewayMetadataFields, readEnv };

@@ -22,12 +22,11 @@ export interface ValidatorIR {
     column?: ColumnMetaIR;
 
     /**
-     * `true` when this validator carries a `.check(...)` refinement. The predicate
-     * is a runtime closure the AST→IR step can't represent, so the node keeps its
-     * base `kind` but records the refinement's presence here. The AOT args-validator
-     * compiler declines any node with this flag (compiling it would silently skip
-     * the predicate). `.meta(...)` is pure metadata with no parse effect and does
-     * NOT set this.
+     * `true` when this validator carries a refinement (`.check(...)`, `.max(n)`,
+     * `.email()`, …) — anything that narrows the accepted values without changing
+     * the kind. `schema-drift` hashes this, so a bound counts here even when it is
+     * modelled below. `.meta(...)` is pure metadata with no parse effect and does
+     * NOT set it.
      */
     hasRefinement?: boolean;
     /** For `v.optional(inner)` / `v.array(inner)`. */
@@ -44,6 +43,14 @@ export interface ValidatorIR {
     shape?: Record<string, ValidatorIR>;
     /** Verbatim source text — used in emitted code when we can't reconstruct from AST. */
     sourceText?: string;
+
+    /**
+     * The `n` of a `v.string().max(n)` written with a numeric literal — the one
+     * refinement predicate the IR can represent exactly (`value.length <= n`).
+     * The AOT compiler emits it as a guard instead of declining the node, which
+     * is what keeps a length-bounded public argument on the fast path.
+     */
+    stringMaxLength?: number;
     /** For `v.id("table")` — the table name. */
     tableName?: string;
 
@@ -55,6 +62,14 @@ export interface ValidatorIR {
      * type falls back to `unknown`.
      */
     tsType?: string;
+
+    /**
+     * `true` when this validator carries a refinement the IR could NOT model — a
+     * `.check(...)` closure, `.email()`, `.pattern(re)`, a `.max()` whose bound is
+     * not a literal. The AOT args-validator compiler declines any node with this
+     * flag, because compiling it would silently skip the predicate.
+     */
+    unmodelledRefinement?: boolean;
     valueType?: ValidatorIR;
 }
 
@@ -351,8 +366,10 @@ export interface FunctionIR {
 /**
  * A `defineMigration({...})` declaration discovered in the user's lunora
  * sources. The emitted `LUNORA_MIGRATIONS` registry keys on {@link MigrationIR.id}; the
- * import wiring needs {@link MigrationIR.exportName}/{@link MigrationIR.filePath}. {@link MigrationIR.table} is
- * informational (the runtime object carries the authoritative value).
+ * import wiring needs {@link MigrationIR.exportName}/{@link MigrationIR.filePath}. The runtime object
+ * carries the authoritative {@link MigrationIR.table}, but the lifted value is
+ * load-bearing at build time: the schema-drift gate matches it against the
+ * tables with breaking drift, so a migration left at `""` covers nothing.
  */
 export interface MigrationIR {
     /** Export binding name, used to reference the module member in generated imports. */
@@ -836,15 +853,18 @@ export interface NondeterministicCallIR {
 }
 
 /**
- * One `ctx.r2sql` access lexically inside a `query`/`mutation` handler — the
- * `r2sql_outside_action` advisor lint input. Structurally identical to the
- * advisor's `AdvisorR2sqlCall` (same field set) so values pass straight through
- * `lintSchema` without conversion, exactly as `NondeterministicCallIR` does.
- * Only `query`/`mutation` handlers are recorded; `action(...)` is the intended
- * home for `ctx.r2sql` and is skipped.
+ * One `ctx.<property>` access lexically inside a `query`/`mutation` handler —
+ * the feeder shape behind every "action-only surface used outside an action"
+ * advisor lint (`hyperdrive_outside_action` for `ctx.sql`,
+ * `r2sql_outside_action` for `ctx.r2sql`). Structurally identical to the
+ * advisor's `AdvisorHyperdriveCall` / `AdvisorR2sqlCall` (same field set) so
+ * values pass straight through `lintSchema` without conversion, exactly as
+ * {@link NondeterministicCallIR} does. Only `query`/`mutation` handlers are
+ * recorded; `action(...)` is the only context where these surfaces are even
+ * typed, so it is the intended home and is skipped.
  */
-export interface R2sqlCallIR {
-    /** The accessed `ctx.r2sql` surface, e.g. `ctx.r2sql.query` / `ctx.r2sql.from`. */
+export interface ContextPropertyCallIR {
+    /** The accessed surface, e.g. `ctx.sql.query` / `ctx.r2sql.from` — the property, suffixed with the method when one is called on it. */
     callee: string;
     /** Export binding name of the function performing the access. */
     exportName: string;
@@ -852,7 +872,7 @@ export interface R2sqlCallIR {
     file: string;
     /** Which procedure kind the access lives in — only `query`/`mutation` handlers are recorded. */
     kind: "mutation" | "query";
-    /** 1-based line of the access, or `0` when unknown. */
+    /** 1-based line of the access. */
     line: number;
 }
 
@@ -1269,6 +1289,15 @@ export interface KvKeyAccessIR {
     line: number;
     /** The `ctx.kv` method invoked: `get` / `getRaw` / `getWithMetadata` / `put` / `delete`. */
     method: string;
+
+    /**
+     * Visibility of the enclosing procedure. `internal` procedures have no
+     * untrusted caller by construction — see `owner_field_from_args_not_auth`'s
+     * identical split — so `kv_unscoped_user_key_idor` drops the finding to
+     * INFO rather than ERROR there. `undefined` when the access sits outside any
+     * registered procedure the feeder could attribute it to.
+     */
+    visibility?: "internal" | "public";
 }
 
 /**
@@ -1754,9 +1783,9 @@ export interface FlagSecurityDefaultIR {
  * `__cdc_log`, so a subscribed query is never re-run when a flag flips and keeps
  * serving the branch it last picked; `useFlag` is the reactive path. Structurally
  * identical to the advisor's `AdvisorFlagRead` (same field set) so values pass
- * straight through `lintSchema` without conversion, exactly as `R2sqlCallIR` does.
+ * straight through `lintSchema` without conversion, exactly as `ContextPropertyCallIR` does.
  *
- * Only `query` handlers are recorded — unlike `R2sqlCallIR` / `NondeterministicCallIR`
+ * Only `query` handlers are recorded — unlike `ContextPropertyCallIR` / `NondeterministicCallIR`
  * there is no `kind` field, because `mutation`/`action` handlers run once and have
  * no subscription staleness to warn about, so the feeder drops them rather than
  * handing the lint rows it would discard.

@@ -37,19 +37,22 @@ import { LunoraError } from "@lunora/errors";
 import type { Project } from "ts-morph";
 
 import assertRequiredPackages from "./assert-required-packages";
-import { discoverAgents } from "./discover-agents";
-import { discoverContainers } from "./discover-containers";
-import { discoverEnv } from "./discover-env";
-import type { FeatureUsage } from "./discover-feature-usage";
-import { discoverFeatureUsage } from "./discover-feature-usage";
-import { discoverIdentity } from "./discover-identity";
-import readPackageDependencies from "./discover-package-dependencies";
-import { discoverQueues } from "./discover-queues";
-import { discoverSandboxUsage } from "./discover-sandbox";
-import discoverStorageRulesMetadata from "./discover-storage-rules";
-import { discoverWorkflows } from "./discover-workflows";
-import { emitDataModel, emitServer } from "./emit";
-import type { AgentIR, ContainerIR, EnvIR, IdentityIR, QueueIR, SchemaIR, StorageRulesMetadataIR, WorkflowIR } from "./ir";
+import { discoverAgents } from "./discover/agents";
+import { discoverContainers } from "./discover/containers";
+import discoverCrons from "./discover/crons";
+import { discoverEnv } from "./discover/env";
+import type { FeatureUsage } from "./discover/feature-usage";
+import { discoverFeatureUsage } from "./discover/feature-usage";
+import { discoverIdentity } from "./discover/identity";
+import readPackageDependencies from "./discover/package-dependencies";
+import { discoverPlatformSignals } from "./discover/platform-signals";
+import { discoverQueues } from "./discover/queues";
+import { discoverSandboxUsage } from "./discover/sandbox";
+import discoverStorageRulesMetadata from "./discover/storage-rules";
+import discoverWorkerEntryCrons from "./discover/worker-entry-crons";
+import { discoverWorkflows } from "./discover/workflows";
+import { buildStorageColumns, emitDataModel, emitServer } from "./emit";
+import type { AgentIR, ContainerIR, CronJobIR, EnvIR, IdentityIR, QueueIR, SchemaIR, StorageRulesMetadataIR, WorkflowIR } from "./ir";
 import type { PlatformGateResult } from "./platform-target";
 import { gatePlatformFeatures, resolveCodegenTarget } from "./platform-target";
 
@@ -116,19 +119,30 @@ const assertNoWorkflowAgentCollision = (workflows: ReadonlyArray<WorkflowIR>, ag
  *
  * The per-capability booleans that used to sit here — `hasAi`, `hasKv`,
  * `hasPayments`, and nine more — are gone: each was a verbatim restatement of
- * `featureUsage` keyed by capability, so call sites read that map directly. Only the three
+ * `featureUsage` keyed by capability, so call sites read that map directly. Only the two
  * whose value is NOT a plain capability read survive as their own fields, and
- * each says why below.
+ * each says why below. `hasBrowser` was a third until `browserTool` usage moved
+ * INTO the gate's input, where it belongs — it is `featureUsage.browser` now.
  */
 interface DeclarationSurface {
     agents: ReadonlyArray<AgentIR>;
     containers: ReadonlyArray<ContainerIR>;
+    /** Cron jobs discovered from `cronJobs()` registrations — read by the platform gate here, emitted downstream. */
+    crons: ReadonlyArray<CronJobIR>;
     /** `_generated/dataModel.ts`, rendered. Not written — see the module docblock. */
     dataModelContent: string;
     /** Declared dependency names, or `undefined` when the manifest is absent/unreadable. */
     declaredDependencies: ReadonlySet<string> | undefined;
     /** The same names with the absent case flattened to an empty set. */
     dependencies: ReadonlySet<string>;
+
+    /**
+     * Cron expressions the worker entry pins outside `lunora/crons.ts` —
+     * `createWorker({ backupCron })` and the keys of `createWorker({ crons })`.
+     * Not jobs (`createWorker` dispatches them itself), only schedules that must
+     * reach wrangler's `triggers.crons`.
+     */
+    entryCronTriggers: ReadonlyArray<string>;
     env: EnvIR | undefined;
 
     /**
@@ -137,14 +151,6 @@ interface DeclarationSurface {
      * through a local alias — the alias layer was pure restatement.
      */
     featureUsage: FeatureUsage;
-
-    /**
-     * `ctx.browser`. NOT a plain `featureUsage.browser`: `@lunora/agent`'s
-     * `browserTool` drives it too, so a project that only uses the sandbox tool
-     * still needs the BROWSER binding provisioned and `ctx.browser` on the action
-     * ctx the dispatcher runs on.
-     */
-    hasBrowser: boolean;
 
     /**
      * `ctx.flags`. Gated on the project declaring `lunora/flags.ts`, NOT on
@@ -214,6 +220,21 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     const containers = discoverContainers(project, lunoraDirectory);
     const storageRulesMetadata = discoverStorageRulesMetadata(project, lunoraDirectory);
 
+    // Crons are discovered here, beside the workflows and agents they resolve
+    // their targets against, rather than after inference: the platform gate below
+    // has to see a declared cron, and it runs in this phase. Resolution is purely
+    // syntactic (`internal.file.fn` / `workflows.NAME` / `agents.NAME`) and reads
+    // nothing from `_generated/`, which `listLunoraSourceFiles` skips, so moving
+    // it earlier cannot change what it finds.
+    const crons = discoverCrons(project, lunoraDirectory, workflows, agents);
+
+    // The other two cron surfaces, which are configured on `createWorker` rather
+    // than registered through `cronJobs()` and so are invisible to the discoverer
+    // above. They produce no job — only schedules the wrangler reconciler has to
+    // know it generated. Read beside the crons for that reason alone; nothing in
+    // this phase consumes them.
+    const entryCronTriggers = discoverWorkerEntryCrons(project, lunoraDirectory);
+
     // Intersect what the app uses with what the deploy target supports. For the
     // default Cloudflare target the matrix marks nothing unsupported, so the gate
     // is the identity and the emitted surface (and goldens) is unchanged; a target
@@ -223,11 +244,56 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // The target is resolved here rather than demanded of every caller: a call
     // site that omits it would emit the DEFAULT surface with no diagnostic, so the
     // mismatch would stay invisible until the deployed app failed.
-    const platformGate = gatePlatformFeatures(discoverFeatureUsage(project, lunoraDirectory), resolveCodegenTarget(projectRoot, options.target));
-    const featureUsage = platformGate.usage;
-
+    //
+    // Beyond the `ctx.*` capability keys, the gate also takes the app-declarable
+    // features that have no capability row — a `.global()` table, a
+    // `defineQueue`, a `.shardBy(...)` schema, a durable `.stream()`, a
+    // `ctx.secrets` read, a declared cron, a `.vectorize()` index, a
+    // `defineAgent` export. Those are rated in every capability matrix and were
+    // consulted by nothing, so e.g. a durable stream on `target: "node"` emitted
+    // its full surface and silently behaved as ephemeral, and a declared cron
+    // built green on a host where no runtime dispatches one.
+    const codeSignals = discoverPlatformSignals(project, lunoraDirectory);
     const sandboxUsage = discoverSandboxUsage(project, lunoraDirectory);
-    const hasBrowser = featureUsage.browser || sandboxUsage.usesSandboxBrowser;
+    const usage = discoverFeatureUsage(project, lunoraDirectory);
+
+    // `@lunora/agent`'s `browserTool` drives `ctx.browser` too, so it is browser
+    // USAGE and has to enter the gate as such. Folded in here rather than OR'd
+    // onto the gate's output downstream, which is where it used to live: that OR
+    // ran after the gate had already turned `browser` off, so importing the tool
+    // both suppressed the diagnostic and re-emitted the surface — and provisioned
+    // the BROWSER binding — on a target with no headless browser at all.
+    usage.browser = usage.browser || sandboxUsage.usesSandboxBrowser;
+
+    const platformGate = gatePlatformFeatures(usage, resolveCodegenTarget(projectRoot, options.target), {
+        // An agent needs both a workflow engine to mount its generated class and
+        // model inference to run its loop, which is why it is rated on its own
+        // key rather than inherited from `workflows`.
+        agents: agents.length > 0,
+        // Read off the SAME IR as `globalTables` below. Until this was wired, a
+        // target whose matrix rates `commitOrderedTables` as `unsupported` emitted
+        // the full surface and silently dropped the ordering guarantee.
+        commitOrderedTables: schema.tables.some((table) => table.commitOrdered === true),
+        // Declared crons, not `ctx.scheduler` usage: `cronJobs` is imported from
+        // `@lunora/server`, so the `featureUsage` arm (which keys `scheduler` on
+        // a `@lunora/scheduler` import) cannot see one.
+        cronTriggers: crons.length > 0,
+        crossShardFanout: schema.tables.some((table) => typeof table.shardMode === "object"),
+        durableStreams: codeSignals.durableStreams,
+        globalTables: schema.tables.some((table) => table.shardMode === "global"),
+        queues: queues.length > 0,
+        secrets: codeSignals.secrets,
+        // Read off the schema for the same reason `globalTables` is — and it has
+        // to be, because `ctx.vectors` is emitted off `schema.vectorIndexes`
+        // while the `vectors` capability only flips on an import or a literal
+        // `ctx.vectors` read, neither of which a `.vectorize()` declaration is.
+        vectorStore: schema.vectorIndexes.length > 0,
+    });
+    const featureUsage = platformGate.usage;
+    // The gate's `vectorStore` verdict, named once for both consumers below.
+    // `undefined` means the app never declared a vector index, which must not
+    // withhold anything; only an explicit `false` is a rejection.
+    const vectorStoreSupported = platformGate.signals.vectorStore !== false;
 
     const declaredDependencies = readPackageDependencies(projectRoot);
     const dependencies = declaredDependencies ?? new Set<string>();
@@ -236,7 +302,21 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // Before either render: a schema needing an uninstalled add-on must fail as an
     // actionable error naming the package, not as a `tsc` failure reported inside
     // a generated file the user did not write.
-    assertRequiredPackages(schema, declaredDependencies);
+    //
+    // The two signal-driven entries mirror how `run-codegen` builds the app
+    // emitter's `hasScheduler` / `hasStorage` — minus its `dependencies.has(...)`
+    // arm, which is the very question being asked here.
+    assertRequiredPackages(schema, declaredDependencies, {
+        hasVectors: vectorStoreSupported,
+        scheduler: featureUsage.scheduler || crons.length > 0,
+        storage: featureUsage.storage || storageRulesMetadata.rules.length > 0 || Object.keys(buildStorageColumns(schema)).length > 0,
+        // The POST-gate usage, the same record the emitters read: a bare
+        // `ctx.kv` / `ctx.ai` read pulls that capability's package into
+        // `_generated/` with nothing else declaring it, and a target that rates
+        // the capability unsupported withholds the surface and must not be told
+        // to install a package for it.
+        usage: featureUsage,
+    });
 
     const hasFlags = existsSync(join(lunoraDirectory, "flags.ts"));
     const hasNotify = existsSync(join(lunoraDirectory, "notify.ts"));
@@ -244,12 +324,13 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     return {
         agents,
         containers,
+        crons,
         dataModelContent: emitDataModel(schema),
         declaredDependencies,
         dependencies,
+        entryCronTriggers,
         env,
         featureUsage,
-        hasBrowser,
         hasFlags,
         hasNotify,
         identity,
@@ -262,7 +343,11 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
             hasAccessFacade: featureUsage.access,
             hasAi: featureUsage.ai,
             hasAnalytics: featureUsage.analytics,
-            hasBrowser,
+            hasBrowser: featureUsage.browser,
+            // The gate's verdict, not the raw declaration: a `.vectorize()` column
+            // declares the feature without importing anything, so `featureUsage`
+            // never sees it. The emitter AND's it with `schema.vectorIndexes`.
+            hasVectors: vectorStoreSupported,
             hasFlags,
             hasHyperdrive: featureUsage.hyperdrive,
             hasImages: featureUsage.images,
@@ -280,7 +365,9 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
             workflows,
         }),
         storageRulesMetadata,
-        usesSandbox: sandboxUsage.usesSandboxBrowser || sandboxUsage.usesSandboxContainer,
+        // ANY sandbox tool needs the `sandbox:invoke` dispatcher registered — the
+        // receiver's `fs` arm is as unreachable without it as the browser one.
+        usesSandbox: sandboxUsage.usesSandboxBrowser || sandboxUsage.usesSandboxContainer || sandboxUsage.usesSandboxFs,
         useUmbrella,
         workflows,
     };

@@ -6,6 +6,7 @@ import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { collectExportGaps, findWranglerFile, readWranglerJsonc, validateWranglerConfig } from "@lunora/config/cloudflare";
 
 import { isSecretKeyName } from "../../../../../shared/secret-key";
+import { describeAdminTokenSource, resolveAdminBearer } from "../../util/admin-token";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
@@ -33,8 +34,11 @@ const DOCTOR_CODES = [
     "d1-placeholder-id",
     "declared-export-missing",
     "declared-export-ok",
+    "declared-export-unchecked",
     "dev-vars-missing-secret",
     "email-destination-placeholder",
+    "scheduler-origin-missing",
+    "schema-unreadable",
     "vector-metadata-index-required",
     "vector-metadata-unfilterable",
     "version-counter-spread",
@@ -131,6 +135,19 @@ const checkWrangler = (parsed: WranglerConfig | undefined, path: string | undefi
     }
 
     const report = validateWranglerConfig(parsed);
+
+    // `doctor`'s job is "tell me what is misconfigured", so it reports the
+    // scheduler-origin warning too. Reading only the SHARD error gave a clean
+    // bill of health to an app whose scheduled jobs could not fire at all.
+    for (const warning of report.warnings.filter((entry) => entry.includes("LUNORA_ORIGIN_URL"))) {
+        findings.push({
+            code: "scheduler-origin-missing",
+            fix: "Set LUNORA_ORIGIN_URL in wrangler vars to the worker's public URL (or `wrangler secret put LUNORA_ORIGIN_URL`).",
+            level: "warn",
+            message: warning,
+        });
+    }
+
     const shardError = report.errors.find((error) => error.includes("SHARD"));
 
     if (shardError === undefined) {
@@ -155,7 +172,23 @@ const checkWrangler = (parsed: WranglerConfig | undefined, path: string | undefi
  * wrangler directly — and to name the exact command.
  */
 const checkVectorMetadataIndexes = (cwd: string, findings: Finding[]): void => {
-    const { info } = discoverSchemaInfo(cwd, "lunora");
+    const { error, info } = discoverSchemaInfo(cwd, "lunora");
+
+    // `error` set means the schema is present but could not be parsed — "I could
+    // not look", not "I looked and found nothing". Discarding it and falling
+    // through to `?? []` produced zero findings and exit 0 over a schema that
+    // fails every downstream command, and `runDoctor` has no other schema-parse
+    // check to catch it.
+    if (error !== undefined) {
+        findings.push({
+            code: "schema-unreadable",
+            fix: "Fix the parse error, then re-run `lunora doctor`. `lunora codegen` reports the same failure with the offending source.",
+            level: "fail",
+            message: `lunora/schema.ts could not be parsed, so every schema-derived check was skipped: ${error}`,
+        });
+
+        return;
+    }
 
     for (const declaration of info?.vectorMetadata ?? []) {
         const type = metadataTypeFor(declaration.kind);
@@ -258,11 +291,20 @@ const checkDevVariables = (cwd: string, findings: Finding[]): void => {
     }
 };
 
-/** `LUNORA_ADMIN_TOKEN` not set → INFO (studio/admin RPCs need it, but it's optional locally). */
-const checkAdminToken = (findings: Finding[]): void => {
-    const token = process.env.LUNORA_ADMIN_TOKEN;
+/**
+ * No admin bearer resolvable → INFO (studio/admin RPCs need it, but it's
+ * optional locally).
+ *
+ * Resolved through {@link resolveAdminBearer}, the same resolver every admin
+ * command uses, so `.dev.vars` counts. Reading only the environment reported
+ * `LUNORA_ADMIN_TOKEN is not set` on every `lunora dev`-scaffolded project —
+ * `lunora dev` writes the token into `.dev.vars` and never exports it — while
+ * this check's own fix text already said "(env or `.dev.vars`)".
+ */
+const checkAdminToken = (cwd: string, findings: Finding[]): void => {
+    const { source } = resolveAdminBearer({ cwd });
 
-    if (token === undefined || token.trim() === "") {
+    if (source === undefined) {
         findings.push({
             code: "admin-token-missing",
             fix: "Set LUNORA_ADMIN_TOKEN (env or `.dev.vars`) to enable admin RPCs / studio.",
@@ -270,7 +312,7 @@ const checkAdminToken = (findings: Finding[]): void => {
             message: "LUNORA_ADMIN_TOKEN is not set.",
         });
     } else {
-        findings.push({ code: "admin-token-set", level: "pass", message: "LUNORA_ADMIN_TOKEN is set." });
+        findings.push({ code: "admin-token-set", level: "pass", message: `LUNORA_ADMIN_TOKEN is set (${describeAdminTokenSource(source)}).` });
     }
 };
 
@@ -292,8 +334,21 @@ const checkDeclaredExports = async (cwd: string, findings: Finding[]): Promise<v
 
     try {
         inferred = await inferLunoraBindings({ projectRoot: cwd });
-    } catch {
-        return; // inference is best-effort; other checks own the real failures.
+    } catch (error: unknown) {
+        // Best-effort — other checks own the real failures, so this does not fail
+        // the run. It is still SAID: a silent return made a skipped check
+        // indistinguishable from a clean one, which is the same shape of quiet the
+        // check itself looks for. `lunora codegen`'s sibling was fixed for exactly
+        // this reason; doctor, the command whose whole job is to say what it
+        // found, was not.
+        findings.push({
+            code: "declared-export-unchecked",
+            fix: "Make sure the worker entry resolves (see `lunora codegen`), then re-run.",
+            level: "warn",
+            message: `could not check whether declared containers/workflows/agents are re-exported by the worker entry: ${error instanceof Error ? error.message : String(error)}`,
+        });
+
+        return;
     }
 
     const gaps = collectExportGaps(inferred);
@@ -533,7 +588,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     checkD1Placeholders(parsed, findings);
     checkEmailDestination(parsed, findings);
     checkDevVariables(cwd, findings);
-    checkAdminToken(findings);
+    checkAdminToken(cwd, findings);
     checkVersionSkew(cwd, findings);
     checkVectorMetadataIndexes(cwd, findings);
     checkCliShadow(cwd, options.executablePath ?? process.argv[1], findings);

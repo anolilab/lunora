@@ -1,8 +1,8 @@
-import type { FunctionReference } from "@lunora/client";
+import type { FunctionReference, SubscriptionErrorCallback } from "@lunora/client";
 import { act, render, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { useEffect } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
 import type { UseAgentApi, UseAgentOptions, UseAgentResult } from "../src/use-agent";
@@ -52,6 +52,42 @@ const Harness = ({ onReady, options }: HarnessProps): ReactElement => {
 };
 
 describe("useAgent", () => {
+    it("surfaces a thread-subscription error on `error` and through `onError`", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+        const onError = vi.fn<SubscriptionErrorCallback>();
+        let latest: undefined | UseAgentResult;
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Harness
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback capturing the hook's latest committed result.
+                    onReady={(result) => {
+                        latest = result;
+                    }}
+                    options={buildOptions({ onError })}
+                />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        await act(async () => {
+            mock.emitError(THREAD_REF, { code: "UNAUTHORIZED", message: "session expired" });
+        });
+
+        await waitFor(() => {
+            expect(latest?.error).toBeDefined();
+        });
+
+        // Without this the thread just freezes at its last status.
+        expect(latest?.error).toMatchObject({ code: "UNAUTHORIZED", message: "session expired" });
+        expect(onError).toHaveBeenCalledWith({ code: "UNAUTHORIZED", message: "session expired" });
+    });
+
     it("fires the run mutation with the input, thread key, and merged run args", async () => {
         expect.hasAssertions();
 

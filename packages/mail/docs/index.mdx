@@ -109,7 +109,20 @@ export default {
         const mailer = createMailer({ apiKey: env.RESEND_API_KEY, from: "Acme <noreply@acme.test>" });
 
         for (const message of batch.messages) {
+            const { idempotencyKey } = message.body;
+
+            // The dedupe is YOURS to do. Nothing downstream does it for you: no
+            // transport forwards the key to the provider (Resend dedupes on an
+            // `Idempotency-Key` REQUEST header, which the provider client does not
+            // expose), so this store is the only thing standing between a
+            // redelivery and a second copy of the same email.
+            if (await env.SENT.get(idempotencyKey)) {
+                message.ack();
+                continue;
+            }
+
             await consumeQueuedSend(mailer, message.body);
+            await env.SENT.put(idempotencyKey, "1", { expirationTtl: 86_400 });
             message.ack();
         }
     },
@@ -117,9 +130,19 @@ export default {
 ```
 
 Each queued send carries a stable `idempotencyKey` — a caller-supplied one, or one
-generated at enqueue time — so a redelivered message can be deduped against your
-own store even though the ack above already narrows retries to the message that
-actually failed.
+generated at enqueue time. The `ack` narrows retries to the message that actually
+failed, and the key is what stops a redelivery from mailing a second copy: skip
+the store and the window where the provider accepted the send but the worker died
+before acking sends a duplicate every time.
+
+It narrows that window rather than closing it, and nothing on this path can close
+it. The mark is written after the provider accepted the message, so a crash in
+between still redelivers and resends, and KV is eventually consistent — a
+redelivery seconds later can miss a mark that was written. Delivery is
+at-least-once end to end. If a second copy is unacceptable, claim the key in a
+strongly-consistent store (a Durable Object, or a D1 row) _before_ the send and
+release it on failure; that trades a possible duplicate for a possible unsent
+message, which is the only other side of this coin.
 
 ## Receiving email
 
@@ -135,10 +158,13 @@ env, ctx)` export, a sibling of `fetch`/`scheduled`. Export one built by
 `createInboundEmailHandler`:
 
 ```ts
-import { createInboundEmailHandler, dispatchToLunoraFunction, parseInboundEmail } from "@lunora/mail/inbound";
+import { authenticatesFrom, createInboundEmailHandler, dispatchToLunoraFunction, parseInboundEmail } from "@lunora/mail/inbound";
 
 export const email = createInboundEmailHandler({
     parse: parseInboundEmail,
+    // The sender gate. `authenticatesFrom` accepts only a DMARC/SPF/DKIM pass
+    // that is ALIGNED with the `From` domain — see the warning below.
+    verify: authenticatesFrom,
     dispatch: dispatchToLunoraFunction({
         shard: env.SHARD,
         functionPath: "inbound:onEmail",
@@ -152,26 +178,62 @@ The handler reads `message.raw`, parses it into a normalised `InboundEmail`
 html?, attachments, authentication }`, every header CR/LF-checked), and
 dispatches it. `dispatchToLunoraFunction` posts an RPC envelope to the root shard
 stub (the same admin-RPC-over-shard path the dev mail catcher uses), calling the
-named mutation/action with the parsed message as its args. It needs
-`LUNORA_ADMIN_TOKEN` to authorize the RPC (read from `env` by default). On a
-parse/dispatch failure the handler calls `message.setReject(reason)` so
-Cloudflare bounces or retries rather than silently dropping the mail; override
-`onError` to log/forward/swallow instead.
+named mutation/action with the parsed message as its args. The RPC is marked a
+**trusted system dispatch** — the same marker the scheduler and cron paths set —
+so the target may be an `internalMutation` / `internalAction`. It needs
+`LUNORA_ADMIN_TOKEN` to authorize the RPC (read from `env` by default).
+
+Failures split by whether a redelivery could ever succeed. A **parse or verify**
+failure is permanent — the same bytes fail the same way — so the handler calls
+`message.setReject(reason)` and Cloudflare bounces the mail to the sender;
+override `onError` to log/forward/swallow instead. A **dispatch** failure (a
+shard 502, a briefly-absent `LUNORA_ADMIN_TOKEN`) is usually transient, but
+Cloudflare gives an inbound worker no way to say "try later": `setReject` is a
+permanent SMTP error and an uncaught throw is permanent too, just opaque
+(`521 Upstream error`). There is no inbound redelivery to fall back on. By
+default the handler therefore bounces with the same fixed generic reason.
+
+To stop a two-second blip losing a legitimate email, absorb the retry inside the
+worker: pass `retain` and the handler hands the parsed message to it and
+**accepts** the SMTP session, because the message is now owned rather than lost.
+The sink is yours — a queue, a Durable Object, an alarm:
+
+```ts
+export const email = createInboundEmailHandler({
+    parse: parseInboundEmail,
+    dispatch: dispatchToLunoraFunction({ shard: env.SHARD, functionPath: "inbound:onEmail" }),
+    retain: async (parsed, { env }) => env.INBOUND_RETRY.send(parsed),
+});
+```
+
+If `retain` itself throws there is nowhere durable to put the message, so it
+falls back to the generic bounce (the real reason is logged server-side, never
+reflected to the sender). A `dispatch` that knows one of its own failures is
+permanent should call `context.message.setReject(...)` and return instead of
+throwing, so it bounces without being queued for a retry that can never succeed.
 
 <Callout type="warn">
     Inbound mail is untrusted and dispatch is privileged. Cloudflare Email Routing authenticates only the recipient domain, not the sender (`email.from` and the
-    body are trivially spoofable), and `dispatchToLunoraFunction` runs the target function in a system/admin context with RLS bypassed. Never make a trust
-    decision on `email.from`. Gate on the DKIM/SPF/DMARC verdicts in `email.authentication` via the `verify` hook before dispatch, and treat the function input
-    as fully attacker-controlled.
+    body are trivially spoofable), and `dispatchToLunoraFunction` dispatches as a trusted system call, so make the target an `internalMutation` /
+    `internalAction`: a **public** `mutation` reachable from inbound mail is equally reachable from any browser client, which can post a forged
+    `from`/`to`/`text` straight into your inbox table. The dispatch carries no caller identity, so an `rls()` policy on the target sees an anonymous caller — it
+    is not bypassed; do the authorization in the handler. Never make a trust decision on `email.from`. Gate on the DKIM/SPF/DMARC verdicts in
+    `email.authentication` via the `verify` hook before dispatch, and treat the function input as fully attacker-controlled. A bare `pass` is not enough: SPF
+    vouches for the envelope `MAIL FROM` domain and DKIM for the signing `d=`, both of which the sender picks. `authentication.dkim` / `.spf` / `.dmarc` are
+    **lists** — one header legitimately reports a method more than once (an ESP-relayed message is DKIM-signed twice) — and each entry carries the `domain` it
+    is about. Do not hand-roll that check: pass `verify: authenticatesFrom` and let `@lunora/mail` answer it. It accepts only when ANY entry has `result ===
+    "pass"` **and** a `domain` equal to the `From` address's domain, treating an entry with a `null` domain as unauthenticated and an empty list as "not
+    reported" (a DMARC pass already checked alignment). Every copy of this predicate written by hand has been one `&&` away from accepting a genuine `spf=pass`
+    + `dkim=pass` for the attacker's OWN domain on a message forging someone else's `From`.
 </Callout>
 
-The receiving function is an ordinary mutation/action (the default `resolveArgs`
-passes the whole `InboundEmail`, so declare the fields you use):
+The receiving function is an ordinary internal mutation/action (the default
+`resolveArgs` passes the whole `InboundEmail`, so declare the fields you use):
 
 ```ts
-import { mutation, v } from "@/lunora/_generated/server";
+import { internalMutation, v } from "@/lunora/_generated/server";
 
-export const onEmail = mutation
+export const onEmail = internalMutation
     .input({
         from: v.string(),
         to: v.array(v.string()),
@@ -218,8 +280,10 @@ rules; that lifecycle stays in Cloudflare.
 | Type-only                             | `Mailer`, `MailTransport`, `SendOptions`, `SendPayload`, `QueueLike`, `LunoraMailOptions`, `QueuedSend`, `CapturedMail`, `MailboxSink`, `CloudflareSend`, `CloudflareTransportOptions`, `FromEnvOptions`, `MailEnv` |
 
 `@lunora/mail/inbound`: `createInboundEmailHandler(options)`,
-`dispatchToLunoraFunction(options)`, `parseInboundEmail(raw)`, and the inbound
-types (`InboundEmail`, `InboundAttachment`, `InboundAuthentication`,
+`dispatchToLunoraFunction(options)`, `parseInboundEmail(raw)`,
+`authenticatesFrom(email)` (the canonical `verify` gate — true only for a
+DMARC/SPF/DKIM pass aligned with the `From` domain), and the inbound types
+(`InboundEmail`, `InboundAttachment`, `InboundAuthentication`,
 `InboundEmailHandlerOptions`, `InboundDispatch`, `InboundVerify`, …).
 
 `@lunora/mail/testing` (dev/test-only): `waitForMail(options)`,

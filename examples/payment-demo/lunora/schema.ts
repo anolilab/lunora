@@ -1,3 +1,4 @@
+import { ratelimit } from "./ratelimit/schema.js";
 import { defineSchema, defineTable, v } from "lunorash/server";
 
 /**
@@ -77,4 +78,4 @@ export default defineSchema({
     })
         .index("by_idempotency", ["provider", "idempotencyKey"], { unique: true })
         .index("by_reference_feature", ["referenceId", "featureId"]),
-});
+}).extend(ratelimit.extension);

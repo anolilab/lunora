@@ -245,7 +245,11 @@ export class EventLog {
             seq,
             type,
             payload: pl,
-            timestamp: resolvedOptions?.timestamp ?? Date.now(),
+            // An `InputEvent` carries its own required `timestamp` — when the
+            // event was created, which is not when it reaches the log. Honour it
+            // here the way {@link EventLog#commitAll} always has; stamping
+            // `Date.now()` over it silently rewrote every such event's time.
+            timestamp: resolvedOptions?.timestamp ?? (typeof typeOrEvent === "string" ? undefined : typeOrEvent.timestamp) ?? Date.now(),
             tableDiffs: diffs,
             clientId: resolvedOptions?.clientId,
             sessionId: resolvedOptions?.sessionId,
@@ -342,10 +346,19 @@ export class EventLog {
 
     /**
      * Paginated read starting at `fromSeq`.
+     *
+     * `limit` must be a positive safe integer, validated like
+     * {@link EventLog#truncateBelow}'s floor and the constructor's `maxEntries`:
+     * a `limit` of `0` returned an empty page with `hasMore: true`, which spins a
+     * paginating caller forever on a page it can never advance past.
      * @returns `{ entries, hasMore }` where `hasMore` is `true` when more
      * entries exist beyond the requested page.
      */
     public getFrom(fromSeq: number, limit: number = 50): { entries: ReadonlyArray<EventLogEntry>; hasMore: boolean } {
+        if (!Number.isSafeInteger(limit) || limit < 1) {
+            throw new RangeError("limit must be a positive safe integer");
+        }
+
         // Locate the first live entry at/after `fromSeq` by scanning the backing
         // array from `#headOffset` — never materialize the whole retained log
         // (an uncapped log would make each page O(total history)); copy only the

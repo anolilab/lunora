@@ -30,7 +30,7 @@ export interface FakeStreamCall {
     iterable: StreamIterable<unknown>;
     /** Spy invoked when the primitive cancels its iterator (teardown / args change). */
     onCancel: ReturnType<typeof vi.fn>;
-    options: { maxBuffer?: number; shardKey?: string };
+    options: { durable?: boolean; maxBuffer?: number; shardKey?: string };
 }
 
 export interface FakeClient {
@@ -41,6 +41,8 @@ export interface FakeClient {
     mutationCalls: { args: unknown; functionPath: string }[];
     /** Push a chunk to every open stream matching `(functionPath, args)`. */
     pushStream: (functionPath: string, args: Record<string, unknown>, value: unknown) => void;
+    /** Set the auth token (and optionally the subject) — fires `onAuthTokenChange`. */
+    setAuthToken: (token: string | null, subject?: string | null) => void;
     /** Resolve the next `mutation()` with this value (default: echoes args). */
     setMutationResult: (value: unknown) => void;
     /** Reject the next `mutation()` with this error. */
@@ -58,7 +60,41 @@ export const createFakeClient = (): FakeClient => {
     let mutationResult: unknown;
     let mutationThrow: Error | undefined;
 
+    // Auth-identity surface the voice primitive's `watchVoiceIdentity` reads: it
+    // keys on the identity FINGERPRINT (subject when supplied, else the token), so
+    // a same-subject JWT refresh fires the listeners without moving the identity.
+    let authToken: string | null = null;
+    let authSubject: string | null | undefined;
+    const authTokenListeners = new Set<(token: string | null) => void>();
+    const setAuthTokenFake = (token: string | null, subject?: string | null): void => {
+        if (subject !== undefined) {
+            authSubject = subject;
+        } else if (token === null) {
+            authSubject = undefined;
+        }
+
+        if (authToken === token) {
+            return;
+        }
+
+        authToken = token;
+
+        for (const listener of authTokenListeners) {
+            listener(token);
+        }
+    };
+
     const client = {
+        currentIdentity: (): string | null => authSubject ?? authToken,
+        getAuthToken: (): string | null => authToken,
+        onAuthTokenChange: (listener: (token: string | null) => void): Unsubscribe => {
+            authTokenListeners.add(listener);
+
+            return () => {
+                authTokenListeners.delete(listener);
+            };
+        },
+        setAuthToken: setAuthTokenFake,
         mutation: (function_: FunctionReference, args: unknown) => {
             mutationCalls.push({ args, functionPath: function_.__lunoraRef });
 
@@ -71,7 +107,7 @@ export const createFakeClient = (): FakeClient => {
         stream: <F extends FunctionReference<"stream">>(
             function_: F,
             args: ArgsOf<F>,
-            options: { maxBuffer?: number; shardKey?: string } = {},
+            options: { durable?: boolean; maxBuffer?: number; shardKey?: string } = {},
         ): StreamIterable<ReturnOf<F>> => {
             const onCancel = vi.fn<() => void>();
             const { handle, iterable } = createStream<unknown>({ maxBuffer: options.maxBuffer, onCancel });
@@ -132,6 +168,7 @@ export const createFakeClient = (): FakeClient => {
         flush,
         mutationCalls,
         pushStream,
+        setAuthToken: setAuthTokenFake,
         setMutationResult: (value: unknown) => {
             mutationResult = value;
         },

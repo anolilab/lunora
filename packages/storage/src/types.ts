@@ -29,6 +29,21 @@ export interface PresignedUrlOptions {
 
 export interface LunoraStorageOptions {
     bucket: R2BucketLike;
+
+    /**
+     * The name this bucket is registered under — the same string a
+     * `defineStorageRule({ bucket })` rule and the generated `StorageBucketName`
+     * union use. Bound into every signed URL's HMAC and mirrored on it as
+     * `&bucket=`, so a URL minted for one bucket can't be replayed against
+     * another sharing the signing secret, and the serving route can resolve
+     * which bucket to read.
+     *
+     * Required, and deliberately without a default: a defaulted name is how
+     * every bucket ended up signing as `"default"` and cross-verifying against
+     * each other. Pass `"default"` for a single-bucket app's `ctx.storage`, and
+     * the registered name for any bucket reached through `createBucketStorage`.
+     */
+    bucketName: string;
     /** Public base URL used by `getSignedUrl()`. Required for signed URLs. */
     publicBaseUrl?: string;
 
@@ -50,11 +65,20 @@ export interface UploadOptions {
 
     /**
      * Maximum body size in bytes. For `ArrayBuffer`/`Blob` sources the length is
-     * known up front and rejected before the upload starts. For a
-     * `ReadableStream` the length isn't known synchronously, so the stream is
-     * piped through a byte counter that aborts the upload once the limit is
-     * exceeded — this also guards against R2 silently accepting/truncating an
-     * unbounded stream.
+     * known up front and rejected before the upload starts.
+     *
+     * A `ReadableStream` has no length to check, and R2 refuses any stream whose
+     * length it cannot read — so a capped stream is READ INTO MEMORY under the
+     * cap and uploaded as a sized body. Nothing reaches the bucket if the body
+     * crosses the limit.
+     *
+     * `maxSize` is therefore also the memory ceiling for a streamed upload, and
+     * the isolate's ~128 MB is shared by every concurrent request — so on the
+     * stream path `maxSize` is itself capped at 16 MiB and rejected above it.
+     * For objects larger than that use `createMultipartUpload` /
+     * `createUploadHandler`, which upload without ever holding the whole object.
+     * Must be a finite, non-negative number; anything else (`Number(undefined)`
+     * is the usual source) is rejected as a `VALIDATION_ERROR`.
      */
     maxSize?: number;
 
@@ -73,7 +97,11 @@ export interface ListOptions {
     cursor?: string;
     /** R2 list delimiter — when set, common prefixes group instead of listing. */
     delimiter?: string;
-    /** Defaults to 100, capped at 1000 (R2 limit). */
+
+    /**
+     * Defaults to 100, capped at 1000 (R2 limit). A ceiling, not a promise: R2
+     * may return fewer per page to fit the entry metadata.
+     */
     limit?: number;
 }
 
@@ -110,6 +138,18 @@ export interface ObjectMetadata {
 }
 
 export interface Storage {
+    /**
+     * The bucket name this accessor operates under — the same value
+     * {@link Storage.getSignedUrl} puts into the HMAC canonical.
+     *
+     * Exposed so everything downstream agrees on one name: `asBucketStorage`
+     * tags a single-bucket storage with it, and `storageRules(...)` matches
+     * `(bucket, operation)` rules against that tag. Without it a
+     * `createStorage({ bucketName: "avatars" })` signed URLs as `avatars` while
+     * the rules engine only ever saw `"default"`.
+     */
+    readonly bucketName: string;
+
     /**
      * Begin a native R2 **multipart upload** for very large objects — upload
      * parts (each uniform in size except the last), then `complete` with the
@@ -167,7 +207,18 @@ export interface Storage {
      * the same read.
      */
     head: (key: string) => Promise<R2ObjectLike | null>;
-    list: (prefix?: string, options?: ListOptions) => Promise<{ cursor?: string; objects: R2ObjectLike[]; truncated?: boolean }>;
+
+    /**
+     * List objects under `prefix`. With `options.delimiter` set, keys sharing a
+     * segment are rolled up into `delimitedPrefixes` (the "folders") and are NOT
+     * in `objects` — a folder browser needs both, so a listing whose `objects` is
+     * empty is not an empty directory.
+     *
+     * A page may hold FEWER objects than `options.limit`: R2 shrinks a page to
+     * fit the per-entry metadata this call asks for. Paginate on `truncated` /
+     * `cursor`, never on `objects.length === limit`.
+     */
+    list: (prefix?: string, options?: ListOptions) => Promise<{ cursor?: string; delimitedPrefixes?: string[]; objects: R2ObjectLike[]; truncated?: boolean }>;
 
     /**
      * Resume an in-progress multipart upload by its `uploadId` (e.g. across

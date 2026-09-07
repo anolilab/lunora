@@ -105,3 +105,9 @@ const raiseNonRetryable = (message: string, cause: unknown, NativeNonRetryableEr
 
 export type { NativeNonRetryableErrorConstructor };
 export { convertNonRetryableError, isNonRetryableError, NonRetryableError, raiseNonRetryable, toNativeNonRetryableError };
+// `isDuplicateInstanceError` lives in `shared/` rather than here: `@lunora/runtime`'s
+// scheduler dispatcher makes the same idempotency decision about the same rejection,
+// but reaches the Workflows binding structurally and keeps no runtime dependency on
+// this package. This package still OWNS the predicate as public API — the fan-out
+// spawn and `@lunora/agent`'s sub-agent/channel dispatch import it from here.
+export { isDuplicateInstanceError } from "../../../shared/duplicate-instance";

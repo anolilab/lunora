@@ -60,7 +60,15 @@ const PM_CI_PROFILES: Record<PackageManager, PmCiProfile> = {
     },
     pnpm: {
         githubCacheKey: "pnpm",
-        githubSetupStep: "      - uses: pnpm/action-setup@v4\n",
+        // `version` is REQUIRED unless the project's package.json carries a
+        // `packageManager` field, and no Lunora template writes one — so the
+        // bare step failed every scaffolded pipeline at setup. `latest` rather
+        // than a pinned major: this file ships inside the CLI, so a number here
+        // goes stale in every project scaffolded after the next pnpm release,
+        // which is the same class of defect. A project that pins
+        // `packageManager` can drop this `with:` block and the action will
+        // follow the pin.
+        githubSetupStep: "      - uses: pnpm/action-setup@v4\n        with:\n          version: latest\n",
         gitlabImage: "node:22",
         gitlabProvisionScript: ["corepack enable"],
         installCmd: "pnpm install --frozen-lockfile",

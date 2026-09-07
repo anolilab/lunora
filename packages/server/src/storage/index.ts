@@ -33,11 +33,19 @@
  * A rule only governs operations on its own bucket. The bare `ctx.storage` is the
  * `"default"` bucket (so `{ bucket: "default" }` guards it), UNLESS the worker
  * built `createBucketStorage(..., { default: "media" })`, which renames the bare
- * accessor to `"media"` — then a `{ bucket: "default" }` rule is inert. Likewise a
- * single-bucket app (`createStorage`) tags every accessor `"default"`, so a
- * `{ bucket: "other" }` rule never fires. Match the rule's `bucket` to the name
- * the binding is addressed under (the generated `StorageBucketName` union lists
- * them); a mismatched bucket name is a silent no-op, not an error.
+ * accessor to `"media"`. Likewise a single-bucket app (`createStorage`) tags every
+ * accessor `"default"`. Match the rule's `bucket` to the name the binding is
+ * registered under in the app's `.storage({ bucket, buckets })` declaration.
+ *
+ * **A rule naming a bucket the request's storage cannot address throws** — it is
+ * a configuration error, not a no-op. It has to be: such a rule governs nothing,
+ * so the operation it was written to lock down stays wide open while the source
+ * and the studio's access-rules view both read as if it were enforced. The check
+ * runs per request in the middleware, against the accessor itself, because the
+ * registered bucket names live in a runtime declaration. Do **not** validate
+ * against the generated `StorageBucketName` union: it is seeded from
+ * `v.storage()` columns *and from the rules themselves*, so it can never
+ * disagree with a rule, and it is not the runtime bucket map either.
  */
 export { defineStorageRule, defineStorageRules } from "./define";
 export { storageRules } from "./middleware";

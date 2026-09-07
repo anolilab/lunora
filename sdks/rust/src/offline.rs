@@ -45,6 +45,9 @@ pub const CODE_OFFLINE_PRECONDITION_FAILED: &str = "OFFLINE_PRECONDITION_FAILED"
 pub const CODE_OFFLINE_IDENTITY_CHANGED: &str = "OFFLINE_IDENTITY_CHANGED";
 /// The write's args cannot be wire-encoded, so it can never replay.
 pub const CODE_OFFLINE_WRITE_UNENCODABLE: &str = "OFFLINE_WRITE_UNENCODABLE";
+/// A restored record's args are not readable as wire values — the store was
+/// corrupted, or written by an incompatible build.
+pub const CODE_OFFLINE_WRITE_UNDECODABLE: &str = "OFFLINE_WRITE_UNDECODABLE";
 /// The client was closed while the write was still queued.
 pub const CODE_CLIENT_CLOSED: &str = "CLIENT_CLOSED";
 
@@ -56,11 +59,40 @@ pub const CODE_CLIENT_CLOSED: &str = "CLIENT_CLOSED";
 /// replaying it would only re-trigger the same failure, a poison-message loop.
 pub const TRANSIENT_ERROR_CODES: [&str; 2] = ["SHARD_ERROR", "SHARD_UNAVAILABLE"];
 
+/// The coded errors that say "not now" rather than "no".
+///
+/// A rate-limited replay is the one verdict a durable queue must never honour:
+/// the write is perfectly valid and the server is asking for it later, so
+/// dropping it loses data for being punctual. The delay comes from the
+/// envelope's `data.retryAfterMs` (see `protocol/fixtures/rpc.json`'s
+/// `responseError.with-data`).
+pub const RATE_LIMIT_ERROR_CODES: [&str; 2] = ["RATE_LIMITED", "TOO_MANY_REQUESTS"];
+
+/// The longest delay a rate-limit hint is honoured for, matching the reference
+/// client's clamp. A server — or a proxy rewriting for one — that names hours
+/// would otherwise park a durable queue for hours on one unvalidated number.
+pub const MAX_RETRY_AFTER_MS: i64 = 60_000;
+
+/// The worker's answer to a batch body over its cap. Coded, so it arrives as a
+/// whole-batch envelope — which every other coded envelope makes a verdict on
+/// every entry, and this one is not.
+pub const CODE_PAYLOAD_TOO_LARGE: &str = "PAYLOAD_TOO_LARGE";
+
 /// Hard cap on entries in one batch, matching the server's own
 /// (`shared/batch-wire.ts`). A Durable Object is single-threaded and replays a
 /// batch's entries sequentially, so an unbounded one could pin a shard for tens
 /// of thousands of dispatches. A flush with a larger backlog chunks itself.
 pub const MAX_BATCH_ENTRIES: usize = 500;
+
+/// Byte budget for one batch body: the worker's own 1 MiB body cap
+/// (`packages/runtime/src/body-readers.ts`) less 64 KiB of headroom, written as
+/// the subtraction so the derivation stays visible. The entry cap alone is blind
+/// to size: 500 writes carrying bytes or long text exceed a megabyte, the worker
+/// answers `413 PAYLOAD_TOO_LARGE`, and a whole-batch coded envelope is terminal
+/// for every entry — so a count-only chunker settles 500 durable writes
+/// `rejected` that would each have committed alone. The headroom covers the
+/// request line, the headers and the JSON framing this estimate does not weigh.
+pub const MAX_BATCH_BYTES: usize = 1_048_576 - 65_536;
 
 /// Bounds the queue when no capacity is configured.
 pub const DEFAULT_MAX_ITEMS: usize = 1000;
@@ -425,7 +457,14 @@ impl OfflineQueue {
     /// authoritative, since a prior-session write is always older. Appending would
     /// let a boot-time write replay first and last-writer-wins clobber newer data
     /// with stale.
-    pub fn hydrate(&mut self, decode: impl Fn(&Value) -> WireValue) -> Result<(Vec<Option<String>>, Vec<Discarded>), String> {
+    ///
+    /// `decode` may FAIL, and a record it refuses is purged from the store and
+    /// returned as a discard rather than restored. Never a substitute value: a
+    /// record hydrated with empty args replays SUCCESSFULLY with the wrong
+    /// arguments, which is corruption rather than failure — and a decode that
+    /// propagated out of here instead would kill the whole restart path over one
+    /// bad row.
+    pub fn hydrate(&mut self, decode: impl Fn(&Value) -> Result<WireValue, String>) -> Result<(Vec<Option<String>>, Vec<Discarded>), String> {
         let Some(store) = self.persistence.as_mut() else {
             return Ok((Vec::new(), Vec::new()));
         };
@@ -435,6 +474,7 @@ impl OfflineQueue {
         let mut seen: HashSet<String> = self.items.iter().map(|item| item.id.clone()).collect();
         let mut restored = Vec::new();
         let mut purge_errors = Vec::new();
+        let mut undecodable = Vec::new();
 
         for record in &persisted {
             let id = record.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
@@ -453,9 +493,24 @@ impl OfflineQueue {
                 continue;
             }
 
-            let args = decode(record.get("args").unwrap_or(&Value::Null));
+            match decode(record.get("args").unwrap_or(&Value::Null)) {
+                Ok(args) => restored.push(QueuedMutation::from_record(record, args)),
+                Err(_) => {
+                    // Purged and REPORTED, never replayed with substitute args: a
+                    // record whose args do not decode has no correct replay, and
+                    // sending it with an empty argument object would commit a
+                    // DIFFERENT write than the one the caller made.
+                    if let Err(purge) = store.remove(&id) {
+                        purge_errors.push((purge, id.clone()));
+                    }
 
-            restored.push(QueuedMutation::from_record(record, args));
+                    undecodable.push(Discarded {
+                        code: CODE_OFFLINE_WRITE_UNDECODABLE,
+                        entry: QueuedMutation::from_record(record, WireValue::Null),
+                        message: "offline mutation restored from storage cannot be wire-decoded",
+                    });
+                }
+            }
         }
 
         for (error, id) in purge_errors {
@@ -469,7 +524,9 @@ impl OfflineQueue {
 
         // A store holding more than `max_items` (the cap was lowered between
         // sessions, or writes piled up across restarts) must not bypass it.
-        let evicted = self.evict_overflow();
+        let mut evicted = undecodable;
+
+        evicted.extend(self.evict_overflow());
 
         self.notify_size();
 

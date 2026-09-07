@@ -21,6 +21,26 @@ module Lunora
   # of thousands of dispatches. A flush with a larger backlog chunks itself.
   MAX_BATCH_ENTRIES = 500
 
+  # Byte budget for one batch body, under the worker's own 1 MiB body cap
+  # (+packages/runtime/src/body-readers.ts+). The entry cap alone is blind to
+  # size: 500 writes carrying bytes or long text exceed a megabyte, the worker
+  # answers 413 PAYLOAD_TOO_LARGE, and a whole-batch coded envelope is terminal
+  # for every entry — so a count-only chunker settles 500 durable writes rejected
+  # that would each have committed alone. The 64 KiB of headroom covers the
+  # request line, the headers and the JSON framing this estimate does not weigh.
+  MAX_BATCH_BYTES = 1_048_576 - 65_536
+
+  # The worker's answer to a body over its cap. Coded, so it arrives as a
+  # whole-batch envelope — which every other coded envelope is a verdict on every
+  # entry, and this one is not.
+  PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE"
+
+  # Ceiling on a delay this client will actually sit out, matching the browser
+  # client's own clamp. A server (or a proxy inventing one) that names an hour
+  # would otherwise strand a durable queue for an hour, with no way for the
+  # consumer to tell a deliberate backoff from a stuck client.
+  MAX_RETRY_AFTER_MS = 60_000
+
   # How many un-applied poke buffers to retain before evicting the oldest. A
   # buffer is only released at its +pokeEnd+; a socket that drops mid-poke never
   # sends one, so without a bound the abandoned buffers accumulate for the life
@@ -30,13 +50,20 @@ module Lunora
   MAX_PENDING_POKES = 64
 
   # A coded error from an RPC error envelope.
+  #
+  # +transient+ says the call did not reach a verdict — a 5xx, or a non-2xx
+  # carrying no envelope at all (an edge error page, a WAF block, a proxy). It is
+  # set where the STATUS is still in scope, because nothing downstream can
+  # recover it: +code+ alone cannot tell a BAD_REQUEST the function returned from
+  # the INTERNAL this client synthesises for a body that never came from one.
   class ApiError < StandardError
-    attr_reader :code, :data
+    attr_reader :code, :data, :transient
 
-    def initialize(code, message, data = nil)
+    def initialize(code, message, data = nil, transient = false)
       super(message)
       @code = code
       @data = data
+      @transient = transient
     end
   end
 
@@ -80,11 +107,19 @@ module Lunora
   # accepted, the ids dropped on a verdict/identity change/stale precondition,
   # the ids left queued for the next reconnect, and the subset of the rejected
   # that failed their precondition.
-  FlushReport = Struct.new(:committed, :rejected, :requeued, :conflicted, keyword_init: true) do
+  # +retry_after_ms+ is how long the server asked the caller to wait before
+  # flushing again, when a replay came back rate-limited; nil otherwise. The
+  # client enforces it too — a flush inside the window is a no-op — so this is
+  # for a caller that schedules its own retry.
+  FlushReport = Struct.new(:committed, :rejected, :requeued, :conflicted, :retry_after_ms, keyword_init: true) do
     def self.empty = new(committed: [], conflicted: [], rejected: [], requeued: [])
   end
 
   module_function
+
+  # A clock that only moves forward, for the rate-limit window. Monotonic, so a
+  # wall-clock adjustment cannot strand a queue for hours.
+  def monotonic_now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 
   # Build the POST /_lunora/rpc body. +shard_key+ is omitted when nil OR empty,
   # which routes to the default shard.
@@ -111,10 +146,19 @@ module Lunora
     if body.key?("error")
       envelope = body["error"]
       data = envelope["data"].nil? ? nil : decode_wire(envelope["data"])
-      raise ApiError.new(envelope.fetch("code", "INTERNAL"), envelope.fetch("message", "request failed"), data)
+      # A 5xx is the shard or the edge failing under the call, not a verdict on
+      # it, so a queued write replayed under the same idempotency key is still
+      # good. See +Client#transient?+.
+      raise ApiError.new(envelope.fetch("code", "INTERNAL"), envelope.fetch("message", "request failed"), data,
+                         status >= 500)
     end
 
-    raise ApiError.new("INTERNAL", "HTTP #{status} without an error envelope") unless (200..299).cover?(status)
+    # No envelope at all, so this body never came from a Lunora function: an edge
+    # error page, a WAF block, a proxy. Nothing reached the shard, which makes it
+    # transport rather than a verdict — the batch path already classified the
+    # identical response that way, and a lone queued write must not be dropped
+    # for being alone.
+    raise ApiError.new("INTERNAL", "HTTP #{status} without an error envelope", nil, true) unless (200..299).cover?(status)
 
     decode_wire(body["result"])
   end
@@ -217,6 +261,9 @@ module Lunora
       @next_id = 0
       @next_shape_id = 0
       @was_ever_connected = false
+      # The monotonic instant before which a flush is a no-op, set when a replay
+      # came back rate-limited and the envelope named a delay.
+      @flush_not_before = 0.0
       @closed = false
       @settled_listeners = []
       @mutex = Mutex.new
@@ -365,8 +412,9 @@ module Lunora
       end
     end
 
-    # Re-subscribe everything after a reconnect, carrying each subscription's
-    # resume cursor so the server can skip results that have not changed.
+    # Re-subscribe everything — queries AND shape views — after a reconnect,
+    # carrying each subscription's resume cursor or checkpoint so the server can
+    # skip results that have not changed.
     #
     # Without this the cursor/epoch tracked on every +data+ frame would be
     # write-only state and a reconnect would silently re-seed from scratch.
@@ -380,10 +428,20 @@ module Lunora
         sender = @send
         next [] if sender.nil?
 
-        @subscriptions.map do |id, entry|
+        queries = @subscriptions.map do |id, entry|
           Lunora.build_subscribe_frame(
             id, entry[:function_path], entry[:args],
             since_seq: entry[:cursor], since_epoch: entry[:epoch]
+          )
+        end
+
+        # BOTH registries. A resend that walks only the queries leaves every
+        # shape view subscribed to a socket that no longer exists — silently, and
+        # for the rest of the process's life.
+        queries + @shapes.map do |id, entry|
+          Lunora.build_shape_subscribe_frame(
+            id, entry[:name], entry[:args],
+            since_checkpoint: entry[:checkpoint], since_epoch: entry[:epoch]
           )
         end
       end
@@ -510,7 +568,18 @@ module Lunora
     # blocking every write behind it in the FIFO.
     def flush_offline_queue(shard_key = nil)
       report = FlushReport.empty
-      queue, current_identity = @mutex.synchronize { [@offline_queue, @identity] }
+
+      queue, current_identity, remaining = @mutex.synchronize do
+        [@offline_queue, @identity, @flush_not_before - Lunora.monotonic_now]
+      end
+
+      # A server that answered "not now" gets waited out. Without this the
+      # caller's own reconnect loop replays the identical burst immediately and
+      # earns the same 429, indefinitely.
+      if remaining.positive?
+        report.retry_after_ms = (remaining * 1000).to_i + 1
+        return report
+      end
 
       conflicted = drain_conflicted(queue)
 
@@ -579,7 +648,19 @@ module Lunora
 
     def deliver(entry, frame, kind, deferred)
       payload = frame.key?("data") && !frame["data"].nil? ? frame["data"] : frame["delta"]
-      value = Lunora.decode_wire(payload)
+
+      begin
+        value = Lunora.decode_wire(payload)
+      rescue WireFormatError => e
+        # Delivered to the ONE subscription the frame is addressed to, never
+        # raised out of +handle_frame+: the caller is a socket read loop, so a
+        # raise here ends it and with it every other subscription on this client
+        # — one malformed payload silently killing the whole stream.
+        return deliver_error(
+          { "error" => { "code" => "INVALID_FRAME", "message" => e.message }, "id" => frame["id"] },
+          "error", deferred
+        )
+      end
 
       if entry
         advance(entry, frame)
@@ -811,8 +892,9 @@ module Lunora
       return replay_sequential(queue, sendable, report) if sendable.length <= 1
 
       to_requeue = []
+      chunks = chunk_batches(sendable)
 
-      sendable.each_slice(MAX_BATCH_ENTRIES).with_index do |chunk, chunk_index|
+      chunks.each_with_index do |chunk, chunk_index|
         # Chunks replay sequentially, which is what preserves FIFO across a
         # flush longer than one batch.
         requeue, stop = replay_batched(queue, chunk, report)
@@ -823,7 +905,7 @@ module Lunora
         # A whole-chunk transport failure. Leave every write not yet sent
         # queued, in order, rather than sending on into a connection that just
         # failed.
-        to_requeue.concat(sendable[((chunk_index + 1) * MAX_BATCH_ENTRIES)..] || [])
+        chunks[(chunk_index + 1)..].each { |later| to_requeue.concat(later) }
         break
       end
 
@@ -833,6 +915,48 @@ module Lunora
       end
 
       report
+    end
+
+    # A batch entry's contribution to the request body, in bytes.
+    #
+    # The args dominate and are the only part that can be large; the constant
+    # covers the entry's fixed keys and the comma joining it to the next one.
+    # Encoding twice (here and in +batch_calls+) is deliberate — the flush is the
+    # slow path, and carrying the encoded form through the chunker would put a
+    # second representation of every queued write in memory.
+    def entry_bytes(item)
+      JSON.generate(Lunora.encode_wire(item.args.nil? ? {} : item.args)).bytesize +
+        item.function_path.to_s.bytesize + item.id.to_s.bytesize + 160
+    end
+
+    # Split a flush into batch bodies the worker will accept.
+    #
+    # By BYTES as well as by count: the worker reads a batch body under a 1 MiB
+    # budget and answers 413 PAYLOAD_TOO_LARGE past it, so 500 writes carrying
+    # bytes or long text are one request the server refuses whole. A single write
+    # over the budget still forms its own chunk — splitting cannot help it, and
+    # +replay_batched+ settles it on the answer.
+    def chunk_batches(items)
+      chunks = []
+      current = []
+      size = 0
+
+      items.each do |item|
+        cost = entry_bytes(item)
+
+        if !current.empty? && (current.length >= MAX_BATCH_ENTRIES || size + cost > MAX_BATCH_BYTES)
+          chunks << current
+          current = []
+          size = 0
+        end
+
+        current << item
+        size += cost
+      end
+
+      chunks << current unless current.empty?
+
+      chunks
     end
 
     # Replay writes one at a time. FIFO is preserved by the loop itself.
@@ -845,6 +969,8 @@ module Lunora
             settle_terminal(queue, item, e, report)
             next
           end
+
+          note_retry_after(report, e)
 
           # Nothing after this write may go out ahead of it: replaying out of
           # order is how a durable queue corrupts the data it was protecting.
@@ -889,11 +1015,34 @@ module Lunora
 
       # No per-slot results. A coded envelope is a verdict on the WHOLE batch — a
       # bad request, an authorization denial — and therefore terminal for every
-      # entry; anything else is transport, and transient.
+      # entry; anything else is transport, and transient. The two exceptions are
+      # below: a body the worker refused for SIZE, and a code that says "not now"
+      # rather than "no".
       envelope = body["error"]
       return [items, true] unless envelope.is_a?(Hash)
 
       error = batch_error(envelope, "batch rejected")
+
+      # The body was too big, not wrong — every entry in it would have committed
+      # alone. Halve and retry; the estimate the chunker used cannot see the
+      # framing the worker actually measured, and only the answer can.
+      if error.code == PAYLOAD_TOO_LARGE && items.length > 1
+        middle = items.length / 2
+        left, stop = replay_batched(queue, items[0...middle], report)
+        return [left + items[middle..], true] if stop
+
+        right, stop = replay_batched(queue, items[middle..], report)
+        return [left + right, stop]
+      end
+
+      # A shard blip or a rate limit is not a verdict on the batch's contents.
+      # Requeue it whole and stop the flush, exactly as the single-call path does
+      # for the same codes.
+      if transient?(error)
+        note_retry_after(report, error)
+        return [items, true]
+      end
+
       items.each { |item| settle_terminal(queue, item, error, report) }
 
       [[], false]
@@ -960,17 +1109,21 @@ module Lunora
         envelope = slot["error"]
 
         if envelope.is_a?(Hash)
-          code = envelope["code"].is_a?(String) ? envelope["code"] : "INTERNAL"
+          error = batch_error(envelope, "request failed")
 
-          # A transient shard failure is the batch's counterpart of a raw error
-          # on the single-call path: the server never reached a verdict, so the
-          # write goes back on the queue rather than being reported as failed.
-          if TRANSIENT_ERROR_CODES.include?(code)
+          # A transient shard failure or a rate limit is the batch's counterpart
+          # of a raw error on the single-call path: the server never reached a
+          # verdict on this entry, so the write goes back on the queue rather
+          # than being reported as failed. Classified through the SAME predicate
+          # the whole-batch and single-call paths use — a second code set here is
+          # how a slot came to be terminal for a code the other two retried.
+          if transient?(error)
+            note_retry_after(report, error)
             requeue << item
             next
           end
 
-          settle_terminal(queue, item, batch_error(envelope, "request failed"), report)
+          settle_terminal(queue, item, error, report)
           next
         end
 
@@ -1005,9 +1158,37 @@ module Lunora
     # A raw error from the injected poster is the network, not the server: no
     # verdict was reached, so the write is still good.
     def transient?(error)
-      return TRANSIENT_ERROR_CODES.include?(error.code) if error.is_a?(ApiError)
+      if error.is_a?(ApiError)
+        return error.transient || TRANSIENT_ERROR_CODES.include?(error.code) ||
+               RATE_LIMIT_ERROR_CODES.include?(error.code)
+      end
 
       true
+    end
+
+    # How long a rate-limited replay asks to wait, if the envelope said.
+    #
+    # nil when the server named no delay — the caller then decides its own
+    # backoff rather than hammering, which is what +FlushReport#retry_after_ms+
+    # reports.
+    def retry_after_ms(error)
+      return nil unless error.is_a?(ApiError) && RATE_LIMIT_ERROR_CODES.include?(error.code)
+
+      delay = error.data.is_a?(Hash) ? error.data["retryAfterMs"] : nil
+      return nil unless delay.is_a?(Integer) && delay.positive?
+
+      [delay, MAX_RETRY_AFTER_MS].min
+    end
+
+    # Record a rate limit's delay, and hold the next flush off until it passes.
+    def note_retry_after(report, error)
+      delay = retry_after_ms(error)
+      return if delay.nil?
+
+      report.retry_after_ms = delay
+      @mutex.synchronize do
+        @flush_not_before = [@flush_not_before, Lunora.monotonic_now + (delay / 1000.0)].max
+      end
     end
 
     # Run both optimistic APIs' CONSUMER code and return the layers to install.

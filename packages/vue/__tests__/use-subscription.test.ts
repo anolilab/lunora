@@ -1,6 +1,6 @@
 import type { FunctionReference } from "@lunora/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { effectScope } from "vue";
+import { effectScope, nextTick, ref } from "vue";
 
 import { useSubscription } from "../src/use-subscription";
 import { createFakeClient } from "./fake-client";
@@ -57,6 +57,31 @@ describe(useSubscription, () => {
         scope.run(() => fake.provide(() => useSubscription(msgRef, "skip")))!;
 
         expect(fake.subscribeCalls).toHaveLength(0);
+
+        scope.stop();
+    });
+
+    it("resets data to undefined when reactive args change, until the new subscription pushes", async () => {
+        const fake = createFakeClient();
+        const scope = effectScope();
+        const channelId = ref("c1");
+        const { data } = scope.run(() =>
+            fake.provide(() =>
+                useSubscription(msgRef, () => {
+                    return { channelId: channelId.value };
+                }),
+            ),
+        )!;
+
+        fake.push("messages:subscribe", { channelId: "c1" }, [{ id: "1" }]);
+
+        expect(data.value).toStrictEqual([{ id: "1" }]);
+
+        channelId.value = "c2";
+        await nextTick();
+
+        expect(fake.subscribeCalls).toHaveLength(2);
+        expect(data.value).toBeUndefined();
 
         scope.stop();
     });

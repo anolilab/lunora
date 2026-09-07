@@ -1,4 +1,4 @@
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import { applyLintIgnores, BADGES, detectLintTools, isInteractive } from "@lunora/config";
@@ -18,7 +18,7 @@ import { addArgsFor, detectInstalledManagers, detectPackageManager, installArgsF
 import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
 import { PromptCancelledError } from "../../util/prompt-cancelled";
-import { resolveDistTag, resolvePinnedSourceRef, resolveSourceRef, resolveTagVersions } from "../../util/source-ref";
+import { resolveDistTag, resolvePinnedRepoRef, resolvePinnedSourceRef, resolveSourceRef, resolveTagVersions } from "../../util/source-ref";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { NextStep } from "../../util/tui-prompts";
@@ -36,7 +36,7 @@ import {
     withTuiSpinner,
 } from "../../util/tui-prompts";
 import type { FeatureItem } from "../add/features";
-import { detectAuthUiItem } from "../add/features";
+import { detectAuthUiItem, isReactNativeProject } from "../add/features";
 import { runAddCommand } from "../registry";
 import describeDownloadFailure from "./download-failure";
 import { emitMascot, emitStep } from "./flow";
@@ -219,12 +219,19 @@ import { lunora } from "@lunora/vite";
 export default defineConfig({ plugins: [lunora()] });
 `;
 
-/** Sample `lunora/schema.ts` written when scaffolding Lunora into an existing app. */
+/**
+ * Sample `lunora/schema.ts` written when scaffolding Lunora into an existing app.
+ *
+ * `channelId` is a `v.string()`, not a `v.id("channels")`: this schema declares
+ * exactly one table, so an `Id<"channels">` names a document type codegen never
+ * emits and every scaffolded project failed `tsc` with TS2345 on the sample
+ * function's very first argument. The bespoke templates spell it the same way.
+ */
 const SAMPLE_SCHEMA = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export default defineSchema({
     messages: defineTable({
-        channelId: v.id("channels"),
+        channelId: v.string(),
         text: v.string(),
     })
         .shardBy("channelId")
@@ -236,13 +243,13 @@ export default defineSchema({
 const SAMPLE_FUNCTION = `import { mutation, query, v } from "./_generated/server";
 
 export const list = query
-    .input({ channelId: v.id("channels"), limit: v.optional(v.number()) })
+    .input({ channelId: v.string(), limit: v.optional(v.number()) })
     .query(async ({ args }) => {
         return { channelId: args.channelId, limit: args.limit ?? 50, messages: [] };
     });
 
 export const send = mutation
-    .input({ channelId: v.id("channels"), text: v.string() })
+    .input({ channelId: v.string(), text: v.string() })
     .mutation(async ({ args }) => {
         return { channelId: args.channelId, text: args.text };
     });
@@ -258,6 +265,33 @@ const isTextFile = (filePath: string): boolean => {
     }
 
     return TEXT_EXTENSIONS.has(filePath.slice(lastDot));
+};
+
+/**
+ * wrangler's own worker-name rule (`isValidName` in its config schema). A name
+ * outside it is a hard error at `wrangler dev` / `deploy` time, long after the
+ * scaffold that wrote it into `wrangler.jsonc` reported success.
+ */
+const WRANGLER_WORKER_NAME = /^[a-z0-9_][a-z0-9\-_]*$/u;
+
+/** `myApp` → `my-App`, so camelCase suggests a kebab name rather than one long word. */
+const WORKER_NAME_CAMEL_BOUNDARY = /([a-z0-9])([A-Z])/gu;
+
+/** Any single character {@link WRANGLER_WORKER_NAME} rejects, replaced by the separator. */
+const WORKER_NAME_DISALLOWED = /[^a-z0-9_]/gu;
+
+/** The closest conforming worker name to `name`, for the rejection message. */
+const suggestWorkerName = (name: string): string => {
+    const segments = name
+        .replaceAll(WORKER_NAME_CAMEL_BOUNDARY, "$1-$2")
+        .toLowerCase()
+        .replaceAll(WORKER_NAME_DISALLOWED, "-")
+        .split("-")
+        .filter((segment) => segment.length > 0);
+
+    // Every remaining character is allowed and every segment is non-empty, so
+    // the join always satisfies `WRANGLER_WORKER_NAME`.
+    return segments.length > 0 ? segments.join("-") : "my-app";
 };
 
 const substitute = (content: string, name: string): string => content.replaceAll("{{name}}", name);
@@ -422,6 +456,29 @@ const collectFiles = (directory: string): ReadonlyArray<string> => {
     return out;
 };
 
+/** The upstream repo `lunora init --vite` fetches its stock create-vite base from. */
+const CREATE_VITE_REPO = "vitejs/vite";
+
+/**
+ * Copy every REAL file under `source` into `target`, preserving the tree.
+ *
+ * Deliberately not `cpSync(..., { recursive: true })`: that reproduces symlinks
+ * verbatim, so a base carrying a link to `~/.ssh/id_rsa` plants that link inside
+ * the user's fresh project. {@link collectFiles} already drops symlinks for the
+ * bespoke-template path; this is the same rule for the create-vite base, which
+ * comes from a third-party repo at a moving ref.
+ */
+const copyRealFiles = (source: string, target: string): void => {
+    for (const file of collectFiles(source)) {
+        const destination = join(target, relative(source, file));
+
+        mkdirSync(dirname(destination), { recursive: true });
+        // `copyFileSync` reads through the source path; `collectFiles` has
+        // already guaranteed it is a regular file, never a link.
+        copyFileSync(file, destination);
+    }
+};
+
 const copyTemplate = async (sourceDirectory: string, target: string, name: string): Promise<ReadonlyArray<string>> => {
     const files = collectFiles(sourceDirectory);
     const written: string[] = [];
@@ -487,6 +544,39 @@ const isSafeSource = (source: string): boolean => {
 const logWould = (logger: Logger, action: string): void => {
     logger.info(`[dry-run] would ${action}`);
 };
+
+/**
+ * A scaffold that copied nothing is a failure, not a success.
+ *
+ * The remote path reaches this shape whenever the requested `templates/<type>/`
+ * subdirectory does not exist in the fetched tarball (a bad `--ref`, a custom
+ * `--source` laid out differently, a template renamed upstream): giget strips
+ * every entry outside the subdir and resolves without an error, so the
+ * directory walk finds nothing. The local `--from` path reaches it via an
+ * existing-but-empty `<type>/`. Both used to print "Project initialized!" and
+ * "scaffolded 0 files" over an empty project directory and exit 0.
+ *
+ * The non-zero code routes it through {@link resetPartialScaffold}, so the
+ * empty target is removed and a retry with the right ref is not met with
+ * "target directory not empty".
+ */
+const failEmptyScaffold = (logger: Logger, target: string, source: string): InitCommandResult => {
+    logger.error(`init: the template at ${source} contains no files — nothing was scaffolded. Check the template name, \`--source\` layout and \`--ref\`.`);
+
+    return { code: 1, files: [], target };
+};
+
+/**
+ * The checklist header shown once every scaffold TASK has finished.
+ *
+ * Deliberately a statement of what the tasks did, not a verdict on the run: the
+ * checklist flips to it the moment the copy task completes, which is BEFORE the
+ * empty-scaffold check below can fail the command. Claiming "Project
+ * initialized!" here printed a success over a run that then reported an error
+ * and exited 1. The one success line is {@link logScaffoldSuccess}, and it runs
+ * only after that check passes.
+ */
+const SCAFFOLD_TASKS_DONE = "Template files copied.";
 
 const logScaffoldSuccess = (logger: Logger, written: ReadonlyArray<string>, target: string): void => {
     // Cosmetic blank line above the success so it isn't glued to the task
@@ -722,7 +812,14 @@ const maybeOfferInstall = async (options: InitCommandOptions, target: string): P
     return manager;
 };
 
-const scaffoldFromLocal = async (fromRoot: string, templateType: Template, target: string, name: string, logger: Logger): Promise<InitCommandResult> => {
+const scaffoldFromLocal = async (
+    fromRoot: string,
+    templateType: Template,
+    target: string,
+    name: string,
+    logger: Logger,
+    markComplete: () => void,
+): Promise<InitCommandResult> => {
     const templateDirectory = join(fromRoot, templateType);
 
     if (!existsSync(templateDirectory)) {
@@ -733,6 +830,14 @@ const scaffoldFromLocal = async (fromRoot: string, templateType: Template, targe
 
     const written = await copyTemplate(templateDirectory, target, name);
 
+    if (written.length === 0) {
+        return failEmptyScaffold(logger, target, templateDirectory);
+    }
+
+    // The files are on disk: the project is real from here, so nothing after
+    // this line may delete it. A throw from the logging below used to reach the
+    // caller's cleanup with the target still tracked.
+    markComplete();
     logScaffoldSuccess(logger, written, target);
 
     return { code: 0, files: written, target };
@@ -747,13 +852,14 @@ const scaffoldFromLocal = async (fromRoot: string, templateType: Template, targe
  */
 const scaffoldFromRemote = async (options: {
     logger: Logger;
+    markComplete: () => void;
     name: string;
     ref: string | undefined;
     source: string | undefined;
     target: string;
     templateType: Template;
 }): Promise<InitCommandResult> => {
-    const { logger, name, ref, source, target, templateType } = options;
+    const { logger, markComplete, name, ref, source, target, templateType } = options;
     const stagingRoot = mkdtempSync(join(tmpdir(), "lunora-init-fetch-"));
     const stagingDirectory = join(stagingRoot, "template");
 
@@ -792,8 +898,16 @@ const scaffoldFromRemote = async (options: {
                     },
                 },
             ],
-            { end: "Project initialized!", start: "Project initializing…" },
+            { end: SCAFFOLD_TASKS_DONE, start: "Project initializing…" },
         );
+
+        if (written.length === 0) {
+            return failEmptyScaffold(logger, target, downloaded?.source ?? remote);
+        }
+
+        // Copy done — see the same call in `scaffoldFromLocal`. Everything below
+        // is reporting, and reporting must not be able to delete the project.
+        markComplete();
 
         const staged = collectFiles(stagingDirectory);
 
@@ -855,11 +969,12 @@ const renameCreateViteDotfiles = (directory: string): void => {
 const scaffoldViteOverlay = async (options: {
     framework: OverlayFramework;
     logger: Logger;
+    markComplete: () => void;
     name: string;
     overlayBaseFrom: string | undefined;
     target: string;
 }): Promise<InitCommandResult> => {
-    const { framework, logger, name, overlayBaseFrom, target } = options;
+    const { framework, logger, markComplete, name, overlayBaseFrom, target } = options;
     const adapter = ADAPTERS[framework];
     const stagingRoot = mkdtempSync(join(tmpdir(), "lunora-vite-base-"));
 
@@ -880,17 +995,23 @@ const scaffoldViteOverlay = async (options: {
 
         const copyBase = async (): Promise<void> => {
             if (localBase !== undefined) {
-                cpSync(localBase, target, { recursive: true });
+                copyRealFiles(localBase, target);
 
                 return;
             }
 
             const stagingDirectory = join(stagingRoot, "base");
-            const remote = `github:vitejs/vite/packages/create-vite/template-${adapter.createViteTemplate}#main`;
+            // Pin `main` to the commit it points at right now, the same way the
+            // bespoke template path pins its own repo: the base is third-party
+            // code copied verbatim into the user's project, so the SHA it came
+            // from is logged and auditable. Falls back to the branch (with a
+            // warning) when the API can't be reached.
+            const baseRef = await resolvePinnedRepoRef(CREATE_VITE_REPO, "main", logger);
+            const remote = `github:${CREATE_VITE_REPO}/packages/create-vite/template-${adapter.createViteTemplate}#${baseRef}`;
 
             await downloadTemplate(remote, { cwd: stagingRoot, dir: stagingDirectory, force: true, install: false, silent: true });
             renameCreateViteDotfiles(stagingDirectory);
-            cpSync(stagingDirectory, target, { recursive: true });
+            copyRealFiles(stagingDirectory, target);
         };
 
         let written: ReadonlyArray<string> = [];
@@ -905,9 +1026,11 @@ const scaffoldViteOverlay = async (options: {
                     },
                 },
             ],
-            { end: "Project initialized!", start: "Project initializing…" },
+            { end: SCAFFOLD_TASKS_DONE, start: "Project initializing…" },
         );
 
+        // Copy done — see the same call in `scaffoldFromLocal`.
+        markComplete();
         logScaffoldSuccess(logger, written, target);
 
         return { code: 0, files: [...collectFiles(target)], target };
@@ -1026,6 +1149,24 @@ const scaffoldLunoraDirectory = (cwd: string, logger: Logger): ReadonlyArray<str
 };
 
 /**
+ * Frameworks that own their build via their own config and wire Lunora through
+ * their server entry, so `init --here` writes no `lunora()` Vite plugin for them
+ * — and must not tell them to install `@lunora/vite` either.
+ *
+ * Gated on the framework ALONE: this used to sit behind "and no Vite config
+ * exists", which SvelteKit and Nuxt always have — so the skip never fired for
+ * them and a bare `lunora()` was patched in regardless, without the
+ * `{ cloudflare: false, validateWrangler: false }` options the class-B templates
+ * pass it.
+ *
+ * Named because two places have to agree on it: the patcher below and the next-
+ * steps install line. They did not — the patch wrote `@lunora/vite` into the
+ * config for every other framework while the printed install command omitted it,
+ * so following the instructions verbatim produced an unresolvable import.
+ */
+const wiresLunoraThroughServerEntry = (framework: DetectedFramework): boolean => framework === "sveltekit" || framework === "nuxt" || framework === "astro";
+
+/**
  * Per-framework "next steps" copy printed after the in-place patch. Each entry
  * names the idiomatic Lunora adapter to install and the composition wiring
  * the user must add by hand (worker `httpRouter` for class A, hook-injection for
@@ -1040,7 +1181,17 @@ const printFrameworkNextSteps = (detection: FrameworkDetection, manager: Package
     logger.info("");
     logger.info(`detected framework: ${framework} (class ${frameworkClass})`);
     logger.info("next steps:");
-    logger.info(`  1. install the adapter:  ${installCommand(manager, [adapter, "@lunora/client", "@lunora/runtime", "@lunora/server"])}`);
+    // `@lunora/vite` is listed whenever this run patched (or wrote) a Vite config
+    // naming it — otherwise the very first instruction produced a config with an
+    // unresolvable import. Only the create-vite overlay path used to add the dep,
+    // and `--here` is not that path.
+    const packages = [adapter, "@lunora/client", "@lunora/runtime", "@lunora/server"];
+
+    if (!wiresLunoraThroughServerEntry(framework)) {
+        packages.push("@lunora/vite");
+    }
+
+    logger.info(`  1. install the adapter:  ${installCommand(manager, packages)}`);
     logger.info("  2. run codegen:          lunora codegen");
 
     if (frameworkClass === "A") {
@@ -1074,17 +1225,15 @@ const printFrameworkNextSteps = (detection: FrameworkDetection, manager: Package
  * Returns the InitCommandResult so a hard write failure aborts the whole run.
  */
 const patchOrCreateViteConfig = (cwd: string, framework: DetectedFramework, logger: Logger): InitCommandResult => {
+    if (wiresLunoraThroughServerEntry(framework)) {
+        logger.info(`${framework} wires Lunora through its server entry, not a lunora() Vite plugin — leaving the Vite config alone (see next steps)`);
+
+        return { code: 0, files: [], target: cwd };
+    }
+
     const viteConfigPath = findExistingViteConfig(cwd);
 
     if (viteConfigPath === undefined) {
-        // SvelteKit/Nuxt own their build via their own config; don't drop a
-        // standalone vite.config.ts on them. They get lunora/ + instructions only.
-        if (framework === "sveltekit" || framework === "nuxt" || framework === "astro") {
-            logger.info(`no Vite config found — ${framework} wires Lunora through its server entry (see next steps)`);
-
-            return { code: 0, files: [], target: cwd };
-        }
-
         return createMinimalViteConfig(cwd, logger);
     }
 
@@ -1158,10 +1307,14 @@ const offerLintIgnores = async (projectDirectory: string, interactive: boolean, 
  * run the post-scaffold auth/email offer against `projectDir`. Interactive when
  * `--interactive` is set, prompts are injected (tests), or stdin is a TTY —
  * unless `--yes` suppresses it (then it prints the later-setup hint and applies
- * nothing). Apply is best-effort: a failed registry add is logged by
- * `runAddCommand` and never aborts the (already successful) scaffold.
+ * nothing).
+ *
+ * The INTERACTIVE offer is best-effort: a failed registry add is logged by
+ * `runAddCommand` and never aborts the (already successful) scaffold. An
+ * explicit `--add` is not — it exists for scripts, so returns `false` on failure
+ * and that becomes the command's exit code.
  */
-const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: string): Promise<void> => {
+const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: string): Promise<boolean> => {
     const interactive = offerIsInteractive(options);
     const preselected =
         options.add === undefined
@@ -1247,16 +1400,29 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
         projectName: basename(projectDirectory),
         // Detect the per-framework auth-UI item from the scaffolded template's deps.
         resolveAuthUiItem: () => {
+            let dependencies: Record<string, string>;
+
             try {
                 const pkg = JSON.parse(readFileSync(join(projectDirectory, "package.json"), "utf8")) as {
                     dependencies?: Record<string, string>;
                     devDependencies?: Record<string, string>;
                 };
 
-                return detectAuthUiItem({ ...pkg.dependencies, ...pkg.devDependencies }) ?? "auth-ui-react";
+                dependencies = { ...pkg.dependencies, ...pkg.devDependencies };
             } catch {
                 return "auth-ui-react";
             }
+
+            // The same gate `lunora add auth-ui` applies, and for the same reason:
+            // every auth-UI port renders DOM, so there is no item that fits an Expo
+            // project. `undefined` is the refusal the offer acts on — this used to
+            // fall through to the React payload and copy ~85 DOM files into a Metro
+            // bundle while `lunora add` in the very same project refused.
+            if (isReactNativeProject(dependencies)) {
+                return undefined;
+            }
+
+            return detectAuthUiItem(dependencies) ?? "auth-ui-react";
         },
         select:
             options.prompt?.select ??
@@ -1266,10 +1432,11 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
 
     // `--add` applies its features directly (no headline, no multi-select).
     if (preselected.length > 0) {
-        await offerRegistryExtras(deps);
+        const added = await offerRegistryExtras(deps);
+
         await offerLintIgnores(projectDirectory, interactive, options);
 
-        return;
+        return added;
     }
 
     // A plain headline for the interactive offer (no badge, just the section
@@ -1282,6 +1449,8 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
 
     await offerRegistryExtras(deps);
     await offerLintIgnores(projectDirectory, interactive, options);
+
+    return true;
 };
 
 /** Default framework when none is specified — the React create-vite overlay. */
@@ -1308,10 +1477,10 @@ const FRAMEWORK_CHOICES: ReadonlyArray<{ description: string; label: string; val
     { description: "Next.js App Router on Vite (vinext) — composed into the Lunora worker (experimental)", label: "vinext · App Router", value: "vinext" },
     { description: "Next.js Pages Router on Vite (vinext) — composed into one worker (experimental)", label: "vinext · Pages Router", value: "vinext-pages" },
     { description: "React Router (v7, framework mode) — SSR composed into the Lunora worker", label: "React Router", value: "react-router" },
-    { description: "Astro + a standalone Lunora worker", label: "Astro", value: "astro" },
+    { description: "Astro (islands) — single-worker, Lunora composed into the adapter worker", label: "Astro", value: "astro" },
     { description: "AnalogJS (Angular) — single-worker, Lunora mounted in Nitro", label: "Analog", value: "analog" },
     { description: "Nuxt (Vue) — single-worker, Lunora mounted in Nitro", label: "Nuxt", value: "nuxt" },
-    { description: "SvelteKit + a standalone Lunora worker", label: "SvelteKit", value: "sveltekit" },
+    { description: "SvelteKit — single-worker, Lunora composed into the adapter worker", label: "SvelteKit", value: "sveltekit" },
     { description: "React Native (Expo) — an iOS/Android/web app + a Lunora worker backend", label: "React Native · Expo", value: "expo" },
     { description: "Worker only — no frontend", label: "Standalone", value: "standalone" },
 ];
@@ -1389,7 +1558,13 @@ const nonInteractiveInitError = (options: InitCommandOptions): string | undefine
  * fetches a stock create-vite base (over the network unless `overlayBaseFrom` is
  * set) and applies the Lunora layer on top.
  */
-const scaffoldOverlayPath = async (options: InitCommandOptions, framework: string, name: string, target: string): Promise<InitCommandResult> => {
+const scaffoldOverlayPath = async (
+    options: InitCommandOptions,
+    framework: string,
+    name: string,
+    target: string,
+    markComplete: () => void,
+): Promise<InitCommandResult> => {
     if (!isOverlayFramework(framework)) {
         options.logger.error(`init: unknown framework "${framework}". Supported overlays: ${Object.keys(ADAPTERS).join(", ")}.`);
 
@@ -1402,7 +1577,7 @@ const scaffoldOverlayPath = async (options: InitCommandOptions, framework: strin
 
     mkdirSync(target, { recursive: true });
 
-    return scaffoldViteOverlay({ framework, logger: options.logger, name, overlayBaseFrom: options.overlayBaseFrom, target });
+    return scaffoldViteOverlay({ framework, logger: options.logger, markComplete, name, overlayBaseFrom: options.overlayBaseFrom, target });
 };
 
 /**
@@ -1410,9 +1585,15 @@ const scaffoldOverlayPath = async (options: InitCommandOptions, framework: strin
  * remote template with giget — verifying connectivity + the ref first so a bad
  * `--ref`/`--source` or being offline fails fast and clean.
  */
-const scaffoldTemplatePath = async (options: InitCommandOptions, templateType: Template, name: string, target: string): Promise<InitCommandResult> => {
+const scaffoldTemplatePath = async (
+    options: InitCommandOptions,
+    templateType: Template,
+    name: string,
+    target: string,
+    markComplete: () => void,
+): Promise<InitCommandResult> => {
     if (options.from !== undefined) {
-        return await scaffoldFromLocal(options.from, templateType, target, name, options.logger);
+        return await scaffoldFromLocal(options.from, templateType, target, name, options.logger, markComplete);
     }
 
     if (options.source !== undefined && options.source.length > 0 && !options.allowUnsafeSource && !isSafeSource(options.source)) {
@@ -1428,14 +1609,10 @@ const scaffoldTemplatePath = async (options: InitCommandOptions, templateType: T
         return { code: 1, files: [], target };
     }
 
-    return scaffoldFromRemote({ logger: options.logger, name, ref: options.ref, source: options.source, target, templateType });
+    return scaffoldFromRemote({ logger: options.logger, markComplete, name, ref: options.ref, source: options.source, target, templateType });
 };
 
-const scaffoldNewProject = async (
-    options: InitCommandOptions,
-    cwd: string,
-    recordTarget: (target: string, preExisted: boolean) => void,
-): Promise<InitCommandResult> => {
+const scaffoldNewProject = async (options: InitCommandOptions, cwd: string, tracker: ScaffoldTracker): Promise<InitCommandResult> => {
     // Moonrise header, then create-astro-style linear questions: each prompt shows
     // its badge + question and collapses to a dimmed transcript line on submit.
     await tuiMoonrise("realtime backend on Cloudflare Workers + Durable Objects");
@@ -1478,8 +1655,39 @@ const scaffoldNewProject = async (
         return { code: 1, files: [], target: "" };
     }
 
+    // The name is substituted verbatim into `wrangler.jsonc`'s `name` field, and
+    // wrangler's own `isValidName` (`/^$|^[a-z0-9_][a-z0-9-_]*$/`) is a HARD
+    // error — so `MyApp` / `My App` scaffolded happily and then failed every
+    // subsequent `wrangler dev` and `wrangler deploy`. Rejecting here, with the
+    // conforming suggestion, is the only place the user can still act on it.
+    // It also rules out the `$&` / `$'` replacement patterns `String.replaceAll`
+    // interprets in a string replacement, and the `"` that would break the JSON.
+    if (!WRANGLER_WORKER_NAME.test(name)) {
+        options.logger.error(
+            `init: refusing project name "${name}" — a Cloudflare Worker name must be lowercase letters, digits, "-" or "_" ` +
+                `(starting with a letter, digit or "_"), and wrangler rejects anything else. Try \`${suggestWorkerName(name)}\`.`,
+        );
+
+        return { code: 1, files: [], target: "" };
+    }
+
     const target = resolve(cwd, name);
-    const targetPreExisted = existsSync(target);
+    // `lstat`, not `existsSync`/`stat`: those FOLLOW a symlink, so a
+    // `cwd/<name>` pointing at an empty directory elsewhere passed the
+    // emptiness check below and became the scaffold target — the writes landed
+    // outside `cwd`, and `resetPartialScaffold` (which empties a pre-existing
+    // target back out) would then delete whatever else lives there, files this
+    // run never wrote. Refuse the link instead of resolving it: the user asked
+    // to scaffold into `<name>`, and only they can say what the link is for.
+    const existing = lstatSync(target, { throwIfNoEntry: false });
+
+    if (existing?.isSymbolicLink() === true) {
+        options.logger.error(`init: refusing to scaffold into "${target}" — it is a symlink. Remove it, or scaffold into a different directory name.`);
+
+        return { code: 1, files: [], target };
+    }
+
+    const targetPreExisted = existing !== undefined;
 
     if (targetPreExisted) {
         const entries = readdirSync(target);
@@ -1504,12 +1712,12 @@ const scaffoldNewProject = async (
 
     // From here we commit to writing into `target`. Record it so a Ctrl-C abort
     // can reset it (a dir we created is removed; a pre-existing empty dir is
-    // emptied back out) — see `resetScaffoldOnCancel`.
-    recordTarget(target, targetPreExisted);
+    // emptied back out) — see `resetPartialScaffold`.
+    tracker.record(target, targetPreExisted);
 
     return choice.kind === "overlay"
-        ? scaffoldOverlayPath(options, choice.framework, name, target)
-        : scaffoldTemplatePath(options, choice.templateType, name, target);
+        ? scaffoldOverlayPath(options, choice.framework, name, target, tracker.complete)
+        : scaffoldTemplatePath(options, choice.templateType, name, target, tracker.complete);
 };
 
 /** Tracks the project directory a `lunora init` run creates, so a Ctrl-C abort can reset it. */
@@ -1519,13 +1727,32 @@ interface ScaffoldCleanup {
 }
 
 /**
- * Undo a partially-created scaffold after the user aborts (Ctrl-C): restore the
- * target back to its pre-run state. A directory we created is removed outright; a
- * directory that already existed (verified empty before we wrote into it) is
- * emptied back out but kept. A no-op when nothing was created yet (cancel during
- * the early prompts) or for in-place init (which never sets `cleanup.target`).
+ * How a scaffold path reports its progress to the cleanup bookkeeping.
+ *
+ * The two calls bracket the window in which the target is disposable:
+ * `record` opens it (we are about to write), `complete` closes it (the files
+ * are on disk, the project is real). Outside that window
+ * {@link resetPartialScaffold} must do nothing — before it there is nothing of
+ * ours to remove, and after it removal would destroy a finished project over,
+ * say, a logging failure.
  */
-const resetScaffoldOnCancel = (cleanup: ScaffoldCleanup, logger: Logger): void => {
+interface ScaffoldTracker {
+    /** The copy finished — stop tracking the target, it is a real project now. */
+    complete: () => void;
+    /** About to write into `target` — track it so a failure or Ctrl-C can reset it. */
+    record: (target: string, preExisted: boolean) => void;
+}
+
+/**
+ * Undo a partially-created scaffold — after the user aborts (Ctrl-C) or after
+ * the scaffold itself fails: restore the target back to its pre-run state. A
+ * directory we created is removed outright; a directory that already existed
+ * (verified empty before we wrote into it) is emptied back out but kept. A
+ * no-op when nothing was created yet (cancel during the early prompts, a name
+ * rejected before `recordTarget`) or for in-place init (which never sets
+ * `cleanup.target`), so it can never touch a directory of the user's own.
+ */
+const resetPartialScaffold = (cleanup: ScaffoldCleanup, logger: Logger): void => {
     const { target, targetPreExisted } = cleanup;
 
     if (target === undefined || !existsSync(target)) {
@@ -1544,13 +1771,9 @@ const resetScaffoldOnCancel = (cleanup: ScaffoldCleanup, logger: Logger): void =
 };
 
 /** Run the scaffold step itself: in-place config, a `--dry-run` no-op, or a fresh-directory scaffold. */
-const runScaffoldStep = async (
-    options: InitCommandOptions,
-    cwd: string,
-    recordTarget: (target: string, preExisted: boolean) => void,
-): Promise<InitCommandResult> => {
+const runScaffoldStep = async (options: InitCommandOptions, cwd: string, tracker: ScaffoldTracker): Promise<InitCommandResult> => {
     if (options.inPlace !== true) {
-        return scaffoldNewProject(options, cwd, recordTarget);
+        return scaffoldNewProject(options, cwd, tracker);
     }
 
     if (options.dryRun === true) {
@@ -1568,8 +1791,8 @@ const runScaffoldStep = async (
  * are part of the single install. In-place init keeps its own per-framework
  * wiring hints and never auto-installs an existing project.
  */
-const runPostScaffold = async (options: InitCommandOptions, result: InitCommandResult, cwd: string): Promise<void> => {
-    await maybeOfferExtras(options, result.target);
+const runPostScaffold = async (options: InitCommandOptions, result: InitCommandResult, cwd: string): Promise<boolean> => {
+    const added = await maybeOfferExtras(options, result.target);
 
     const installedManager = options.inPlace === true ? undefined : await maybeOfferInstall(options, result.target);
 
@@ -1585,6 +1808,8 @@ const runPostScaffold = async (options: InitCommandOptions, result: InitCommandR
         await printNextSteps(basename(result.target), installedManager, manager, isInsideMonorepo(cwd));
         await emitMascot(options.logger);
     }
+
+    return added;
 };
 
 /** `--ci`: drop a deploy pipeline into the scaffolded project (or `cwd` for in-place). Best-effort — never affects the exit code. */
@@ -1630,9 +1855,14 @@ const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandR
     let result: InitCommandResult;
 
     try {
-        result = await runScaffoldStep(options, cwd, (target, preExisted) => {
-            cleanup.target = target;
-            cleanup.targetPreExisted = preExisted;
+        result = await runScaffoldStep(options, cwd, {
+            complete: () => {
+                cleanup.target = undefined;
+            },
+            record: (target, preExisted) => {
+                cleanup.target = target;
+                cleanup.targetPreExisted = preExisted;
+            },
         });
 
         if (result.code === 0 && result.target !== "") {
@@ -1643,18 +1873,45 @@ const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandR
             // scaffold interrupted mid-write (which throws before reaching here).
             cleanup.target = undefined;
 
-            await runPostScaffold(options, result, cwd);
+            // An explicit `--add` that could not be applied fails the command:
+            // the result used to be discarded, so a script asking for a feature
+            // got an error line and exit 0.
+            if (!(await runPostScaffold(options, result, cwd))) {
+                result = { ...result, code: 1 };
+            }
+        } else if (result.code !== 0) {
+            // A scaffold that FAILED (a failed overlay apply, an empty template)
+            // left its partial writes behind, and the retry — with the cause
+            // fixed — was then refused with "target directory not empty". Same
+            // reset the Ctrl-C path uses: a directory we created is removed, a
+            // pre-existing empty one is emptied back out. A failure raised
+            // before `recordTarget` (bad name, non-empty target) never recorded
+            // a target, so this is a no-op there and cannot delete the user's
+            // own directory.
+            resetPartialScaffold(cleanup, options.logger);
         }
     } catch (error) {
         // The user pressed Ctrl-C mid-flow — reset anything we created, then abort
         // cleanly with a friendly note (NOT the install/git failure path, which
         // prints recovery steps instead).
         if (error instanceof PromptCancelledError) {
-            resetScaffoldOnCancel(cleanup, options.logger);
+            resetPartialScaffold(cleanup, options.logger);
             process.stdout.write("\n  ✖  Setup cancelled — run `lunora init` again whenever you're ready. 🌙\n");
 
             return { code: 130, files: [], target: "" };
         }
+
+        // The scaffold threw mid-write — `copyTemplate` writes sequentially, so
+        // an fs failure (ENOSPC, EMFILE, an unreadable template file) lands
+        // after earlier files are already on disk. That partial target used to
+        // survive the rethrow, and the retry — with the cause fixed — was
+        // refused with "target directory not empty".
+        //
+        // Safe to run unconditionally: `complete` clears `cleanup.target` the
+        // moment the copy finishes, so a throw from anything after it (the
+        // provenance line, the success log, the post-scaffold offers) finds
+        // nothing tracked and leaves the finished project alone.
+        resetPartialScaffold(cleanup, options.logger);
 
         throw error;
     }
@@ -1682,12 +1939,43 @@ const resolveCiProvider = (raw: string | undefined, logger: Logger): CiProvider 
     return undefined;
 };
 
+/**
+ * Resolve `--template` into either a bespoke template id or a create-vite
+ * overlay framework, or into an error message.
+ *
+ * The four overlay framework names (`react` / `vue` / `solid` / `svelte`) are
+ * documented `-t` values, so they route to the overlay path rather than being
+ * looked up as bespoke templates that do not exist. Anything else is an ERROR:
+ * silently dropping an unrecognised value (what this did) left
+ * `resolveScaffoldChoice` falling through to `DEFAULT_FRAMEWORK = "react"`, so
+ * `lunora init -t vue` and `lunora init -t nextjs` both scaffolded React without
+ * a word — while the sibling paths (`--ci` warns, `--vite` errors) do say so.
+ */
+const resolveTemplateFlag = (raw: string | undefined): { error: string } | { templateType?: Template; vite?: string } => {
+    if (raw === undefined) {
+        return {};
+    }
+
+    if (isTemplate(raw)) {
+        return { templateType: raw };
+    }
+
+    if (isOverlayFramework(raw)) {
+        return { vite: raw };
+    }
+
+    return { error: `init: unknown --template "${raw}" — expected a bespoke template (${TEMPLATE_VALUES}) or an overlay framework (${OVERLAY_VALUES}).` };
+};
+
 /** `lunora init [name]` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argument, cwd, logger, options }) => {
-    // Leave `templateType` undefined when no `-t` was passed (or an unknown one
-    // was), so the scaffolder shows the interactive picker (TTY) / errors
-    // (non-TTY) / takes the React-overlay default rather than a stale template.
-    const templateType: Template | undefined = options.template !== undefined && isTemplate(options.template) ? options.template : undefined;
+    const template = resolveTemplateFlag(options.template);
+
+    if ("error" in template) {
+        logger.error(template.error);
+
+        return { code: 1 };
+    }
 
     return runInitCommand({
         add: options.add,
@@ -1702,12 +1990,14 @@ const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argum
         name: argument[0],
         ref: options.ref,
         source: options.source,
-        templateType,
-        vite: options.vite,
+        templateType: template.templateType,
+        // An explicit `--vite` still wins; `-t react` only fills the overlay slot
+        // when the user did not name a framework the other way.
+        vite: options.vite ?? template.vite,
         yes: options.yes === true,
     });
 });
 
-export { execute, isTemplate, resolveTemplateSource };
+export { execute, isTemplate, resolveTemplateFlag, resolveTemplateSource };
 export type { InitCommandOptions, InitCommandResult, Template };
 export { runInitCommand };

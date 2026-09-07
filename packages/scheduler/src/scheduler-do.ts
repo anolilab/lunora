@@ -1,5 +1,6 @@
 import { toBase64Url } from "../../../shared/base64";
 import { jsonResponse } from "../../../shared/json-response";
+import resolveScheduleId from "./resolve-schedule-id";
 import type { RetryPolicy, ScheduleRecord } from "./types";
 
 /**
@@ -51,7 +52,7 @@ interface SchedulerEnv {
     /**
      * Base URL where the Worker is mounted. SchedulerDO uses this at dispatch
      * time to call back into the Worker. Read at fire time (NOT taken from the
-     * request body) to prevent SSRF via a forged `originUrl` field.
+     * request body, which carries no dispatch target at all) to prevent SSRF.
      */
     LUNORA_ORIGIN_URL?: string;
 
@@ -82,10 +83,10 @@ const HEADER_PREFIX = "id:";
 const RETRY_PREFIX = "retry:";
 const DEAD_PREFIX = "dead:";
 const POOL_PREFIX = "pool:";
-// Default page size for listRecords() (the `/list` + WS `jobs` view) and the
-// page size used internally by the exact-count cursor loop (countHeaders()).
-// Mirrors the alarm path's existing `limit: 100` bound (:417-420 below) so the
-// whole file has one bounded-page convention.
+// Default page size for the `/list` + WS `jobs` view (listPage()) and the
+// page size used internally by the exact-count cursor loop (forEachPage()).
+// Mirrors the alarm path's existing `limit: 100` bound so the whole file has
+// one bounded-page convention: every storage.list() here carries a limit.
 const DEFAULT_LIST_LIMIT = 100;
 
 /**
@@ -123,7 +124,25 @@ const MAX_SCHEDULED_FOR_MS = 999_999_999_999_999;
 const TIME_PAD = 15;
 const padTime = (n: number): string => String(n).padStart(TIME_PAD, "0");
 
-const generateId = (): string => toBase64Url(crypto.getRandomValues(new Uint8Array(12)));
+/**
+ * Can `value` be written into the `t:` time index at all? A positive integer no
+ * greater than {@link MAX_SCHEDULED_FOR_MS} is exactly the range `padTime()`
+ * renders as TIME_PAD digits, which is what makes the index's lexical order
+ * match numeric order.
+ *
+ * Shared by BOTH writers of the index — {@link SchedulerDO.handleSchedule},
+ * which rejects an out-of-range request, and {@link SchedulerDO.recordRetry},
+ * which dead-letters an out-of-range retry. A retry ladder is every bit as
+ * capable of producing an unindexable time as an untrusted caller is
+ * (`{ retry: { maxAttempts: 60 } }` runs the default 30s base past the cap after
+ * ~36 doublings), and a value that lands outside this range does not merely
+ * mis-sort: a 16-digit key sorts above every `end` bound `alarm()` computes, so
+ * the job is never listed, dispatched or dead-lettered again, and a value at or
+ * above 1e21 renders as `'8.6e+21'`, which `Number.parseInt()` in
+ * {@link SchedulerDO.rescheduleAlarm} reads back as `8` — arming the alarm at a
+ * permanently past instant that the runtime then re-delivers in a tight loop.
+ */
+const isIndexableTime = (value: number): boolean => Number.isInteger(value) && value > 0 && value <= MAX_SCHEDULED_FOR_MS;
 
 interface ScheduleRequestBody {
     args: Record<string, unknown>;
@@ -134,6 +153,16 @@ interface ScheduleRequestBody {
      * {@link ScheduleRequestBody.workflow}. Exactly one of the two is set.
      */
     functionPath?: string;
+
+    /**
+     * Job id chosen by the caller instead of minted here. Set by
+     * `@lunora/server`'s deferred-schedule facade, which has to hand a mutation
+     * handler the id synchronously while holding the call back until the
+     * transaction commits. Ignored unless it is a safe key segment (see `resolveScheduleId`)
+     * — the id becomes part of two storage keys, so a value carrying a `:` would
+     * corrupt the time index.
+     */
+    id?: string;
 
     /**
      * The scheduler/workpool instance name the enqueuing client routed to
@@ -150,12 +179,6 @@ interface ScheduleRequestBody {
      */
     maxConcurrency?: number;
 
-    /**
-     * Legacy field accepted but ignored: dispatch always uses
-     * `env.LUNORA_ORIGIN_URL`. Kept on the wire so older `@lunora/scheduler`
-     * clients can still talk to this DO.
-     */
-    originUrl?: string;
     /** Logical workpool name; gates dispatch behind {@link ScheduleRequestBody.maxConcurrency}. */
     pool?: string;
     /** Per-job retry policy; overrides the DO's built-in defaults when present. */
@@ -363,6 +386,13 @@ class SchedulerDO {
 
     protected readonly env: SchedulerEnv;
 
+    /**
+     * Whether {@link SchedulerDO.reindexOrphanedRecords} has already run in THIS
+     * instance. Once is enough: an orphan can only be minted by an eviction, and
+     * an eviction ends the instance that minted it.
+     */
+    private reindexed = false;
+
     public constructor(state: SchedulerDOState, env: SchedulerEnv) {
         this.state = state;
         this.env = env;
@@ -371,6 +401,16 @@ class SchedulerDO {
     }
 
     public async fetch(request: Request): Promise<Response> {
+        // An orphan is minted by a death DURING dispatch — after the claim
+        // deleted the `t:` entry and before `rescheduleAlarm()` re-armed — so
+        // the instance that comes back has no alarm left to recover from, and
+        // recovering from `alarm()` alone would never run. Every route needs the
+        // recovery anyway: `/list` and `/status` under-report an orphan, and
+        // `armAlarmIfEarlier` on a fresh `/schedule` compares against a clock
+        // derived from `t:` alone. Guarded by `reindexed`, so this is one boolean
+        // read per request after the first.
+        await this.reindexOrphanedRecords();
+
         const url = new URL(request.url);
 
         // `/ws` gates on the Upgrade header rather than the HTTP method, so it
@@ -381,13 +421,13 @@ class SchedulerDO {
 
         switch (`${request.method} ${url.pathname}`) {
             case "GET /dead": {
-                return this.handleDeadList();
+                return this.handleDeadList(url);
             }
             case "GET /get": {
                 return this.handleGet(url);
             }
             case "GET /list": {
-                return this.handleList();
+                return this.handleList(url);
             }
             case "GET /pool": {
                 return this.handlePoolStatus(url);
@@ -420,6 +460,10 @@ class SchedulerDO {
 
     /** Called by the Workers runtime when the alarm previously set by `_rescheduleAlarm()` fires. */
     public async alarm(): Promise<void> {
+        // BEFORE the due slice is read, so a job recovered here fires in this
+        // very pass rather than waiting for the next one.
+        await this.reindexOrphanedRecords();
+
         const now = Date.now();
         const due: ScheduleRecord[] = [];
 
@@ -496,8 +540,8 @@ class SchedulerDO {
      * `dead:` key for inspection — never silently deleted.
      *
      * The dispatch target is taken from `env.LUNORA_ORIGIN_URL` (NOT from the
-     * stored record) to prevent SSRF via a forged `originUrl` on the schedule
-     * request. If that env var is missing at fire time (a deploy/binding
+     * stored record) so a schedule request can never name where the DO calls
+     * back — that would be SSRF. If that env var is missing at fire time (a deploy/binding
      * regression — schedule time already enforced its presence) we return
      * `false` so the record is retried rather than silently dropped.
      */
@@ -571,7 +615,10 @@ class SchedulerDO {
             // any other 4xx, or a 5xx is NOT treated as done — the caller
             // (alarm()) keeps the record and routes it through recordRetry()
             // rather than deleting it. Idempotent dispatch keyed by record id
-            // makes a re-fire safe.
+            // makes a re-fire safe: the receiver spends `id` as the shard's
+            // replay-dedup `mutationId` for a function target and as the
+            // WORKFLOW INSTANCE id for a `workflow` target, so neither runs
+            // twice.
             return response.ok;
         } catch {
             return false;
@@ -613,12 +660,15 @@ class SchedulerDO {
      * A throw reaching here always means the job was NOT dispatched:
      * {@link drainRecord} swallows its own post-dispatch cleanup errors and
      * returns instead of throwing once a kick succeeds, so every escaping throw
-     * comes from the pre-dispatch or failed-dispatch paths. We therefore always
-     * re-assert the time-index claim so a later alarm re-attempts it
-     * (at-least-once): the claim delete may have removed it and
-     * recordRetry()/requeuePooled() may not have re-armed it before throwing, and
-     * re-inserting the same key is idempotent, so a surviving claim is simply
-     * rewritten to its prior value.
+     * comes from the pre-dispatch or failed-dispatch paths. We therefore re-assert
+     * the time-index claim so a later alarm re-attempts it (at-least-once): the
+     * claim delete may have removed it and recordRetry()/requeuePooled() may not
+     * have re-armed it before throwing, and re-inserting the same key is
+     * idempotent, so a surviving claim is simply rewritten to its prior value.
+     *
+     * With one exception, checked first: a record that already has a durable
+     * `dead:` row is TERMINAL, and re-claiming it would re-dispatch a job the
+     * dead-letter says is finished. See the comment on that branch.
      */
     private async drainRecordGuarded(record: ScheduleRecord): Promise<void> {
         try {
@@ -626,6 +676,19 @@ class SchedulerDO {
             await this.drainRecord(record);
         } catch {
             try {
+                // `parkDead` writes `dead:<id>` and THEN clears the pending rows.
+                // If that clear is what threw, the park is already durable and
+                // re-asserting the claim would dispatch a job that has a terminal
+                // dead-letter record — a duplicate run of a workflow or any other
+                // non-idempotent job, which at-least-once does not license. Finish
+                // the park's cleanup instead; the delete is idempotent, so a later
+                // pass retries it if this one throws too.
+                if ((await this.state.storage.get(`${DEAD_PREFIX}${record.id}`)) !== undefined) {
+                    await this.state.storage.delete([`${RETRY_PREFIX}${record.id}`, `${HEADER_PREFIX}${record.id}`]);
+
+                    return;
+                }
+
                 await this.state.storage.put(SchedulerDO.indexKey(record.scheduledFor, record.id), record.id);
             } catch {
                 // The infra is failing hard enough that even the re-claim put
@@ -770,7 +833,7 @@ class SchedulerDO {
         // Seed the new subscriber with the current (bounded) list so its first
         // value arrives over the same channel as later changes, in the same
         // `{ records, truncated }` shape `broadcastChange()` and `/list` use.
-        const seed = await this.listRecords();
+        const seed = await this.listPage(HEADER_PREFIX, DEFAULT_LIST_LIMIT);
 
         server.send(JSON.stringify({ records: seed.records, truncated: seed.truncated, type: "jobs" }));
 
@@ -779,7 +842,7 @@ class SchedulerDO {
     }
 
     /**
-     * Re-list the jobs (bounded — see {@link listRecords}) and push them to
+     * Re-list the jobs (bounded — see {@link listPage}) and push them to
      * every connected subscriber. Called after any change (schedule / cancel /
      * alarm-fire) so live studios reflect it immediately. A no-op when the
      * runtime doesn't support hibernated sockets.
@@ -791,7 +854,7 @@ class SchedulerDO {
             return;
         }
 
-        const { records, truncated } = await this.listRecords();
+        const { records, truncated } = await this.listPage(HEADER_PREFIX, DEFAULT_LIST_LIMIT);
         const message = JSON.stringify({ records, truncated, type: "jobs" });
 
         for (const socket of sockets) {
@@ -804,42 +867,55 @@ class SchedulerDO {
     }
 
     /**
-     * The current pending job records (shared by `/list` and the live channel),
-     * bounded to `limit` (default {@link DEFAULT_LIST_LIMIT}) so a large backlog
-     * can't be JSON-serialized and fanned out to every socket in one shot. Lists
-     * `limit + 1` and slices back down so `truncated` reflects whether there was
-     * a next row, without a second round-trip.
+     * One bounded page of the rows under `prefix`, in key order, plus the
+     * `cursor` a caller resumes from (the last key of the page) when `truncated`.
+     * Lists `limit + 1` and slices back down so both facts are known without a
+     * second round-trip.
+     *
+     * Shared by `/list` (pending headers) and `/dead` (dead-letter records) so
+     * NEITHER can materialize an unbounded set into one JSON response: nothing
+     * prunes `dead:`, so a workpool with a broken origin parks thousands of rows
+     * and the studio's only view of them — and only way to requeue them — would
+     * fail exactly when it is needed.
      */
-    private async listRecords(limit: number = DEFAULT_LIST_LIMIT): Promise<{ records: ScheduleRecord[]; truncated: boolean }> {
-        const entries = await this.state.storage.list<ScheduleRecord>({ limit: limit + 1, prefix: HEADER_PREFIX });
+    private async listPage(prefix: string, limit: number, startAfter?: string): Promise<{ cursor?: string; records: ScheduleRecord[]; truncated: boolean }> {
+        const entries = await this.state.storage.list<ScheduleRecord>({
+            limit: limit + 1,
+            prefix,
+            ...(startAfter === undefined ? {} : { startAfter }),
+        });
+        const keys = [...entries.keys()];
         const records = [...entries.values()];
         const truncated = records.length > limit;
 
-        return { records: truncated ? records.slice(0, limit) : records, truncated };
+        if (!truncated) {
+            return { records, truncated };
+        }
+
+        return { cursor: keys[limit - 1], records: records.slice(0, limit), truncated };
     }
 
     /**
-     * Page through every `id:` header exactly once with bounded per-page memory
-     * (a `limit`+`startAfter` cursor loop), invoking `visit` for each record.
-     * Unlike {@link listRecords}, which intentionally truncates for the studio's
+     * Page through every row under `prefix` exactly once with bounded per-page
+     * memory (a `limit`+`startAfter` cursor loop), invoking `visit` for each.
+     * Unlike {@link listPage}, which intentionally truncates for the studio's
      * live view, `/status` and `/pool` need EXACT counts — this walks the full
      * set, but never materializes more than one page at a time.
      */
-    private async countHeaders(visit: (record: ScheduleRecord) => void, pageSize: number = DEFAULT_LIST_LIMIT): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- T types the stored rows for the caller and is forwarded to `storage.list`; without it every visitor casts.
+    private async forEachPage<T>(prefix: string, visit: (value: T, key: string) => void, pageSize: number = DEFAULT_LIST_LIMIT): Promise<void> {
         let startAfter: string | undefined;
 
         for (;;) {
             // eslint-disable-next-line no-await-in-loop -- each page's cursor (startAfter) depends on the previous page's last key, so the pages are inherently sequential
-            const page = await this.state.storage.list<ScheduleRecord>(
-                startAfter === undefined ? { limit: pageSize, prefix: HEADER_PREFIX } : { limit: pageSize, prefix: HEADER_PREFIX, startAfter },
-            );
+            const page = await this.state.storage.list<T>(startAfter === undefined ? { limit: pageSize, prefix } : { limit: pageSize, prefix, startAfter });
 
             if (page.size === 0) {
                 break;
             }
 
-            for (const record of page.values()) {
-                visit(record);
+            for (const [key, value] of page.entries()) {
+                visit(value, key);
             }
 
             const keys = [...page.keys()];
@@ -881,27 +957,34 @@ class SchedulerDO {
     private async recordRetry(record: ScheduleRecord): Promise<void> {
         const attempts = (record.attempts ?? 0) + 1;
         const { backoff, baseMs, maxAttempts, maxMs } = SchedulerDO.resolveRetry(record);
+        const rawDelay = backoff === "linear" ? baseMs * attempts : baseMs * 2 ** (attempts - 1);
+        const delayMs = maxMs === undefined ? rawDelay : Math.min(rawDelay, maxMs);
+        // Round: `baseMs`/`maxMs` are only validated as finite and non-negative,
+        // so a fractional one (0.5) yields a fractional instant whose `String()`
+        // carries a '.' and therefore does NOT pad to TIME_PAD digits — the key
+        // then sorts outside alarm()'s end bound and the job is stranded from the
+        // very first retry.
+        const nextScheduledFor = Math.round(Date.now() + delayMs);
 
         if (attempts > maxAttempts) {
-            await this.state.storage.put(`${DEAD_PREFIX}${record.id}`, { ...record, attempts });
-            // Park is terminal; clear the pending retry row AND the live header
-            // row in one batched delete. Leaving `id:<id>` behind would keep the
-            // dead job visible in listRecords()/`/list` (and the studio) as a
-            // scheduled job that can never fire — only the `dead:` record should
-            // survive.
-            await this.state.storage.delete([`${RETRY_PREFIX}${record.id}`, `${HEADER_PREFIX}${record.id}`]);
-
-            // eslint-disable-next-line no-console -- no logger is injected into SchedulerDO; emit via console so the host captures dead-letter parks
-            console.warn(
-                `@lunora/scheduler: job "${record.id}" (${record.functionPath ?? record.workflow ?? "unknown"}) parked in dead-letter after ${String(attempts)} attempts`,
-            );
+            await this.parkDead(record, attempts, `after ${String(attempts)} attempts`);
 
             return;
         }
 
-        const rawDelay = backoff === "linear" ? baseMs * attempts : baseMs * 2 ** (attempts - 1);
-        const delayMs = maxMs === undefined ? rawDelay : Math.min(rawDelay, maxMs);
-        const nextScheduledFor = Date.now() + delayMs;
+        if (!isIndexableTime(nextScheduledFor)) {
+            // The backoff ladder ran past the largest instant the `t:` index can
+            // represent (see isIndexableTime). Writing the key anyway is strictly
+            // worse than parking: the job would be invisible to every later alarm
+            // AND could pin the alarm in the past. A retry that cannot be
+            // scheduled is a job that will never run, and the dead-letter is
+            // exactly the surface for that — `/dead/retry` re-arms it for now,
+            // which is the only sane recovery anyway.
+            await this.parkDead(record, attempts, `at attempt ${String(attempts)}: the retry backoff exceeded the largest schedulable time`);
+
+            return;
+        }
+
         const retryRecord: ScheduleRecord = {
             ...record,
             attempts,
@@ -912,6 +995,24 @@ class SchedulerDO {
         // Re-arm via the standard time index so the alarm fires at the right moment.
         await this.state.storage.put(`${HEADER_PREFIX}${record.id}`, retryRecord);
         await this.state.storage.put(SchedulerDO.indexKey(nextScheduledFor, record.id), record.id);
+    }
+
+    /**
+     * Terminal park into the dead-letter (`dead:`) prefix, with `reason` naming
+     * why in the emitted warning. Shared by the two ways a retry ends for good:
+     * an exhausted attempt budget, and a backoff that ran past the largest
+     * schedulable time (see {@link isIndexableTime}).
+     */
+    private async parkDead(record: ScheduleRecord, attempts: number, reason: string): Promise<void> {
+        await this.state.storage.put(`${DEAD_PREFIX}${record.id}`, { ...record, attempts });
+        // Park is terminal; clear the pending retry row AND the live header row
+        // in one batched delete. Leaving `id:<id>` behind would keep the dead job
+        // visible in `/list` (and the studio) as a scheduled job
+        // that can never fire — only the `dead:` record should survive.
+        await this.state.storage.delete([`${RETRY_PREFIX}${record.id}`, `${HEADER_PREFIX}${record.id}`]);
+
+        // eslint-disable-next-line no-console -- no logger is injected into SchedulerDO; emit via console so the host captures dead-letter parks
+        console.warn(`@lunora/scheduler: job "${record.id}" (${record.functionPath ?? record.workflow ?? "unknown"}) parked in dead-letter ${reason}`);
     }
 
     /** Read the durable `pool:<name>` row, defaulting to a fresh `inFlight: 0` pool. */
@@ -994,8 +1095,8 @@ class SchedulerDO {
         let queued = 0;
 
         // Exact count via a bounded cursor loop — never materializes the whole
-        // header set at once (see countHeaders()).
-        await this.countHeaders((record) => {
+        // header set at once (see forEachPage()).
+        await this.forEachPage<ScheduleRecord>(HEADER_PREFIX, (record) => {
             if (record.pool === name) {
                 queued += 1;
             }
@@ -1019,17 +1120,11 @@ class SchedulerDO {
      * scan over `pool:` plus a cursor loop over `id:` is sufficient.
      */
     private async handleStatus(): Promise<Response> {
-        // One scan for the durable pool rows (concurrency state, one row per
-        // pool name — inherently small and bounded) and a bounded cursor loop
-        // over the pending headers (queued counts, which scale with backlog
-        // size and so must NOT be materialized in one unlimited list).
-        const poolRows = await this.state.storage.list<PoolState>({ prefix: POOL_PREFIX });
-
         // Count pending jobs per pool name in a single pass over the headers,
         // exactly as handlePoolStatus() counts for one pool.
         const queuedByPool = new Map<string, number>();
 
-        await this.countHeaders((record) => {
+        await this.forEachPage<ScheduleRecord>(HEADER_PREFIX, (record) => {
             if (record.pool !== undefined) {
                 queuedByPool.set(record.pool, (queuedByPool.get(record.pool) ?? 0) + 1);
             }
@@ -1039,7 +1134,11 @@ class SchedulerDO {
         let backlog = 0;
         let inFlight = 0;
 
-        for (const [key, pool] of poolRows.entries()) {
+        // Pool rows go through the SAME bounded cursor loop as the headers. One
+        // row per pool name is small in every app anyone has written, but the
+        // names come from user code and nothing caps how many there are, so this
+        // file has exactly one convention and no unlimited list() left in it.
+        await this.forEachPage<PoolState>(POOL_PREFIX, (pool, key) => {
             const name = key.slice(POOL_PREFIX.length);
             // Defend against a corrupted row (`inFlight` should never go negative)
             // exactly as loadPool() does on the alarm path.
@@ -1049,11 +1148,96 @@ class SchedulerDO {
             pools.push({ inFlight: slots, maxConcurrency: pool.maxConcurrency, name, queued });
             backlog += queued;
             inFlight += slots;
-        }
+        });
 
         const status: SchedulerStatus = { backlog, inFlight, pools };
 
         return SchedulerDO.json(status);
+    }
+
+    /**
+     * Persist (or refresh) a pool's concurrency cap, so the alarm-time gate has
+     * a durable `maxConcurrency` even after the enqueuing client is gone.
+     */
+    private async persistPoolCap(pool: string, requestedMaxConcurrency: number | undefined): Promise<void> {
+        const current = await this.loadPool(pool, requestedMaxConcurrency);
+
+        await this.savePool(pool, {
+            inFlight: current.inFlight,
+            // Preserve the in-flight id set so refreshing the cap on a new
+            // enqueue can't wipe the held-slot bookkeeping (which would let a
+            // later /complete over-release).
+            ...(current.inFlightIds === undefined ? {} : { inFlightIds: current.inFlightIds }),
+            maxConcurrency: SchedulerDO.normalizeConcurrency(requestedMaxConcurrency, current.maxConcurrency),
+        });
+    }
+
+    /**
+     * The `409` a caller-supplied id earns when something durable already holds
+     * it, or `undefined` when the id is free.
+     *
+     * A pending header is the obvious half: `put` on `id:<id>` overwrites, but
+     * the `t:` index is keyed by TIME as well as id, so the OLD entry survives.
+     * The drain then dispatches the NEW record at the OLD time and deletes the
+     * entry it should have fired at — the job runs early and never runs again.
+     * Refused rather than made a replace: `RunOptions.id` exists so a deferred
+     * schedule can name its own job, and silently retiming someone else's is the
+     * worse failure.
+     *
+     * The `dead:` row holds the id too, and for a worse reason. A dead record
+     * keeps NO `id:` header, so a pending-only check leaves the id apparently
+     * free — and a later `/dead/retry` writes the revived corpse straight over
+     * the new job's header and adds a SECOND time index under the same id. The
+     * new job is gone and the dead one fires in its place. Recovering a dead job
+     * is an operator action taken minutes or days after the schedule, so nothing
+     * at schedule time would ever have surfaced the collision.
+     */
+    private async idConflict(id: string): Promise<Response | undefined> {
+        if ((await this.state.storage.get<ScheduleRecord>(`${HEADER_PREFIX}${id}`)) !== undefined) {
+            return SchedulerDO.error(
+                409,
+                "DUPLICATE_SCHEDULE_ID",
+                `a job with id "${id}" is already scheduled — cancel it first, or schedule under a different id`,
+            );
+        }
+
+        if ((await this.state.storage.get<ScheduleRecord>(`${DEAD_PREFIX}${id}`)) !== undefined) {
+            return SchedulerDO.error(
+                409,
+                "DUPLICATE_SCHEDULE_ID",
+                `id "${id}" is held by a dead-letter record — retry or cancel it (POST /dead/retry, POST /dead/cancel) first, or schedule under a different id`,
+            );
+        }
+
+        return undefined;
+    }
+
+    /**
+     * The id the record is stored under, or the `Response` refusing it.
+     *
+     * A caller id that is not a safe key segment is refused with a `400` rather
+     * than minted over: `RunOptions.id` is not an idempotency key, so swapping an
+     * invalid one for a random id made two calls naming it schedule two jobs
+     * where the second should have answered `409`.
+     *
+     * Only an id the CALLER chose can collide — a minted one is 96 random bits —
+     * so {@link idConflict} costs two `get`s on the deferred path and nothing on
+     * the ordinary one.
+     */
+    private async resolveId(requested: unknown): Promise<Response | string> {
+        let id: string;
+
+        try {
+            id = resolveScheduleId(requested);
+        } catch (error: unknown) {
+            return SchedulerDO.error(400, "INVALID_SCHEDULE_ID", error instanceof Error ? error.message : "invalid `id`");
+        }
+
+        if (requested === undefined) {
+            return id;
+        }
+
+        return (await this.idConflict(id)) ?? id;
     }
 
     private async handleSchedule(request: Request): Promise<Response> {
@@ -1076,18 +1260,13 @@ class SchedulerDO {
         // and for values >= 1e21 `String()` switches to exponential notation
         // ('1e+21'), which additionally breaks the `Number.parseInt()` recovery
         // in alarm()/rescheduleAlarm() (it stops at the 'e').
-        if (
-            typeof body.scheduledFor !== "number" ||
-            !Number.isInteger(body.scheduledFor) ||
-            body.scheduledFor <= 0 ||
-            body.scheduledFor > MAX_SCHEDULED_FOR_MS
-        ) {
+        if (typeof body.scheduledFor !== "number" || !isIndexableTime(body.scheduledFor)) {
             return SchedulerDO.error(400, "INVALID_INPUT", "scheduledFor must be a positive integer epoch-millisecond number no greater than 999999999999999");
         }
 
-        // Dispatch target lives only in env — never trust an `originUrl` from
-        // the caller (would be an SSRF vector). Refuse schedules if the env
-        // hasn't been configured: the job would be unfireable.
+        // Dispatch target lives only in env — the schedule request has no field
+        // for one, and a caller-supplied one would be an SSRF vector. Refuse
+        // schedules if the env hasn't been configured: the job would be unfireable.
         if (typeof this.env.LUNORA_ORIGIN_URL !== "string" || this.env.LUNORA_ORIGIN_URL.length === 0) {
             return SchedulerDO.error(500, "ORIGIN_NOT_CONFIGURED", "LUNORA_ORIGIN_URL env binding must be set on the SchedulerDO");
         }
@@ -1095,7 +1274,15 @@ class SchedulerDO {
         const pool = typeof body.pool === "string" && body.pool.length > 0 ? body.pool : undefined;
         const instanceName = typeof body.instanceName === "string" && body.instanceName.length > 0 ? body.instanceName : undefined;
         const retry = SchedulerDO.normalizeRetry(body.retry);
-        const id = generateId();
+
+        const resolved = await this.resolveId(body.id);
+
+        if (resolved instanceof Response) {
+            return resolved;
+        }
+
+        const id = resolved;
+
         const record: ScheduleRecord = {
             // body is parsed from an untrusted request; args may be absent at runtime
             // despite the type, so the ?? fallback is a real guard.
@@ -1112,19 +1299,8 @@ class SchedulerDO {
             ...(workflow === undefined ? {} : { workflow }),
         };
 
-        // Persist (or refresh) the pool's concurrency cap so the alarm-time gate
-        // has a durable maxConcurrency even after the enqueuing client is gone.
         if (pool !== undefined) {
-            const current = await this.loadPool(pool, body.maxConcurrency);
-
-            await this.savePool(pool, {
-                inFlight: current.inFlight,
-                // Preserve the in-flight id set so refreshing the cap on a new
-                // enqueue can't wipe the held-slot bookkeeping (which would let
-                // a later /complete over-release).
-                ...(current.inFlightIds === undefined ? {} : { inFlightIds: current.inFlightIds }),
-                maxConcurrency: SchedulerDO.normalizeConcurrency(body.maxConcurrency, current.maxConcurrency),
-            });
+            await this.persistPoolCap(pool, body.maxConcurrency);
         }
 
         await this.state.storage.put(`${HEADER_PREFIX}${id}`, record);
@@ -1166,10 +1342,15 @@ class SchedulerDO {
         return SchedulerDO.json({ cancelled: true });
     }
 
-    private async handleList(): Promise<Response> {
-        const { records, truncated } = await this.listRecords();
+    /**
+     * `GET /list[?cursor=]` — one bounded page of pending jobs. `truncated` says
+     * whether more rows follow and `cursor` is what a caller passes back to get
+     * them (`createScheduler.list()` walks every page; the studio shows one).
+     */
+    private async handleList(url: URL): Promise<Response> {
+        const { cursor, records, truncated } = await this.listPage(HEADER_PREFIX, DEFAULT_LIST_LIMIT, url.searchParams.get("cursor") ?? undefined);
 
-        return SchedulerDO.json({ records, truncated });
+        return SchedulerDO.json({ cursor, records, truncated });
     }
 
     /**
@@ -1177,12 +1358,13 @@ class SchedulerDO {
      * retry budget ({@link recordRetry}) and were parked under `dead:<id>`
      * instead of being silently dropped. These never appear in `/list` (their
      * `id:` header is deleted on park), so this is the ONLY way the studio can
-     * surface — and recover — a permanently-failed job.
+     * surface — and recover — a permanently-failed job. Bounded and cursored
+     * like `/list`: nothing prunes `dead:`, so this set grows without limit.
      */
-    private async handleDeadList(): Promise<Response> {
-        const entries = await this.state.storage.list<ScheduleRecord>({ prefix: DEAD_PREFIX });
+    private async handleDeadList(url: URL): Promise<Response> {
+        const { cursor, records, truncated } = await this.listPage(DEAD_PREFIX, DEFAULT_LIST_LIMIT, url.searchParams.get("cursor") ?? undefined);
 
-        return SchedulerDO.json({ records: [...entries.values()] });
+        return SchedulerDO.json({ cursor, records, truncated });
     }
 
     /**
@@ -1273,6 +1455,59 @@ class SchedulerDO {
 
         if (current === null || scheduledFor < current) {
             await this.state.storage.setAlarm(scheduledFor);
+        }
+    }
+
+    /**
+     * Re-index every pending job whose time-index entry is gone.
+     *
+     * {@link SchedulerDO.drainRecordGuarded} claims a job by DELETING its `t:`
+     * entry, awaited (so durable) BEFORE {@link SchedulerDO.dispatch}'s outbound
+     * fetch. If the Durable Object is evicted or crashes during that fetch, the
+     * `id:` header (and any `retry:` row) survives with no `t:` entry — and
+     * nothing puts one back: {@link SchedulerDO.rescheduleAlarm} derives the
+     * clock from `t:` alone, and `alarm()`'s inline reconciliation only handles
+     * the INVERSE orphan (a `t:` entry whose header is gone). The job then sits
+     * in `/list` and `/status.backlog` forever, never fires, never reaches
+     * `/dead`. The at-least-once contract `drainRecordGuarded` documents covers
+     * a thrown storage op, not a lost instance.
+     *
+     * Re-firing is safe: the dispatch carries the record id, which the receiver
+     * spends as `x-lunora-mutation-id` for a function target and as the workflow
+     * INSTANCE id for a `workflow` target, so a job that DID reach the origin
+     * before the crash is not run twice either way.
+     *
+     * Two bounded walks (all `t:` values, then all `id:` headers) rather than a
+     * per-header `get`, so the cost is one pass over each prefix.
+     */
+    private async reindexOrphanedRecords(): Promise<void> {
+        if (this.reindexed) {
+            return;
+        }
+
+        this.reindexed = true;
+
+        const indexed = new Set<string>();
+
+        await this.forEachPage<string>("t:", (recordId) => {
+            indexed.add(recordId);
+        });
+
+        const orphans: ScheduleRecord[] = [];
+
+        await this.forEachPage<ScheduleRecord>(HEADER_PREFIX, (record) => {
+            // A record whose `scheduledFor` is not representable as an index key
+            // is deliberately unindexed (see `isIndexableTime`) — leave it alone.
+            if (!indexed.has(record.id) && isIndexableTime(record.scheduledFor)) {
+                orphans.push(record);
+            }
+        });
+
+        for (const record of orphans) {
+            // eslint-disable-next-line no-await-in-loop -- Durable Object storage is single-threaded local state; the index write and the alarm arm must land in order per record
+            await this.state.storage.put(SchedulerDO.indexKey(record.scheduledFor, record.id), record.id);
+            // eslint-disable-next-line no-await-in-loop -- same
+            await this.armAlarmIfEarlier(record.scheduledFor);
         }
     }
 

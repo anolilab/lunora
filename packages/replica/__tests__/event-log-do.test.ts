@@ -14,6 +14,13 @@ interface StoredRow {
     type: string;
 }
 
+/** Body of a `GET /since` response. */
+interface SincePage {
+    cursor?: number;
+    entries: { seq: number; type: string }[];
+    truncated: boolean;
+}
+
 const createMockSql = () => {
     const tables = new Map<string, StoredRow[]>([["events", []]]);
 
@@ -79,16 +86,15 @@ const createMockSql = () => {
                     table = table.filter((r) => r.seq >= since);
                 }
 
-                // ORDER BY seq ASC
-                // LIMIT
-                const limitMatch = query.match(/LIMIT\s+(\d+)/i);
+                // ORDER BY seq ASC — applied BEFORE the limit, as SQLite does.
+                table.sort((a, b) => a.seq - b.seq);
+
+                // LIMIT ? (bound — the handlers' form) or LIMIT <n>
+                const limitMatch = query.match(/LIMIT\s+(\?|\d+)/i);
                 if (limitMatch) {
-                    const limit = Number(limitMatch[1]);
+                    const limit = limitMatch[1] === "?" ? Number(params.at(-1)) : Number(limitMatch[1]);
                     table = table.slice(0, limit);
                 }
-
-                // ORDER BY seq ASC (default sort)
-                table.sort((a, b) => a.seq - b.seq);
 
                 return { toArray: () => table };
             }
@@ -208,8 +214,8 @@ describe(EventLogDO, () => {
         expect(data.entries[1]!.type).toBe("e.3");
     });
 
-    it("supports paginated range queries", async () => {
-        expect.assertions(11);
+    it("pages /since with an explicit limit", async () => {
+        expect.assertions(12);
 
         const do_ = createDO();
 
@@ -225,30 +231,181 @@ describe(EventLogDO, () => {
         });
 
         // Get first page of 2
-        const page1 = await doFetch(do_, "GET", "/range?from=0&limit=2");
-        const d1 = (await page1.json()) as { entries: { seq: number }[]; hasMore: boolean };
+        const page1 = await doFetch(do_, "GET", "/since?seq=0&limit=2");
+        const d1 = (await page1.json()) as SincePage;
 
         expect(d1.entries).toHaveLength(2);
         expect(d1.entries[0]!.seq).toBe(0);
         expect(d1.entries[1]!.seq).toBe(1);
-        expect(d1.hasMore).toBe(true);
+        expect(d1.truncated).toBe(true);
+        expect(d1.cursor).toBe(2);
 
-        // Get second page
-        const page2 = await doFetch(do_, "GET", "/range?from=2&limit=2");
-        const d2 = (await page2.json()) as { entries: { seq: number }[]; hasMore: boolean };
+        // Get second page from the cursor the first one handed back
+        const page2 = await doFetch(do_, "GET", `/since?seq=${String(d1.cursor)}&limit=2`);
+        const d2 = (await page2.json()) as SincePage;
 
         expect(d2.entries).toHaveLength(2);
         expect(d2.entries[0]!.seq).toBe(2);
-        expect(d2.entries[1]!.seq).toBe(3);
-        expect(d2.hasMore).toBe(true);
+        expect(d2.truncated).toBe(true);
+        expect(d2.cursor).toBe(4);
 
-        // Get last page (should have 1 entry, hasMore false)
-        const page3 = await doFetch(do_, "GET", "/range?from=4&limit=2");
-        const d3 = (await page3.json()) as { entries: { seq: number }[]; hasMore: boolean };
+        // Last page — one entry, and the walk ends here.
+        const page3 = await doFetch(do_, "GET", `/since?seq=${String(d2.cursor)}&limit=2`);
+        const d3 = (await page3.json()) as SincePage;
 
         expect(d3.entries).toHaveLength(1);
         expect(d3.entries[0]!.seq).toBe(4);
-        expect(d3.hasMore).toBe(false);
+        expect(d3.truncated).toBe(false);
+    });
+
+    it("bounds /since to 500 entries when no limit is given", async () => {
+        expect.assertions(4);
+
+        const do_ = createDO();
+
+        await doFetch(do_, "POST", "/append", {
+            events: Array.from({ length: 501 }, () => {
+                return { type: "e", payload: {} };
+            }),
+        });
+
+        // A catch-up from 0 must NOT serialize the whole log into one response.
+        const page1 = await doFetch(do_, "GET", "/since?seq=0");
+        const d1 = (await page1.json()) as SincePage;
+
+        expect(d1.entries).toHaveLength(500);
+        expect(d1.truncated).toBe(true);
+        expect(d1.cursor).toBe(500);
+
+        const page2 = await doFetch(do_, "GET", `/since?seq=${String(d1.cursor)}`);
+        const d2 = (await page2.json()) as SincePage;
+
+        expect(d2.entries).toHaveLength(1);
+    });
+
+    it("refuses /state for a log too large to serialise, naming the bounded read instead", async () => {
+        expect.assertions(4);
+
+        const do_ = createDO();
+
+        await doFetch(do_, "POST", "/append", {
+            events: Array.from({ length: 1001 }, () => {
+                return { type: "e", payload: {} };
+            }),
+        });
+
+        // `/state` has no LIMIT and `Response.json` serialises whatever
+        // `rowsToEntries` materialised, so log growth alone eventually breaks it
+        // — the exact failure `/since` was bounded to fix. It must refuse rather
+        // than build the whole body inside a 128 MB isolate.
+        const res = await doFetch(do_, "GET", "/state");
+
+        expect(res.status).toBe(413);
+
+        const error = (await res.json()) as { error: { message: string } };
+
+        expect(error.error.message).toMatch(/\/since/);
+
+        // A log that still fits keeps working unchanged.
+        const small = createDO();
+
+        await doFetch(small, "POST", "/append", { events: [{ type: "e", payload: {} }] });
+
+        const smallRes = await doFetch(small, "GET", "/state");
+
+        expect(smallRes.status).toBe(200);
+        expect(((await smallRes.json()) as { entries: unknown[] }).entries).toHaveLength(1);
+    });
+
+    /*
+     * The entry COUNT alone does not bound the body. A log of a few big events
+     * is under every count limit and still serialises to more than an isolate
+     * can hold, so the byte budget has to be checked before the payloads are
+     * parsed and the body is built — and the append side has to agree with it,
+     * or an event can be stored that no read can ever return.
+     */
+    it("refuses /state for a log whose payloads exceed the response byte budget", async () => {
+        expect.assertions(4);
+
+        const do_ = createDO();
+        // 140 payloads just under the per-event cap: each one is individually
+        // acceptable, the log is well under the 1000-entry limit, and together
+        // they are more than one response body may carry.
+        const bigPayload = { blob: "x".repeat(32_000) };
+
+        const appendRes = await doFetch(do_, "POST", "/append", {
+            events: Array.from({ length: 140 }, () => {
+                return { payload: bigPayload, type: "e" };
+            }),
+        });
+
+        expect(appendRes.status).toBe(200);
+
+        const res = await doFetch(do_, "GET", "/state");
+
+        expect(res.status).toBe(413);
+
+        const error = (await res.json()) as { error: { message: string } };
+
+        expect(error.error.message).toMatch(/\/since/);
+
+        // `/since` is the read the refusal names, so it must not have the same
+        // unbounded body — it shortens the page and reports it as truncated.
+        const page = await doFetch(do_, "GET", "/since?seq=0");
+        const data = (await page.json()) as SincePage;
+
+        expect(data.entries.length).toBeLessThan(140);
+    });
+
+    it("rejects an append whose single payload exceeds the per-event budget", async () => {
+        expect.assertions(3);
+
+        const do_ = createDO();
+
+        const tooBig = await doFetch(do_, "POST", "/append", { events: [{ payload: { blob: "x".repeat(64_000) }, type: "e" }] });
+
+        expect(tooBig.status).toBe(400);
+
+        // The per-event budget must leave every accepted event readable: an
+        // event at the limit has to fit in a response, or it would be stored
+        // and then permanently unreadable through both read routes.
+        const atLimit = await doFetch(do_, "POST", "/append", { events: [{ payload: { blob: "x".repeat(32_000) }, type: "e" }] });
+
+        expect(atLimit.status).toBe(200);
+
+        const state = await doFetch(do_, "GET", "/state");
+
+        expect(state.status).toBe(200);
+    });
+
+    it("rejects an append with no payload rather than failing the NOT NULL column", async () => {
+        expect.assertions(1);
+
+        const do_ = createDO();
+        const res = await doFetch(do_, "POST", "/append", { events: [{ type: "e" }] });
+
+        expect(res.status).toBe(400);
+    });
+
+    it("rejects an out-of-range /since limit", async () => {
+        expect.assertions(2);
+
+        const do_ = createDO();
+
+        await expect(doFetch(do_, "GET", "/since?seq=0&limit=0").then((r) => r.status)).resolves.toBe(400);
+        await expect(doFetch(do_, "GET", "/since?seq=0&limit=1001").then((r) => r.status)).resolves.toBe(400);
+    });
+
+    it("rejects non-integral /since pagination parameters", async () => {
+        expect.assertions(2);
+
+        const do_ = createDO();
+
+        // Both are finite, so the old range checks let them through: a fractional
+        // `limit` reaches SQLite's `LIMIT ?` as a 500, and a fractional `seq`
+        // silently shifts the `seq >= ?` boundary past a real entry.
+        await expect(doFetch(do_, "GET", "/since?seq=0&limit=1.5").then((r) => r.status)).resolves.toBe(400);
+        await expect(doFetch(do_, "GET", "/since?seq=1.5").then((r) => r.status)).resolves.toBe(400);
     });
 
     it("rejects append with empty events array", async () => {

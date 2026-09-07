@@ -1,10 +1,42 @@
 {
     "migrationIds": [],
     "tables": {
+        "ratelimit_buckets": {
+            "fields": {
+                "key": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "value": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "ts": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "prev": {
+                    "kind": "number",
+                    "optional": true
+                }
+            },
+            "indexes": {
+                "by_key": {
+                    "fields": ["key"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "root"
+        },
         "tasks": {
             "fields": {
                 "title": {
                     "kind": "string",
+                    "optional": false
+                },
+                "status": {
+                    "kind": "union",
                     "optional": false
                 },
                 "order": {

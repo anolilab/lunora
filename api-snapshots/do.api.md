@@ -29,6 +29,14 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `DispatchBookmark` (interface)
+
+```ts
+interface DispatchBookmark {
+    value: string | undefined;
+}
+```
+
 ### `ExportRow` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -58,12 +66,6 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `LogSink` (type)
-
-```ts
-type LogSink = TelemetrySink;
-```
-
 ### `MaskPoliciesResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -75,6 +77,15 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `MutationDelta` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `QueryReadScope` (interface)
+
+```ts
+interface QueryReadScope {
+    footprint: ReadFootprint;
+    tracker: DependencyTracker;
+}
+```
 
 ### `QueuesResult` (interface)
 
@@ -120,10 +131,10 @@ interface RunShardApplyCdcResult {
 }
 ```
 
-### `RunShardBulkDeleteArgs` (interface)
+### `RunShardBulkRowArgs` (interface)
 
 ```ts
-interface RunShardBulkDeleteArgs {
+interface RunShardBulkRowArgs {
     filters?: FilterClause[];
     limit?: number;
     search?: string;
@@ -131,11 +142,12 @@ interface RunShardBulkDeleteArgs {
 }
 ```
 
-### `RunShardBulkDeleteResult` (interface)
+### `RunShardBulkRowResult` (interface)
 
 ```ts
-interface RunShardBulkDeleteResult {
-    deleted: number;
+interface RunShardBulkRowResult {
+    count: number;
+    cursor?: string;
     hasMore: boolean;
 }
 ```
@@ -271,6 +283,7 @@ interface SessionRecord {
 ```ts
 abstract class ShardDO {
     protected static readonly MAX_STREAMS_PER_SOCKET = 8;
+    protected static readonly MAX_ATTACHMENT_BYTES = 16384;
     protected static readonly MAX_SUBSCRIPTIONS_PER_SOCKET = 32;
     protected static readonly MAX_REACTOR_RUNS_PER_DRAIN = 8;
     protected static readonly GLOBAL_SHAPE_POLL_INTERVAL_MS = 2e3;
@@ -290,9 +303,9 @@ abstract class ShardDO {
     fetch(request: Request): Promise<Response>;
     webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void>;
     webSocketClose(rawSocket: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void>;
-    webSocketError(_ws: ShardSocketLike, _error: unknown): void;
+    webSocketError(rawSocket: WebSocket, error: unknown): Promise<void>;
     alarm(): Promise<void>;
-    abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker): Promise<unknown>;
+    abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark): Promise<unknown>;
     protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor"): ReadonlyArray<string>;
     protected dispatchLifecycle(event: "connect" | "disconnect", info: LifecycleDispatchInfo): Promise<void>;
     protected dispatchReactors(changed: Set<string>, runs: Map<string, number>): Promise<void>;
@@ -306,7 +319,6 @@ abstract class ShardDO {
     protected deferPastResponse(work: Promise<unknown>): Promise<void>;
     protected runInTransaction<T>(handler: () => Promise<T> | T): Promise<T>;
     protected getInboundBookmark(): string | undefined;
-    protected setOutboundBookmark(bookmark: string | undefined): void;
     protected getCurrentUserId(): string | undefined;
     protected getCurrentIp(): string | undefined;
     protected getCurrentTraceparent(): string | undefined;
@@ -338,9 +350,8 @@ abstract class ShardDO {
     protected runtimeAdvisories(): AdvisoryFinding[];
     protected runShardExport(_args: RunShardExportArgs): Promise<ExportRow[]>;
     protected runShardImport(_args: RunShardImportArgs): Promise<ImportShardResult>;
-    protected runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult>;
-    protected deleteRowThroughWriter(_table: string, _id: string, _headroom?: TransactionHeadroomTracker): Promise<void>;
-    protected runShardBulkDelete(args: RunShardBulkDeleteArgs): Promise<RunShardBulkDeleteResult>;
+    protected runShardWrite(args: RunShardWriteArgs, _headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult>;
+    protected runShardBulkRowOp(args: RunShardBulkRowArgs, apply: (id: string) => Promise<void>, after?: string): Promise<RunShardBulkRowResult>;
     protected runShardRankBefore(_args: RunShardRankBeforeArgs): Promise<{
         before: number;
         total: number;
@@ -350,6 +361,10 @@ abstract class ShardDO {
         changes: CdcChange[];
         cursor: number;
     };
+    protected cdcSyncPage(args: RunShardCdcSyncArgs): Promise<{
+        changes: CdcChange[];
+        cursor: number;
+    }>;
     protected currentCdcCursor(): number | undefined;
     protected currentCdcEpoch(): string | undefined;
     protected sealForkedTimeline(): string;
@@ -362,7 +377,7 @@ abstract class ShardDO {
     protected readIdempotentResult(mutationId: string | undefined): {
         value: unknown;
     } | undefined;
-    protected persistIdempotentResult(result: unknown): void;
+    protected persistIdempotentResult(encodedResult: unknown): void;
     protected isCustomMutator(_functionPath: string): boolean;
     protected isMutationFunction(_functionPath: string): boolean;
     protected classifyClientMutation(): ClientMutationClass | undefined;
@@ -376,7 +391,8 @@ abstract class ShardDO {
         strict?: boolean;
     }): void;
     protected runShardApplyCdc(_args: RunShardApplyCdcArgs): Promise<RunShardApplyCdcResult>;
-    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "serialize_failed" | "too_many";
+    protected isPaidFunction(_functionPath: string): boolean;
+    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "paid" | "serialize_failed" | "too_many";
     protected unsubscribe(ws: ShardSocketLike, subId: string): void;
     protected shapeSubscribe(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery): "ok" | "serialize_failed" | "too_many";
     protected shapeUnsubscribe(ws: ShardSocketLike, subId: string): void;
@@ -397,18 +413,24 @@ abstract class ShardDO {
     protected recordShardInitError(hookPath: string, error: unknown, trace?: TraceRefLike): void;
     protected recordExternalSourceError(table: string, error: unknown, trace?: TraceRefLike): void;
     protected recordExternalSourceWarning(table: string, message: string, trace?: TraceRefLike): void;
-    protected executeStream(_functionPath: string, _args: Record<string, unknown>): null | {
+    protected executeStream(_functionPath: string, _args: Record<string, unknown>, _identity?: SubscriptionIdentity): null | {
         durable?: {
             ttlMs?: number;
         };
         iterator: (signal: AbortSignal) => AsyncIterable<unknown>;
     };
-    protected runCachedQuery<R>(functionPath: string, args: Record<string, unknown>, run: () => Promise<R>): Promise<R>;
-    protected getCtxDbReadHook(): (table: string, idOrScan?: string) => void;
-    protected getCtxDbReadRangeHook(): (range: KeyRange) => void;
+    protected runCachedQuery<R>(functionPath: string, args: Record<string, unknown>, run: (scope?: QueryReadScope) => Promise<R>, attribution?: QueryAttribution, outer?: QueryReadScope): Promise<R>;
+    protected getCtxDbReadHook(scope?: QueryReadScope): (table: string, idOrScan?: string) => void;
+    protected getCtxDbReadRangeHook(scope?: QueryReadScope): (range: KeyRange) => void;
     protected getCtxDbIndexUseHook(): (table: string, indexName: string) => void;
+    protected ctxDbTuning(): {
+        cache?: ReactiveCache;
+        maxRelationKeys?: number;
+        relationExistsPushDown?: "always" | "auto" | "never";
+    };
+    protected isQueryFunction(_functionPath: string): boolean;
     protected transactionLimits(): Partial<TransactionLimits>;
-    protected transactionHeadroom(): TransactionHeadroomTracker | undefined;
+    protected transactionHeadroom(): TransactionHeadroomTracker;
     protected subscriptionHeadroom(): TransactionHeadroomTracker;
     protected alarmHeadroom(): TransactionHeadroomTracker;
     protected recordChangedTable(table: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): void;
@@ -444,7 +466,10 @@ abstract class ShardDO {
 
 ```ts
 interface ShardDOOptions {
+    ctxDbCacheWired?: boolean;
+    maxRelationKeys?: number;
     reactiveCache?: ReactiveCacheOptions;
+    relationExistsPushDown?: "always" | "auto" | "never";
 }
 ```
 
@@ -457,6 +482,7 @@ interface ShardDOState {
     blockConcurrencyWhile?: <T>(callback: () => Promise<T>) => Promise<T>;
     getWebSockets: (tag?: string) => WebSocket[];
     id?: {
+        jurisdiction?: string;
         name?: string;
     };
     setWebSocketAutoResponse?: (pair: WebSocketRequestResponsePair) => void;

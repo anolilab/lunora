@@ -163,6 +163,20 @@ describe("classifyStatement offsets", () => {
         expect(classifyStatement("SELECT 1;")).toBeUndefined();
     });
 
+    it("allows a comment after the trailing semicolon", () => {
+        expect.assertions(3);
+
+        // A comment is whitespace to SQLite, so `SELECT 1; -- note` is one
+        // statement. The trailing-`;` strip ran on the RAW text, where the comment
+        // sits between the `;` and the end, so the regex missed it and the `;` was
+        // read as a batch separator — the editor refused a draft the operator
+        // could run by deleting the note.
+        expect(classifyStatement("SELECT 1;\n-- a closing note")).toBeUndefined();
+        expect(classifyStatement("SELECT 1; /* note */")).toBeUndefined();
+        // …and the tail is still not a place to hide a second statement.
+        expect(classifyStatement("SELECT 1; -- note\nSELECT 2")?.code).toBe("SQL_MULTIPLE_STATEMENTS");
+    });
+
     it.each([
         ["a string literal", "SELECT ';' AS a"],
         ["a doubled-quote escape inside one", "SELECT 'a''b;c' AS x"],
@@ -221,6 +235,20 @@ describe("classifyStatement offsets", () => {
         // trade for a tool that must never corrupt the shadow tables. Masking the
         // batch scan fixes a rule nobody chose; this one someone did.
         expect(classifyStatement("SELECT 'DROP TABLE x'")?.code).toBe("SQL_NOT_READONLY");
+    });
+
+    it("allows SQLite's read-only `replace()` scalar but still refuses `REPLACE INTO`", () => {
+        expect.assertions(4);
+
+        // `replace` is a write only in the `REPLACE INTO` statement form. As a
+        // scalar it is a core string function, and refusing it broke a plain
+        // SELECT with a message that named no rule the operator had broken.
+        expect(classifyStatement("SELECT REPLACE(name, 'a', 'b') FROM users")).toBeUndefined();
+        expect(classifyStatement("SELECT replace(name, 'a', 'b') AS n FROM users")).toBeUndefined();
+        // The statement form is still refused — including from inside a CTE,
+        // which is the reason the keyword scan exists at all.
+        expect(classifyStatement("REPLACE INTO t VALUES (1)")?.code).toBe("SQL_NOT_READONLY");
+        expect(classifyStatement("WITH x AS (SELECT 1) REPLACE INTO t SELECT * FROM x")?.code).toBe("SQL_NOT_READONLY");
     });
 });
 

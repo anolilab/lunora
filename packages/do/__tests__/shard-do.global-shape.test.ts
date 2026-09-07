@@ -147,8 +147,33 @@ class ChangeFeedGlobalShard extends GlobalShapeShard {
     }
 }
 
+/**
+ * A {@link GlobalShapeShard} that also reports an external-source next-due time,
+ * so a tick can leave the SHARED poll alarm armed far out (a `.source()` with a
+ * long `refresh.everyMs`) while no global shape is subscribed.
+ */
+class SourcedGlobalShapeShard extends GlobalShapeShard {
+    /** What `pollExternalSources` reports as its next-due timestamp. */
+    public sourceDueAt: number | undefined = undefined;
+
+    protected override pollExternalSources(): Promise<number | undefined> {
+        return Promise.resolve(this.sourceDueAt);
+    }
+}
+
 let harness: ReturnType<typeof createSqliteExec>;
-const alarmBox: { scheduled: null | number } = { scheduled: null };
+
+/**
+ * `scheduled` is the last target the host accepted. `failAt` makes the arm for
+ * exactly that target HANG until `releaseFailure()` rejects it — the window in
+ * which another `scheduleGlobalPoll` interleaves (DO fetches and alarm handlers
+ * both reach it across the same `await`).
+ */
+const alarmBox: { failAt: null | number; releaseFailure: (() => void) | null; scheduled: null | number } = {
+    failAt: null,
+    releaseFailure: null,
+    scheduled: null,
+};
 
 const makeState = (sockets: FakeWebSocket[]): ShardDOState => {
     return {
@@ -160,7 +185,17 @@ const makeState = (sockets: FakeWebSocket[]): ShardDOState => {
         },
         storage: {
             setAlarm(scheduledTime) {
-                alarmBox.scheduled = typeof scheduledTime === "number" ? scheduledTime : scheduledTime.getTime();
+                const at = typeof scheduledTime === "number" ? scheduledTime : scheduledTime.getTime();
+
+                if (at === alarmBox.failAt) {
+                    return new Promise<void>((_resolve, reject) => {
+                        alarmBox.releaseFailure = () => {
+                            reject(new Error("alarm host unavailable"));
+                        };
+                    });
+                }
+
+                alarmBox.scheduled = at;
 
                 return Promise.resolve();
             },
@@ -193,6 +228,8 @@ describe("shardDO global-shape poll tier", () => {
     beforeEach(() => {
         harness = createSqliteExec();
         alarmBox.scheduled = null;
+        alarmBox.failAt = null;
+        alarmBox.releaseFailure = null;
     });
 
     it("seeds the current global membership as an insert-poke and arms the alarm", async () => {
@@ -282,6 +319,44 @@ describe("shardDO global-shape poll tier", () => {
 
         expect(errorFrame?.code).toBe("SHAPE_GLOBAL_TOO_LARGE");
         expect(alarmBox.scheduled).toBeNull();
+    });
+
+    it("reports an over-cap durable snapshot even though it is the first durable write", async () => {
+        expect.assertions(3);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new GlobalShapeShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+        sockets.push(ws);
+
+        // Under the ROW cap but past the CHARACTER cap: few rows, very wide ones.
+        // That is the shape whose report was swallowed — `writeGlobalShapeSnapshot`
+        // refuses it on its very FIRST durable write, so the availability flag the
+        // log used to be gated on had never been set true, and the message naming
+        // the subscription surfaced only if a later hibernation eviction happened
+        // to flip it.
+        shard.rows = Array.from({ length: 12 }, (_, index) => {
+            return { doc: { _id: `w${String(index)}`, blob: "x".repeat(100_000) }, id: `w${String(index)}` };
+        });
+
+        // A durable connection id is what makes the persist attempt happen at all
+        // — `saveGlobalSnapshot` no-ops without one, which is the in-memory-only
+        // harness mode.
+        ws.attachment = { connectionId: "conn-1", subs: {} };
+
+        await subscribeShape(shard, ws);
+
+        // The subscription itself still succeeds — the in-memory baseline carries
+        // it, which is exactly why the failed persist was invisible.
+        expect(frameTypes(ws)).toContain("pokeStart");
+
+        // `logs` is private and there is no public drain on this surface — the
+        // recorded diagnostic IS the observable behaviour being asserted.
+        const recorded = (shard as unknown as { logs: { entries: () => { functionPath?: string; message: string }[] } }).logs.entries();
+        const snapshotErrors = recorded.filter((entry) => (entry.functionPath ?? "").startsWith("shape:snapshot:"));
+
+        expect(snapshotErrors).toHaveLength(1);
+        expect(snapshotErrors[0]?.message).toContain("past the");
     });
 
     it("pokes only the diff (insert / update / delete) on an alarm tick", async () => {
@@ -388,6 +463,53 @@ describe("shardDO global-shape poll tier", () => {
         // without persistence the empty cold cache would miss it (phantom row).
         expect(frameTypes(ws)).toStrictEqual(["pokeStart", "pokePart", "pokeEnd"]);
         expect(pokeOps(ws)).toStrictEqual([{ key: "t2", op: "delete", table: "things" }]);
+    });
+
+    it("a lost durable baseline re-seeds with `reset` instead of diffing against an empty one", async () => {
+        expect.assertions(3);
+
+        migrateGlobalShapeSnapshot(harness.sql);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new GlobalShapeShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+
+        ws.attachment = { connectionId: "conn-1", subs: {} };
+        sockets.push(ws);
+
+        shard.rows = [
+            { doc: { _id: "t1", label: "a" }, id: "t1" },
+            { doc: { _id: "t2", label: "b" }, id: "t2" },
+        ];
+        await subscribeShape(shard, ws);
+
+        // The baseline row is GONE while the subscription is still live — what a
+        // swallowed persist failure leaves behind (the snapshot write threw, the
+        // in-memory cache advanced past it anyway, and the eviction took that copy
+        // with it). Deleting the row reproduces that state exactly.
+        harness.sql.exec(`DELETE FROM "__global_shape_snapshot"`);
+
+        const woken = new GlobalShapeShard(makeState([ws]), {});
+
+        // t2 left the global backend while the DO slept.
+        woken.rows = [{ doc: { _id: "t1", label: "a" }, id: "t1" }];
+        ws.sent.length = 0;
+
+        await woken.alarm();
+
+        // Diffing against a fabricated empty baseline can emit an `insert` for
+        // every surviving row and a `delete` for none, so t2 would have stayed on
+        // the client for the life of the tab. `reset` is the one frame that drops
+        // what the client still holds.
+        expect(partResets(ws)).toStrictEqual([true]);
+        expect(pokeOps(ws)).toStrictEqual([{ key: "t1", op: "insert", table: "things", value: expect.objectContaining({ _id: "t1", label: "a" }) }]);
+
+        // And the recovered baseline persists, so the next tick is an ordinary diff again.
+        ws.sent.length = 0;
+        woken.rows = [];
+        await woken.alarm();
+
+        expect(pokeOps(ws)).toStrictEqual([{ key: "t1", op: "delete", table: "things" }]);
     });
 
     it("does not re-arm the alarm once the global shape is unsubscribed", async () => {
@@ -561,5 +683,64 @@ describe("shardDO global-shape poll tier", () => {
         expect(ws.sent).toStrictEqual([]);
         // ...but the shape stays counted, so the alarm re-arms and retries next tick.
         expect(alarmBox.scheduled).not.toBeNull();
+    });
+
+    it("pulls a far-off pending alarm in when a fresh global-shape seed needs the poll floor", async () => {
+        expect.assertions(2);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new SourcedGlobalShapeShard(makeState(sockets), {});
+        const startedAt = Date.now();
+
+        // A tick with no global subscribers: only the external-source tier has
+        // pending work, and it is not due for an hour, so the shared alarm is
+        // re-armed way out there.
+        shard.sourceDueAt = startedAt + 3_600_000;
+        await shard.alarm();
+
+        expect(alarmBox.scheduled).toBeGreaterThan(startedAt + 3_500_000);
+
+        // A client now subscribes a global shape. Its membership can only be
+        // polled, so the seed must pull the shared alarm back to the 2 s floor —
+        // a pending-but-distant alarm is not "already scheduled" for this caller.
+        const ws = createFakeWebSocket();
+
+        sockets.push(ws);
+        shard.rows = [{ doc: { _id: "t1", label: "a" }, id: "t1" }];
+
+        await subscribeShape(shard, ws);
+
+        expect(alarmBox.scheduled).toBeLessThanOrEqual(Date.now() + 2000);
+    });
+
+    it("leaves a concurrently armed earlier target alone when its own arm fails", async () => {
+        expect.assertions(2);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new GlobalShapeShard(makeState(sockets), {});
+        const poll = (shard as unknown as { scheduleGlobalPoll: (atMs?: number) => Promise<void> }).scheduleGlobalPoll.bind(shard);
+        const startedAt = Date.now();
+
+        await poll(startedAt + 60_000);
+
+        expect(alarmBox.scheduled).toBe(startedAt + 60_000);
+
+        // This arm hangs mid-`await`. While it does, a global-shape seed arms an
+        // EARLIER wake, which succeeds — the host now really is set to +2 s.
+        alarmBox.failAt = startedAt + 30_000;
+
+        const failing = poll(startedAt + 30_000);
+
+        await poll(startedAt + 2000);
+        alarmBox.releaseFailure?.();
+        await failing;
+        alarmBox.failAt = null;
+
+        // The failed arm must not restore its own pending time over that: doing
+        // so leaves the bookkeeping claiming +60 s, so this request looks like an
+        // improvement and pushes the real wake out by 28 seconds.
+        await poll(startedAt + 30_000);
+
+        expect(alarmBox.scheduled).toBe(startedAt + 2000);
     });
 });

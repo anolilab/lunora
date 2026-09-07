@@ -5,8 +5,9 @@
  * `LUNORA_ADMIN_TOKEN`. `--prod` (with an explicit `--url`) is the guardrail
  * against accidentally targeting localhost in production scripts.
  */
+import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { unlink } from "node:fs/promises";
+import { rename, unlink } from "node:fs/promises";
 
 import { resolveAdminBearer } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
@@ -138,20 +139,20 @@ const streamNdjsonToSink = async (body: ReadableStream<Uint8Array>, sink: NodeJS
 };
 
 /**
- * Close the write stream and remove the partial backup after a mid-stream
- * export failure. No-op for the stdout sink (`outPath === undefined`).
+ * Close the write stream and remove the staged file after a mid-stream export
+ * failure. No-op for the stdout sink (`stagePath === undefined`).
  */
-const discardPartialExport = async (sink: NodeJS.WritableStream, outPath: string | undefined): Promise<void> => {
-    if (outPath === undefined) {
+const discardPartialExport = async (sink: NodeJS.WritableStream, stagePath: string | undefined): Promise<void> => {
+    if (stagePath === undefined) {
         return;
     }
 
     (sink as ReturnType<typeof createWriteStream>).destroy();
 
     try {
-        await unlink(outPath);
+        await unlink(stagePath);
     } catch {
-        /* ignore — partial file may not exist */
+        /* ignore — the staged file may not exist */
     }
 };
 
@@ -160,7 +161,7 @@ const discardPartialExport = async (sink: NodeJS.WritableStream, outPath: string
  * over a discarded partial file. A failure captured mid-write must not be
  * reported as a clean export.
  */
-const closeFileSink = async (sink: NodeJS.WritableStream, outPath: string, getError: () => Error | undefined): Promise<void> => {
+const closeFileSink = async (sink: NodeJS.WritableStream, stagePath: string, getError: () => Error | undefined): Promise<void> => {
     await new Promise<void>((resolve, reject) => {
         (sink as ReturnType<typeof createWriteStream>).end((error?: Error) => {
             const failure = error ?? getError();
@@ -176,9 +177,30 @@ const closeFileSink = async (sink: NodeJS.WritableStream, outPath: string, getEr
     const failure = getError();
 
     if (failure !== undefined) {
-        await discardPartialExport(sink, outPath);
+        await discardPartialExport(sink, stagePath);
 
         throw failure;
+    }
+};
+
+/**
+ * Close the staged file and move it onto `--out`.
+ *
+ * Commit: the bytes are all on disk, so replacing `--out` is atomic. A rejected
+ * rename (`--out` is a directory, a cross-device stage, a read-only parent)
+ * leaves the COMPLETE plaintext export sitting in the stage file — the
+ * disclosure the staging exists to prevent — so discard it before the failure
+ * propagates.
+ */
+const commitStagedExport = async (sink: NodeJS.WritableStream, file: { path: string; stage: string }, getError: () => Error | undefined): Promise<void> => {
+    await closeFileSink(sink, file.stage, getError);
+
+    try {
+        await rename(file.stage, file.path);
+    } catch (error) {
+        await discardPartialExport(sink, file.stage);
+
+        throw error;
     }
 };
 
@@ -244,15 +266,26 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
 
     // Open the output sink: stdout when `out` is `undefined` / `-`, otherwise
     // a file stream so a 10M-row dump never bloats Node's heap.
-    const outPath = options.out === undefined || options.out === "-" ? undefined : options.out;
-    const sink = outPath === undefined ? process.stdout : createWriteStream(outPath, { encoding: "utf8" });
+    //
+    // The file form writes to a sibling `.partial` and renames into place on
+    // success — the same stage/commit the backup destinations use. Streaming
+    // straight at `--out` truncated whatever was there the moment the request
+    // opened, and the mid-stream failure path then unlinked it: refreshing
+    // yesterday's dump over itself and losing the connection left neither copy.
+    const out = options.out === undefined || options.out === "-" ? undefined : options.out;
+    const file = out === undefined ? undefined : { path: out, stage: `${out}.${randomUUID()}.partial` };
+    // `mode: 0o600` on the stage: `createWriteStream` defaults to 0o666 before
+    // the umask, so under the common `umask 022` the staged file is world-readable
+    // for the length of the dump — and a dump is every row of every table. The
+    // rename carries the mode onto `--out`, so the committed file is private too.
+    const sink = file === undefined ? process.stdout : createWriteStream(file.stage, { encoding: "utf8", mode: 0o600 });
 
     // A write stream with no `error` listener turns any write failure into an
     // unhandled `error` event, which takes the process down instead of surfacing
     // as a failed export. Hold the first one so the paths below can report it.
     let sinkError: Error | undefined;
 
-    if (outPath !== undefined) {
+    if (file !== undefined) {
         sink.on("error", (error: Error) => {
             sinkError ??= error;
         });
@@ -265,16 +298,17 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
         ({ bytes, rows } = await streamNdjsonToSink(response.body, sink));
     } catch (error) {
         // On a mid-stream failure, close the file descriptor and remove the
-        // partial backup so we don't leak the fd or leave a truncated dump.
-        await discardPartialExport(sink, outPath);
+        // staged file so we don't leak the fd or leave a truncated dump. `--out`
+        // itself was never opened, so any previous dump there survives.
+        await discardPartialExport(sink, file?.stage);
 
         throw error;
     }
 
-    if (outPath !== undefined) {
-        await closeFileSink(sink, outPath, () => sinkError);
+    if (file !== undefined) {
+        await commitStagedExport(sink, file, () => sinkError);
 
-        options.logger.success(`wrote ${String(rows)} rows to ${outPath} (${String(bytes)} bytes)`);
+        options.logger.success(`wrote ${String(rows)} rows to ${file.path} (${String(bytes)} bytes)`);
     }
 
     return { bytes, code: 0, rows };

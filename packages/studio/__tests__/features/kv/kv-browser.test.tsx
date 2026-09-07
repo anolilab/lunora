@@ -202,6 +202,22 @@ describe("kvBrowser", () => {
         await expect(screen.findByTestId("kv-create-sheet")).resolves.toBeDefined();
     });
 
+    it("re-lists rather than blanking the table when Filter is clicked with an unchanged prefix", async () => {
+        expect.assertions(2);
+
+        render(renderBrowser(mock));
+
+        await screen.findByTestId("kv-key-row-session:abc");
+
+        // The very first click applies the prefix the list already ran with. The
+        // applied prefix is unchanged, so nothing re-keys the load — but the click
+        // still clears the rendered page, and the list must come back.
+        fireEvent.click(screen.getByTestId("kv-filter-btn"));
+
+        await expect(screen.findByTestId("kv-key-row-session:abc")).resolves.toBeDefined();
+        expect(screen.getByTestId("kv-key-table")).toBeDefined();
+    });
+
     it("shows an empty state when no namespaces are configured", async () => {
         expect.assertions(1);
 

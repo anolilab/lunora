@@ -19,6 +19,7 @@
  * (`createStaticShardRegistry`) here and leave the DO/KV-backed registry
  * for a follow-up once codegen opts schemas into cross-shard call sites.
  */
+import { toErrorBody } from "@lunora/errors";
 import type { RankDirection as RankPageDirection, RankPageRow, RankPageRowKey as RankPageKey, ShardRankPageResult } from "@lunora/shard-engine";
 
 import { fromBase64, toBase64 } from "../../../shared/base64";
@@ -82,70 +83,6 @@ type MergeStrategy =
     | { kind: "sum" }
     | { kind: "groupBy"; op?: "max" | "min" | "sum" };
 
-/**
- * Convenience: build the right wire-serializable {@link MergeStrategy} for a
- * given aggregate read. The reader doesn't know which op the caller chose, so
- * a fan-out wrapper passes the user's op + by-keys through this to derive the
- * merge.
- *
- * - `count` → `sum`.
- * - `aggregate({ op })` → `sum`/`max`/`min` (or throws for `avg`).
- * - `groupBy({ by, agg })` → `groupBy({ op })` (defaults to `sum` since
- * `groupBy`'s default reducer is `count`).
- * @returns the derived {@link MergeStrategy}.
- */
-const mergeStrategyForAggregate = (
-    input:
-        | { agg?: { op?: "avg" | "count" | "max" | "min" | "sum" }; kind: "groupBy" }
-        | { kind: "count" }
-        | { kind: "scalar"; op: "avg" | "count" | "max" | "min" | "sum" },
-): MergeStrategy => {
-    if (input.kind === "count") {
-        return { kind: "sum" };
-    }
-
-    if (input.kind === "scalar") {
-        if (input.op === "count" || input.op === "sum") {
-            return { kind: "sum" };
-        }
-
-        if (input.op === "max") {
-            return { kind: "max" };
-        }
-
-        if (input.op === "min") {
-            return { kind: "min" };
-        }
-
-        // avg (or any op the union does not yet list) must fail loudly — a
-        // silent default would mis-merge per-shard aggregate results across the
-        // fan-out.
-        throw new LunoraError('aggregate({ op: "avg" }) is not supported across shards in v1 — fan out sum + count separately', {
-            code: "BAD_REQUEST",
-            status: 400,
-        });
-    }
-
-    const op = input.agg?.op ?? "count";
-
-    if (op === "count" || op === "sum") {
-        return { kind: "groupBy", op: "sum" };
-    }
-
-    if (op === "max") {
-        return { kind: "groupBy", op: "max" };
-    }
-
-    if (op === "min") {
-        return { kind: "groupBy", op: "min" };
-    }
-
-    throw new LunoraError('groupBy({ agg: { op: "avg" } }) is not supported across shards in v1 — fan out sum + count separately', {
-        code: "BAD_REQUEST",
-        status: 400,
-    });
-};
-
 interface FanOutSpec {
     merge: MergeStrategy;
     /** Table whose shard keys drive the fan-out. */
@@ -159,7 +96,22 @@ interface FanOutSpec {
  * UI.
  */
 interface ShardError {
-    /** Human-readable; tests assert on `.includes("timeout")` and similar. */
+    /**
+     * Machine-readable failure code, from the same `toErrorBody` shaping every
+     * other error leaving this runtime goes through: a shard's own
+     * `LunoraError` code when it had one, `SHARD_TIMEOUT` / `SHARD_HTTP_ERROR`
+     * for the transport failures this coordinator detects itself, and `INTERNAL`
+     * for anything else. Callers branch on this rather than on `message`.
+     */
+    code: string;
+
+    /**
+     * Human-readable; tests assert on `.includes("timeout")` and similar. Shaped
+     * by `toErrorBody`, so an internal-coded or non-`LunoraError` throw is
+     * redacted here exactly as it would be on the single-shard path — the
+     * fan-out envelope is `Response.json`-ed straight to the caller, and a raw
+     * `error.message` from a shard is platform detail that must not ride out.
+     */
     message: string;
     shardKey: string;
     /** Set when the per-shard timeout fired. */
@@ -193,6 +145,22 @@ interface QueryCoordinatorOptions {
     registry: ShardRegistry;
 }
 
+/**
+ * Shard a fan-out falls back to when registry discovery finds nothing — normally
+ * the worker's `"__root__"` — or `null` to deliberately keep an empty discovery
+ * as an empty fan-out.
+ *
+ * Required on every request that has it, with no default, on purpose. Discovery
+ * is registry-driven and a registry only knows the keys an app registers for its
+ * `.shardBy(...)` tables, so on a plain root-DO app it comes back empty and a
+ * fan-out that reads that as "nothing to do" reports success having touched
+ * nothing: an export streamed an empty NDJSON backup, a migration reported
+ * `completed` with `processed: 0`. Fan-outs inherited that bug by simply not
+ * passing the field, so omission is no longer expressible — say `null` when you
+ * mean it. See {@link withDefaultShard}.
+ */
+type DefaultShardKey = string | null;
+
 interface FanOutRequest {
     args?: Record<string, unknown>;
     fanOut: FanOutSpec;
@@ -217,6 +185,9 @@ type ShardRpcRequest = Pick<FanOutRequest, "args" | "functionPath" | "headers">;
  */
 interface MigrationFanOutRequest {
     args?: Record<string, unknown>;
+
+    /** {@link DefaultShardKey} — the shard fallback, or `null` for none. */
+    defaultShardKey: DefaultShardKey;
     functionPath: string;
     headers?: Record<string, string>;
     /** Table whose live shard keys the migration runs across. */
@@ -440,6 +411,9 @@ interface QueryCoordinator {
  */
 interface ExportFanOutRequest {
     args?: Record<string, unknown>;
+
+    /** {@link DefaultShardKey} — the shard fallback, or `null` for none. */
+    defaultShardKey: DefaultShardKey;
     headers?: Record<string, string>;
 
     /**
@@ -473,6 +447,9 @@ interface ExportFanOutResult {
  */
 interface CdcSyncFanOutRequest {
     cursors?: Record<string, number>;
+
+    /** {@link DefaultShardKey} — the shard fallback, or `null` for none. */
+    defaultShardKey: DefaultShardKey;
     headers?: Record<string, string>;
     limit?: number;
     tables: ReadonlyArray<string>;
@@ -1129,6 +1106,8 @@ interface ShardRpcOk {
 }
 
 interface ShardRpcError {
+    /** See {@link ShardError.code}. */
+    code: string;
     kind: "err";
     message: string;
     shardKey: string;
@@ -1184,7 +1163,7 @@ const callOneShard = async (namespace: ShardNamespaceInput, shardKey: string, pr
                 // needs to propagate.
             }
 
-            resolve({ kind: "err", message: `shard "${shardKey}" timed out after ${String(timeoutMs)}ms`, shardKey, timedOut: true });
+            resolve({ code: "SHARD_TIMEOUT", kind: "err", message: `shard "${shardKey}" timed out after ${String(timeoutMs)}ms`, shardKey, timedOut: true });
         }, timeoutMs);
     });
 
@@ -1193,16 +1172,21 @@ const callOneShard = async (namespace: ShardNamespaceInput, shardKey: string, pr
             const response = await stub.fetch(forwarded);
 
             if (!response.ok) {
-                return { kind: "err", message: `shard "${shardKey}" returned ${String(response.status)}`, shardKey, timedOut: false };
+                return { code: "SHARD_HTTP_ERROR", kind: "err", message: `shard "${shardKey}" returned ${String(response.status)}`, shardKey, timedOut: false };
             }
 
             const value = await response.json();
 
             return { kind: "ok", shardKey, value };
         } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : String(error);
+            // Shape it the way every other error leaving this runtime is shaped.
+            // `fanOut` reports failures as DATA — the envelope is `Response.json`-ed
+            // to the caller — so a raw `error.message` here would echo whatever the
+            // shard (or the platform beneath it) put in a throw. `toErrorBody`
+            // echoes a catalogued `LunoraError` and redacts everything else.
+            const { body } = toErrorBody(error, { fallbackCode: "INTERNAL", redactedMessage: "shard call failed" });
 
-            return { kind: "err", message: `shard "${shardKey}" threw: ${message}`, shardKey, timedOut: false };
+            return { code: body.code, kind: "err", message: `shard "${shardKey}" failed: ${body.message}`, shardKey, timedOut: false };
         }
     })();
 
@@ -1271,6 +1255,27 @@ const unionShardKeys = async (registry: ShardRegistry, tables: ReadonlyArray<str
     return [...new Set(perTableKeys.flat())];
 };
 
+/**
+ * Resolve the shards a fan-out should reach, falling back to the default shard
+ * when discovery finds nothing.
+ *
+ * Discovery is registry-driven, and a registry only knows the keys an app
+ * registers for its `.shardBy(...)` tables. A plain root-DO table has no entry
+ * and never will, so an empty result means "the registry cannot answer", NOT
+ * "there is nothing to do" — and the two are indistinguishable to the caller.
+ * Every fan-out that treats them as the same thing reports success having
+ * touched nothing: export streamed an empty file, and a data migration reported
+ * `status: "completed"` with `processed: 0`.
+ *
+ * `orchestrateImport` has always resolved this case to the default shard. This
+ * is that answer, made shareable.
+ *
+ * Callers that legitimately mean "no shards, no answer" pass `null` and keep the
+ * empty list — see `orchestrateRank`.
+ */
+const withDefaultShard = (discovered: ReadonlyArray<string>, defaultShardKey: DefaultShardKey): ReadonlyArray<string> =>
+    discovered.length > 0 || defaultShardKey === null ? discovered : [defaultShardKey];
+
 const runBoundedFanOut = async (
     namespace: ShardNamespaceInput,
     keys: ReadonlyArray<string>,
@@ -1324,8 +1329,8 @@ const combineGroupByValue = (current: number, incoming: number, op: GroupByMerge
 
         default: {
             // Compile-time exhaustiveness guard; an op outside the union can
-            // only arrive via untyped input, and `mergeStrategyForAggregate`
-            // already rejected it upstream — never evaluate `Math[op]` on it.
+            // only arrive via untyped input, which the fan-out envelope
+            // validation rejects upstream — never evaluate `Math[op]` on it.
             op satisfies never;
 
             return current;
@@ -1542,7 +1547,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                 if (result.kind === "ok") {
                     okValues.push(result.value);
                 } else {
-                    errors.push({ message: result.message, shardKey: result.shardKey, timedOut: result.timedOut });
+                    errors.push({ code: result.code, message: result.message, shardKey: result.shardKey, timedOut: result.timedOut });
                 }
             }
 
@@ -1557,7 +1562,9 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // Union the shard keys across all requested shard-local tables so
             // an export of `["users","messages"]` reaches every shard that
             // holds either table. Skip globals — they live in D1, not a DO.
-            const shardKeys = await unionShardKeys(options.registry, request.tables);
+            const discovered = await unionShardKeys(options.registry, request.tables);
+
+            const shardKeys = withDefaultShard(discovered, request.defaultShardKey);
 
             const exportRequest: ShardRpcRequest = {
                 // Spread the caller's `args` (`batchSize`, future export knobs)
@@ -1577,7 +1584,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // live shard keys. Unlike export, each shard resumes from its own
             // cursor, so (like import) we can't reuse `runBoundedFanOut`'s
             // same-args-to-all model; we drive a per-shard-args worker loop.
-            const shardKeys = await unionShardKeys(options.registry, request.tables);
+            const shardKeys = withDefaultShard(await unionShardKeys(options.registry, request.tables), request.defaultShardKey);
             const cursors = request.cursors ?? {};
 
             const results = await runBoundedJobs(shardKeys, maxConcurrency, async (shardKey) => {
@@ -1643,12 +1650,21 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             return rollUpApplyCdc(outcomes);
         },
         async orchestrateMigration(namespace: ShardNamespaceInput, request: MigrationFanOutRequest): Promise<MigrationFanOutResult> {
-            const keys = await options.registry.listShardKeys(request.table);
+            // Without the fallback a migration on a root table fans out to nothing
+            // and rolls up as `completed` with `processed: 0` — a backfill the
+            // operator is told succeeded and that never ran.
+            const keys = withDefaultShard(await options.registry.listShardKeys(request.table), request.defaultShardKey);
 
             const results = await runBoundedFanOut(namespace, keys, request, maxConcurrency, perShardTimeoutMs);
 
             return rollUpMigration(results);
         },
+        // No `withDefaultShard` on the rank/rankPage/shardTraffic paths below —
+        // they are the `defaultShardKey: null` case in permanent form, and that
+        // is deliberate: they answer questions ABOUT the shard set, so an empty
+        // registry genuinely means "no shards to rank across" rather than "ask the
+        // default one". A root-table read never reaches them — codegen routes it
+        // straight to the default shard instead of through the coordinator.
         async orchestrateRank(namespace: ShardNamespaceInput, request: RankFanOutRequest): Promise<RankFanOutResult> {
             const keys = await options.registry.listShardKeys(request.table);
 
@@ -1779,7 +1795,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
     };
 };
 
-export { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggregate };
+export { createQueryCoordinator, createStaticShardRegistry };
 export type {
     ExportFanOutRequest,
     ExportFanOutResult,

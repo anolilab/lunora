@@ -52,6 +52,7 @@ const exportShardLocalRows = async (
     shardLocalTables: ReadonlyArray<string>,
     writeRow: (row: ExportRow) => void,
     namespace: ShardNamespaceLike,
+    defaultShardKey: string,
 ): Promise<void> => {
     // Skip only when the caller named tables and none are shard-local. When
     // tables is undefined the per-shard exporter visits every shard-local table.
@@ -59,9 +60,13 @@ const exportShardLocalRows = async (
         return;
     }
 
-    // `tables === undefined` (export everything) leaves `shardLocalTables` empty:
-    // the args tell each shard "every table", and the registry probe has no seed —
-    // the runtime carries no schema, so shard discovery is best-effort there.
+    // `tables === undefined` (export everything) leaves `shardLocalTables` empty
+    // when the worker cannot enumerate its schema: the args still tell each shard
+    // "every table", but the registry probe has no seed. `defaultShardKey` is what
+    // keeps that case from exporting NOTHING — the default shard is contacted and
+    // hands back every table it holds. A deployment with `.shardBy(...)` tables
+    // still needs a seeded table list to reach the other DOs, which is why
+    // `streamExportRows` fills one in from `listSchemaTables` when it can.
     //
     // `namespace` is the worker's jurisdiction-pinned shard binding (create-worker
     // pins it once). Fanning out through it keeps export reading the SAME DOs the
@@ -69,6 +74,7 @@ const exportShardLocalRows = async (
     // global DOs (a different ID per jurisdiction) and return wrong/empty rows.
     const result = await coordinator.orchestrateExport(namespace, {
         args: { tables: shardLocalTables },
+        defaultShardKey,
         headers: forwardedHeaders,
         tables: shardLocalTables,
     });
@@ -100,9 +106,24 @@ const streamExportRows = async (
     writeRow: (row: ExportRow) => void,
     namespace: ShardNamespaceLike,
 ): Promise<void> => {
-    const { globalTables, shardLocalTables } = partitionExportTables(options, tables);
+    // "Every table" is a real table list when codegen could supply one. Shard
+    // discovery is driven by that list, so without it only the default shard is
+    // contacted and a whole-deployment export silently comes back short.
+    const seeded = tables ?? options.listSchemaTables?.();
 
-    await exportShardLocalRows(coordinator, forwardedHeaders, tables, shardLocalTables, writeRow, namespace);
+    // Said out loud, once, to the operator whose backup is short — the invariant is
+    // otherwise only documented, and a caller cannot tell a partial export from a
+    // deployment that genuinely has one shard.
+    if (tables === undefined && options.listSchemaTables === undefined) {
+        // eslint-disable-next-line no-console -- operational warning on a data-export path; there is no logger in scope here
+        console.warn(
+            "[lunora] export: no table list available (`listSchemaTables` is unset and no `tables` were named), so only the default shard is reachable. " +
+                "A `.shardBy()` deployment's other shards will be missing from this export. Name the tables explicitly, or regenerate the worker so codegen supplies the list.",
+        );
+    }
+    const { globalTables, shardLocalTables } = partitionExportTables(options, seeded);
+
+    await exportShardLocalRows(coordinator, forwardedHeaders, seeded, shardLocalTables, writeRow, namespace, options.defaultShardKey ?? "__root__");
 
     // Globals: stream rows from the D1 helper when configured.
     const exportGlobalsFunction = options.exportGlobals;

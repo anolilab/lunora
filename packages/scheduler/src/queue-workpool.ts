@@ -22,6 +22,7 @@
 import { createDispatchRunner } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
+import { encodeWire } from "../../../shared/wire-codec";
 import type {
     ArgsOf,
     FunctionReference,
@@ -61,6 +62,34 @@ const MAX_QUEUE_BATCH = 100;
 const DEFAULT_JOB_TIMEOUT_MS = 300_000;
 
 /**
+ * The single owner of what this package's producers put in a {@link QueueJob}'s
+ * `args` — `enqueue` and `enqueueBatch` both go through here, so the two cannot
+ * drift on what a job looks like on the queue.
+ *
+ * A job's args can hold a `bigint`, a `Date` or bytes, and the queue is a
+ * serialising hop: `@lunora/platform-node`'s queue host defaults to
+ * `contentType: "json"`, where a `bigint` throws inside `JSON.stringify` before
+ * the message is ever recorded and a `Date` silently arrives as an ISO string.
+ * A structured-clone (`"v8"`) queue carries both one hop further, only for the
+ * dispatcher's own `JSON.stringify` to refuse them identically. Encoding here
+ * makes the message body pure JSON on every host, which is also what keeps a
+ * dead-lettered job readable.
+ *
+ * The counterpart decode is the shard's, and it is the ONLY one on this path:
+ * `@lunora/do`'s dispatch loop runs `decodeWire(payload.args ?? {})` before the
+ * handler. `httpDispatcher` and `/_lunora/scheduler/dispatch` pass `args`
+ * through untouched, so nothing between here and there may encode or decode
+ * again — `decodeWire` is not idempotent, and a second pass flattens a `Date`
+ * to `{}`.
+ *
+ * `encodeWire` is the identity on pure JSON, so an existing caller's message
+ * body is unchanged. Absent args stay absent rather than becoming `{}`: a
+ * top-level `undefined` would otherwise encode to the tagged form.
+ */
+const encodeJobArgs = (args: Record<string, unknown> | undefined): Record<string, unknown> | undefined =>
+    args === undefined ? undefined : (encodeWire(args) as Record<string, unknown>);
+
+/**
  * Build a Queues producer that enqueues Lunora function dispatches. Concurrency
  * and retry policy live on the consumer's `wrangler.jsonc` config, not here.
  */
@@ -72,7 +101,15 @@ const createQueueWorkpool = (options: QueueWorkpoolOptions): QueueWorkpool => {
     }
 
     const enqueue = async <F extends FunctionReference>(function_: F, args: ArgsOf<F>, enqueueOptions: QueueEnqueueOptions = {}): Promise<void> => {
-        const job: QueueJob = { args, functionPath: function_.__lunoraRef, shardKey: enqueueOptions.shardKey };
+        // `ArgsOf<F>` is the reference's own args object, which TS cannot prove is
+        // a `Record<string, unknown>` even though every generated args type is
+        // one. Cast at the serialisation boundary rather than loosening the
+        // parameter, which is what makes the call site arg-checked at all.
+        const job: QueueJob = {
+            args: encodeJobArgs(args as Record<string, unknown>),
+            functionPath: function_.__lunoraRef,
+            shardKey: enqueueOptions.shardKey,
+        };
         const sendOptions = enqueueOptions.delaySeconds === undefined ? undefined : { delaySeconds: enqueueOptions.delaySeconds };
 
         await options.queue.send(job, sendOptions);
@@ -90,7 +127,7 @@ const createQueueWorkpool = (options: QueueWorkpoolOptions): QueueWorkpool => {
         }
 
         const messages = jobs.map((job) => {
-            return { body: { args: job.args, functionPath: job.ref.__lunoraRef, shardKey: job.shardKey } satisfies QueueJob };
+            return { body: { args: encodeJobArgs(job.args), functionPath: job.ref.__lunoraRef, shardKey: job.shardKey } satisfies QueueJob };
         });
 
         await options.queue.sendBatch(messages, sendOptions);
@@ -144,9 +181,19 @@ const createQueueConsumer =
  * message — including a 2xx carrying a non-empty non-JSON body, which is an
  * intermediary's page rather than a function's return value and therefore no
  * evidence the job ran. An empty 2xx is a normal success (a `void` function).
+ *
+ * `job.args` is forwarded VERBATIM: {@link encodeJobArgs} already put it in wire
+ * form at the producer, and the shard's dispatch loop is the single decoder.
+ * Encoding again here would leave the handler a tagged array.
  */
 const httpDispatcher = (options: HttpDispatcherOptions): QueueDispatch => {
     const run = createDispatchRunner({
+        // `enqueue`/`enqueueBatch` already encoded these before the job entered the
+        // queue — that hop is its own JSON serialisation and a `bigint` throws at
+        // `queue.send`. Without this the runner encodes a SECOND time and the shard
+        // decodes once, so the handler gets `["$lunora.wire$","bigint","7"]` rather
+        // than `7n`, and a `Date` that is no longer a `Date`.
+        argsAlreadyEncoded: true,
         env: { LUNORA_ADMIN_TOKEN: options.adminToken, LUNORA_ORIGIN_URL: options.originUrl },
         fetchImpl: options.fetchImpl,
         label: "@lunora/scheduler",
@@ -155,7 +202,15 @@ const httpDispatcher = (options: HttpDispatcherOptions): QueueDispatch => {
     const timeoutMs = options.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS;
 
     return async (job: QueueJob, messageId?: string): Promise<void> => {
-        await run({ __lunoraRef: job.functionPath }, job.args, { messageId, shardKey: job.shardKey, timeoutMs });
+        // `dedupId: messageId` is what makes a Queues REDELIVERY idempotent: it
+        // reaches the shard as the replay-dedup `mutationId`, so a message
+        // redelivered after its mutation already committed is applied once
+        // instead of charging the customer twice. (The DO-backed path gets this
+        // from `SchedulerDO.dispatch` sending `id: record.id`.) Safe to reuse the
+        // message id verbatim here — unlike a queue HANDLER, one message
+        // dispatches exactly one call, so there is no second call to collide
+        // with the first's cached result.
+        await run({ __lunoraRef: job.functionPath }, job.args, { dedupId: messageId, messageId, shardKey: job.shardKey, timeoutMs });
     };
 };
 

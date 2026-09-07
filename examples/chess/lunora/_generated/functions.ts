@@ -40,6 +40,11 @@ export interface RegisteredLunoraFunction {
     lifecycle?: "connect" | "disconnect" | "init" | "reactor";
     /** `"internal"` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
+    /**
+     * `.x402({ price })` tag on a paid public procedure. The origin worker
+     * paywalls it; the shard refuses to subscribe it (`isPaidFunction`).
+     */
+    x402?: { readonly price: number | string };
 }
 
 /**
@@ -85,11 +90,14 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["gameId"] !== "string") return DEFER;
 if (typeof source["from"] !== "string") return DEFER;
+if (source["from"].length > 2) return DEFER;
 if (typeof source["to"] !== "string") return DEFER;
+if (source["to"].length > 2) return DEFER;
 let __has1 = false;
 let __val1;
 if (source["promotion"] !== undefined) {
 if (typeof source["promotion"] !== "string") return DEFER;
+if (source["promotion"].length > 1) return DEFER;
 __val1 = source["promotion"];
 __has1 = true;
 }
@@ -140,6 +148,7 @@ let __has1 = false;
 let __val1;
 if (source["inviteCode"] !== undefined) {
 if (typeof source["inviteCode"] !== "string") return DEFER;
+if (source["inviteCode"].length > 16) return DEFER;
 __val1 = source["inviteCode"];
 __has1 = true;
 }
@@ -149,6 +158,7 @@ installCompiledValidatorMap(lunora_lobby_1.joinByCode.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["inviteCode"] !== "string") return DEFER;
+if (source["inviteCode"].length > 16) return DEFER;
 return { "inviteCode": source["inviteCode"] };
 });
 installCompiledValidatorMap(lunora_lobby_1.leave.args, (source) => {
@@ -164,6 +174,7 @@ let __has1 = false;
 let __val1;
 if (source["displayName"] !== undefined) {
 if (typeof source["displayName"] !== "string") return DEFER;
+if (source["displayName"].length > 80) return DEFER;
 __val1 = source["displayName"];
 __has1 = true;
 }
@@ -248,6 +259,27 @@ const callRegistered = async <R>(context: CallerCtx, functionPath: string, args:
 
     if (!registered) {
         throw new LunoraError("FUNCTION_NOT_FOUND", `function not registered: ${functionPath}`);
+    }
+
+    // A mutation is routed through the caller's own `ctx.runMutation` rather than
+    // invoked directly, so `createCaller(ctx).ns.someMutation()` gets exactly what
+    // `ctx.runMutation(api.ns.someMutation)` gets: the BEGIN/COMMIT span (or the
+    // enclosing one, when the caller is already inside a transaction), the jobs it
+    // schedules held until that span commits, and the deferred object deletes
+    // flushed only once it has. Called straight, a mutation composed from an action
+    // or a stream had none of the three — its writes autocommitted one row at a
+    // time and its `ctx.scheduler` calls dispatched immediately, so a mid-handler
+    // throw left the earlier writes durable and the job already enqueued.
+    //
+    // The fallback covers a context that is not a shard dispatch (`runMutation` is
+    // installed by `buildCtx` on every kind but a query's TYPE omits it); there is
+    // no transaction to join in that case, so a direct call is all there is.
+    if (registered.kind === "mutation") {
+        const { runMutation } = context as { runMutation?: (reference: { __lunoraRef: string }, args: Record<string, unknown>) => Promise<unknown> };
+
+        if (typeof runMutation === "function") {
+            return (await runMutation.call(context, { __lunoraRef: functionPath }, args ?? {})) as R;
+        }
     }
 
     return (await registered.handler(context, args ?? {})) as R;

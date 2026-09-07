@@ -34,6 +34,28 @@ describe("createSystemReader — _scheduled_functions", () => {
         ]);
     });
 
+    it("leaves functionPath absent on a workflow-targeted job instead of inventing an empty path", async () => {
+        expect.assertions(1);
+
+        // A job that starts a durable workflow carries `workflow` and NO
+        // `functionPath`. Coercing the absent value to `""` made every such row
+        // look like a function whose path happened to be empty, so an app
+        // de-duplicating on `functionPath` never matched and scheduled a second
+        // run on every invocation.
+        const list = vi.fn<() => Promise<Record<string, unknown>[]>>(async () => [
+            scheduledRecord({ functionPath: undefined, id: "job_wf", pool: "billing", workflow: "WORKFLOW_NIGHTLY" }),
+        ]);
+        const scheduler: SystemReaderSchedulerLike = { get: vi.fn<SystemReaderSchedulerLike["get"]>(), list };
+
+        const reader = createSystemReader({ scheduler });
+
+        const docs = await reader.query("_scheduled_functions").collect();
+
+        expect(docs).toStrictEqual<ScheduledFunctionDoc[]>([
+            { args: { x: 1 }, enqueuedAt: 1000, id: "job_wf", pool: "billing", scheduledFor: 2000, workflow: "WORKFLOW_NIGHTLY" },
+        ]);
+    });
+
     it("proxies scheduler.get through get(table, id)", async () => {
         expect.assertions(3);
 

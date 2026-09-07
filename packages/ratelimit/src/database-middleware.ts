@@ -25,6 +25,11 @@ import type { RateLimitConfigMap } from "./types";
  * {@link rateLimit} unchanged. When `config` is precisely typed, `name`
  * autocompletes to its declared limit names.
  *
+ * On a mutation the consumed unit commits with the handler: a handler that
+ * throws rolls it back, so a failed call costs nothing. Attach it to an action
+ * (whose writes commit independently) when failed attempts must count — see
+ * {@link createDatabaseStore}.
+ *
  * Re-exported as `dbRateLimit` from the package root.
  *
  * ```ts

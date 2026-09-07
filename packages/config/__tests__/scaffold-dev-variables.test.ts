@@ -62,7 +62,7 @@ AUTH_SECRET="replace-with-openssl-rand-hex-32"
 # Base URL — not a secret, copied verbatim.
 AUTH_URL="http://localhost:5173"
 
-STORAGE_SECRET="replace-with-openssl-rand-hex-32"
+STORAGE_SIGNING_SECRET="replace-with-openssl-rand-hex-32"
 LUNORA_ADMIN_TOKEN="replace-with-openssl-rand-hex-32"
 `;
 
@@ -126,7 +126,7 @@ describe("planDevVariablesScaffold", () => {
 
         const plan = generatePlan(planDevVariablesScaffold({ devVarsExists: false, exampleContent: EXAMPLE, randomHex: fixedHex }));
 
-        expect(plan.generatedKeys).toStrictEqual(["AUTH_SECRET", "STORAGE_SECRET", "LUNORA_ADMIN_TOKEN"]);
+        expect(plan.generatedKeys).toStrictEqual(["AUTH_SECRET", "STORAGE_SIGNING_SECRET", "LUNORA_ADMIN_TOKEN"]);
         // Secret keys get a fresh 64-char hex value.
         expect(plan.content).toContain(`AUTH_SECRET="${"a".repeat(64)}"`);
         // Non-secret values and comments are preserved verbatim.
@@ -140,13 +140,32 @@ describe("planDevVariablesScaffold", () => {
         const plan = generatePlan(
             planDevVariablesScaffold({
                 devVarsExists: false,
-                exampleContent: 'AUTH_SECRET="TODO"\nAPI_KEY="PLACEHOLDER"\nWEBHOOK_TOKEN="CHANGE_THIS"\n',
+                exampleContent: 'AUTH_SECRET="TODO"\nSTORAGE_SIGNING_SECRET="PLACEHOLDER"\nLUNORA_ADMIN_TOKEN="CHANGE_THIS"\n',
                 randomHex: fixedHex,
             }),
         );
 
-        // All three are placeholders for secret-like keys → all regenerated.
-        expect(plan.generatedKeys).toStrictEqual(["AUTH_SECRET", "API_KEY", "WEBHOOK_TOKEN"]);
+        // All three are placeholders for registry secrets → all regenerated.
+        expect(plan.generatedKeys).toStrictEqual(["AUTH_SECRET", "STORAGE_SIGNING_SECRET", "LUNORA_ADMIN_TOKEN"]);
+    });
+
+    it("leaves a secret-NAMED key the registry does not know unfilled, however placeholder-looking", () => {
+        expect.assertions(4);
+
+        const plan = generatePlan(
+            planDevVariablesScaffold({
+                devVarsExists: false,
+                // Neither key is in the registry, so neither is one Lunora can mint:
+                // a random value would be rejected by the provider at runtime AND
+                // would hide the gap from `lunora env doctor`.
+                exampleContent: 'OPENAI_API_KEY="<your-openai-api-key>"\nGITHUB_CLIENT_SECRET=""\nAUTH_SECRET="TODO"\n',
+                randomHex: fixedHex,
+            }),
+        );
+
+        expect(plan.generatedKeys).toStrictEqual(["AUTH_SECRET"]);
+        expect(plan.content).toContain('OPENAI_API_KEY="<your-openai-api-key>"');
+        expect(plan.content).toContain('GITHUB_CLIENT_SECRET=""');
     });
 
     it("leaves a secret-like key alone when the example already pins a real value", () => {
@@ -254,15 +273,15 @@ describe("planDevVariablesAugment", () => {
         expect.assertions(3);
 
         const plan = planDevVariablesAugment({
-            exampleContent: 'AUTH_SECRET="real"\nAUTH_URL="http://localhost:5173"\nSTORAGE_SECRET="replace-me"\n',
+            exampleContent: 'AUTH_SECRET="real"\nAUTH_URL="http://localhost:5173"\nSTORAGE_SIGNING_SECRET="replace-me"\n',
             existingContent: 'AUTH_SECRET="real"\n',
             randomHex: fixedHex,
         });
 
-        expect(plan.missingKeys).toStrictEqual(["AUTH_URL", "STORAGE_SECRET"]);
-        expect(plan.generatedKeys).toStrictEqual(["STORAGE_SECRET"]);
+        expect(plan.missingKeys).toStrictEqual(["AUTH_URL", "STORAGE_SIGNING_SECRET"]);
+        expect(plan.generatedKeys).toStrictEqual(["STORAGE_SIGNING_SECRET"]);
         // Non-secret copied verbatim; secret placeholder regenerated.
-        expect(plan.additions).toStrictEqual(['AUTH_URL="http://localhost:5173"', `STORAGE_SECRET="${"a".repeat(64)}"`]);
+        expect(plan.additions).toStrictEqual(['AUTH_URL="http://localhost:5173"', `STORAGE_SIGNING_SECRET="${"a".repeat(64)}"`]);
     });
 });
 
@@ -283,7 +302,7 @@ describe("ensureDevVariables", () => {
         // A complete file — all four example keys present.
         writeFileSync(
             join(dir, ".dev.vars"),
-            'AUTH_SECRET="kept"\nAUTH_URL="http://localhost:5173"\nSTORAGE_SECRET="kept"\nLUNORA_ADMIN_TOKEN="kept"\n',
+            'AUTH_SECRET="kept"\nAUTH_URL="http://localhost:5173"\nSTORAGE_SIGNING_SECRET="kept"\nLUNORA_ADMIN_TOKEN="kept"\n',
             "utf8",
         );
         writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
@@ -298,7 +317,7 @@ describe("ensureDevVariables", () => {
     it("appends keys the example lists but .dev.vars is missing", async () => {
         expect.assertions(4);
 
-        // Only AUTH_SECRET present locally; the example also wants AUTH_URL, STORAGE_SECRET, LUNORA_ADMIN_TOKEN.
+        // Only AUTH_SECRET present locally; the example also wants AUTH_URL, STORAGE_SIGNING_SECRET, LUNORA_ADMIN_TOKEN.
         writeFileSync(join(dir, ".dev.vars"), 'AUTH_SECRET="my-real-secret"\n', "utf8");
         writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
 
@@ -306,16 +325,16 @@ describe("ensureDevVariables", () => {
         const written = readFileSync(join(dir, ".dev.vars"), "utf8");
 
         expect(result.status).toBe("augmented");
-        expect(result.addedKeys).toStrictEqual(["AUTH_URL", "STORAGE_SECRET", "LUNORA_ADMIN_TOKEN"]);
+        expect(result.addedKeys).toStrictEqual(["AUTH_URL", "STORAGE_SIGNING_SECRET", "LUNORA_ADMIN_TOKEN"]);
         // Existing value is preserved; missing secret keys are appended with fresh hex.
         expect(written).toContain('AUTH_SECRET="my-real-secret"');
-        expect(written).toContain(`STORAGE_SECRET="${"a".repeat(64)}"`);
+        expect(written).toContain(`STORAGE_SIGNING_SECRET="${"a".repeat(64)}"`);
     });
 
     it("merges a concurrent peer's append instead of clobbering it (compare-and-swap retry)", async () => {
         expect.assertions(4);
 
-        // Only AUTH_SECRET present locally; the example also wants AUTH_URL, STORAGE_SECRET, LUNORA_ADMIN_TOKEN.
+        // Only AUTH_SECRET present locally; the example also wants AUTH_URL, STORAGE_SIGNING_SECRET, LUNORA_ADMIN_TOKEN.
         writeFileSync(join(dir, ".dev.vars"), 'AUTH_SECRET="my-real-secret"\n', "utf8");
         writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
 
@@ -341,12 +360,12 @@ describe("ensureDevVariables", () => {
             const written = readFileSync(join(dir, ".dev.vars"), "utf8");
 
             expect(result.status).toBe("augmented");
-            // Our attempt still added the remaining keys (STORAGE_SECRET, LUNORA_ADMIN_TOKEN) —
+            // Our attempt still added the remaining keys (STORAGE_SIGNING_SECRET, LUNORA_ADMIN_TOKEN) —
             // AUTH_URL is no longer "missing" once re-planned against the peer's content.
-            expect(result.addedKeys).toStrictEqual(["STORAGE_SECRET", "LUNORA_ADMIN_TOKEN"]);
+            expect(result.addedKeys).toStrictEqual(["STORAGE_SIGNING_SECRET", "LUNORA_ADMIN_TOKEN"]);
             // Both the peer's key and our keys survive in the final file.
             expect(written).toContain('AUTH_URL="http://localhost:5173"');
-            expect(written).toContain(`STORAGE_SECRET="${"a".repeat(64)}"`);
+            expect(written).toContain(`STORAGE_SIGNING_SECRET="${"a".repeat(64)}"`);
         } finally {
             onStatSync = undefined;
         }
@@ -355,7 +374,7 @@ describe("ensureDevVariables", () => {
     it("reports `exists` (no info line) when a peer lands every missing key before our write", async () => {
         expect.assertions(3);
 
-        // Only AUTH_SECRET present locally; the example also wants AUTH_URL, STORAGE_SECRET, LUNORA_ADMIN_TOKEN.
+        // Only AUTH_SECRET present locally; the example also wants AUTH_URL, STORAGE_SIGNING_SECRET, LUNORA_ADMIN_TOKEN.
         writeFileSync(join(dir, ".dev.vars"), 'AUTH_SECRET="my-real-secret"\n', "utf8");
         writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
 
@@ -371,7 +390,7 @@ describe("ensureDevVariables", () => {
             if (statCalls === 2) {
                 writeFileSync(
                     join(dir, ".dev.vars"),
-                    'AUTH_SECRET="my-real-secret"\nAUTH_URL="http://localhost:5173"\nSTORAGE_SECRET="peer"\nLUNORA_ADMIN_TOKEN="peer"\n',
+                    'AUTH_SECRET="my-real-secret"\nAUTH_URL="http://localhost:5173"\nSTORAGE_SIGNING_SECRET="peer"\nLUNORA_ADMIN_TOKEN="peer"\n',
                     "utf8",
                 );
             }
@@ -420,7 +439,7 @@ describe("ensureDevVariables", () => {
         const result = await ensureDevVariables({ confirm: async () => true, cwd: dir, info: () => undefined, randomHex: fixedHex });
 
         expect(result.status).toBe("generated");
-        expect(result.generatedKeys).toStrictEqual(["AUTH_SECRET", "STORAGE_SECRET", "LUNORA_ADMIN_TOKEN"]);
+        expect(result.generatedKeys).toStrictEqual(["AUTH_SECRET", "STORAGE_SIGNING_SECRET", "LUNORA_ADMIN_TOKEN"]);
         expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toContain(`AUTH_SECRET="${"a".repeat(64)}"`);
     });
 

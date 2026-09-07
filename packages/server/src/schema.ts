@@ -4,6 +4,7 @@ import { isSearchLanguage, isSearchStrategy, SEARCH_LANGUAGES, SEARCH_STRATEGIES
 import type { Validator } from "@lunora/values";
 import { v } from "@lunora/values";
 
+import { effectiveKind } from "../../../shared/effective-kind";
 import type { PrefixedTables, SchemaExtension } from "./plugin";
 import { mergeSchemaExtension } from "./plugin";
 import type {
@@ -1250,6 +1251,45 @@ const validateMemoryTables = (tables: Record<string, TableDefinition>): void => 
  * is arbitrary — `.global().commitOrdered()` and `.commitOrdered().global()`
  * must both be caught, and only the assembled table knows both facts.
  */
+
+/**
+ * Reject `v.bigint()` on a `.global()` table.
+ *
+ * A shard table stores a bigint as an order-preserving, zero-padded sort key
+ * (`@lunora/shard-engine`'s `bigintSqlKey`), so `ORDER BY`, ranges and the
+ * aggregate companion all compare it correctly. A `.global()` table lives in D1
+ * (or Hyperdrive) and stores it as a bare decimal string in a TEXT column, where
+ * SQL compares it LEXICOGRAPHICALLY: `"100" < "25" < "9"`. `orderBy` returns the
+ * reverse of the intended order, a range like `> 50n` matches the wrong rows,
+ * and `aggregate` reports `9` as the maximum of `{9, 25, 100}` — every one of
+ * them silently, with no error and no diagnostic.
+ *
+ * Refusing at `defineSchema` is the same call `.commitOrdered()` makes above,
+ * for the same reason: a field whose contract does not hold on the backend it
+ * lands on is worse than a field that will not compile. Store the value as
+ * `v.number()` when it fits in a double, or as `v.string()` when it does not and
+ * you only need equality.
+ *
+ * Enforced on the assembled table because `.global()` may be chained either side
+ * of the column declarations.
+ */
+const validateGlobalBigint = (tables: Record<string, TableDefinition>): void => {
+    for (const [tableName, table] of Object.entries(tables)) {
+        if (table.shardMode.kind !== "global") {
+            continue;
+        }
+
+        for (const [columnName, validator] of Object.entries(table.shape)) {
+            if (effectiveKind(validator) === "bigint") {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `defineSchema: table "${tableName}" is .global() and column "${columnName}" is v.bigint(). A global (D1/Hyperdrive) table stores a bigint as decimal TEXT, which SQL compares lexicographically — "100" sorts before "25" — so \`orderBy\`, range filters and \`aggregate\` on this column would silently return wrong results. Use v.number() if the value fits a double, or v.string() if you only need equality.`,
+                );
+            }
+        }
+    }
+};
+
 const validateCommitOrdered = (tables: Record<string, TableDefinition>): void => {
     for (const [tableName, table] of Object.entries(tables)) {
         if (table.commitOrderedMode) {
@@ -1290,6 +1330,7 @@ const defineSchema = <T extends Record<string, TableDefinition>>(
     attachStandaloneIndexes(tables, aggregateIndexes, rankIndexes);
     validateExternalSources(tables);
     validateCommitOrdered(tables);
+    validateGlobalBigint(tables);
     validateMemoryTables(tables);
     validateIndexFields(tables);
 

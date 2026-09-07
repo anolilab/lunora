@@ -16,13 +16,39 @@ import type { LunoraQueuesOptions, MessageSendRequestLike, QueueBindingLike, Que
  */
 const MAX_QUEUE_BATCH = 100;
 
+/**
+ * Cloudflare Queues ceiling on a per-message (or per-batch) delivery delay: 12
+ * hours. Mirrored by `@lunora/platform-node`'s host, which clamps to the same
+ * number — so without this check the same `delaySeconds: 64_800` fires 6 hours
+ * early on Node and is rejected by the platform on Cloudflare, from inside the
+ * mutation, with an error that names neither the limit nor the option.
+ */
+const MAX_DELAY_SECONDS = 43_200;
+
+/** Refuse a delay past the platform ceiling, naming the limit and the option. */
+const assertDelay = (delaySeconds: number | undefined, where: string): void => {
+    if (delaySeconds !== undefined && delaySeconds > MAX_DELAY_SECONDS) {
+        // `VALIDATION_ERROR` (400) for the same reason the batch-size guard uses
+        // it: the caller passed a value the platform cannot accept, which is not
+        // a server fault.
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/queue: ${where} delaySeconds is ${String(delaySeconds)}, over the Cloudflare Queues ceiling of ${String(MAX_DELAY_SECONDS)} (12 hours) — use @lunora/scheduler for longer schedules`,
+        );
+    }
+};
+
 /** Wrap a single Cloudflare `Queue` binding in the {@link QueueProducer} surface. */
 const producerFor = (binding: QueueBindingLike): QueueProducer => {
     return {
         send: async (body: unknown, options?: QueueSendOptions): Promise<void> => {
+            assertDelay(options?.delaySeconds, "send");
+
             await binding.send(body, options);
         },
         sendBatch: async (messages: Iterable<MessageSendRequestLike>, options?: QueueSendBatchOptions): Promise<void> => {
+            assertDelay(options?.delaySeconds, "sendBatch");
+
             // Materialize so the array can both be counted against the cap and
             // forwarded unchanged to the binding (an Iterable can only be
             // consumed once).
@@ -40,6 +66,10 @@ const producerFor = (binding: QueueBindingLike): QueueProducer => {
                     "VALIDATION_ERROR",
                     `@lunora/queue: sendBatch exceeds ${String(MAX_QUEUE_BATCH)} (got ${String(batch.length)}) — split across calls`,
                 );
+            }
+
+            for (const [index, message] of batch.entries()) {
+                assertDelay(message.delaySeconds, `sendBatch message ${String(index)}`);
             }
 
             await binding.sendBatch(batch, options);

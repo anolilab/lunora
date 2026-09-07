@@ -27,7 +27,7 @@ describe(flag, () => {
 
         flag("hero", "control", { client: fake.asClient, destroyRef: destroy.asDestroyRef });
 
-        expect(fake.subscriptions[0]?.args).toStrictEqual({ context: undefined, default: "control", key: "hero", type: "string" });
+        expect(fake.subscriptions[0]?.args).toStrictEqual({ default: "control", key: "hero", type: "string" });
     });
 
     it("fails open — a thrown subscribe keeps the default", () => {

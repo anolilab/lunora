@@ -17,12 +17,17 @@ vi.mock("posthog-js", () => ({ default: client }));
  *
  * The module initializes at import time, so each case needs its own module
  * registry — `vi.resetModules()` before the dynamic import is what gives it one.
+ *
+ * The unconfigured case *deletes* both variables rather than leaving them
+ * alone: `apps/docs/.env` is gitignored but present on any machine set up for
+ * analytics, and Vite loads it into `import.meta.env` for the test run too. A
+ * merely-absent stub made that case unreachable locally — it initialized with
+ * the real token and only passed on a machine that had no `.env`, which is to
+ * say on CI.
  */
 const loadModule = async (configured: boolean) => {
-    if (configured) {
-        vi.stubEnv("VITE_PUBLIC_POSTHOG_PROJECT_TOKEN", "phc_test");
-        vi.stubEnv("VITE_PUBLIC_POSTHOG_HOST", "https://eu.posthog.com");
-    }
+    vi.stubEnv("VITE_PUBLIC_POSTHOG_PROJECT_TOKEN", configured ? "phc_test" : undefined);
+    vi.stubEnv("VITE_PUBLIC_POSTHOG_HOST", configured ? "https://eu.posthog.com" : undefined);
 
     vi.resetModules();
 

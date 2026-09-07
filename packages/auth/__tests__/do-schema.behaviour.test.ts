@@ -86,7 +86,48 @@ describe("authDoSchemaStatements", () => {
         const uniqueIndexes = database.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND sql LIKE '%UNIQUE%'`).all();
 
         expect(tables.filter((name) => name.startsWith("scim")).length).toBeGreaterThan(0);
-        expect(uniqueIndexes.length).toBeGreaterThan(0);
+
+        // better-auth names a unique index `<table>_<column>_uidx`.
+        const uidx = (table: string, column: string): string => `${table}_${column}_uidx`;
+
+        expect(uniqueIndexes.map((row) => String(row.name))).toStrictEqual(
+            expect.arrayContaining([
+                uidx("scimUser", "externalIdKey"),
+                uidx("scimUser", "connectionUserKey"),
+                uidx("scimUser", "userNameKey"),
+                uidx("scimGroup", "externalIdKey"),
+                uidx("scimGroupMember", "membershipKey"),
+            ]),
+        );
+    });
+
+    it("refuses a duplicate SCIM externalIdKey, so a re-sync updates rather than double-provisions", () => {
+        expect.assertions(2);
+
+        const database = materialise({ plugins: [scim(scimOptions), admin()], secret: SECRET });
+
+        // Every column that carries its own unique index varies per row; `externalIdKey` is held
+        // constant, so ONLY the externalIdKey index can refuse the second insert.
+        const insert = (n: string): void => {
+            database
+                .prepare(
+                    `INSERT INTO "scimUser" ("id", "connectionId", "provisioningDomainId", "userId", "connectionUserKey", "userName", "userNameKey",
+                      "primaryEmail", "workEmailValueIndex", "emailValueIndex", "displayName", "formattedName", "serializedEmails",
+                      "externalId", "externalIdKey", "active", "orderKey", "createdAt", "updatedAt")
+                     VALUES (?, 'okta-acme', 'acme.test', ?, ?, ?, ?, 'ada@acme.test', '', '', 'Ada', 'Ada L', '[]', 'ext-1', 'okta-acme:ext-1', 1, ?, '', '')`,
+                )
+                .run(`su${n}`, `u${n}`, `okta-acme:u${n}`, `ada${n}@acme.test`, `key-${n}`, `order-${n}`);
+        };
+
+        insert("1");
+
+        // A directory re-sync of the same external identity must collide, not silently create a
+        // second SCIM user (and with it a second account for one real person).
+        expect(() => {
+            insert("2");
+        }).toThrow(/UNIQUE/i);
+
+        expect(database.prepare(`SELECT COUNT(*) AS n FROM "scimUser"`).get()?.n).toBe(1);
     });
 
     it("marks required columns NOT NULL and leaves optional ones nullable", () => {

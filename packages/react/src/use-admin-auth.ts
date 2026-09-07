@@ -236,6 +236,30 @@ const useOrganizations = (options: UseOrganizationsOptions = {}): AdminAuthListR
     return useAdminAuthList<Record<string, unknown>>(client, ["organizations"], (limit) => client.listAuthOrganizations({ limit }), { enabled, pageSize });
 };
 
+/** Options for {@link useSignUpInvitations}. */
+type UseSignUpInvitationsOptions = AdminAuthQueryOptions;
+
+/**
+ * List sign-up invitations (requires the `inviteOnly` plugin). Hits
+ * `client.listAuthSignUpInvitations` — an HTTP-only admin-gated read, same
+ * transport note as {@link useAuthUsers}.
+ *
+ * Rows come back unfiltered and newest-first; a row is pending when `acceptedAt`
+ * is null and `expiresAt` is in the future. Mutations
+ * (`client.createAuthSignUpInvitation`, `client.revokeAuthSignUpInvitation`)
+ * stay plain `client.*` calls — call `refetch()` afterward, as the other admin
+ * hooks do.
+ */
+const useSignUpInvitations = (options: UseSignUpInvitationsOptions = {}): AdminAuthListResult<Record<string, unknown>> => {
+    const client = useLunora();
+    const { enabled, pageSize } = options;
+
+    return useAdminAuthList<Record<string, unknown>>(client, ["sign-up-invitations"], (limit) => client.listAuthSignUpInvitations({ limit }), {
+        enabled,
+        pageSize,
+    });
+};
+
 /** Options for {@link useAuthSessions}. */
 interface UseAuthSessionsOptions extends AdminAuthQueryOptions {
     /** Scope the list to one user's sessions; omit for the global cross-user browser. */
@@ -324,5 +348,5 @@ const useImpersonate = (): UseImpersonateResult => {
     };
 };
 
-export type { AdminAuthListResult, UseAuthSessionsOptions, UseAuthUsersOptions, UseImpersonateResult, UseOrganizationsOptions };
-export { useAuthSessions, useAuthUsers, useImpersonate, useOrganizations };
+export type { AdminAuthListResult, UseAuthSessionsOptions, UseAuthUsersOptions, UseImpersonateResult, UseOrganizationsOptions, UseSignUpInvitationsOptions };
+export { useAuthSessions, useAuthUsers, useImpersonate, useOrganizations, useSignUpInvitations };

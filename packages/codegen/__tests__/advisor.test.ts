@@ -7,7 +7,7 @@ import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { formatAdvisories, lintSchema, toAdvisorContext } from "../src/advisor";
-import discoverSchema from "../src/discover-schema";
+import discoverSchema from "../src/discover/schema";
 import { runCodegen } from "../src/index";
 
 /** Build a `SchemaIR` from in-memory schema source (no disk). */

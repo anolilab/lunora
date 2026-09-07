@@ -25,9 +25,29 @@ class TestWireCodec < Minitest::Test
     cases.each do |entry|
       encoded = entry["encoded"]
       round_tripped = Lunora.encode_wire(Lunora.decode_wire(encoded))
+      # A handful of shapes are legitimately not fixed points — a bare [TAG]
+      # array is escaped on the way out, an undefined object field is dropped —
+      # and carry the expected re-encoding.
+      expected = entry.key?("reencoded") ? entry["reencoded"] : encoded
 
-      assert_equal canonical(encoded), canonical(round_tripped), "round-trip mismatch for #{entry["name"]}"
+      assert_equal canonical(expected), canonical(round_tripped), "round-trip mismatch for #{entry["name"]}"
+      # And again as the BYTES the transport sends: a round-trip assertion
+      # measured on a string the transport never sends cannot see the divergence
+      # it exists to catch.
+      assert_equal wire_text(expected), wire_text(round_tripped), "wire-text mismatch for #{entry["name"]}"
     end
+  end
+
+  # Native construction, not a fixture: a fixture carries wire VALUES, and the
+  # shape here is a WireError whose label slots hold non-strings. decode_wire
+  # refuses those, so an encoder that passed them through emitted a frame its
+  # own decoder rejects — and a decoder raise on a subscription frame kills the
+  # subscription rather than surfacing the error.
+  def test_error_labels_are_coerced_so_encode_stays_decodable
+    encoded = Lunora.encode_wire(Lunora::WireError.new(5, { "a" => 1 }))
+
+    assert_equal "5", encoded[2]
+    assert_equal "5", Lunora.decode_wire(encoded).name
   end
 end
 
@@ -50,6 +70,32 @@ class TestStableKey < Minitest::Test
 
       assert_equal entry["key"], Lunora.stable_wire_key(decoded), entry["name"]
     end
+  end
+end
+
+class TestShardKey < Minitest::Test
+  # "" is ABSENT on the wire, not "the shard named empty string". The runtime
+  # takes any string as a named shard and gives "" its own Durable Object, while
+  # this client treats "" and nil as one shard everywhere it matches a
+  # subscription or drains the queue. A port that sent it replayed a single
+  # queued write to one Durable Object and a BATCHED replay of that same write
+  # to another, with the optimistic overlay tracking neither.
+  def test_empty_shard_key_is_omitted
+    ConformanceManifest.covers("empty_shard_key_is_omitted")
+
+    [nil, ""].each do |absent|
+      refute Lunora.build_rpc_body("messages:list", {}, absent).key?("shardKey"), "shard key #{absent.inspect}"
+    end
+
+    assert_equal "tenant_a", Lunora.build_rpc_body("messages:list", {}, "tenant_a")["shardKey"]
+
+    client = Lunora::Client.new("https://app.example")
+
+    [nil, ""].each do |absent|
+      refute_includes client.send(:ws_url, absent), "shard=", "ws shard key #{absent.inspect}"
+    end
+
+    assert_includes client.send(:ws_url, "tenant_a"), "shard=tenant_a"
   end
 end
 
@@ -148,6 +194,38 @@ class TestWsFrames < Minitest::Test
     assert_equal canonical(frames["unsubscribe"]), canonical(Lunora.build_unsubscribe_frame("sub_1"))
   end
 
+  def test_shape_subscriptions_resend_after_reconnect
+    ConformanceManifest.covers("shape_subscriptions_resend_after_reconnect")
+
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(_frame) {})
+    client.subscribe("messages:list", { "channel" => "general" }, ->(_rows) {})
+    client.subscribe_shape("roomMessages", { "room" => "general" }, ->(_rows) {})
+
+    # The cursors a resume carries are written by the frame handler, so they have
+    # to exist before the resend is built.
+    client.handle_frame(JSON.generate({ "cursor" => 9, "data" => [], "epoch" => "e1", "id" => "sub_1", "type" => "data" }))
+    client.handle_frame(JSON.generate({ "epoch" => "e1", "pokeId" => "poke-1", "type" => "pokeStart" }))
+    client.handle_frame(JSON.generate({ "pokeId" => "poke-1", "reset" => true, "rowsPatch" => [],
+                                        "shapeId" => "shape_1", "type" => "pokePart" }))
+    client.handle_frame(JSON.generate({ "checkpoint" => 5, "epoch" => "e1", "pokeId" => "poke-1", "type" => "pokeEnd" }))
+
+    resent = []
+    client.attach_socket(->(frame) { resent << frame })
+    client.resend_subscriptions
+
+    # BOTH registries. A resend that walks only the queries leaves every shape
+    # view subscribed to a socket that no longer exists — silently, and for the
+    # rest of the process's life.
+    assert_equal(%w[subscribe shape_subscribe], resent.map { |frame| frame["type"] })
+    assert_equal 9, resent[0]["query"]["sinceSeq"]
+    assert_equal "shape_1", resent[1]["id"]
+    assert_equal "roomMessages", resent[1]["shape"]["name"]
+    assert_equal({ "room" => "general" }, resent[1]["shape"]["args"])
+    assert_equal 5, resent[1]["sinceCheckpoint"]
+    assert_equal "e1", resent[1]["sinceEpoch"]
+  end
+
   def test_server_frames
     ConformanceManifest.covers("server_frame_consumer")
 
@@ -174,6 +252,37 @@ class TestWsFrames < Minitest::Test
         assert_equal expect["code"], errors.first.code
       end
     end
+  end
+
+  # A payload the codec refuses belongs on the addressed subscription's error
+  # callback, not on the socket read loop's stack: raising out of +handle_frame+
+  # ended that loop, and with it every OTHER subscription on the client, over one
+  # bad frame.
+  def test_a_refused_payload_errors_one_subscription_and_leaves_the_rest_reading
+    ConformanceManifest.covers("server_frame_consumer")
+
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(_frame) {})
+    first = []
+    second = []
+    errors = []
+    client.subscribe("messages:list", { "channel" => "a" }, ->(value) { first << value }, ->(error) { errors << error })
+    client.subscribe("messages:list", { "channel" => "b" }, ->(value) { second << value })
+
+    kind = client.handle_frame(JSON.generate({
+                                               "cursor" => 1, "data" => { "n" => [Lunora::TAG, "bigint", "not-a-number"] },
+                                               "id" => "sub_1", "type" => "data"
+                                             }))
+
+    assert_equal "error", kind
+    assert_equal 1, errors.length
+    assert_equal "INVALID_FRAME", errors.first.code
+    assert_empty first
+
+    # The second subscription is still live, which is the whole point.
+    client.handle_frame(JSON.generate({ "cursor" => 2, "data" => %w[ok], "id" => "sub_2", "type" => "data" }))
+
+    assert_equal [%w[ok]], second
   end
 
   # The Enumerator form of a live query: same subscription, same decode, same

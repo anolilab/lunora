@@ -27,9 +27,14 @@ typedef LunoraFrameSender = void Function(Map<String, Object?> frame);
 
 /// One open keyed view and the rows it has materialised.
 class _ShapeSubscription {
-  _ShapeSubscription(this.name, this.onRows, this.onError);
+  _ShapeSubscription(this.name, this.args, this.onRows, this.onError);
 
   final String name;
+
+  /// Kept, not just sent: a reconnect has to rebuild this view's
+  /// `shape_subscribe` frame, and a registry holding only the id cannot.
+  final Object? args;
+
   final LunoraRowsCallback? onRows;
   final LunoraErrorCallback? onError;
   final Map<String, Object?> rows = <String, Object?>{};
@@ -97,7 +102,7 @@ class ShapeRegistry {
 
     final id = 'shape_$_nextId';
 
-    _shapes[id] = _ShapeSubscription(name, onRows, onError);
+    _shapes[id] = _ShapeSubscription(name, args, onRows, onError);
     sender()?.call(buildSubscribeFrame(id, name, args: args));
 
     return () {
@@ -109,6 +114,19 @@ class ShapeRegistry {
 
   /// Deliver a subscription-scoped error to the view with this id, if any.
   void reportError(String id, LunoraSubscriptionError error) => _shapes[id]?.onError?.call(error);
+
+  /// One `shape_subscribe` frame per live view, carrying the checkpoint and
+  /// epoch it has materialised up to.
+  ///
+  /// A resend that walks only the QUERY registry leaves every shape view
+  /// subscribed to a socket that no longer exists — silently, and for the rest of
+  /// the process's life. Built, not sent: the caller writes a socket this
+  /// registry does not own, and a write that synchronously unsubscribes would
+  /// otherwise mutate `_shapes` while it is being iterated.
+  List<Map<String, Object?>> resendFrames() => <Map<String, Object?>>[
+        for (final entry in _shapes.entries)
+          buildSubscribeFrame(entry.key, entry.value.name, args: entry.value.args, sinceCheckpoint: entry.value.checkpoint, sinceEpoch: entry.value.epoch),
+      ];
 
   /// Begin buffering a poke.
   void beginPoke(Map<String, Object?> frame) {

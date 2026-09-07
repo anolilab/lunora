@@ -189,4 +189,36 @@ describe("schemaEditorOverlay", () => {
         expect(mock).toHaveBeenCalledTimes(1);
         expect(JSON.parse(request.body)).toStrictEqual({ column: "due", kind: "addOptionalColumn", table: "todos", validator: "v.number()" });
     });
+
+    it("sends v.bigint() for the bigint palette entry — the validator the server allow-lists and `@lunora/values` exports", async () => {
+        expect.assertions(2);
+
+        // `v.int64()` is neither exported by `@lunora/values` nor on the
+        // server's allow-list, so every bigint column the palette offered came
+        // back `400 invalid-validator`.
+        const mock = stubFetch(200, { diagnostics: [], ok: true, tables: [TABLE("todos")] });
+
+        render(<SchemaEditorOverlay onApplied={vi.fn<(tables: ReadonlyArray<SchemaEditTable>) => void>()} tableNames={TODOS_ONLY} />);
+
+        fireEvent.click(screen.getByTestId("sc-editor-add-column"));
+        fireEvent.change(screen.getByTestId("sc-editor-column-name"), { target: { value: "amount" } });
+
+        const select = screen.getByTestId<HTMLSelectElement>("sc-editor-column-type");
+        const bigintOption = [...select.options].find((option) => option.textContent === "bigint");
+
+        expect(bigintOption?.value).toBe("v.bigint()");
+
+        fireEvent.change(select, { target: { value: bigintOption?.value } });
+        fireEvent.click(screen.getByTestId("sc-editor-column-apply"));
+
+        await vi.waitFor(() => {
+            if (mock.mock.calls.length === 0) {
+                throw new Error("fetch not called yet");
+            }
+        });
+
+        const [, bigintRequest] = mock.mock.calls[0] as [string, { body: string }];
+
+        expect(JSON.parse(bigintRequest.body)).toStrictEqual({ column: "amount", kind: "addOptionalColumn", table: "todos", validator: "v.bigint()" });
+    });
 });

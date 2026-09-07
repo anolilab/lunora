@@ -1,6 +1,6 @@
 import type { Middleware } from "@lunora/server";
 
-import readIdentityGroups from "./identity-groups";
+import { isAccessIdentity, readIdentityGroups } from "./identity-groups";
 import type { AccessClaims } from "./types";
 
 /**
@@ -67,16 +67,14 @@ const facadeFor = (identity: Record<string, unknown>, userId: string | undefined
     // `composeResolvers` (e.g. better-auth), or a custom `mapClaims` that dropped
     // `access` — there is no Access identity to surface, so `ctx.access` reads
     // anonymous rather than misreporting a foreign identity as Access-authenticated.
-    const raw = identity["access"];
-
-    if (typeof raw !== "object" || raw === null) {
+    if (!isAccessIdentity(identity)) {
         return ANONYMOUS_FACADE;
     }
 
-    const claims = raw as AccessClaims;
+    const claims = identity["access"] as AccessClaims;
     // Promoted fields may be overridden at the envelope top by a custom `mapClaims`;
     // prefer those, falling back to the verified claim set. `readIdentityGroups`
-    // (shared with `accessRoles`) applies the same promoted-then-nested fallback
+    // (shared with the resolver's role mapping) applies the same promoted-then-nested fallback
     // and string filtering; `?? []` keeps the facade's non-nullable `groups`.
     const groups = readIdentityGroups(identity) ?? [];
 
@@ -116,7 +114,7 @@ const accessFacade = (identity: Record<string, unknown> | null | undefined, user
  * fail closed.
  *
  * It does not gate the request; pair it with `rls(...)` (or
- * `accessRoles(...)` → `rls(...)`) when you need enforcement. It only surfaces
+ * `rls(...)`) when you need enforcement. It only surfaces
  * the identity for branching inside a handler.
  *
  * ```ts

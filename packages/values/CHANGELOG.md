@@ -1,3 +1,799 @@
+## @lunora/values [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.41...@lunora/values@1.0.0-alpha.42) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.34
+
+## @lunora/values [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.40...@lunora/values@1.0.0-alpha.41) (2026-09-06)
+
+### ⚠ BREAKING CHANGES
+
+* **errors,values,server:** `ERROR_CATALOG` gains six keys, so `LunoraErrorCode` widens, and a `CONFIG_INVALID`
+message is now redacted to "Internal error" on the wire.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(shared): stop refusing SQLite's read-only `replace()` scalar
+
+`FORBIDDEN_KEYWORD` listed `replace` as a bare word, so a plain
+`SELECT REPLACE(name, 'a', 'b') FROM users` was rejected as "not read-only" — naming a rule the
+operator had not broken. `replace` is a write only in the `REPLACE INTO` statement form; as a scalar
+it is a core string function. The docblock's accepted trade covers a keyword inside a string
+literal, not a bare function call.
+
+The discrimination is a one-token negative lookahead — the write form is `REPLACE INTO`, never
+`REPLACE (`. Deliberately a lookahead rather than matching `replace\s+into`, so an inline block
+comment wedged between the two words (whitespace to SQLite's tokenizer, but not to `\s`) still fails
+the scan. Every other word on the list has no read-only meaning, so none of them moves.
+
+`VALUES (1)` stays refused, and that is left as-is: the diagnostic states exactly the rule enforced
+("only SELECT / WITH / EXPLAIN"), widening the lead set buys nothing, and `INSERT … VALUES` is
+already caught by `insert`. Noted in the docblock so it is not re-litigated.
+
+The AI SQL assistant made a false refusal invisible: it retries once and then discards, and the
+caller only ever learns `unsafe-response` — which reads the same whether the model wrote a real
+`DELETE` or the gate misread a read-only shape. Each discard now warns to the server console with
+the gate's rejection code.
+
+Tests: the scalar form is allowed while `REPLACE INTO` — including from inside a CTE, which is why
+the keyword scan exists — is still refused; and the assistant logs the rejection code once per
+attempt.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(values): make the emitted JSON Schema agree with the runtime parser
+
+Four claims in the schema contradicted what `parse` actually does, so a client generated from the
+OpenAPI/OpenRPC spec rejected bodies the server accepts and could not express what the server
+requires:
+
+  - `additionalProperties: false` on every object, while `v.object` STRIPS an unknown key rather
+    than refusing it (only `.output()`'s `rejectUnknownKeys` refuses one, which is not what these
+    schemas describe). Dropped — absent means allowed, which matches the parser.
+  - `required` listed every key whose kind was not `optional`, so `v.any()` and a union with an
+    optional member were required although `parse {}` succeeds for both. Requiredness is now decided
+    by whether the parser accepts the field ABSENT.
+  - bigint was described two incompatible ways — `{ format: "int64", type: "integer" }` for the
+    scalar, `{ const: "5", type: "string" }` for `v.literal(5n)` — and codegen spelled the literal a
+    third way (`{ const: "5n" }`, the IR's source text falling through the numeric branch). One
+    lossless carrier for all three: an int64 decimal string. `type: "integer"` advertised the one
+    JSON form the parser refuses, and truncated past 2^53 besides; a bigint already rides as its
+    decimal string in the wire codec, and this is the treatment `bytes` already gets.
+  - `v.record(v.string().pattern(…), …)` emitted no `propertyNames` — the reader read only the value
+    child — while the runtime rejects a non-matching key. The reader gains `keyChild`.
+
+Regenerated: both codegen golden fixtures and all 13 examples' committed `_generated` trees.
+
+Also pins the ORDER-DEPENDENT `.check()`/`.nullable()` semantics that round 28 questioned. It holds
+as written: `.nullable().check(p)` refines the widened type, so `p` runs on null — and its parameter
+is typed `string | null`, so dereferencing it is a compile error, not a runtime surprise.
+`.check(p).nullable()` is the other reading and short-circuits. No behaviour change, a test so the
+pair is not "fixed" into agreement later.
+* **errors,values,server:** `SchemaNodeReader` gains a required `keyChild` member, and generated OpenAPI /
+OpenRPC documents change shape (no `additionalProperties: false` on argument objects, a narrower
+`required`, `propertyNames` on records, bigint as an int64 string).
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* docs: correct two APIs the snippets taught with a shape they never had
+
+`useMutation` returns `{ data, error, isError, mutate, pending, reset, withOptimisticUpdate }`, but
+13 snippets — the flagship realtime-chat tutorial, error handling, the React and reactive-loaders
+pages, both migration guides, three blog posts — wrote `const send = useMutation(...)` and then
+called `send(...)`. A reader following them gets `TS2349: This expression is not callable`, or
+`TypeError: send is not a function`. The React page was half-right, reading `send.pending`, which
+does exist on the object. Two prose sentences said "returns a callable with a `.pending` flag".
+
+`ctx.db.findMany("users")` exists on the untyped runtime writer but not on the generated typed
+`ctx.db`, so the masking and RLS snippets may run yet never typecheck in a user project. Replaced
+with the per-table facade (`ctx.db.users.findMany()`).
+
+`check-doc-imports.mjs` only validated import NAMES, so both classes were invisible to it. It gains
+a small deny-table of shapes found wrong in shipped docs, each entry carrying the correct form in
+its message, and now walks `content/blog` as well — two of the wrong snippets lived there. Not a
+type checker: doing this properly needs the packages installed in apps/docs plus synthesized
+`_generated` modules, which is noted in the file.
+
+Only tracked files are touched. `apps/docs/src/content/docs/packages` is gitignored — a local copy
+regenerated at build — so nothing there ships.
+
+The round also reported `ctx.db.from("invoices").all()` in the cloudflare-access page. That call
+appears nowhere in the repo, tracked or otherwise, so nothing was changed for it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* security(playground): make the inbound-email sink internal, and stop claiming a DO reset
+
+The worker entry gates `email()` on `verify: authenticatesFrom` and says so at length: Cloudflare
+Email Routing authenticates the RECIPIENT domain, never the sender, so without the gate anyone who
+can send mail to the routed address reaches the sink with a `from` of their choosing. But the sink
+was a plain `mutation`, registered publicly, so the same call was on the client `api` — the gate was
+walked around rather than through.
+
+`internalMutation` is the sibling pattern (`cleanup.ts`), and it costs the mail path nothing:
+`@lunora/mail`'s shard dispatcher already sends `x-lunora-system: 1`, which is exactly what admits a
+server-initiated dispatch to an internal target — the package's own docblock says an inbound target
+"should be" internal for this reason. Verified rather than assumed: nothing in the app or the e2e
+suite calls it from a client.
+
+`inbound:list` stays public and now says why: it demonstrates that the write lands on the change
+feed, and the `inbox` table has no owner column to scope a read by. Called out as the demo's choice,
+not the pattern to copy.
+
+Separately, `/test/reset` POSTed `https://do/internal/reset` at a DO named `__e2e_reset__` inside a
+swallowing `catch`. `ShardDO.fetch` answers 404 to anything that is not `/rpc` or its WS/relay
+routes, and that name is neither `__root__` nor any channel shard, so even a real route would have
+reset the wrong DO. Only `clearD1` ever ran. Deleted rather than implemented: shard-local rows are
+reachable only through their channel and every spec mints a fresh one, so nothing depends on
+clearing them. The e2e fixture's "Clears DO state so tests are order-independent" and the
+`workers: 1` rationale now say what actually happens — D1 is truncated, DO state is not, and
+order-independence comes from each spec minting its own channel.
+
+Tests: the generated `api` keeps `onEmail` out of `ApiTypes` and in `InternalApiTypes`, and the
+worker entry no longer calls the phantom route.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(docs): make the doc-snippet deny-table falsifiable on its own
+
+Every `NONEXISTENT_API` entry was added because a shipped doc matched it, and
+once that doc is fixed the pattern matches nothing forever. From then on a
+narrowed or broken regex reads exactly like a clean repo — the run is green
+either way. That is the property the error-catalog scanner grew a self-check
+for in this same wave; this file had none.
+
+Add fixture strings per entry, asserting both directions: the pattern still
+matches the wrong form, and does not match the correct one. Verified by breaking
+it each way — narrowing `(?:const|let|var)` back to `const` reports the missed
+`let`, and widening `\w+` to swallow a destructuring pattern reports that it
+would now reject valid docs.
+
+Two patterns widened while adding their fixtures: `useMutation` was bound to
+`const` and missed `let`/`var`, and `ctx.db.findMany` matched only quote
+characters, missing a template literal.
+
+Also demote the payment section header in the error catalog from `/**` to `/*` —
+as a docblock it attached itself to nothing, sitting between the previous entry
+and `CONFIG_INVALID`'s own docblock.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(docs): stop the useMutation gate rejecting a correct snippet
+
+The pattern matched any `const <name> = useMutation(` binding, so it rejected
+the correct non-destructuring form — `const m = useMutation(fn)` then
+`await m.mutate(args)` — which keeps the hook's object and calls `mutate` off
+it. A CI gate that blocks valid docs is worse than the misuse it catches, and
+the self-check added alongside it could not see this because its samples only
+covered the destructuring form.
+
+The two forms differ in whether the bound name is later CALLED, and that spans
+two lines, so a per-line scan cannot tell them apart. Buffer each fence and
+match over its body, with a backreference requiring the binding to be seen
+called. Line numbers are recovered from the match offset, so reports still point
+at the offending line rather than the fence.
+
+Verified against all four shapes: `const send = useMutation(…)` + `send(args)`
+reports at the right line; both correct forms pass; the `ctx.db.findMany` entry
+still fires, so the fence-scoped scan did not weaken the line-local pattern.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(payment): mint the arg-shape guard as VALIDATION_ERROR, not CONFIG_INVALID
+
+Cataloguing `CONFIG_INVALID` as `internal: true` is right for what the code was
+meant to carry — "webhook secret not configured", a duplicate or absent adapter
+— messages that name server wiring and that the caller can do nothing with. But
+`check()`'s argument-shape guard minted the same code for "check() requires a
+featureId or priceId", which is the caller's own mistake, so marking the code
+internal turned actionable guidance into a generic 500.
+
+Move those two sites to `VALIDATION_ERROR`, already in the payment taxonomy at
+400 and already catalogued as caller-safe. The `entitlements`-not-configured
+sites stay on `CONFIG_INVALID`: those do name server configuration, and the
+detail survives in the server-side log.
+
+Record the constraint in the catalog docblock so the next caller-fixable failure
+is not added to this code, which would quietly re-widen what the flag redacts.
+
+252 payment tests and 669 errors tests pass.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* docs(values,errors): correct two claims the code does not support
+
+`v.bigint()`'s JSON Schema said it names "the JSON carrier". It does not: every
+RPC arg path runs `decodeWire` first (`shard-do.ts` 5528/5588/5647/5925), so a
+bigint's actual carrier is the tagged array `["$lunora.wire$","bigint","5"]` and
+a bare `"5"` fails the parser exactly as a bare `5` did. The emitted shape is
+unchanged and still right by the file's own convention — `bytes` and `date`
+describe their decoded payloads the same way, and nothing here consumes a tuple
+schema — but the comment claimed a parser agreement this node does not have,
+which is the class of thing the surrounding wave exists to remove. State the
+convention and the residual gap instead.
+
+The webhook-rejection entry claimed "the messages are fixed and name no internal
+state". Five of the six mints are fixed strings; `providers/stripe.ts` forwards
+the Stripe SDK's verification message. The non-internal verdict is still right —
+those texts describe the request the poster sent — but the justification was
+wrong, so it now says which site differs and what keeps it safe.
+
+187 values tests and 669 errors tests pass.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* style(docs): format check-doc-imports
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* style(errors): add the blank line jsdoc/lines-before-block requires
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **errors,values,server:** close the gates that were failing open ([#621](https://github.com/anolilab/lunora/issues/621)) ([42879c4](https://github.com/anolilab/lunora/commit/42879c4d43379f6475fb3dc9971e70a856fa796b))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.33
+
+## @lunora/values [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.39...@lunora/values@1.0.0-alpha.40) (2026-09-05)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+
+## @lunora/values [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.38...@lunora/values@1.0.0-alpha.39) (2026-09-04)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.31
+
+## @lunora/values [1.0.0-alpha.38](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.37...@lunora/values@1.0.0-alpha.38) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* 34 public API changes across mail, storage, payment, replica,
+studio, workflow, agent, codegen, cli and the shard runtime. The full list is in
+
+### Bug Fixes
+
+* audit rounds 7-11 ([#579](https://github.com/anolilab/lunora/issues/579)) ([224a42a](https://github.com/anolilab/lunora/commit/224a42a741f524e0110da55917c79fd08c90a885))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.30
+
+## @lunora/values [1.0.0-alpha.37](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.36...@lunora/values@1.0.0-alpha.37) (2026-09-02)
+
+### ⚠ BREAKING CHANGES
+
+* `lunora import` and `lunora backup restore` against a remote
+URL now require `--yes`, as does `lunora seed --reset` off a TTY.
+`lunora deploy --allow-schema-drift` no longer advances the schema baseline;
+use `--update-schema-baseline` for that.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(protocol): close the wire-codec divergences the fixture never asserted
+
+All eight non-JS ports accepted a map entry with MORE than two elements while
+the reference rejects it, so `[["k","v","EXTRA"]]` threw in the JS client and the
+Durable Object runtime and decoded to `Map{k→v}` everywhere else — two peers of
+one deployment reading different values from identical bytes.
+
+The cause is instructive: an earlier fix hardened the reference in both
+directions and added only the too-short case to
+`protocol/fixtures/wire-codec.json`. Every port was written against the fixture,
+not against the reference, so the too-long half was never implemented. The
+fixture is the contract, and it was incomplete.
+
+So each divergence here is fixed fixture-first — add the entry, watch all eight
+go red, then fix — which is both the repair and the permanent guard. Kotlin
+turned out to have no map-entry check at all, and its rejection helper was
+catching the resulting `ClassCastException` only by accident.
+
+Also aligned: a typed-array payload whose byte length is not a multiple of its
+element size is now rejected rather than handed back as raw bytes for the
+consumer to misread; an unknown typed-array constructor name decodes to raw
+bytes and drops the name, which is what the protocol README already specified
+and only the reference did, and which matters because the name survived into
+`stableWireKey` and therefore into subscription dedup; and duplicate map keys
+collapse last-wins to match the reference. That last one was measured rather
+than assumed — `Map.prototype.set` overwrites at the FIRST occurrence's position
+and collapses under SameValueZero, so bigint keys merge while structurally equal
+`Date` and bytes keys do not, and a second fixture case pins that half.
+
+Python's decoder leaked `IndexError`, `TypeError` and `ValueError` out of a read
+loop whose guard catches only `WireFormatError`, so one malformed frame killed
+every subscription on the client — and on the built-in socket path it was
+swallowed instead, leaving the query silently stale. Fixed at the source: the
+decoder now raises only `WireFormatError`, and `_is_bigint_literal` no longer
+uses Unicode-aware `str.isdigit()`, which accepted digits `int()` refuses. A
+string `set`/`arr` payload decoded to a set of its characters — inventing data —
+where the `map` branch in the same file already had the type guard its siblings
+lacked; Ruby raised a `NoMethodError` its own assertion could not accept. Java
+and Kotlin charged the WebSocket frame envelope against the value's depth
+budget, so a value the reference legitimately encodes at the cap produced a
+frame they refused.
+
+Two reference behaviours are tightened rather than reproduced. A payload-less
+`date` decoded `undefined` into an Invalid Date and re-encoded it as a NaN
+timestamp, and a non-object `error` props slot ran `Object.keys` over a string
+and produced `{0:"a",1:"b"}` where every port produced `{}`. Both are JS
+accidents rather than contracts, both are shapes `encodeWire` never emits, and
+every port already rejected them — so the reference now agrees with the ports
+instead of eight languages reproducing the accident.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(sql-store): store a global bigint in an order-preserving key
+
+`v.bigint()` on a `.global()` table was stored as plain decimal text, so every
+range filter, `ORDER BY`, page cursor and `MAX` over it compared
+lexicographically. `where: { cents: { gt: 9n } }` returned ZERO rows while 10n
+and 100n sat in the table, and `max` answered 9 for a set whose maximum was 100.
+`=` stayed exact under both encodings, which is why nothing ever surfaced
+loudly and five audit rounds went past it.
+
+The shard plane solved this and says so in its own comment: "Plain decimal text
+(`"10"`) is exact for `=` but sorts `"9"` after `"10"`, so ranges and `ORDER BY`
+would silently return the wrong rows instead." Same schema, `.shardBy()`
+correct, `.global()` wrong. That encoder is now exported and imported rather
+than restated — a second copy of an order-preserving encoding is the thing that
+drifts, and a cross-plane parity test compares the two answers row for row.
+
+A backfill ships with it, because read-tolerance alone would be a NEW silent
+break: with the format changed, `eq: 10n` binds the key and stops matching a row
+written as `"10"`. The rewrite is keyset-paged and in-place, self-terminating
+(its probe matches nothing on a converted table), and the decoder still reads
+plain decimal text so no row is garbage mid-conversion. Reductions over a padded
+key are refused with a typed error naming the aggregate index that answers them,
+where `sum` past 2^53 previously escaped as a raw driver `RangeError`.
+
+MySQL `.global()` tables inherited `utf8mb4_0900_ai_ci`, folding distinct values
+together: `count` for tenant "Acme" answered 3 where two rows were "Acme" and
+one "acme", `.unique()` rejected `alice@` against `Alice@`, and `rankPage`
+partitioned by tenant returned another tenant's row. Every character column now
+declares `utf8mb4_0900_bin` — column-level because a column's own collation
+beats the connection's on every `column = 'literal'` comparison, and the `0900`
+variant because `utf8mb4_bin` is PAD SPACE and would still disagree with SQLite
+and Postgres on trailing whitespace. Pre-existing tables keep their collation;
+`CREATE TABLE IF NOT EXISTS` cannot reshape one, so that is an operator `ALTER`,
+documented in the dialect.
+
+Three more: adding a field to an existing global table provisioned nothing and
+every later insert died on `table p has no column named slug` — an untyped
+driver message that never mentioned `lunora migrate` — while two siblings in the
+same package already ALTER their own tables; `patch`/`replace`/`delete` ran
+their compare-and-swap through `all`, which had no `onBookmark`, so D1's session
+bookmark never advanced and read-your-writes was lost for exactly the write path
+it exists for; and the admin import iterated only declared columns, so a field
+renamed since the snapshot was dropped and reported as a clean success, where
+the shard twin refuses the identical row.
+* `v.bigint()` columns on `.global()` tables are re-encoded once,
+automatically and in place, on the next migration. Values past 39 digits are now
+refused with a typed `BAD_REQUEST` rather than mis-sorted. Existing MySQL tables
+need `ALTER TABLE <t> CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin`
+to pick up the collation fix.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(agent): bound what a delegated run, a voice session and a retry can spend
+
+An unauthenticated caller could start a run on another user's owned thread: both
+owner guards read `owner !== undefined`, so a named stranger was refused and the
+identity-less caller was not. That admits second-order prompt injection — the
+injected row persists and is read into the model context on the victim's NEXT
+turn, with the victim's tools — plus victim-billed inference and, under
+`onConcurrentRun: "replace"`, termination of their in-flight run. The docblock
+asserted the opposite ("the owner is immutable"), and the test that covered it
+blessed the gap in its comment. The match is exact in both directions now: no
+owner is an identity that owns nothing, not a wildcard.
+
+`agent.asTool` had no depth bound. Each child gets a distinct thread key, so the
+per-thread run-queue cap never applied across a delegation chain, and a
+timed-out parent did not terminate its child — it reported "did not finish"
+while the subtree kept growing and billing. Depth rides the run input; the
+refusal is returned as the tool's answer rather than thrown, so the parent's
+model answers with what it has instead of failing and retrying its durable step.
+
+A voice session had no bound of any kind — no turn cap, no text-frame cap, and
+an audio overflow that reset its own counter, so the utterance limit bounded
+peak memory rather than throughput and never closed the socket. Voice turns also
+ignored the agent's `compaction` config while text turns honoured it, on a
+thread the two share, and the greeting was re-synthesised on every reconnect.
+Turns, text length and audio are capped; wall-clock is not, deliberately — a
+hibernating socket is not billed for time, and every paid action now is.
+
+The scheduler's `recordRetry` wrote the time index while skipping every guard
+`handleSchedule` enforces on the same value, two hundred lines below a comment
+explaining that anything past 15 digits breaks the index's lexical ordering and
+anything at 1e21 "would corrupt the index outright". A raised `maxAttempts`
+walked the backoff ladder past both: the job sorted above every alarm bound and
+was never dispatched again, then `parseInt` on the exponential form armed the
+alarm at epoch millisecond 8 — permanently in the past, so the object re-woke
+forever. Over-cap retries dead-letter now rather than firing at the cap, which
+would park the job in year 33658 with no `/dead` row and nothing to act on.
+
+A leaked workpool slot had no reset path in any shipped surface: `/status`
+diagnosed the wedge perfectly and offered no way out. An admin release route
+proxies the DO's existing `/complete`; a lease was the wrong shape, since it
+would steal the slot of a job that is legitimately running long.
+
+Also: `/list` and `/dead` are cursored and their clients walk every page, so a
+dedupe check past 100 pending jobs stops silently scheduling duplicates and the
+dead-letter panel stops hiding the backlog it exists to show; a cron trigger
+that matches no registered key warns instead of reporting success; and a queue
+message is only recorded as dead-lettered when a dead-letter queue exists.
+
+One bad subscription used to abort an entire client reconnect — nothing
+resubscribed, offline mutations never flushed, streams never resumed — while the
+status still read `connected`. Args are encoded once at subscribe time, the way
+the shape path already did it, and a decode failure reaches the subscription's
+`onError` instead of escaping the socket listener. Subscribers are no longer
+deduped by callback identity, so two consumers sharing one function reference
+get two registrations rather than the first unsubscribe silently killing the
+second.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(auth): key the rate limiter on a header the client cannot write
+
+better-auth reads only `x-forwarded-for`, which Cloudflare does not set and any
+client can send, and nothing in the repo configured otherwise. Every request
+whose XFF was not exactly one bare IP collapsed onto a single shared bucket, so
+three clients behind any proxy chain exhausted it and a fourth was denied
+sign-in on its first attempt — at 3 requests per 10 seconds, app-wide. The same
+package already refuses that header elsewhere as "attacker-chosen" and reads
+`cf-connecting-ip` instead; the limiter now expresses that same policy through
+better-auth's own configuration rather than a second one beside it.
+
+Reading a header the client cannot write closes both directions of the hazard,
+which matters because it was not possible to verify whether the edge appends to
+a client-supplied XFF (shared-bucket denial of service) or replaces it (limiter
+bypass). When no trustworthy IP resolves at all, a catch-all rule applies a
+coarse global flood cap instead — a shared bucket cannot be sized for one
+client, and dropping the limit discards the protection entirely.
+
+A `javascript:` OAuth `redirectURI` reached `location.assign` in the auth app's
+origin. The surrounding docblock argues correctly that the value is
+authorization-server-vetted against registered redirect URIs — a claim about
+HOST trust that says nothing about scheme.
+
+A storage-rule table and a shape both gained a registration-time refusal rather
+than a silent wrong answer. A `defineShape` over a `.memory()` table seeded once
+and then never updated: the poke path replicates from the changelog and a memory
+table is deliberately never appended to it, so the diff could not move. Making
+memory tables pokeable is not implementable correctly — without the log nothing
+records which keys LEFT, so a presence row for a departed user would survive on
+the client forever — and the same root cause let the resume path vouch for a
+table it has no record of, so a reconnecting client kept its pre-disconnect
+state indefinitely. Both refuse now, and the docs page that promised live
+queries "work exactly as they do on a durable one" says what is true.
+
+A hard delete followed by a re-insert of the same id in one poke window emitted
+no delta, because the changelog reports only the latest op per id and the
+diff's never-replicated exemption assumed a sole op.
+
+The remaining half is coverage for controls that had none. Deleting the RLS
+filter from the legacy reader, or the masking from `.filter()`/`.first()`, left
+the entire server suite green; so did removing the bulk-insert methods from the
+writer guard's gated list. Those gaps are closed with tests proven RED by
+mutation, and the gated-method list is now a `Record` over the writer interface,
+so a new table-first method fails to compile until it is classified. The DO
+admin read dispatch table was reachable but never driven by a test, leaving its
+prototype-pollution guard with a permanently-dead branch. And the playground's
+tests, excluded from CI as a hang, were a 15-second cold codegen against a
+10-second local timeout — they run now.
+* a `defineShape` over a `.memory()` table is refused at
+subscribe with `SHAPE_MEMORY_TABLE`, and a read of a memory table marks its
+subscription un-resumable. Both were previously silent wrong answers.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(cli): keep the provisioned config in scope for the artifacts built from it
+
+`lunora build --emit-bindings` handed an IaC deployer a manifest describing the
+UN-provisioned config — the exact failure the function's own docblock says it
+exists to prevent ("reading it earlier would describe the requirements the
+project happened to have written down, not the ones the bundle actually has").
+The dry-run rollback added last round restored the file before the artifact
+steps ran, so a project with a declared nightly cron emitted `"crons": []` for
+Terraform and the deployed worker never fired it. Two fixes in one branch
+cancelled out. The rollback now belongs to whoever produces the last artifact,
+so the manifest and the wrangler bundle are both built inside the provisioned
+window.
+
+`lunora add --from <dir>` skipped the untrusted-source confirmation that
+`--source` triggers, and the same predicate was duplicated one file over, so
+fixing only the reported site would still have written a files-only item
+silently. One shared check covers both.
+
+Registry output stripped C0/C1 controls but not the Unicode bidirectional
+overrides that are the actual terminal-spoofing vector, and `JSON.stringify`
+carried them through binding and env-var values regardless. There were also two
+subtly different strippers in one directory, one citing the other; there is one
+now, at the render boundary — deliberately not at parse time, because that
+layer's output is WRITTEN to the user's manifests and it validates by rejection
+rather than silent mutation.
+
+Also: an export whose atomic rename failed left the complete plaintext dump in
+its staging file; the `d1-to-hyperdrive` self-migration guard compared raw URLs,
+so a trailing slash walked past it while both legs resolved to one worker; and
+`lunora verify --format json` reported only the first platform diagnostic from
+the documented CI gate.
+
+A signed image URL decoded to a transform the signer never authorised: values
+were not escaped, so a user-influenced `background` spliced new keys under a
+valid signature. The sibling builder in the same directory already guarded this.
+Escaping the separators fixes it without rejecting the legitimate overlay URLs
+that guard would have refused.
+
+Every live studio panel stopped streaming after an admin-token change: the
+subscription effect omitted `client` from its deps under a comment claiming it
+was provider-stable, while a docblock in the same file said the opposite. And
+`vite build` continued after codegen threw, bundling the previous run's
+generated output — the plugin failed the build on the softer signal (an ERROR
+advisory) while the hard one was log-only.
+
+Also in the studio: "Delete N matching" could send a predicate-free request
+during the search debounce, because the button read the raw search box while the
+request sent the debounced one — and the server accepted it as a full-table
+delete, indistinguishable from `clearTable`. Both halves are closed. The
+operation tape now names what a truncate or a restore actually targeted, the
+"Apply index" button says Copy because that is what it does, and the flags
+documented as making the studio "read-only" now say they hide controls, which is
+all they ever did.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* ci: auto-review pull requests stacked on the audit branch
+
+CodeRabbit only auto-reviews a pull request whose base branch is listed in
+`reviews.auto_review.base_branches`; every other base gets a "Review skipped"
+notice and a manual `@coderabbitai review` runs against an empty file set. The
+audit fixes ship as one pull request per subsystem stacked on
+`fix/audit-round-5` so each is a bounded, reviewable diff, which means that
+branch has to be on the list.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix: close the review findings on rounds 5-6
+
+Sixteen review threads plus the two the description left open, each with a
+regression test verified RED against the unfixed code.
+
+The two open ones:
+
+`.meta()` cleared the unbounded-string lint and enforces nothing. The
+predicate matched source TEXT, so `.meta({ schema: { maxLength: 200 } })`
+cleared it — and so did the bare substrings `length`/`max` anywhere in the
+initializer: a comment, a nested field NAME, a default string. Detection is
+now an AST walk over the validator chain, and the 132 call sites across
+examples, templates and the registry that believed they were bounded now use
+`.max(n)`, which emits the same JSON Schema fragment AND enforces it.
+`v.string().max(<literal>)` is modelled in the AOT args compiler rather than
+declining the node, so adding the bound the advisor asks for does not cost
+the function its fast path; a repeated bound keeps the tighter one.
+
+`describeObject` skipped the truncation every sibling branch applies. A JSON
+body carrying its own `constructor` property is a plain object whose OWN
+`constructor.name` is whatever was sent, so a client sized the validation
+error it got back, and that lands in logs.
+
+Also fixed:
+
+- The staged export wrote at 0666-before-umask and was world-readable for the
+  length of the dump.
+- The registry display sanitiser passed LF through, so a manifest value could
+  forge its own CLI output lines.
+- The custom-source confirmation named `--source` when the resolver reads
+  `--from`, asking the operator to confirm a place nothing read from.
+- A voice control frame was JSON-parsed in full before its size was checked,
+  so a 32MiB message was parsed once per frame on the DO's single thread.
+- `cf-connecting-ip` was trusted off Cloudflare, where nothing sets it:
+  rotate the header, get a fresh rate-limit bucket. Gated on the runtime;
+  declared proxies still get `x-forwarded-for`.
+- Import validation used `key in shape`, so a snapshot key named
+  `constructor` read as declared and reached the writer unvalidated.
+- A dead-letter park that got its row durable and then failed to clear the
+  pending rows had its time-index claim restored, re-dispatching a job the
+  dead-letter says is finished.
+- A shape joining a `.memory()` relation target froze the same way a
+  memory-backed shape table does; the walk now rejects both.
+- A `staged: true` search index over an empty table refused every query
+  forever, because nothing ever wrote its progress row.
+- The bigint re-encoding pass scanned the whole table on every ctx-db — per
+  request on a Hyperdrive binding — because completion was never recorded,
+  and its length-only predicate skipped every negative 39-digit value,
+  leaving one stored as decimal text that `eq` no longer matches.
+- Studio's advisory-index metadata accepted `[null]`/`[42]` as fields, and
+  its operation tape threw on a null import row before the RPC could
+  validate it.
+- Two docblocks in `value-codec.ts` described symbols that had moved out, so
+  IDE hover attributed them to `sqliteEncode`.
+- The `__agg_` companion is a DOUBLE, so it is exact per contribution, not
+  per total; the aggregate refusal said otherwise.
+- The CodeQL suppression named `js/unsafe-code-construction`; the alert is
+  `js/bad-code-sanitization`.
+
+`__lunora_*` tables are excluded from the studio table browser, and a
+pre-existing `lint:types` failure in `@lunora/client`'s test is fixed.
+* a `v.string().meta({ schema: { maxLength: n } })` never
+bounded anything at runtime and now reads as unbounded to the
+`unbounded_string_arg` lint. Replace it with `.max(n)`, which emits the same
+schema fragment and enforces the length.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_019dhrsvdiJJuDAMjmiKVrae
+
+* test(client): type the dead-jobs fetch mock's request input
+
+`fetch`'s input is `string | URL | Request`; the mock narrowed only the `URL`
+case and called `.includes` on the rest, which fails `tsc` on the `Request`
+member. Only a URL string can be substring-matched for the cursor.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* ci: list every audit chain branch as a CodeRabbit base
+
+Each audit-round group PR is based on the previous group's branch so the
+reviewer sees one bounded diff; CodeRabbit auto-reviews only the bases on
+this list.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* ci: run the lint, test and scan workflows for PRs based on fix branches
+
+The audit fixes ship as a chain of pull requests, each based on the previous
+`fix/*` branch so a reviewer sees one bounded diff. The lint, test, CodeQL and
+dependency-review workflows only triggered for pull requests targeting the
+release branches, so every PR in the chain was green with nothing but the
+metadata checks. A `fix/**` base pattern runs the real gates for them.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* ci: run an app's codegen before its tests
+
+The vis `test` and `test:coverage` targets depended only on upstream builds,
+while the lint targets also depend on the app's own `codegen`. The playground's
+`lunora/_generated` is gitignored, so a fresh CI checkout had none of it and
+its tests failed on a missing module while passing locally, where the directory
+already existed.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* ci: match any audit-chain branch as a CodeRabbit base
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* rounds 5-6 — session expiry, global bigint ordering, MySQL collation, agent bounds, CLI safety, SDK parity ([#544](https://github.com/anolilab/lunora/issues/544)) ([811de77](https://github.com/anolilab/lunora/commit/811de77004306ce4556a63b045628a9de2244202)), closes [#545](https://github.com/anolilab/lunora/issues/545)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.29
+
+## @lunora/values [1.0.0-alpha.36](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.35...@lunora/values@1.0.0-alpha.36) (2026-09-01)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.28
+
+## @lunora/values [1.0.0-alpha.35](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.34...@lunora/values@1.0.0-alpha.35) (2026-09-01)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.27
+
+## @lunora/values [1.0.0-alpha.34](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.33...@lunora/values@1.0.0-alpha.34) (2026-08-30)
+
+### ⚠ BREAKING CHANGES
+
+* **values,server:** `.output()` rejects keys the validator does not declare — add
+them, or call `.strip()` to keep dropping them. `.output()` followed by
+`.stream()` no longer type-checks.
+
+
+Claude-Session: https://claude.ai/code/session_019dhrsvdiJJuDAMjmiKVrae
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **values,server:** reject undeclared keys on the way out, and refuse output on a stream ([#531](https://github.com/anolilab/lunora/issues/531)) ([6532aab](https://github.com/anolilab/lunora/commit/6532aab31e678ab4117c676bc546a8edcd6813d0))
+
+## @lunora/values [1.0.0-alpha.33](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.32...@lunora/values@1.0.0-alpha.33) (2026-08-29)
+
+### ⚠ BREAKING CHANGES
+
+* eleven packages now declare peerDependencies. Consumers that
+relied on those packages resolving through hoisting must install them; the
+alternative was shipping types that fail to resolve off this repo's node_modules.
+
+`@lunora/workflow` is an optional peer of `@lunora/runtime`, so packem inlines
+its types rather than importing them — the published `@lunora/runtime` carries no
+`@lunora/workflow` dependency, as its source comments already promised.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AWDgSnuBJaeQHfEitB2zeL
+
+* fix: satisfy eslint and the template matrix after the packem gate
+
+Two CI failures from making packem warnings fatal, each a gate that the local
+packem sweep does not cover.
+
+`@lunora/advisor` back to a real dependency on `@lunora/errors`. `ae-metrics.ts`
+imports `LunoraError` as a VALUE, and import/no-extraneous-dependencies requires
+that for anything under `src/` regardless of whether the module reaches the
+bundle. packem cannot see it because that module's value exports are
+quarantined — `src/index.ts` re-exports only its types — so the throwing code is
+tree-shaken out. The two rules disagree by construction; the packem side is now a
+commented `unused` exclusion that says which condition would end it.
+
+`@lunora/workflow` becomes a REQUIRED peer of `@lunora/runtime`. As an optional
+peer it was auto-installed anyway, and every one of the twelve templates then
+resolved `@lunora/workflow` from the npm REGISTRY instead of this checkout — the
+scaffold matrix builds its local-tarball map from required peers only, on the
+assumption that optional ones are never pulled in. Forcing the type to inline
+instead (`resolveExternals.exclude`) does not work: that option governs the JS
+bundle, and the declaration build has its own resolver, so the import survived.
+A required peer matches the other seven packages here and keeps the type
+resolvable for consumers.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AWDgSnuBJaeQHfEitB2zeL
+
+### Build System
+
+* ship .mjs everywhere and make packem warnings fatal ([#526](https://github.com/anolilab/lunora/issues/526)) ([b3eaacc](https://github.com/anolilab/lunora/commit/b3eaacc5a31fe4634a5f4a6c59fda6fbbc8315e1))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.26
+
+## @lunora/values [1.0.0-alpha.32](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.31...@lunora/values@1.0.0-alpha.32) (2026-08-28)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.25
+
 ## @lunora/values [1.0.0-alpha.31](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.30...@lunora/values@1.0.0-alpha.31) (2026-08-26)
 
 ### Performance Improvements

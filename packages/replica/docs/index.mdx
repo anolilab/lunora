@@ -118,46 +118,96 @@ interface MyEvents {
 
 const emitter = new EventEmitter<MyEvents>();
 
-emitter.on("data", (payload) => console.log(payload.id));
+// `on` is keyed to the map, so an unknown event name is a compile error.
+// It returns an unsubscribe function; `off(event, handler)` is the same thing.
+const unsubscribe = emitter.on("data", (payload) => console.log(payload.id));
+
 emitter.emit("data", { id: "abc", value: 42 });
 
-// Wildcard listener — receives every event:
-emitter.on("*", (event, payload) => console.log(event, payload));
+// Wildcard listener — `onAny` (there is no `"*"` event name), also returning
+// an unsubscribe function; `offAny(handler)` is the explicit form.
+emitter.onAny((event, payload) => console.log(event, payload));
 
-// One-shot:
-emitter.once("error", (payload) => console.error(payload.message));
+unsubscribe();
 ```
+
+There is no `once`: unsubscribe from inside the handler with the function `on`
+returned.
 
 ## defineEvents
 
-Declare a family of typed events and their payloads:
+Declare a family of typed events and their payloads. The definition is
+**nested**: the outer keys are namespaces, the inner keys are event names, and
+each event's value is its payload schema (a `@lunora/values` validator, or a
+plain descriptor). Every event's `type` is the namespace-qualified
+`"<namespace>.<name>"`.
 
 ```ts
 import { defineEvents } from "@lunora/replica";
+import { v } from "@lunora/server";
 
-const todoEvents = defineEvents({
-    "todo:created": (id: string, title: string) => ({ id, title, done: false }),
-    "todo:toggled": (id: string) => ({ id }),
-    "todo:deleted": (id: string) => ({ id }),
+const events = defineEvents({
+    todo: {
+        created: v.object({ id: v.string(), title: v.string() }),
+        deleted: v.object({ id: v.string() }),
+        toggled: v.object({ id: v.string() }),
+    },
 });
 
-const entry = source.applyEvent("todo:created", todoEvents["todo:created"]("1", "Write docs"));
+// Each leaf is a factory returning an InputEvent.
+const entry = events.todo.created({ id: "1", title: "Write docs" });
+//    ^ { type: "todo.created", payload: { id, title }, timestamp: number }
+
+// Type-only introspection — a map of qualified type → payload shape.
+type TodoEvents = typeof events._types;
+//   ^ { "todo.created": { id: string; title: string }; "todo.deleted": …; … }
 ```
 
 ## EventLogDO (Durable Object)
 
-A Durable Object that persists events to DO SQLite storage:
+A Durable Object that persists events to DO SQLite storage.
+
+Re-export the class from your **worker entry** so Wrangler can find it:
 
 ```ts
-// In wrangler.jsonc, export this class:
+// src/worker.ts
 export { EventLogDO } from "@lunora/replica";
+```
 
-// From a mutation or action:
-const client = new EventLogDOClient({ namespace: "my-app" });
-const entry = await client.append({ type: "order-placed", payload: { orderId: "123" } });
+Then declare the binding in `wrangler.jsonc`. The DO uses `state.storage.sql`,
+so its migration **must** use `new_sqlite_classes` — with `new_classes` the
+instance gets a key-value store with no `.sql` and every request fails at the
+first statement:
 
-// Query historical events:
-const events = await client.query({ type: "order-placed", limit: 50 });
+```jsonc
+{
+    "durable_objects": {
+        "bindings": [{ "name": "EVENT_LOG_DO", "class_name": "EventLogDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["EventLogDO"] }],
+}
+```
+
+`EventLogDOClient` wraps the DO's `fetch()` RPC surface. Its only option is
+`fetch` — the function that dispatches a request to the instance you want, which
+is where the namespace and instance id are chosen:
+
+```ts
+const client = new EventLogDOClient({
+    fetch: (request) => env.EVENT_LOG_DO.get(env.EVENT_LOG_DO.idFromName("my-app")).fetch(request),
+});
+
+// `append` takes an ARRAY and returns the entries with their assigned `seq`s.
+// Pass `{ batchId }` to make a retry idempotent.
+const [entry] = await client.append([{ type: "order.placed", payload: { orderId: "123" } }], { batchId: "order-123" });
+
+// The log is append-only and ordered, so reads are by sequence number — there
+// is no filter-by-type query. `getSince` returns ONE bounded page (500 entries
+// by default, 1000 max); keep passing the returned `cursor` back while
+// `truncated` is true to walk the whole log.
+const { entries, truncated, cursor } = await client.getSince(entry.seq);
+const page = await client.getSince(0, 50);
+const size = await client.getSize();
 ```
 
 ## SubscriptionManager
@@ -185,19 +235,32 @@ unsub();
 
 ## eventsContext
 
-Wires the event-sourcing runtime into a Lunora action context, so events are
-available to your actions:
+Wires the event log into a Lunora procedure context, so appends are available to
+your handlers.
+
+`eventsContext(client)` takes a configured `EventLogDOClient` and returns a
+**middleware**, so it goes on `.use(...)`, not around the handler. It attaches
+one member, `ctx.events`, which is the client itself — so `append` takes the
+same **array** of input events as `client.append`.
 
 ```ts
-import { eventsContext } from "@lunora/replica";
+import { EventLogDOClient, eventsContext } from "@lunora/replica";
 
-// In your schema or action definition:
-export const myAction = action({
-    args: {/* ... */},
-    handler: eventsContext(async (ctx, args) => {
-        // ctx.events.source — the EventSource
-        // ctx.events.append(type, payload) — shorthand
-        await ctx.events.append("user-action", { action: args.type });
-    }),
+import { action, v } from "@/lunora/_generated/server";
+
+const client = new EventLogDOClient({
+    fetch: (request) => env.EVENT_LOG_DO.get(env.EVENT_LOG_DO.idFromName("my-app")).fetch(request),
 });
+
+export const myAction = action
+    .input({ type: v.string() })
+    .use(eventsContext(client))
+    .action(async ({ ctx, args }) => {
+        const [entry] = await ctx.events.append([{ type: "user.action", payload: { action: args.type } }]);
+
+        return entry;
+    });
 ```
+
+The middleware is unopinionated about the context it extends, so the same
+`.use(eventsContext(client))` works on a `query`, `mutation`, or `action`.

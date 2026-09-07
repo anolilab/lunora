@@ -13,8 +13,10 @@ organization, invite a member, then ban a user from the admin panel.
   Lunora's RPC router.
 - Pre-deploy schema setup with `ensureMigrated(auth)` against the D1
   binding (use `compileMigrationsSql` + `wrangler d1 execute` in CI).
-- An org-scoped table (`documents`) with handlers that gate by membership
-  via the better-auth `getActiveMember` endpoint.
+- A `documents` table whose handlers scope every read and write to the
+  session's own `ownerId` — and a note in `lunora/documents.ts` on why the
+  stricter _membership_ check has to live in an `httpAction`, where the inbound
+  `Headers` `getActiveMember` authorizes from are actually available.
 - Browser flows: sign-up, create-org, invite-member, admin ban/unban.
 
 ## Run it
@@ -45,7 +47,7 @@ Before deploying to a real Cloudflare account:
 ```
 lunora/
   auth.ts                 createAuth({ plugins: [organization(), admin()] })
-  documents.ts            org-scoped query + mutation, gated by membership
+  documents.ts            query + mutation scoped to the session's ownerId
   schema.ts               documents table (auth tables are managed by better-auth)
   _generated/             lunora codegen output (api, dataModel, server, shard, drizzle)
 src/

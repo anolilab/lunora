@@ -142,7 +142,10 @@ describe("backfillSearch admin RPC", () => {
             return rows.map((document) => document["title"]);
         };
 
-        await expect(search()).resolves.toStrictEqual([]);
+        // A staged index that covers none of the table refuses rather than
+        // answering from an empty prefix: `staged` opts INTO the partial state,
+        // it does not make a partial answer correct.
+        await expect(search()).rejects.toThrow(/still backfilling/u);
 
         const shard = new SearchShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.backfillSearch, { maxPages: 5 }, ADMIN_TOKEN));

@@ -100,6 +100,34 @@ describe("createWorker — cron-jobs run endpoint", () => {
         expect(created).toStrictEqual([{ params: { region: "eu" } }]);
     });
 
+    it("starts a fresh instance on every cron run — the cron path deliberately passes no instance id", async () => {
+        expect.assertions(2);
+
+        // The scheduler path forwards its record id as the workflow instance id
+        // so an at-least-once re-fire is deduped. The cron path must NOT: there
+        // is no record id, every scheduled fire of the same expression is a
+        // distinct run, and this "Run now" trigger has to be repeatable on
+        // demand. A stable per-job key here would make the second fire a
+        // duplicate and silently never run again.
+        const created: { id?: string; params?: unknown }[] = [];
+        const env = {
+            WORKFLOW_DIGEST: {
+                create: async (options?: { id?: string; params?: unknown }) => {
+                    created.push(options ?? {});
+
+                    return { id: "wf-1" };
+                },
+            },
+        };
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, cronJobs: CRON_JOBS, shardDO: createShardSpy().namespace });
+
+        await worker.fetch(runRequest("nightly digest"), env, fakeContext);
+        await worker.fetch(runRequest("nightly digest"), env, fakeContext);
+
+        expect(created).toHaveLength(2);
+        expect(created.every((options) => options.id === undefined)).toBe(true);
+    });
+
     it("returns 404 for an unknown job name", async () => {
         expect.assertions(2);
 

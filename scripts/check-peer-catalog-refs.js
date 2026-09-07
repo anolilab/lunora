@@ -52,25 +52,36 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { workspaceGroups } from "./workspace-config.js";
+
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Workspace globs that hold publishable manifests (`templates/*` are standalone, not workspace members). */
-const WORKSPACE_DIRS = ["apps", "packages", "examples", "tests"];
-
-/** Every `<workspace-dir>/<name>/package.json` that exists, plus the repo root manifest. */
+/**
+ * Every `<workspace-dir>/<name>/package.json` that exists, plus the repo root
+ * manifest.
+ *
+ * The workspace directories come from `pnpm-workspace.yaml` rather than a
+ * hardcoded list, and an unreadable one is fatal rather than skipped: this guard
+ * reports success by finding nothing, so "walked no directories" and "found no
+ * offenders" printed the same tick. (`templates/*` are standalone projects, not
+ * workspace members, and are correctly absent for that reason.)
+ */
 const manifestPaths = () => {
     const found = [join(rootDir, "package.json")];
 
-    for (const parent of WORKSPACE_DIRS) {
+    for (const parent of workspaceGroups()) {
         const parentPath = join(rootDir, parent);
 
         let entries = [];
 
         try {
             entries = readdirSync(parentPath);
-        } catch {
-            continue;
+        } catch (error) {
+            console.error(`❌ pnpm-workspace.yaml declares "${parent}/*" but ${parent}/ could not be read: ${error.message}`);
+            process.exit(1);
         }
+
+        let inGroup = 0;
 
         for (const entry of entries) {
             const manifest = join(parentPath, entry, "package.json");
@@ -78,10 +89,16 @@ const manifestPaths = () => {
             try {
                 if (statSync(manifest).isFile()) {
                     found.push(manifest);
+                    inGroup += 1;
                 }
             } catch {
                 // Not a package directory — skip.
             }
+        }
+
+        if (inGroup === 0) {
+            console.error(`❌ pnpm-workspace.yaml declares "${parent}/*" but no ${parent}/*/package.json exists — nothing was checked for that group.`);
+            process.exit(1);
         }
     }
 
@@ -89,8 +106,9 @@ const manifestPaths = () => {
 };
 
 const offenders = [];
+const manifests = manifestPaths();
 
-for (const manifest of manifestPaths()) {
+for (const manifest of manifests) {
     let pkg;
 
     try {
@@ -127,4 +145,4 @@ if (offenders.length > 0) {
     process.exit(1);
 }
 
-console.log("✅ No peerDependency references a catalog: specifier.");
+console.log(`✅ No peerDependency references a catalog: specifier (${manifests.length} manifests read).`);

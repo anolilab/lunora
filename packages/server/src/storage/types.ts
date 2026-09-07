@@ -16,10 +16,17 @@
 import type { Permission, Role } from "../rls/types";
 
 /**
- * Operations a storage rule can gate. `read` covers `download` / `getMetadata`
- * / `getSignedUrl` / `getUrl`; `write` covers `store` / `generateUploadUrl`;
- * `delete` is `delete`; `list` is a prefix listing (governed via the file
- * browser / admin path, not `ctx.storage` which has no `list`).
+ * Operations a storage rule can gate. `read` covers `download` / `getMetadata` /
+ * `head` / `getSignedUrl` / `getUrl`; `write` covers `store` /
+ * `generateUploadUrl`; `delete` covers `delete` and the `deleteAfterCommit`
+ * enqueue; `list` is a prefix listing.
+ *
+ * `list` governs `ctx.db.system.query("_storage")` — the object enumeration
+ * reachable from a handler — plus the file browser / admin path. It governs
+ * nothing on `ctx.storage`, which exposes no `list` (and `storageRules` drops
+ * any). Note the enumeration is additionally narrowed by the bucket's `read`
+ * rules, so a `read` prefix rule scopes what a handler can enumerate even with
+ * no `list` rule declared.
  */
 export type StorageOperation = "delete" | "list" | "read" | "write";
 
@@ -37,6 +44,7 @@ export interface StorageRuleContext<Context = unknown> {
     readonly auth: {
         readonly can: (permission: Permission | string) => boolean;
         readonly identity?: Record<string, unknown> | null;
+        /** Role labels from the identity's `roles` claim (see `PolicyContext.auth.roles`). */
         readonly roles: ReadonlyArray<string>;
         readonly userId: null | string;
     };
@@ -52,10 +60,26 @@ export interface StorageRule<Context = unknown> {
      * (`ctx.storage.bucketName`, or the bucket selected via `ctx.storage.bucket(name)`).
      * A rule only applies to operations on its own bucket. The unnamed bucket is
      * `"default"`. Also surfaced in the studio's access-rules view.
+     *
+     * Must name a bucket the request's storage can address, or the middleware
+     * throws `INTERNAL`: an unaddressable rule governs nothing, which leaves its
+     * operation open rather than locked down. Typed `string` rather than the
+     * generated `StorageBucketName` union deliberately — that union is not the
+     * set of registered buckets (it is seeded partly from these very rules), so
+     * narrowing to it would reject valid names and still admit typos. The
+     * runtime check in `./middleware` is the one that has the real set.
      */
     readonly bucket: string;
     readonly on: StorageOperation;
-    /** Optional key-prefix scope; the rule only governs keys under it. Absent ⇒ the whole bucket. */
+
+    /**
+     * Optional key-prefix scope; the rule only governs keys under it. Absent (or
+     * empty) ⇒ the whole bucket.
+     *
+     * Matched on a **path-segment boundary**: `users/1` governs `users/1` and
+     * `users/1/avatar.png`, but NOT `users/10/avatar.png`. A trailing slash is
+     * cosmetic — `users/1` and `users/1/` scope the same subtree.
+     */
     readonly prefix?: string;
     readonly when: (context: StorageRuleContext<Context>) => StorageRuleDecision;
 }

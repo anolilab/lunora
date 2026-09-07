@@ -5,7 +5,7 @@
 > next step. If anything in the "STOP conditions" section occurs, stop and
 > report — do not improvise. Your reviewer maintains `plans/README.md`.
 >
-> **Drift check (run first)**: `git diff --stat 207be1b63..HEAD -- packages/advisor/src/lints/static/workflow-duplicate-step-name.ts packages/advisor/src/workflows.ts packages/advisor/src/index.ts packages/codegen/src/discover-workflows.ts`
+> **Drift check (run first)**: `git diff --stat 207be1b63..HEAD -- packages/advisor/src/lints/static/workflow-duplicate-step-name.ts packages/advisor/src/workflows.ts packages/advisor/src/index.ts packages/codegen/src/discover/workflows.ts`
 > If any changed since this plan was written, compare the "Current state"
 > excerpts against the live code before proceeding; on a mismatch, treat it as
 > a STOP condition.
@@ -108,8 +108,8 @@ api-snapshots/advisor.api.md:1753-1756                              `workflowDup
 ### The feeder chain that exists only for this lint
 
 ```
-packages/codegen/src/discover-workflows.ts:81   stepsFromHandler(): WorkflowStepIR[]
-packages/codegen/src/discover-workflows.ts:187  steps: stepsFromHandler(argument)
+packages/codegen/src/discover/workflows.ts:81   stepsFromHandler(): WorkflowStepIR[]
+packages/codegen/src/discover/workflows.ts:187  steps: stepsFromHandler(argument)
 packages/codegen/src/ir.ts:562                  WorkflowIR.steps
 packages/codegen/src/ir.ts:631                  interface WorkflowStepIR
 packages/advisor/src/workflows.ts:16-23         interface AdvisorWorkflowStep
@@ -199,7 +199,7 @@ so semantic-release records the break.
 - `packages/advisor/__tests__/workflow-lints.test.ts` — drop the
   `describe("workflow_duplicate_step_name")` block (`:110-193`) and the import (`:7`)
 - `packages/advisor/docs/index.mdx:169` — drop the rule-table row
-- `packages/codegen/src/discover-workflows.ts` — drop `stepsFromHandler` and the
+- `packages/codegen/src/discover/workflows.ts` — drop `stepsFromHandler` and the
   `steps:` field it feeds
 - `packages/codegen/src/ir.ts` — drop `WorkflowStepIR` and `WorkflowIR.steps`
 - `api-snapshots/advisor.api.md` — **regenerated**, never hand-edited
@@ -258,7 +258,7 @@ shared across the three workflow lints.
 Drop `AdvisorWorkflowStep` and `AdvisorWorkflow.steps` from
 `packages/advisor/src/workflows.ts` (including the docblock repeating the false
 premise), then `stepsFromHandler` / `WorkflowIR.steps` / `WorkflowStepIR` from
-`packages/codegen/src/discover-workflows.ts` and `packages/codegen/src/ir.ts`.
+`packages/codegen/src/discover/workflows.ts` and `packages/codegen/src/ir.ts`.
 
 Before deleting each, re-confirm it has no other consumer:
 

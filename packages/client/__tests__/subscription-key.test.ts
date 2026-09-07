@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
 
+import { stableWireKey } from "../../../shared/wire-key";
 import type { SubscriptionState } from "../src/subscription";
 import { SubscriptionRegistry } from "../src/subscription";
 
-/** Minimal {@link SubscriptionState} carrying only the fields the registry keys on. */
+/**
+ * Minimal {@link SubscriptionState} carrying only the fields the registry keys
+ * on. `argsKey` is what `subscribe()` caches at registration time, and what the
+ * registry's key derivation reads — a double without it would key every state
+ * identically.
+ */
 const makeState = (id: string, fn: string, args: Record<string, unknown>, shardKey?: string): SubscriptionState =>
-    ({ args, fn: { __lunoraRef: fn }, id, shardKey }) as unknown as SubscriptionState;
+    ({ args, argsKey: stableWireKey(args), fn: { __lunoraRef: fn }, id, shardKey }) as unknown as SubscriptionState;
 
 /**
  * `SubscriptionRegistry.key` routes `args` through the shared `stableWireKey`
@@ -98,6 +104,27 @@ describe("subscriptionRegistry.remove", () => {
         expect(registry.get(SubscriptionRegistry.key("q", { limit: 10 }))).toBe(s2);
         expect(registry.getById("sub_2")).toBe(s2);
         expect(registry.getById("sub_1")).toBeUndefined();
+    });
+
+    it("removes a state whose caller mutated its args object after registering", () => {
+        expect.assertions(2);
+
+        const registry = new SubscriptionRegistry();
+        const args: Record<string, unknown> = { limit: 10 };
+        const state = makeState("sub_1", "q", args);
+
+        registry.add(state);
+
+        // `args` is the caller's own object, retained by reference. Re-deriving
+        // the key from it on remove would compute a DIFFERENT key here and leak
+        // the registration forever (and, for a RegExp, throw).
+        args.limit = 20;
+        args.pattern = /abc/;
+
+        expect(() => {
+            registry.remove(state);
+        }).not.toThrow();
+        expect(registry.get(SubscriptionRegistry.key("q", { limit: 10 }))).toBeUndefined();
     });
 
     it("removing the current state evicts its byKey slot", () => {

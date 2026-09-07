@@ -1,4 +1,4 @@
-import type { FunctionReference } from "@lunora/client";
+import type { FunctionReference, SubscriptionError } from "@lunora/client";
 import { get } from "svelte/store";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -69,6 +69,26 @@ describe(agentChat, () => {
         handle.teardown();
 
         expect(fake.unsubscribeSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it("forwards onError so a history or thread subscription error reaches the caller", () => {
+        // Without an error channel a session expiry left `messages` / `status`
+        // frozen at their last value with nothing surfaced.
+        const fake = createFakeClient();
+        const errors: SubscriptionError[] = [];
+
+        agentChat(fake.client, {
+            api: buildApi(),
+            onError: (error) => errors.push(error),
+            send: makeRef(SEND_REF) as FunctionReference<"mutation">,
+            threadKey: "t1",
+        });
+
+        for (const call of fake.subscribeCalls) {
+            call.options.onError?.({ code: "UNAUTHORIZED", message: `expired:${call.functionPath}` });
+        }
+
+        expect(errors.map((error) => error.message).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([`expired:${MESSAGES_REF}`, `expired:${THREAD_REF}`]);
     });
 
     it("accumulates in-flight token deltas into streamingText, then clears once the turn persists", async () => {

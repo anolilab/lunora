@@ -1,15 +1,16 @@
 "use client";
 
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 
-import { signInAnonymously } from "../core/anonymous";
+import { createAnonymousController } from "../core/anonymous";
 import { createBackupCodeSignInController } from "../core/backup-codes";
 import { queryParameter } from "../core/browser-location";
+import { viewHref } from "../core/config";
 import { createEmailOtpController } from "../core/email-otp";
 import { isFlowEnabled } from "../core/flow-gate";
 import { createForgotPasswordController } from "../core/forgot-password";
-import { LAST_METHOD_EMAIL, LAST_METHOD_MAGIC_LINK, readLastLoginMethod } from "../core/last-login-method";
+import { LAST_METHOD_EMAIL, LAST_METHOD_MAGIC_LINK, lastLoginMethodStore } from "../core/last-login-method";
 import { createMagicLinkController } from "../core/magic-link";
 import { createResetPasswordController } from "../core/reset-password";
 import { createResetPasswordOtpController } from "../core/reset-password-otp";
@@ -23,15 +24,20 @@ import { AuthCard, AuthDivider, AuthLink, Field, FormBanner, LastUsedBadge, Pass
 import { useAuthUI } from "./provider";
 import { useController } from "./use-controller";
 
-/** Guest sign-in, when the `anonymous` plugin is on. */
+/**
+ * Guest sign-in, when the `anonymous` plugin is on. The in-flight state (and the
+ * double-click guard behind it) belongs to `createAnonymousController`.
+ */
 const AnonymousButton = (): ReactElement => {
     const context = useAuthUI();
+    const [state, actions] = useController(createAnonymousController);
 
     return (
         <button
             className="lunora-auth-button lunora-auth-button--secondary"
+            disabled={state.status === "submitting"}
             onClick={() => {
-                void signInAnonymously(context);
+                void actions.signIn();
             }}
             type="button"
         >
@@ -41,23 +47,30 @@ const AnonymousButton = (): ReactElement => {
 };
 
 interface SignInCardProps {
+    /** Defaults to the configured forgot-password route; see `viewPaths.base`. */
     forgotPasswordHref?: string;
+    /** Defaults to the configured sign-up route; see `viewPaths.base`. */
     signUpHref?: string;
 }
 
-const SignInCard = ({ forgotPasswordHref = "/forgot-password", signUpHref = "/sign-up" }: SignInCardProps = {}): ReactElement => {
+const SignInCard = ({ forgotPasswordHref, signUpHref }: SignInCardProps = {}): ReactElement => {
     const context = useAuthUI();
     const { localization: t, social } = context;
     const [state, actions] = useController(createSignInController);
     const pending = state.status === "submitting";
-    // Read once per render rather than in an effect: it is a cookie, it is
-    // available before the first paint, and it only picks a badge.
-    const lastUsed = readLastLoginMethod();
+    // Read after hydration, not during render: the server has no cookie, so a
+    // render-time read is a hydration mismatch. See `lastLoginMethodStore`.
+    const lastUsedAfterHydration = useSyncExternalStore(
+        lastLoginMethodStore.subscribe,
+        lastLoginMethodStore.getSnapshot,
+        lastLoginMethodStore.getServerSnapshot,
+    );
+    const lastUsed = context.plugins.lastLoginMethod ? lastUsedAfterHydration : undefined;
 
     return (
-        <AuthCard footer={context.signUp ? <AuthLink href={signUpHref}>{t.noAccount}</AuthLink> : undefined} title={t.signIn}>
+        <AuthCard footer={context.signUp ? <AuthLink href={signUpHref ?? viewHref(context, "signUp")}>{t.noAccount}</AuthLink> : undefined} title={t.signIn}>
             <SocialButtons
-                lastUsed={context.plugins.lastLoginMethod ? lastUsed : undefined}
+                lastUsed={lastUsed}
                 onSelect={(provider) => {
                     void signInWithSocial(context, provider);
                 }}
@@ -75,12 +88,9 @@ const SignInCard = ({ forgotPasswordHref = "/forgot-password", signUpHref = "/si
                     <FormBanner error={state.formError} />
                     <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
                     <FormField actions={actions} autoComplete="current-password" field="password" label={t.passwordLabel} state={state} type="password" />
-                    <AuthLink href={forgotPasswordHref}>{t.forgotPasswordLink}</AuthLink>
+                    <AuthLink href={forgotPasswordHref ?? viewHref(context, "forgotPassword")}>{t.forgotPasswordLink}</AuthLink>
                     <SubmitButton pending={pending}>
                         {t.signIn}
-                        {/* better-auth records a password sign-in as "email", so
-                            without this the badge is invisible for the most
-                            common route there is. */}
                         {lastUsed === LAST_METHOD_EMAIL ? <LastUsedBadge /> : null}
                     </SubmitButton>
                 </form>
@@ -90,10 +100,11 @@ const SignInCard = ({ forgotPasswordHref = "/forgot-password", signUpHref = "/si
 };
 
 interface SignUpCardProps {
+    /** Defaults to the configured sign-in route; see `viewPaths.base`. */
     signInHref?: string;
 }
 
-const SignUpCard = ({ signInHref = "/sign-in" }: SignUpCardProps = {}): ReactElement | null => {
+const SignUpCard = ({ signInHref }: SignUpCardProps = {}): ReactElement | null => {
     const context = useAuthUI();
     const { localization: t, social } = context;
     const [state, actions] = useController(createSignUpController);
@@ -107,7 +118,7 @@ const SignUpCard = ({ signInHref = "/sign-in" }: SignUpCardProps = {}): ReactEle
     }
 
     return (
-        <AuthCard footer={<AuthLink href={signInHref}>{t.haveAccount}</AuthLink>} title={t.signUp}>
+        <AuthCard footer={<AuthLink href={signInHref ?? viewHref(context, "signIn")}>{t.haveAccount}</AuthLink>} title={t.signUp}>
             {/*
              * Social buttons belong on sign-up too — OAuth is a sign-up path, not
              * just a sign-in one, and omitting them here sends new users through a
@@ -134,16 +145,19 @@ const SignUpCard = ({ signInHref = "/sign-in" }: SignUpCardProps = {}): ReactEle
 };
 
 interface ForgotPasswordCardProps {
+    /** Defaults to the configured reset-password route; see `viewPaths.base`. */
     resetPath?: string;
+    /** Defaults to the configured sign-in route; see `viewPaths.base`. */
     signInHref?: string;
 }
 
-const ForgotPasswordCard = ({ resetPath, signInHref = "/sign-in" }: ForgotPasswordCardProps = {}): ReactElement => {
-    const { localization: t } = useAuthUI();
-    const [state, actions] = useController((context) => createForgotPasswordController(context, { resetPath }), [resetPath]);
+const ForgotPasswordCard = ({ resetPath, signInHref }: ForgotPasswordCardProps = {}): ReactElement => {
+    const context = useAuthUI();
+    const t = context.localization;
+    const [state, actions] = useController((context_) => createForgotPasswordController(context_, { resetPath }), [resetPath]);
 
     return (
-        <AuthCard footer={<AuthLink href={signInHref}>{t.backToSignIn}</AuthLink>} title={t.forgotPassword}>
+        <AuthCard footer={<AuthLink href={signInHref ?? viewHref(context, "signIn")}>{t.backToSignIn}</AuthLink>} title={t.forgotPassword}>
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
@@ -200,21 +214,29 @@ const ResetPasswordOtpCard = (): ReactElement => {
 };
 
 interface MagicLinkCardProps {
+    /** Defaults to the configured sign-in route; see `viewPaths.base`. */
     signInHref?: string;
 }
 
-const MagicLinkCard = ({ signInHref = "/sign-in" }: MagicLinkCardProps = {}): ReactElement | null => {
-    const lastUsed = readLastLoginMethod();
+const MagicLinkCard = ({ signInHref }: MagicLinkCardProps = {}): ReactElement | null => {
     const context = useAuthUI();
     const { localization: t } = context;
     const [state, actions] = useController(createMagicLinkController);
+    // Read after hydration, not during render: the server has no cookie, so a
+    // render-time read is a hydration mismatch. See `lastLoginMethodStore`.
+    const lastUsedAfterHydration = useSyncExternalStore(
+        lastLoginMethodStore.subscribe,
+        lastLoginMethodStore.getSnapshot,
+        lastLoginMethodStore.getServerSnapshot,
+    );
+    const lastUsed = context.plugins.lastLoginMethod ? lastUsedAfterHydration : undefined;
 
     if (!isFlowEnabled(context, "magicLink", "MagicLinkCard")) {
         return null;
     }
 
     return (
-        <AuthCard footer={<AuthLink href={signInHref}>{t.backToSignIn}</AuthLink>} title={t.magicLink}>
+        <AuthCard footer={<AuthLink href={signInHref ?? viewHref(context, "signIn")}>{t.backToSignIn}</AuthLink>} title={t.magicLink}>
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />

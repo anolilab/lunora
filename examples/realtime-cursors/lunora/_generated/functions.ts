@@ -38,6 +38,11 @@ export interface RegisteredLunoraFunction {
     lifecycle?: "connect" | "disconnect" | "init" | "reactor";
     /** `"internal"` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
+    /**
+     * `.x402({ price })` tag on a paid public procedure. The origin worker
+     * paywalls it; the shard refuses to subscribe it (`isPaidFunction`).
+     */
+    x402?: { readonly price: number | string };
 }
 
 /**
@@ -59,22 +64,29 @@ installCompiledValidatorMap(lunora_cursors_0.joinRoom.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["roomId"] !== "string") return DEFER;
+if (source["roomId"].length > 64) return DEFER;
 if (typeof source["sessionId"] !== "string") return DEFER;
+if (source["sessionId"].length > 64) return DEFER;
 if (typeof source["name"] !== "string") return DEFER;
+if (source["name"].length > 80) return DEFER;
 if (typeof source["color"] !== "string") return DEFER;
+if (source["color"].length > 32) return DEFER;
 return { "roomId": source["roomId"], "sessionId": source["sessionId"], "name": source["name"], "color": source["color"] };
 });
 installCompiledValidatorMap(lunora_cursors_0.listCursors.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["roomId"] !== "string") return DEFER;
+if (source["roomId"].length > 64) return DEFER;
 return { "roomId": source["roomId"] };
 });
 installCompiledValidatorMap(lunora_cursors_0.updateCursor.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["roomId"] !== "string") return DEFER;
+if (source["roomId"].length > 64) return DEFER;
 if (typeof source["sessionId"] !== "string") return DEFER;
+if (source["sessionId"].length > 64) return DEFER;
 if (typeof source["x"] !== "number" || !Number.isFinite(source["x"])) return DEFER;
 if (typeof source["y"] !== "number" || !Number.isFinite(source["y"])) return DEFER;
 return { "roomId": source["roomId"], "sessionId": source["sessionId"], "x": source["x"], "y": source["y"] };
@@ -137,6 +149,27 @@ const callRegistered = async <R>(context: CallerCtx, functionPath: string, args:
 
     if (!registered) {
         throw new LunoraError("FUNCTION_NOT_FOUND", `function not registered: ${functionPath}`);
+    }
+
+    // A mutation is routed through the caller's own `ctx.runMutation` rather than
+    // invoked directly, so `createCaller(ctx).ns.someMutation()` gets exactly what
+    // `ctx.runMutation(api.ns.someMutation)` gets: the BEGIN/COMMIT span (or the
+    // enclosing one, when the caller is already inside a transaction), the jobs it
+    // schedules held until that span commits, and the deferred object deletes
+    // flushed only once it has. Called straight, a mutation composed from an action
+    // or a stream had none of the three — its writes autocommitted one row at a
+    // time and its `ctx.scheduler` calls dispatched immediately, so a mid-handler
+    // throw left the earlier writes durable and the job already enqueued.
+    //
+    // The fallback covers a context that is not a shard dispatch (`runMutation` is
+    // installed by `buildCtx` on every kind but a query's TYPE omits it); there is
+    // no transaction to join in that case, so a direct call is all there is.
+    if (registered.kind === "mutation") {
+        const { runMutation } = context as { runMutation?: (reference: { __lunoraRef: string }, args: Record<string, unknown>) => Promise<unknown> };
+
+        if (typeof runMutation === "function") {
+            return (await runMutation.call(context, { __lunoraRef: functionPath }, args ?? {})) as R;
+        }
     }
 
     return (await registered.handler(context, args ?? {})) as R;

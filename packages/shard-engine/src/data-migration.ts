@@ -19,6 +19,16 @@
  * `_creationTime ASC, id ASC` order, and `replace` preserves both `_id` and
  * `_creationTime`, so rewriting a row never moves it relative to the cursor —
  * each row is visited exactly once even as the batch ahead of us is rewritten.
+ * The cursor advances PER ROW, not per batch, so that claim survives a failure:
+ * persisting the page-start cursor on a mid-batch throw would re-walk every row
+ * of the failed batch on resume, re-applying a non-idempotent transform (the
+ * `version + 1` shape) to rows it had already rewritten.
+ *
+ * The page is also re-read per row before it is rewritten — see
+ * {@link applyTransformToRow}. A page of `batchSize` documents is up to that many
+ * `await`s old by the time its last row is written, and `writer.replace` only
+ * compare-and-swaps on the snapshot IT reads, so without the re-read a live
+ * mutation landing mid-batch was overwritten with the pre-mutation value.
  *
  * `dryRun` previews counts from a fresh scan without touching either the data
  * rows or the state table.
@@ -26,9 +36,12 @@
 
 import { LunoraError } from "@lunora/errors";
 
+import { stableWireKey } from "../../../shared/wire-key";
 import type { SqlExec } from "./ctx-db";
 import { runSql } from "./do-exec";
-import type { DatabaseWriterLike } from "./schema-types";
+import { CURSOR_PREFIX, encodeCursor } from "./query-args";
+import type { DatabaseWriterLike, OrderKey } from "./schema-types";
+import { ConflictError } from "./transaction";
 
 /** Reserved table the per-shard runner tracks migration progress in. Auto-hidden from the data browser by the `__lunora` prefix. */
 const DATA_MIGRATION_STATE_TABLE = "__lunora_migrations";
@@ -230,8 +243,32 @@ const readState = (sql: SqlExec, id: string): ResumeState | undefined => {
     };
 };
 
-const deleteState = (sql: SqlExec, id: string): void => {
-    runSql(sql, `DELETE FROM "${DATA_MIGRATION_STATE_TABLE}" WHERE id = ?`, id);
+/**
+ * Drop the run-state row, but ONLY when no runner is live behind it.
+ *
+ * The sole caller wipes an opposite-direction row so the new direction starts
+ * from a clean cursor. Unconditional, that deletes a *running* peer's claim:
+ * `direction` is caller-supplied over the admin RPC (and the CLI exposes
+ * `migrate down`), the batch loop awaits per page and per row, so an `up` and a
+ * `down` interleave on the same single-threaded DO — the second one erases the
+ * first's claim, wins a fresh one, and both then rewrite the same table through
+ * `writer.replace`, each overwriting the other's rows.
+ *
+ * The guard is the same liveness test {@link claimMigration} applies, expressed
+ * as one synchronous statement so no peer can observe a half-applied decision:
+ * a `completed`/`failed` row, or an `in_progress` one whose `updated_at` predates
+ * {@link STALE_CLAIM_TIMEOUT_MS}, is dead and removable; a fresh `in_progress`
+ * row is a live runner and survives. When it survives, the claim below fails and
+ * the caller returns the active run's state instead of trampling it.
+ */
+const deleteDeadState = (sql: SqlExec, id: string, staleBefore: number): void => {
+    runSql(
+        sql,
+        `DELETE FROM "${DATA_MIGRATION_STATE_TABLE}"
+         WHERE id = ? AND (status <> 'in_progress' OR updated_at IS NULL OR updated_at <= ?)`,
+        id,
+        staleBefore,
+    );
 };
 
 /** Upsert the run-state row, preserving `started_at` across resumes by omitting it from the conflict update. */
@@ -272,14 +309,20 @@ const persistState = (sql: SqlExec, state: PersistedState): void => {
  * `status` to `in_progress` and bumps `updated_at`; every loser sees
  * `changes() === 0`.
  *
- * Claimable when the row is absent, already this runner's resumable
- * `in_progress`/`failed` progress in the SAME direction, an opposite-direction
- * run, OR a stale `in_progress` claim whose `updated_at` predates
+ * Claimable when the row is absent, holds a non-`in_progress` status (a
+ * `failed` run this runner resumes, or a `completed` one in the opposite
+ * direction), OR carries a stale `in_progress` claim whose `updated_at` predates
  * {@link STALE_CLAIM_TIMEOUT_MS} (a crashed runner must not wedge the migration
- * forever). A `completed` row in the same direction is intentionally NOT
- * claimable — re-running a finished migration stays the idempotent no-op the
- * caller handles before claiming. The `WHERE` therefore rejects only a *fresh*
- * same-direction `in_progress` peer.
+ * forever). A `completed` row in the SAME direction never reaches here —
+ * re-running a finished migration is an idempotent no-op the caller handles
+ * before claiming. The `WHERE` therefore rejects exactly one thing: a *fresh*
+ * `in_progress` peer.
+ *
+ * Direction is deliberately NOT part of that test. It used to be — any
+ * opposite-direction row counted as claimable, fresh or stale — which made a
+ * `down` steal the claim from an `up` that was mid-batch (and vice versa), the
+ * one case {@link CLAIM_HEARTBEAT_INTERVAL_MS} exists to make impossible. A live
+ * claim is a live claim whichever way it is running.
  */
 const claimMigration = (sql: SqlExec, id: string, direction: MigrationDirection, now: number): boolean => {
     runSql(
@@ -291,8 +334,7 @@ const claimMigration = (sql: SqlExec, id: string, direction: MigrationDirection,
             status = 'in_progress',
             updated_at = excluded.updated_at
          WHERE
-            "${DATA_MIGRATION_STATE_TABLE}".direction <> excluded.direction
-            OR "${DATA_MIGRATION_STATE_TABLE}".status <> 'in_progress'
+            "${DATA_MIGRATION_STATE_TABLE}".status <> 'in_progress'
             OR "${DATA_MIGRATION_STATE_TABLE}".updated_at IS NULL
             OR "${DATA_MIGRATION_STATE_TABLE}".updated_at <= excluded.updated_at - ${String(STALE_CLAIM_TIMEOUT_MS)}`,
         id,
@@ -390,6 +432,128 @@ const readMigrationStatus = (sql: SqlExec, id?: string): MigrationStatusRow[] =>
 };
 
 /**
+ * The iteration order `writer.findMany(table, { cursor, limit })` uses when the
+ * caller passes no `orderBy` — `normalizeOrderKeys`' default. Named here because
+ * the runner mints its own per-row resume cursor from it, and a cursor minted
+ * against different keys would seek to the wrong place on resume.
+ */
+const MIGRATION_ORDER_KEYS: OrderKey[] = [{ direction: "asc", field: "_creationTime", nullable: false }];
+
+/**
+ * The cursor prefix this runner's persisted resume points were minted under
+ * before {@link CURSOR_PREFIX} was bumped to `"~3"`.
+ */
+const PRIOR_CURSOR_PREFIX = "~2";
+
+/**
+ * Re-stamp a persisted resume cursor that was minted under {@link PRIOR_CURSOR_PREFIX}.
+ *
+ * The bump exists because a `.withIndex(q => q.eq(f, v)).paginate()` cursor
+ * changed payload — `[value, id]` became `[creationTime, id]`, the same length,
+ * so nothing downstream could catch it — and `decodeCursor` therefore refuses
+ * any older prefix outright. Correct there; fatal here. This runner PERSISTS its
+ * cursor, so a resume fed the stored value straight back into `findMany`, threw
+ * `invalid cursor`, and re-persisted `failed` with the same doomed cursor: every
+ * later run of that migration wedged on it, with no reset short of running the
+ * migration backwards (which, for the non-idempotent transforms this runner is
+ * built for, is worse than the wedge).
+ *
+ * Safe HERE and only here, for one reason: this path's key list is
+ * {@link MIGRATION_ORDER_KEYS}, a fixed constant that bypasses
+ * `normalizeOrderKeys` entirely, so its payload is `[_creationTime, _id]` on
+ * BOTH sides of the bump — byte-for-byte valid, stale prefix and all. Nothing
+ * general may be inferred from that: making `decodeCursor` itself lenient would
+ * restore exactly the silently-wrong page the bump was minted to stop.
+ *
+ * A FUTURE prefix bump must re-verify this before adding its own predecessor
+ * here — if the encoded payload for `[_creationTime, _id]` ever changes, the
+ * cursor is not merely mis-prefixed and re-stamping it would seek to the wrong
+ * row.
+ */
+const restampResumeCursor = (cursor: null | string): null | string =>
+    typeof cursor === "string" && cursor.startsWith(PRIOR_CURSOR_PREFIX) ? CURSOR_PREFIX + cursor.slice(PRIOR_CURSOR_PREFIX.length) : cursor;
+
+/**
+ * How many times one row's transform is re-applied against a fresher read before
+ * the run gives up on it. Two is already unusual — it means live traffic wrote
+ * the same row twice while this one row was being migrated — so a third failure
+ * is a hot row a migration should not be silently losing writes on.
+ */
+const MAX_ROW_ATTEMPTS = 3;
+
+/**
+ * Apply `transform` to one row and rewrite it, re-reading the row between the
+ * transform and the write.
+ *
+ * The rewrite used to run straight off the page document, and that is a lost
+ * update: the page was read once, up to `batchSize` `await`s ago, while
+ * `writer.replace` compare-and-swaps only on the snapshot it reads at the top of
+ * its OWN call. A user mutation landing in that gap was overwritten with the
+ * pre-mutation value — no conflict, no error. (The claim machinery around this
+ * runner is about two MIGRATION runners interleaving; it says nothing about a
+ * migration interleaving with live traffic, which is the normal case.)
+ *
+ * So the row is re-read after the transform and immediately before the write.
+ * Nothing can interleave between them: the continuation that resumes after
+ * `get` resolves runs synchronously into `replace`, whose row probe is likewise
+ * synchronous. A row that moved is re-transformed against what is actually on
+ * disk (rather than skipped, which would silently leave rows unmigrated, or
+ * failed, which would let one hot row abort a whole shard's run) — and a row
+ * that keeps moving eventually raises, because a transform that can never see a
+ * stable row is not something to paper over.
+ * @returns whether the row was rewritten (`changed`) or left alone
+ */
+const applyTransformToRow = async (options: {
+    context: DataMigrationContext;
+    document: DataMigrationDocument;
+    dryRun: boolean;
+    table: string;
+    transform: DataMigrationTransform;
+    writer: DatabaseWriterLike;
+}): Promise<"changed" | "unchanged"> => {
+    const { context, document, dryRun, table, transform, writer } = options;
+    const id = String(document["_id"]);
+    let source = document;
+
+    for (let attempt = 0; attempt < MAX_ROW_ATTEMPTS; attempt += 1) {
+        // eslint-disable-next-line no-await-in-loop -- compare-and-swap retry: each attempt transforms what the previous attempt re-read
+        const next = await transform(source, context);
+
+        if (next === undefined) {
+            return "unchanged";
+        }
+
+        if (dryRun) {
+            return "changed";
+        }
+
+        // Pinned to the migration's own table: a bare `get` probes every table in
+        // the schema for the id, which is a per-row O(tables) scan here.
+        // eslint-disable-next-line no-await-in-loop -- the re-read must sit between THIS attempt's transform and its write; hoisting it would reopen the gap it closes
+        const latest = await writer.get(id, table);
+
+        if (latest === null) {
+            // Deleted under us. Rewriting it would resurrect a row the
+            // application removed, so leave it: counted processed, not changed.
+            return "unchanged";
+        }
+
+        if (stableWireKey(latest) === stableWireKey(source)) {
+            // Trusted rewrite: preserve the row's original `_creationTime` via
+            // the `allowExplicitId` opt-in (default replace mints a fresh clock()).
+            // eslint-disable-next-line no-await-in-loop -- writes share one SQLite handle; parallelizing would interleave statements on a single connection.
+            await writer.replace(id, { ...next, _creationTime: source["_creationTime"], _id: source["_id"] }, undefined, { allowExplicitId: true });
+
+            return "changed";
+        }
+
+        source = latest;
+    }
+
+    throw new ConflictError(`data migration could not rewrite row ${id}: it was modified by concurrent traffic on every attempt`, "occ");
+};
+
+/**
  * Run one migration over its table within the current shard. Returns the
  * post-run counts and status; `status` is `"in_progress"` only when a
  * `maxBatches` limit cut the run short (it stays resumable).
@@ -444,7 +608,10 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
             // Opposite direction — discard the prior run's progress so this one
             // starts fresh (and `started_at` resets on the claim INSERT). Done
             // synchronously, immediately before the claim, so no peer slips in.
-            deleteState(sql, migration.id);
+            // Gated on liveness: a peer still heartbeating its claim keeps its
+            // row, the claim below then fails, and we return its state rather
+            // than running a second rewrite of the same table alongside it.
+            deleteDeadState(sql, migration.id, clock() - STALE_CLAIM_TIMEOUT_MS);
         }
 
         // Atomic in-flight guard. Exactly one of two interleaved invocations on
@@ -462,7 +629,10 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
             return {
                 changed: active?.changed ?? 0,
                 cursor: active?.cursor ?? cursor,
-                direction,
+                // The holder's direction, not the requested one: a `down` that
+                // loses to a live `up` must not report itself as the in-progress
+                // run. Identical to `direction` for the same-direction loser.
+                direction: active?.direction ?? direction,
                 dryRun,
                 id: migration.id,
                 processed: active?.processed ?? 0,
@@ -475,7 +645,7 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
         const resume = existing?.direction === direction ? existing : undefined;
 
         if (resume) {
-            cursor = resume.cursor;
+            cursor = restampResumeCursor(resume.cursor);
             processed = resume.processed;
             changed = resume.changed;
             startedAt = resume.startedAt ?? startedAt;
@@ -494,24 +664,21 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
             const batch = await writer.findMany(migration.table, { cursor, limit: batchSize });
 
             for (const document of batch.page) {
-                processed += 1;
-
                 // eslint-disable-next-line no-await-in-loop -- rows share one SQLite handle; a transform's cross-table read must complete before the next row's rewrite
-                const next = await transform(document, migrationContext);
+                const outcome = await applyTransformToRow({ context: migrationContext, document, dryRun, table: migration.table, transform, writer });
 
-                if (next !== undefined) {
+                if (outcome === "changed") {
                     changed += 1;
-
-                    if (!dryRun) {
-                        // Trusted rewrite: preserve the row's original `_creationTime`
-                        // via the `allowExplicitId` opt-in (default replace mints a
-                        // fresh clock()).
-                        // eslint-disable-next-line no-await-in-loop -- writes share one SQLite handle; parallelizing would interleave statements on a single connection.
-                        await writer.replace(String(document["_id"]), { ...next, _creationTime: document["_creationTime"], _id: document["_id"] }, undefined, {
-                            allowExplicitId: true,
-                        });
-                    }
                 }
+
+                // Counted and cursor-advanced only once the row is fully handled.
+                // Both used to move BEFORE the transform / at the end of the batch,
+                // so a mid-batch throw persisted the page-start cursor with the
+                // failed row already counted: the resume re-walked rows it had
+                // already rewritten (bumping a `version + 1` transform twice) and
+                // re-counted them.
+                processed += 1;
+                cursor = encodeCursor(document, MIGRATION_ORDER_KEYS);
 
                 // Mid-batch heartbeat: keep the claim fresh so a batch that runs
                 // longer than the stale-claim window can't be reclaimed out from

@@ -5,7 +5,10 @@ package lunora
 // Expected values were captured from a real JS engine, not derived by reading
 // the spec — the two disagreed on three points before these tests existed.
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestFormatNumberMatchesEcmaScript(t *testing.T) {
 	covers("format_number_matches_ecmascript")
@@ -27,6 +30,12 @@ func TestFormatNumberMatchesEcmaScript(t *testing.T) {
 		{1e-21, "1e-21"},
 		{1e20, "100000000000000000000"},
 		{1e21, "1e+21"},
+		// An integral double past 2^53: ECMAScript prints the SHORTEST digits
+		// that read back as the same double and zero-pads, so this is not the
+		// exact expansion 1152921504606846976.
+		{1 << 60, "1152921504606847000"},
+		// Negative zero keeps its sign; an integer conversion drops it.
+		{math.Copysign(0, -1), "-0"},
 	} {
 		if got := formatNumber(testCase.value); got != testCase.want {
 			t.Errorf("formatNumber(%v) = %q, want %q", testCase.value, got, testCase.want)

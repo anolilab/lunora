@@ -6,8 +6,11 @@ import { test as base, request as requestApi } from "@playwright/test";
  *
  * These centralise the bits of plumbing that every test needs:
  *   - `resetServer`  — call the `/test/reset` route exposed by the playground
- *     worker (gated by `LUNORA_E2E === "true"`). Clears DO state so tests are
- *     order-independent.
+ *     worker (gated by `LUNORA_E2E === "true"`). Clears the shared **D1** state
+ *     (users, channels, every `.global()` table). It does NOT clear Durable
+ *     Object state — shard-local rows such as `messages` survive it, and stay
+ *     out of each other's way only because every spec mints a fresh channel. A
+ *     spec that needs a clean shard has to mint one, not rely on this.
  *   - `signedInPage` — a Page whose BrowserContext already holds the
  *     better-auth `session_token` cookie. Most chat tests skip the signup
  *     form and use this.

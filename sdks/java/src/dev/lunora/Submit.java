@@ -8,6 +8,7 @@ import dev.lunora.Offline.OfflineQueue;
 import dev.lunora.Offline.QueuedMutation;
 import dev.lunora.Optimistic.LocalStore;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -89,6 +90,15 @@ public final class Submit {
 
         /** The ids dropped because their precondition no longer held. */
         public final List<String> conflicted = new ArrayList<>();
+
+        /**
+         * Milliseconds the server asked the caller to wait before flushing again, when a replay
+         * came back rate-limited. Null otherwise.
+         *
+         * <p>The client enforces it too — a flush inside the window is a no-op — so this is for a
+         * caller that schedules its own retry.
+         */
+        public Long retryAfterMs;
     }
 
     /** One offline-capable write. */
@@ -261,6 +271,17 @@ public final class Submit {
         List<QueuedMutation> snapshot;
 
         synchronized (client.lock) {
+            // A server that answered "not now" gets waited out. Without this the caller's own
+            // reconnect loop replays the identical burst immediately and earns the same 429,
+            // indefinitely.
+            long remaining = client.flushNotBefore - System.nanoTime();
+
+            if (remaining > 0) {
+                report.retryAfterMs = remaining / 1_000_000L + 1;
+
+                return report;
+            }
+
             queue = client.offlineQueue;
             current = client.identity;
             snapshot = queue.items();
@@ -414,20 +435,21 @@ public final class Submit {
         }
 
         List<QueuedMutation> toRequeue = new ArrayList<>();
+        List<List<QueuedMutation>> chunks = chunkBatches(sendable);
 
-        for (int start = 0; start < sendable.size(); start += Offline.MAX_BATCH_ENTRIES) {
-            int end = Math.min(start + Offline.MAX_BATCH_ENTRIES, sendable.size());
+        for (int index = 0; index < chunks.size(); index++) {
             // Chunks replay sequentially, which is what preserves FIFO across a flush longer than
             // one batch.
-            BatchOutcome outcome =
-                    replayBatched(client, queue, sendable.subList(start, end), report);
+            BatchOutcome outcome = replayBatched(client, queue, chunks.get(index), report);
 
             toRequeue.addAll(outcome.requeue());
 
             if (outcome.stop()) {
                 // A whole-chunk transport failure. Leave every write not yet sent queued, in
                 // order, rather than sending on into a connection that just failed.
-                toRequeue.addAll(sendable.subList(end, sendable.size()));
+                for (List<QueuedMutation> later : chunks.subList(index + 1, chunks.size())) {
+                    toRequeue.addAll(later);
+                }
 
                 break;
             }
@@ -448,6 +470,105 @@ public final class Submit {
 
     /** What one batch chunk left for the caller: the writes to re-queue, and whether to stop. */
     private record BatchOutcome(List<QueuedMutation> requeue, boolean stop) {}
+
+    /**
+     * A batch entry's contribution to the request body, in bytes.
+     *
+     * <p>The args dominate and are the only part that can be large; the constant covers the entry's
+     * fixed keys and the comma joining it to the next one. Encoding twice (here and in {@link
+     * #replayBatched}) is deliberate — the flush is the slow path, and carrying the encoded form
+     * through the chunker would put a second representation of every queued write in memory.
+     */
+    private static int entryBytes(QueuedMutation item) {
+        String encoded =
+                Json.write(Wire.encode(item.args != null ? item.args : new LinkedHashMap<>()));
+
+        return encoded.getBytes(StandardCharsets.UTF_8).length
+                + item.functionPath.length()
+                + item.id.length()
+                + 160;
+    }
+
+    /**
+     * Splits a flush into batch bodies the worker will accept.
+     *
+     * <p>By BYTES as well as by count: the worker reads a batch body under a 1 MiB budget and
+     * answers {@code 413 PAYLOAD_TOO_LARGE} past it, so 500 writes carrying bytes or long text are
+     * one request the server refuses whole. A single write over the budget still forms its own
+     * chunk — splitting cannot help it, and {@link #replayBatched} settles it on the answer.
+     */
+    private static List<List<QueuedMutation>> chunkBatches(List<QueuedMutation> items) {
+        List<List<QueuedMutation>> chunks = new ArrayList<>();
+        List<QueuedMutation> current = new ArrayList<>();
+        long size = 0;
+
+        for (QueuedMutation item : items) {
+            int cost = entryBytes(item);
+
+            if (!current.isEmpty()
+                    && (current.size() >= Offline.MAX_BATCH_ENTRIES
+                            || size + cost > Offline.MAX_BATCH_BYTES)) {
+                chunks.add(current);
+                current = new ArrayList<>();
+                size = 0;
+            }
+
+            current.add(item);
+            size += cost;
+        }
+
+        if (!current.isEmpty()) {
+            chunks.add(current);
+        }
+
+        return chunks;
+    }
+
+    /** Records a rate limit's delay, and holds the next flush off until it passes. */
+    private static void noteRetryAfter(Client client, FlushReport report, RuntimeException error) {
+        Long delay = retryAfterMs(error);
+
+        if (delay == null) {
+            return;
+        }
+
+        report.retryAfterMs = delay;
+
+        synchronized (client.lock) {
+            long until = System.nanoTime() + delay * 1_000_000L;
+
+            if (until - client.flushNotBefore > 0) {
+                client.flushNotBefore = until;
+            }
+        }
+    }
+
+    /**
+     * How long a rate-limited replay asks to wait, if the envelope said.
+     *
+     * <p>Null when the server named no delay — the caller then decides its own backoff rather than
+     * hammering, which is what {@link FlushReport#retryAfterMs} reports.
+     *
+     * <p>Clamped at {@link Offline#MAX_RETRY_AFTER_MS}. The hint is a number this client did not
+     * write, so an absurd one must not be able to park a durable queue indefinitely.
+     *
+     * <p>Only the envelope's {@code data.retryAfterMs} is read. {@code protocol/README.md} §4.3
+     * allows the {@code Retry-After} HEADER as the alternative hint, and this port cannot honour
+     * that half: {@link Client.HttpPoster} surfaces {@code (status, body)} only, and widening it
+     * would change the contract every consumer implements for one optional hint the RPC plane
+     * already carries in the envelope.
+     */
+    static Long retryAfterMs(RuntimeException error) {
+        if (!(error instanceof ApiException api)
+                || !Offline.RATE_LIMIT_ERROR_CODES.contains(api.code)
+                || !(api.data instanceof Map<?, ?> data)) {
+            return null;
+        }
+
+        return data.get("retryAfterMs") instanceof Number delay && delay.longValue() > 0
+                ? Math.min(delay.longValue(), Offline.MAX_RETRY_AFTER_MS)
+                : null;
+    }
 
     /** Replays writes one at a time. FIFO is preserved by the loop itself. */
     private static void replaySequential(
@@ -475,6 +596,8 @@ public final class Submit {
 
                     continue;
                 }
+
+                noteRetryAfter(client, report, error);
 
                 // Nothing after this write may go out ahead of it: replaying out of order is how a
                 // durable queue corrupts the data it was protecting.
@@ -559,6 +682,38 @@ public final class Submit {
 
         ApiException error = batchSlotError(envelope, "batch rejected");
 
+        // The body was too big, not wrong — every entry in it would have committed alone. Halve and
+        // retry; the estimate the chunker used cannot see the framing the worker actually measured,
+        // and only the answer can.
+        if (Offline.PAYLOAD_TOO_LARGE.equals(error.code) && items.size() > 1) {
+            int middle = items.size() / 2;
+            BatchOutcome left = replayBatched(client, queue, items.subList(0, middle), report);
+
+            if (left.stop()) {
+                List<QueuedMutation> requeue = new ArrayList<>(left.requeue());
+
+                requeue.addAll(items.subList(middle, items.size()));
+
+                return new BatchOutcome(requeue, true);
+            }
+
+            BatchOutcome right =
+                    replayBatched(client, queue, items.subList(middle, items.size()), report);
+            List<QueuedMutation> requeue = new ArrayList<>(left.requeue());
+
+            requeue.addAll(right.requeue());
+
+            return new BatchOutcome(requeue, right.stop());
+        }
+
+        // A shard blip or a rate limit is not a verdict on the batch's contents. Requeue it whole
+        // and stop the flush, exactly as the single-call path does for the same codes.
+        if (isTransient(error)) {
+            noteRetryAfter(client, report, error);
+
+            return new BatchOutcome(new ArrayList<>(items), true);
+        }
+
         for (QueuedMutation item : items) {
             synchronized (client.lock) {
                 queue.unpersist(item.id);
@@ -608,12 +763,15 @@ public final class Submit {
             }
 
             if (slot.get("error") instanceof Map<?, ?> envelope) {
-                String code = envelope.get("code") instanceof String text ? text : "INTERNAL";
+                ApiException error = batchSlotError(envelope, "request failed");
 
-                // A transient shard failure is the batch's counterpart of an uncoded throw on the
-                // single-call path: the server never reached a verdict, so the write goes back on
-                // the queue rather than being reported as failed.
-                if (Offline.TRANSIENT_ERROR_CODES.contains(code)) {
+                // Classified by the SAME predicate the whole-batch and single-call paths use, not
+                // by a second code set: a slot's body is exactly a §4.2 envelope, so a shard blip
+                // or a limiter refusing to look means the server reached no verdict on that entry
+                // and the write goes back on the queue rather than being reported as failed. Two
+                // code sets is how one of them silently falls behind the other.
+                if (isTransient(error)) {
+                    noteRetryAfter(client, report, error);
                     requeue.add(item);
 
                     continue;
@@ -623,7 +781,7 @@ public final class Submit {
                     queue.unpersist(item.id);
                 }
 
-                settleRejected(client, item, batchSlotError(envelope, "request failed"));
+                settleRejected(client, item, error);
                 report.rejected.add(item.id);
 
                 continue;
@@ -651,7 +809,12 @@ public final class Submit {
         return new ApiException(
                 envelope.get("code") instanceof String code ? code : "INTERNAL",
                 envelope.get("message") instanceof String message ? message : fallback,
-                envelope.get("data") == null ? null : Wire.decode(envelope.get("data")));
+                envelope.get("data") == null ? null : Wire.decode(envelope.get("data")),
+                // The HTTP status is not in scope on the batch path — `rpcBatch` returns the parsed
+                // body only — so a batch envelope is classified by its CODE alone. That is enough:
+                // an envelope-less non-2xx never reaches here (it parses to no `results` and no
+                // `error`, which the caller already treats as transport).
+                false);
     }
 
     /**
@@ -663,7 +826,9 @@ public final class Submit {
      */
     static boolean isTransient(RuntimeException error) {
         if (error instanceof ApiException api) {
-            return Offline.TRANSIENT_ERROR_CODES.contains(api.code);
+            return api.transientFailure
+                    || Offline.TRANSIENT_ERROR_CODES.contains(api.code)
+                    || Offline.RATE_LIMIT_ERROR_CODES.contains(api.code);
         }
 
         return !(error instanceof OfflineException) && !(error instanceof Wire.WireFormatException);

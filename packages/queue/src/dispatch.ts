@@ -18,7 +18,7 @@
 import type { ArgsOf, DispatchRunFunction, FunctionReference, RunFunctionOptions } from "@lunora/dispatch";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { getDispatchMessageId, isDeterministicDispatchFailure } from "@lunora/dispatch";
-import { LunoraError } from "@lunora/errors";
+import { LunoraError, toErrorBody } from "@lunora/errors";
 
 import { createQueueRunContext } from "./run-context";
 import type { MessageBatchLike, MessageLike, QueueDefinition, QueueMessage, QueueMessageBatch, QueueRetryOptions } from "./types";
@@ -56,7 +56,7 @@ interface CapturedQueueMessage {
     attempts: number;
     /** The message body (JSON-encoded + capped by the catcher). */
     body: unknown;
-    /** `true` when this failed delivery was the message's last (its retries are exhausted — the broker dead-letters it). */
+    /** `true` when this failed delivery was the message's last (its retries are exhausted) AND the queue declares a `deadLetterQueue` for it to land in. Stays `false` for a queue with no DLQ, where the broker drops the exhausted message instead — `attempts > maxRetries` with `outcome !== "ack"` is what identifies that case. */
     deadLettered: boolean;
     /** Handler error message when `outcome` is `error`; absent otherwise. */
     error?: string;
@@ -93,6 +93,15 @@ interface DispatchOptions {
     env: Record<string, unknown>;
     /** Injectable fetch for the `ctx.run` dispatcher (tests). */
     fetchImpl?: typeof fetch;
+
+    /**
+     * W3C `traceparent` of the consumer invocation's own trace, supplied by the
+     * runtime's `queue()` entry. Forwarded on every `ctx.run` dispatch so the
+     * functions a handler calls are CHILDREN of the queue span instead of a set of
+     * unrelated root traces. Absent (a hand-built dispatch, a unit test) keeps the
+     * prior behaviour: the callee mints its own trace.
+     */
+    traceparent?: string;
 }
 
 /** Cloudflare Queues' default `max_retries` (retries after the initial delivery; total deliveries = 1 + max_retries). */
@@ -306,7 +315,10 @@ const describeThrownError = (handlerError: unknown): string => {
  * For every other message an explicit `ack`/`retry` wins; an undecided message
  * is an implicit `ack` on a clean return, or `error` when the handler threw
  * (workerd retries the whole batch). `deadLettered` flags a non-ack disposition
- * that exhausted the queue's `maxRetries`.
+ * that exhausted the queue's `maxRetries` AND has somewhere to land: with no
+ * `deadLetterQueue` configured Cloudflare simply DELETES the exhausted message,
+ * so claiming it was dead-lettered sends an operator hunting through a queue
+ * that does not exist for a message that no longer exists anywhere.
  */
 const buildCaptureRecords = (
     harness: CaptureHarness,
@@ -322,6 +334,8 @@ const buildCaptureRecords = (
     // handler threw (the batch is retried by workerd, but the handler signalled
     // failure), else workerd's implicit ack-on-success.
     const undecided: QueueMessageOutcome = threw ? "error" : "ack";
+    // A message only reaches a dead-letter queue if the queue declares one.
+    const hasDeadLetterQueue = typeof entry.definition.deadLetterQueue === "string" && entry.definition.deadLetterQueue.length > 0;
 
     return harness.originals.map((message): CapturedQueueMessage => {
         const isAttributed = message === attributed;
@@ -332,7 +346,7 @@ const buildCaptureRecords = (
         return {
             attempts,
             body: message.body,
-            deadLettered: !isAttributed && outcome !== "ack" && attempts > maxRetries,
+            deadLettered: hasDeadLetterQueue && !isAttributed && outcome !== "ack" && attempts > maxRetries,
             error: outcome === "error" ? errorMessage : undefined,
             exportName: entry.exportName,
             messageId: message.id,
@@ -429,7 +443,12 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
         throw new TypeError(`@lunora/queue: queue "${batch.queue}" (${entry.exportName}) has no push handler — it is declared as a pull consumer`);
     }
 
-    const context = createQueueRunContext({ env: options.env, exportName: entry.exportName, fetchImpl: options.fetchImpl });
+    const context = createQueueRunContext({
+        env: options.env,
+        exportName: entry.exportName,
+        fetchImpl: options.fetchImpl,
+        ...(options.traceparent === undefined ? {} : { traceparent: options.traceparent }),
+    });
     // Always instrumented, capture sink or not: the wrapper is what gives each
     // message its pinned `run`, and poison-message isolation is a DELIVERY
     // property — gating it on the dev capture sink left it inert in production,
@@ -459,6 +478,37 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
 
     if (attributed !== undefined) {
         resolveAttributedBatch(harness, attributed);
+
+        // Always log the drop. The ack above is terminal — no retry, no DLQ, no
+        // redelivery — and the capture record that describes it is only built
+        // when `options.capture` is wired, which needs an explicit
+        // `LUNORA_QUEUE_CAPTURE=1` or a dev-shaped `WORKER_ENV`. Without this
+        // line a production deployment discards the message with no signal
+        // anywhere: a rotated admin token silently stops the receipts and
+        // nothing says so.
+        //
+        // This is the ONLY disposition that reaches here: `resolveAttributedFailure`
+        // returns a message for a deterministic dispatch failure (400/403/404/422)
+        // and nothing else. Retry exhaustion never reaches this line — the broker
+        // owns that, and it dead-letters rather than acking — so the message names
+        // which of the two happened instead of sending an operator to a DLQ that
+        // will never hold it.
+        //
+        // Routed through `toErrorBody` for the same reason every other
+        // error-to-output path in the repo is: this error is rebuilt from a
+        // dispatch RESPONSE, and an unparseable body becomes an internal-coded
+        // error carrying that body verbatim (see `toDispatchError`'s fallback).
+        // Logging the raw value would put an upstream 4xx's response text — a
+        // token, a SQL fragment, an internal identifier — into the Workers log.
+        // A developer-facing code keeps its message; an internal one is redacted to
+        // its code, which together with the message id, queue and export name is
+        // what actually locates the failure.
+        const { body, status } = toErrorBody(handlerError, { redactedMessage: "internal error" });
+
+        // eslint-disable-next-line no-console -- last-resort operator signal for a dropped message; there is no injected logger on the dispatch path
+        console.error(
+            `@lunora/queue: dropped message ${attributed.id} on queue "${batch.queue}" (${entry.exportName}) — a dispatch it made failed with a deterministic ${String(status)} (${body.code}: ${body.message}), so it was acked, not retried. Its retries are NOT exhausted and it is not dead-lettered — it will never be redelivered.`,
+        );
     }
 
     // `threw` stays truthful (the handler DID fail, and the records say so);

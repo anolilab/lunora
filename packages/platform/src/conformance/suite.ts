@@ -19,7 +19,8 @@ type VitestApi = {
  * The suite asserts the provider-neutral behaviors that every Lunora host must
  * provide: single-writer serialization, durable transactions, local SQL,
  * durable alarms, socket accept/send/close, attachment round-trip across
- * recycle, deterministic shard placement, and durable scheduling.
+ * recycle, deterministic shard placement, and durable scheduling — including
+ * runtime cron registration on the hosts that offer it.
  *
  * Usage:
  *
@@ -32,6 +33,12 @@ type VitestApi = {
  */
 /** The message every host raises once `disposeTerminally` has run. */
 const PLATFORM_CLOSED = /platform closed/u;
+
+/** Yield the turn for `ms`, hoisted so legs nested inside a host closure stay flat. */
+const sleep = (ms: number): Promise<void> =>
+    new Promise((resolve) => {
+        setTimeout(resolve, ms);
+    });
 
 const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, vitest: VitestApi): void => {
     const { describe, expect, it } = vitest;
@@ -111,6 +118,89 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
 
                     const rows = host.shard.sql.exec("SELECT id FROM rollback_test WHERE id = 2").toArray();
                     expect(rows).toHaveLength(0);
+                });
+            });
+
+            it("never lets a task outside a mutation observe its uncommitted writes", async (context) => {
+                // Not a fixed count: a host that defers the dispatch makes three
+                // assertions, one that refuses makes a fourth on the refusal.
+                expect.hasAssertions();
+
+                await withHost(async (host) => {
+                    if (host.isolatesByDispatch === true) {
+                        // The observation is unrepresentable here, not merely
+                        // unimplemented — see the `isolatesByDispatch` note on
+                        // `ConformanceHost` for the two measurements. What still covers the
+                        // property: the runtime's own input gate (workerd's
+                        // test, not the adapter's), and "rolls back a
+                        // transaction that throws" above, which pins that
+                        // nothing uncommitted survives on every host.
+                        context.skip(`${name} isolates concurrent tasks at the dispatch boundary, which no in-isolate read can stand in for`);
+
+                        return;
+                    }
+
+                    host.shard.sql.exec("CREATE TABLE IF NOT EXISTS isolation_test (id INTEGER PRIMARY KEY)");
+
+                    // Resolved from inside the transaction, the instant the
+                    // uncommitted row exists. A `sleep` racing the mutation's
+                    // own `sleep` would be both non-deterministic and, on a
+                    // gated host, a deadlock: the earlier-due continuation
+                    // head-of-line blocks the later one behind the closed gate.
+                    let inserted!: () => void;
+                    const uncommitted = new Promise<void>((resolve) => {
+                        inserted = resolve;
+                    });
+
+                    // The engine's mutation shape: `runSerialized(() => transaction(work))`,
+                    // with a real await inside — fs-backed object storage, an
+                    // outbound `fetch`, anything that yields the turn.
+                    const mutation = host.shard.runSerialized(async () =>
+                        host.shard.transaction(async () => {
+                            host.shard.sql.exec("INSERT INTO isolation_test (id) VALUES (1)");
+                            inserted();
+
+                            await sleep(20);
+
+                            throw new Error("boom");
+                        }),
+                    );
+
+                    await uncommitted;
+
+                    // A query dispatch is NOT wrapped in `runSerialized` — only
+                    // mutations are — so this is what the shard actually does
+                    // while a mutation is mid-await. A host whose SQL executor
+                    // is synchronous cannot defer the read, so refusing is the
+                    // conformant answer. What no host may do is hand back the
+                    // row: `ShardHost` guarantee 2 is that no partial writes are
+                    // observable, and these are about to roll back.
+                    let observed: unknown[];
+                    let refusal: unknown;
+
+                    try {
+                        observed = host.shard.sql.exec("SELECT id FROM isolation_test").toArray();
+                    } catch (error) {
+                        observed = [];
+                        refusal = error;
+                    }
+
+                    expect(observed).toStrictEqual([]);
+
+                    // Refusing is conformant. Refusing with a bare `Error` is
+                    // not: the transport can only classify what it recognizes,
+                    // so an uncatalogued throw redacts to an `INTERNAL` 500 that
+                    // no client retries — and this read failed only because it
+                    // arrived while a mutation was mid-await, which the very
+                    // next attempt will not. A host that refuses must refuse
+                    // with the retryable 503 code the runtime and client already
+                    // treat as "no verdict, try again".
+                    if (refusal !== undefined) {
+                        expect(refusal).toMatchObject({ code: "SHARD_UNAVAILABLE", status: 503, type: "VisulimaError" });
+                    }
+
+                    await expect(mutation).rejects.toThrow("boom");
+                    expect(host.shard.sql.exec("SELECT id FROM isolation_test").toArray()).toStrictEqual([]);
                 });
             });
 
@@ -312,7 +402,8 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
 
             // `SocketHost.idFor` is documented to answer the SAME string for
             // the SAME socket, not a fresh value per call — the property every
-            // caller (fan-out dedup, subscription reassociation) relies on.
+            // comparison through it (this suite's own identity assertions, a
+            // host's recycle addressing) relies on.
             it("keeps idFor stable across repeated calls within a wake", async () => {
                 expect.assertions(1);
 
@@ -327,10 +418,12 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
             });
 
             // Same leg as "round-trips attachments across a recycle" above, for
-            // identity rather than payload: the engine reassociates a rehydrated
-            // socket with the subscription state it owned before the wake BY id,
-            // so a host whose id drifts across a recycle breaks that lookup even
-            // though the attachment round-trips fine.
+            // identity rather than payload. Not because the engine keys on it —
+            // it keys on its own `connectionId` (see `SocketHost.idFor`) — but
+            // because `idFor` is this suite's identity oracle and a host's own
+            // recycle plumbing addresses sockets by the id it hands out here. An
+            // id that drifts across a recycle makes both meaningless, even though
+            // the attachment round-trips fine.
             it("keeps idFor stable across a recycle", async (context) => {
                 await withHost(async (host) => {
                     if (host.simulateRecycle === undefined || host.restoreSocket === undefined) {
@@ -725,6 +818,63 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                     // resurrect, and a host answering `true` tells an operator it
                     // recovered a job it did not.
                     expect(await host.scheduler.deadLetter.requeue("job-does-not-exist")).toBe(false);
+                });
+            });
+
+            // `SchedulerHost.cron` had an implementation and no leg here, which
+            // is how a `setTimeout` overflow lived in it: `setTimeout` clamps
+            // any delay above 2^31-1 ms (~24.8 days) to 1 ms, so a monthly cron
+            // fired at once, dispatched, recomputed the same far-future target
+            // and fired again — an unbounded dispatch loop for a schedule that
+            // should tick once a month. Both halves are asserted in one leg so
+            // the negative one cannot pass vacuously on a host whose cron never
+            // ticks at all.
+            //
+            // A missing `cronTicks` is NOT a reason to skip. Skipping on either
+            // half made the whole leg vanish for precisely the host the contract
+            // forbids — one whose `cron` is present and inert — because such a
+            // host has no ticks to expose either. `SchedulerHost.cron`'s docblock
+            // is explicit that a host without dynamic cron OMITS the method
+            // rather than supplying one that throws or silently no-ops, so a
+            // declared `cron` the suite cannot observe is a conformance failure.
+            it("ticks a cron on schedule, and not before its next occurrence", async (context) => {
+                await withHost(async (host) => {
+                    if (host.scheduler?.cron === undefined) {
+                        context.skip(`${name} does not implement SchedulerHost.cron`);
+
+                        return;
+                    }
+
+                    const { cronTicks } = host;
+
+                    if (cronTicks === undefined) {
+                        expect.fail(
+                            `${name} declares SchedulerHost.cron but no cronTicks — presence of cron is the claim that dynamic cron works, so it must be observable`,
+                        );
+
+                        return;
+                    }
+
+                    expect.assertions(2);
+
+                    // Seconds granularity (the optional sixth field) keeps the
+                    // positive half under two seconds. A host whose cron grammar
+                    // is five fields throws here rather than mis-scheduling.
+                    await host.scheduler.cron("* * * * * *", "tasks/tick");
+
+                    // The 1st of the month five to six months out: beyond the
+                    // timer ceiling from every date, unlike a fixed expression
+                    // (`0 0 29 2 *`), whose distance depends on today's calendar.
+                    const farMonth = ((new Date().getMonth() + 6) % 12) + 1;
+
+                    await host.scheduler.cron(`0 0 1 ${String(farMonth)} *`, "tasks/far");
+
+                    await new Promise((resolve) => {
+                        setTimeout(resolve, 1200);
+                    });
+
+                    expect(cronTicks("tasks/tick")).toBeGreaterThanOrEqual(1);
+                    expect(cronTicks("tasks/far")).toBe(0);
                 });
             });
         });

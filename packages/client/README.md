@@ -34,7 +34,7 @@
 
 ---
 
-The framework-agnostic browser/edge SDK for Lunora. It runs RPC over HTTP and real-time deltas over a single multiplexed WebSocket, with optimistic updates, an offline mutation queue, and decorrelated-jitter reconnect built in. It is the lowest-level user-facing entry point that every framework adapter (React, Vue, Svelte, Solid) layers on top of.
+The framework-agnostic browser/edge SDK for Lunora. It runs RPC over HTTP and real-time deltas over a single multiplexed WebSocket, with optimistic updates, an offline mutation queue, and exponential-backoff-with-jitter reconnect built in. It is the lowest-level user-facing entry point that every framework adapter (React, Vue, Svelte, Solid) layers on top of.
 
 Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 

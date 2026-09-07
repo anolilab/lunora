@@ -3,6 +3,7 @@ import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-li
 import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { encodeWire } from "../../../../../shared/wire-codec";
 import { GenerateRowsDialog } from "../../../src/features/data/generate-rows-dialog";
 import type { InsertBatchOutcome } from "../../../src/features/data/hooks/use-generate-rows";
 import { useGenerateRows } from "../../../src/features/data/hooks/use-generate-rows";
@@ -208,13 +209,77 @@ describe("generateRowsDialog", () => {
         expect(onInsertRows).not.toHaveBeenCalled();
     });
 
-    it("marks FK column with empty pool as skippable", () => {
+    it("marks an FK column whose parent table has no rows", () => {
         expect.assertions(1);
 
         renderDialog({ columns: FK_COLUMNS, fkPools: {} });
 
         // The empty pool badge should be visible for the FK column.
         expect(screen.getByTestId("gen-rows-fk-empty-userId").tagName.toLowerCase()).toBe("span");
+    });
+
+    it("blocks generation when an FK parent has no rows, and says so instead of claiming the column was skipped", () => {
+        expect.assertions(3);
+
+        // The endpoint refuses this request: `seedPlan` links the FK to freshly
+        // FABRICATED parent rows that the endpoint then drops, so every inserted
+        // child carried a reference to a row nobody inserted — while the dialog
+        // reported "Inserted N rows. Skipped FK columns: userId".
+        renderDialog({ columns: FK_COLUMNS, fkPools: {} });
+
+        const blocked = screen.getByTestId("gen-rows-blocked");
+
+        expect(blocked.textContent).toContain("userId");
+        expect(blocked.textContent).toContain("Seed those tables first");
+        expect(screen.getByTestId<HTMLButtonElement>("gen-rows-generate").disabled).toBe(true);
+    });
+
+    it("decodes wire-encoded rows so a bigint cell reaches the insert as a bigint", async () => {
+        expect.hasAssertions();
+
+        // The endpoint hands back `encodeWire`d rows; `importShard` parses each
+        // cell against the declared validator, and `v.bigint().parse(number)`
+        // throws — so a JSON-narrowed payload got every row rejected.
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => jsonResponse(true, { ok: true, rows: encodeWire([{ amount: 42n, blob: Uint8Array.from([1, 2]).buffer }]) })),
+        );
+
+        const onInsertRows = makeInsertRows();
+
+        renderDialog({ onInsertRows });
+
+        fireEvent.click(screen.getByTestId("gen-rows-generate"));
+
+        await waitFor(() => {
+            expect(onInsertRows).toHaveBeenCalledTimes(1);
+        });
+
+        const [rows] = onInsertRows.mock.calls[0] ?? [];
+
+        expect(rows?.[0]?.["amount"]).toBe(42n);
+        expect(rows?.[0]?.["blob"]).toBeInstanceOf(ArrayBuffer);
+    });
+
+    it("surfaces the endpoint's fk-parents-empty refusal naming the tables to seed first", async () => {
+        expect.hasAssertions();
+
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => jsonResponse(false, { error: "fk-parents-empty", ok: false, tables: ["users"] })),
+        );
+
+        const onInsertRows = makeInsertRows();
+
+        renderDialog({ columns: SIMPLE_COLUMNS, onInsertRows });
+
+        fireEvent.click(screen.getByTestId("gen-rows-generate"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("gen-rows-error").textContent).toContain("no rows to reference in users");
+        });
+
+        expect(onInsertRows).not.toHaveBeenCalled();
     });
 
     it("marks FK column with non-empty pool as ok", () => {

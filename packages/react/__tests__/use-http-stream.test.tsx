@@ -56,6 +56,23 @@ const Display = ({ args = {} }: { args?: "skip" | { searchParams?: { prompt: str
     );
 };
 
+/** A `v.bigint()` search param, as `@lunora/codegen` types it for an http route. */
+const feedRef: HttpStreamRef<{ text: string }, { after: bigint }> = { method: "GET", path: "/api/feed" };
+
+/**
+ * Hoisted out of the component body on purpose. React Compiler cannot lower a
+ * `BigIntLiteral` expression, so an inline `42n` fails the `react-hooks-js/todo`
+ * rule — the value under test is the bigint reaching the hook, not where the
+ * literal is written. A stable reference is the right shape for options anyway.
+ */
+const BIGINT_STREAM_ARGS = { searchParams: { after: 42n } };
+
+const BigIntDisplay = (): ReactElement => {
+    const { status } = useHttpStream(feedRef, BIGINT_STREAM_ARGS);
+
+    return <span data-testid="status">{status}</span>;
+};
+
 describe("useHttpStream", () => {
     it("opens the HTTP stream on mount and appends chunks until `complete`", async () => {
         expect.hasAssertions();
@@ -151,5 +168,36 @@ describe("useHttpStream", () => {
         });
 
         expect(screen.getByTestId("error").textContent).toBe("not allowed");
+    });
+
+    it("keys on wire-typed search params — a bigint must not throw out of render", async () => {
+        expect.hasAssertions();
+
+        // A `bigint` search param is first-class end to end: `@lunora/server`'s
+        // http router coerces `?after=42` to `BigInt(raw)` for a `v.bigint()`
+        // param, codegen types it `bigint`, and `client.httpStream` transports
+        // it. Keying the effect on `stableStringify` (which throws on a bigint)
+        // rather than `stableWireKey` threw from the render body, so React
+        // unwound the whole subtree to the nearest error boundary.
+        const { client, openStream } = buildClientWithHttpStream();
+
+        render(
+            <LunoraProvider client={client}>
+                <BigIntDisplay />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(openStream).not.toThrow();
+        });
+
+        await act(async () => {
+            openStream().handle.push({ text: "ok" });
+            openStream().handle.complete();
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("status").textContent).toBe("complete");
+        });
     });
 });

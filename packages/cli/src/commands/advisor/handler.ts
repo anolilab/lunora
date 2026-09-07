@@ -147,15 +147,7 @@ const runAdvisorCommand = (options: AdvisorCommandOptions): AdvisorCommandResult
 
     const { advisorContext, advisories } = runCodegen({ dryRun: true, projectRoot });
 
-    if (advisorContext === undefined) {
-        const message = "advisor evidence unavailable — codegen ran with linting disabled";
-
-        options.logger.error(message);
-
-        return { error: message };
-    }
-
-    const map = scoreAdvisor(advisorContext.procedureProtections ?? [], advisories, { generatedAt: options.generatedAt ?? STABLE_STAMP });
+    const map = scoreAdvisor(advisorContext?.procedureProtections ?? [], advisories, { generatedAt: options.generatedAt ?? STABLE_STAMP });
     const result: AdvisorCommandResult = { map };
 
     // Diff BEFORE writing. `--baseline` and `--out` default to the same path, so

@@ -1,6 +1,7 @@
 import { DEFER_VALIDATION, installCompiledValidatorMap } from "@lunora/values";
 import { describe, expect, it, vi } from "vitest";
 
+import type { Middleware } from "../src/index";
 import { initLunora, LunoraError, v, ValidationError } from "../src/index";
 
 const c = initLunora.dataModel<Record<string, never>>().create();
@@ -36,11 +37,12 @@ describe("builder terminal", () => {
 });
 
 describe(".meta()", () => {
-    // Expressing per-procedure policy only as
-    // `.use(rateLimit("pins/create"))` makes it executable but not
-    // *enumerable* — you cannot generate a rate-limit registry or docs from a
-    // middleware chain. `.meta()` puts the same policy back in data.
-    it("stamps merged metadata onto the registration", () => {
+    // `.meta()` exists so ONE generic middleware can read the policy it is meant
+    // to enforce off `ctx.meta`, instead of the policy being re-parameterised at
+    // every `.use()` site. It is deliberately NOT stamped onto the registration:
+    // nothing ever read `fn.meta` (not codegen, not the runtime, not studio), and
+    // `FunctionRegistryEntry` has no field for it.
+    it("does not stamp metadata onto the registration", () => {
         expect.assertions(3);
 
         const createPin = c.query
@@ -48,20 +50,95 @@ describe(".meta()", () => {
             .input({ id: v.string() })
             .query(() => 1);
 
-        expect(createPin.meta).toStrictEqual({ rateLimit: "pins/create" });
+        const watch = c.query.meta({ rateLimit: "pins/watch" }).stream(async function* watchPins() {
+            yield 1;
+        });
 
-        // Merges, so a shared base builder can set defaults a specific
-        // procedure then extends.
-        const audited = c.query
-            .meta({ audit: true, rateLimit: "base" })
-            .meta({ rateLimit: "pins/create" })
-            .query(() => 1);
+        expect(createPin).not.toHaveProperty("meta");
+        expect(watch).not.toHaveProperty("meta");
+        expect(c.query.query(() => 1)).not.toHaveProperty("meta");
+    });
 
-        expect(audited.meta).toStrictEqual({ audit: true, rateLimit: "pins/create" });
+    // The SAME object reaches every request's `ctx.meta`, so a middleware that
+    // writes through it would edit the procedure's module-level static
+    // declaration for the rest of the isolate's life. A shallow `Object.freeze`
+    // stopped only the top-level assignment; `.meta({ rateLimit: { hits: 0 } })`
+    // plus `ctx.meta.rateLimit.hits += 1` is exactly the nested shape the
+    // surface invites.
+    it("deep-freezes the declaration so a middleware cannot accumulate into it", async () => {
+        expect.assertions(3);
 
-        // Absent — not an empty object — when never declared, so the no-meta
-        // path stays byte-identical.
-        expect(c.query.query(() => 1).meta).toBeUndefined();
+        const guarded = c.query
+            .meta({ rateLimit: { hits: 0 } })
+            .use(async ({ ctx, next }) => {
+                const { meta } = ctx as unknown as { meta: { rateLimit: { hits: number } } };
+
+                expect(Object.isFrozen(meta.rateLimit)).toBe(true);
+
+                // Non-strict-mode assignment to a frozen object is a silent
+                // no-op; the module is strict, so this throws — either way the
+                // shared declaration must not change.
+                expect(() => {
+                    meta.rateLimit.hits += 1;
+                }).toThrow(TypeError);
+
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .query(({ ctx }) => (ctx as unknown as { meta: { rateLimit: { hits: number } } }).meta.rateLimit.hits);
+
+        await expect(guarded.handler({}, {})).resolves.toBe(0);
+    });
+
+    // The freeze must land on a COPY. `.meta({ rateLimit: shared })` freezing the
+    // caller's `shared` would turn `shared.hits += 1` into a TypeError in
+    // unrelated module scope — a side effect on data the caller still owns.
+    it("freezes a copy, leaving the caller's own object mutable", () => {
+        expect.assertions(4);
+
+        const shared = { hits: 0 };
+        const declaration = { rateLimit: shared };
+
+        c.query.meta(declaration).query(() => 1);
+
+        expect(Object.isFrozen(shared)).toBe(false);
+        expect(Object.isFrozen(declaration)).toBe(false);
+
+        shared.hits += 1;
+
+        expect(shared.hits).toBe(1);
+
+        // …and the copy did not follow the caller's mutation.
+        expect(Object.isFrozen(shared)).toBe(false);
+    });
+
+    // A `Map`/`Set` survives `Object.freeze` untouched — its entries live in
+    // internal slots — so a middleware could accumulate into the shared
+    // declaration through `.set()` / `.add()` for the isolate's life. The clone
+    // shadows the mutators so the promise holds for every value kind.
+    it("locks a Map/Set in the declaration and copies it away from the caller", async () => {
+        expect.assertions(4);
+
+        const seen = new Set<string>(["a"]);
+        const limits = new Map<string, number>([["signup", 5]]);
+
+        const guarded = c.query
+            .meta({ limits, seen })
+            .use(async ({ ctx, next }) => {
+                const { meta } = ctx as unknown as { meta: { limits: Map<string, number>; seen: Set<string> } };
+
+                expect(() => meta.seen.add("b")).toThrow(TypeError);
+                expect(() => meta.limits.set("signup", 999)).toThrow(TypeError);
+
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .query(({ ctx }) => (ctx as unknown as { meta: { limits: Map<string, number> } }).meta.limits.get("signup"));
+
+        await expect(guarded.handler({}, {})).resolves.toBe(5);
+
+        // The caller's own collections are copies away, still fully usable.
+        seen.add("b");
+
+        expect([...seen]).toStrictEqual(["a", "b"]);
     });
 
     it("exposes the metadata to middleware as ctx.meta", async () => {
@@ -84,26 +161,27 @@ describe(".meta()", () => {
         expect(seen).toStrictEqual({ rateLimit: "pins/create" });
     });
 
-    // `.stream()` builds its own handler shell (makeStreamHandler), separate from
-    // the query/mutation/action one above — meta must reach both the same way.
-    it("stamps merged metadata onto a streaming registration", () => {
-        expect.assertions(3);
+    // `.meta()` MERGES across calls, so a shared base builder can set defaults a
+    // specific procedure then extends. Observable only through `ctx.meta` now
+    // that the registration carries nothing.
+    it("merges across calls, last write winning per key", async () => {
+        expect.assertions(1);
 
-        const gen = async function* watchPins() {
-            yield 1;
-        };
+        let seen: unknown;
 
-        const watch = c.query.meta({ rateLimit: "pins/watch" }).stream(gen);
+        const audited = c.query
+            .meta({ audit: true, rateLimit: "base" })
+            .meta({ rateLimit: "pins/create" })
+            .use(async ({ ctx, next }) => {
+                seen = ctx.meta;
 
-        expect(watch.meta).toStrictEqual({ rateLimit: "pins/watch" });
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .query(() => "ok");
 
-        // Merges on the stream terminal too.
-        const audited = c.query.meta({ audit: true, rateLimit: "base" }).meta({ rateLimit: "pins/watch" }).stream(gen);
+        await audited.handler({}, {});
 
-        expect(audited.meta).toStrictEqual({ audit: true, rateLimit: "pins/watch" });
-
-        // Absent when never declared, same as the non-stream terminal.
-        expect(c.query.stream(gen).meta).toBeUndefined();
+        expect(seen).toStrictEqual({ audit: true, rateLimit: "pins/create" });
     });
 
     it("exposes the metadata to middleware as ctx.meta inside a streaming procedure", async () => {
@@ -130,6 +208,180 @@ describe(".meta()", () => {
         await iterator.next();
 
         expect(seen).toStrictEqual({ rateLimit: "pins/watch" });
+    });
+});
+
+// `ctx.args` is what makes a payload-gating middleware possible at all: the
+// procedure context carries the resolved identity, not the request body, so a
+// guard like `@lunora/auth`'s Turnstile/email-gate middlewares — whose whole
+// contract is a `(ctx) => ctx.args.<field>` selector — reads its input here or
+// nowhere. Without it every such guard rejects every call.
+describe("ctx.args (the middleware's view of the call arguments)", () => {
+    it("exposes the call arguments to middleware as ctx.args", async () => {
+        expect.assertions(2);
+
+        let seen: unknown;
+
+        const guarded = c.mutation
+            .input({ message: v.string(), turnstileToken: v.string() })
+            .use(async ({ ctx, next }) => {
+                // The documented selector shape, verbatim.
+                seen = ctx.args.turnstileToken;
+
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .mutation(({ args }) => args.message);
+
+        await expect(guarded.handler({}, { message: "hi", turnstileToken: "tok" })).resolves.toBe("hi");
+        expect(seen).toBe("tok");
+    });
+
+    // Compile-time half of the same claim, in the shape `@lunora/auth`'s guards
+    // are actually written: a factory generic over the ctx whose ONLY inference
+    // site is the `.use()` position. If `.use()` did not hand the middleware the
+    // args, `(ctx) => ctx.args.token` here would not type-check — which is what
+    // both shipped guards' JSDoc tells users to write.
+    it("infers ctx.args through a generic selector-taking middleware factory", async () => {
+        expect.assertions(2);
+
+        let seen: unknown;
+
+        const selectorGuard =
+            <Context>(select: (context: Context) => string | undefined): Middleware<Context, Context> =>
+            async ({ ctx, next }) => {
+                seen = select(ctx);
+
+                return await next();
+            };
+
+        const guarded = c.mutation
+            .input({ token: v.string() })
+            .use(selectorGuard((ctx) => ctx.args.token))
+            .mutation(() => "ok");
+
+        await expect(guarded.handler({}, { token: "tok" })).resolves.toBe("ok");
+        expect(seen).toBe("tok");
+    });
+
+    // The trust boundary: a security middleware must never be handed input that
+    // has not crossed the validators. Undeclared wire keys are dropped by
+    // `validateArgs`, so they must not reappear on `ctx.args`.
+    it("surfaces the VALIDATED args, not the raw wire object", async () => {
+        expect.assertions(1);
+
+        let seen: unknown;
+
+        const guarded = c.mutation
+            .input({ email: v.string() })
+            .use(async ({ ctx, next }) => {
+                seen = ctx.args;
+
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .mutation(() => "ok");
+
+        await guarded.handler({}, { email: "a@b.test", role: "admin" } as unknown as { email: string });
+
+        expect(seen).toStrictEqual({ email: "a@b.test" });
+    });
+
+    // `ctx.args` is a frozen COPY, so a middleware cannot rewrite the payload the
+    // handler is then dispatched with — a guard that verified `email` must not be
+    // able to hand the handler a different one (nor an unrelated middleware do it
+    // by accident).
+    it("hands middleware a frozen copy the handler does not read back", async () => {
+        expect.assertions(4);
+
+        let frozen: boolean | undefined;
+        let seen: unknown;
+
+        const guarded = c.mutation
+            .input({ email: v.string() })
+            .use(async ({ ctx, next }) => {
+                seen = ctx.args;
+                // Asserted alongside `isFrozen`, which answers `true` for a
+                // missing `ctx.args` and would pass vacuously on its own.
+                frozen = Object.isFrozen(ctx.args);
+
+                expect(() => {
+                    (ctx.args as unknown as { email: string }).email = "evil@b.test";
+                }).toThrow(TypeError);
+
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .mutation(({ args }) => args.email);
+
+        await expect(guarded.handler({}, { email: "a@b.test" })).resolves.toBe("a@b.test");
+        expect(seen).toStrictEqual({ email: "a@b.test" });
+        expect(frozen).toBe(true);
+    });
+
+    it("exposes the call arguments to middleware inside a streaming procedure", async () => {
+        expect.assertions(1);
+
+        let seen: unknown;
+
+        const guarded = c.query
+            .input({ room: v.string() })
+            .use(async ({ ctx, next }) => {
+                seen = ctx.args.room;
+
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .stream(async function* watchRoom() {
+                yield "ok";
+            });
+
+        const { signal } = new AbortController();
+        // The chain is deferred to the first pump — drive one step to observe it.
+        await guarded.handler({}, { room: "lobby" }, signal)[Symbol.asyncIterator]().next();
+
+        expect(seen).toBe("lobby");
+    });
+
+    // `.meta()` and `.args` land on the same decorated context; adding one must
+    // not have displaced the other.
+    it("carries ctx.meta alongside ctx.args", async () => {
+        expect.assertions(2);
+
+        let seenArgs: unknown;
+        let seenMeta: unknown;
+
+        const guarded = c.mutation
+            .input({ email: v.string() })
+            .meta({ rateLimit: "signup" })
+            .use(async ({ ctx, next }) => {
+                seenArgs = ctx.args;
+                seenMeta = ctx.meta;
+
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .mutation(() => "ok");
+
+        await guarded.handler({}, { email: "a@b.test" });
+
+        expect(seenArgs).toStrictEqual({ email: "a@b.test" });
+        expect(seenMeta).toStrictEqual({ rateLimit: "signup" });
+    });
+
+    // Ordering, not decoration: the args reach middleware only after they have
+    // been parsed, so a bad payload is rejected before any guard runs.
+    it("rejects an invalid payload before the chain runs", async () => {
+        expect.assertions(2);
+
+        const ran = vi.fn<() => void>();
+
+        const guarded = c.mutation
+            .input({ email: v.string() })
+            .use(async ({ ctx, next }) => {
+                ran();
+
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .mutation(() => "ok");
+
+        await expect(guarded.handler({}, { email: 42 as unknown as string })).rejects.toThrow(ValidationError);
+        expect(ran).not.toHaveBeenCalled();
     });
 });
 
@@ -282,6 +534,142 @@ describe("builder middleware", () => {
         await expect(fn.handler({}, {})).rejects.toThrow(/next\(\) called multiple times/u);
     });
 
+    /**
+     * A middleware that resolves without calling `next()` used to look like a
+     * short-circuit but was an authorization bypass: the terminal is what builds
+     * the handler's context, so the handler ran anyway — with every later
+     * `.use()` (`rls()`, `mask()`, `storageRules()`) skipped and `ctx.db` still
+     * the unwrapped writer, while the hoisted `fn.rls` kept advertising the
+     * procedure as guarded to studio and the shape registry. Returning
+     * `undefined` instead only produced a bare `TypeError` deeper in.
+     */
+    it("rejects a middleware that resolves without calling next(), and does not run the handler", async () => {
+        expect.assertions(3);
+
+        const handler = vi.fn<() => string>(() => "secret");
+        const later = vi.fn<() => void>();
+
+        const fn = c.query
+            .use(({ ctx }) => ctx)
+            .use(async ({ next }) => {
+                later();
+
+                return next();
+            })
+            .query(handler);
+
+        await expect(fn.handler({}, {})).rejects.toThrow(/resolved without calling next\(\)/u);
+
+        expect(handler).not.toHaveBeenCalled();
+        expect(later).not.toHaveBeenCalled();
+    });
+
+    it("rejects a middleware that returns undefined with the same clear error, not a TypeError", async () => {
+        expect.assertions(1);
+
+        const fn = c.query.use(() => undefined).query(() => "ok");
+
+        await expect(fn.handler({}, {})).rejects.toThrow(/resolved without calling next\(\)/u);
+    });
+
+    /**
+     * `void next()` satisfies the "did it call next()?" guard while still
+     * resolving the chain early: `next()` hands back the downstream promise and
+     * nothing awaits it, so the handler runs against a half-built context — the
+     * later `.use()` steps (`rls()`, `mask()`, `storageRules()`) are still in
+     * flight — and a downstream rejection detaches into an unhandled rejection.
+     */
+    it("does not resolve the chain before a fire-and-forget next() has run the rest of it", async () => {
+        expect.assertions(2);
+
+        const order: string[] = [];
+        // Fire-and-forget: the promise is kept, and nothing ever awaits it.
+        const dropped: unknown[] = [];
+
+        const fn = c.query
+            .use(({ ctx, next }) => {
+                dropped.push(next());
+
+                return ctx;
+            })
+            .use(async ({ next }) => {
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 5);
+                });
+
+                order.push("downstream");
+
+                return next();
+            })
+            .query(() => {
+                order.push("handler");
+
+                return "ok";
+            });
+
+        await fn.handler({}, {});
+
+        expect(dropped).toHaveLength(1);
+        expect(order).toStrictEqual(["downstream", "handler"]);
+    });
+
+    it("surfaces the rejection a fire-and-forget next() detached, instead of running the handler", async () => {
+        expect.assertions(3);
+
+        const handler = vi.fn<() => string>(() => "secret");
+        const dropped: unknown[] = [];
+
+        const fn = c.query
+            .use(({ ctx, next }) => {
+                dropped.push(next());
+
+                return ctx;
+            })
+            .use(() => {
+                throw new LunoraError("FORBIDDEN");
+            })
+            .query(handler);
+
+        await expect(fn.handler({}, {})).rejects.toThrow(/FORBIDDEN/u);
+
+        expect(dropped).toHaveLength(1);
+        expect(handler).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The other side of that fix: a middleware that AWAITED `next()` owns the
+     * outcome, including a rejection it deliberately swallowed. Re-awaiting the
+     * downstream promise on its behalf would re-throw what it just handled.
+     */
+    it("refuses to let a middleware swallow a later step's denial", async () => {
+        expect.assertions(2);
+
+        const handler = vi.fn<() => string>(() => "secret");
+
+        // The shape reads like error handling and is an authorization bypass.
+        // This chain's terminal only BUILDS the context and the handler runs
+        // after it resolves, so a rejection arriving here is never a handler
+        // error a middleware could legitimately recover from — it is a later
+        // step refusing (an `rls()` denial, or the no-next() guard one link
+        // down). Catching it and returning a fallback context would run the
+        // handler against exactly the context the denial existed to prevent.
+        const fn = c.query
+            .use(async ({ ctx, next }) => {
+                try {
+                    return await next();
+                } catch {
+                    return { ...ctx, fallback: true };
+                }
+            })
+            .use(() => {
+                throw new LunoraError("FORBIDDEN");
+            })
+            .query(handler);
+
+        await expect(fn.handler({}, {})).rejects.toBeInstanceOf(LunoraError);
+        expect(handler).not.toHaveBeenCalled();
+    });
+
     it("a middleware that throws aborts before the handler runs", async () => {
         expect.assertions(2);
 
@@ -303,12 +691,46 @@ describe("builder middleware", () => {
 });
 
 describe("builder output", () => {
-    it("parses the handler result through the .output() validator, stripping undeclared keys", async () => {
+    it("rejects a result carrying keys the .output() validator does not declare", async () => {
+        expect.assertions(2);
+
+        // This used to strip `extra` and return `{ count: 1 }`. That is how a
+        // column present in a row goes missing from every response the procedure
+        // serves, with no error anywhere — the failure this asymmetry exists to
+        // stop. On the way IN stripping is right; on the way OUT it deletes data
+        // the server meant to send.
+        const fn = c.query.output(v.object({ count: v.number() })).query(() => ({ count: 1, extra: "not declared" }) as { count: number });
+
+        await expect(fn.handler({}, {})).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+        // And it names the key, so the fix does not need a debugger.
+        await expect(fn.handler({}, {})).rejects.toThrow(/extra/u);
+    });
+
+    it("strips undeclared keys when .strip() says the narrowing is deliberate", async () => {
         expect.assertions(1);
 
-        const fn = c.query.output(v.object({ count: v.number() })).query(() => ({ count: 1, extra: "stripped" }) as { count: number });
+        // Trimming an internal field off a row before it reaches a client is a
+        // real use of `.output()`. It stays available — it just has to be said,
+        // so a reviewer can tell it apart from a forgotten column.
+        const fn = c.query.output(v.object({ count: v.number() }).strip()).query(() => ({ count: 1, passwordHash: "secret" }) as { count: number });
 
         await expect(fn.handler({}, {})).resolves.toEqual({ count: 1 });
+    });
+
+    it("leaves .strip() off the original validator when a shared const is narrowed", async () => {
+        expect.assertions(2);
+
+        // `.strip()` returns a new validator rather than mutating in place: the
+        // shape may be a const reused across procedures, and flipping it there
+        // would silently change what every other holder parses.
+        const shared = v.object({ count: v.number() });
+        const narrowed = shared.strip();
+
+        const strict = c.query.output(shared).query(() => ({ count: 1, extra: "x" }) as { count: number });
+        const lenient = c.query.output(narrowed).query(() => ({ count: 1, extra: "x" }) as { count: number });
+
+        await expect(strict.handler({}, {})).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+        await expect(lenient.handler({}, {})).resolves.toEqual({ count: 1 });
     });
 
     it("re-tags an .output() mismatch as an internal error, not a client 400", async () => {

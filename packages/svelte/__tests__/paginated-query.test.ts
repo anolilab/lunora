@@ -1,7 +1,7 @@
-import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
+import type { FunctionReference, LunoraClient, SubscriptionError, Unsubscribe } from "@lunora/client";
 import type { PaginationResult } from "@lunora/client/pagination";
 import { get, writable } from "svelte/store";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { infiniteQuery, paginatedQuery } from "../src/paginated-query";
 
@@ -54,6 +54,21 @@ const fn = { __lunoraRef: "messages:list" } as FunctionReference;
 const NUM_ITEMS = 5;
 const firstPageItems = [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }, { id: "e" }];
 const secondPageItems = [{ id: "f" }, { id: "g" }, { id: "h" }, { id: "i" }, { id: "j" }];
+
+// Every subscribing primitive in this package gates on a browser `window` (the
+// SSR guard — svelte's server runtime subscribes to `{$store}` during
+// `render()`, so a `readable`'s start callback runs on the server too). The
+// vitest env is `node`, so define one for the client-path tests. Mirrors the
+// same stub in `flag.test.ts` / `presence.test.ts`.
+/* eslint-disable vitest/require-top-level-describe -- the `window` stub is shared by every describe in this file, so it belongs at file scope */
+beforeAll(() => {
+    Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
+});
+
+afterAll(() => {
+    Reflect.deleteProperty(globalThis, "window");
+});
+/* eslint-enable vitest/require-top-level-describe */
 
 describe("paginatedQuery (Svelte)", () => {
     it("first page loads and results flatten", async () => {
@@ -129,13 +144,16 @@ describe("paginatedQuery (Svelte)", () => {
     it("skip short-circuits to LoadingFirstPage", async () => {
         const fake = createFakePaginatedClient();
 
-        const { status } = paginatedQuery(fake.client, fn, "skip", { initialNumItems: NUM_ITEMS });
+        const { isLoading, status } = paginatedQuery(fake.client, fn, "skip", { initialNumItems: NUM_ITEMS });
         const stopStatus = status.subscribe(() => {});
 
         await flushAsync();
 
         expect(get(status)).toBe("LoadingFirstPage");
         expect(fake.subscribeCalls).toHaveLength(0);
+        // `status` alone is "LoadingFirstPage" for a skipped feed, so a spinner
+        // bound to `isLoading` would never stop — React's `!skipped` contract.
+        expect(get(isLoading)).toBe(false);
 
         stopStatus();
     });
@@ -159,6 +177,66 @@ describe("paginatedQuery (Svelte)", () => {
         expect(get(status)).toBe("Exhausted");
 
         stopStatus();
+    });
+});
+
+describe("paginatedQuery page errors", () => {
+    it("a page error surfaces on `error`, returns status to CanLoadMore, and lets loadMore retry", async () => {
+        const subscribeCalls: { args: Record<string, unknown>; callback: (data: unknown) => void; onError?: (error: SubscriptionError) => void }[] = [];
+
+        const client = {
+            subscribe: (
+                _fn: FunctionReference,
+                args: Record<string, unknown>,
+                callback: (data: unknown) => void,
+                options?: { onError?: (error: SubscriptionError) => void },
+            ) => {
+                subscribeCalls.push({ args, callback, onError: options?.onError });
+
+                return () => undefined;
+            },
+        } as unknown as LunoraClient;
+
+        const errors: SubscriptionError[] = [];
+        const { error, isLoading, loadMore, results, status } = paginatedQuery(client, fn, {}, { initialNumItems: NUM_ITEMS, onError: (e) => errors.push(e) });
+
+        const stops = [results.subscribe(() => {}), status.subscribe(() => {}), error.subscribe(() => {}), isLoading.subscribe(() => {})];
+        const find = (opts: Record<string, unknown>) => subscribeCalls.find((c) => JSON.stringify(c.args) === JSON.stringify({ paginationOpts: opts }));
+
+        find({ cursor: null, endCursor: null, numItems: NUM_ITEMS })?.callback({ continueCursor: "cur-1", isDone: false, page: firstPageItems });
+        await flushAsync();
+
+        loadMore(NUM_ITEMS);
+        await flushAsync();
+
+        expect(get(status)).toBe("LoadingMore");
+
+        // An RLS denial on the new page: without an error channel the feed sat
+        // in `LoadingMore` forever with `isLoading` true and nothing surfaced.
+        const tailArgs = { cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS };
+
+        find(tailArgs)?.onError?.({ code: "FORBIDDEN", message: "denied" });
+        await flushAsync();
+
+        expect(errors).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
+        expect(get(error)).toStrictEqual({ code: "FORBIDDEN", message: "denied" });
+        expect(get(status)).toBe("CanLoadMore");
+        expect(get(isLoading)).toBe(false);
+        expect(get(results)).toStrictEqual(firstPageItems);
+
+        // The failed tail was dropped, so `loadMore` re-opens exactly that range.
+        const before = subscribeCalls.length;
+
+        loadMore(NUM_ITEMS);
+        await flushAsync();
+
+        expect(get(error)).toBeUndefined();
+        expect(get(status)).toBe("LoadingMore");
+        expect(subscribeCalls.slice(before).map((c) => c.args["paginationOpts"])).toStrictEqual([tailArgs]);
+
+        for (const stop of stops) {
+            stop();
+        }
     });
 });
 
@@ -656,5 +734,36 @@ describe("paginatedQuery with reactive args", () => {
 
         stopStatus();
         stopResults();
+    });
+});
+
+// Regression: `readable`'s start callback is NOT browser-only. Svelte's server
+// runtime resolves `{$store}` by calling `subscribe_to_store`, so every store
+// read in a server-rendered template runs its start callback — opening a live
+// socket per rendered request against a client whose URL does not resolve
+// server-side, and throwing straight out of the render when that URL is the
+// relative/empty one the SvelteKit template builds.
+describe("paginatedQuery during SSR", () => {
+    it("opens no page subscriptions without a browser window", () => {
+        const original = Reflect.getOwnPropertyDescriptor(globalThis, "window");
+
+        Reflect.deleteProperty(globalThis, "window");
+
+        try {
+            const fake = createFakePaginatedClient();
+            const { results, status } = paginatedQuery(fake.client, fn, {}, { initialNumItems: NUM_ITEMS });
+
+            const stop = results.subscribe(() => {});
+
+            expect(fake.subscribeCalls).toHaveLength(0);
+            expect(get(results)).toStrictEqual([]);
+            expect(get(status)).toBe("LoadingFirstPage");
+
+            stop();
+        } finally {
+            if (original) {
+                Object.defineProperty(globalThis, "window", original);
+            }
+        }
     });
 });

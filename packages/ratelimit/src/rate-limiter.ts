@@ -107,8 +107,15 @@ class RateLimiter<Names extends string = string> {
 
     public constructor(options: RateLimiterOptions<Names>) {
         this.config = options.config;
-        this.denyList = new Set(options.denyList);
         this.normalize = options.normalize ?? ((key: string): string => key);
+        // Store every entry in BOTH forms so an entry can be written either way.
+        // Storing it verbatim only, and matching the raw request key against
+        // that, catches nothing but a byte-exact repeat of the stored string:
+        // `denyList: ["Abuse@Example.com"]` under a trim+lowercase normalizer
+        // misses a request keyed `abuse@example.com`, which consumes from the
+        // SAME bucket the stored form routes to — so a banned caller sheds the
+        // ban by lower-casing their own email.
+        this.denyList = new Set([...(options.denyList ?? [])].flatMap((entry) => [entry, this.normalize(entry)]));
         this.now = options.now ?? Date.now;
 
         if (options.store === undefined) {
@@ -204,9 +211,10 @@ class RateLimiter<Names extends string = string> {
         const normalizedKey = this.normalizeKey(args.key);
 
         // The deny list short-circuits before any token accounting. Both the
-        // normalizer's output and the raw input are checked so callers can
-        // populate the deny-list either before or after normalization without
-        // surprises (the normalized form is canonical for storage).
+        // normalizer's output and the raw input are checked, against a list that
+        // holds every entry in both forms too (see the constructor) — so a
+        // caller can populate the deny-list either before or after
+        // normalization, and either form of a key is caught.
         if (normalizedKey !== undefined && (this.denyList.has(normalizedKey) || this.denyList.has(args.key as string))) {
             const status: RateLimitStatus = { ok: false, reason: "deny", retryAfter: Number.POSITIVE_INFINITY };
 

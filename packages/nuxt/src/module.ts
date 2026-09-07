@@ -1,8 +1,8 @@
 /**
  * The Lunora **Nuxt module** — single-worker composition, the inverse of the
  * old two-worker split. Instead of Lunora owning the Cloudflare worker entry, it
- * is mounted *inside* Nitro: a server route at `<prefix>/**` (default
- * `/_lunora/**`) forwards every RPC / WebSocket / admin request to the project's
+ * is mounted *inside* Nitro: a server route at `/_lunora/**` (the paths the
+ * worker routes on) forwards every RPC / WebSocket / admin request to the project's
  * Lunora app (`createWorker(...)` / `defineApp().build()`), which runs in the
  * same worker Nuxt deploys as. The `ShardDO` Durable Object class is carried to
  * the deployed worker by a root `worker.ts` wrapper (`wrangler.jsonc`'s `main`)
@@ -27,6 +27,43 @@
  * export { default } from "./.output/server/index.mjs";
  * export { ShardDO } from "./lunora/server";
  * ```
+ *
+ * ## Why this module registers no Vue plugin
+ *
+ * The `LunoraClient` is provided by a plugin the *project* owns
+ * (`plugins/lunora.ts`), not by `addPlugin` from here. That looks like the
+ * wrong layer — a module-registered plugin would fix every app rather than
+ * only freshly scaffolded ones — and it has been proposed more than once, so
+ * the reasons are recorded here rather than re-derived:
+ *
+ * - **The client URL is not knowable from this module.** In production it is
+ *   the page's own origin (`useRequestURL().origin`), but in dev `nuxt dev`
+ *   runs Nitro under Node, which cannot host `ShardDO`, so the client must
+ *   talk to the `wrangler dev` sidecar instead — on a port the Lunora CLI
+ *   resolves per run (`--worker-port`, then wrangler's `dev.port`, then the
+ *   first free port at or above 8787). This module sees none of that. It
+ *   could only hardcode the template's 8788, which is wrong for exactly the
+ *   hand-written apps a module-level fix is meant to serve, or grow a `devUrl`
+ *   option the user has to keep in sync with their own wrangler config by
+ *   hand.
+ * - **It would be a SECOND provider, and the loser is not free.** `addPlugin`
+ *   unshifts, so a module plugin installs before the project's own; both call
+ *   `app.provide` on the same injection key and the project's wins. That
+ *   ordering is the right way round, but it leaves a live orphan: in a browser
+ *   the `LunoraClient` constructor auto-probes IndexedDB persistence and
+ *   queues outbox hydration, which opens sockets for restored writes. Two
+ *   clients would then contend over one durable outbox, one of them dialling a
+ *   guessed origin. A loud `useLunora(): no LunoraClient provided` is a better
+ *   failure than that.
+ * - **Every other framework integration provides the client in user-land**
+ *   too (`root.tsx`, `layout.tsx`, `providers.tsx`, `__root.tsx`), for the
+ *   same reason: the URL is app-specific. Nuxt silently constructing one would
+ *   be the odd case, and it would also force `@lunora/vue` (and Vue) onto apps
+ *   that use only the `@lunora/nuxt/server` reactive-loader helpers.
+ *
+ * What this module does instead is warn — see {@link checkClientOnlyProvider},
+ * which catches the actual defect (a `.client.ts` provider, which never runs on
+ * the server) at build time, the same stance it already takes for `worker.ts`.
  */
 
 /* eslint-disable import/exports-last -- the public ModuleOptions type is declared next to the module definition it configures rather than grouped at the file end */
@@ -102,8 +139,24 @@ const lunoraTsSourceResolver = (rootDirectory: string): TsSourceResolverPlugin =
     };
 };
 
-/** Wrapper snippet shown in every `worker.ts` warning — kept as one constant so the three messages below stay byte-identical. */
-const WORKER_TS_SNIPPET = 'export { default } from "./.output/server/index.mjs"; export { ShardDO } from "./lunora/server";';
+/**
+ * Wrapper snippet shown in every `worker.ts` warning — kept as one constant so
+ * the messages below stay byte-identical.
+ *
+ * It COMPOSES Nitro's handler rather than re-exporting its `default`. Nitro's
+ * handler does export `scheduled` / `queue` / `email`, but each only fires the
+ * matching `cloudflare:*` Nitro hook, which nothing here listens on — so a
+ * re-export produces a worker where Cloudflare finds those entrypoints, calls
+ * them successfully, and Lunora's own never run.
+ */
+// All three event entrypoints, not just `scheduled`. Nitro exports `scheduled`,
+// `queue` and `email`, and each only fires an empty `cloudflare:*` hook, so a
+// bare `export { default } from` swallows every one of them. Handing the user a
+// snippet that fixes one and warns about the other two invites exactly the
+// silent loss the warning describes — a queue consumer that returns without
+// throwing ACKS its batch. Mirrors `templates/nuxt/worker.ts`.
+const WORKER_TS_SNIPPET =
+    'import nitro from "./.output/server/index.mjs"; import app, { ShardDO } from "./lunora/server"; export { ShardDO }; export default { ...nitro, email: (m, e, x) => app.email?.(m, e, x), queue: (b, e, x) => app.queue?.(b, e, x), scheduled: (c, e, x) => app.scheduled(c, e, x) };';
 
 /** Whether the source has an `export` keyword anywhere at all. */
 const EXPORT_KEYWORD_PATTERN = /\bexport\b/u;
@@ -113,6 +166,9 @@ const SHARD_DO_IDENTIFIER_PATTERN = /\bShardDO\b/u;
 
 /** `export * from` a specifier containing "lunora" — re-exports everything (including `ShardDO`) from a barrel without naming it, the common case being `export * from "./lunora/server"`. */
 const LUNORA_STAR_EXPORT_PATTERN = /\bexport\s*\*\s*from\s*["'][^"']*lunora[^"']*["']/u;
+
+/** Whether the entry mentions `scheduled` at all — the cron entrypoint a Nitro re-export silently swallows. */
+const SCHEDULED_IDENTIFIER_PATTERN = /\bscheduled\b/u;
 
 /**
  * Whether `source` looks like it exports `ShardDO` — the file has an `export`
@@ -188,7 +244,95 @@ export const checkWorkerEntry = (rootDirectory: string, warn: (message: string) 
             `worker.ts at the project root does not appear to export \`ShardDO\` — add \`export { ShardDO } from "./lunora/server";\` (e.g. \`${WORKER_TS_SNIPPET}\`) and point wrangler's \`main\` at it, so the SHARD Durable Object is exported from the deployed worker.`,
         );
     }
+
+    // The silent half of the same wiring. `export { default } from` Nitro's
+    // output ships a worker whose `scheduled` / `queue` / `email` only fire an
+    // empty `cloudflare:*` Nitro hook, so Lunora's never run — while
+    // `lunora deploy` writes the matching `triggers.crons` (and queue consumer)
+    // from the same codegen discovery. The trigger exists, Cloudflare fires it,
+    // the invocation succeeds, and the cron does nothing. Nothing else in the
+    // build says a word about it, which is why it is worth a warning.
+    if (!SCHEDULED_IDENTIFIER_PATTERN.test(source)) {
+        warn(
+            `worker.ts at the project root does not forward \`scheduled\` — re-exporting Nitro's \`default\` gives Cloudflare a \`scheduled\` entrypoint that only fires an empty \`cloudflare:scheduled\` hook, so a cron declared in \`lunora/crons.ts\` is provisioned and then runs nothing. Compose the two instead (\`${WORKER_TS_SNIPPET}\`), which forwards \`queue\` and \`email\` too — Nitro's exports for those fire empty hooks the same way, and a queue consumer that returns without throwing ACKS its batch.`,
+        );
+    }
 };
+
+/** Whether the source installs `@lunora/vue`'s provider (`app.use(createLunora(client))`). */
+const CREATE_LUNORA_PATTERN = /\bcreateLunora\b/u;
+
+/** Read `path` and report whether it mentions `createLunora`; an unreadable file simply doesn't count as a provider. */
+const providesLunoraClient = (path: string): boolean => {
+    try {
+        return CREATE_LUNORA_PATTERN.test(readFileSync(path, "utf8"));
+    } catch {
+        return false;
+    }
+};
+
+/**
+ * One entry of Nuxt's resolved plugin list (`app.plugins` at `app:resolve`):
+ * an absolute `src` plus the `mode` Nuxt derived for it. Declared structurally
+ * for the same reason as {@link LunoraNuxtModule} — `@nuxt/schema`, which owns
+ * `NuxtPlugin`, is not a resolvable dependency here — and `NuxtPlugin[]`
+ * satisfies it.
+ */
+export interface ResolvedNuxtPlugin {
+    mode?: "all" | "client" | "server";
+    src: string;
+}
+
+/**
+ * Warn when the project's ONLY `LunoraClient` provider is a client-only plugin.
+ *
+ * `@lunora/vue`'s composables call `useLunora()` unconditionally — ahead of
+ * their own browser guard — and it throws when nothing is injected. A
+ * `plugins/lunora.client.ts` by definition never runs on the server, so the
+ * first server-rendered page touching Lunora answers 500 with
+ * `useLunora(): no LunoraClient provided`. The fix is dropping `.client` from
+ * the filename plus a universal way to read the origin, which the warning says.
+ *
+ * Takes Nuxt's own resolved plugin list (`app.plugins`, from the `app:resolve`
+ * hook) rather than scanning `plugins/` itself. That is the whole point: Nuxt
+ * loads plugins with a two-pattern, ONE-level glob — top-level entries plus a
+ * subdirectory's `index` file — over every layer's configured plugins dir, so
+ * a filesystem scan of its own has to mirror the glob, the extension list,
+ * `dir.plugins` and every layer — and gets the answer WRONG in both directions
+ * when it doesn't. A recursive scan counts `plugins/lib/make-client.ts` (an
+ * ordinary colocated helper Nuxt never loads) as a universal provider and goes
+ * silent on a genuinely broken app. Reading `mode` off the resolved entry also
+ * drops the `.client` filename rule, since that is what Nuxt derived it from.
+ *
+ * Detection of the provider itself is the same shape as
+ * {@link looksLikeShardDoExport}: a documented keyword test, not a TS parse,
+ * because the outcome is a build-time warning. Its imprecision is a
+ * `createLunora` mention inside a comment, whose only cost is a warning
+ * pointing at a file that is already about the client.
+ *
+ * Silence requires a provider Nuxt loads on the server — `mode` `"all"` or
+ * `"server"` — not merely a working app: an app that confines every Lunora
+ * usage to `<ClientOnly>` is correct with a client-only provider and still
+ * warns, which is why the message names that case as a reason to ignore it.
+ */
+export const checkClientOnlyProvider = (plugins: ReadonlyArray<ResolvedNuxtPlugin>, warn: (message: string) => void): void => {
+    const providers = plugins.filter((plugin) => providesLunoraClient(plugin.src));
+
+    if (providers.length === 0 || providers.some((plugin) => plugin.mode !== "client")) {
+        return;
+    }
+
+    warn(
+        `the only plugin providing a \`LunoraClient\` is client-only (${providers.map((plugin) => plugin.src).join(", ")}) — ` +
+            `\`@lunora/vue\`'s composables resolve the client during SSR too and throw \`useLunora(): no LunoraClient provided\` without one, ` +
+            `so the first server-rendered page that touches Lunora answers 500. Drop the \`.client\` from the filename to make the plugin ` +
+            `universal, and read the origin with \`useRequestURL().origin\`, which resolves from the incoming request on the server and from ` +
+            `\`window.location\` in the browser. Ignore this if every Lunora usage is confined to \`<ClientOnly>\`, which never renders on the server.`,
+    );
+};
+
+/** The fixed path prefix the Lunora worker routes on (`RPC_PATH` / `WS_PATH` in `@lunora/runtime`). */
+const LUNORA_ROUTE_PREFIX = "/_lunora";
 
 /** Options for the `@lunora/nuxt` module (configurable under the `lunora` key in `nuxt.config`). */
 export interface ModuleOptions {
@@ -198,8 +342,6 @@ export interface ModuleOptions {
      * `ShardDO`. Aliased to the `#lunora/app` virtual the server route imports.
      */
     appEntry: string;
-    /** URL prefix Lunora realtime is mounted at. */
-    prefix: string;
 }
 
 /**
@@ -218,7 +360,6 @@ type LunoraNuxtModule = typeof defineNuxtModule<ModuleOptions> extends {
 const lunoraNuxtModule: LunoraNuxtModule = defineNuxtModule<ModuleOptions>({
     defaults: {
         appEntry: "~/lunora/server",
-        prefix: "/_lunora",
     },
     meta: {
         configKey: "lunora",
@@ -251,9 +392,14 @@ const lunoraNuxtModule: LunoraNuxtModule = defineNuxtModule<ModuleOptions>({
         // Mount Lunora realtime (RPC + WebSocket + admin) as a Nitro server route.
         // The handler reconstructs a Web Request, resolves the Cloudflare env/ctx
         // off the event, and forwards to the Lunora app's `fetch` in-process.
+        //
+        // The mount is fixed, not an option: `createWorker` routes on the
+        // `/_lunora/rpc` + `/_lunora/ws` constants and the generated client calls
+        // them, so a configurable prefix could only mount a route whose every
+        // request the worker answers 404 — which is what it used to do.
         addServerHandler({
             handler: resolver.resolve("./runtime/server/lunora"),
-            route: `${options.prefix}/**`,
+            route: `${LUNORA_ROUTE_PREFIX}/**`,
         });
 
         // The `ShardDO` class must reach the deployed Cloudflare worker: Nitro's
@@ -265,6 +411,21 @@ const lunoraNuxtModule: LunoraNuxtModule = defineNuxtModule<ModuleOptions>({
         // otherwise-valid build. See `checkWorkerEntry` for the three checks.
         checkWorkerEntry(nuxt.options.rootDir, (message) => {
             useLogger("@lunora/nuxt").warn(message);
+        });
+
+        // The client-side counterpart: the project (not this module) owns the
+        // plugin that provides the `LunoraClient` — see the file docblock for
+        // why — so the one failure mode we can still catch cheaply is a
+        // provider that never runs on the server. Same warn-don't-fail stance.
+        // Hooked on `app:resolve` (which runs in `nuxt build` and `nuxt dev`
+        // alike) so the check sees the plugin list Nuxt actually resolved,
+        // modes included, instead of re-deriving it from the filesystem — a
+        // scan of its own has to mirror Nuxt's one-level glob, extension list,
+        // `dir.plugins` and layers, and silently misjudges apps when it drifts.
+        nuxt.hook("app:resolve", (app) => {
+            checkClientOnlyProvider(app.plugins, (message) => {
+                useLogger("@lunora/nuxt").warn(message);
+            });
         });
     },
 });

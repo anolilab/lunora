@@ -1,25 +1,35 @@
-import { toErrorBody } from "@lunora/errors";
+import { isLunoraError, LunoraError, toErrorBody } from "@lunora/errors";
 import type { Infer, Validator, ValidatorKind } from "@lunora/values";
 import { ValidationError } from "@lunora/values";
 import type { Context } from "hono";
 import { Hono } from "hono";
 
+import { encodeWire } from "../../../shared/wire-codec";
 import applyOutput from "./apply-output";
 import type { EmptyArgs } from "./builder/index";
-import { LunoraError } from "./error";
 import { parseValidatorMap } from "./functions";
 import type { ActionCtx as ActionContext, ArgsValidator, InferArgs } from "./types";
 
 /** HTTP verbs the typed {@link httpRoute} builder can bind to. */
 type HttpMethod = "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PUT";
 
+/** The `run*` trio, shared between {@link HttpActionCtx} itself and its `forShard(key)` view. */
+type HttpRunners = Pick<ActionContext, "runAction" | "runMutation" | "runQuery">;
+
 /**
  * Context handed to an HTTP action handler. A narrower view of {@link ActionContext}:
  * HTTP actions run in the worker (the "action runtime"), separate from the
  * transactional store, so there is no direct `db` / `vectors` surface — reach the
- * data layer through `runQuery` / `runMutation` / `runAction`, which forward to
- * the owning shard. `db`'s absence is principled: an HTTP handler is not
+ * data layer through `runQuery` / `runMutation` / `runAction`, which forward an
+ * RPC to a shard. `db`'s absence is principled: an HTTP handler is not
  * transactional.
+ *
+ * WHICH shard is the handler's to choose. A query/mutation ctx is already inside
+ * the owning DO, so its `ctx.run*` has nowhere else to go; an HTTP action runs in
+ * the worker, one hop away from every shard, so the bare `ctx.run*` targets the
+ * DEFAULT shard and {@link HttpActionCtx.forShard} names any other. On a
+ * `.shardBy(...)` app that distinction is the whole ballgame — the default shard
+ * is the root DO, which holds none of a sharded table's rows.
  *
  * `scheduler` and `storage` ARE present, because neither needs the shard — the
  * scheduler talks to the scheduler DO, and R2 is a worker binding an HTTP
@@ -37,10 +47,40 @@ type HttpMethod = "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PU
  * the helper even on the branches that never went near storage.
  */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
-type HttpActionCtx = Pick<ActionContext, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery"> & {
+type HttpActionCtx = {
+    /**
+     * The same `run*` trio bound to `shardKey`, mirroring
+     * `createShardClient(...).forShard(key)`:
+     *
+     * ```ts
+     * const rows = await ctx.forShard(channelId).runQuery(api.messages.list, { channelId });
+     * ```
+     *
+     * Without it a webhook / REST route on a `.shardBy(...)` app could only reach
+     * the default (root) shard, so it read an empty table and wrote to the wrong
+     * DO — silently, with no way to say otherwise.
+     */
+    readonly forShard: (shardKey: string) => HttpRunners;
     readonly scheduler?: ActionContext["scheduler"];
     readonly storage?: ActionContext["storage"];
-};
+
+    /**
+     * The request's `ExecutionContext.waitUntil` — keep a promise alive past the
+     * returned `Response`. Present whenever the host supplied one (a real
+     * Cloudflare `ExecutionContext` always does; a partial context from a
+     * framework mount seam or a unit test may not), hence optional.
+     *
+     * An HTTP action is the one ctx that routinely returns before its work is
+     * done — "acknowledge the webhook in 200ms, then do the real thing" — and
+     * without this a handler had no way to defer anything: work started and not
+     * awaited is cancelled when the response resolves. Wrappers that need it
+     * (`@lunora/x402`'s `withX402`, whose receipt sink must outlive the
+     * response) read it structurally off whatever context they are handed, so
+     * its absence made them silently no-op rather than fail.
+     */
+    readonly waitUntil?: (promise: Promise<unknown>) => void;
+} & HttpRunners &
+    Pick<ActionContext, "auth" | "cache" | "fetch">;
 
 /** A raw handler wrapped by {@link httpAction}. Receives the raw request, returns the raw response. */
 type HttpActionHandler = (context: HttpActionCtx, request: Request) => Promise<Response> | Response;
@@ -144,7 +184,8 @@ interface HttpStreamHandlerOptions<SearchParams extends ArgsValidator, Params ex
  * builder, `.output(validator)` defaults to the `undefined` sentinel — while
  * unset the handler is generic over its own return; once set the handler must
  * return that type and the result is parsed through the validator before
- * serialization. `[Output] extends [undefined]` is tuple-wrapped so a union
+ * serialization. It binds `.stream()` the same way, per yielded chunk.
+ * `[Output] extends [undefined]` is tuple-wrapped so a union
  * `Output` doesn't distribute and the test is for the exact sentinel.
  *
  * The terminal `.handler()` yields a {@link LunoraRouteHandler} — mount it
@@ -178,10 +219,16 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
      * iterator completion the route writes a final `event: complete` frame; on
      * throw, an `event: error` frame is written with `{code, message}` before
      * the stream closes. The chunks are JSON-encoded; `R` is inferred from the
-     * handler's yielded type.
+     * handler's yielded type — unless `.output()` was declared, in which case each
+     * chunk must be that type and is parsed through the validator before the frame
+     * is written (a violation ends the stream with an `event: error` frame).
      * @experimental Reconnect/POST-body/wire-fidelity design questions are still open, so the shape may change.
      */
-    stream: <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => LunoraRouteHandler;
+    stream: [Output] extends [undefined]
+        ? <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => LunoraRouteHandler
+        : (
+              handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<Output, void, void> | AsyncIterable<Output>,
+          ) => LunoraRouteHandler;
 
     /**
      * Attach a `Vary` header to the response so Cloudflare stores separate
@@ -357,7 +404,14 @@ const errorResponse = (error: unknown): Response => {
         return Response.json({ code: "BAD_REQUEST", error: error.message }, { status: 400 });
     }
 
-    if (error instanceof LunoraError) {
+    // Structural, NOT `instanceof`: the errors that actually reach a route
+    // handler are minted by several classes (the facade's `@lunora/errors`
+    // `LunoraError`, the runtime's own subclass, a twin rebuilt from a shard-RPC
+    // error payload) and by other bundled copies of this package. An
+    // `instanceof` test against any single class misses all of those and falls
+    // through to the rethrow below, which escapes hono as a bare
+    // `500 text/plain` — losing the code, status, hint and `data`.
+    if (isLunoraError(error)) {
         const { body, redacted, status } = toErrorBody(error, { fallbackCode: "INTERNAL_SERVER_ERROR", redactedMessage: "Internal error" });
 
         if (redacted) {
@@ -372,6 +426,29 @@ const errorResponse = (error: unknown): Response => {
 };
 
 /**
+ * Reject a request whose verb is not the one the route was declared with.
+ *
+ * The verb is real routing information, not decoration: mounting
+ * `httpRoute.post("/api/todos")…` as `app.get("/api/todos", create)` is a typo
+ * hono cannot catch, and without this check the GET runs the POST handler and
+ * dies in `parseBody` with `400 "Invalid JSON body"` instead of saying the
+ * method is wrong. `HEAD` is accepted on a `GET` route (RFC 9110: HEAD is GET
+ * without a body); everything else answers 405 with the required `Allow` header.
+ */
+const methodNotAllowed = (state: RouteState, c: Context<LunoraHttpEnv>): Response | undefined => {
+    const { method } = c.req;
+
+    if (method === state.method || (state.method === "GET" && method === "HEAD")) {
+        return undefined;
+    }
+
+    return Response.json(
+        { code: "METHOD_NOT_ALLOWED", error: `${method} is not allowed on this route (declared as ${state.method})` },
+        { headers: { allow: state.method }, status: 405 },
+    );
+};
+
+/**
  * Compile the accumulated route state into a {@link LunoraRouteHandler}. Reads
  * `ctx` from `c.var.lunora` (set by {@link httpRouter}'s middleware). Input
  * decode failures (bad query / body / params) surface as 400; a result that
@@ -380,6 +457,12 @@ const errorResponse = (error: unknown): Response => {
 const buildRouteHandler =
     (state: RouteState, userHandler: LooseHandler): LunoraRouteHandler =>
     async (c) => {
+        const wrongMethod = methodNotAllowed(state, c);
+
+        if (wrongMethod) {
+            return wrongMethod;
+        }
+
         try {
             const context = c.get("lunora");
             const searchParams = Object.keys(state.searchParams).length > 0 ? parseSearchParams(state.searchParams, c) : {};
@@ -441,9 +524,19 @@ const SSE_HEADERS: Record<string, string> = {
  * Format one SSE frame. Each frame ends with `\n\n`, the spec-required
  * separator. `event:` is omitted for `data` (the default event name); we use
  * named events only for the terminal sentinels (`complete`, `error`).
+ *
+ * A default `data` frame carries a user chunk, so it goes through the wire codec
+ * — the same bracketing the WS stream path has always had, and which this
+ * transport was missing on both ends. Bare `JSON.stringify` flattens a `Date` to
+ * an ISO string, an `ArrayBuffer` to `{}` and `NaN` to `null` (all still typed
+ * as the declared yield type on the client), and throws outright on a `bigint`,
+ * killing the stream mid-flight with a redacted "Internal error".
+ *
+ * The terminal sentinels are NOT encoded: `complete` carries `{}` and `error`
+ * carries a plain `{ code, message }` that the client reads without decoding.
  */
 const sseFrame = (chunk: unknown, event?: "complete" | "error"): string => {
-    const data = JSON.stringify(chunk);
+    const data = JSON.stringify(event === undefined ? encodeWire(chunk) : chunk);
     const prefix = event ? `event: ${event}\n` : "";
 
     return `${prefix}data: ${data}\n\n`;
@@ -461,6 +554,12 @@ const buildStreamHandler =
     (state: RouteState, userHandler: LooseStreamHandler): LunoraRouteHandler =>
     // eslint-disable-next-line @typescript-eslint/require-await -- LunoraRouteHandler is contractually `(c) => Promise<Response>`; this handler returns synchronously (all awaits live inside the ReadableStream pump), so `async` is required by the type, not the body.
     async (c) => {
+        const wrongMethod = methodNotAllowed(state, c);
+
+        if (wrongMethod) {
+            return wrongMethod;
+        }
+
         let searchParams: Record<string, unknown>;
         let params: Record<string, unknown>;
 
@@ -497,6 +596,19 @@ const buildStreamHandler =
                 request.signal.removeEventListener("abort", onAbort);
                 ac.abort();
             },
+            // KNOWN CEILING — no backpressure. The whole user iterator is driven
+            // inside `start()`, enqueueing every chunk without consulting
+            // `controller.desiredSize`, so a generator that yields faster than the
+            // client reads buffers the difference in worker memory. Cancel IS
+            // honored (see `cancel()` above and the `ac.signal` check below), so
+            // nothing keeps running past a disconnect — this is a memory ceiling on
+            // a live stream, not a leak.
+            //
+            // Deliberately left: draining on demand means hoisting the iterator and
+            // pulling one chunk per `pull()`, which rewrites the abort / terminal-
+            // frame / error-frame ordering this block already carries a scar from
+            // (see the post-loop re-check). Do it when a real stream is observed
+            // outrunning its reader; the surface is `@experimental` until then.
             async start(controller) {
                 try {
                     const iterator = userHandler({ ctx: context, params, request, searchParams, signal: ac.signal });
@@ -506,10 +618,29 @@ const buildStreamHandler =
                             break;
                         }
 
-                        controller.enqueue(encoder.encode(sseFrame(chunk)));
+                        // `.output()` applies HERE too. SSE was the one result path
+                        // that skipped `applyOutput`, whose own contract is "every
+                        // result-parsing site (RPC, REST, any future transport) must
+                        // route through this helper" — so a `.stream()` route accepted
+                        // an `.output()`, type-checked the handler against it, and then
+                        // discarded it, sending whatever the generator yielded. A
+                        // violating chunk throws out of the pump into the catch below
+                        // and becomes a redacted `event: error` frame, which is the
+                        // same verdict the RPC and REST paths reach for a contract
+                        // breach — a wrong chunk is not a stream that keeps going.
+                        controller.enqueue(encoder.encode(sseFrame(state.output ? applyOutput(state.output, chunk) : chunk)));
                     }
 
-                    controller.enqueue(encoder.encode(sseFrame({}, "complete")));
+                    // Re-check after the loop: a consumer `cancel()` (or a client
+                    // disconnect) aborts `ac` and breaks the pump, and the
+                    // controller is already closed by then — enqueueing the
+                    // terminal frame onto it throws a `TypeError` that would be
+                    // caught below, logged as a bogus handler error, and then
+                    // throw AGAIN out of the error frame and `close()`, rejecting
+                    // `start()` unhandled on every mid-stream disconnect.
+                    if (!ac.signal.aborted) {
+                        controller.enqueue(encoder.encode(sseFrame({}, "complete")));
+                    }
                 } catch (error: unknown) {
                     // Mirror the shared `toErrorBody` redaction policy: only a
                     // non-internal LunoraError-shaped value gets its `code`/`message`
@@ -524,10 +655,24 @@ const buildStreamHandler =
                         console.error("[lunora] unhandled stream handler error:", error);
                     }
 
-                    controller.enqueue(encoder.encode(sseFrame({ code: body.code, message: body.message }, "error")));
+                    // Same guard as the terminal frame above: nobody is left to
+                    // read the error frame once the stream is cancelled, and
+                    // enqueueing onto the closed controller would throw out of
+                    // this catch.
+                    if (!ac.signal.aborted) {
+                        controller.enqueue(encoder.encode(sseFrame({ code: body.code, message: body.message }, "error")));
+                    }
                 } finally {
                     request.signal.removeEventListener("abort", onAbort);
-                    controller.close();
+
+                    // `close()` throws on an already-closed/errored controller
+                    // (a cancelled stream), which would escape `start()` as an
+                    // unhandled rejection. The close is best-effort cleanup.
+                    try {
+                        controller.close();
+                    } catch {
+                        // already closed — nothing to do
+                    }
                 }
             },
         });
@@ -587,73 +732,6 @@ const httpRoute: HttpRoute = {
 };
 
 /**
- * Structural view of an R2 object body, as returned by `@lunora/storage`'s
- * `download()`. Re-declared here (not imported) so `@lunora/server` takes no
- * runtime dependency on `@lunora/storage`; the real binding satisfies the shape.
- */
-interface StorageObjectBody {
-    /** The object body stream (`null` for a zero-byte object). */
-    body: ReadableStream | null;
-    etag: string;
-    httpMetadata?: { contentType?: string };
-    key: string;
-    /** Hex SHA-256, when R2 carries a checksum (surfaced by `@lunora/storage`). */
-    sha256?: string;
-    /** Base64 SHA-256 (RFC 9530 digest encoding), when R2 carries a checksum. */
-    sha256Base64?: string;
-    size: number;
-}
-
-/** Byte window forwarded to `download()` so R2 streams just the requested slice. */
-interface StorageRange {
-    length: number;
-    offset: number;
-}
-
-/**
- * The minimal storage surface {@link serveStorageObject} needs: a metadata-rich
- * `download`, plus the body-free `head` a range request resolves against.
- *
- * `head` is required rather than optional-with-a-fallback because the fallback
- * is the bug: without it a ranged request has to start a full-object `download`
- * just to learn the size, then throw that body away. `@lunora/storage`'s `head`
- * already degrades internally to a 0-length ranged `get()` on a binding with no
- * HEAD, so there is nothing a caller here could usefully do that it does not.
- */
-interface StorageHead {
-    /** Object metadata with no body. `size` is the FULL object size (mirrors R2). */
-    head: (key: string) => Promise<Omit<StorageObjectBody, "body"> | null>;
-}
-
-/** The storage surface {@link serveStorageObject} reads through. */
-interface StorageDownloader extends StorageHead {
-    download: (key: string, options?: { range?: StorageRange }) => Promise<StorageObjectBody | null>;
-}
-
-/** Any ctx that carries a {@link StorageDownloader} on `.storage` (Query/Mutation/Action ctx all do). */
-interface ContextWithStorage {
-    storage: StorageDownloader;
-}
-
-/** Hoisted so the single-range matcher isn't recompiled on every request. */
-const SINGLE_BYTE_RANGE_RE = /^bytes=(\d*)-(\d*)$/;
-
-/**
- * RFC 7232 requires an `ETag` field-value to be a quoted-string (or `W/`-prefixed
- * weak validator). R2's `object.etag` is the *unquoted* MD5 hex, so emitting it
- * verbatim produces a malformed header that conditional-request clients and CDNs
- * will never match against `If-None-Match: "…"`. Wrap it in quotes unless the
- * source already carries them (or a weak prefix).
- */
-const toHttpEtag = (etag: string): string => {
-    if (etag.startsWith('"') || etag.startsWith('W/"')) {
-        return etag;
-    }
-
-    return `"${etag}"`;
-};
-
-/**
  * True when `value` is safe to use as an HTTP header field-value: no CR, LF, or
  * NUL. Guards against response-header injection / `Headers`-construction throws
  * when reflecting attacker-influenced object metadata (e.g. a stored
@@ -663,201 +741,7 @@ const toHttpEtag = (etag: string): string => {
  */
 const isSafeHeaderValue = (value: string): boolean => !(value.includes("\r") || value.includes("\n") || value.includes("\0"));
 
-/**
- * Outcome of parsing a `Range` header. `kind: "full"` → no/ignorable range
- * (serve the whole object as 200); `kind: "partial"` → a resolved inclusive
- * `[start, end]` (serve 206); `kind: "unsatisfiable"` → syntactically valid but
- * out of bounds (serve 416).
- */
-type RangeResult = { end: number; kind: "partial"; start: number } | { kind: "full" } | { kind: "unsatisfiable" };
-
-/**
- * Parse a single-range `Range: bytes=start-end` header against a known object
- * `size`. Only a single byte range is supported; a multi-range request
- * (`bytes=0-1,3-4`) is ignored and the full object is served — the common
- * media-streaming case is a single range, and multipart/byteranges responses
- * add disproportionate complexity.
- */
-const parseRange = (header: null | string, size: number): RangeResult => {
-    if (header === null) {
-        return { kind: "full" };
-    }
-
-    const match = SINGLE_BYTE_RANGE_RE.exec(header.trim());
-
-    if (!match) {
-        // Multi-range or malformed — ignore and serve the whole object.
-        return { kind: "full" };
-    }
-
-    const startRaw = match[1] ?? "";
-    const endRaw = match[2] ?? "";
-
-    if (startRaw === "" && endRaw === "") {
-        return { kind: "full" };
-    }
-
-    let start: number;
-    let end: number;
-
-    if (startRaw === "") {
-        // Suffix range `bytes=-N`: the final N bytes.
-        const suffix = Number(endRaw);
-
-        if (suffix === 0) {
-            return { kind: "unsatisfiable" };
-        }
-
-        start = Math.max(0, size - suffix);
-        end = size - 1;
-    } else {
-        start = Number(startRaw);
-        end = endRaw === "" ? size - 1 : Math.min(Number(endRaw), size - 1);
-    }
-
-    if (start > end || start >= size) {
-        return { kind: "unsatisfiable" };
-    }
-
-    return { end, kind: "partial", start };
-};
-
-/**
- * The headers every representation of an object carries — its content-type, its
- * validator, and the RFC 9530 digest when R2 recorded a checksum.
- *
- * `contentType` originates from object metadata set at upload time, so it is
- * attacker-influenced. A value carrying CR/LF (or other control chars) would
- * either throw inside `Response`/`Headers` construction (→ unhandled 500) or,
- * on a permissive runtime, smuggle an injected response header. Reject any
- * unsafe value and fall back to the safe default rather than reflecting it.
- */
-const storageObjectHeaders = (object: Omit<StorageObjectBody, "body">): Record<string, string> => {
-    const rawContentType = object.httpMetadata?.contentType;
-    const headers: Record<string, string> = {
-        "accept-ranges": "bytes",
-        "content-type": rawContentType !== undefined && isSafeHeaderValue(rawContentType) ? rawContentType : "application/octet-stream",
-        etag: toHttpEtag(object.etag),
-    };
-
-    if (object.sha256Base64 !== undefined) {
-        // RFC 9530 representation digest so clients can verify integrity. The
-        // value is a structured-field byte-sequence (base64 wrapped in colons),
-        // and it covers the full representation, so it's correct on a 206 too.
-        headers["repr-digest"] = `sha-256=:${object.sha256Base64}:`;
-    }
-
-    return headers;
-};
-
-/**
- * Whether `header` degrades to the whole object no matter how big the object is:
- * absent, multi-range, malformed, or a bare `bytes=-`.
- *
- * Every branch of {@link parseRange} that answers `"full"` returns before `size`
- * is read, so probing with `0` is a header-only question — which lets a request
- * that can never be a 206 skip the metadata read instead of paying for one and
- * throwing it away.
- */
-const rangeDegradesToWholeObject = (header: null | string): boolean => parseRange(header, 0).kind === "full";
-
-/** The whole object as a `200`, streamed from a single `download()`. */
-const serveWholeStorageObject = async (context: ContextWithStorage, key: string): Promise<Response> => {
-    const object = await context.storage.download(key);
-
-    if (!object) {
-        return new Response("Not Found", { status: 404 });
-    }
-
-    return new Response(object.body, {
-        headers: { ...storageObjectHeaders(object), "content-length": String(object.size) },
-        status: 200,
-    });
-};
-
-/**
- * Stream a stored object as an HTTP {@link Response} from an `httpAction`
- * handler, with correct `Content-Type`, `ETag`, and `Accept-Ranges: bytes`.
- * Honors a single-range `Range` request → **206 Partial Content** with
- * `Content-Range` + `Content-Length`; otherwise **200**. A missing object is a
- * **404**; an out-of-bounds range is a **416** with a `Content-Range` of
- * `bytes` star-slash-size.
- *
- * A range request resolves its window against a body-free `head()`, then issues
- * ONE `download()` with the resolved `{ offset, length }` so R2 streams just
- * those bytes — the slice is never buffered in the isolate, and no full-object
- * body transfer is started only to be cancelled. A request that cannot produce a
- * 206 at all (no `Range`, multi-range, malformed) skips the `head()` entirely and
- * streams straight from a single `download()`. For very
- * large objects a signed URL (`ctx.storage.getSignedUrl`) is still cheaper since
- * the client then ranges against R2/CDN directly with no Worker hop.
- */
-const serveStorageObject = async (context: ContextWithStorage, key: string, request: Request): Promise<Response> => {
-    const rangeHeader = request.headers.get("range");
-
-    // No `Range`, or one that cannot produce a 206 anyway (multi-range, malformed):
-    // the object's own metadata rides along with its body, so there is nothing to
-    // look up first — and paying for a `head()` here would only add a round trip
-    // and a window for the object to vanish between the two reads.
-    if (rangeDegradesToWholeObject(rangeHeader)) {
-        return serveWholeStorageObject(context, key);
-    }
-
-    // A range has to be resolved against the object's size before it can be
-    // requested, so this read exists only for the metadata — which is exactly why
-    // it is a `head()` and not a `download()`.
-    const metadata = await context.storage.head(key);
-
-    if (!metadata) {
-        return new Response("Not Found", { status: 404 });
-    }
-
-    const range = parseRange(rangeHeader, metadata.size);
-
-    if (range.kind === "unsatisfiable") {
-        // The body here is a plain-text error, not the object — so it carries
-        // neither the object's `Content-Type` nor its digest. Only the
-        // range-relevant headers (and the resource ETag) ride along.
-        return new Response("Range Not Satisfiable", {
-            headers: {
-                "accept-ranges": "bytes",
-                "content-range": `bytes */${String(metadata.size)}`,
-                "content-type": "text/plain; charset=utf-8",
-                etag: toHttpEtag(metadata.etag),
-            },
-            status: 416,
-        });
-    }
-
-    // Unreachable: the whole-object check at the top already answered this, and
-    // its answer does not depend on `size`. Kept so the union stays exhaustive.
-    if (range.kind === "full") {
-        return serveWholeStorageObject(context, key);
-    }
-
-    const length = range.end - range.start + 1;
-    const slice = await context.storage.download(key, { range: { length, offset: range.start } });
-
-    if (!slice) {
-        // Raced with a delete between the metadata read and the ranged read.
-        return new Response("Not Found", { status: 404 });
-    }
-
-    // Headers come from `metadata`, not `slice`: the validator, the digest and the
-    // `Content-Range` total must all describe the ONE representation the window
-    // was resolved against. (An object replaced between the two reads is a
-    // pre-existing race either way — this at least keeps the header set coherent.)
-    return new Response(slice.body, {
-        headers: {
-            ...storageObjectHeaders(metadata),
-            "content-length": String(length),
-            "content-range": `bytes ${String(range.start)}-${String(range.end)}/${String(metadata.size)}`,
-        },
-        status: 206,
-    });
-};
-
-export { httpAction, httpRoute, httpRouter, isSafeHeaderValue, serveStorageObject };
+export { httpAction, httpRoute, httpRouter, isSafeHeaderValue };
 
 export type {
     HttpActionCtx,
@@ -867,6 +751,7 @@ export type {
     HttpRouteBuilder,
     HttpRouteFactory,
     HttpRouteHandlerOptions,
+    HttpRunners,
     HttpStreamHandlerOptions,
     LunoraHttpApp,
     LunoraHttpEnv,

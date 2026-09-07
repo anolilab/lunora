@@ -1,5 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
+import { CAPABILITIES } from "./capabilities";
+import type { FeatureUsage } from "./discover/feature-usage";
 import type { SchemaIR } from "./ir";
 
 /** One package the emitted `_generated/` will import, and the schema feature that pulls it in. */
@@ -11,17 +13,67 @@ interface RequiredPackage {
 }
 
 /**
+ * The emit signals that pull in an add-on package but that the schema alone
+ * cannot answer. Everything derivable from the IR (`.global()`, `.vectorize()`)
+ * is read off `schema` instead.
+ */
+interface RequiredPackageSignals {
+    /**
+     * The platform gate's `vectorStore` verdict. `false` means the emitted output
+     * withholds the Vectorize wiring, so the binding package it would have
+     * imported is not required either.
+     */
+    hasVectors?: boolean;
+
+    /**
+     * A declared cron or `ctx.scheduler` usage — the same OR the app emitter's
+     * `hasScheduler` is built from. A cron is declared with `cronJobs` out of
+     * `@lunora/server`, so nothing about it implies the scheduler dependency.
+     */
+    scheduler?: boolean;
+
+    /**
+     * A `v.storage()` column, a storage access rule, or `ctx.storage` usage — the
+     * same OR the app emitter's `hasStorage` is built from. `v.storage()` lives in
+     * `@lunora/values` and is an ordinary data type, so declaring one implies no
+     * dependency on `@lunora/storage` at all.
+     */
+    storage?: boolean;
+
+    /**
+     * The platform-gated `ctx.*` usage probe. Reading a bare `ctx.kv` / `ctx.ai`
+     * / … is enough on its own to make the emitters import that capability's
+     * package, so every {@link CAPABILITIES} row carrying a `requiredPackage`
+     * demands it here. Gated usage, not raw: a target that rates a capability
+     * unsupported withholds its surface, so demanding the package would hard-fail
+     * over an import the generated code does not contain.
+     */
+    usage?: FeatureUsage;
+}
+
+/**
  * The add-on packages this schema's generated output will import.
  *
- * Deliberately keyed off the *schema*, not off the emitted text: the point is
- * to fail before emit, so the diagnostic names the `.global()` / `.vectorize()`
- * declaration rather than a module specifier in a file the user did not write.
+ * Deliberately keyed off the *schema* plus the emit signals, not off the emitted
+ * text: the point is to fail before emit, so the diagnostic names the
+ * `.global()` / `v.storage()` / cron declaration rather than a module specifier
+ * in a file the user did not write.
+ *
+ * Every entry here has to track what `emit-app.ts` actually imports. The three
+ * signal-driven ones were missing for exactly that reason: they are emitted off
+ * signals with no implied dependency (a `v.storage()` column, a declared cron, a
+ * hyperdrive-backed global table), so codegen exited 0 and the build died with
+ * `Cannot find module` INSIDE `_generated/app.ts` — the failure this check
+ * exists to prevent.
  *
  * None of these are umbrella-provided — `lunorash` re-exports only the base
  * packages (server, values, runtime, do, client), so an umbrella project still
  * installs these separately.
+ * @param schema the discovered schema.
+ * @param signals the emit signals the schema cannot answer — see {@link RequiredPackageSignals}.
  */
-const requiredPackagesFor = (schema: SchemaIR): RequiredPackage[] => {
+const requiredPackagesFor = (schema: SchemaIR, signals: RequiredPackageSignals = {}): RequiredPackage[] => {
+    const { hasVectors = true, scheduler = false, storage = false, usage } = signals;
     const required: RequiredPackage[] = [];
     const globalTables = schema.tables.filter((table) => table.shardMode === "global");
 
@@ -33,20 +85,71 @@ const requiredPackagesFor = (schema: SchemaIR): RequiredPackage[] => {
     }
 
     if (globalTables.some((table) => table.globalBackend === "hyperdrive")) {
+        required.push(
+            {
+                name: "@lunora/hyperdrive",
+                reason: '`.global({ backend: "hyperdrive" })` tables route through `@lunora/hyperdrive/global`',
+            },
+            // A separate specifier in the emitted file, so a strict node_modules
+            // layout will not resolve it off `@lunora/hyperdrive`'s dependency on it.
+            {
+                name: "@lunora/sql-store",
+                reason: '`.global({ backend: "hyperdrive" })` makes `_generated/app.ts` import the `SqlCtxDbOptions` / `SqlExec` types',
+            },
+        );
+    }
+
+    if (scheduler) {
         required.push({
-            name: "@lunora/hyperdrive",
-            reason: '`.global({ backend: "hyperdrive" })` tables route through `@lunora/hyperdrive/global`',
+            name: "@lunora/scheduler",
+            reason: "a declared cron (or `ctx.scheduler` use) makes `_generated/app.ts` import `createScheduler`",
         });
     }
 
-    if (schema.vectorIndexes.length > 0) {
+    if (storage) {
+        required.push({
+            name: "@lunora/storage",
+            reason: "a `v.storage()` column, a storage access rule (or `ctx.storage` use) makes `_generated/app.ts` import `createStorage`",
+        });
+    }
+
+    // Gated on the platform verdict, not on the raw declaration: when the target
+    // rates `vectorStore` as `unsupported` the shard emitter withholds the
+    // `@lunora/bindings/vectors` import entirely, so demanding the package would
+    // hard-fail the build over an import the generated code does not contain —
+    // for a binding the host does not have, after the gate has already reported
+    // the feature unsupported.
+    if (schema.vectorIndexes.length > 0 && hasVectors) {
         required.push({
             name: "@lunora/bindings",
-            reason: "`.vectorize()` indexes make `_generated/vectors.ts` import `@lunora/bindings/vectors`",
+            reason: "`.vectorize()` indexes make `_generated/shard.ts` import `@lunora/bindings/vectors`",
         });
     }
 
-    return required;
+    // The `ctx.*` arm, last so the schema-derived reasons above win the dedupe —
+    // they name the declaration that caused the import, which is more actionable
+    // than "you read this ctx property".
+    //
+    // `discover/feature-usage.ts` flips a capability on a bare `ctx.<prop>` read,
+    // with no import anywhere, and the emitters then write that capability's
+    // import into `_generated/`. Nothing above covers that, so `ctx.kv` /
+    // `ctx.ai` / `ctx.analytics` / … exited codegen 0 and died in `tsc` with
+    // `Cannot find module` inside a generated file — the exact class this module
+    // exists to prevent. Driven off the CAPABILITIES table so a capability added
+    // there cannot reintroduce the gap.
+    for (const capability of usage === undefined ? [] : CAPABILITIES) {
+        if (capability.requiredPackage !== undefined && usage?.[capability.key] === true) {
+            required.push({
+                name: capability.requiredPackage,
+                reason: `\`ctx.${capability.contextProperty ?? capability.key}\` usage makes \`_generated/\` import \`${capability.moduleSpecifier}\``,
+            });
+        }
+    }
+
+    // Several capabilities share one package (`@lunora/bindings` backs `/kv`,
+    // `/analytics`, `/images`, `/pipelines`, `/r2sql` and `/vectors`), so the
+    // diagnostic must name it once however many of them the app reaches.
+    return required.filter((entry, index) => required.findIndex((other) => other.name === entry.name) === index);
 };
 
 /**
@@ -65,13 +168,16 @@ const requiredPackagesFor = (schema: SchemaIR): RequiredPackage[] => {
  * tell", not "declares nothing" — a project without a root `package.json` (the
  * codegen fixtures, an embedded schema, a tool driving `runCodegen` directly)
  * must not be told every add-on is missing. The check simply does not run.
+ * @param schema the discovered schema.
+ * @param dependencies the project's declared dependencies, or `undefined` when no manifest could be read.
+ * @param signals the emit signals the schema cannot answer — see {@link RequiredPackageSignals}.
  */
-const assertRequiredPackages = (schema: SchemaIR, dependencies: ReadonlySet<string> | undefined): void => {
+const assertRequiredPackages = (schema: SchemaIR, dependencies: ReadonlySet<string> | undefined, signals: RequiredPackageSignals = {}): void => {
     if (dependencies === undefined) {
         return;
     }
 
-    const missing = requiredPackagesFor(schema).filter((entry) => !dependencies.has(entry.name));
+    const missing = requiredPackagesFor(schema, signals).filter((entry) => !dependencies.has(entry.name));
 
     if (missing.length === 0) {
         return;
@@ -92,4 +198,4 @@ const assertRequiredPackages = (schema: SchemaIR, dependencies: ReadonlySet<stri
 
 export default assertRequiredPackages;
 export { requiredPackagesFor };
-export type { RequiredPackage };
+export type { RequiredPackage, RequiredPackageSignals };

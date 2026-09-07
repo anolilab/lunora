@@ -4,16 +4,25 @@
     "compilerOptions": {
         "noEmit": true,
         "moduleResolution": "bundler",
-        "types": ["node"],
+        "types": [
+            "node"
+        ],
         "paths": {
-            "@lunora/auth/plugins": ["../packages/auth/dist/plugins.d.ts"],
-            "@lunora/*": ["../packages/*/dist/index.d.ts"],
-            "better-auth/plugins/generic-oauth": ["../packages/auth/node_modules/better-auth/dist/plugins/generic-oauth/index.d.mts"]
+            "@lunora/auth/plugins": [
+                "../packages/auth/dist/plugins.d.ts"
+            ],
+            "@lunora/flags/providers/*": [
+                "../packages/flags/dist/providers/*.d.ts"
+            ],
+            "@lunora/*": [
+                "../packages/*/dist/index.d.ts"
+            ],
+            "better-auth/plugins/generic-oauth": [
+                "../packages/auth/node_modules/better-auth/dist/plugins/generic-oauth/index.d.mts"
+            ]
         }
     },
-    "// exclude": "Function templates that import the per-app builders (`mutation`/`query`/`action`/`internal*`) from `./_generated/server` — the path codegen emits in a real project — can't be checked here: that relative path only exists after codegen, and ambient declarations can't stub a relative specifier (same reason `crons/crons.ts`, which imports `./_generated/api`, is excluded). Items that import only published `@lunora/*` surfaces stay in and are checked against the mapped dist declarations above. Subpath-exports like `@lunora/flags/providers/memory` are also excluded because the single `@lunora/*` path mapping can't reach them.",
-    "// exclude auth-emails": "Same reason as the auth-ui-* items below: `auth-emails` is TSX rendered by @react-email/render, so it needs a JSX config this backend-oriented program does not have. It is type-checked at its source, `packages/auth-ui/src/emails/index.tsx`.",
-    "// exclude auth-ui": "The auth-ui-* items are copy-in UI templates in framework dialects (React/Vue/Svelte/Solid/Angular) — they import UI frameworks (react, vue, solid-js, @angular/core) and cross-file JSX/SFCs this backend-oriented tsconfig can't resolve. They're type-checked at their source in @lunora/auth-ui (core + react) and in the consumer's own project after `lunora add auth-ui`.",
+    "// exclude": "Why each entry below is excluded, and why the rest are now checked: see registry/TYPECHECK.md.",
     "exclude": [
         "**/node_modules/**",
         "auth-emails/**",
@@ -23,18 +32,9 @@
         "auth-ui-solid/**",
         "auth-ui-solid-v2/**",
         "auth-ui-angular/**",
-        "ai/ai.ts",
-        "browser/browser.ts",
-        "crons/crons.ts",
-        "crons/jobs.ts",
-        "backup/backup.ts",
-        "flags/flags.ts",
-        "hyperdrive/hyperdrive.ts",
-        "mail/mail.ts",
-        "payment/payment.ts",
-        "presence/presence.ts",
-        "ratelimit/ratelimit.ts",
-        "storage/storage.ts"
+        "crons/crons.ts"
     ],
-    "include": ["**/*.ts"]
+    "include": [
+        "**/*.ts"
+    ]
 }

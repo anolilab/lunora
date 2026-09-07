@@ -124,7 +124,6 @@ export const openRpcSpec: Record<string, unknown> = {
                     "name": "args",
                     "required": true,
                     "schema": {
-                        "additionalProperties": false,
                         "properties": {
                             "channelId": {
                                 "description": "Id<\"channels\">",
@@ -272,7 +271,6 @@ export const openRpcSpec: Record<string, unknown> = {
                     "name": "args",
                     "required": true,
                     "schema": {
-                        "additionalProperties": false,
                         "properties": {
                             "channelId": {
                                 "description": "Id<\"channels\">",
@@ -296,6 +294,9 @@ export const openRpcSpec: Record<string, unknown> = {
                             },
                             "tags": {
                                 "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "propertyNames": {
                                     "type": "string"
                                 },
                                 "type": "object"

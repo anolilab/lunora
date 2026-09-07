@@ -107,6 +107,11 @@ interface AuthAdmin {
         permission: Record<string, string[]>;
         role: string;
     }) => Promise<AuthOrgRole>;
+    createSignUpInvitation: (input: {
+        email: string;
+        expiresInSeconds?: number;
+        invitedBy?: string;
+    }) => Promise<AuthSignUpInvitation>;
     createTeam: (input: {
         name: string;
         organizationId: string;
@@ -169,6 +174,10 @@ interface AuthAdmin {
         offset?: number;
         userId?: string;
     }) => Promise<AuthPage<AuthAdminSession>>;
+    listSignUpInvitations: (options: {
+        limit?: number;
+        offset?: number;
+    }) => Promise<AuthPage<AuthSignUpInvitation>>;
     listTeamMembers: (options: {
         limit?: number;
         offset?: number;
@@ -191,6 +200,9 @@ interface AuthAdmin {
     }) => Promise<void>;
     removeUser: (input: {
         userId: string;
+    }) => Promise<void>;
+    revokeSignUpInvitation: (input: {
+        email: string;
     }) => Promise<void>;
     revokeUserSession: (input: {
         sessionId: string;
@@ -326,6 +338,7 @@ interface AuthAuditReader {
 interface AuthCapabilities {
     accounts: boolean;
     admin: boolean;
+    inviteOnly: boolean;
     organization: boolean;
     passkey: boolean;
     twoFactor: boolean;
@@ -477,6 +490,21 @@ interface AuthQuery {
 type AuthRow = Record<string, unknown>;
 ```
 
+### `AuthSignUpInvitation` (interface)
+
+```ts
+interface AuthSignUpInvitation {
+    [key: string]: unknown;
+    acceptedAt?: AuthTimestamp;
+    createdAt?: AuthTimestamp;
+    email?: null | string;
+    expiresAt?: AuthTimestamp;
+    id: string;
+    invitedBy?: null | string;
+    token?: string;
+}
+```
+
 ### `AuthStore` (interface)
 
 ```ts
@@ -562,6 +590,10 @@ interface DoAuthWiring {
     auditReader: AuthAuditReader;
     authHandler: (request: Request) => Promise<Response | undefined>;
     resolveIdentity: (request: Request) => Promise<null | {
+        email?: string;
+        expiresAtMs?: number;
+        name?: string;
+        role?: string;
         userId: string;
     }>;
 }
@@ -600,7 +632,6 @@ interface EmailGateConfig {
     allowDomains?: ReadonlyArray<string>;
     blockDisposable?: boolean;
     denyDomains?: ReadonlyArray<string>;
-    flagFreeEmail?: boolean;
     mx?: boolean;
     requireValidSyntax?: boolean;
 }
@@ -640,6 +671,22 @@ interface ImpersonationResult {
     expiresAt: AuthTimestamp;
     token: string;
     user: AuthAdminUser;
+}
+```
+
+### `InviteOnlyOptions` (interface)
+
+```ts
+interface InviteOnlyOptions {
+    allowFirstUser?: boolean;
+}
+```
+
+### `IssuedSignUpInvitation` (interface)
+
+```ts
+interface IssuedSignUpInvitation extends SignUpInvitation {
+    token: string;
 }
 ```
 
@@ -716,6 +763,19 @@ interface ReadAuthAuditOptions {
 
 ```ts
 type SessionPolicy = NonNullable<BetterAuthOptions["session"]>;
+```
+
+### `SignUpInvitation` (interface)
+
+```ts
+interface SignUpInvitation {
+    acceptedAt: Date | null;
+    createdAt: Date;
+    email: string;
+    expiresAt: Date;
+    id: string;
+    invitedBy: null | string;
+}
 ```
 
 ### `SqlExecutor` (interface)
@@ -873,6 +933,16 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 const createMemoryAuthStore: () => AuthStore;
 ```
 
+### `createSignUpInvitation` (const)
+
+```ts
+const createSignUpInvitation: (auth: LunoraAuth, input: {
+    email: string;
+    expiresInSeconds?: number;
+    invitedBy?: string;
+}) => Promise<IssuedSignUpInvitation>;
+```
+
 ### `createSqlAuthStore` (const)
 
 ```ts
@@ -923,6 +993,14 @@ const eventForPath: (path: string) => AuthAuditEvent | undefined;
 const handleAuthRequest: (auth: LunoraAuth, request: Request, basePath?: string) => Promise<Response | undefined>;
 ```
 
+### `listSignUpInvitations` (const)
+
+```ts
+const listSignUpInvitations: (auth: LunoraAuth, options?: {
+    pendingOnly?: boolean;
+}) => Promise<SignUpInvitation[]>;
+```
+
 ### `loadEmailDomainLists` (const)
 
 ```ts
@@ -951,6 +1029,14 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 const matchesWhere: (row: AuthRow, where: ReadonlyArray<AuthWhereClause>) => boolean;
 ```
 
+### `pruneSignUpInvitations` (const)
+
+```ts
+const pruneSignUpInvitations: (auth: LunoraAuth, options?: {
+    limit?: number;
+}) => Promise<number>;
+```
+
 ### `readAuthAuditLog` (const)
 
 ```ts
@@ -961,6 +1047,14 @@ const readAuthAuditLog: (executor: SqlExecutor, options?: ReadAuthAuditOptions) 
 
 ```ts
 const resolveAuthOptions: (options: LunoraAuthOptions) => LunoraAuthOptions;
+```
+
+### `revokeSignUpInvitation` (const)
+
+```ts
+const revokeSignUpInvitation: (auth: LunoraAuth, input: {
+    email: string;
+}) => Promise<void>;
 ```
 
 ### `sessionPresets` (const)
@@ -1131,6 +1225,18 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ## `@lunora/auth/plugins`
 
+### `InviteOnlyOptions` (interface)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `IssuedSignUpInvitation` (interface)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `SignUpInvitation` (interface)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
 ### `UiConfigOptions` (interface)
 
 ```ts
@@ -1218,6 +1324,12 @@ Re-exported from `better-auth` — signature tracked at its source.
 ### `haveIBeenPwned` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
+
+### `inviteOnly` (const)
+
+```ts
+const inviteOnly: (options?: InviteOnlyOptions) => BetterAuthPlugin;
+```
 
 ### `jwt` (const)
 

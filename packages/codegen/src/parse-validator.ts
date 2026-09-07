@@ -14,10 +14,10 @@ type StandardTypeResolver = (node: Node) => string | undefined;
 /**
  * Registered by the codegen run, because recovering the type needs the type
  * checker AND the same "is this renderable in a generated file?" guards the
- * handler-return path uses — both of which live in `discover-functions`. A
+ * handler-return path uses — both of which live in `discover/functions`. A
  * module-level hook rather than a threaded parameter keeps the recursive
  * parse functions' signatures unchanged, and importing it the other way would
- * make a cycle (`discover-functions` already imports this module).
+ * make a cycle (`discover/functions` already imports this module).
  *
  * Unset (a bare parser, a test) simply means `v.from()` stays `unknown`, which
  * is the behaviour that predates the recovery.
@@ -119,6 +119,24 @@ const REFINEMENT_MODIFIERS = new Set(["check", "email", "int", "length", "max", 
  * passes through untouched and the AOT compiler may still compile the node.
  */
 const METADATA_MODIFIERS = new Set(["meta"]);
+
+/**
+ * Modifiers that change only how a value is PARSED at runtime, never the
+ * inferred type or the set of accepted values — so the IR passes through
+ * untouched, exactly like a metadata modifier, and the AOT compiler may still
+ * compile the node.
+ *
+ * `.strip()` marks an object as narrowing on purpose, which only has an effect
+ * under `.output()` (where undeclared keys are otherwise an error). Args
+ * validation — the only thing the AOT compiler emits — is unaffected either way,
+ * so there is nothing here for it to model.
+ *
+ * Kept separate from {@link METADATA_MODIFIERS} rather than folded in: that set
+ * is defined as attaching a JSON Schema fragment, and `.strip()` attaches
+ * nothing. Same handling, different reason — and the reason is what the next
+ * person needs.
+ */
+const PARSE_BEHAVIOR_MODIFIERS = new Set(["strip"]);
 
 /**
  * Identifiers currently being followed to their declaration, so a self- or
@@ -425,6 +443,24 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>, call: Cal
     }
 };
 
+/**
+ * The single numeric literal a modifier was called with, or `undefined` for
+ * anything else — no argument, several, or an expression whose value this pass
+ * cannot know (`v.string().max(LIMIT)`). Underscore separators are stripped, so
+ * `max(100_000)` reads as 100000.
+ */
+const numericLiteralArgument = (args: ReadonlyArray<Node>): number | undefined => {
+    const [only] = args;
+
+    if (args.length !== 1 || only === undefined || !Node.isNumericLiteral(only)) {
+        return undefined;
+    }
+
+    const value = Number(only.getText().replaceAll("_", ""));
+
+    return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+};
+
 const parseValidatorCall = (call: CallExpression): ValidatorIR => {
     const callee = call.getExpression();
 
@@ -440,7 +476,7 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
     // choosing which list it belongs in — a single `member === …` comparison
     // standing in for one of the sets is how the next addition silently gets the
     // wrong treatment.
-    if (COLUMN_MODIFIERS.has(member) || REFINEMENT_MODIFIERS.has(member) || METADATA_MODIFIERS.has(member)) {
+    if (COLUMN_MODIFIERS.has(member) || REFINEMENT_MODIFIERS.has(member) || METADATA_MODIFIERS.has(member) || PARSE_BEHAVIOR_MODIFIERS.has(member)) {
         const receiver = callee.getExpression();
         const base = Node.isExpression(receiver) ? parseValidator(receiver) : { kind: "any" };
 
@@ -448,11 +484,32 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
             return applyColumnModifier(base, member);
         }
 
-        return REFINEMENT_MODIFIERS.has(member) ? { ...base, hasRefinement: true } : base;
+        if (!REFINEMENT_MODIFIERS.has(member)) {
+            return base;
+        }
+
+        // A `.max(<literal>)` on a string is the one refinement whose predicate
+        // the IR CAN represent — `value.length <= n` and nothing else — so it is
+        // recorded rather than left opaque, and the AOT compiler keeps its fast
+        // path over it (see `stringMaxLength`). Every other refinement stays a
+        // runtime closure and sets `unmodelledRefinement`, which is what the
+        // compiler declines on. `hasRefinement` is set either way: it is what
+        // `schema-drift` hashes, and a bound is still a refinement there.
+        const bound = member === "max" && base.kind === "string" ? numericLiteralArgument(args) : undefined;
+
+        if (bound !== undefined) {
+            // The TIGHTER of the two on a repeated bound: the runtime applies every
+            // `.check()` in the chain, so `v.string().max(5).max(10)` accepts 5.
+            // Keeping the later one would emit a guard that lets a 7-character
+            // value through the fast path that the interpreted parser rejects.
+            return { ...base, hasRefinement: true, stringMaxLength: Math.min(base.stringMaxLength ?? bound, bound) };
+        }
+
+        return { ...base, hasRefinement: true, unmodelledRefinement: true };
     }
 
     return parseBuilderMember(member, args, call);
 };
 
-export { COLUMN_MODIFIERS, METADATA_MODIFIERS, parseObjectShape, parseValidator, REFINEMENT_MODIFIERS, setStandardTypeResolver };
+export { COLUMN_MODIFIERS, METADATA_MODIFIERS, PARSE_BEHAVIOR_MODIFIERS, parseObjectShape, parseValidator, REFINEMENT_MODIFIERS, setStandardTypeResolver };
 export type { StandardTypeResolver };

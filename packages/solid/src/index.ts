@@ -20,7 +20,7 @@ export { createAgentToolEvents } from "./create-agent-tool-events";
 export type { UseAuthResult } from "./create-auth";
 export { Authenticated, AuthLoading, createAuth, Unauthenticated } from "./create-auth";
 export { default as createConnectionStatus } from "./create-connection-status";
-export type { FlagContext, FlagValue } from "./create-flag";
+export type { FlagValue } from "./create-flag";
 export { createFlag, createFlags } from "./create-flag";
 export type { MutationClient, MutationHandle } from "./create-mutation";
 export { createMutation, createMutationForClient } from "./create-mutation";
@@ -83,4 +83,13 @@ export { LunoraProvider } from "./lunora-provider";
 export type { SolidChildren } from "./solid-compat";
 // Re-export the core type surface so consumers can stay on a single import for
 // function references, args/return inference, and the SSR `Preloaded` token.
-export type { ArgsOf, FunctionReference, OptimisticUpdate, Preloaded, ReturnOf, Unsubscribe } from "@lunora/client";
+export type {
+    ArgsOf,
+    FunctionReference,
+    OptimisticUpdate,
+    Preloaded,
+    ReturnOf,
+    SubscriptionError,
+    SubscriptionErrorCallback,
+    Unsubscribe,
+} from "@lunora/client";

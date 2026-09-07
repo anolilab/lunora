@@ -13,6 +13,30 @@ const silentLogger = (): Logger => {
     };
 };
 
+/**
+ * A fetch stub for the "must never reach the network" cases: it records that it
+ * was called — which is the failure those tests pin — and answers a bare 200.
+ */
+const recordingFetch = (): { called: () => boolean; fetchImpl: FetchLike } => {
+    let called = false;
+
+    return {
+        called: () => called,
+        fetchImpl: async () => {
+            called = true;
+
+            return {
+                json: async () => {
+                    return {};
+                },
+                ok: true,
+                status: 200,
+                text: async () => "",
+            };
+        },
+    };
+};
+
 describe("lunora run", () => {
     it("pOSTs the RPC payload to the configured URL", async () => {
         expect.assertions(4);
@@ -167,6 +191,45 @@ describe("lunora run", () => {
 
         expect(result.code).toBe(1);
         expect(errors.join("\n")).toContain("failed to parse --args");
+    });
+
+    it("returns non-zero when --args parses to a non-object", async () => {
+        expect.assertions(2);
+
+        const errors: string[] = [];
+        const { called, fetchImpl } = recordingFetch();
+
+        const result = await runRpcCommand({
+            args: "5",
+            fetchImpl,
+            functionPath: "x:y",
+            logger: { ...silentLogger(), error: (message) => errors.push(message) },
+        });
+
+        expect(result.code).toBe(1);
+        expect(called()).toBe(false);
+    });
+
+    it("refuses --claims without --as instead of making an anonymous call", async () => {
+        expect.assertions(3);
+
+        const errors: string[] = [];
+        const { called, fetchImpl } = recordingFetch();
+
+        // Regression: `claims` was only threaded into the `runAs` branch, so this
+        // exited 0 having made an ANONYMOUS call — an authoritative-looking wrong
+        // answer when debugging a claims-gated procedure.
+        const result = await runRpcCommand({
+            claims: JSON.stringify({ role: "admin" }),
+            fetchImpl,
+            functionPath: "x:y",
+            logger: { ...silentLogger(), error: (message) => errors.push(message) },
+            url: "http://localhost:9999",
+        });
+
+        expect(result.code).toBe(1);
+        expect(called()).toBe(false);
+        expect(errors.join("\n")).toContain("--claims requires --as");
     });
 });
 

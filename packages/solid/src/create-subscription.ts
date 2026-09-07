@@ -1,4 +1,4 @@
-import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
+import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionErrorCallback } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 import { LunoraError } from "@lunora/errors";
 import type { Accessor } from "solid-js";
@@ -16,11 +16,15 @@ interface CreateSubscriptionResult<T> {
  * Subscribe to a reactive server push stream. Returns `{ data, error }`
  * accessors that update whenever the server emits. Passing `"skip"` as `args`
  * (or an accessor that resolves to `"skip"`) tears down the subscription.
+ *
+ * `onError` mirrors the other adapters' subscription primitives: it receives the
+ * raw wire-level subscription error (code included) alongside the normalised
+ * `error` accessor.
  */
 const createSubscription = <F extends FunctionReference>(
     function_: F,
     args: ArgsOf<F> | "skip" | Accessor<ArgsOf<F> | "skip">,
-    options: { shardKey?: string } = {},
+    options: { onError?: SubscriptionErrorCallback; shardKey?: string } = {},
 ): CreateSubscriptionResult<ReturnOf<F>> => {
     const client = useLunora();
 
@@ -30,10 +34,12 @@ const createSubscription = <F extends FunctionReference>(
     const resolveArgs = typeof args === "function" ? (args as Accessor<ArgsOf<F> | "skip">) : () => args;
 
     trackedEffect(resolveArgs, (currentArgs) => {
-        if (currentArgs === "skip") {
-            setData(() => undefined);
-            setError(() => undefined);
+        // Each args generation starts clean: the previous args' value must not
+        // render under the new args until the new subscription's first frame.
+        setData(() => undefined);
+        setError(() => undefined);
 
+        if (currentArgs === "skip") {
             return undefined;
         }
 
@@ -58,6 +64,7 @@ const createSubscription = <F extends FunctionReference>(
 
                     setError(() => normalized);
                     setData(() => undefined);
+                    options.onError?.(subscriptionError);
                 },
                 onReset: () => {
                     setData(() => undefined);

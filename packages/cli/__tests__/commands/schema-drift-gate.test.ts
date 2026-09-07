@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { runBuildCommand } from "../../src/commands/build/handler";
 import { runDeployCommand } from "../../src/commands/deploy/handler";
 import { runPrepareCommand } from "../../src/commands/prepare/handler";
 import { runVerifyCommand } from "../../src/commands/verify/handler";
@@ -63,12 +64,12 @@ const introduceBreakingDrift = (): void => {
 };
 
 /** Append a `defineMigration` to `lunora/schema.ts` so a NEW migration id is discovered. */
-const addMigration = (id: string): void => {
+const addMigration = (id: string, table = "users"): void => {
     const migrationsPath = join(workdir, "lunora", "migrations.ts");
 
     writeFileSync(
         migrationsPath,
-        `import { defineMigration } from "@lunora/server";\n\nexport const fix = defineMigration({\n    id: "${id}",\n    table: "users",\n    up: (doc) => doc,\n});\n`,
+        `import { defineMigration } from "@lunora/server";\n\nexport const fix = defineMigration({\n    id: "${id}",\n    table: "${table}",\n    up: (doc) => doc,\n});\n`,
         "utf8",
     );
 };
@@ -153,6 +154,27 @@ describe("schema-drift gate", () => {
             expect(result.code).toBe(0);
             // Deploy proceeded — wrangler was spawned.
             expect(calls.length).toBeGreaterThan(0);
+        });
+
+        it("still blocks when the new migration iterates a DIFFERENT table", async () => {
+            // Pins the wiring, not just the rule: `runCodegen` must hand its
+            // discovered `migrations` to the gate. Drop that argument and the gate
+            // falls back to counting ids, and this deploy would sail through.
+            expect.assertions(3);
+
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+            introduceBreakingDrift();
+            addMigration("backfill-messages", "messages");
+
+            const { errors, logger } = silentLogger();
+            const { calls, spawner } = createRecordingSpawner();
+            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+
+            expect(result.code).not.toBe(0);
+            // wrangler was never reached.
+            expect(calls).toHaveLength(0);
+            expect(errors.find((line) => line.includes("deploy blocked")) ?? "").toContain("unresolved breaking schema change");
         });
 
         it("passes a blocked deploy when --allow-schema-drift is set", async () => {
@@ -267,6 +289,83 @@ describe("schema-drift gate", () => {
 
             expect(result.code).toBe(1);
             expect(result.schemaDrift?.blocked).toBe(true);
+        });
+
+        it("prepare --allow-schema-drift does not permanently disarm the gate", async () => {
+            expect.assertions(4);
+
+            await runPrepareCommand({ cwd: workdir, logger: silentLogger().logger });
+            const baselineBefore = readFileSync(join(workdir, SNAPSHOT_FILE), "utf8");
+
+            introduceBreakingDrift();
+
+            const blocked = await runPrepareCommand({ cwd: workdir, logger: silentLogger().logger });
+
+            expect(blocked.code).toBe(1);
+
+            // The per-run override lets THIS run through — and prepare produces no
+            // bundle, so nothing shipped.
+            const overridden = await runPrepareCommand({ allowSchemaDrift: true, cwd: workdir, logger: silentLogger().logger });
+
+            expect(overridden.code).toBe(0);
+            // …and must not have advanced the committed baseline past a change no
+            // deploy carried, which would defeat the gate for every later run.
+            expect(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8")).toBe(baselineBefore);
+
+            const retry = await runPrepareCommand({ cwd: workdir, logger: silentLogger().logger });
+
+            expect(retry.code).toBe(1);
+        });
+
+        it("build accepts the --allow-schema-drift the blocked-drift message tells it to pass", async () => {
+            expect.assertions(6);
+
+            await runPrepareCommand({ cwd: workdir, logger: silentLogger().logger });
+            const baselineBefore = readFileSync(join(workdir, SNAPSHOT_FILE), "utf8");
+
+            introduceBreakingDrift();
+
+            // Assert the MESSAGE, not just the exit code. The gate takes the
+            // command name from the caller, and `build` delegates through
+            // `runDeployCommand` — so a hardcoded "deploy" here told the operator
+            // a deploy was blocked when none was attempted, and recommended
+            // `--update-schema-baseline`, which `build` rejects with a raw
+            // `Found unknown option` stack trace. Both halves of its own advice
+            // failed, and an exit-code-only assertion could not see either.
+            const blockedLog = silentLogger();
+            const blocked = await runBuildCommand({ cwd: workdir, logger: blockedLog.logger, spawner: createRecordingSpawner().spawner });
+            const blockedText = blockedLog.errors.join("\n");
+
+            expect(blocked.code).toBe(1);
+            expect(blockedText).toContain("build blocked");
+            expect(blockedText).not.toContain("deploy blocked");
+            expect(blockedText).not.toContain("pass `--update-schema-baseline`");
+
+            const overridden = await runBuildCommand({
+                allowSchemaDrift: true,
+                cwd: workdir,
+                logger: silentLogger().logger,
+                spawner: createRecordingSpawner().spawner,
+            });
+
+            expect(overridden.code).toBe(0);
+            // A build publishes nothing, so the baseline stays where it was.
+            expect(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8")).toBe(baselineBefore);
+        });
+
+        it("prepare --update-schema-baseline still accepts the new shape", async () => {
+            expect.assertions(2);
+
+            await runPrepareCommand({ cwd: workdir, logger: silentLogger().logger });
+            introduceBreakingDrift();
+
+            const blessed = await runPrepareCommand({ cwd: workdir, logger: silentLogger().logger, updateSchemaBaseline: true });
+
+            expect(blessed.code).toBe(0);
+
+            const followUp = await runPrepareCommand({ cwd: workdir, logger: silentLogger().logger });
+
+            expect(followUp.code).toBe(0);
         });
 
         it("verify surfaces breaking drift as an error without writing the baseline", async () => {

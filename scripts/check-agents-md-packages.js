@@ -74,7 +74,14 @@ for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
         continue;
     }
 
-    if (typeof manifest.name !== "string" || agentsMd.includes(manifest.name)) {
+    // A word-boundary match, not `includes`: `@lunora/platform` is a prefix of
+    // `@lunora/platform-node` and `@lunora/platform-cloudflare`, so a plain
+    // substring test let the shorter row satisfy every longer name — three
+    // packages could go undocumented while this printed a tick.
+    if (
+        typeof manifest.name !== "string" ||
+        new RegExp(String.raw`${manifest.name.replaceAll(/[$()*+.?[\^{|]/gu, String.raw`\$&`)}(?![\w/-])`, "u").test(agentsMd)
+    ) {
         continue;
     }
 

@@ -1,11 +1,49 @@
+import type { LunoraErrorCodeInput } from "@lunora/errors";
+
 import { stableWireKey } from "../../../shared/wire-key";
 import type { FunctionReference } from "./types";
 
 export type SubscriptionCallback = (data: unknown) => void;
 
+/**
+ * The high-water marks a shape poke has now synced to the client: `checkpoint`
+ * is the op-log cursor and `mutationId` the highest custom-mutator id the server
+ * echoed for this client. A `@lunora/db` collection feeds these into its
+ * checkpoint registry to drop optimistic overlays once the server's authoritative
+ * rows have landed.
+ */
+export interface SyncWatermark {
+    checkpoint?: number;
+    mutationId?: number;
+
+    /**
+     * `true` only on the checkpoint a `data`/`delta` frame fires immediately
+     * before that same frame's rowset callback — i.e. the one checkpoint whose
+     * `mutationId` describes rows that are about to arrive.
+     *
+     * A `settled` frame (and a cross-tab `subscription-settled` relay) fires a
+     * checkpoint with NO matching rowset, because the server suppressed a data
+     * frame whose value didn't change. A consumer that stashes `mutationId` for
+     * the next rowset to consume — `@lunora/db`'s `pendingFrameWatermark` — must
+     * not stash those, or the value sits until some later unstamped frame eats
+     * it and the checkpoint gate resolves at a stale watermark instead of
+     * falling back to the RPC-ack compensator.
+     */
+    rowsFollow?: boolean;
+}
+
 /** A subscription-scoped error the server pushed for this subscription id. */
 export interface SubscriptionError {
-    code?: string;
+    /**
+     * The coded reason, when the frame carried one. `LunoraErrorCodeInput`, not
+     * `LunoraErrorCode`: the catalog codes autocomplete for a consumer branching
+     * on this (the shard sends `BAD_SUBSCRIPTION_ARGS`, `TOO_MANY_SUBSCRIPTIONS`,
+     * `SUBSCRIPTION_PERSIST_FAILED`, …; the client itself adds
+     * `WIRE_DECODE_FAILED` for a frame `decodeWire` refuses), but this value is
+     * read verbatim off the wire and nothing validates it against the catalog,
+     * so narrowing it to `LunoraErrorCode` would be a lie a newer server tells.
+     */
+    code?: LunoraErrorCodeInput;
     message: string;
 }
 
@@ -56,7 +94,7 @@ export interface SubscriptionState {
      * `errorCallbacks`) and a `settled` frame fans out to all of them. Plain
      * `useQuery` consumers register nothing, leaving the set empty.
      */
-    readonly checkpointCallbacks: Set<(watermark: { checkpoint?: number; mutationId?: number }) => void>;
+    readonly checkpointCallbacks: Set<(watermark: SyncWatermark) => void>;
     /** Notified when the server rejects this subscription (e.g. admin auth). */
     readonly errorCallbacks: Set<SubscriptionErrorCallback>;
     readonly fn: FunctionReference;
@@ -109,6 +147,20 @@ export interface SubscriptionState {
      */
     serverEpoch?: string;
     readonly shardKey?: string;
+
+    /**
+     * The wire-encoded form of `args`, computed once at `subscribe` time (so an
+     * unsupported value fails loud at the call site, not inside a reconnect's
+     * open handler). Sent on every `subscribe` frame — identical to `args` for
+     * pure JSON, tagged tokens for `bigint`/`Date`/bytes/… (the shard
+     * `decodeWire`s them at its subscribe entry point).
+     *
+     * A SNAPSHOT, not a view: `args` is the caller's own object, retained by
+     * reference and never copied, so a caller that mutates it after subscribing
+     * would otherwise poison every later resubscribe. `encodeWire` rebuilds
+     * every container, so this copy is immune to that.
+     */
+    readonly wireArgs: Record<string, unknown>;
 }
 
 /**
@@ -126,6 +178,17 @@ export class SubscriptionRegistry {
         return `${functionPath}::${stableWireKey(args)}::${shardKey ?? ""}`;
     }
 
+    /**
+     * The registry key of an already-registered state, from its cached
+     * {@link SubscriptionState.argsKey}. Re-deriving it from `state.args` would
+     * re-read the caller's own (mutable) args object, so a caller that mutated
+     * its args after subscribing would compute a DIFFERENT key on unsubscribe
+     * and leak the registration forever.
+     */
+    public static keyOf(state: SubscriptionState): string {
+        return `${state.fn.__lunoraRef}::${state.argsKey}::${state.shardKey ?? ""}`;
+    }
+
     private readonly byKey = new Map<string, SubscriptionState>();
 
     private readonly byId = new Map<string, SubscriptionState>();
@@ -139,12 +202,12 @@ export class SubscriptionRegistry {
     }
 
     public add(state: SubscriptionState): void {
-        this.byKey.set(SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey), state);
+        this.byKey.set(SubscriptionRegistry.keyOf(state), state);
         this.byId.set(state.id, state);
     }
 
     public remove(state: SubscriptionState): void {
-        const key = SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey);
+        const key = SubscriptionRegistry.keyOf(state);
 
         // Identity-checked: only evict the `byKey` slot when it still maps to
         // THIS state. After a server `complete` removed S1, a fresh subscription
@@ -161,5 +224,17 @@ export class SubscriptionRegistry {
 
     public all(): SubscriptionState[] {
         return [...this.byKey.values()];
+    }
+
+    /**
+     * Drop every registration. Terminal — used by `LunoraClient.close()`, whose
+     * whole point is to release the callback closures each {@link SubscriptionState}
+     * holds (`callbacks`, `errorCallbacks`, `checkpointCallbacks` — React state
+     * setters and `@lunora/db` collection closures), which otherwise outlive the
+     * closed client for as long as the client object is reachable.
+     */
+    public clear(): void {
+        this.byKey.clear();
+        this.byId.clear();
     }
 }

@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Middleware, StorageRule } from "../src/index";
-import { defineStorageRule, defineStorageRules, initLunora, LunoraError, storageRules } from "../src/index";
+import { asBucketStorage, defineStorageRule, defineStorageRules, initLunora, LunoraError, storageRules } from "../src/index";
 
 const lunora = initLunora.dataModel<Record<string, never>>().create();
 
@@ -15,6 +15,7 @@ interface FakeStorage {
     storage: {
         bucketName: string;
         delete: (key: string) => Promise<void>;
+        deleteAfterCommit: (key: string) => void;
         download: (key: string) => Promise<undefined>;
         getSignedUrl: (key: string, options?: { method?: string }) => Promise<string>;
         getUrl: (key: string) => string;
@@ -32,6 +33,9 @@ const createFakeStorage = (): FakeStorage => {
             bucketName: "avatars",
             delete: async (key: string): Promise<void> => {
                 calls.push({ key, method: "delete" });
+            },
+            deleteAfterCommit: (key: string): void => {
+                calls.push({ key, method: "deleteAfterCommit" });
             },
             download: async (key: string): Promise<undefined> => {
                 calls.push({ key, method: "download" });
@@ -63,12 +67,21 @@ const createFakeStorage = (): FakeStorage => {
 };
 
 interface TestContext {
-    auth: { roles: string[]; userId: null | string };
+    auth: { getIdentity?: () => Promise<Record<string, unknown> | null>; userId: null | string };
     storage: FakeStorage["storage"];
 }
 
+// Roles reach a rule only as the `roles` claim on the resolved identity.
 const makeContext = (fake: FakeStorage, userId: null | string, roles: string[] = []): TestContext => {
-    return { auth: { roles, userId }, storage: fake.storage };
+    return {
+        auth: {
+            getIdentity: async () => {
+                return { roles, userId };
+            },
+            userId,
+        },
+        storage: fake.storage,
+    };
 };
 
 const rulesForTest = <Context>(rules: ReadonlyArray<StorageRule<Context>>): Middleware<any, any> =>
@@ -195,6 +208,31 @@ describe("storageRules — prefix scoping + default-deny", () => {
         const handler = lunora.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.getUrl("public/logo.png"));
 
         await expect(handler.handler(makeContext(fake, "u1"), {})).rejects.toThrow(/denied by access rule/);
+    });
+
+    it("scopes a prefix on a path-segment boundary — users/1 never governs users/10", async () => {
+        expect.assertions(1);
+
+        // The only rule that allows anything is scoped to user 1's subtree. A raw
+        // `startsWith` would let it grant user 10's objects too, because "users/10"
+        // starts with "users/1".
+        const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "read", prefix: "users/1", when: () => true });
+
+        const fake = createFakeStorage();
+        const handler = lunora.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.getUrl("users/10/avatar.png"));
+
+        await expect(handler.handler(makeContext(fake, "u1"), {})).rejects.toThrow(/denied by access rule/);
+    });
+
+    it("still governs the prefix's own subtree, trailing slash or not", async () => {
+        expect.assertions(1);
+
+        const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "read", prefix: "users/1", when: () => true });
+
+        const fake = createFakeStorage();
+        const handler = lunora.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.getUrl("users/1/avatar.png"));
+
+        await expect(handler.handler(makeContext(fake, "u1"), {})).resolves.toBe("https://cdn.example/users/1/avatar.png");
     });
 
     it("applies OR across multiple rules — any allowing rule grants the op", async () => {
@@ -332,12 +370,12 @@ const createBucketedFakeStorage = (): BucketedFakeStorage => {
 };
 
 interface BucketedContext {
-    auth: { roles: string[]; userId: null | string };
+    auth: { getIdentity?: () => Promise<Record<string, unknown> | null>; userId: null | string };
     storage: BucketedFakeAccessor;
 }
 
 const makeBucketedContext = (fake: BucketedFakeStorage, userId: null | string): BucketedContext => {
-    return { auth: { roles: [], userId }, storage: fake.storage };
+    return { auth: { userId }, storage: fake.storage };
 };
 
 describe("storageRules — bucket scoping", () => {
@@ -412,7 +450,7 @@ describe("storageRules — allowlist (privileged methods dropped)", () => {
         };
 
         let exposed: Record<string, unknown> = {};
-        const context = { auth: { roles: [], userId: "u1" }, storage: backing };
+        const context = { auth: { userId: "u1" }, storage: backing };
         const handler = lunora.action.use(rulesForTest([rule])).action(async ({ ctx }) => {
             exposed = ctx.storage;
         });
@@ -425,5 +463,229 @@ describe("storageRules — allowlist (privileged methods dropped)", () => {
         expect(exposed.list).toBeUndefined();
         expect(exposed.getPresignedUrl).toBeUndefined();
         expect(exposed.createMultipartUpload).toBeUndefined();
+    });
+});
+
+/**
+ * A rule naming a bucket the request's storage cannot address governs nothing.
+ * The operation it was written to lock down then falls through the per-op
+ * default-deny and is fully open, while the source and the studio's
+ * access-rules view both read as if it were enforced. Nothing upstream catches
+ * it: `StorageRule.bucket` is `string`, and the generated `StorageBucketName`
+ * union is seeded from the rules themselves, so a typo adds itself to the list
+ * of "valid" names.
+ */
+describe("storageRules — unaddressable rule bucket", () => {
+    it("throws for a single-bucket app whose rule names a bucket no accessor uses", async () => {
+        expect.assertions(2);
+
+        // A `createStorage` single-bucket app, built through the very wrapper
+        // every generated `ctx.storage` passes through. `asBucketStorage` gives
+        // it a `bucket()` selector that is the IDENTITY — it answers to any name
+        // with the same `"default"`-tagged accessor — which is why "the selector
+        // threw" and "there is no selector" both fail to detect this shape.
+        const calls: { key: string; method: string }[] = [];
+        const backing = asBucketStorage({
+            download: async (key: string): Promise<undefined> => {
+                calls.push({ key, method: "download" });
+
+                return undefined;
+            },
+            store: async (key: string): Promise<{ etag: string; key: string }> => {
+                calls.push({ key, method: "store" });
+
+                return { etag: "e", key };
+            },
+        }) as { bucketName: string; download: (key: string) => Promise<undefined> };
+
+        // The owner-scoped read rule the author believes gates every download.
+        const rule = defineStorageRule<{ auth: { userId: null | string }; storage: typeof backing }>({
+            bucket: "uploads",
+            on: "read",
+            when: ({ auth, key }) => key.startsWith(`${auth.userId ?? ""}/`),
+        });
+
+        const handler = lunora.action
+            .use(rulesForTest([rule]))
+            // u2's object, which the rule was written to deny to u1.
+            .action(async ({ ctx }) => (ctx.storage as typeof backing).download("u2/secret.png"));
+
+        await expect(handler.handler({ auth: { userId: "u1" }, storage: backing }, {})).rejects.toThrow(/rule for bucket "uploads" governs nothing/);
+        // The load-bearing half: the read never reached the backing storage.
+        expect(calls).toStrictEqual([]);
+    });
+
+    it("throws for a multi-bucket app whose rule mistypes a registered bucket name", async () => {
+        expect.assertions(1);
+
+        // Mirrors `createBucketStorage`: `bucket(name)` throws for a name that
+        // was never registered, which is the ground truth the check probes.
+        const registered = new Set(["avatars", "default"]);
+        const make = (bucketName: string): Record<string, unknown> => {
+            return {
+                bucket: (name: string): Record<string, unknown> => {
+                    if (!registered.has(name)) {
+                        throw new LunoraError("INTERNAL", `no bucket registered for "${name}"`);
+                    }
+
+                    return make(name);
+                },
+                bucketName,
+                download: async (): Promise<undefined> => undefined,
+            };
+        };
+
+        const rule = defineStorageRule({ bucket: "avatar", on: "read", when: () => false });
+        const storage = make("default");
+        const handler = lunora.action.use(rulesForTest([rule])).action(async () => undefined);
+
+        await expect(handler.handler({ auth: { userId: "u1" }, storage }, {})).rejects.toThrow(/rule for bucket "avatar" governs nothing/);
+    });
+
+    it("accepts a rule for a bucket reachable only via bucket(name)", async () => {
+        expect.assertions(1);
+
+        // The legitimate multi-bucket shape must keep working: `avatars` is not
+        // the bare accessor's bucket, but it is addressable.
+        const rule = defineStorageRule<BucketedContext>({ bucket: "avatars", on: "read", when: () => true });
+        const fake = createBucketedFakeStorage();
+        const handler = lunora.action
+            .use(rulesForTest<BucketedContext>([rule]))
+            .action(async ({ ctx }) => ctx.storage.bucket("avatars").download("user/u1/a.png"));
+
+        await handler.handler(makeBucketedContext(fake, "u1"), {});
+
+        expect(fake.calls).toContainEqual({ bucket: "avatars", key: "user/u1/a.png", method: "download" });
+    });
+});
+
+describe("storageRules — deleteAfterCommit survives the wrapper and is gated as a delete", () => {
+    it("keeps the method the generated ctx installs on every mutation/action", async () => {
+        expect.assertions(2);
+
+        // `withDeferredDeletes` installs `deleteAfterCommit` on `ctx.storage` for
+        // every dispatch that can host a mutation handler, and the public ctx type
+        // promises it. A wrapper that rebuilds `ctx.storage` from an allowlist
+        // dropped it, so a guarded mutation threw `TypeError: ... is not a function`.
+        const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "delete", when: ({ key }) => key.startsWith("user/u1/") });
+
+        const fake = createFakeStorage();
+        const handler = lunora.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => {
+            ctx.storage.deleteAfterCommit("user/u1/old.png");
+        });
+
+        await handler.handler(makeContext(fake, "u1"), {});
+
+        expect(fake.calls).toEqual([{ key: "user/u1/old.png", method: "deleteAfterCommit" }]);
+        expect(fake.calls).toHaveLength(1);
+    });
+
+    it("denies the ENQUEUE when a delete rule rejects the key", async () => {
+        expect.assertions(2);
+
+        // Gated at enqueue time, not at flush: the queued call replays
+        // `inner.delete(key)` after the transaction commits, past every wrapper.
+        const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "delete", when: ({ key }) => key.startsWith("user/u1/") });
+
+        const fake = createFakeStorage();
+        const handler = lunora.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => {
+            ctx.storage.deleteAfterCommit("user/u2/secret.png");
+        });
+
+        await expect(handler.handler(makeContext(fake, "u1"), {})).rejects.toThrow(LunoraError);
+        expect(fake.calls).toEqual([]);
+    });
+});
+
+/**
+ * `ctx.db.system.query("_storage")` / `.get("_storage", key)` read the SAME R2
+ * adapter `ctx.storage` does. A fake system reader over a fixed object list is
+ * enough to pin that the middleware gates it in the same bucket scope.
+ */
+const SYSTEM_OBJECTS = [
+    { key: "user/u1/avatar.png", sha256: "aaa", size: 10 },
+    { key: "user/u2/secret.png", sha256: "bbb", size: 20 },
+];
+
+const createFakeSystemDatabase = (): Record<string, unknown> => {
+    return {
+        get: async (table: string, id: string) => SYSTEM_OBJECTS.find((object) => table === "_storage" && object.key === id) ?? null,
+        query: (table: string) => {
+            return { collect: async () => (table === "_storage" ? SYSTEM_OBJECTS : []) };
+        },
+    };
+};
+
+interface SystemTestContext extends TestContext {
+    db: { system: Record<string, unknown> };
+}
+
+const makeSystemContext = (fake: FakeStorage, userId: string): SystemTestContext => {
+    return { ...makeContext(fake, userId), db: { system: createFakeSystemDatabase() } };
+};
+
+describe("storageRules — ctx.db.system is gated against the same rules", () => {
+    it("filters the _storage enumeration to the objects a read rule allows", async () => {
+        expect.assertions(1);
+
+        // The rule the source and the studio's access-rules view both read as
+        // "this caller sees only their own objects". Ungated, `ctx.db.system`
+        // handed back key/size/sha256 for every object in the bucket.
+        const rule = defineStorageRule<SystemTestContext>({
+            bucket: "avatars",
+            on: "read",
+            prefix: "user/u1/",
+            when: () => true,
+        });
+
+        const { handler } = lunora.action.use(rulesForTest<SystemTestContext>([rule])).action(async ({ ctx }) => {
+            const { system } = (ctx as unknown as SystemTestContext).db;
+
+            return system as { query: (t: string) => { collect: () => Promise<unknown[]> } };
+        });
+
+        const reader = (await handler(makeSystemContext(createFakeStorage(), "u1"), {})) as {
+            query: (t: string) => { collect: () => Promise<{ key: string }[]> };
+        };
+        const rows = await reader.query("_storage").collect();
+
+        expect(rows.map((row) => row.key)).toEqual(["user/u1/avatar.png"]);
+    });
+
+    it("refuses a by-key _storage get outside the rule's prefix", async () => {
+        expect.assertions(1);
+
+        const rule = defineStorageRule<SystemTestContext>({
+            bucket: "avatars",
+            on: "read",
+            prefix: "user/u1/",
+            when: () => true,
+        });
+
+        const { handler } = lunora.action.use(rulesForTest<SystemTestContext>([rule])).action(async ({ ctx }) => {
+            const { system } = (ctx as unknown as SystemTestContext).db;
+
+            return (system as { get: (t: string, id: string) => Promise<unknown> }).get("_storage", "user/u2/secret.png");
+        });
+
+        await expect(handler(makeSystemContext(createFakeStorage(), "u1"), {})).rejects.toThrow(LunoraError);
+    });
+
+    it("leaves _scheduled_functions and an ungoverned bucket untouched", async () => {
+        expect.assertions(1);
+
+        // No `read`/`list` rule for the bucket at all — opt-in, exactly like a
+        // table with no RLS policy. The enumeration must not be narrowed.
+        const rule = defineStorageRule<SystemTestContext>({ bucket: "avatars", on: "write", when: () => true });
+
+        const { handler } = lunora.action.use(rulesForTest<SystemTestContext>([rule])).action(async ({ ctx }) => {
+            const { system } = (ctx as unknown as SystemTestContext).db;
+
+            return (system as { query: (t: string) => { collect: () => Promise<{ key: string }[]> } }).query("_storage").collect();
+        });
+
+        const rows = (await handler(makeSystemContext(createFakeStorage(), "u1"), {})) as { key: string }[];
+
+        expect(rows.map((row) => row.key)).toEqual(["user/u1/avatar.png", "user/u2/secret.png"]);
     });
 });

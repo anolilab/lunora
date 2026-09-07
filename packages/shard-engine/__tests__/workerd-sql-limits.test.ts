@@ -5,7 +5,8 @@ import { describe, expect, it } from "vitest";
 import type { SchemaLike, SqlExec } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import { runSql } from "../src/do-exec";
-import { renderSql, sqliteInList, unionAll } from "../src/drizzle";
+import { renderSql, sqliteInList, unionAll, WORKERD_SQLITE_LIMITS } from "../src/drizzle";
+import { buildSeekBeforeWhere, buildSeekWhere } from "../src/query-args";
 import { compileWhereSql } from "../src/where-sql";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -254,6 +255,42 @@ describe("bound-parameter cap", () => {
         }
     });
 
+    it("keeps a bounded page over the widest orderBy under the cap, seek included", () => {
+        expect.assertions(3);
+
+        // `@lunora/server`'s list args cap `orderBy` at 8 keys; `normalizeOrderKeys`
+        // splices `_creationTime` in and `buildSeek` appends the `id` tiebreak, so
+        // the widest reachable seek is 10 columns. A reactive page ANDs TWO of
+        // them — the cursor's lower bound and the fixed end cursor's upper one.
+        //
+        // Flattened, that seek bound `k(k+1)/2` parameters each, so the pair spent
+        // 110 against Workerd's cap of 100 and the statement failed to PREPARE
+        // with a bare `SQLITE_ERROR` — a broken page, not a slow one. Nested, it
+        // is `2k-1` each.
+        const keys = [
+            ...Array.from({ length: 8 }, (_, index) => {
+                return { direction: "asc" as const, field: `f${String(index)}`, nullable: false };
+            }),
+            { direction: "asc" as const, field: "_creationTime", nullable: false },
+        ];
+        const values = [...keys.map((_, index) => index), "row_1"];
+
+        const page = { AND: [buildSeekWhere(keys, values), buildSeekBeforeWhere(keys, values)] };
+        const { params } = renderSql("sqlite", compileWhereSql(page, strategy)!);
+
+        expect(params.length).toBeLessThanOrEqual(WORKERD_SQLITE_LIMITS.boundParams);
+        // 10 columns: (2 * 10 - 1) for the nested seek + 1 for the redundant
+        // leading bound, twice over.
+        expect(params).toHaveLength(40);
+
+        // And the list budget shrinks to match, rather than assuming a fixed half
+        // of the cap is free: the two together must still fit.
+        const items = Array.from({ length: 40 }, (_, index) => `id-${String(index)}`);
+        const withList = renderSql("sqlite", compileWhereSql({ AND: [page, { tag: { in: items } }] }, strategy)!);
+
+        expect(withList.params.length).toBeLessThanOrEqual(WORKERD_SQLITE_LIMITS.boundParams);
+    });
+
     it("splits the list budget across every `in` in one `where`, not per list", () => {
         expect.assertions(2);
 
@@ -455,21 +492,34 @@ describe("expression-depth cap", () => {
         const harness = createSqliteExec();
 
         try {
-            const schema = schemaWith(1);
+            // DISTINCT fields, not N copies of one key: an object literal holds
+            // each key once, so `Array.from({length: 200}, () => ["title", …])`
+            // collapsed to a single condition and this case ran one term where
+            // it claimed to run 200.
+            //
+            // 90, not 200, because the two caps meet here: one equality binds one
+            // parameter, and the bound-parameter ceiling the suite above pins is
+            // 100, so a genuinely-200-term `where` is rejected before it can be
+            // executed at all. The structural assertions on `compileWide` still
+            // cover the full 200.
+            const fields = Array.from({ length: 90 }, (_unused, index) => `f${String(index)}`);
+            const schema: SchemaLike = {
+                tables: { t0: { indexes: [], shape: Object.fromEntries(fields.map((field) => [field, { kind: "string" }])) } },
+            };
 
             runShardMigrations(harness.sql, schema);
 
             const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
 
-            await writer.insert("t0", { title: "kept" });
+            await writer.insert("t0", Object.fromEntries(fields.map((field) => [field, "kept"])));
 
-            // 200 AND'd conditions the row satisfies, then one it does not.
-            const satisfied = Object.fromEntries(Array.from({ length: 200 }, () => ["title", "kept"]));
+            // Every one of them AND'd and satisfied, then one that is not.
+            const satisfied = Object.fromEntries(fields.map((field) => [field, "kept"]));
             const rows = await writer.findMany("t0", { where: satisfied });
 
             expect(rows.page).toHaveLength(1);
 
-            const contradicted = await writer.findMany("t0", { where: { ...satisfied, title: "absent" } });
+            const contradicted = await writer.findMany("t0", { where: { ...satisfied, f0: "absent" } });
 
             expect(contradicted.page).toHaveLength(0);
         } finally {

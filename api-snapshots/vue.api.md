@@ -134,12 +134,6 @@ const AuthLoading: Component;
 const Authenticated: Component;
 ```
 
-### `FlagContext` (type)
-
-```ts
-type FlagContext = Record<string, unknown>;
-```
-
 ### `FlagValue` (type)
 
 ```ts
@@ -254,6 +248,14 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `SubscriptionError` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `SubscriptionErrorCallback` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `Unauthenticated` (const)
 
 ```ts
@@ -295,6 +297,7 @@ interface UseAgentChatOptions {
     api: UseAgentChatApi;
     cancel?: FunctionReference<"mutation">;
     limit?: number;
+    onError?: SubscriptionErrorCallback;
     send: FunctionReference<"mutation">;
     sendArgs?: Record<string, unknown>;
     stream?: AgentTokenStreamReference;
@@ -308,6 +311,7 @@ interface UseAgentChatOptions {
 interface UseAgentChatResult {
     approve: (toolCallId: string, note?: string) => Promise<void>;
     cancel: () => Promise<void>;
+    error: ComputedRef<Error | undefined>;
     messages: ComputedRef<ReadonlyArray<AgentChatMessage>>;
     reject: (toolCallId: string, note?: string) => Promise<void>;
     send: (input: string, args?: Record<string, unknown>) => Promise<void>;
@@ -322,6 +326,7 @@ interface UseAgentChatResult {
 interface UseAgentOptions {
     api: UseAgentApi;
     cancel?: FunctionReference<"mutation">;
+    onError?: SubscriptionErrorCallback;
     run: FunctionReference<"mutation">;
     runArgs?: Record<string, unknown>;
     threadKey: MaybeRefOrGetter<string>;
@@ -333,6 +338,7 @@ interface UseAgentOptions {
 ```ts
 interface UseAgentResult {
     cancel: () => Promise<void>;
+    error: Ref<Error | undefined>;
     pending: Readonly<Ref<boolean>>;
     run: (input: string, args?: Record<string, unknown>) => Promise<void>;
     status: ComputedRef<AgentThreadStatus | undefined>;
@@ -414,6 +420,7 @@ interface UseAuthResult {
 ```ts
 interface UseInfiniteQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -422,6 +429,7 @@ interface UseInfiniteQueryOptions {
 
 ```ts
 interface UseInfiniteQueryResult<T> {
+    error: Ref<SubscriptionError | undefined>;
     fetchNextPage: (numberItems?: number) => void;
     hasNextPage: Ref<boolean>;
     isFetchingNextPage: Ref<boolean>;
@@ -436,6 +444,7 @@ interface UseInfiniteQueryResult<T> {
 ```ts
 interface UsePaginatedQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -444,6 +453,7 @@ interface UsePaginatedQueryOptions {
 
 ```ts
 interface UsePaginatedQueryResult<T> {
+    error: Ref<SubscriptionError | undefined>;
     isLoading: Ref<boolean>;
     loadMore: (numberItems: number) => void;
     results: Ref<T[]>;
@@ -459,6 +469,7 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
     heartbeat: H;
     intervalMs?: number;
     listPresent: L;
+    onError?: SubscriptionErrorCallback;
     sessionId?: string;
     shardKey?: string;
 }
@@ -468,6 +479,7 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
 
 ```ts
 interface UsePresenceResult<L extends ListPresentReference> {
+    error: ShallowRef<SubscriptionError | undefined>;
     present: ShallowRef<ReturnOf<L> | undefined>;
     sessionId: string;
     setData: (data: Record<string, unknown> | undefined) => void;
@@ -478,6 +490,7 @@ interface UsePresenceResult<L extends ListPresentReference> {
 
 ```ts
 interface UseQueryOptions {
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -508,6 +521,7 @@ interface UseRateLimitResult {
 
 ```ts
 interface UseStreamOptions {
+    durable?: boolean;
     maxBuffer?: number;
     shardKey?: string;
 }
@@ -608,7 +622,9 @@ const createLunora: (client: LunoraClient) => {
 ### `hydratePreloaded` (const)
 
 ```ts
-const hydratePreloaded: <T>(preloaded: Preloaded<T>) => Ref<T | undefined>;
+const hydratePreloaded: <T>(preloaded: Preloaded<T>, options?: {
+    onError?: SubscriptionErrorCallback;
+}) => Ref<T>;
 ```
 
 ### `provideLunora` (const)
@@ -621,6 +637,7 @@ const provideLunora: (client: LunoraClient) => void;
 
 ```ts
 const subscribeToQuery: <F extends FunctionReference, T = ReturnOf<F>>(client: LunoraClient, function_: F, args: ArgsOf<F>, options?: {
+    onError?: SubscriptionErrorCallback;
     seed?: T;
     shardKey?: string;
 }) => Ref<T | undefined>;
@@ -671,13 +688,13 @@ const useConnectionStatus: () => Readonly<Ref<ConnectionStatus>>;
 ### `useFlag` (const)
 
 ```ts
-const useFlag: <T extends FlagValue>(key: MaybeRefOrGetter<string>, defaultValue: T, context?: MaybeRefOrGetter<FlagContext | undefined>) => Readonly<Ref<T>>;
+const useFlag: <T extends FlagValue>(key: MaybeRefOrGetter<string>, defaultValue: T) => Readonly<Ref<T>>;
 ```
 
 ### `useFlags` (const)
 
 ```ts
-const useFlags: <T extends Record<string, FlagValue>>(flags: T, context?: MaybeRefOrGetter<FlagContext | undefined>) => Readonly<Ref<T>>;
+const useFlags: <T extends Record<string, FlagValue>>(flags: T) => Readonly<Ref<T>>;
 ```
 
 ### `useInfiniteQuery` (const)

@@ -14,6 +14,9 @@ import { createShardDO } from "./shard.js";
 /** Read a value off the per-request `env`. Returns `undefined` to leave the capability unconfigured (its `ctx.*`/admin surface stays a clear-error stub). */
 type Selector<Env, T> = (env: Env) => T | undefined;
 
+/** The generated `createShardDO` config — `.observability()`, `.maxRelationKeys()` and the long-tail `.ai()` / `.kv()` / … methods pass straight through to it. */
+type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
+
 /** `.auth(...)` declaration — better-auth options plus the storage the adapter reads. Give it `d1` (the default) or `namespace` (a Durable Object that hosts the auth tables), never both. The builder owns the lazy build + `ensureMigrated` dance and wires `authHandler` / `resolveIdentity` / `authAdmin`. */
 interface AuthDeclaration<Env> {
     /** The D1 binding the auth SQL adapter is wired over (via `lunoraD1Adapter`). Omit only when using `namespace`. */
@@ -46,6 +49,10 @@ class AppBuilder<Env extends object> {
     private adminToken?: Selector<Env, string>;
     private authDeclaration?: AuthDeclaration<Env>;
     private cdcEnabled = false;
+    private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;
+    private maxRelationKeysLimit?: ShardConfig["maxRelationKeys"];
+    private observabilitySink?: ShardConfig["observability"];
+    private relationExistsPushDownMode?: ShardConfig["relationExistsPushDown"];
     private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];
     private httpRouterApp?: HttpRouterLike;
     private readonly routeMap: Record<string, Route> = {};
@@ -69,6 +76,42 @@ class AppBuilder<Env extends object> {
      */
     public cdc(enabled = true): this {
         this.cdcEnabled = enabled;
+
+        return this;
+    }
+
+    /**
+     * Enable the per-shard reactive query cache: query results are memoized by `(functionPath, args, identity)` and invalidated by the ctx-db write hooks BEFORE the subscription broadcast, so a subscriber re-running its query always observes the post-write state.
+     *
+     * Off by default (every dispatch re-runs its handler). Pass an options object to tune the caps: `maxEntries` (default 1000) and `maxBytes` (default 4 MiB); either accepts `Number.POSITIVE_INFINITY` to disable that cap.
+     */
+    public reactiveCache(config: boolean | { maxBytes?: number; maxEntries?: number } = true): this {
+        this.reactiveCacheConfig = config;
+
+        return this;
+    }
+
+    /** Ceiling on the join keys ONE relation-crossing `where` predicate may pre-resolve via semijoin before failing closed. Omit for the engine default. */
+    public maxRelationKeys(limit: NonNullable<ShardConfig["maxRelationKeys"]>): this {
+        this.maxRelationKeysLimit = limit;
+
+        return this;
+    }
+
+    /**
+     * Route the shard's `ctx.log` lines, `ctx.trace` spans and `ctx.metrics` measurements to a telemetry sink.
+     *
+     * The DO half of observability: without it every in-handler signal stays in the shard's local ring buffer (the studio Logs panel) and reaches no collector. The worker half — one `onRpc` event per dispatched RPC — is a `createWorker` option; pass the SAME sink to both via `.extend((env) => ({ observability: sink(env) }))` to correlate them.
+     */
+    public observability(selector: NonNullable<ShardConfig["observability"]>): this {
+        this.observabilitySink = selector;
+
+        return this;
+    }
+
+    /** Resolution policy for a relation-crossing `where` whose child is co-located in this shard: `"auto"` (cost-based, the engine default), `"always"` (inline correlated EXISTS) or `"never"` (universal semijoin). All three return identical rows. */
+    public relationExistsPushDown(mode: NonNullable<ShardConfig["relationExistsPushDown"]>): this {
+        this.relationExistsPushDownMode = mode;
 
         return this;
     }
@@ -141,6 +184,10 @@ class AppBuilder<Env extends object> {
     private assemble(): ComposedApp {
         const ShardDO = createShardDO({
             cdc: this.cdcEnabled,
+            reactiveCache: this.reactiveCacheConfig,
+            ...(this.maxRelationKeysLimit === undefined ? {} : { maxRelationKeys: this.maxRelationKeysLimit }),
+            ...(this.observabilitySink === undefined ? {} : { observability: this.observabilitySink }),
+            ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),
         });
 
         // Per-isolate singletons: the worker (and auth instance) are expensive to
@@ -148,9 +195,10 @@ class AppBuilder<Env extends object> {
         // the same isolate reuses them.
         let worker: LunoraWorker | null = null;
         let auth: LunoraAuth | null = null;
+        let authInit: Promise<void> | null = null;
 
-        const ensureAuth = async (env: Env): Promise<void> => {
-            if (!this.authDeclaration || auth) {
+        const initAuth = async (env: Env): Promise<void> => {
+            if (!this.authDeclaration) {
                 return;
             }
 
@@ -163,11 +211,30 @@ class AppBuilder<Env extends object> {
                 return;
             }
 
-            auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
             // Apply the better-auth schema lazily on first request (raw-D1 Kysely
             // migrator). For production run the migrate command ahead of deploy.
+            // The migration instance takes the RAW binding: better-auth migrates
+            // only through Kysely and rejects the adapter the request instance uses.
             await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
+            // Assigned after the schema exists, never before. Assigning first is
+            // what let a concurrent request see a non-null `auth` and serve
+            // `/api/auth/*` against tables the migrator had not created yet —
+            // `no such table: rateLimit`, from the isolate that was mid-migration.
+            auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
         };
+
+        // Single-flighted on the PROMISE, not on `auth`. Every `fetch` awaits this
+        // and the body above is async, so a per-isolate cold start runs it once
+        // rather than once per concurrent request — better-auth's migrator emits a
+        // bare `CREATE TABLE` (no IF NOT EXISTS), so a second concurrent run on a
+        // fresh database fails with `table user already exists` and, because this is
+        // awaited ahead of the router, 500s every route. Evicted on failure so a
+        // transient error retries instead of being replayed forever.
+        const ensureAuth = (env: Env): Promise<void> =>
+            (authInit ??= initAuth(env).catch((error: unknown) => {
+                authInit = null;
+                throw error;
+            }));
 
         const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => auth));
 
@@ -216,6 +283,8 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
+        options.listSchemaTables = () => ["messages", "ratelimit_buckets"];
+
         options.logArchive = resolveLogArchiveFromEnv(env);
 
         // Captured before the branch so the narrowing survives — reading
@@ -260,7 +329,37 @@ class AppBuilder<Env extends object> {
 
                 const session = await auth.api.getSession({ headers: (request as Request).headers });
 
-                return session?.user?.id ? { userId: session.user.id } : null;
+                if (!session?.user?.id) {
+                    return null;
+                }
+
+                // `role` rides along so `rls(policies, { roles })` and `auth.can(...)`
+                // work on this wiring without a hand-written resolver. better-auth's
+                // `admin()` plugin owns that column (comma-joined for multiple roles)
+                // and only an administrator can write it; it is absent when the plugin
+                // is off, which reads as no roles.
+                //
+                // `expiresAtMs` is the socket credential expiry the runtime forwards
+                // as `x-lunora-identity-exp`. Without it the DO's expiry check never
+                // fires, so a signed-out, banned or lapsed user keeps streaming their
+                // RLS-scoped rows over an already-open WebSocket while every HTTP call
+                // is anonymous. better-auth hands back a `Date`; anything else means
+                // the adapter did not hydrate it, and omitting beats guessing.
+                const expiresAt = session.session.expiresAt;
+                // `email` and `name` are the claims `ctx.auth.getIdentity()` is
+                // documented to carry ("email, name, roles, custom claims"). Without
+                // them the documented `me` query — `identity?.email` — resolves
+                // `undefined` on the built-in wiring. Empty strings are dropped so an
+                // absent claim reads as absent rather than as "".
+                const user = session.user as { email?: unknown; name?: unknown; role?: unknown };
+
+                return {
+                    ...(typeof user.email === "string" && user.email.length > 0 ? { email: user.email } : {}),
+                    ...(expiresAt instanceof Date ? { expiresAtMs: expiresAt.getTime() } : {}),
+                    ...(typeof user.name === "string" && user.name.length > 0 ? { name: user.name } : {}),
+                    role: user.role,
+                    userId: session.user.id,
+                };
             };
             const authInstance = getAuth();
 

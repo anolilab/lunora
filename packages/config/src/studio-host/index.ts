@@ -22,7 +22,7 @@ export type { SchemaEditRequest, SchemaEditResponse } from "./schema-edit-handle
 export { handleSchemaEditRequest, SCHEMA_EDIT_ENDPOINT } from "./schema-edit-handler";
 export type { SeedRequest, SeedRequestBody, SeedResponse } from "./seed-handler";
 export { handleSeedRequest, SEED_ENDPOINT } from "./seed-handler";
-export type { LocalEndpointHandler, LocalEndpointRequest, LocalEndpointResponse } from "./serve-json-handler";
+export type { LocalEndpointContext, LocalEndpointHandler, LocalEndpointRequest, LocalEndpointResponse } from "./serve-json-handler";
 // `serveJsonHandler` applies the shared CSRF gate itself, so a host gets that
 // defense by routing through it — no per-host copy of the check to drift.
 export { serveJsonHandler } from "./serve-json-handler";

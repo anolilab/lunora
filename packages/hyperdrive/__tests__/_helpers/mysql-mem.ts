@@ -60,17 +60,38 @@ const createMysqlHarness = async (): Promise<MysqlHarness> => {
 };
 
 /**
+ * Set to `1` where mysqld is expected to be obtainable — the `test-mysql` job in
+ * `.github/workflows/test.yml`, and any local run that wants the gate to be a
+ * gate. It turns {@link tryCreateMysqlHarness}'s skip into a failure.
+ */
+const MYSQL_REQUIRED_ENV = "LUNORA_MYSQL_TESTS";
+
+/**
  * Like {@link createMysqlHarness}, but gated on the environment actually being
  * able to provision mysqld: `mysql-memory-server` downloads the MySQL binary on
  * first use, and restricted sandboxes (e.g. an egress proxy answering the CDN
  * with HTTP 403) make that download impossible. Suites consume this and skip —
  * with the captured reason — instead of failing on an environment limitation.
+ *
+ * A skip is indistinguishable from a pass, though: the MySQL suites are the only
+ * gate proving the dialect's SQL executes, and for as long as nothing asserted
+ * otherwise they could report green having run nothing. So where mysqld IS meant
+ * to be obtainable — {@link MYSQL_REQUIRED_ENV} set — the failure is raised
+ * rather than captured, and the suite goes red instead of quietly empty.
  */
 const tryCreateMysqlHarness = async (): Promise<{ harness?: MysqlHarness; unavailable?: string }> => {
     try {
         return { harness: await createMysqlHarness() };
     } catch (error) {
-        return { unavailable: `mysql-memory-server could not provision mysqld in this environment: ${error instanceof Error ? error.message : String(error)}` };
+        const reason = `mysql-memory-server could not provision mysqld in this environment: ${error instanceof Error ? error.message : String(error)}`;
+
+        if (process.env[MYSQL_REQUIRED_ENV] === "1") {
+            throw new Error(`${reason} — ${MYSQL_REQUIRED_ENV}=1 says it should have been, so this is a broken gate, not an environment limitation.`, {
+                cause: error,
+            });
+        }
+
+        return { unavailable: reason };
     }
 };
 

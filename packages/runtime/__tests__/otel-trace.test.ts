@@ -153,7 +153,7 @@ describe("otel-trace", () => {
             expect(headers.traceparent).toMatch(/-00$/);
         });
 
-        // The attack: `traceIdToUnitInterval` maps the first 8 hex chars onto
+        // The attack: `traceIdToUnitInterval` maps the last 8 hex chars onto
         // [0, 1), so an all-`f` id lands at ~1.0 and is dropped by any headRate < 1.
         // A client that could choose the id could opt itself out of every trace.
         it("does not let an untrusted caller steer the head-sampling verdict", () => {

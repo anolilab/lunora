@@ -82,6 +82,41 @@ class ParkingActionShard extends ShardDO {
     }
 }
 
+/**
+ * A {@link ParkingActionShard} whose MUTATION also parks — after it has committed
+ * its in-transaction replay bookkeeping, but before `handleRpc` resolves.
+ *
+ * That window is the whole point: a concurrently dispatched action resumes inside
+ * it and reads the shard's shared "bookkeeping committed" state while it belongs
+ * to the mutation. Only a mutation FUNCTION takes the `runSerialized` gate, so an
+ * action carrying an `x-lunora-mutation-id` really can be in flight here.
+ */
+class InterleavingBookkeepingShard extends ParkingActionShard {
+    /** Released by the test once the action has resumed inside the mutation's committed window. */
+    public parkedMutationTail: Promise<void> | undefined;
+
+    public override async handleRpc(functionPath: string): Promise<unknown> {
+        if (functionPath !== "messages:send") {
+            return super.handleRpc(functionPath);
+        }
+
+        this.started.push(functionPath);
+        this.runs += 1;
+
+        const result = await this.runInTransaction(() => {
+            const value = { sent: true };
+
+            this.commitMutationBookkeeping(value);
+
+            return value;
+        });
+
+        await this.parkedMutationTail;
+
+        return result;
+    }
+}
+
 const makeState = (database: ReturnType<typeof createSqliteExec>): ShardDOState => {
     return {
         acceptWebSocket() {},
@@ -256,6 +291,64 @@ describe("shardDO mutation-replay dedup (dispatch path)", () => {
             await shard.fetch(rpcRequest("messages:slowAction", "m-1", "u1"));
 
             expect(shard.runs).toBe(2);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("an action still records its own dedup row when a concurrent mutation commits bookkeeping mid-await", async () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            runShardMigrations(database.sql, messagesSchema);
+
+            const shard = new InterleavingBookkeepingShard(makeState(database), {});
+
+            let releaseAction: () => void = () => {};
+            let releaseMutation: () => void = () => {};
+
+            shard.parked = new Promise<void>((resolve) => {
+                releaseAction = resolve;
+            });
+            shard.parkedMutationTail = new Promise<void>((resolve) => {
+                releaseMutation = resolve;
+            });
+
+            // u1's action parks mid-handler, holding mutation id m-1.
+            const slow = shard.fetch(rpcRequest("messages:slowAction", "m-1", "u1"));
+
+            await new Promise((resolve) => {
+                setTimeout(resolve, 0);
+            });
+
+            // u2's MUTATION commits its bookkeeping and then parks, so the shard's
+            // shared "bookkeeping committed" state is set and has NOT yet been
+            // cleared by that dispatch's epilogue.
+            const mutation = shard.fetch(mutationRequest("m-2", "u2"));
+
+            await new Promise((resolve) => {
+                setTimeout(resolve, 0);
+            });
+
+            // The action resumes squarely inside that window. Reading the shared
+            // state as its own made it skip its `__idempotency` write entirely.
+            releaseAction();
+            await slow;
+
+            releaseMutation();
+            await mutation;
+
+            expect(shard.runs).toBe(2);
+
+            // The replay of m-1 must be served from the dedup row. Without one the
+            // handler runs again — for an action that is a second outbound call,
+            // a second charge.
+            await shard.fetch(rpcRequest("messages:slowAction", "m-1", "u1"));
+
+            expect(shard.runs).toBe(2);
+            expect(shard.started).toStrictEqual(["messages:slowAction", "messages:send"]);
         } finally {
             database.close();
         }

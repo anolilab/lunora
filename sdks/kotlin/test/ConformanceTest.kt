@@ -74,6 +74,14 @@ internal fun fixture(name: String): Map<*, *> = Json.parse(File(fixturesDir(), n
 /** Canonical text form so two structures compare independent of key order. */
 private fun canonical(value: Any?): String = Key.stableStringify(value)
 
+/**
+ * Renders a value the way `Client.kt` puts it on the socket, with `Json.write`. Separate from
+ * [canonical], which is free to normalise: `stableStringify` spells every number the ECMAScript
+ * way, so `1.0` and `1` compare EQUAL through it — the divergence a round-trip case exists to
+ * catch. Dart's dates went out as `1700000000000.0` for exactly that reason, on a green suite.
+ */
+private fun wireText(value: Any?): String = Json.write(value)
+
 private fun wireCodecRoundTrip() {
     covers("wire_codec_round_trip")
 
@@ -85,8 +93,16 @@ private fun wireCodecRoundTrip() {
         val testCase = entry as Map<*, *>
         val encoded = testCase["encoded"]
         val roundTripped = Wire.encode(Wire.decode(encoded))
+        // A handful of shapes are legitimately not fixed points — a bare [TAG]
+        // array is escaped on the way out, an Undefined object field is dropped
+        // — and carry the expected re-encoding.
+        val expected = if (testCase.containsKey("reencoded")) testCase["reencoded"] else encoded
 
-        check(canonical(roundTripped) == canonical(encoded), "round-trip mismatch for ${testCase["name"]}")
+        check(canonical(roundTripped) == canonical(expected), "round-trip mismatch for ${testCase["name"]}")
+        // And again as the BYTES the transport sends: a round-trip assertion
+        // measured on a string the transport never sends cannot see the
+        // divergence it exists to catch.
+        check(wireText(roundTripped) == wireText(expected), "wire-text mismatch for ${testCase["name"]}")
     }
 }
 
@@ -119,17 +135,35 @@ private fun overLongBigIntRejected() {
 private fun rejects(value: Any?): Boolean = try {
     Wire.decode(value)
     false
-} catch (error: RuntimeException) {
-    // Wire.decode's own bounds (bigint length, depth) throw its typed
-    // WireFormatException; a nested decoder (Base64 on a malformed bytes tag)
-    // throws its own unwrapped RuntimeException. Both are a rejection.
+} catch (error: WireFormatException) {
+    // ONLY the codec's own type counts. This used to catch RuntimeException,
+    // which was wider than the codec — `decodeBytes` wraps Base64's
+    // IllegalArgumentException — so a regression letting a raw JDK exception
+    // escape `Wire.decode` still read as a rejection, while a caller catching
+    // WireFormatException caught nothing.
     true
 }
 
-private fun malformedBytesRejected() {
-    covers("malformed_bytes_rejected")
+/**
+ * Walks the shared rejection list.
+ *
+ * The list is data (`protocol/fixtures/wire-codec.json`), not a per-suite
+ * invention: a rejection each port hard-codes for itself is a rejection only
+ * some ports have, which is how one of them ended up accepting a truncated
+ * base64 payload as valid short bytes.
+ */
+private fun malformedValuesRejected() {
+    covers("malformed_values_rejected")
 
-    check(rejects(listOf(Wire.TAG, "bytes", "not@@base64!!")), "malformed base64 in a bytes tag must be rejected")
+    val rejected = fixture("wire-codec.json")["rejected"] as? List<*>
+
+    check(!rejected.isNullOrEmpty(), "the fixture must carry a rejection list")
+
+    for (entry in rejected.orEmpty()) {
+        val testCase = entry as Map<*, *>
+
+        check(rejects(testCase["encoded"]), "${testCase["name"]} must be rejected")
+    }
 
     val decoded = Wire.decode(listOf(Wire.TAG, "bytes", "AQID"))
 
@@ -137,6 +171,71 @@ private fun malformedBytesRejected() {
         decoded is WireValue.Bytes && decoded.data.contentEquals(byteArrayOf(1, 2, 3)),
         "well-formed bytes must still decode",
     )
+
+    // A bare [TAG] is NOT malformed: it is the forward-compat shape, and the
+    // reference hands it back as an ordinary array.
+    check(Wire.decode(listOf(Wire.TAG)) == WireValue.Arr(listOf(WireValue.Text(Wire.TAG))), "a bare tag array decodes as an array")
+}
+
+/**
+ * An integer a `Double` cannot hold exactly must not silently become a
+ * different integer on the wire.
+ *
+ * [WireValue.Num] IS a `Double`, so this port cannot carry such an integer
+ * through the codec at all — the exposure is the decode side, where a JSON
+ * parser could hand over a `Long`. That is refused rather than narrowed.
+ */
+private fun exactIntegerRangeEnforced() {
+    covers("exact_integer_range_enforced")
+
+    val maximum = 9007199254740991L
+
+    check(Wire.encode(WireValue.Num(maximum.toDouble())) == maximum.toDouble(), "the largest exact integer encodes")
+    check(rejects(maximum + 1), "a Long past the exact Double range must be refused, not narrowed")
+    check(rejects(-maximum - 1), "a Long past the exact Double range must be refused, not narrowed")
+
+    // BigInt is the way across, and it keeps every digit.
+    check(
+        canonical(Wire.encode(WireValue.BigInt(BigInteger("9007199254740992")))) ==
+            canonical(listOf(Wire.TAG, "bigint", "9007199254740992")),
+        "BigInt carries the value the number range refuses",
+    )
+}
+
+/**
+ * An EMPTY shard key is absent, not the shard named `""`.
+ *
+ * The runtime takes any string as a named shard and gives `""` its own Durable
+ * Object, while this client treats `""` and null as one shard wherever it
+ * matches a subscription or drains the queue. Sending it split those two views:
+ * a single-call replay of a queued write landed on one Durable Object and a
+ * BATCHED replay of that same write on another, with the optimistic overlay
+ * tracking neither. Both builders that carry a shard key are asserted, because
+ * normalising one and not the other is the same split.
+ */
+private fun emptyShardKeyIsOmitted() {
+    covers("empty_shard_key_is_omitted")
+
+    for (absent in listOf(null, "")) {
+        check(
+            !Client.buildRpcBody("messages:send", WireValue.Obj(emptyList()), absent).containsKey("shardKey"),
+            "shard key $absent must not reach the RPC body",
+        )
+    }
+
+    check(
+        Client.buildRpcBody("messages:send", WireValue.Obj(emptyList()), "room-1")["shardKey"] == "room-1",
+        "a real shard key still rides the body",
+    )
+
+    val client = Client("https://app.example", null)
+
+    for (absent in listOf(null, "")) {
+        check(!client.wsUrl(absent, null).contains("shard="), "shard key $absent must not name a shard on the socket")
+    }
+
+    check(client.wsUrl("", null) == client.wsUrl(null, null), "an empty shard key is byte-identical to sending none")
+    check(client.wsUrl("room-1", null).contains("shard="), "a real shard key still rides the socket URL")
 }
 
 private fun depthCapEnforced() {
@@ -147,6 +246,27 @@ private fun depthCapEnforced() {
     repeat(Wire.MAX_DEPTH + 2) { nested = listOf(nested) }
 
     check(rejects(nested), "decoding past the depth cap must be rejected")
+
+    // The PARSER's cap is counted from the document root, and every payload
+    // arrives inside an envelope — so charging the envelope against the wire
+    // value's own budget refused a frame whose payload the reference encodes
+    // happily. A value nested exactly MAX_DEPTH deep must still reach onData.
+    var deepest: Any? = "leaf"
+
+    repeat(Wire.MAX_DEPTH) { deepest = listOf(deepest) }
+
+    val client = Client("https://app.example")
+
+    client.attachSocket { }
+
+    val seen = mutableListOf<WireValue>()
+
+    client.subscribe("messages:list", null, seen::add)
+
+    val envelope = linkedMapOf<String, Any?>("type" to "data", "id" to "sub_1", "data" to deepest)
+
+    check(client.handleFrame(Json.write(envelope)) == "data", "a MAX_DEPTH value must survive its frame envelope")
+    check(seen.size == 1, "and reach onData")
 }
 
 private fun stableWireKeyFixtures() {
@@ -181,6 +301,11 @@ private fun formatNumberMatchesEcmaScript() {
         0.0 to "0", 3.0 to "3", 1.5 to "1.5", -2.5 to "-2.5",
         1e-5 to "0.00001", 1e-6 to "0.000001", 1e-7 to "1e-7", 1.5e-7 to "1.5e-7",
         1e-21 to "1e-21", 1e20 to "100000000000000000000", 1e21 to "1e+21",
+        // An integral double past 2^53 keeps ECMAScript's shortest-digits
+        // spelling rather than the exact expansion 1152921504606846976.
+        1.152921504606847e18 to "1152921504606847000",
+        // Negative zero keeps its sign; every integer conversion drops it.
+        -0.0 to "-0",
     )
 
     for ((value, want) in cases) {
@@ -366,6 +491,76 @@ private fun shapeSubscribeFrame() {
     )
 }
 
+/**
+ * A reconnect re-subscribes the SHAPES as well as the queries.
+ *
+ * A resend that walks only the query registry leaves every shape view subscribed
+ * to a socket that no longer exists — silently, and for the rest of the process's
+ * life, because a shape only ever learns of new rows through a poke.
+ */
+private fun shapeSubscriptionsResendAfterReconnect() {
+    covers("shape_subscriptions_resend_after_reconnect")
+
+    val client = Client("https://app.example")
+    val args = WireValue.Obj(listOf("room" to WireValue.Text("general")))
+
+    client.attachSocket { }
+    client.subscribe("messages:list", WireValue.Obj(listOf("channel" to WireValue.Text("general"))), { })
+    client.subscribeShape("roomMessages", args, { })
+
+    // The cursors a resume carries are written by the frame handler, so they have
+    // to exist before the resend is built.
+    client.handleFrame(Json.write(mapOf("cursor" to 9, "data" to emptyList<Any?>(), "epoch" to "e1", "id" to "sub_1", "type" to "data")))
+    client.handleFrame(Json.write(mapOf("epoch" to "e1", "pokeId" to "poke-1", "type" to "pokeStart")))
+    client.handleFrame(Json.write(mapOf("pokeId" to "poke-1", "reset" to true, "rowsPatch" to emptyList<Any?>(), "shapeId" to "shape_1", "type" to "pokePart")))
+    client.handleFrame(Json.write(mapOf("checkpoint" to 5, "epoch" to "e1", "pokeId" to "poke-1", "type" to "pokeEnd")))
+
+    val resent = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { resent.add(it) }
+    client.resendSubscriptions()
+
+    check(resent.map { it["type"] } == listOf("subscribe", "shape_subscribe"), "both registries resend, queries first")
+    check(((resent[0]["query"] as Map<*, *>)["sinceSeq"] as Number).toInt() == 9, "the query resumes from its tracked cursor")
+    check(resent[1]["id"] == "shape_1", "the shape frame carries the registered id")
+
+    val shape = resent[1]["shape"] as Map<*, *>
+
+    // Name and args are only available because `subscribeShape` keeps them; a
+    // registry holding the callbacks alone cannot build this frame at all.
+    check(shape["name"] == "roomMessages", "and the shape's name")
+    check(canonical(shape["args"]) == canonical(Wire.encode(args)), "and its args")
+    check((resent[1]["sinceCheckpoint"] as Number).toInt() == 5, "resuming from the tracked checkpoint")
+    check(resent[1]["sinceEpoch"] == "e1", "and the tracked epoch")
+}
+
+/**
+ * A payload the codec refuses reaches the addressed subscription's error
+ * callback, and goes no further.
+ *
+ * Thrown out of [Client.handleFrame] it ends the caller's read loop, taking every
+ * OTHER subscription on the client down with it — one malformed row on one query
+ * silences the whole client.
+ */
+private fun refusedPayloadStaysOnItsOwnSubscription() {
+    val errors = mutableListOf<SubscriptionError>()
+    val second = mutableListOf<WireValue>()
+    val client = Client("https://app.example")
+
+    client.attachSocket { }
+    client.subscribe("messages:list", null, { }, { errors.add(it) })
+    client.subscribe("messages:other", null, { second.add(it) })
+
+    val kind = client.handleFrame("{\"data\":[\"${Wire.TAG}\",\"bigint\",\"not-a-number\"],\"id\":\"sub_1\",\"type\":\"data\"}")
+
+    check(kind == "error", "the refused frame is reported as an error rather than thrown")
+    check(errors.map { it.code } == listOf("INVALID_FRAME"), "the addressed subscription's error callback fires")
+
+    client.handleFrame("{\"data\":[1],\"id\":\"sub_2\",\"type\":\"data\"}")
+
+    check(second.size == 1, "and a later good frame on another subscription still delivers")
+}
+
 private fun pokeSequenceMaterialisesRows() {
     covers("poke_sequence_materialises_rows")
 
@@ -544,12 +739,14 @@ fun main() {
     wireCodecRoundTrip()
     undefinedIsDistinctFromNull()
     overLongBigIntRejected()
-    malformedBytesRejected()
+    malformedValuesRejected()
     depthCapEnforced()
+    exactIntegerRangeEnforced()
     stableWireKeyFixtures()
     formatNumberMatchesEcmaScript()
     keyOrderMatchesUtf16()
     stringEscapingMatchesJsonStringify()
+    emptyShardKeyIsOmitted()
     rpcRequestBodies()
     rpcResponses()
     non2xxWithoutEnvelopeThrows()
@@ -557,6 +754,8 @@ fun main() {
     serverFrameConsumer()
     subscriptionStreamYieldsFrameValuesInOrder()
     shapeSubscribeFrame()
+    shapeSubscriptionsResendAfterReconnect()
+    refusedPayloadStaysOnItsOwnSubscription()
     pokeSequenceMaterialisesRows()
     pokePartsDoNotApplyBeforePokeEnd()
     resetPokeReplacesShapeMembership()

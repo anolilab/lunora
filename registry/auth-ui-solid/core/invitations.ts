@@ -10,7 +10,7 @@
  * user has an account, or "accept" is a leap of faith. Accepting still requires
  * a session, so the controller redirects to sign-in and comes back.
  */
-import { currentPath } from "./browser-location";
+import { currentPath, isBrowser } from "./browser-location";
 import type { ControllerContext } from "./config";
 import type { ResourceState } from "./create-resource-controller";
 import { createResourceController } from "./create-resource-controller";
@@ -119,6 +119,11 @@ const createAcceptInvitationController = (context: ControllerContext, options: A
 
             store.update({ status: "success" });
             context.onSessionChange?.();
+            // Deliberately the raw field, not `postAuthDestination`: this screen is what
+            // `?redirectTo=<the invitation>` points AT. Resolving it here would
+            // send a user who just accepted the invitation straight back to the
+            // invitation. The parameter is for the doors that bounce through
+            // sign-in, not for the destination itself.
             context.nav.replace(context.redirects.afterSignIn);
         } catch (error) {
             context.onError?.(error);
@@ -126,7 +131,11 @@ const createAcceptInvitationController = (context: ControllerContext, options: A
         }
     };
 
-    if (options.autoLoad !== false) {
+    // `isBrowser`: off the browser the invitation id is unreadable, and
+    // reporting that as "invitation missing" would render the error banner into
+    // the SSR markup while the hydrating client renders the skeleton. Leaving
+    // `loading: true` is that skeleton, so the two agree.
+    if (options.autoLoad !== false && isBrowser()) {
         void load();
     }
 

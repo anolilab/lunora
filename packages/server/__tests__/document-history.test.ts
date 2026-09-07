@@ -66,6 +66,10 @@ const createRangeBuilder = (predicates: Predicate[]) => {
 
 const createMemoryDb = () => {
     const rows = new Map<string, Record<string, unknown>>();
+    // Every `take(n)` the reader was asked for. A clamp on a caller-supplied
+    // `limit` is invisible in the returned rows on a small fixture — the bound
+    // that matters is the one handed to the index scan, so record it.
+    const takes: number[] = [];
     let nextId = 1;
     // Stands in for `.commitOrdered()`: a per-shard integer allocated ONCE per
     // mutation and strictly increasing in commit order. `commit()` opens the next
@@ -90,7 +94,11 @@ const createMemoryDb = () => {
 
                 return reader;
             },
-            take: async (limit: number) => resolved().slice(0, limit),
+            take: async (limit: number) => {
+                takes.push(limit);
+
+                return resolved().slice(0, limit);
+            },
             withIndex(_name: string, range?: (q: unknown) => unknown) {
                 range?.(createRangeBuilder(predicates));
 
@@ -105,6 +113,7 @@ const createMemoryDb = () => {
         delete: async (id: string) => {
             rows.delete(id);
         },
+        takes,
         insert: async (table: string, document: Record<string, unknown>) => {
             const id = `${table}|${String(nextId)}`;
 
@@ -266,6 +275,36 @@ describe("defineDocumentHistory — recording", () => {
         expect(serialized).not.toContain("new-hash");
         expect(serialized).not.toContain("old-hash");
         expect(JSON.parse(entry?.["doc"] as string)).toStrictEqual({ email: "a@b.c" });
+    });
+
+    it("walks a Map/Set column — the wire codec round-trips both, and a Map holds NAMED keys", async () => {
+        expect.assertions(2);
+
+        const db = createMemoryDb();
+        const history = defineDocumentHistory();
+        const { handlers } = capture(history.record);
+
+        vi.setSystemTime(1000);
+        await handlers["insert"]?.(triggerContextFor(db), {
+            doc: {
+                oauth: new Map([
+                    ["provider", "github"],
+                    ["refreshToken", "rt-secret"],
+                ]),
+                sessions: new Set([{ hashedPassword: "hp-secret", id: "s1" }]),
+            },
+            id: "user_1",
+            op: "insert",
+            table: "users",
+        } as never);
+
+        // A `Map` was passed through whole as a "wire codec leaf that holds no
+        // named field" — it holds named fields, and this table retains what it is
+        // given for months.
+        const serialized = entries(db)[0]?.["doc"] as string;
+
+        expect(serialized).not.toContain("rt-secret");
+        expect(serialized).not.toContain("hp-secret");
     });
 
     it("drops the caller's extra redacted fields too", async () => {
@@ -595,5 +634,25 @@ describe("defineDocumentHistory — ordering across a restart", () => {
 
         expect(result[0]?.doc).toStrictEqual({ title: "second" });
         expect(result[1]?.doc).toStrictEqual({ title: "first" });
+    });
+});
+
+describe("defineDocumentHistory — listForDocument clamps its limit", () => {
+    it("caps a caller-supplied limit rather than passing it straight to take()", async () => {
+        expect.assertions(2);
+
+        const db = createMemoryDb();
+        const history = defineDocumentHistory();
+
+        // `take()` has no ceiling of its own, and this read returns full un-RLS'd
+        // row snapshots — the one preset read that skipped the clamp its siblings
+        // (`action-cache`'s purge, `presence`'s `maxSessions`) all apply.
+        await history.functions.listForDocument.handler({ db }, { documentId: "thread_1", limit: 5_000_000 });
+
+        expect(db.takes).toEqual([1000]);
+
+        await history.functions.listForDocument.handler({ db }, { documentId: "thread_1", limit: 7 });
+
+        expect(db.takes).toEqual([1000, 7]);
     });
 });

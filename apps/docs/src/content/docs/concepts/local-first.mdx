@@ -39,12 +39,13 @@ export default defineApp()
     .build();
 ```
 
-It is off by default because it costs a changelog row per write. Without it a
-shard has no `__cdc_log`, so every reconnect re-seeds a shape's full membership
-instead of resuming with a delta — the engine still works, it just never does
-the "delta" half. With `.global()` tables the same switch turns on the global
-changelog the poll tick asks which tables moved, so a `.global()` shape has no
-fast path at all until you set it.
+It is off by default because it costs a changelog row per write, but the engine
+does not degrade without it: a shard has no `__cdc_log` to diff, so every
+shard-local `shape_subscribe` is **refused** with `SHAPE_REQUIRES_CDC` and the
+subscription never seeds at all. `.global()` shapes are driven by the poll loop
+instead and work either way — the same switch also turns on the global changelog
+the poll tick asks which tables moved, so they are latency-tiered rather than
+poke-live until you set it.
 
 ## Why the DO topology fits
 
@@ -64,8 +65,8 @@ this:
 
 A **shape** names a table, a predicate, and an optional column projection. The
 client subscribes by shape _name_ + validated `args`; the DO resolves the
-predicate server-side and AND-composes it with the table's RLS read base-where,
-then streams only the matching rows.
+predicate server-side and AND-composes it with the read policies **the shape
+itself declares**, then streams only the matching rows.
 
 ```ts title="lunora/shapes.ts"
 import { defineShape, v } from "lunorash/server";
@@ -78,6 +79,36 @@ export const messagesByChannel = defineShape({
     columns: ["text", "authorId", "channelId"], // optional projection
 });
 ```
+
+### Opting a shape into RLS (`use`)
+
+A shape runs no procedure, so a `.use(rls(...))` chain never fires for it and the
+policies your queries declare do not reach it. A shape names its own guards:
+
+```ts title="lunora/shapes.ts"
+export const messagesByChannel = defineShape({
+    table: "messages",
+    args: { channelId: v.id("channels") },
+    use: [tenantScoped], // the same rls(...) guard the equivalent query lists
+    where: (_ctx, { channelId }) => ({ channelId }),
+});
+```
+
+Their `on: "read"` policies are evaluated under the socket's verified identity
+and AND-merged with `where` before a row replicates. Several guards compose:
+every one of them must admit a row. Only the policies are read — a shape cannot
+run `requireAdmin` or a rate limiter, so never lean on a procedure-level gate to
+protect one.
+
+Omitting `use` is a decision, not a default:
+
+- Under `.rls("required")`, a shape over a non-`.public()` table that names no
+  guard replicates **nothing**.
+- Otherwise codegen stamps a boot check into the generated DO: when the project's
+  `rls()` guards declare an `on: "read"` policy for the shape's table and the
+  shape names none, the worker refuses to start and names the shape and the
+  table. Write `use: []` to say the omission is deliberate — the shape's own
+  `where` is the whole filter.
 
 Shard-local shapes replicate out of the changelog, so the app has to turn it on:
 

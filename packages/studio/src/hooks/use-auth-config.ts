@@ -11,7 +11,7 @@ import { useClientQuery } from "./use-admin-query";
  * selector reuses the `capabilities` slice of this constant as its own fallback.
  */
 export const DEFAULT_AUTH_CONFIG: AuthConfigInfo = {
-    capabilities: { accounts: true, admin: true, organization: false, passkey: false, twoFactor: false },
+    capabilities: { accounts: true, admin: true, inviteOnly: false, organization: false, passkey: false, twoFactor: false },
     emailAndPassword: false,
     organization: { enabled: false, roles: false, teams: false },
     plugins: [],

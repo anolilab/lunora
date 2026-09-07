@@ -1,7 +1,7 @@
 /**
  * `createNodeR2Bucket` — a Node implementation of the `R2BucketLike` structural
  * contract (`@lunora/platform`) over the local filesystem, so `@lunora/storage`'s
- * `createStorage({ bucket })` runs on the Node host.
+ * `createStorage({ bucket, bucketName })` runs on the Node host.
  *
  * # The invariant
  *
@@ -162,6 +162,17 @@ const decodeKey = (relativePath: string): string | undefined => {
     return segments.join("/");
 };
 
+/** Shared encoder for measuring UTF-8 byte length (not UTF-16 `String.length`). */
+const R2_KEY_ENCODER = new TextEncoder();
+
+/**
+ * UTF-8 byte length of a key. R2's ceiling is documented in **bytes**, and this
+ * emulator states that it applies "the same ceiling and control-character rule
+ * `@lunora/storage` applies, so a key accepted on one target is accepted on the
+ * other" — which only holds if both measure the same way.
+ */
+const r2ByteLength = (value: string): number => R2_KEY_ENCODER.encode(value).length;
+
 /**
  * Reject keys that would leave the bucket directory or collide inside it. Every
  * segment must be a plain name: `a/./b` and `a//b` would otherwise resolve to
@@ -178,7 +189,7 @@ const validateKey = (key: string): void => {
     // key accepted on one target is accepted on the other. Divergent key grammar
     // per host is the thing the platform-parity convention exists to prevent —
     // and without the ceiling an over-long key surfaces as a raw `ENAMETOOLONG`.
-    if (key.length > MAX_KEY_LENGTH) {
+    if (r2ByteLength(key) > MAX_KEY_LENGTH) {
         throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: R2 key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 
@@ -611,7 +622,7 @@ const unlinkIfPresent = async (path: string): Promise<void> => {
 
 /**
  * Create an `R2BucketLike` over the local filesystem. Any object shape
- * `createStorage({ bucket })` accepts — `put`/`get`/`head`/`delete`/`list` —
+ * `createStorage({ bucket, bucketName })` accepts — `put`/`get`/`head`/`delete`/`list` —
  * maps directly onto a file operation.
  */
 const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
@@ -712,7 +723,7 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
             return stored === undefined ? null : toObject(key, stored.meta); // eslint-disable-line unicorn/no-null
         },
 
-        list: async (listOptions: { cursor?: string; delimiter?: string; limit?: number; prefix?: string } = {}) => {
+        list: async (listOptions: { cursor?: string; delimiter?: string; limit?: number; prefix?: string; startAfter?: string } = {}) => {
             const limit = Math.max(1, clamp(listOptions.limit, 1000, 1000));
 
             if (listOptions.prefix?.includes("\0")) {
@@ -721,11 +732,52 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
 
             const all = await walkObjects(directory);
             const prefix = listOptions.prefix ?? "";
-            const filtered = all.filter(
-                (key) => key.startsWith(prefix) && (listOptions.delimiter === undefined || !key.slice(prefix.length).includes(listOptions.delimiter)),
-            );
+            const underPrefix = all.filter((key) => key.startsWith(prefix));
+            const { delimiter } = listOptions;
+            const filtered = delimiter === undefined ? underPrefix : underPrefix.filter((key) => !key.slice(prefix.length).includes(delimiter));
 
-            const startIndex = listOptions.cursor === undefined ? 0 : firstIndexGreaterThan(filtered, listOptions.cursor);
+            // Keys the delimiter rolled up. R2 does not drop them — it returns
+            // the common prefix (through the delimiter) in `delimitedPrefixes`,
+            // which is the entire point of asking for a delimiter. Filtering
+            // them out and returning nothing else made a delimited list report
+            // an empty, untruncated page over a full bucket.
+            const delimitedPrefixes =
+                delimiter === undefined
+                    ? undefined
+                    : [
+                          ...new Set(
+                              underPrefix
+                                  .map((key) => {
+                                      const rest = key.slice(prefix.length);
+                                      const at = rest.indexOf(delimiter);
+
+                                      return at === -1 ? undefined : key.slice(0, prefix.length + at + delimiter.length);
+                                  })
+                                  .filter((value): value is string => value !== undefined),
+                          ),
+                          // Codepoint order, the order R2 itself lists in.
+                          // `localeCompare` would interleave case differently.
+                      ].toSorted((a, b) => (a < b ? -1 : Number(a > b)));
+
+            // `startAfter` and `cursor` are the same operation on a sorted key
+            // list — resume strictly after a key — and R2 honours both when both
+            // are given. The later of the two wins, which is the cursor whenever
+            // a caller has begun paging: a cursor names a position inside an
+            // in-progress listing, so rewinding to `startAfter` would re-serve
+            // keys already delivered.
+            //
+            // Ignoring `startAfter` here would not be a slow path, it would be a
+            // wrong one: a caller using it to seek into a large prefix would
+            // silently get the front of the listing instead, and once more keys
+            // precede the seek point than `limit` admits, the keys it asked for
+            // never appear at all.
+            let after = listOptions.cursor;
+
+            if (listOptions.startAfter !== undefined && (after === undefined || listOptions.startAfter > after)) {
+                after = listOptions.startAfter;
+            }
+
+            const startIndex = after === undefined ? 0 : firstIndexGreaterThan(filtered, after);
             const page = filtered.slice(startIndex, startIndex + limit);
             const truncated = startIndex + limit < filtered.length;
             // A key can vanish (or turn out to be an unrelated file) between the
@@ -745,7 +797,7 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
             // taking it from `objects` then rewinds the next page over keys
             // already served — or, if the whole page dropped out, hands back
             // `undefined` while claiming `truncated`, which strands the caller.
-            return { cursor: truncated ? page.at(-1) : undefined, objects, truncated };
+            return { cursor: truncated ? page.at(-1) : undefined, delimitedPrefixes, objects, truncated };
         },
 
         put: async (

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { McpAccessTokenClaims, McpAuthProtect } from "../src/authed-http";
 import { createAuthedMcpFetchHandler, mcpTokenScopes } from "../src/authed-http";
+import { DEFAULT_MAX_REQUEST_BYTES } from "../src/serve-stateless";
 
 /** Minimal mock exposing only the methods the tools touch. */
 const mockClient = (): LunoraClient =>
@@ -178,5 +179,36 @@ describe("createAuthedMcpFetchHandler", () => {
         expect(readOnlyTools).not.toContain("lunora_run_mutation");
         expect(readWriteTools).toContain("lunora_list_functions");
         expect(readWriteTools).toContain("lunora_run_mutation");
+    });
+
+    /**
+     * A read-scoped token is still a token: without this, one authorized POST
+     * of a JSON-RPC array turns into that many admin-bearer upstream calls.
+     */
+    it("refuses a batched request from an authorized caller", async () => {
+        expect.assertions(2);
+
+        const handle = createAuthedMcpFetchHandler({ protect: fakeProtect({ scope: "lunora:read" }), server: { client: mockClient() } });
+        const response = await handle(mcpRequest([initializeBody, listToolsBody, listToolsBody]));
+
+        expect(response.status).toBe(400);
+        await expect(response.text()).resolves.toContain("batched requests are not supported");
+    });
+
+    it("refuses a body over the size limit from an authorized caller", async () => {
+        expect.assertions(2);
+
+        const handle = createAuthedMcpFetchHandler({ protect: fakeProtect({ scope: "lunora:read" }), server: { client: mockClient() } });
+        const response = await handle(
+            mcpRequest({
+                id: 1,
+                jsonrpc: "2.0",
+                method: "tools/call",
+                params: { arguments: { path: "z".repeat(DEFAULT_MAX_REQUEST_BYTES) }, name: "lunora_run_query" },
+            }),
+        );
+
+        expect(response.status).toBe(413);
+        await expect(response.text()).resolves.toContain("exceeds");
     });
 });

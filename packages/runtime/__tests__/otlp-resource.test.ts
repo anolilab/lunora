@@ -19,6 +19,36 @@ describe("shared/otlp-resource", () => {
             expect(read("EMPTY")).toBeUndefined();
         });
 
+        it("unwraps a Cloudflare version_metadata binding, preferring its tag", () => {
+            expect.assertions(3);
+
+            // The binding is an OBJECT, so a strict string reader made
+            // `CF_VERSION_METADATA` unreadable — `service.version` auto-detection
+            // could never fire on the platform it was written for.
+            const tagged = readerFromRecord({ CF_VERSION_METADATA: { id: "8ee9-4b4d", tag: "v1.4.0", timestamp: "2026-01-01T00:00:00Z" } });
+
+            expect(tagged("CF_VERSION_METADATA")).toBe("v1.4.0");
+
+            // A deployment that set no tag still has a version id.
+            const untagged = readerFromRecord({ CF_VERSION_METADATA: { id: "8ee9-4b4d", tag: "", timestamp: "2026-01-01T00:00:00Z" } });
+
+            expect(untagged("CF_VERSION_METADATA")).toBe("8ee9-4b4d");
+
+            expect(detectServiceResource(tagged)["service.version"]).toBe("v1.4.0");
+        });
+
+        it("unwraps ONLY the version binding, never any other object-valued one", () => {
+            expect.assertions(2);
+
+            // Generalized, the `.tag ?? .id` fallback would export the internal id
+            // of whatever a future probed key named — a Hyperdrive config, a queue —
+            // as a resource attribute on every span.
+            const read = readerFromRecord({ ENVIRONMENT: { id: "hyperdrive-9", tag: "prod-ish" }, SERVICE_VERSION: { id: "not-a-version" } });
+
+            expect(read("SERVICE_VERSION")).toBeUndefined();
+            expect(read("ENVIRONMENT")).toBeUndefined();
+        });
+
         it("tolerates an absent environment", () => {
             expect.assertions(1);
 
@@ -73,6 +103,17 @@ describe("shared/otlp-resource", () => {
             expect(detectHostResource(readerFromRecord({ HOSTNAME: "pod-1", KUBERNETES_SERVICE_HOST: "kubernetes.default.svc" }))["k8s.pod.name"]).toBe(
                 "pod-1",
             );
+        });
+
+        it("reports an explicitly named pod without the in-cluster service env", () => {
+            expect.assertions(1);
+
+            // The `KUBERNETES_SERVICE_HOST` gate exists for the HOSTNAME fallback —
+            // a machine name is not a pod name. `KUBERNETES_POD_NAME` needs no such
+            // corroboration: it says what it is. Gating it too dropped the
+            // attribute wherever the pod name is injected without the in-cluster
+            // service env alongside it.
+            expect(detectHostResource(readerFromRecord({ HOSTNAME: "box-1", KUBERNETES_POD_NAME: "pod-7" }))["k8s.pod.name"]).toBe("pod-7");
         });
 
         it("omits process.pid when the host has none", () => {

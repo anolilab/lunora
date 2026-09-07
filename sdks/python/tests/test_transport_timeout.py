@@ -20,7 +20,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lunora.client import LunoraClient, _urllib_post
+from lunora.client import _NO_REDIRECT_OPENER, LunoraClient, _urllib_post
 
 # Well under DEFAULT_HTTP_TIMEOUT so the test proves the override works, and
 # short enough that it does not slow the suite down.
@@ -111,10 +111,17 @@ class TestDefaultTransportTimeout(unittest.TestCase):
             def read(self):
                 return self._body
 
+            def close(self):
+                pass  # no underlying fp to release
+
         def raise_http_error(_request, **_kwargs):
             raise _FakeHTTPError(502, json.dumps({"error": {"code": "INTERNAL", "message": "bad gateway"}}).encode("utf-8"))
 
-        with patch("urllib.request.urlopen", side_effect=raise_http_error):
+        # The opener, not `urllib.request.urlopen`: the poster drives its own
+        # opener so that redirects are refused rather than followed with the
+        # bearer token attached, and patching the module function would leave the
+        # real request to run.
+        with patch.object(_NO_REDIRECT_OPENER, "open", side_effect=raise_http_error):
             status, body = _urllib_post("http://app.example/_lunora/rpc", {}, b"{}")
 
         self.assertEqual(status, 502)

@@ -208,6 +208,21 @@ class DurableStreamRunner {
             }
 
             request.sink.fail({ code: body.code, message: body.message });
+        } finally {
+            // Sweep on EVERY attach, not only on the branch that claims a new
+            // run: joining a live run, replaying a terminal transcript and
+            // resuming an interrupted one all returned before the old sweep
+            // site, so a shard whose streaming settled into those (or stopped
+            // starting runs at all) kept every expired transcript forever,
+            // whatever its retention was set to.
+            //
+            // AFTER the attach, deliberately. The sweep deletes on
+            // `startedAt + ttlMs`, so running it first would delete the very
+            // transcript an expired-but-replayable resume is about to read — a
+            // replay that works today would start returning nothing. `trim` is
+            // itself throttled, so this costs a clock read on all but one
+            // attach per GC interval.
+            this.trim(this.sql());
         }
     }
 
@@ -272,8 +287,6 @@ class DurableStreamRunner {
         if (decision === "reclaim") {
             deleteStreamRun(sql, runKey);
         }
-
-        this.trim(sql);
 
         // On a reclaim, never reuse the replaced run's stamp: two claims inside
         // the same millisecond would otherwise share a generation, and a resume

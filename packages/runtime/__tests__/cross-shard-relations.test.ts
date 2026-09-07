@@ -1,6 +1,7 @@
 import { RELATION_FUNCTION_PREFIX } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
+import { encodeWire } from "../../../shared/wire-codec";
 import type { ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import { createCrossShardRelationCapabilities } from "../src/cross-shard-relations";
@@ -105,6 +106,29 @@ describe("createCrossShardRelationCapabilities", () => {
         expect(cluster.seen.filter((entry) => entry.functionPath === "__lunora_relation__:read").map((entry) => entry.userId)).toEqual(["user_42", "user_42"]);
     });
 
+    it("decodes the shard's wire-encoded rows, so a bigint arrives as a bigint", async () => {
+        expect.assertions(3);
+
+        // The producing shard runs `encodeWire` on its relation result, so bigints
+        // and byte arrays land as `["$lunora.wire$", …]` tags. Without the matching
+        // `decodeWire` here, every child row's 64-bit id reaches the parent as a
+        // tag ARRAY instead of a value.
+        const row = encodeWire({ _id: "l1", blob: new Uint8Array([1, 2, 3]), views: 9_007_199_254_740_993n }) as Record<string, unknown>;
+        const cluster = createShardCluster({ s1: [row], s2: [] }, {});
+        const worker = buildWorker(cluster);
+        const capabilities = createCrossShardRelationCapabilities({
+            fetch: ((request: Request) => worker.fetch(request, {}, fakeContext)) as typeof globalThis.fetch,
+            origin: "https://worker.test",
+            userId: "user_42",
+        });
+
+        const page = await capabilities.crossShardReader("local", { where: {} });
+
+        expect(page.page).toHaveLength(1);
+        expect(page.page[0]?.["views"]).toBe(9_007_199_254_740_993n);
+        expect(page.page[0]?.["blob"]).toStrictEqual(new Uint8Array([1, 2, 3]));
+    });
+
     it("fans a `count` out across every shard and sums the per-shard tallies", async () => {
         expect.assertions(1);
 
@@ -166,6 +190,26 @@ describe("createCrossShardRelationCapabilities", () => {
         const cluster = createShardCluster({ s1: [{ _id: "l1" }] }, {});
         const worker = createWorker({
             authorizeFanOut: () => false,
+            queryCoordinator: createQueryCoordinator({ registry: createStaticShardRegistry({ local: ["s1", "s2"] }) }),
+            shardDO: cluster.namespace,
+        });
+        const capabilities = createCrossShardRelationCapabilities({
+            fetch: ((request: Request) => worker.fetch(request, {}, fakeContext)) as typeof globalThis.fetch,
+            origin: "https://worker.test",
+        });
+
+        await expect(capabilities.crossShardReader("local", { where: {} })).rejects.toThrow(/worker returned 403/u);
+    });
+
+    it("denies the fan-out when `authorizeFanOut` returns a truthy non-boolean", async () => {
+        expect.assertions(1);
+
+        // This gate stands in front of the RLS-blind `__lunora_relation__:*`
+        // cross-shard raw-row reads, so a truthy-but-not-`true` verdict from an
+        // untyped app gate would expose every shard's rows.
+        const cluster = createShardCluster({ s1: [{ _id: "l1" }] }, {});
+        const worker = createWorker({
+            authorizeFanOut: () => ({ valid: false }) as unknown as boolean,
             queryCoordinator: createQueryCoordinator({ registry: createStaticShardRegistry({ local: ["s1", "s2"] }) }),
             shardDO: cluster.namespace,
         });

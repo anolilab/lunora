@@ -41,7 +41,7 @@ interface ActionBuilder<Context, Args extends ArgsValidator, Output = undefined>
     input: <A extends ArgsValidator>(validators: A) => ActionBuilder<Context, A & Args, Output>;
     meta: (value: Record<string, unknown>) => ActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => ActionBuilder<Context, Args, Infer<V>>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => ActionBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => ActionBuilder<ContextOut, Args, Output>;
     x402: (config: X402ProcedureConfig) => ActionBuilder<Context, Args, Output>;
 }
 ```
@@ -703,10 +703,12 @@ interface GeoPointInput {
 ### `HttpActionCtx` (type)
 
 ```ts
-type HttpActionCtx = Pick<ActionCtx, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery"> & {
+type HttpActionCtx = {
+    readonly forShard: (shardKey: string) => HttpRunners;
     readonly scheduler?: ActionCtx["scheduler"];
     readonly storage?: ActionCtx["storage"];
-};
+    readonly waitUntil?: (promise: Promise<unknown>) => void;
+} & HttpRunners & Pick<ActionCtx, "auth" | "cache" | "fetch">;
 ```
 
 ### `HttpActionHandler` (type)
@@ -750,7 +752,11 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
     output: <V extends Validator>(validator: V) => HttpRouteBuilder<SearchParams, Body, Params, Infer<V>>;
     params: <P extends ArgsValidator>(validators: P) => HttpRouteBuilder<SearchParams, Body, P & Params, Output>;
     searchParams: <S extends ArgsValidator>(validators: S) => HttpRouteBuilder<S & SearchParams, Body, Params, Output>;
-    stream: <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => LunoraRouteHandler;
+    stream: [
+        Output
+    ] extends [
+        undefined
+    ] ? <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => LunoraRouteHandler : (handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<Output, void, void> | AsyncIterable<Output>) => LunoraRouteHandler;
     vary: (value: string) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
 }
 ```
@@ -770,6 +776,12 @@ interface HttpRouteHandlerOptions<SearchParams extends ArgsValidator, Body exten
     params: InferArgs<Params>;
     searchParams: InferArgs<SearchParams>;
 }
+```
+
+### `HttpRunners` (type)
+
+```ts
+type HttpRunners = Pick<ActionCtx, "runAction" | "runMutation" | "runQuery">;
 ```
 
 ### `HttpStreamHandlerOptions` (interface)
@@ -915,7 +927,7 @@ interface InternalActionBuilder<Context, Args extends ArgsValidator, Output = un
     input: <A extends ArgsValidator>(validators: A) => InternalActionBuilder<Context, A & Args, Output>;
     meta: (value: Record<string, unknown>) => InternalActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => InternalActionBuilder<Context, Args, Infer<V>>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalActionBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalActionBuilder<ContextOut, Args, Output>;
 }
 ```
 
@@ -939,7 +951,7 @@ interface InternalMutationBuilder<Context, Args extends ArgsValidator, Output = 
         ctx: Context;
     }) => Output | Promise<Output>) => RegisteredMutation<Args, Output>;
     output: <V extends Validator>(validator: V) => InternalMutationBuilder<Context, Args, Infer<V>>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalMutationBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalMutationBuilder<ContextOut, Args, Output>;
 }
 ```
 
@@ -968,7 +980,7 @@ interface InternalQueryBuilder<Context, Args extends ArgsValidator, Output = und
         ctx: Context;
         signal: AbortSignal;
     }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: StreamOptions) => RegisteredStream<Args, R>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalQueryBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalQueryBuilder<ContextOut, Args, Output>;
 }
 ```
 
@@ -1075,7 +1087,7 @@ interface LunoraBuilders {
 ### `LunoraEnvError` (class)
 
 ```ts
-class LunoraEnvError extends LunoraError$1 {
+class LunoraEnvError extends LunoraError {
     readonly failures: ReadonlyArray<EnvKeyFailure>;
     constructor(failures: ReadonlyArray<EnvKeyFailure>);
 }
@@ -1083,11 +1095,7 @@ class LunoraEnvError extends LunoraError$1 {
 
 ### `LunoraError` (class)
 
-```ts
-class LunoraError extends LunoraError$1 {
-    constructor(code: LunoraErrorCode, message?: string, data?: unknown);
-}
-```
+Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `LunoraErrorCode` (type)
 
@@ -1156,7 +1164,7 @@ type LunoraRouteHandler = (c: Context<LunoraHttpEnv>) => Promise<Response>;
 ### `LunoraTracer` (type)
 
 ```ts
-type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields | SpanOptions) => Promise<T>;
+type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields | SpanOptions, identity?: SpanIdentity) => Promise<T>;
 ```
 
 ### `LunoraWideEvent` (type)
@@ -1237,6 +1245,14 @@ type Middleware<ContextIn, ContextOut> = (options: {
     ctx: ContextIn;
     next: MiddlewareNext<ContextIn>;
 }) => ContextOut | Promise<ContextOut>;
+```
+
+### `MiddlewareContext` (type)
+
+```ts
+type MiddlewareContext<Context, Args extends ArgsValidator> = Context & {
+    readonly args: Readonly<InferArgs<Args>>;
+};
 ```
 
 ### `MiddlewareNext` (interface)
@@ -1320,7 +1336,7 @@ interface MutationBuilder<Context, Args extends ArgsValidator, Output = undefine
         ctx: Context;
     }) => Output | Promise<Output>) => RegisteredMutation<Args, Output>;
     output: <V extends Validator>(validator: V) => MutationBuilder<Context, Args, Infer<V>>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => MutationBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => MutationBuilder<ContextOut, Args, Output>;
     x402: (config: X402ProcedureConfig) => MutationBuilder<Context, Args, Output>;
 }
 ```
@@ -1579,12 +1595,16 @@ interface QueryBuilder<Context, Args extends ArgsValidator, Output = undefined> 
         args: InferArgs<Args>;
         ctx: Context;
     }) => Output | Promise<Output>) => RegisteredQuery<Args, Output>;
-    stream: <R>(handler: (options: {
+    stream: [
+        Output
+    ] extends [
+        undefined
+    ] ? <R>(handler: (options: {
         args: InferArgs<Args>;
         ctx: Context;
         signal: AbortSignal;
-    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: StreamOptions) => RegisteredStream<Args, R>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => QueryBuilder<ContextOut, Args, Output>;
+    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: StreamOptions) => RegisteredStream<Args, R> : never;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => QueryBuilder<ContextOut, Args, Output>;
     x402: (config: X402ProcedureConfig) => QueryBuilder<Context, Args, Output>;
 }
 ```
@@ -1672,7 +1692,9 @@ type ReactorSelect<T> = (context: QueryCtx) => Promise<T> | T;
 interface ReadOnlyStorage<Buckets extends string = string> {
     bucket: (name: Buckets) => ReadOnlyStorage<Buckets>;
     readonly bucketName: string;
-    download: (key: string) => Promise<ReadableStream | null>;
+    download: (key: string, options?: {
+        range?: StorageRange;
+    }) => Promise<StorageObjectBody | null>;
     getMetadata: (key: string) => Promise<StorageMetadata | null>;
     getSignedUrl: (key: string, options?: {
         expiresInSeconds?: number;
@@ -1697,7 +1719,6 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
     readonly kind: Kind;
     readonly lifecycle?: LifecycleEventKind;
-    readonly meta?: Readonly<Record<string, unknown>>;
     readonly visibility?: FunctionVisibility;
     readonly x402?: X402ProcedureConfig;
 }
@@ -1757,6 +1778,7 @@ interface RegisteredShape<Args extends ValidatorMap = ValidatorMap, Context = Qu
     readonly compileWhere: (context: unknown, rawArgs: Record<string, unknown>, options?: {
         ownerField?: string;
     }) => WhereInput;
+    readonly rlsRegistry: RlsReadRegistry;
 }
 ```
 
@@ -1768,7 +1790,6 @@ interface RegisteredStream<A extends ArgsValidator, R> {
     readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
-    readonly meta?: Readonly<Record<string, unknown>>;
     readonly visibility?: FunctionVisibility;
 }
 ```
@@ -1805,6 +1826,17 @@ interface RelationDefinition {
 
 ```ts
 type RestCacheConfig = RestCachePolicy;
+```
+
+### `RetryPolicy` (interface)
+
+```ts
+interface RetryPolicy {
+    backoff?: "exponential" | "linear";
+    baseMs?: number;
+    maxAttempts?: number;
+    maxMs?: number;
+}
 ```
 
 ### `RlsOptions` (interface)
@@ -1848,10 +1880,12 @@ interface ScheduledFunctionDoc {
     args: Record<string, unknown>;
     attempts?: number;
     enqueuedAt: number;
-    functionPath: string;
+    functionPath?: string;
     id: string;
+    pool?: string;
     scheduledFor: number;
     shardKey?: string;
+    workflow?: string;
 }
 ```
 
@@ -1862,10 +1896,14 @@ interface ScheduledJob {
     args: Record<string, unknown>;
     attempts?: number;
     enqueuedAt: number;
-    functionPath: string;
+    functionPath?: string;
     id: string;
+    instanceName?: string;
+    pool?: string;
+    retry?: RetryPolicy;
     scheduledFor: number;
     shardKey?: string;
+    workflow?: string;
 }
 ```
 
@@ -1878,8 +1916,8 @@ interface Scheduler {
     }>;
     get: (id: string) => Promise<ScheduledJob | null>;
     list: () => Promise<ScheduledJob[]>;
-    runAfter: (delayMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
+    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
 }
 ```
 
@@ -1933,7 +1971,18 @@ interface ShapeDefinition<Args extends ValidatorMap = ValidatorMap, Context = Qu
     readonly columns?: ReadonlyArray<string>;
     readonly owner?: string | true;
     readonly table: string;
+    readonly use?: ReadonlyArray<Middleware<never, unknown>>;
     readonly where?: (context: Context, args: InferValidatorMap<Args>) => WhereInput | boolean;
+}
+```
+
+### `ShapeGuardDeclaration` (interface)
+
+```ts
+interface ShapeGuardDeclaration {
+    readonly rlsRegistry: RlsReadRegistry;
+    readonly table: string;
+    readonly use?: ReadonlyArray<unknown>;
 }
 ```
 
@@ -1944,7 +1993,6 @@ interface ShapeReadWhereRequest {
     readonly ctx: unknown;
     readonly identity: Record<string, unknown> | null;
     readonly rlsRequired: boolean;
-    readonly roles: ReadonlyArray<string>;
     readonly shapeWhere: WhereInput;
     readonly table: string;
     readonly tablePublic: boolean;
@@ -1980,6 +2028,16 @@ type ShardMode = {
 };
 ```
 
+### `SpanContextIds` (interface)
+
+```ts
+interface SpanContextIds {
+    sampled?: boolean;
+    spanId: string;
+    traceId: string;
+}
+```
+
 ### `SpanEvaluation` (interface)
 
 ```ts
@@ -2000,10 +2058,16 @@ interface SpanHandle {
     recordException: (error: unknown) => void;
     setAttribute: (key: string, value: LogFields[string]) => void;
     setAttributes: (fields: LogFields) => void;
-    spanContext: () => {
-        spanId: string;
-        traceId: string;
-    };
+    spanContext: () => SpanContextIds;
+}
+```
+
+### `SpanIdentity` (interface)
+
+```ts
+interface SpanIdentity {
+    parentSpanId: string;
+    spanId: string;
 }
 ```
 
@@ -2043,6 +2107,10 @@ interface Storage<Buckets extends string = string> extends ReadOnlyStorage<Bucke
         contentType?: string;
         expiresInSeconds?: number;
     }) => Promise<string>;
+    getPresignedUrl: (key: string, options?: {
+        expiresInSeconds?: number;
+        method?: "GET" | "PUT";
+    }) => Promise<string>;
     store: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: {
         allowedContentTypes?: ReadonlyArray<string>;
         contentType?: string;
@@ -2068,12 +2136,20 @@ interface StorageMetadata {
 }
 ```
 
+### `StorageObjectBody` (interface)
+
+```ts
+interface StorageObjectBody extends StorageObjectHead {
+    body: ReadableStream | null;
+}
+```
+
 ### `StorageObjectHead` (interface)
 
 ```ts
 interface StorageObjectHead {
     customMetadata?: Record<string, string>;
-    etag?: string;
+    etag: string;
     httpEtag?: string;
     httpMetadata?: {
         contentType?: string;
@@ -2090,6 +2166,20 @@ interface StorageObjectHead {
 
 ```ts
 type StorageOperation = "delete" | "list" | "read" | "write";
+```
+
+### `StorageRange` (type)
+
+```ts
+type StorageRange = {
+    length?: number;
+    offset: number;
+} | {
+    length: number;
+    offset?: number;
+} | {
+    suffix: number;
+};
 ```
 
 ### `StorageRule` (interface)
@@ -2129,6 +2219,21 @@ type StorageRuleDecision = boolean | undefined;
 ```ts
 interface StorageRulesOptions {
     readonly roles?: ReadonlyArray<Role>;
+}
+```
+
+### `StorageServeAuthorizer` (type)
+
+```ts
+type StorageServeAuthorizer = (context: StorageServeAuthzContext) => boolean | Promise<boolean>;
+```
+
+### `StorageServeAuthzContext` (interface)
+
+```ts
+interface StorageServeAuthzContext {
+    key: string;
+    request: Request;
 }
 ```
 
@@ -2760,6 +2865,18 @@ const anyApi: AnyApi;
 const asBucketStorage: (raw: unknown) => unknown;
 ```
 
+### `assertShapesDeclareReadPolicies` (const)
+
+```ts
+const assertShapesDeclareReadPolicies: (shapes: Readonly<Record<string, ShapeGuardDeclaration>>, readPolicyTables: Iterable<string>, rlsRequired: boolean) => void;
+```
+
+### `beginDeferredSchedules` (const)
+
+```ts
+const beginDeferredSchedules: (context: DeferredScheduleContext) => ((committed: boolean) => Promise<void>);
+```
+
 ### `bindOrm` (const)
 
 ```ts
@@ -2781,7 +2898,7 @@ const buildMaskRegistry: (functions: Iterable<unknown>) => MaskRegistry;
 ### `buildRlsReadRegistry` (const)
 
 ```ts
-const buildRlsReadRegistry: (functions: Iterable<unknown>) => RlsReadRegistry;
+const buildRlsReadRegistry: (guards: Iterable<unknown>) => RlsReadRegistry;
 ```
 
 ### `cacheKeyFor` (const)
@@ -3106,7 +3223,7 @@ const rls: <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray
 ### `serveStorageObject` (const)
 
 ```ts
-const serveStorageObject: (context: ContextWithStorage, key: string, request: Request) => Promise<Response>;
+const serveStorageObject: (context: ContextWithStorage, key: string, request: Request, authorize: StorageServeAuthorizer, cacheControl?: string) => Promise<Response>;
 ```
 
 ### `storageRules` (const)
@@ -3129,6 +3246,12 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 
 ```ts
 const withDeferredDeletes: (storage: unknown) => unknown;
+```
+
+### `withDeferredSchedules` (const)
+
+```ts
+const withDeferredSchedules: <S extends SchedulerLike>(scheduler: S) => S;
 ```
 
 ## `@lunora/server/data-model`
@@ -4453,7 +4576,6 @@ interface PolicyAssertion {
 ```ts
 interface TestIdentity {
     identity?: Record<string, unknown> | null;
-    roles?: ReadonlyArray<string>;
     userId?: null | string;
 }
 ```
@@ -4697,6 +4819,10 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
+### `RetryPolicy` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
 ### `RunQueryOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
@@ -4761,11 +4887,19 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
+### `SpanContextIds` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
 ### `SpanEvaluation` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `SpanHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `SpanIdentity` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
@@ -4789,7 +4923,15 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
+### `StorageObjectBody` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
 ### `StorageObjectHead` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `StorageRange` (type)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 

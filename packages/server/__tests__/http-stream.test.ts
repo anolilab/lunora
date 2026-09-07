@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { HttpActionCtx as HttpActionContext, LunoraRouteHandler } from "../src/index";
 import { httpRoute, httpRouter, LunoraError, v } from "../src/index";
@@ -158,5 +158,121 @@ describe("httpRoute stream() terminal", () => {
         expect(response.headers.get("cache-control")).toBe("no-cache, no-transform");
         expect(response.headers.get("cache-tag")).toBeNull();
         expect(response.headers.get("vary")).toBeNull();
+    });
+});
+
+describe("httpRoute stream() mid-stream cancel", () => {
+    // On a consumer cancel the pump breaks, but the terminal `event: complete`
+    // frame was enqueued unconditionally onto a controller that is already
+    // closed. That throws a `TypeError`, which the catch below logged as a bogus
+    // "unhandled stream handler error", then threw AGAIN out of the error frame
+    // and out of `finally`'s `close()` — so `start()` rejected unhandled on every
+    // mid-stream disconnect, and a real handler error in the same turn was
+    // masked by the transport error.
+    it("does not enqueue a terminal frame after the consumer cancels", async () => {
+        expect.assertions(1);
+
+        const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+        let release = (): void => undefined;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        const route = httpRoute.get("/api/ticks").stream(async function* ticksGen() {
+            yield { tick: 1 };
+            await gate;
+            yield { tick: 2 };
+        });
+
+        const response = await dispatch(route, "GET", "/api/ticks", new Request("https://x/api/ticks"));
+        const reader = response.body!.getReader();
+
+        await reader.read();
+        // The consumer drops the stream: `cancel()` aborts the controller and
+        // closes it under the still-running pump.
+        await reader.cancel();
+
+        release();
+        // Let the resumed generator drive the pump past its break.
+        await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
+
+        errors.mockRestore();
+
+        expect(errors).not.toHaveBeenCalled();
+    });
+});
+
+describe("httpRoute.stream — .output() is enforced per chunk", () => {
+    it("parses every chunk through the declared output validator", async () => {
+        expect.assertions(1);
+
+        // `applyOutput`'s contract: "Every result-parsing site (RPC, REST, any
+        // future transport) must route through this helper". SSE was the one that
+        // did not — `.output()` was accepted, type-checked against, and then
+        // silently discarded, so a chunk went straight to `JSON.stringify`.
+        const route = httpRoute
+            .get("/tick")
+            .output(v.object({ id: v.string() }))
+            .stream(async function* okGen() {
+                yield { id: "a" };
+                yield { id: "b" };
+            });
+
+        const response = await dispatch(route, "GET", "/tick", new Request("https://x.example/tick"));
+        const { events } = await readSse(response);
+
+        expect(events.filter((entry) => entry.event === "message").map((entry) => entry.data)).toEqual([{ id: "a" }, { id: "b" }]);
+    });
+
+    it("a chunk that violates the output schema becomes an error frame, not raw data", async () => {
+        expect.assertions(2);
+
+        const route = httpRoute
+            .get("/bad")
+            .output(v.object({ id: v.string() }))
+            .stream(async function* badGen() {
+                yield { id: "ok" };
+                yield { id: 42 } as unknown as { id: string };
+            });
+
+        const response = await dispatch(route, "GET", "/bad", new Request("https://x.example/bad"));
+        const { events } = await readSse(response);
+
+        // The good chunk still shipped; the violating one is a redacted error
+        // frame (an output mismatch is a server contract bug → INTERNAL, so
+        // `toErrorBody` redacts the message) rather than `data: {"id":42}`.
+        expect(events.map((entry) => entry.event)).toEqual(["message", "error"]);
+        expect(events[0]?.data).toEqual({ id: "ok" });
+    });
+});
+
+describe("httpRoute.stream — the wire codec brackets every data frame", () => {
+    it("ships a Date, a bigint and a NaN as wire tags instead of flattening or killing the stream", async () => {
+        expect.assertions(3);
+
+        const route = httpRoute.get("/rich").stream(async function* richGen() {
+            yield { at: new Date(1_700_000_000_000) };
+            yield { balance: 9_007_199_254_740_993n };
+            yield { ratio: Number.NaN };
+        });
+
+        const response = await dispatch(route, "GET", "/rich", new Request("https://x.example/rich"));
+        const { events } = await readSse(response);
+
+        // Raw `JSON.stringify` flattened the Date to an ISO string and `NaN` to
+        // `null` — both still typed as the declared chunk type on the client —
+        // and threw outright on the bigint, killing the stream mid-flight with a
+        // redacted "Internal error" frame.
+        expect(events.map((entry) => entry.event)).toEqual(["message", "message", "message", "complete"]);
+        expect(events.slice(0, 3).map((entry) => entry.data)).toEqual([
+            { at: ["$lunora.wire$", "date", 1_700_000_000_000] },
+            { balance: ["$lunora.wire$", "bigint", "9007199254740993"] },
+            { ratio: ["$lunora.wire$", "nan"] },
+        ]);
+        // The terminal sentinels stay plain — the client reads them without decoding.
+        expect(events.at(-1)?.data).toEqual({});
     });
 });

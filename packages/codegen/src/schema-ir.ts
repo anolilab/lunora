@@ -3,10 +3,14 @@ import { jsonSchemaFromNode, objectSchemaFromNodes } from "@lunora/values";
 
 import type { ValidatorIR } from "./ir";
 
+/** A bigint literal as the IR records its source text — digits with the `n` suffix, optionally signed. */
+const BIGINT_LITERAL = /^-?\d+n$/u;
+
 /**
  * Render a `v.literal(...)` value as a JSON Schema `const`. The IR carries the
- * literal as verbatim source text (`"admin"`, `42`, `true`, `null`), so parse it
- * back to a JSON value; a bigint-style literal is carried as its decimal string.
+ * literal as verbatim source text (`"admin"`, `42`, `true`, `null`, `5n`), so
+ * parse it back to a JSON value; a bigint literal is carried as its decimal
+ * string, matching both the runtime reader and the `bigint` scalar node.
  */
 const literalConst = (literalValue: string | undefined): JsonSchema => {
     if (literalValue === undefined) {
@@ -43,6 +47,14 @@ const literalConst = (literalValue: string | undefined): JsonSchema => {
         return { const: trimmed.slice(1, -1), type: "string" };
     }
 
+    // A bigint literal reaches here as its SOURCE text (`5n`), which is not a
+    // number and not JSON — it used to fall through to `{ const: "5n" }`, a
+    // third spelling of a value the runtime reader emits as `{ const: "5" }`
+    // and the `bigint` scalar as an int64 string. One carrier for all three.
+    if (BIGINT_LITERAL.test(trimmed)) {
+        return { const: trimmed.slice(0, -1), format: "int64", type: "string" };
+    }
+
     const asNumber = Number(trimmed);
 
     if (!Number.isNaN(asNumber)) {
@@ -66,6 +78,7 @@ const irReader: SchemaNodeReader<ValidatorIR> = {
     constraints: () => undefined,
     inner: (validator) => validator.inner,
     isNullable: (validator) => validator.column?.notNull === false,
+    keyChild: (validator) => validator.keyType,
     // `ValidatorIR.kind` is a loose `string` (build-time AST); narrow it to the
     // shared reader's `ValidatorKind`. Unknown kinds fall through the mapper's
     // `default` branch to an empty schema, exactly as before.

@@ -36,7 +36,7 @@ const reverseSchema: SchemaLike = {
 let harness: ReturnType<typeof createD1Exec>;
 
 const seedParent = async (writer: DatabaseWriterLike): Promise<void> => {
-    harness.ddl(`CREATE TABLE "globals" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "ownerId" TEXT)`);
+    harness.ddl(`CREATE TABLE "globals" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "ownerId" TEXT)`);
     await writer.insert("globals", { _id: "g1", ownerId: "l1" }, { allowExplicitId: true });
 };
 

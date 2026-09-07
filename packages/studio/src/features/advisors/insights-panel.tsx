@@ -23,12 +23,12 @@ import type {
     TablesIndexesResult,
 } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, fireAndForget } from "../../lib/internal";
+import { adminRef, callOptions, fireAndForget, formatBytes } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
 import type { AdvisorRow } from "./advisor-view";
 import { AdvisorView, advisoryRow } from "./advisor-view";
 import { ApplyIndexButton } from "./apply-index-button";
-import { hasIndexMetadata } from "./compose-index-sql";
+import { hasIndexMetadata } from "./compose-index-declaration";
 import type { Insight } from "./derive-insights";
 import { deriveInsights } from "./derive-insights";
 import type { DeclaredIndex } from "./derive-runtime-advisories";
@@ -79,6 +79,7 @@ const insightTitle = (t: TFunction, insight: Insight): string =>
         "low-cache-hit-rate": t("Low cache hit rate"),
         "missing-index": t("Missing index"),
         "slow-function": t("Slow function"),
+        "storage-headroom": t("Storage headroom"),
     })[insight.kind];
 
 /**
@@ -100,6 +101,9 @@ const insightDetail = (t: TFunction, insight: Insight): string =>
             tables: tableList(insight.tables ?? []),
         }),
         "slow-function": t("Slowest call took {duration}.", { duration: seconds(insight.value) }),
+        "storage-headroom": t("{size} of the 10 GiB per-shard ceiling — plan a .shardBy() migration while it still has runway.", {
+            size: formatBytes(insight.value),
+        }),
     })[insight.kind];
 
 interface AddIndexButtonProps {
@@ -132,9 +136,10 @@ const AddIndexButton = ({ onJump, table }: AddIndexButtonProps): ReactElement =>
  * tabs over a findings table (via {@link AdvisorView}). It pulls the `getMetrics`
  * health snapshot and `getFunctionStats` per-function table for one shard, then
  * maps the issues {@link deriveInsights} detects (low cache hit rate, high
- * eviction, slow functions, missing indexes, error spikes) into rows. A
- * `missing-index` row carries an inline "add the index" jump to the Schema tab.
- * Both reads are best-effort — one failing still yields the other's insights.
+ * eviction, slow functions, missing indexes, error spikes, storage headroom)
+ * into rows. A `missing-index` row carries an inline "add the index" jump to the
+ * Schema tab. Both reads are best-effort — one failing still yields the other's
+ * insights.
  */
 export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPanelProps): ReactElement => {
     const client = useLunora();
@@ -385,7 +390,11 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
         [navigate],
     );
 
-    const insights = deriveInsights(metrics, functions);
+    // Memoized, not a bare call: `insights` and `runtimeRows` below are deps of
+    // the `rows` memo, so a fresh array identity on every render made that memo
+    // inert — `deriveRuntimeAdvisories` re-ran the whole lint set, and every
+    // action element was rebuilt, on each render of the panel.
+    const insights = useMemo(() => deriveInsights(metrics, functions), [functions, metrics]);
 
     // Tables the `missing-index` insight already reports on. The runtime
     // `index_utilization` hot-scan lint reads the SAME `scannedTables` signal, so
@@ -393,21 +402,28 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
     // layer). The insight owns the hot-scan story (it's the causal, latency-aware
     // view with the inline "add index" jump); the runtime lint suppresses its
     // hot-scan finding for those tables and keeps only its unique dead-index half.
-    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over the advisor insights for one shard — a findings list, built once per fetch
-    const missingIndexTables = new Set(insights.filter((insight) => insight.kind === "missing-index").flatMap((insight) => insight.tables ?? []));
+    const missingIndexTables = useMemo(
+        // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over the advisor insights for one shard — a findings list, built once per fetch
+        () => new Set(insights.filter((insight) => insight.kind === "missing-index").flatMap((insight) => insight.tables ?? [])),
+        [insights],
+    );
 
     // Runtime advisor lints (dead index + hot scan + hot shard) over the recorded
     // metrics. Same verbatim advisory mapping as the static getAdvisories findings
     // — no new i18n. The shardTraffic feed (fanned out above) flows in so hot_shard
     // fires on a genuine cross-shard skew; hot-scan findings for tables the
     // missing-index insight already owns are suppressed so a hot table renders once.
-    const runtimeRows = deriveRuntimeAdvisories({
-        declaredIndexes: declaredIndexes ?? [],
-        functions,
-        indexHits,
-        shardTraffic,
-        suppressHotScanTables: missingIndexTables,
-    });
+    const runtimeRows = useMemo(
+        () =>
+            deriveRuntimeAdvisories({
+                declaredIndexes: declaredIndexes ?? [],
+                functions,
+                indexHits,
+                shardTraffic,
+                suppressHotScanTables: missingIndexTables,
+            }),
+        [declaredIndexes, functions, indexHits, missingIndexTables, shardTraffic],
+    );
 
     const rows = useMemo<AdvisorRow[]>(() => {
         const insightRows = insights.map((insight) => {
@@ -429,10 +445,11 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
         //
         // For `unindexed_foreign_key` / `unindexed_relation_target` findings (and
         // any other finding that carries `suggestedIndex` metadata), attach an
-        // "Apply index" action that composes the `CREATE INDEX` SQL and copies it
-        // to the operator's clipboard on confirm. This is the Item 5 "create all
-        // missing indexes" apply control — per-finding rather than bulk, guarded
-        // by ConfirmButton.
+        // action that composes the `.index(...)` schema declaration and copies it
+        // to the operator's clipboard on confirm — per-finding rather than bulk,
+        // guarded by ConfirmButton. It copies rather than applies: the index has
+        // to be declared in `lunora/schema.ts`, which is what the migration
+        // system tracks and what nothing here can write.
         const indexAdvisoryLints = new Set(["unindexed_foreign_key", "unindexed_relation_target"]);
         const staticRows: AdvisorRow[] = (advisories ?? []).map((finding) => {
             const base = advisoryRow(finding);

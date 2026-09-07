@@ -27,8 +27,8 @@ import type { RateLimitConfigMap } from "@lunora/ratelimit";
  * `ratelimit.middleware`.
  */
 export const limits = {
-    /** Default per-key limit: 10 requests, refilling continuously over 60s. */
-    default: { kind: "token bucket", period: 60_000, rate: 10 },
+    /** Writes on the `send` path: 10 per caller, refilling continuously over 60s. */
+    send: { kind: "token bucket", period: 60_000, rate: 10 },
 } as const satisfies RateLimitConfigMap;
 
 /** The limit names you've configured above. */

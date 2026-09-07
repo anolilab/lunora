@@ -1,9 +1,32 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { isPublicWrite } from "../helpers";
+import { isPublicWrite, matchesNamePhrase } from "../helpers";
 
-/** Export names that strongly imply an abuse-sensitive endpoint — surfaced in the detail to raise urgency. */
-const SENSITIVE_NAME_RE = /contact|forgot|login|magic|otp|register|reset|signin|signup|subscribe|verify/iu;
+/**
+ * Export-name phrases that strongly imply an abuse-sensitive endpoint —
+ * surfaced in the detail to raise urgency.
+ *
+ * Matched as WORDS via {@link matchesNamePhrase}, not as substrings: a
+ * substring scan tags `updatePresets` (`reset`) and `unsubscribeAll`
+ * (`subscribe`) high-risk, and prose that overstates a benign finding costs the
+ * same trust a false finding does.
+ */
+const SENSITIVE_PHRASES = [
+    "contact",
+    "forgot",
+    "login",
+    "logIn",
+    "magic",
+    "otp",
+    "register",
+    "reset",
+    "signin",
+    "signIn",
+    "signup",
+    "signUp",
+    "subscribe",
+    "verify",
+];
 
 /**
  * Flags a public `mutation`/`action` whose builder chain installs no rate limit.
@@ -37,7 +60,7 @@ const publicMutationWithoutRatelimit: Lint = {
         return context.procedureProtections
             .filter((procedure) => isPublicWrite(procedure) && !procedure.usesRateLimit)
             .map((procedure) => {
-                const sensitive = SENSITIVE_NAME_RE.test(procedure.exportName);
+                const sensitive = matchesNamePhrase(procedure.exportName, SENSITIVE_PHRASES);
 
                 return emit(publicMutationWithoutRatelimit, {
                     cacheKey: `public_mutation_without_ratelimit:${procedure.file}:${procedure.exportName}`,

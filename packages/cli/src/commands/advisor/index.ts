@@ -28,16 +28,17 @@ const advisorCommand: Command = {
         { description: "Output format: pretty (default) or json", name: "format", type: String },
         { description: "Exit non-zero when the global score is below this value (0-100)", name: "min-score", type: String },
         { description: `Where to write the map (default ${DEFAULT_MAP_PATH})`, name: "out", type: String },
-        // Declared as a `no-*` option, like `codegen`'s `--no-strict-advisories` /
-        // `dev`'s `--no-studio` / `--no-codegen` / `--no-worker`: cerebro reads a
-        // `no-`-prefixed name as the negative half of a negatable boolean and
-        // synthesizes the positive counterpart itself, exposing the RESULT under
-        // the positive camelCase key (`write`) at runtime — so `--no-write` and
-        // `--write` both work and `options.write` defaults to `true`. Declaring
-        // the positive name directly (as this used to) never registers a
-        // `--no-write` flag at all — cerebro only negates options named `no-*`
-        // — which is exactly why `--no-write` was rejected as unknown (#285).
-        { description: "Write the map artifact to disk (default true; use --no-write to skip)", name: "no-write", type: Boolean },
+        // BOTH halves are declared, like `codegen`'s `--strict-advisories` pair.
+        // cerebro only registers a `--no-X` flag for an option literally named
+        // `no-X` (declaring just `write` is why `--no-write` was once rejected as
+        // unknown, #285), but a `no-*`-ONLY declaration makes it synthesize the
+        // positive form by cloning this description verbatim — so `--help` listed
+        // `--write` under the negation's wording. Both are exposed under the one
+        // positive camelCase key (`write`); neither sets a `defaultValue`, so it
+        // stays `undefined` until the user picks a side and the handler's
+        // `!== false` read treats that as "write it".
+        { description: "Write the map artifact to disk (the default)", name: "write", type: Boolean },
+        { description: "Don't write the map artifact to disk — report only", name: "no-write", type: Boolean },
     ],
 };
 

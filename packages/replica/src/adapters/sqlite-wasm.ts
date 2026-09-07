@@ -1,3 +1,4 @@
+import { narrowSafeIntegers } from "./int64";
 import type { SqliteAdapter } from "./types";
 
 /**
@@ -11,18 +12,13 @@ import type { SqliteAdapter } from "./types";
  * IMPORTANT (REPLICA-01): the real `oo1.DB.exec()` does NOT return sql.js's
  * `{ columns, values }[]` result shape — with `rowMode: "object"` and
  * `returnValue: "resultRows"` it returns the rows directly, as
- * `Record<string, unknown>[]`. This adapter is written against that real
- * shape; `lastInsertRowId` uses the driver's `selectValue()` convenience
- * method (a single-scalar query helper) rather than parsing a result-row
- * array.
+ * `Record<string, unknown>[]`. This adapter is written against that real shape.
  * @param database An already-initialised `sqlite3.oo1.DB` instance.
  * @param database.close Tear down the database connection.
  * @param database.exec Execute SQL with optional bind params. With
  * `{ returnValue: "resultRows", rowMode: "object" }` it returns the matched
  * rows directly (`Record<string, unknown>[]`); otherwise (DDL/DML/BEGIN/
  * COMMIT/ROLLBACK) its return value is unused here.
- * @param database.selectValue Run a query and return the first column of the
- * first row as a single scalar — used for `SELECT last_insert_rowid()`.
  * @experimental
  */
 export const createSqliteWasmAdapter = (database: {
@@ -35,7 +31,6 @@ export const createSqliteWasmAdapter = (database: {
             rowMode?: "object";
         },
     ) => Record<string, unknown>[] | undefined;
-    selectValue: (sql: string, bind?: unknown[]) => unknown;
 }): SqliteAdapter => {
     return {
         exec(sql: string, params?: ReadonlyArray<unknown>): void {
@@ -53,7 +48,11 @@ export const createSqliteWasmAdapter = (database: {
                 rowMode: "object",
             });
 
-            return (rows ?? []) as T[];
+            // This build decodes an out-of-range INTEGER as a `bigint` on its
+            // own (`bigIntEnabled`), so there is no per-call flag to set here —
+            // only the same narrowing the other two adapters apply, so all
+            // three agree on when a column is a `number` and when it is wide.
+            return narrowSafeIntegers<T>(rows ?? []);
         },
 
         transaction(function_: () => void): void {
@@ -65,20 +64,6 @@ export const createSqliteWasmAdapter = (database: {
                 database.exec("ROLLBACK");
                 throw error;
             }
-        },
-
-        lastInsertRowId(): number {
-            const value = database.selectValue("SELECT last_insert_rowid()");
-
-            if (typeof value === "number") {
-                return value;
-            }
-
-            if (typeof value === "bigint") {
-                return Number(value);
-            }
-
-            return -1;
         },
 
         close(): void {

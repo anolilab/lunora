@@ -68,9 +68,13 @@ physical device, or the deployed worker URL).
 npx wrangler secret put AUTH_SECRET
 ```
 
-Point the app at the deployed worker via `EXPO_PUBLIC_LUNORA_URL`, and set
-`AUTH_URL` (in `wrangler.jsonc` `vars`) to the same URL so better-auth resolves
-cookie origins correctly.
+Point the app at the deployed worker via `EXPO_PUBLIC_LUNORA_URL`. Leave
+`AUTH_URL` unset in production — better-auth resolves the origin from each
+request over HTTPS, and `@lunora/auth` keys `useSecureCookies` (and the
+weak-secret guard) off the absence of an explicit `http://` baseURL. Pin it only
+if you must, and only as a secret with the deployed HTTPS URL:
+`npx wrangler secret put AUTH_URL`. `.dev.vars` carries the localhost value for
+`wrangler dev`.
 
 ## Running on web
 

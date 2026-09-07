@@ -82,6 +82,15 @@ const DEFAULT_MAX_SNAPSHOT_BYTES = 64 * 1024;
 /** Entries read/deleted per page. */
 const PAGE = 200;
 
+/**
+ * Ceiling on a caller-supplied `listForDocument` limit. `take()` has no ceiling of
+ * its own, so an unbounded `limit` is an unbounded index scan returning full
+ * un-RLS'd row snapshots — the same reasoning `action-cache`'s `PURGE_MAX_LIMIT`
+ * and `presence`'s `maxSessions` clamp were added for. Being an `internalQuery`
+ * bounds who can ask, not how much one ask costs.
+ */
+const LIST_MAX_LIMIT = 1000;
+
 /** Pages `vacuum` will walk in one call, so a stuck read cannot spin forever. */
 const MAX_VACUUM_ROUNDS = 64;
 
@@ -292,8 +301,9 @@ const defineDocumentHistory = (options: DefineDocumentHistoryOptions = {}): Docu
      *
      * Recursive, not a top-level filter: a credential is at least as likely to sit
      * inside a `v.object({ apiKey })` column or an `oauth: { refreshToken }` blob
-     * as at the root, and this table retains what it is given for months. Arrays
-     * are walked too, so a list of connection objects is covered.
+     * as at the root, and this table retains what it is given for months. Arrays,
+     * `Map`s and `Set`s are walked too — the wire codec round-trips all three, so
+     * a list of connection objects, or a `Map` keyed `"refreshToken"`, is covered.
      *
      * `MAX_REDACT_DEPTH` bounds a pathological or cyclic shape; past it the branch
      * is dropped rather than copied, because a value this module cannot fully
@@ -308,8 +318,27 @@ const defineDocumentHistory = (options: DefineDocumentHistoryOptions = {}): Docu
             return value;
         }
 
-        // Only plain objects are walked. A `Date`, a `Map`, bytes — anything the
-        // wire codec carries as a leaf — is passed through whole; recursing into
+        // A `Map` holds NAMED keys, so it is a container this filter has to walk:
+        // a column holding `new Map([["refreshToken", tok]])` otherwise landed in
+        // the table verbatim, against the module's "recursively" claim. Rebuilt as
+        // a `Map` so the wire codec still round-trips it as one. A `Set` carries no
+        // names of its own but its members can, so its values are walked too.
+        if (value instanceof Map) {
+            return depth >= MAX_REDACT_DEPTH
+                ? undefined
+                : new Map(
+                      [...value.entries()]
+                          .filter(([key]) => typeof key !== "string" || !redacted.has(key))
+                          .map(([key, member]) => [key, redact(member, depth + 1)]),
+                  );
+        }
+
+        if (value instanceof Set) {
+            return depth >= MAX_REDACT_DEPTH ? undefined : new Set([...value].map((member) => redact(member, depth + 1)));
+        }
+
+        // Everything else that is not a plain object is a leaf. A `Date`, bytes —
+        // anything the wire codec carries whole — is passed through; recursing into
         // one would corrupt it, and none of them holds a named field.
         if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
             return value;
@@ -389,7 +418,7 @@ const defineDocumentHistory = (options: DefineDocumentHistoryOptions = {}): Docu
     const listForDocument = internalQuery
         .input({ before: v.optional(v.number()), documentId: v.string(), limit: v.optional(v.number()) })
         .query(async ({ args, ctx: context }): Promise<DocumentHistoryEntry[]> => {
-            const limit = args.limit !== undefined && Number.isFinite(args.limit) ? Math.max(1, Math.floor(args.limit)) : PAGE;
+            const limit = args.limit !== undefined && Number.isFinite(args.limit) ? Math.min(LIST_MAX_LIMIT, Math.max(1, Math.floor(args.limit))) : PAGE;
 
             const rows = await context.db
                 .query(DOCUMENT_HISTORY_TABLE)

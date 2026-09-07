@@ -163,19 +163,32 @@ describe("createLunoraClient", () => {
         expect(() => createLunoraClient({ storage, url: "https://api.example.com" })).not.toThrow();
     });
 
-    it("honours an explicit `persistence: false` over `storage`", () => {
+    it("honours an explicit `persistence: false` over `storage`, and still wires the query cache", async () => {
         expect.assertions(1);
 
-        const store = new Map<string, string>();
+        const reads: string[] = [];
         const storage = {
-            getItem: async (key: string) => store.get(key) ?? null,
-            removeItem: async () => {},
-            setItem: async (key: string, value: string) => {
-                store.set(key, value);
+            getItem: async (key: string) => {
+                reads.push(key);
+
+                return null;
             },
+            removeItem: async () => {},
+            setItem: async () => {},
         };
 
-        expect(() => createLunoraClient({ persistence: false, storage, url: "https://api.example.com" })).not.toThrow();
+        // `storage` backs two independent caches and each has its own opt-out, so
+        // turning off the mutation queue leaves query results still written to
+        // AsyncStorage. Asserted rather than smoke-tested because the option's
+        // docs used to read as though `persistence: false` disabled both.
+        const client = createLunoraClient({ persistence: false, storage, url: "https://api.example.com" });
+
+        await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
+        client.close();
+
+        expect(reads).toContain("lunora:query-cache");
     });
 
     it("derives an AsyncStorage query cache from `storage`", async () => {

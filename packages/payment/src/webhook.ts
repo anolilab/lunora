@@ -4,6 +4,7 @@
  * Verification runs over the **raw, unparsed request body** — never re-serialize JSON before
  * checking the signature. Uses WebCrypto (`crypto.subtle`), available in both workerd and Node.
  */
+import { fromBase64, toBase64 } from "../../../shared/base64";
 import { constantTimeEqual as sharedConstantTimeEqual } from "../../../shared/constant-time-equal";
 import { LunoraPaymentError } from "./errors";
 
@@ -13,15 +14,24 @@ const toHex = (buffer: ArrayBuffer): string => [...new Uint8Array(buffer)].map((
 
 const SYMMETRIC_PREFIX = "whsec_";
 
-const base64ToBytes = (value: string): Uint8Array<ArrayBuffer> => new Uint8Array(Array.from(atob(value), (character) => character.codePointAt(0) ?? 0));
-
-const bytesToBase64 = (buffer: ArrayBuffer): string => btoa(String.fromCodePoint(...new Uint8Array(buffer)));
-
 const hmacSha256Base64 = async (keyBytes: BufferSource, payload: string): Promise<string> => {
     const key = await crypto.subtle.importKey("raw", keyBytes, { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
     const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
 
-    return bytesToBase64(signature);
+    return toBase64(new Uint8Array(signature));
+};
+
+/**
+ * Fail closed on an empty/missing webhook secret. A zero-length HMAC key is attacker-known, so a
+ * deployment whose secret is bound-but-empty (an unset `.dev.vars` line, a wrangler var set to `""`,
+ * a CI secret that resolved empty) would otherwise accept forged events. Every adapter's
+ * verification path routes through this one check — some SDKs (Stripe's included) do not validate
+ * the secret themselves, and on some runtimes an empty key merely happens to make `importKey` throw.
+ */
+export const assertWebhookSecret = (secret: string): void => {
+    if (!secret) {
+        throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
+    }
 };
 
 /**
@@ -71,10 +81,7 @@ export interface VerifyStandardWebhookInput {
  * entries, with a replay-window check. Throws a {@link LunoraPaymentError} on any failure.
  */
 export const verifyStandardWebhook = async (input: VerifyStandardWebhookInput): Promise<void> => {
-    // Fail closed on an empty/missing secret: a zero-length HMAC key is attacker-known and forgeable.
-    if (!input.secret) {
-        throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
-    }
+    assertWebhookSecret(input.secret);
 
     const toleranceSeconds = input.toleranceSeconds ?? 300;
     const nowMs = input.now ?? Date.now();
@@ -94,7 +101,7 @@ export const verifyStandardWebhook = async (input: VerifyStandardWebhookInput): 
         throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
     }
 
-    const keyBytes = base64ToBytes(rawSecret);
+    const keyBytes = fromBase64(rawSecret);
 
     if (keyBytes.length === 0) {
         throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
@@ -130,10 +137,7 @@ export interface VerifyCreemSignatureInput {
  * replay-window check. Throws a {@link LunoraPaymentError} on any failure.
  */
 export const verifyCreemSignature = async (input: VerifyCreemSignatureInput): Promise<void> => {
-    // Fail closed on an empty/missing secret: a zero-length HMAC key is attacker-known and forgeable.
-    if (!input.secret) {
-        throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
-    }
+    assertWebhookSecret(input.secret);
 
     if (!input.signature) {
         throw new LunoraPaymentError("WEBHOOK_SIGNATURE_INVALID", "missing creem-signature header");

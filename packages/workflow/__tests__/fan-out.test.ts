@@ -1,3 +1,4 @@
+import type { Mock } from "vitest";
 import { describe, expect, it, vi } from "vitest";
 
 import { BRANCH_MARKER_KEY, BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
@@ -14,7 +15,24 @@ import {
     signalBranchParentSafe,
     stripBranchMarker,
 } from "../src/fan-out";
-import type { WorkflowInstanceLike, WorkflowStepLike } from "../src/types";
+import type { WorkflowInstanceLike, WorkflowStatusResult, WorkflowStepLike } from "../src/types";
+
+/**
+ * The engine's own instance-id grammar and length cap, copied from the shared
+ * validators the Workflows runtime applies to every `create` before it does
+ * anything else (miniflare's `binding.worker.js` — the same file the workerd
+ * harness and `wrangler dev` load).
+ *
+ * Note what it excludes: `:` is NOT in the character class. A double that
+ * accepts any string lets a colon-bearing id pass here and fail in production —
+ * which is exactly how the group-saga rollback shipped inert.
+ */
+const ENGINE_INSTANCE_ID_PATTERN = /^\w[\w-]*$/u;
+const ENGINE_MAX_INSTANCE_ID_LENGTH = 100;
+
+/** The engine's create-time id check, mirrored so the doubles reject what the runtime rejects. */
+const engineRejectsInstanceId = (id: unknown): boolean =>
+    typeof id !== "string" || id.length > ENGINE_MAX_INSTANCE_ID_LENGTH || !ENGINE_INSTANCE_ID_PATTERN.test(id);
 
 /** A fake instance handle — only the methods the fan-out path touches are real. */
 const makeInstance = (id: string): WorkflowInstanceLike => {
@@ -24,10 +42,39 @@ const makeInstance = (id: string): WorkflowInstanceLike => {
         restart: vi.fn<() => Promise<void>>(),
         resume: vi.fn<() => Promise<void>>(),
         sendEvent: vi.fn<(event: { payload: unknown; type: string }) => Promise<void>>(async () => undefined),
-        status: vi.fn<() => Promise<never>>(),
+        // The real handle always answers with a `WorkflowStatusResult`; a double
+        // that resolved `undefined` let a missing status read look harmless.
+        status: vi.fn<() => Promise<WorkflowStatusResult>>(async () => {
+            return { status: "running" };
+        }),
         terminate: vi.fn<() => Promise<void>>(),
     };
 };
+
+/** A `create` double that validates its id the way the real binding does. */
+const makeCreate = (): Mock<(options?: { id?: string; params?: Record<string, unknown> }) => Promise<WorkflowInstanceLike>> =>
+    vi.fn<(options?: { id?: string; params?: Record<string, unknown> }) => Promise<WorkflowInstanceLike>>(async (options) => {
+        if (options?.id !== undefined && engineRejectsInstanceId(options.id)) {
+            // The engine's exact rejection: `throw new WorkflowError("Workflow instance has invalid id")`.
+            throw new Error("Workflow instance has invalid id");
+        }
+
+        return makeInstance(options?.id ?? "auto");
+    });
+
+/** A handle whose `status()` already reports a given result — an attached child that has finished. */
+const finishedInstance = (id: string, result: WorkflowStatusResult): WorkflowInstanceLike => {
+    return { ...makeInstance(id), status: vi.fn<() => Promise<WorkflowStatusResult>>(async () => result) };
+};
+
+/** A durable step whose `waitForEvent` never settles — the join a consumed event can never satisfy. */
+const makeNeverJoiningStep = (): WorkflowStepLike =>
+    ({
+        do: vi.fn<(name: string, callback: (context: unknown) => Promise<unknown>) => Promise<unknown>>(async (_name, callback) => callback({})),
+        sleep: vi.fn<() => Promise<void>>(),
+        sleepUntil: vi.fn<() => Promise<void>>(),
+        waitForEvent: vi.fn<() => Promise<never>>(async () => new Promise<never>(() => {})),
+    }) as unknown as WorkflowStepLike;
 
 /** A fake durable step: `do` runs its callback inline; `waitForEvent` drains `outcomes` in call order. */
 const makeStep = (outcomes: BranchOutcome[] = []): WorkflowStepLike => {
@@ -77,9 +124,24 @@ const makeLog = (): { debug: ReturnType<typeof vi.fn>; error: ReturnType<typeof 
     };
 };
 
-/** Build fan-out deps over a single shared binding double, with a deterministic id counter. */
-const makeDeps = (step: WorkflowStepLike): { create: ReturnType<typeof vi.fn>; deps: FanOutDeps; get: ReturnType<typeof vi.fn> } => {
-    const create = vi.fn<(options?: { id?: string }) => Promise<WorkflowInstanceLike>>(async (options) => makeInstance(options?.id ?? "auto"));
+/**
+ * Build fan-out deps over a single shared binding double, with a deterministic id
+ * counter.
+ *
+ * `parentId` mirrors the run context's own allocator exactly — it returns an
+ * explicit id verbatim and otherwise appends `-c<n>` with NO ceiling of its own —
+ * so a long host-issued parent produces the same over-long derived child here as it
+ * does in production.
+ */
+const makeDeps = (
+    step: WorkflowStepLike,
+    parentId = "parent-1",
+): {
+    create: Mock<(options?: { id?: string; params?: Record<string, unknown> }) => Promise<WorkflowInstanceLike>>;
+    deps: FanOutDeps;
+    get: Mock<(id: string) => Promise<WorkflowInstanceLike>>;
+} => {
+    const create = makeCreate();
     const get = vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async (id) => makeInstance(id));
     let counter = 0;
 
@@ -87,13 +149,13 @@ const makeDeps = (step: WorkflowStepLike): { create: ReturnType<typeof vi.fn>; d
         create,
         deps: {
             env: {},
-            instanceId: "parent-1",
+            instanceId: parentId,
             nextChildId: (explicit?: string) => {
                 if (explicit !== undefined) {
                     return explicit;
                 }
 
-                const id = `parent-1-c${String(counter)}`;
+                const id = `${parentId}-c${String(counter)}`;
                 counter += 1;
 
                 return id;
@@ -192,12 +254,66 @@ describe("createParallel", () => {
 
         expect((error as Error).name).toBe("NonRetryableError");
 
-        const compensations = create.mock.calls.map((call) => call[0]).filter((options) => String(options?.id).endsWith(":compensate"));
+        const compensations = create.mock.calls.map((call) => call[0]).filter((options) => String(options?.id).endsWith("-compensate"));
 
         // Reverse declaration order: c1 (second) is compensated before c0 (first).
-        expect(compensations.map((options) => options?.id)).toEqual(["parent-1-c1:compensate", "parent-1-c0:compensate"]);
+        expect(compensations.map((options) => options?.id)).toEqual(["parent-1-c1-compensate", "parent-1-c0-compensate"]);
         // Compensation params carry the completed branch's output + the failing sibling's error.
         expect(compensations[0]?.params).toStrictEqual({ branch: "second", error: { message: "boom", name: "Error" }, index: 1, output: { b: 2 } });
+    });
+
+    it("group saga: fails as soon as ANY branch fails, and compensates every sibling that had completed", async () => {
+        expect.assertions(4);
+
+        // The documented shape: a fast branch completes, a slow one is still running, and a
+        // third fails. Under a declaration-order join the group waited for branch #0 before it
+        // could even see #2's failure (not fail-fast), and branch #1 — which finished ahead of
+        // #0 — was absent from the completed set, so its rollback never ran.
+        const settled: string[] = [];
+        const resolvers = new Map<string, (outcome: BranchOutcome) => void>();
+        const step = {
+            do: vi.fn<(name: string, callback: (context: unknown) => Promise<unknown>) => Promise<unknown>>(async (_name, callback) => callback({})),
+            sleep: vi.fn<() => Promise<void>>(),
+            sleepUntil: vi.fn<() => Promise<void>>(),
+            waitForEvent: vi.fn<(name: string, options: { type: string }) => Promise<{ payload: unknown; type: string }>>(
+                async (_name, options) =>
+                    await new Promise((resolve) => {
+                        resolvers.set(options.type, (payload: BranchOutcome) => {
+                            settled.push(options.type);
+                            resolve({ payload, type: options.type });
+                        });
+                    }),
+            ),
+        } as unknown as WorkflowStepLike;
+        const { create, deps } = makeDeps(step);
+
+        const group = createParallel(deps)([
+            branch("slow", undefined, { compensateWith: "undoSlow" }),
+            branch("fast", undefined, { compensateWith: "undoFast" }),
+            branch("doomed"),
+        ]).catch((error_: unknown) => error_);
+
+        // Let the spawn phase and all three joins register, then land "fast" (out of declaration
+        // order) and fail "doomed". "slow" never reports — the group must not wait on it.
+        for (let tick = 0; tick < 50 && resolvers.size < 3; tick += 1) {
+            // eslint-disable-next-line no-await-in-loop -- drain the microtask queue until every join has registered
+            await Promise.resolve();
+        }
+
+        resolvers.get("lunora:branch:parent-1-c1")?.(okOutcome({ b: 2 }));
+        resolvers.get("lunora:branch:parent-1-c2")?.(errorOutcome(new Error("boom")));
+
+        const error = await group;
+
+        expect((error as Error).name).toBe("NonRetryableError");
+        // Fail-fast: the group rejected without branch #0 ever signalling back.
+        expect(settled).toStrictEqual(["lunora:branch:parent-1-c1", "lunora:branch:parent-1-c2"]);
+
+        const compensations = create.mock.calls.map((call) => call[0]).filter((options) => String(options?.id).endsWith("-compensate"));
+
+        // The out-of-order sibling that HAD completed is rolled back; the one still running is not.
+        expect(compensations.map((options) => options?.id)).toStrictEqual(["parent-1-c1-compensate"]);
+        expect(compensations[0]?.params).toStrictEqual({ branch: "fast", error: { message: "boom", name: "Error" }, index: 1, output: { b: 2 } });
     });
 
     it("group saga: a group with no compensateWith fails fast with zero compensation spawns", async () => {
@@ -209,7 +325,7 @@ describe("createParallel", () => {
         const error = await createParallel(deps)([branch("first"), branch("second")]).catch((error_: unknown) => error_);
 
         expect((error as Error).name).toBe("NonRetryableError");
-        expect(create.mock.calls.some((call) => String(call[0]?.id).endsWith(":compensate"))).toBe(false);
+        expect(create.mock.calls.some((call) => String(call[0]?.id).endsWith("-compensate"))).toBe(false);
     });
 
     it("group saga: skips completed siblings that declared no compensateWith", async () => {
@@ -221,10 +337,10 @@ describe("createParallel", () => {
 
         await createParallel(deps)([branch("first"), branch("second", undefined, { compensateWith: "undoSecond" }), branch("third")]).catch(() => undefined);
 
-        const compensations = create.mock.calls.map((call) => call[0]).filter((options) => String(options?.id).endsWith(":compensate"));
+        const compensations = create.mock.calls.map((call) => call[0]).filter((options) => String(options?.id).endsWith("-compensate"));
 
         expect(compensations).toHaveLength(1);
-        expect(compensations[0]?.id).toBe("parent-1-c1:compensate");
+        expect(compensations[0]?.id).toBe("parent-1-c1-compensate");
     });
 
     it("honors an explicit branch id over the derived one", async () => {
@@ -254,9 +370,247 @@ describe("createParallel", () => {
         expect((error as Error).name).toBe("NonRetryableError");
         expect((error as Error).message).toContain("join failed");
 
-        const compensations = create.mock.calls.map((call) => call[0]).filter((options) => String(options?.id).endsWith(":compensate"));
+        const compensations = create.mock.calls.map((call) => call[0]).filter((options) => String(options?.id).endsWith("-compensate"));
 
-        expect(compensations.map((options) => options?.id)).toEqual(["parent-1-c0:compensate"]);
+        expect(compensations.map((options) => options?.id)).toEqual(["parent-1-c0-compensate"]);
+    });
+
+    it("every instance id it mints — children and compensations — satisfies the engine's id grammar", async () => {
+        expect.assertions(2);
+
+        // The regression guard for the whole class: not "the suffix is
+        // `-compensate`" but "nothing this package hands to `create` can be
+        // rejected by the engine's id check". A future suffix carrying a `:`, a
+        // `.`, or a leading `-` fails here rather than in production.
+        //
+        // The parent here is a SHORT synthetic id, so this case only exercises the
+        // character class. The engine checks length first and the ids are
+        // caller-controlled up to that ceiling — see the two over-ceiling cases below.
+        const step = makeStep([okOutcome({ a: 1 }), okOutcome({ b: 2 }), errorOutcome(new Error("boom"))]);
+        const { create, deps } = makeDeps(step);
+
+        await createParallel(deps)([
+            branch("first", { x: 1 }, { compensateWith: "undoFirst" }),
+            branch("second", undefined, { compensateWith: "undoSecond" }),
+            branch("third"),
+        ]).catch(() => undefined);
+
+        const ids = create.mock.calls.map((call) => call[0]?.id);
+
+        expect(ids).toHaveLength(5);
+        expect(ids.filter((id) => engineRejectsInstanceId(id))).toStrictEqual([]);
+    });
+
+    it("spawns branches of a 98-character parent, whose derived `-c<n>` ids overflow the ceiling", async () => {
+        expect.assertions(4);
+
+        // The fold was applied to the compensation id but not to the CHILD id it
+        // derives from. The run context's allocator appends `-c<n>` with no ceiling
+        // of its own, so a 98-character host-issued parent (the id shapes hosts
+        // actually mint run long) yields a 101-character child. The
+        // engine checks length FIRST, so `create` rejects it outright — and the
+        // spawn `Promise.all` sits OUTSIDE `createParallel`'s try, so that
+        // rejection is not a `BranchJoinFailure`: the whole group-saga rollback is
+        // skipped and the raw engine error surfaces instead.
+        const parentId = `p${"0".repeat(97)}`;
+        const step = makeStep([okOutcome({ a: 1 }), okOutcome({ b: 2 })]);
+        const { create, deps } = makeDeps(step, parentId);
+
+        const results = await createParallel(deps)([branch("first", { x: 1 }), branch("second")]);
+
+        expect(results).toStrictEqual([{ a: 1 }, { b: 2 }]);
+
+        const ids = create.mock.calls.map((call) => call[0]?.id);
+
+        expect(ids).toHaveLength(2);
+        expect(ids.filter((id) => engineRejectsInstanceId(id))).toStrictEqual([]);
+        // Folded, not truncated: siblings of one over-long parent stay distinct, or
+        // both branches share a spawn step name and one silently never runs.
+        expect(new Set(ids).size).toBe(2);
+    });
+
+    it("folds an over-long explicit `branch(…, { id })` and still compensates it", async () => {
+        expect.assertions(4);
+
+        // The other half of the same gap: `nextChildId` returns an explicit id
+        // VERBATIM, with no length check at all, so a caller-supplied 150-character
+        // branch id reaches `create` as-is. Its rollback is unreachable for the
+        // same reason — and on a saga that took payment, that unrun rollback is the
+        // refund.
+        const longId = `b${"9".repeat(149)}`;
+        const step = makeStep([okOutcome({ paid: true }), errorOutcome(new Error("boom"))]);
+        const { create, deps } = makeDeps(step);
+        const log = makeLog();
+
+        await createParallel({ ...deps, log: log as unknown as FanOutDeps["log"] })([
+            branch("charge", undefined, { compensateWith: "refund", id: longId }),
+            branch("second"),
+        ]).catch(() => undefined);
+
+        const ids = create.mock.calls.map((call) => call[0]?.id);
+
+        // charge, second, and charge's rollback.
+        expect(ids).toHaveLength(3);
+        expect(ids.filter((id) => engineRejectsInstanceId(id))).toStrictEqual([]);
+        expect(ids.filter((id) => String(id).endsWith("-compensate"))).toHaveLength(1);
+        // A swallowed create rejection leaves the group failing exactly as it does
+        // here, with only this log to show for it.
+        expect(log.error).not.toHaveBeenCalled();
+    });
+
+    it("compensates a branch whose own id sits just under the engine's 100-character ceiling", async () => {
+        expect.assertions(3);
+
+        // The character class is only half of the engine's check, and it is the
+        // half that runs SECOND: the create-time id check rejects on
+        // `id.length > 100` before it ever tests the pattern. A branch id is
+        // caller-controlled right up to that ceiling — an explicit
+        // `branch(…, { id })`, or a derived `<parentId>-c<n>` under a long
+        // host-issued parent — so a 90-character branch id plus `-compensate` is
+        // 101: the create is rejected, `compensateCompleted` logs and continues,
+        // and the completed branch is never rolled back. On a saga that took
+        // payment, that unrun rollback is the refund.
+        const longId = `b${"0".repeat(89)}`;
+        const step = makeStep([okOutcome({ paid: true }), errorOutcome(new Error("boom"))]);
+        const { create, deps } = makeDeps(step);
+        const log = makeLog();
+
+        await createParallel({ ...deps, log: log as unknown as FanOutDeps["log"] })([
+            branch("charge", undefined, { compensateWith: "refund", id: longId }),
+            branch("second"),
+        ]).catch(() => undefined);
+
+        const compensations = create.mock.calls.map((call) => call[0]?.id).filter((id) => id !== longId && id !== "parent-1-c0");
+
+        expect(compensations).toHaveLength(1);
+        expect(compensations.filter((id) => engineRejectsInstanceId(id))).toStrictEqual([]);
+        // The rollback actually landed: a swallowed create rejection leaves the
+        // group failing exactly as it does here, with only this log to show for it.
+        expect(log.error).not.toHaveBeenCalled();
+    });
+
+    it("takes an already-finished attached child's status as its outcome instead of waiting for an event that will never come", async () => {
+        expect.assertions(3);
+
+        // `instance.restart()` on a parent that already fanned out: the restart wipes
+        // the parent's step cache AND its event map, so the spawn steps re-run and
+        // re-attach to children that have already sent — and consumed — their
+        // completion events. Waiting on those events hibernates until the branch
+        // timeout (24 h by default) and then fails the group.
+        const step = makeNeverJoiningStep();
+        const { create, deps, get } = makeDeps(step);
+
+        create.mockRejectedValue(new Error("instance already exists"));
+        get.mockImplementation(async (id: string) => finishedInstance(id, { output: id.endsWith("c0") ? { a: 1 } : { b: 2 }, status: "complete" }));
+
+        await expect(createParallel(deps)([branch("first"), branch("second")])).resolves.toStrictEqual([{ a: 1 }, { b: 2 }]);
+        expect(get).toHaveBeenCalledTimes(2);
+        // The join never hibernated: the terminal status was already the answer.
+        expect(step.waitForEvent).not.toHaveBeenCalled();
+    });
+
+    it("bounds an attached child's oversized output instead of returning it into the durable step cache", async () => {
+        expect.assertions(2);
+
+        // The attach path returns the child's outcome as the SPAWN STEP's value, so
+        // it is persisted by the workflow host exactly like an event payload is
+        // sent: miniflare's engine answers a step output over 1 MiB with
+        // `Step … output is too large`, and production Workflows caps it the same
+        // way. Only the event path was bounded, so a large-output child taken over
+        // by the attach path failed the step (and burned its retries) instead of
+        // failing the branch with a message that names the byte count.
+        const step = makeNeverJoiningStep();
+        const { create, deps, get } = makeDeps(step);
+
+        create.mockRejectedValue(new Error("instance already exists"));
+        get.mockImplementation(async (id: string) => finishedInstance(id, { output: { blob: "x".repeat(1_048_576) }, status: "complete" }));
+
+        const settled = await createParallel(deps)([branch("first")]).then(
+            () => "resolved with the blob",
+            (error: unknown) => (error as Error).message,
+        );
+        const spawned: unknown = await (step.do as ReturnType<typeof vi.fn>).mock.results[0]?.value;
+
+        expect(settled).toContain("1048576-byte");
+        // What the step returns is what the host persists — bounded, not the blob.
+        expect(JSON.stringify(spawned).length).toBeLessThan(1024);
+    });
+
+    it("fails the group from an attached child that already errored, without waiting on its consumed event", async () => {
+        expect.assertions(2);
+
+        const step = makeNeverJoiningStep();
+        const { create, deps, get } = makeDeps(step);
+
+        create.mockRejectedValue(new Error("instance already exists"));
+        get.mockImplementation(async (id: string) => finishedInstance(id, { error: { message: "child blew up", name: "Error" }, status: "errored" }));
+
+        const error = await createParallel(deps)([branch("first")]).catch((error_: unknown) => error_);
+
+        expect((error as Error).name).toBe("NonRetryableError");
+        expect((error as Error).message).toContain("child blew up");
+    });
+
+    it("still joins on the event when the attached child is still running", async () => {
+        expect.assertions(2);
+
+        // The ordinary idempotency case — a spawn step that failed *after* its
+        // create landed — must keep waiting for the child's signal.
+        const step = makeStep([okOutcome({ a: 1 })]);
+        const { create, deps, get } = makeDeps(step);
+
+        create.mockRejectedValue(new Error("instance already exists"));
+        get.mockImplementation(async (id: string) => finishedInstance(id, { status: "running" }));
+
+        await expect(createParallel(deps)([branch("first")])).resolves.toStrictEqual([{ a: 1 }]);
+        expect(step.waitForEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it("fans out from a host-issued parent id the Cloudflare engine would not accept", async () => {
+        expect.assertions(2);
+
+        // `@lunora/platform-node` runs this same orchestrator, and its run ids come
+        // from `@visulima/workflow`'s `generateRunId` — `<definitionId>:<uuid>`,
+        // which no Cloudflare grammar allows and which that host does not let us
+        // override. The parent id is the HOST's; only the suffix is ours. Refusing a
+        // derived id on Cloudflare's grammar took `ctx.spawn`/`ctx.parallel` out
+        // entirely on every non-Cloudflare host.
+        const hostId = "parent:94c2d980-6116-430f-8581-d5beb8de975c";
+        const step = makeStep([okOutcome({ a: 1 }), errorOutcome(new Error("boom"))]);
+        // NOT `makeCreate()`: this models a different engine, not a laxer double.
+        // The Node host's `create({ id })` aliases any string to the run it minted.
+        const create = vi.fn<(options?: { id?: string; params?: Record<string, unknown> }) => Promise<WorkflowInstanceLike>>(async (options) =>
+            makeInstance(options?.id ?? "auto"),
+        );
+        const { deps } = makeDeps(step);
+        let counter = 0;
+
+        const hostDeps: FanOutDeps = {
+            ...deps,
+            instanceId: hostId,
+            nextChildId: (explicit?: string) => {
+                if (explicit !== undefined) {
+                    return explicit;
+                }
+
+                const id = `${hostId}-c${String(counter)}`;
+                counter += 1;
+
+                return id;
+            },
+            // This host's `create` aliases any string, exactly as the Node host does.
+            resolveBinding: () => {
+                return { create, get: async (id: string) => makeInstance(id) };
+            },
+        };
+
+        const error = await createParallel(hostDeps)([branch("first", undefined, { compensateWith: "undoFirst" }), branch("second")]).catch(
+            (error_: unknown) => error_,
+        );
+
+        // The group fails on its branch, not on its ids — and the rollback still ran.
+        expect((error as Error).message).toContain('branch "second"');
+        expect(create.mock.calls.map((call) => call[0]?.id)).toStrictEqual([`${hostId}-c0`, `${hostId}-c1`, `${hostId}-c0-compensate`]);
     });
 
     it("throws (non-retryable) on duplicate branch ids without spawning anything", async () => {
@@ -281,7 +635,7 @@ describe("createParallel", () => {
         // Reverse order compensates undoSecond (c1) first — its binding is unresolvable;
         // undoFirst (c0) must still be compensated, and the failure is logged.
         const step = makeStep([okOutcome({ a: 1 }), okOutcome({ b: 2 }), errorOutcome(new Error("boom"))]);
-        const create = vi.fn<(options?: { id?: string }) => Promise<WorkflowInstanceLike>>(async (options) => makeInstance(options?.id ?? "auto"));
+        const create = makeCreate();
         const get = vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async (id) => makeInstance(id));
         const log = makeLog();
         let counter = 0;
@@ -316,9 +670,9 @@ describe("createParallel", () => {
             branch("third"),
         ]).catch(() => undefined);
 
-        const compensations = create.mock.calls.map((call) => call[0]).filter((options) => String(options?.id).endsWith(":compensate"));
+        const compensations = create.mock.calls.map((call) => call[0]).filter((options) => String(options?.id).endsWith("-compensate"));
 
-        expect(compensations.map((options) => options?.id)).toEqual(["parent-1-c0:compensate"]);
+        expect(compensations.map((options) => options?.id)).toEqual(["parent-1-c0-compensate"]);
         expect(log.error).toHaveBeenCalledTimes(1);
     });
 });
@@ -335,6 +689,25 @@ describe("createSpawn", () => {
         expect(create).toHaveBeenCalledWith({ id: "parent-1-c0", params: { y: 2 } });
         expect(get).toHaveBeenCalledWith("parent-1-c0");
         expect(instance.id).toBe("parent-1-c0");
+    });
+
+    it("folds an over-long child id and returns the handle for the id it actually created", async () => {
+        expect.assertions(3);
+
+        // `ctx.spawn` shares the same allocator, so it shares the same gap. The
+        // handle must address the FOLDED id — a `get()` on the unfolded one points
+        // at an instance that was never created.
+        const longId = `s${"7".repeat(149)}`;
+        const step = makeStep();
+        const { create, deps, get } = makeDeps(step);
+
+        const instance = await createSpawn(deps)("child", { y: 2 }, { id: longId });
+
+        const created = create.mock.calls[0]?.[0]?.id;
+
+        expect(engineRejectsInstanceId(created)).toBe(false);
+        expect(get).toHaveBeenCalledWith(created);
+        expect(instance.id).toBe(created);
     });
 
     it("rejects a caller-supplied reserved branch marker without touching the step API", async () => {
@@ -404,6 +777,117 @@ describe("branch marker helpers", () => {
     });
 });
 
+describe("spawn create-or-attach (a step body that failed after `create` landed)", () => {
+    /** A `step.do` double that RETRIES its callback the way Cloudflare does — a completed step is memoized, a failed one is re-run. */
+    const retryingStep = (): WorkflowStepLike => {
+        const memoized = new Map<string, unknown>();
+
+        return {
+            do: vi.fn<(name: string, callback: (context: unknown) => Promise<unknown>) => Promise<unknown>>(async (name, callback) => {
+                if (memoized.has(name)) {
+                    return memoized.get(name);
+                }
+
+                let lastError: unknown;
+
+                for (let attempt = 1; attempt <= 3; attempt += 1) {
+                    try {
+                        // eslint-disable-next-line no-await-in-loop -- the point of the double is a serial retry loop
+                        const value = await callback({ attempt });
+
+                        memoized.set(name, value);
+
+                        return value;
+                    } catch (error: unknown) {
+                        lastError = error;
+                    }
+                }
+
+                throw lastError;
+            }),
+            sleep: vi.fn<() => Promise<void>>(),
+            sleepUntil: vi.fn<() => Promise<void>>(),
+            waitForEvent: vi.fn<(name: string, options: { type: string }) => Promise<{ payload: unknown; type: string }>>(async (_name, options) => {
+                return { payload: { status: "ok", value: 1 }, type: options.type };
+            }),
+        } as unknown as WorkflowStepLike;
+    };
+
+    /** A binding whose FIRST `create` applies and then throws (transport died after the side effect), and which rejects a repeated id. */
+    const flakyBinding = (): { created: string[]; resolveBinding: FanOutDeps["resolveBinding"] } => {
+        const created: string[] = [];
+        let failedOnce = false;
+
+        const create = vi.fn<(options?: { id?: string; params?: Record<string, unknown> }) => Promise<WorkflowInstanceLike>>(async (options) => {
+            const id = options?.id ?? "auto";
+
+            if (created.includes(id)) {
+                throw new Error(`instance.create: instance with id "${id}" already exists`);
+            }
+
+            created.push(id);
+
+            if (!failedOnce) {
+                failedOnce = true;
+
+                throw new Error("RPC transport closed after create was applied");
+            }
+
+            return makeInstance(id);
+        });
+        const read = vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async (id) => makeInstance(id));
+
+        return {
+            created,
+            resolveBinding: () => {
+                return { create, get: read };
+            },
+        };
+    };
+
+    it("ctx.spawn returns the existing child instead of failing on 'already exists'", async () => {
+        expect.assertions(2);
+
+        const binding = flakyBinding();
+        const { deps } = makeDeps(retryingStep());
+
+        const instance = await createSpawn({ ...deps, resolveBinding: binding.resolveBinding })("child");
+
+        expect(instance.id).toBe("parent-1-c0");
+        // Exactly one child ran — the retry attached to it rather than starting a second.
+        expect(binding.created).toEqual(["parent-1-c0"]);
+    });
+
+    it("ctx.parallel joins the branch whose create had already landed", async () => {
+        expect.assertions(2);
+
+        const binding = flakyBinding();
+        const { deps } = makeDeps(retryingStep());
+
+        await expect(createParallel({ ...deps, resolveBinding: binding.resolveBinding })([branch("child")])).resolves.toEqual([1]);
+        expect(binding.created).toEqual(["parent-1-c0"]);
+    });
+
+    it("a non-duplicate create rejection still fails the spawn", async () => {
+        expect.assertions(1);
+
+        const create = vi.fn<() => Promise<WorkflowInstanceLike>>(async () => {
+            throw new Error("Workflows service unavailable");
+        });
+        const read = vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async (id) => makeInstance(id));
+        const { deps } = makeDeps(retryingStep());
+
+        await expect(
+            createSpawn({
+                ...deps,
+                resolveBinding: () => {
+                    return { create, get: read };
+                },
+            })("child"),
+        ).rejects.toThrow("Workflows service unavailable");
+    });
+});
+
 describe("signalBranchParent", () => {
     const marker = { eventType: "lunora:branch:c0", index: 0, parentBinding: "WORKFLOW_PARENT", parentId: "parent-1" };
 
@@ -417,6 +901,111 @@ describe("signalBranchParent", () => {
 
         expect(env.WORKFLOW_PARENT.get).toHaveBeenCalledWith("parent-1");
         expect(parent.sendEvent).toHaveBeenCalledWith({ payload: { status: "ok", value: { done: true } }, type: "lunora:branch:c0" });
+    });
+
+    it("replaces an over-the-limit outcome with a bounded failure the parent can actually receive", async () => {
+        expect.assertions(2);
+
+        const parent = makeInstance("parent-1");
+        const env = { WORKFLOW_PARENT: { get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async () => parent) } };
+
+        // Just over Cloudflare's 1 MiB event-payload cap. Sent verbatim it rejects on
+        // every retry, so the parent hibernated to its join timeout (24 h by default)
+        // and then compensated a branch that had actually succeeded.
+        await signalBranchParent({ env, step: makeStep() }, marker, okOutcome({ blob: "x".repeat(1_048_576) }));
+
+        const sent = (parent.sendEvent as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as { payload: BranchOutcome };
+
+        expect(sent.payload).toStrictEqual({
+            error: {
+                message: expect.stringContaining("over Cloudflare's 1048576-byte event payload limit"),
+                name: "BranchOutputTooLarge",
+            },
+            status: "error",
+        });
+        expect(JSON.stringify(sent.payload).length).toBeLessThan(1024);
+    });
+
+    it("replaces an unserialisable outcome with a bounded failure instead of stranding the parent", async () => {
+        expect.assertions(2);
+
+        const parent = makeInstance("parent-1");
+        const env = { WORKFLOW_PARENT: { get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async () => parent) } };
+
+        // A cyclic child output: `JSON.stringify` throws inside the size check, and
+        // `signalBranchParentSafe` only logs — so the parent got no terminal event
+        // and hibernated to its join timeout (24 h by default) on a branch that had
+        // actually finished.
+        const cyclic: Record<string, unknown> = {};
+
+        cyclic.self = cyclic;
+
+        await signalBranchParent({ env, step: makeStep() }, marker, okOutcome(cyclic));
+
+        const sent = (parent.sendEvent as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as { payload: BranchOutcome };
+
+        expect(sent.payload).toStrictEqual({
+            error: {
+                message: expect.stringContaining("cannot be serialised"),
+                name: "BranchOutputUnserializable",
+            },
+            status: "error",
+        });
+        expect(JSON.stringify(sent.payload).length).toBeLessThan(1024);
+    });
+
+    it("still reports the outcome when the serialization failure cannot be stringified", async () => {
+        expect.assertions(4);
+
+        const parent = makeInstance("parent-1");
+        const env = { WORKFLOW_PARENT: { get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async () => parent) } };
+
+        // A branch handler's own `toJSON` decides what `JSON.stringify` throws, so
+        // the thrown value is as arbitrary as any other user value. Two shapes
+        // defeated the naive `instanceof Error ? .message : String()`: an `Error`
+        // carrying a non-string `message` (`.slice` is not a function) and a
+        // null-prototype object (`String()` throws). Either way the diagnostic
+        // threw INSIDE the guard, `signalBranchParentSafe` swallowed it, and the
+        // parent hibernated to its 24 h join timeout on a finished branch.
+        const numericMessage = Object.assign(new Error("ignored"), { message: 42 });
+
+        await signalBranchParent(
+            { env, step: makeStep() },
+            marker,
+            okOutcome({
+                toJSON: () => {
+                    throw numericMessage;
+                },
+            }),
+        );
+
+        await signalBranchParent(
+            { env, step: makeStep() },
+            marker,
+            okOutcome({
+                toJSON: () => {
+                    // No prototype, so no `toString`: `String(value)` throws
+                    // "Cannot convert object to primitive value".
+                    throw Object.create(null) as unknown;
+                },
+            }),
+        );
+
+        const sends = (parent.sendEvent as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0] as { payload: BranchOutcome });
+
+        expect(sends).toHaveLength(2);
+
+        for (const sent of sends) {
+            expect(sent.payload).toStrictEqual({
+                error: {
+                    message: expect.stringContaining("cannot be serialised"),
+                    name: "BranchOutputUnserializable",
+                },
+                status: "error",
+            });
+        }
+
+        expect(JSON.stringify(sends[1]?.payload).length).toBeLessThan(1024);
     });
 
     it("is a no-op when the parent binding is absent (parent falls back to its timeout)", async () => {

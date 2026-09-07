@@ -107,6 +107,7 @@ interface CodegenResult {
         vectors: string;
         workflows: string;
     };
+    migrations: ReadonlyArray<MigrationIR>;
     outputDirectory: string;
     platformDiagnostics: ReadonlyArray<PlatformDiagnostic>;
     queues: ReadonlyArray<QueueIR>;
@@ -151,6 +152,18 @@ interface ContainerIR {
 }
 ```
 
+### `ContextPropertyCallIR` (interface)
+
+```ts
+interface ContextPropertyCallIR {
+    callee: string;
+    exportName: string;
+    file: string;
+    kind: "mutation" | "query";
+    line: number;
+}
+```
+
 ### `CronJobIR` (interface)
 
 ```ts
@@ -176,12 +189,19 @@ const DEFAULT_TARGET = "cloudflare";
 
 ```ts
 interface DriftChange {
+    remediation: DriftRemediation;
     scope: DriftScope;
     severity: "breaking" | "safe";
     summary: string;
     table?: string;
-    type: "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedFieldKind" | "changedIndex" | "changedJurisdiction" | "changedShardMode" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "removedField" | "removedIndex" | "removedRelation" | "removedTable";
+    type: "addedFieldConstraint" | "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedFieldKind" | "changedFieldShape" | "changedIndex" | "changedJurisdiction" | "changedShardMode" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "relaxedFieldConstraint" | "removedField" | "removedIndex" | "removedRelation" | "removedTable" | "widenedFieldShape";
 }
+```
+
+### `DriftRemediation` (type)
+
+```ts
+type DriftRemediation = "backfill" | "code" | "none" | "rehome";
 ```
 
 ### `DriftScope` (type)
@@ -209,18 +229,21 @@ interface EmitAppOptions {
     hasHyperdriveGlobal: boolean;
     hasImages: boolean;
     hasKv: boolean;
+    hasKvIntrospector: boolean;
     hasNotify: boolean;
     hasPayments: boolean;
     hasQueue: boolean;
     hasR2sql: boolean;
     hasScheduler: boolean;
     hasStorage: boolean;
-    hasVectors: boolean;
+    hasVectors?: boolean;
     hasWorkflow: boolean;
     hasX402: boolean;
     identity?: IdentityIR;
     jurisdiction?: JurisdictionIR;
+    tableNames: ReadonlyArray<string>;
     useUmbrella: boolean;
+    vectorIndexCount?: number;
     voiceAgents?: ReadonlyArray<{
         bindingName: string;
         exportName: string;
@@ -240,8 +263,17 @@ const FLAGS_FILENAME = "flags.ts";
 
 ```ts
 interface FieldSnapshot {
+    fields?: Record<string, FieldSnapshot>;
+    key?: FieldSnapshot;
     kind: string;
+    literal?: string;
+    members?: ReadonlyArray<FieldSnapshot>;
+    nullable?: boolean;
+    of?: FieldSnapshot;
     optional: boolean;
+    ref?: string;
+    refined?: boolean;
+    unique?: boolean;
 }
 ```
 
@@ -364,6 +396,7 @@ interface LintSchemaOptions {
     geoIndexUsages?: ReadonlyArray<AdvisorGeoIndexUsage>;
     httpActionGuards?: ReadonlyArray<HttpActionGuardIR>;
     httpHeaderWrites?: ReadonlyArray<HttpHeaderWriteIR>;
+    hyperdriveCalls?: ReadonlyArray<ContextPropertyCallIR>;
     identityClaimReads?: ReadonlyArray<IdentityClaimReadIR>;
     imageDeliveryUrlAccesses?: ReadonlyArray<ImageDeliveryUrlAccessIR>;
     inserts?: ReadonlyArray<InsertWriteIR>;
@@ -382,7 +415,7 @@ interface LintSchemaOptions {
     procedureProtections?: ReadonlyArray<ProcedureMiddlewareIR>;
     queries?: ReadonlyArray<QueryReadIR>;
     queues?: ReadonlyArray<QueueIR>;
-    r2sqlCalls?: ReadonlyArray<R2sqlCallIR>;
+    r2sqlCalls?: ReadonlyArray<ContextPropertyCallIR>;
     ratelimitKeySelectors?: ReadonlyArray<RatelimitKeySelectorIR>;
     rawRowReturns?: ReadonlyArray<RawRowReturnIR>;
     relationLoads?: ReadonlyArray<RelationLoadIR>;
@@ -581,18 +614,6 @@ interface QueueIR {
 }
 ```
 
-### `R2sqlCallIR` (interface)
-
-```ts
-interface R2sqlCallIR {
-    callee: string;
-    exportName: string;
-    file: string;
-    kind: "mutation" | "query";
-    line: number;
-}
-```
-
 ### `RelationSnapshot` (interface)
 
 ```ts
@@ -689,6 +710,7 @@ const SHAPES_FILENAME = "shapes.ts";
 interface SandboxUsage {
     usesSandboxBrowser: boolean;
     usesSandboxContainer: boolean;
+    usesSandboxFs: boolean;
 }
 ```
 
@@ -899,8 +921,10 @@ interface ValidatorIR {
     members?: ValidatorIR[];
     shape?: Record<string, ValidatorIR>;
     sourceText?: string;
+    stringMaxLength?: number;
     tableName?: string;
     tsType?: string;
+    unmodelledRefinement?: boolean;
     valueType?: ValidatorIR;
 }
 ```
@@ -1034,6 +1058,12 @@ const discoverFunctions: (project: Project, lunoraDirectory: string) => Function
 const discoverHttpRoutes: (project: Project, lunoraDirectory: string) => HttpRouteIR[];
 ```
 
+### `discoverHyperdriveCalls` (const)
+
+```ts
+const discoverHyperdriveCalls: (project: Project, lunoraDirectory: string) => ContextPropertyCallIR[];
+```
+
 ### `discoverInserts` (const)
 
 ```ts
@@ -1091,7 +1121,7 @@ const discoverQueues: (project: Project, lunoraDirectory: string) => QueueIR[];
 ### `discoverR2sqlCalls` (const)
 
 ```ts
-const discoverR2sqlCalls: (project: Project, lunoraDirectory: string) => R2sqlCallIR[];
+const discoverR2sqlCalls: (project: Project, lunoraDirectory: string) => ContextPropertyCallIR[];
 ```
 
 ### `discoverRlsMetadata` (const)
@@ -1151,7 +1181,7 @@ const emitApi: (options: EmitApiOptions) => string;
 ### `emitApp` (const)
 
 ```ts
-const emitApp: (options: EmitAppOptions) => string;
+const emitApp: (rawOptions: EmitAppOptions) => string;
 ```
 
 ### `emitCollections` (const)
@@ -1220,13 +1250,13 @@ const emitOpenRpcModule: (document_: Record<string, unknown>) => string;
 ### `emitServer` (const)
 
 ```ts
-const emitServer: ({ agents, containers, env, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasX402, identity, queues, schema, storageRuleBuckets, useUmbrella, workflows }?: EmitServerOptions) => string;
+const emitServer: ({ agents, containers, env, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasVectors, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasX402, identity, queues, schema, storageRuleBuckets, useUmbrella, workflows }?: EmitServerOptions) => string;
 ```
 
 ### `emitShard` (const)
 
 ```ts
-const emitShard: ({ advisories, advisorProcedures, agents, containers, env, flagKeys, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasX402, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, useUmbrella, workflows }: EmitShardOptions) => string;
+const emitShard: ({ advisories, advisorProcedures, agents, containers, env, flagKeys, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasVectors, hasX402, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, useUmbrella, workflows }: EmitShardOptions) => string;
 ```
 
 ### `emitVectors` (const)
@@ -1267,6 +1297,7 @@ const evaluateSchemaDrift: (options: {
     baseline: SchemaSnapshot | undefined;
     command?: string;
     current: SchemaSnapshot;
+    migrations: ReadonlyArray<Pick<MigrationIR, "id" | "table">>;
 }) => SchemaDriftDecision;
 ```
 
@@ -1302,6 +1333,12 @@ const isTypedSchema: (schema: Record<string, unknown> | undefined) => boolean;
 
 ```ts
 const lintSchema: (options: LintSchemaOptions) => Finding[];
+```
+
+### `listLunoraSourceFiles` (const)
+
+```ts
+const listLunoraSourceFiles: (directory: string) => string[];
 ```
 
 ### `parseSchemaSnapshot` (const)

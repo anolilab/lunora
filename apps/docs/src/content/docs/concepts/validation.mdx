@@ -102,9 +102,47 @@ export const getProfile = query
     });
 ```
 
+### Returning more than you declared
+
+On the way **in**, `v.object` drops keys it does not declare — that is what stops
+an over-posted field reaching your handler. On the way **out**, the same
+behaviour would delete a field the server meant to send, so `.output()` rejects
+undeclared keys instead:
+
+```ts
+.output(v.object({ id: v.id("users"), name: v.string() }))
+.query(async ({ ctx, args }) => {
+    const user = await ctx.db.get(args.userId);
+
+    return user; // ← 500: "object has 3 undeclared key(s): email, createdAt, …"
+});
+```
+
+The error names the keys, so the fix is either adding them to the validator or
+saying you meant to drop them.
+
+#### Narrowing on purpose: `.strip()`
+
+Trimming an internal field off a row before it reaches a client is a real use of
+`.output()`. Mark it and it works exactly as before:
+
+```ts
+.output(v.object({ id: v.id("users"), name: v.string() }).strip())
+.query(async ({ ctx, args }) => ctx.db.get(args.userId)); // email, passwordHash dropped
+```
+
+`.strip()` returns a **new** validator, so calling it on a shared const does not
+change what other procedures using that const enforce.
+
+<Callout type="warn">
+    This is the one asymmetry worth remembering: **input strips, output rejects.** Without it, a column present in your table and missing from a hand-written
+    output validator vanished from every response that function served, with no error anywhere — a schema mistake turning into silent data loss. `.strip()`
+    keeps the narrowing available and makes it visible in review.
+</Callout>
+
 <Callout type="info">
-    `.output()` does not apply to streaming/subscription chunks: each chunk is yielded as-is. Use it for the single resolved value of a `query` / `mutation` /
-    `action`.
+    **`.output()` and `.stream()` cannot be combined** — it is a type error. Stream chunks are yielded as-is with no per-chunk validation, so accepting an
+    output validator there would promise something it never did. Validate inside the handler, or return the whole payload from `.query()`.
 </Callout>
 
 ## Return-type inference to the client
@@ -129,7 +167,7 @@ second schema to keep in sync: the validator is the contract on both ends.
 | `v.id(table)`          | `Id<table>`                   | Branded foreign-key id                   |
 | `v.literal(value)`     | exact `value`                 | String / number / boolean / null literal |
 | `v.array(inner)`       | `Array<Infer<inner>>`         | Homogeneous array                        |
-| `v.object(shape)`      | `{ ...shape }`                | Extra keys throw                         |
+| `v.object(shape)`      | `{ ...shape }`                | Extra keys: stripped in, rejected out    |
 | `v.union(a, b, ...)`   | any member                    | Discriminated by `kind` when present     |
 | `v.record(key, value)` | `Record<key, value>`          | Map-style object                         |
 | `v.optional(inner)`    | `Infer<inner>` \| `undefined` | Makes a field optional                   |
@@ -139,9 +177,46 @@ Compose them freely for both columns and function contracts:
 `v.array(v.object({ ... }))`, `v.union(v.literal("a"),
 v.literal("b"))`, `v.optional(v.id("users"))`.
 
+## Coming from zod
+
+`v` reads like zod and most of it behaves like zod, so the places it does not
+are worth knowing up front — three of the four below fail at runtime rather
+than at compile time.
+
+- **`v` has refinements.** `.check(predicate, { message, schema })` is the
+  general form, and three validators carry shortcuts over it. They are enforced
+  at parse time and emitted into the JSON Schema. The shortcuts are per-type —
+  `v.number().length(3)` and `v.string().positive()` do not exist:
+
+    | Validator    | Shortcuts                                                      |
+    | ------------ | -------------------------------------------------------------- |
+    | `v.string()` | `.min()` `.max()` `.length()` `.email()` `.url()` `.pattern()` |
+    | `v.number()` | `.min()` `.max()` `.int()` `.positive()`                       |
+    | `v.array()`  | `.min()` `.max()` (item count)                                 |
+
+- **`.safeParse()` returns a different shape.** `{ ok: true, value }` on success
+  and `{ ok: false, error }` on failure — not zod's `{ success, data }`.
+  `.parse()` matches zod. Reading `.success` off the result is a type error, so
+  ported code fails to compile rather than silently taking the wrong branch —
+  unless the value has been widened to `any`, where it reads as `undefined` and
+  every check falls through to the failure path.
+- **`.default(x)` is a column default, not an argument coercion.** It declares
+  what the database writes when a field is absent on insert; it does **not**
+  fill a missing value in during `parse`. Reading a defaulted field out of
+  `args` gives `undefined`.
+- **`v.object` strips undeclared keys on input, and rejects them on output.**
+  There is no `.strict()`: input stripping is not configurable, and `.output()`
+  is strict for you. A `.check()` cannot restore rejection on the input side,
+  because the predicate receives the already-stripped value.
+
+Genuinely absent: there is no `v.enum` (spell it as
+`v.union(v.literal("a"), v.literal("b"))`), no `.extend()`, and no loose-object
+mode.
+
 ## ValidationError
 
-When a value fails to parse, `.validate(value)` throws `ValidationError`. It
+When a value fails to parse, `.parse(value)` throws `ValidationError` (and
+`.safeParse(value)` returns it as `{ ok: false, error }` instead). It
 carries the `path` to the offending field (rendered via `formatPath` as
 `args.<field>.<sub>`) plus a short `describeValue(value)` summary, so the
 boundary failure points at exactly which input was wrong. See

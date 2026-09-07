@@ -15,19 +15,25 @@ one `RateLimiter` per app from a config map, then either attach the `rateLimit`
 middleware to a procedure's `.use(...)` chain or call `limiter.limit(...)`
 directly. On rejection the middleware throws a structural `LunoraError` that the
 runtime maps to `429 Too Many Requests` (or `403 Forbidden` for a deny-list hit),
-carrying `retryAfter` in milliseconds.
+carrying `data.retryAfterMs` — the retry hint the client and every SDK read off
+a `TOO_MANY_REQUESTS` envelope (`protocol/README.md` §4.3).
 
 ```ts
+import type { RateLimitConfigMap } from "@lunora/ratelimit";
 import { dbRateLimit } from "@lunora/ratelimit";
 
 import { mutation } from "./_generated/server";
 
+// `satisfies` is load-bearing: a bare `const` widens each `kind` to `string`,
+// and the config map needs the literal to pick the algorithm.
 const config = {
     login: { kind: "fixed window", period: 60_000, rate: 5 },
     send: { kind: "token bucket", period: 1_000, rate: 10, capacity: 20 },
-};
+} satisfies RateLimitConfigMap;
 
-export const send = mutation.use(dbRateLimit(config, "send", { key: (ctx) => ctx.auth.userId })).mutation(async ({ ctx }) => {
+// `key` returns `string | undefined` (omit it for a global limit), while
+// `ctx.auth.userId` is `string | null` — collapse the null yourself.
+export const send = mutation.use(dbRateLimit(config, "send", { key: (ctx) => ctx.auth.userId ?? "anonymous" })).mutation(async ({ ctx }) => {
     // …
 });
 ```
@@ -92,7 +98,10 @@ successful login).
 ```ts
 import { RateLimiter, RateLimitError, createDbStore } from "@lunora/ratelimit";
 
-export const login = mutation.mutation(async ({ ctx, args }) => {
+import { action } from "./_generated/server";
+
+// An action, not a mutation: see the callout below.
+export const login = action.action(async ({ ctx, args }) => {
     const limiter = new RateLimiter({ config, store: createDbStore({ db: ctx.db }) });
     const status = await limiter.limit("login", { key: args.email });
 
@@ -112,14 +121,29 @@ export const login = mutation.mutation(async ({ ctx, args }) => {
 });
 ```
 
+<Callout type="warn">
+    **DB-store consumption commits with the mutation.** A mutation's `ctx.db` writes ride its storage transaction, and a throw rolls all of them back —
+    including the unit `limit()` just consumed. Written as a mutation, the example above charges nothing for a wrong password (`authenticate` throws), so only
+    successful logins count and an attacker gets an unlimited number of guesses. Consume from an **action** when failed attempts must count: its writes commit
+    on their own, so the unit stays spent whether or not the handler throws. The same applies to `.use(dbRateLimit(...))` on a mutation whose handler rejects. A
+    mutation that must keep the charge can return a failure value instead of throwing.
+</Callout>
+
 Per-call `RateLimitArgs`:
 
-| Option    | Type      | Default | Notes                                                                                                                                                            |
-| --------- | --------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `key`     | `string`  | —       | Sub-key isolating the limit (per user/team/IP). Omit for a global limit.                                                                                         |
-| `count`   | `number`  | `1`     | Units to consume. Must be a positive integer.                                                                                                                    |
-| `reserve` | `boolean` | `false` | Permit now and reserve future capacity (the stored value goes negative); `retryAfter` reports when the debt clears. Rejected only when `count` exceeds capacity. |
-| `throws`  | `boolean` | `false` | Throw `RateLimitError` instead of returning a failing status.                                                                                                    |
+| Option    | Type      | Default | Notes                                                                                                                                                                        |
+| --------- | --------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `key`     | `string`  | —       | Sub-key isolating the limit (per user/team/IP). Omit for a global limit.                                                                                                     |
+| `count`   | `number`  | `1`     | Units to consume. Must be a positive integer.                                                                                                                                |
+| `reserve` | `boolean` | `false` | Permit now and reserve future capacity (the stored value goes negative); `retryAfter` reports when the debt clears. A `count` above capacity is never permitted — see below. |
+| `throws`  | `boolean` | `false` | Throw `RateLimitError` instead of returning a failing status.                                                                                                                |
+
+<Callout type="warn">
+    **A `count` larger than the limit's capacity is caller misuse, not a rate rejection.** It can never succeed no matter how long you wait, so it does not
+    return `{ ok: false }` and does not honour `throws: false` — it throws an `INTERNAL` `LunoraError` (a 500), with or without `reserve`. `rateLimit(...)`
+    middleware re-throws it as-is rather than masking it behind the fail-open/fail-closed policy, which is reserved for genuine store outages. Clamp the
+    `count`, or raise the limit's `capacity`.
+</Callout>
 
 ## Procedure middleware
 
@@ -138,7 +162,7 @@ const config = { send: { kind: "token bucket", period: 1_000, rate: 10 } } as co
 export const send = mutation
     .use(
         rateLimit((ctx) => new RateLimiter({ config, store: createDbStore({ db: ctx.db }) }), "send", {
-            key: (ctx) => ctx.auth.userId,
+            key: (ctx) => ctx.auth.userId ?? "anonymous",
         }),
     )
     .mutation(async ({ ctx, args }) => {
@@ -167,12 +191,12 @@ the rest of `options` matches `rateLimit`'s.
 
 `RateLimitMiddlewareOptions`:
 
-| Option     | Type                           | Default | Notes                                                                        |
-| ---------- | ------------------------------ | ------- | ---------------------------------------------------------------------------- |
-| `key`      | `(ctx) => string \| undefined` | —       | Sub-key derived from context. Omit for a global limit.                       |
-| `count`    | `number`                       | `1`     | Units to consume per call.                                                   |
-| `message`  | `string`                       | —       | Override the error message thrown on rejection.                              |
-| `failOpen` | `boolean`                      | `false` | Behavior when the limiter itself throws (store unavailable, etc). See below. |
+| Option     | Type                           | Default | Notes                                                                                                                                                                           |
+| ---------- | ------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `key`      | `(ctx) => string \| undefined` | —       | Sub-key derived from context. Omit for a global limit. A resolver that returns `undefined` throws `INTERNAL` rather than silently pooling every keyless caller into one bucket. |
+| `count`    | `number`                       | `1`     | Units to consume per call.                                                                                                                                                      |
+| `message`  | `string`                       | —       | Override the error message thrown on rejection.                                                                                                                                 |
+| `failOpen` | `boolean`                      | `false` | Behavior when the limiter itself throws (store unavailable, etc). See below.                                                                                                    |
 
 <Callout type="warn">
     **Failure policy:** the middleware **fails closed by default**: if resolving or invoking the limiter throws, it logs via `console.error` and rejects with
@@ -221,14 +245,19 @@ bucket) otherwise.
 
 ## Pluggable stores
 
-Persistence is a `RateLimitStore` (`get`/`set`/`delete`, sync or async). Three
-are shipped:
+Persistence is a `RateLimitStore` (`get`/`set`/`delete`, sync or async):
 
-| Factory                   | Backing                                                            | Use when                                                              |
-| ------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------- |
-| `createMemoryStore()`     | An in-process `Map`. The default when no `store` is given.         | Single-DO/process limits where state needn't survive eviction.        |
-| `createSqlStore({ sql })` | `state.storage.sql` (workerd `SqlStorage`, also `node:sqlite`).    | Durable per-DO state that survives hibernation, and you have raw SQL. |
-| `createDbStore({ db })`   | A Lunora table via `ctx.db` (the ORM writer on a mutation/action). | Durable per-DO limits inside a procedure, where there is no raw SQL.  |
+| Factory                         | Backing                                                            | Use when                                                                                                                                                  |
+| ------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createMemoryStore()`           | An in-process `Map`. The default when no `store` is given.         | Single-DO/process limits where state needn't survive eviction.                                                                                            |
+| `createSqlStore({ sql })`       | `state.storage.sql` (workerd `SqlStorage`, also `node:sqlite`).    | Durable per-DO state that survives hibernation, and you have raw SQL.                                                                                     |
+| `createDbStore({ db })`         | A Lunora table via `ctx.db` (the ORM writer on a mutation/action). | Durable per-DO limits inside a procedure, where there is no raw SQL. Inside a mutation the consumed unit commits with the handler and a throw returns it. |
+| `createReadOnlyDbStore({ db })` | The same table through a **query** context's reader `ctx.db`.      | Showing remaining quota from a query — `getValue`/`check` only; `limit`/`reset` throw.                                                                    |
+
+`createReadOnlyDbStore` exists so a remaining-quota display does not have to cast
+a query's `ctx.db` to the writer type. `getValue` and `check` project the stored
+value forward to the current clock, which is a pure read; only `limit`/`reset`
+write, and those reject with a message naming `createDbStore` as the fix.
 
 `createSqlStore` creates its table (default `_lunora_rate_limits`) if missing.
 `createDbStore` expects a table you declare in your schema with a key column and
@@ -249,6 +278,41 @@ export const rateLimits = defineTable({
     Inside a Durable Object the input gate serializes the limiter's read-modify-write against storage, so both SQL- and ORM-backed stores are atomic against
     concurrent calls without an explicit transaction. Driving `createSqlStore` outside a DO, you own serialization yourself.
 </Callout>
+
+## Token budgets
+
+A request limit is the wrong shape for an LLM: one call can cost a hundred
+tokens or a hundred thousand, so "20 calls a minute" bounds nothing that
+matters. `tokenBudget` binds one named limit whose unit is model tokens (or
+cents) and spends it **in arrears**, which is how tokens actually work — the
+cost is only known once the call returns.
+
+```ts
+import { tokenBudget } from "@lunora/ratelimit";
+
+const budget = tokenBudget(limiter, "tokens");
+const allowed = await budget.check(userId);
+
+if (!allowed.ok) {
+    throw new LunoraError("RATE_LIMITED", `token budget exhausted; retry in ${String(allowed.retryAfter)}ms`);
+}
+
+const { text, usage } = await generateText({ model: ctx.ai.model(), prompt });
+
+await budget.record(userId, usage?.totalTokens ?? 0);
+
+return text;
+```
+
+`check` runs before the call and consumes nothing: a tenant whose bucket is
+already empty (or negative, from an expensive previous call) is turned away.
+`record` runs after it — always, including when the call **threw**, since a
+failed generation that consumed input tokens still has to be paid for. The
+charge is a reservation, so the bucket may go negative: the tokens are already
+spent, and the next call is refused until the debt refills away. A charge larger
+than the limit's own ceiling is clamped to it rather than rejected, so the one
+oversized call the budget exists to catch cannot escape it by being too big to
+record.
 
 ## Plugin form
 

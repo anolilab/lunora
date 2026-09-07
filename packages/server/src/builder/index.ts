@@ -2,9 +2,9 @@ import type { Validator } from "@lunora/values";
 
 import applyOutput from "../apply-output";
 import { validateArgs } from "../functions";
-import { readMaskTag } from "../mask/policy-tag";
+import { unionMaskColumns } from "../mask/policy-tag";
 import type { RlsTag } from "../rls/policy-tag";
-import { readRlsTag } from "../rls/policy-tag";
+import { readRlsTags } from "../rls/policy-tag";
 import type {
     ActionCtx as ActionContext,
     ArgsValidator,
@@ -35,7 +35,7 @@ interface BuilderState {
     args: ArgsValidator;
     /** Public-surface tag set by `.expose({ rest: true })`; stamped onto the registered function as `fn.expose`. */
     expose?: ExposeConfig;
-    /** Accumulated `.meta(...)` payload; merged across calls and stamped onto the registered function as `fn.meta`. */
+    /** Accumulated `.meta(...)` payload; merged across calls and surfaced to middleware as `ctx.meta`. */
     meta?: Record<string, unknown>;
     middlewares: ReadonlyArray<Middleware<unknown, unknown>>;
     /** Validator the handler's result is parsed through when `.output()` was called. */
@@ -44,21 +44,54 @@ interface BuilderState {
     x402?: X402ProcedureConfig;
 }
 
+/* eslint-disable jsdoc/check-indentation -- intentional bullet list naming each field the decorated context adds */
+
 /**
- * Seed `ctx.meta` with the procedure's declared `.meta(...)` payload so
- * middleware can read the policy it is supposed to enforce
- * (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each `.use()`
- * site — see the `meta` builder member.
+ * Decorate the per-call context for the middleware chain with the two things a
+ * `.use()` step needs and the raw dispatch context does not carry:
  *
- * A procedure without `.meta(...)` gets the context back untouched, so the
- * no-meta path is byte-identical.
+ * - `ctx.meta` — the procedure's declared `.meta(...)` payload, so middleware
+ *   reads the policy it is supposed to enforce (`ctx.meta.rateLimit`, …)
+ *   instead of having it hard-wired at each `.use()` site.
+ * - `ctx.args` — the call's arguments, so a middleware can gate on the payload
+ *   (`@lunora/auth`'s Turnstile and email-gate middlewares both read a field
+ *   out of it). Without this a `.use()` step is blind to what it is guarding.
+ *
+ * A procedure with at least one `.use()` step or a `.meta()` payload gets this
+ * clone, so `ctx` inside its handler is a spread copy rather than the dispatch
+ * context object. Harmless for the generated context (own enumerable data
+ * properties only); a host that put a getter or a non-enumerable property on it
+ * would not see that survive the spread. Procedures with neither are handed the
+ * dispatch context unchanged.
+ *
+ * `args` is the **validated** result of {@link validateArgs}, never the raw wire
+ * object: middleware — including security middleware — must not be handed input
+ * that has not crossed the validator. It is a frozen shallow COPY, so a
+ * middleware cannot rewrite what the handler then receives; nested objects stay
+ * shared with the handler's `args`.
+ * ponytail: shallow freeze; deep-freeze (as `.meta()` does) only if a nested
+ * write from middleware ever turns up as a real problem — that costs a clone
+ * per call, this does not.
  */
-const withMeta = (context: unknown, meta: Record<string, unknown> | undefined): unknown => {
-    if (meta === undefined || typeof context !== "object" || context === null) {
+/* eslint-enable jsdoc/check-indentation */
+const withCallContext = (context: unknown, meta: Record<string, unknown> | undefined, args: Record<string, unknown>, middlewareCount: number): unknown => {
+    // Nothing can read `ctx.args`/`ctx.meta` without a `.use()` step — the
+    // handler receives `args` as its own parameter — so a procedure with no
+    // middleware and no `.meta()` skips the clone entirely. This is the dispatch
+    // floor every query and mutation pays, and cloning it unconditionally cost
+    // ~20% there.
+    if (middlewareCount === 0 && meta === undefined) {
         return context;
     }
 
-    return Object.assign(Object.create(Object.getPrototypeOf(context) as object | null) as object, context, { meta });
+    if (typeof context !== "object" || context === null) {
+        return context;
+    }
+
+    return Object.assign(Object.create(Object.getPrototypeOf(context) as object | null) as object, context, {
+        args: Object.freeze({ ...args }),
+        ...(meta === undefined ? {} : { meta }),
+    });
 };
 
 /**
@@ -88,7 +121,7 @@ const makeHandler =
     ) =>
     async (context: unknown, rawArgs: InferArgs<Args>): Promise<Awaited<R>> => {
         const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
-        const resolvedContext = await runMiddleware(middlewares, withMeta(context, meta));
+        const resolvedContext = await runMiddleware(middlewares, withCallContext(context, meta, parsed, middlewares.length));
         const result = await userHandler({ args: parsed, ctx: resolvedContext });
 
         return (output ? applyOutput(output, result) : result) as Awaited<R>;
@@ -117,7 +150,7 @@ const makeStreamHandler =
         // caller before returning an iterable — defer the chain to the first
         // `next()` pump by wrapping the iterator with an outer async generator.
         return (async function* drive(): AsyncGenerator<R, void, void> {
-            const resolvedContext = await runMiddleware(middlewares, withMeta(context, meta));
+            const resolvedContext = await runMiddleware(middlewares, withCallContext(context, meta, parsed, middlewares.length));
             const source = userHandler({ args: parsed, ctx: resolvedContext, signal });
             // Drive the source through an explicit iterator so the abort check
             // can gate each `.next()` *before* the producer is resumed — a
@@ -172,45 +205,95 @@ const makeStreamHandler =
  * equivalent guarded query would deny.
  */
 const collectRls = (middlewares: ReadonlyArray<Middleware<unknown, unknown>>): undefined | { tags: ReadonlyArray<RlsTag> } => {
-    const tags = middlewares.map((middleware) => readRlsTag(middleware)).filter((tag): tag is RlsTag => tag !== undefined);
+    const tags = middlewares.flatMap((middleware) => readRlsTags(middleware));
 
     return tags.length > 0 ? { tags } : undefined;
 };
 
 /**
- * Hoist the masked table→column NAMES carried by the chain's `.use(mask(...))`
- * steps onto the registered function as `fn.maskedTables`. Mirrors `collectRls`
- * above — see its docblock for the shared rationale. Unlike RLS's tags (which
- * must stay grouped per middleware so a policy's `auth.can(...)` resolves
- * against its OWN middleware's role map), a mask tag carries only column
- * names — no role-scoped decision to keep separate — so every step's columns
- * are safely flattened into one union per function. Returns `undefined` when
- * no `mask()` middleware is present, so a non-masking function carries no
- * `maskedTables` key.
+ * Shadow the mutators `Object.freeze` cannot reach.
+ *
+ * A frozen `Map`/`Set` still accepts `.set()` / `.add()` / `.delete()` /
+ * `.clear()` — the entries live in internal slots, not in properties. The
+ * collection here is part of {@link freezeMeta}'s own private clone, so
+ * replacing the methods on the instance is safe and makes the immutability
+ * promise hold for every value kind rather than only for plain objects.
  */
-const collectMask = (middlewares: ReadonlyArray<Middleware<unknown, unknown>>): ReadonlyMap<string, ReadonlySet<string>> | undefined => {
-    const columns = new Map<string, Set<string>>();
-
-    for (const middleware of middlewares) {
-        const tag = readMaskTag(middleware);
-
-        if (!tag) {
+const lockCollection = (collection: Map<unknown, unknown> | Set<unknown>): void => {
+    for (const name of ["add", "clear", "delete", "set"]) {
+        if (typeof (collection as unknown as Record<string, unknown>)[name] !== "function") {
             continue;
         }
 
-        for (const [table, tableColumns] of tag.columns) {
-            const set = columns.get(table) ?? new Set<string>();
+        Object.defineProperty(collection, name, {
+            configurable: false,
+            enumerable: false,
+            value: () => {
+                throw new TypeError(`Cannot mutate a frozen .meta() declaration (${collection.constructor.name}.${name})`);
+            },
+            writable: false,
+        });
+    }
+};
 
-            for (const column of tableColumns) {
-                set.add(column);
-            }
-
-            columns.set(table, set);
-        }
+/** Recursively freeze a value already known to be private to us — see {@link freezeMeta}. */
+const deepFreeze = <T>(value: T, seen: WeakSet<object>): T => {
+    if (value === null || typeof value !== "object" || seen.has(value)) {
+        return value;
     }
 
-    return columns.size > 0 ? columns : undefined;
+    seen.add(value);
+
+    if (value instanceof Map) {
+        for (const [key, entry] of value) {
+            deepFreeze(key, seen);
+            deepFreeze(entry, seen);
+        }
+
+        lockCollection(value);
+    } else if (value instanceof Set) {
+        for (const entry of value) {
+            deepFreeze(entry, seen);
+        }
+
+        lockCollection(value);
+    }
+
+    for (const nested of Object.values(value)) {
+        deepFreeze(nested, seen);
+    }
+
+    Object.freeze(value);
+
+    return value;
 };
+
+/**
+ * Copy a `.meta()` declaration into a private, deeply immutable graph.
+ *
+ * Two things have to hold at once. First, the SAME object reaches every
+ * invocation's `ctx.meta`, so a middleware writing `ctx.meta.rateLimit.hits += 1`
+ * would edit the procedure's module-level static declaration and have the
+ * accumulated value observed by every later request in the isolate. Only a DEEP
+ * freeze stops that — `.meta({ rateLimit: { hits: 0 } })` is exactly the nested
+ * shape the surface invites, and a shallow `Object.freeze` guards only the half
+ * that was never at risk. Second, freezing is a side effect on data the caller
+ * still owns: `const shared = { hits: 0 }; c.query.meta({ rateLimit: shared })`
+ * must not make `shared.hits += 1` throw in unrelated module scope.
+ *
+ * So the freeze runs over a `structuredClone`, never over the argument. That
+ * also settles the `Map`/`Set` corner a plain walk leaves half-true: entries are
+ * copied rather than shared with the caller, and `lockCollection` above makes
+ * `ctx.meta.seen.add(x)` throw instead of silently accumulating for the
+ * isolate's life.
+ *
+ * `.meta()` therefore takes structured-cloneable DATA: a function, class
+ * instance, or other non-cloneable value is rejected by the runtime with
+ * `DataCloneError` at declaration time — the right answer for a surface
+ * documented as static metadata, and a build-time failure rather than a
+ * request-time one.
+ */
+const freezeMeta = (meta: Record<string, unknown>): Record<string, unknown> => deepFreeze(structuredClone(meta), new WeakSet());
 
 /**
  * Construct a kind-specific builder. The terminal method is keyed by the kind
@@ -232,7 +315,7 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
         input: (validators: ArgsValidator) => makeBuilder(kind, { ...state, args: { ...state.args, ...validators } }, visibility),
         [kind]: <R>(userHandler: (options: { args: Record<string, unknown>; ctx: unknown }) => Promise<R> | R) => {
             const rls = collectRls(state.middlewares);
-            const maskedTables = collectMask(state.middlewares);
+            const maskedTables = unionMaskColumns(state.middlewares);
 
             return {
                 args: state.args,
@@ -240,7 +323,6 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
                 handler: makeHandler(state.args, state.middlewares, userHandler, state.output, state.meta),
                 kind,
                 ...(maskedTables ? { maskedTables } : {}),
-                ...(state.meta ? { meta: state.meta } : {}),
                 ...(rls ? { rls } : {}),
                 ...(visibility ? { visibility } : {}),
                 ...(state.x402 ? { x402: state.x402 } : {}),
@@ -249,12 +331,14 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
         // `.meta(obj)` MERGES so a shared base builder can set defaults a
         // specific procedure then extends, mirroring tRPC.
         //
-        // Frozen because the SAME object reaches both the registered function and
-        // every invocation's `ctx.meta` — a middleware writing `ctx.meta.x = 1`
-        // would otherwise edit the procedure's static declaration and have it
-        // observed by every later request. A later `.meta()` still extends it: the
-        // spread above reads out of the frozen object into a fresh one.
-        meta: (value: Record<string, unknown>) => makeBuilder(kind, { ...state, meta: Object.freeze({ ...state.meta, ...value }) }, visibility),
+        // Copied and DEEP-frozen because the SAME object reaches every
+        // invocation's `ctx.meta` — a middleware writing `ctx.meta.x = 1` (or
+        // `ctx.meta.rateLimit.hits += 1`) would otherwise edit the procedure's
+        // static declaration and have it observed by every later request in the
+        // isolate — and because the caller keeps owning what they passed (see
+        // `freezeMeta`). A later `.meta()` still extends it: the spread below
+        // reads out of the frozen copy into a fresh object.
+        meta: (value: Record<string, unknown>) => makeBuilder(kind, { ...state, meta: freezeMeta({ ...state.meta, ...value }) }, visibility),
         output: (validator: Validator) => makeBuilder(kind, { ...state, output: validator }, visibility),
         // `.stream()` is meaningful only on query builders. It's harmless to expose
         // on every builder shape (callers can't hit it from action/mutation builders
@@ -271,7 +355,7 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
                       streamOptions?: { durable?: boolean | { ttlMs?: number } },
                   ) => {
                       const rls = collectRls(state.middlewares);
-                      const maskedTables = collectMask(state.middlewares);
+                      const maskedTables = unionMaskColumns(state.middlewares);
                       // `durable: true` and `durable: { … }` are the same thing to
                       // the runtime — normalise here so it only ever sees the object
                       // (and `false`/omitted collapse to "not durable").
@@ -284,7 +368,6 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
                           handler: makeStreamHandler(state.args, state.middlewares, userHandler, state.meta),
                           kind: "stream" as const,
                           ...(maskedTables ? { maskedTables } : {}),
-                          ...(state.meta ? { meta: state.meta } : {}),
                           ...(rls ? { rls } : {}),
                           ...(visibility ? { visibility } : {}),
                           ...(state.x402 ? { x402: state.x402 } : {}),
@@ -347,6 +430,7 @@ export type {
     InternalQueryBuilder,
     LunoraBuilders,
     Middleware,
+    MiddlewareContext,
     MiddlewareNext,
     MutationBuilder,
     QueryBuilder,

@@ -15,19 +15,17 @@ write a custom adapter.
 interface SqliteAdapter {
     close: () => void;
     exec: (sql: string, params?: ReadonlyArray<unknown>) => void;
-    lastInsertRowId: () => number;
     query: <T = Record<string, unknown>>(sql: string, params?: ReadonlyArray<unknown>) => T[];
     transaction: (fn: () => void) => void;
 }
 ```
 
-| Method            | Description                                                                  |
-| ----------------- | ---------------------------------------------------------------------------- |
-| `close`           | Tear down the database connection.                                           |
-| `exec`            | Execute a SQL statement with optional bound params. No result rows returned. |
-| `lastInsertRowId` | Return the rowid of the last `INSERT`.                                       |
-| `query`           | Execute SQL and return result rows as objects keyed by column name.          |
-| `transaction`     | Run all statements in the callback inside a single transaction.              |
+| Method        | Description                                                                  |
+| ------------- | ---------------------------------------------------------------------------- |
+| `close`       | Tear down the database connection.                                           |
+| `exec`        | Execute a SQL statement with optional bound params. No result rows returned. |
+| `query`       | Execute SQL and return result rows as objects keyed by column name.          |
+| `transaction` | Run all statements in the callback inside a single transaction.              |
 
 ## Example: `bun:sqlite` adapter
 
@@ -53,10 +51,6 @@ export const createBunSqliteAdapter = (database: Database): SqliteAdapter => {
         },
         transaction(fn) {
             database.transaction(fn)();
-        },
-        lastInsertRowId() {
-            const row = database.prepare("SELECT last_insert_rowid() AS id").get() as { id: number } | undefined;
-            return row?.id ?? -1;
         },
         close() {
             database.close();
@@ -86,10 +80,6 @@ export const createExpoSqliteAdapter = (database: SQLiteDatabase): SqliteAdapter
         },
         transaction(fn) {
             database.withTransactionSync(fn);
-        },
-        lastInsertRowId() {
-            const result = database.getFirstSync("SELECT last_insert_rowid() AS id") as { id: number } | undefined;
-            return result?.id ?? -1;
         },
         close() {
             database.closeSync();

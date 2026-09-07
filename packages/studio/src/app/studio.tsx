@@ -42,6 +42,7 @@ import { Skeleton } from "../components/ui/skeleton";
 // every other feature panel is a route-level `React.lazy` boundary defined below
 // so it — and its heavy deps (`@xyflow/react`, `recharts`, the SQL editor, the
 // data grid) — loads in its own on-demand `chunk-*.js`, not in Home's first load.
+import type { AnalyticsPanelProps } from "../features/analytics/analytics-panel";
 import { HomePanel } from "../features/home/home-panel";
 import OperationConsole from "../features/logs/operation-console";
 import type { SchedulePanelProps } from "../features/logs/schedule-panel";
@@ -153,6 +154,22 @@ const WorkflowsPanel = lazy(() => import("../features/workflows/workflows-panel"
 
 interface StudioProps {
     /**
+     * Run one Analytics Engine SQL statement for the Analytics tab. There is no
+     * default: the AE SQL API authenticates with an account-scoped Cloudflare API
+     * token, and inlining one into this browser bundle would leak it to anyone who
+     * views source. Supply a runner that proxies the statement through your own
+     * worker (which holds the token server-side). Without it the Analytics tab
+     * renders an empty state and issues no request.
+     *
+     * Pass a STABLE reference — a module-level function, or one held in a
+     * `useCallback`/ref. It is read while building the tab router, so a fresh
+     * inline arrow on every render rebuilds the router and remounts the panel
+     * tree, losing in-progress query state. The same holds for `scheduledLoad`,
+     * `scheduledCancel` and `scheduledCron`.
+     */
+    readonly analyticsQuery?: AnalyticsPanelProps["runQuery"];
+
+    /**
      * URL path prefix the studio is mounted under, passed to the router as its
      * `basepath`. Defaults to `/` (mounted at the origin root). The `@lunora/vite`
      * dev route serves the studio under `/__lunora`, so it sets this — without
@@ -169,8 +186,18 @@ interface StudioProps {
     readonly chrome?: StudioChrome;
 
     /**
-     * Make the data tab editable (insert/edit/delete rows). Off by default so
-     * the studio is read-only unless the host opts in; see {@link TableEditor}.
+     * Show the data tab's write controls (insert/edit/delete rows). Off by
+     * default; see {@link TableEditor}.
+     *
+     * **This HIDES THE CONTROLS. It does not make anything read-only.** The
+     * write RPCs are gated server-side by `LUNORA_ADMIN_TOKEN` alone — one
+     * all-or-nothing check in `handleAdminRpc`, with no read/write scoping — and
+     * `renderStudioHtml({ adminToken })` already ships that bearer to the
+     * browser. So a viewer handed a studio deployed with `dataEditable: false`
+     * still holds a credential that can write; the buttons are simply absent
+     * from the page. Treat it as an affordance switch for a trusted operator,
+     * never as an authorization boundary. The same holds for
+     * {@link StudioProps.schemaEditable} and {@link StudioProps.runAsIdentity}.
      */
     readonly dataEditable?: boolean;
 
@@ -214,6 +241,10 @@ interface StudioProps {
      * the host MUST set this only on a trusted loopback-dev gate (the same gate
      * as `dataEditable`) — never in a production/static deploy. Off by default;
      * see {@link FunctionRunner}.
+     *
+     * Like {@link StudioProps.dataEditable}, leaving it off only hides the tool.
+     * The RPC behind it stays reachable to anyone holding the admin token the
+     * page already carries — the gate is the token, not this flag.
      */
     readonly runAsIdentity?: boolean;
 
@@ -237,12 +268,15 @@ interface StudioProps {
     readonly scheduledLoad?: SchedulePanelProps["scheduledLoad"];
 
     /**
-     * Enable the visual schema editor overlay on the schema diagram (add table /
-     * column / index, written back to `lunora/schema.ts` + codegen). Off by default
-     * so the diagram stays read-only unless a host opts in. Like {@link
-     * StudioProps.dataEditable}, only the loopback-only dev hosts set this — the
-     * write path needs the project's filesystem + toolchain, so a static deploy
-     * leaves it off.
+     * Show the visual schema editor overlay on the schema diagram (add table /
+     * column / index, written back to `lunora/schema.ts` + codegen). Off by
+     * default. Only the loopback-only dev hosts set this — the write path needs
+     * the project's filesystem + toolchain, so a static deploy leaves it off.
+     *
+     * Like {@link StudioProps.dataEditable}, it hides the overlay rather than
+     * making the diagram read-only: what actually stops a schema write in a
+     * static deploy is that the host has no filesystem to write to, not this
+     * flag.
      */
     readonly schemaEditable?: boolean;
 }
@@ -990,6 +1024,7 @@ const NotFoundRedirect = (): null => {
  * rebuilt only when those change.
  */
 const buildRouter = ({
+    analyticsQuery,
     basePath,
     dataEditable = false,
     functions,
@@ -1006,7 +1041,7 @@ const buildRouter = ({
 
     const panels: Record<StudioTab, ReactElement> = {
         agents: <AgentsPanel initialShardKey={initialShardKey} />,
-        analytics: <AnalyticsPanel />,
+        analytics: <AnalyticsPanel runQuery={analyticsQuery} />,
         api: <ApiTab functions={functions} initialShardKey={initialShardKey} openApiSpec={openApiSpec} openRpcSpec={openRpcSpec} />,
         audit: <AuditPanel initialShardKey={initialShardKey} />,
         authAudit: <AuthAuditPanel />,
@@ -1113,6 +1148,7 @@ const buildRouter = ({
  * so navigation state survives unrelated re-renders.
  */
 const StudioShell = ({
+    analyticsQuery,
     basePath,
     chrome,
     dataEditable,
@@ -1130,6 +1166,7 @@ const StudioShell = ({
     // individual props, not the unstable `props` identity), so navigation state
     // survives unrelated re-renders.
     const router = buildRouter({
+        analyticsQuery,
         basePath,
         dataEditable,
         functions,
@@ -1160,41 +1197,14 @@ const StudioShell = ({
  * (`StudioApp` owns one for the top bar too) or the shared default — instead
  * of nesting a second, redundant provider.
  */
-export const Studio = ({
-    basePath,
-    chrome,
-    dataEditable,
-    functions,
-    i18n,
-    initialShardKey,
-    locale,
-    openApiSpec,
-    openRpcSpec,
-    runAsIdentity,
-    schemaEditable,
-    scheduledCancel,
-    scheduledCron,
-    scheduledLoad,
-}: StudioProps): ReactElement => {
+export const Studio = ({ i18n, locale, ...shellProps }: StudioProps): ReactElement => {
     // The header's <ThemeToggle> needs a theme context. `StudioApp` mounts one;
     // a bare `<Studio>` embed (a public export) gets its own here — inherit-or-own,
     // exactly like the i18n provider below.
     const shell = (
         <EnsureThemeProvider>
-            <StudioShell
-                basePath={basePath}
-                chrome={chrome}
-                dataEditable={dataEditable}
-                functions={functions}
-                initialShardKey={initialShardKey}
-                openApiSpec={openApiSpec}
-                openRpcSpec={openRpcSpec}
-                runAsIdentity={runAsIdentity}
-                scheduledCancel={scheduledCancel}
-                scheduledCron={scheduledCron}
-                scheduledLoad={scheduledLoad}
-                schemaEditable={schemaEditable}
-            />
+            {/* eslint-disable-next-line react/jsx-props-no-spreading -- forwarding a closed, typed prop set: hand-writing this list is how `scheduledCron` went missing one layer up. The spread still lands as individual props, so the shell's own memoisation keys on each one, not on this object's identity. */}
+            <StudioShell {...shellProps} />
         </EnsureThemeProvider>
     );
 

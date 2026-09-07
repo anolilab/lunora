@@ -28,21 +28,26 @@ describe("renderDeploySummary", () => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    it("shows the linked worker url, env, migration status, and next-step commands", () => {
+    it("shows the linked worker url, env, and next-step commands", () => {
         expect.assertions(5);
 
         writeLinkedProject(workdir, { workerName: "linked-name", workerUrl: "https://app.acme.workers.dev" });
 
         const { lines, logger } = recordingLogger();
 
-        renderDeploySummary({ cwd: workdir, env: "production", logger, migrated: true });
+        renderDeploySummary({ cwd: workdir, env: "production", logger });
 
         const out = lines.join("\n");
 
         expect(out).toContain("https://app.acme.workers.dev");
         expect(out).toContain("production");
-        expect(out).toContain("migrations: applied");
-        expect(out).toContain("lunora view --remote");
+        // No "migrations: applied": the line was rendered from the `--migrate`
+        // flag rather than the outcome, so it claimed migrations had run when
+        // discovery had thrown or the project declared none. The migration path
+        // already logs each id it applies.
+        expect(out).not.toContain("migrations:");
+        // No studio line: the studio is local-only, so there was never a deployed one to open.
+        expect(out).not.toContain("lunora view");
         expect(out).toContain("lunora logs");
     });
 

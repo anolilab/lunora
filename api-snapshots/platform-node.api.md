@@ -44,17 +44,22 @@ interface NodeGlobalStoreOptions {
 ```ts
 interface NodePlatform<Queues extends Record<string, {
     isLunoraQueue: true;
+}> = Record<string, never>, Workflows extends Record<string, {
+    isLunoraWorkflow: true;
 }> = Record<string, never>> {
     [Symbol.dispose]: () => void;
     capabilities: PlatformCapabilities;
     close: () => void;
     directory: ShardDirectory;
     drain: () => Promise<void>;
+    globalTables?: NodeGlobalStore;
     kv: ShardKvStore;
+    objectStorage?: R2BucketLike;
     queues?: NodeQueueHost<Queues>;
     scheduler: SchedulerHost;
     shard: ShardHost;
     sockets: SocketHost;
+    workflows?: NodeWorkflowHost<Workflows>;
 }
 ```
 
@@ -63,9 +68,14 @@ interface NodePlatform<Queues extends Record<string, {
 ```ts
 type NodePlatformOptions<Queues extends Record<string, {
     isLunoraQueue: true;
+}> = Record<string, never>, Workflows extends Record<string, {
+    isLunoraWorkflow: true;
 }> = Record<string, never>> = {
+    globalTablesPath?: string;
+    objectStorageDirectory?: string;
     onQueueBatch?: NodeQueueHostOptions<Queues>["onBatch"];
     queues?: Queues;
+    workflows?: Workflows;
 } & NodeSchedulerHostOptions & NodeShardHostOptions & NodeShardRegistryOptions;
 ```
 
@@ -255,7 +265,9 @@ const createNodeGlobalStore: (options?: NodeGlobalStoreOptions) => NodeGlobalSto
 ```ts
 const createNodePlatform: <Queues extends Record<string, {
     isLunoraQueue: true;
-}> = Record<string, never>>(options?: NodePlatformOptions<Queues>) => NodePlatform<Queues>;
+}> = Record<string, never>, Workflows extends Record<string, {
+    isLunoraWorkflow: true;
+}> = Record<string, never>>(options?: NodePlatformOptions<Queues, Workflows>) => NodePlatform<Queues, Workflows>;
 ```
 
 ### `createNodeQueueHost` (const)

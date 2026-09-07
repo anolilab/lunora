@@ -18,8 +18,8 @@ import { evaluationAttributes } from "../../../shared/evaluation-attributes";
 import type { LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields } from "../../../shared/log-fields";
 import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
-import { buildTraceparent, LUNORA_ATTR, otlpRandomHex } from "../../../shared/otlp";
-import type { SpanEvent, SpanEventPoint, SpanHandle, SpanLink, SpanOptions } from "../../../shared/span-event";
+import { buildTraceparent, LUNORA_ATTR, OTLP_SPAN_KIND, otlpRandomHex } from "../../../shared/otlp";
+import type { SpanContextIds, SpanEvent, SpanEventPoint, SpanHandle, SpanIdentity, SpanLink, SpanOptions } from "../../../shared/span-event";
 import { redactArgs } from "./request-log";
 import { toErrorType } from "./trace-context";
 
@@ -29,10 +29,14 @@ import { toErrorType } from "./trace-context";
  * (`{ kind: "client", attributes: { … } }`).
  *
  * The rule is deliberately narrow: it is options ONLY when every key is one of
- * the three option names. So `{ kind: "client" }` is options and
- * `{ kind: "premium", plan: "x" }` is attributes — the ambiguity is confined to
- * a bag whose keys are *exclusively* `attributes`/`kind`/`links`, and the
- * explicit `{ attributes: { kind: "premium" } }` form resolves even that.
+ * the three option names AND a `kind`, if present, actually names a span kind.
+ * So `{ kind: "client" }` is options while `{ kind: "premium" }` and
+ * `{ kind: "premium", plan: "x" }` are both attributes — without the value check
+ * the first read as an options bag carrying a kind no encoder knows, so the wire
+ * span got NO kind and the caller's attribute was silently dropped as well. The
+ * ambiguity is confined to a bag whose keys are *exclusively*
+ * `attributes`/`kind`/`links`, and the explicit `{ attributes: { kind: "client" } }`
+ * form resolves even that.
  *
  * The alternative — a fourth positional parameter — puts the rarely-used knob
  * in front of the commonly-used one at every call site, and a hard switch to
@@ -41,7 +45,13 @@ import { toErrorType } from "./trace-context";
 const isSpanOptions = (value: LogFields | SpanOptions): value is SpanOptions => {
     const keys = Object.keys(value);
 
-    return keys.length > 0 && keys.every((key) => key === "attributes" || key === "kind" || key === "links");
+    if (keys.length === 0 || !keys.every((key) => key === "attributes" || key === "kind" || key === "links")) {
+        return false;
+    }
+
+    const { kind } = value as SpanOptions;
+
+    return kind === undefined || Object.hasOwn(OTLP_SPAN_KIND, kind);
 };
 
 /**
@@ -54,6 +64,70 @@ const isSpanOptions = (value: LogFields | SpanOptions): value is SpanOptions => 
  */
 const MAX_SPAN_EVENTS = 128;
 const MAX_SPAN_LINKS = 128;
+
+/**
+ * Same bound for the attribute bag, for the same reason: `setAttribute` in a loop
+ * (`span.setAttribute(`row.${id}`, status)` over a result set) is the identical
+ * unbounded-growth failure through a different door, and a high-cardinality bag is
+ * what destroys a collector's aggregate views. OTel's default attribute limit is
+ * 128 too. Keeps the FIRST N keys; a write to a key already present always lands,
+ * so a bounded set of attributes stays updatable no matter how full the bag is.
+ */
+const MAX_SPAN_ATTRIBUTES = 128;
+
+/**
+ * Merge normalized fields into a span's attribute bag, dropping NEW keys once
+ * {@link MAX_SPAN_ATTRIBUTES} is reached.
+ *
+ * EVERY path that puts attributes on an exported span goes through this or
+ * {@link boundedAttributes} — the post-hoc `setAttribute`/`recordEvaluation`
+ * writers, the START attributes of `ctx.trace(name, fn, bag)`, and the per-item
+ * bags on `addEvent`/`addLink`. The last three used to skip it, which meant a
+ * handler that forwarded request args as span attributes let a client mint
+ * unbounded keys through a door the bound did not cover.
+ */
+const assignBoundedAttributes = (attributes: Record<string, LogFields[string]>, fields: LogFields | undefined): void => {
+    if (fields === undefined) {
+        return;
+    }
+
+    let size = Object.keys(attributes).length;
+
+    for (const [key, value] of Object.entries(fields)) {
+        const isNew = !Object.hasOwn(attributes, key);
+
+        if (isNew && size >= MAX_SPAN_ATTRIBUTES) {
+            continue;
+        }
+
+        if (isNew) {
+            size += 1;
+        }
+
+        // eslint-disable-next-line no-param-reassign -- documented mutate-in-place contract (see jsdoc above): the caller owns the bag and all three writers merge into it
+        attributes[key] = value;
+    }
+};
+
+/**
+ * The bounded form of {@link assignBoundedAttributes} for a fresh bag: normalize
+ * a caller's fields, cap them at {@link MAX_SPAN_ATTRIBUTES}, and return
+ * `undefined` when nothing survives — so an empty bag is omitted rather than
+ * riding as `{}`, exactly like {@link normalizeLogFields} on its own.
+ */
+const boundedAttributes = (fields: LogFields | undefined): LogFields | undefined => {
+    const normalized = normalizeLogFields(fields);
+
+    if (normalized === undefined || Object.keys(normalized).length <= MAX_SPAN_ATTRIBUTES) {
+        return normalized;
+    }
+
+    const bounded: LogFields = {};
+
+    assignBoundedAttributes(bounded, normalized);
+
+    return bounded;
+};
 
 /**
  * Redact an outbound URL for a span attribute: scheme, host, and path, with the
@@ -107,7 +181,7 @@ const resolveSpanOptions = (options: LogFields | SpanOptions | undefined): SpanO
 // local use in `MetricsDeps`/`TracerDeps` etc.) — `export…from` keeps the
 // single source of truth per `unicorn/prefer-export-from`.
 export type { MetricEvent, MetricKind } from "../../../shared/metric-event";
-export type { SpanEvent, SpanEventPoint, SpanHandle, SpanKind, SpanLink, SpanOptions } from "../../../shared/span-event";
+export type { SpanContextIds, SpanEvent, SpanEventPoint, SpanHandle, SpanIdentity, SpanKind, SpanLink, SpanOptions } from "../../../shared/span-event";
 
 /**
  * Structural shape of the `ctx.trace` span factory (see the server
@@ -123,6 +197,7 @@ export type ContextTracer = <T>(
     name: string,
     function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T,
     options?: LogFields | SpanOptions,
+    identity?: SpanIdentity,
 ) => Promise<T>;
 
 /** Structural shape of the `ctx.metrics` recorder (see the server `LunoraMetrics`). */
@@ -335,7 +410,7 @@ export interface SpanCollector {
  * class `isInternalCode` redaction exists for, so it rides the same dev-only
  * escape hatch rather than shipping to a third-party collector by default.
  */
-export const createSpanCollector = (ids: { spanId: string; traceId: string }, captureRaw = false): SpanCollector => {
+export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): SpanCollector => {
     const collected: SpanCollection = { attributes: {}, events: [], links: [] };
 
     const handle: SpanHandle = {
@@ -345,7 +420,7 @@ export const createSpanCollector = (ids: { spanId: string; traceId: string }, ca
                 return;
             }
 
-            const normalized = normalizeLogFields(attributes);
+            const normalized = boundedAttributes(attributes);
 
             collected.events.push({
                 ...(normalized === undefined ? {} : { attributes: normalized }),
@@ -358,7 +433,7 @@ export const createSpanCollector = (ids: { spanId: string; traceId: string }, ca
                 return;
             }
 
-            const normalized = normalizeLogFields(link.attributes);
+            const normalized = boundedAttributes(link.attributes);
 
             collected.links.push({
                 ...(normalized === undefined ? {} : { attributes: normalized }),
@@ -373,7 +448,7 @@ export const createSpanCollector = (ids: { spanId: string; traceId: string }, ca
             // no special casing downstream. `evaluationAttributes` throws on an
             // empty name / non-finite score — caller misuse, so it surfaces in the
             // body rather than being silently dropped.
-            Object.assign(collected.attributes, normalizeLogFields(evaluationAttributes(evaluation)));
+            assignBoundedAttributes(collected.attributes, normalizeLogFields(evaluationAttributes(evaluation)));
         },
         recordException: (error) => {
             // The OTel-conventional `exception` event. `exception.stacktrace` is
@@ -390,10 +465,10 @@ export const createSpanCollector = (ids: { spanId: string; traceId: string }, ca
             });
         },
         setAttribute: (key, value) => {
-            Object.assign(collected.attributes, normalizeLogFields({ [key]: value }));
+            assignBoundedAttributes(collected.attributes, normalizeLogFields({ [key]: value }));
         },
         setAttributes: (fields) => {
-            Object.assign(collected.attributes, normalizeLogFields(fields));
+            assignBoundedAttributes(collected.attributes, normalizeLogFields(fields));
         },
     };
 
@@ -461,8 +536,19 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
 
     const tracerFor =
         (parentSpanId: string): ContextTracer =>
-        async <T>(name: string, function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T, options?: LogFields | SpanOptions): Promise<T> => {
-            const spanId = otlpRandomHex(8);
+        async <T>(
+            name: string,
+            function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T,
+            options?: LogFields | SpanOptions,
+            identity?: SpanIdentity,
+        ): Promise<T> => {
+            // Caller-supplied ids (see `SpanIdentity`) win: an adapter that already
+            // published this span's identity — the `@opentelemetry/api` bridge hands
+            // a `SpanContext` back synchronously, and a library builds a
+            // `traceparent` from it — must be recorded under the id it published, or
+            // every downstream span parents to a phantom.
+            const spanId = identity?.spanId ?? otlpRandomHex(8);
+            const parentId = identity?.parentSpanId ?? parentSpanId;
             const startTs = Date.now();
             // Either a plain attribute bag or a full options object — see
             // `isSpanOptions` for the (deliberately narrow) discriminator.
@@ -475,7 +561,10 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
             // `SpanHandle`. Attributes merge over `normalized` at record time
             // (post-hoc wins on a key clash); each write is normalized through the
             // same field coercer as the start attributes, so the bag stays JSON-safe.
-            const { collected, handle: spanHandle } = createSpanCollector({ spanId, traceId: anchor.traceId }, captureRaw);
+            const { collected, handle: spanHandle } = createSpanCollector(
+                { ...(anchor.sampled === undefined ? {} : { sampled: anchor.sampled }), spanId, traceId: anchor.traceId },
+                captureRaw,
+            );
 
             // The recorded span (our `SpanBuffer`/`otlpSink`) is produced here
             // IDENTICALLY whether or not the CF bridge is active. An optional
@@ -517,7 +606,19 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                     // post-hoc; post-hoc wins on a key clash. Emit `attributes`
                     // only when the merged bag is non-empty, so a span with
                     // neither doesn't ride an empty object.
-                    const merged = { ...normalized, ...collected.attributes };
+                    //
+                    // Merged THROUGH the bound, not with a spread: `collected` is
+                    // already capped on its own, but the start bag never was, so a
+                    // spread let `ctx.trace(name, fn, req.body)` mint unbounded
+                    // keys — the exact high-cardinality blow-up
+                    // `MAX_SPAN_ATTRIBUTES` exists to stop, through a door it did
+                    // not cover. Start attributes are merged first so they claim
+                    // the slots (they are the ones the caller declared up front);
+                    // a post-hoc write to a key already present always lands.
+                    const merged: LogFields = {};
+
+                    assignBoundedAttributes(merged, normalized);
+                    assignBoundedAttributes(merged, collected.attributes);
                     // Start links (known up front) then post-hoc ones, in the order
                     // they were declared — a link list is causal history, not a set.
                     const links = [...(resolved.links ?? []), ...collected.links];
@@ -542,7 +643,7 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                             ...(links.length === 0 ? {} : { links }),
                             name,
                             ok,
-                            parentSpanId,
+                            parentSpanId: parentId,
                             shardKey,
                             spanId,
                             startTs,
@@ -580,10 +681,34 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
             // trace tree. The probe returns `undefined` off-CF / on older compat /
             // unsampled, in which case this is a safe no-op.
             if (fuseHostSpans === true && resolveHostTracing !== undefined) {
-                const cfTracing = await resolveHostTracing();
+                // Guarded, like every other host interaction here: `runRecorded` is
+                // the ARGUMENT to `enterSpan`, so a probe rejection or an
+                // `enterSpan` throw would mean the handler body never runs at all —
+                // telemetry silently swallowing a user's mutation. On any failure
+                // fall through to the un-bridged path, which is the exact prior
+                // behavior.
+                let bodyStarted = false;
 
-                if (cfTracing !== undefined && typeof cfTracing.enterSpan === "function") {
-                    return await cfTracing.enterSpan(name, (span) => runRecorded(span));
+                try {
+                    const cfTracing = await resolveHostTracing();
+
+                    if (cfTracing !== undefined && typeof cfTracing.enterSpan === "function") {
+                        return await cfTracing.enterSpan(name, (span) => {
+                            bodyStarted = true;
+
+                            return runRecorded(span);
+                        });
+                    }
+                } catch (error_) {
+                    // Only a failure BEFORE the body started is ours to swallow —
+                    // then the un-bridged path below runs it exactly once. Once the
+                    // body has started, the rejection is the handler's own error
+                    // (`ctx.trace` re-throws those untouched) and re-running would
+                    // execute the user's mutation twice.
+                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `bodyStarted` is set inside the `enterSpan` callback, which TS's control-flow analysis cannot see, so it narrows to its initializer here. The guard is what stops a handler error being swallowed and the user's mutation re-run.
+                    if (bodyStarted) {
+                        throw error_;
+                    }
                 }
             }
 
@@ -597,6 +722,16 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
 export interface TracedFetchDeps {
     /** The trace the CLIENT spans belong to. */
     anchor: TraceAnchor;
+
+    /**
+     * Whether to record a failed fetch's error message verbatim rather than
+     * redacted. Same dev-only escape hatch as {@link TracerDeps.captureRaw}, and
+     * the same reason: a `fetch` TypeError embeds the request URL, so a key in a
+     * query string would otherwise reach the collector in the clear on the very
+     * span whose `url.full` is scrubbed by `redactUrl`.
+     */
+    captureRaw?: boolean;
+
     /** Function path the spans are attributed to. */
     functionPath: string;
 
@@ -635,13 +770,22 @@ export type ContextFetch = (input: Request | string | URL, init?: RequestInit) =
  * Kind is `client` rather than `internal` — that is what lets a collector draw
  * the edge to the downstream service in a service map.
  *
+ * **Parenting is the DISPATCH, not the enclosing `ctx.trace`.** `ctx.fetch` is
+ * built once per dispatch, and the enclosing span is threaded explicitly rather
+ * than kept on an ambient stack (no `AsyncLocalStorage` in the Durable Object
+ * profile — the same constraint `ctx.trace` and the `@opentelemetry/api` bridge
+ * document), so a fetch inside `ctx.trace("stripe", …)` renders as that span's
+ * SIBLING under the dispatch, not its child. The duration and the ordering are
+ * right and the span is never lost; only the nesting is flat. Wrap the call in
+ * the span whose bar you want it under and read the two side by side.
+ *
  * Failures are recorded and re-thrown untouched, and a non-2xx response is
  * recorded as an ERROR span (it is a failed call from the caller's point of
  * view) while still being returned normally — instrumentation, never flow
  * control.
  */
 export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): ContextFetch => {
-    const { anchor, functionPath, propagate = true, record, shardKey, userId } = deps;
+    const { anchor, captureRaw = false, functionPath, propagate = true, record, shardKey, userId } = deps;
 
     return async (input: Request | string | URL, init?: RequestInit): Promise<Response> => {
         const spanId = otlpRandomHex(8);
@@ -676,7 +820,14 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
 
             return response;
         } catch (error_) {
-            error = { message: error_ instanceof Error ? error_.message : String(error_), type: toErrorType(error_) };
+            // Redacted like every other span error: a `fetch` failure message
+            // routinely embeds the full request URL (query string included), and
+            // this is the span pipeline — the one sink with third-party fan-out.
+            // Shipping it raw here would leak exactly what `redactUrl` strips off
+            // `url.full` two lines below.
+            const rawMessage = error_ instanceof Error ? error_.message : String(error_);
+
+            error = { message: redactArgs(rawMessage, captureRaw) as string, type: toErrorType(error_) };
 
             throw error_;
         } finally {

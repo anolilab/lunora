@@ -35,9 +35,12 @@ const useSubscription = <F extends FunctionReference>(
     watch(
         () => toValue(args),
         (currentArgs, _previous, onCleanup) => {
+            // Each args generation starts clean: the previous args' value must not
+            // render under the new args until the new subscription's first frame.
+            data.value = undefined;
+            error.value = undefined;
+
             if (currentArgs === "skip") {
-                data.value = undefined;
-                error.value = undefined;
                 return;
             }
 
@@ -67,6 +70,10 @@ const useSubscription = <F extends FunctionReference>(
                                 ? new Error(subscriptionError.message)
                                 : new LunoraError(subscriptionError.code, subscriptionError.message);
                         data.value = undefined;
+                        // `UseQueryOptions.onError` is part of this composable's
+                        // surface; forward the raw wire error (code included) so a
+                        // caller that only passes a handler still sees the failure.
+                        options.onError?.(subscriptionError);
                     },
                     onReset: () => {
                         data.value = undefined;

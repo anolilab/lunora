@@ -87,6 +87,7 @@ interface AgentChatOptions {
     api: AgentChatApi;
     cancel?: FunctionReference<"mutation">;
     limit?: number;
+    onError?: SubscriptionErrorCallback;
     send: FunctionReference<"mutation">;
     sendArgs?: Record<string, unknown>;
     stream?: AgentTokenStreamReference;
@@ -119,6 +120,7 @@ type AgentLiveEvent = AgentProgressEvent | AgentTokenDelta;
 interface AgentOptions {
     api: AgentApi;
     cancel?: FunctionReference<"mutation">;
+    onError?: SubscriptionErrorCallback;
     run: FunctionReference<"mutation">;
     runArgs?: Record<string, unknown>;
     threadKey: string;
@@ -288,12 +290,6 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 type ConnectionStatusStore = Readable<ConnectionStatus>;
 ```
 
-### `FlagContext` (type)
-
-```ts
-type FlagContext = Record<string, unknown>;
-```
-
 ### `FlagValue` (type)
 
 ```ts
@@ -320,6 +316,7 @@ type HeartbeatReference = FunctionReference<"mutation", {
 
 ```ts
 interface InfiniteQueryHandle<T> {
+    error: Readable<SubscriptionError | undefined>;
     fetchNextPage: (numberItems?: number) => void;
     hasNextPage: Readable<boolean>;
     isFetchingNextPage: Readable<boolean>;
@@ -334,6 +331,7 @@ interface InfiniteQueryHandle<T> {
 ```ts
 interface InfiniteQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -404,6 +402,7 @@ type PaginatedArgs<F extends FunctionReference> = Omit<ArgsOf<F>, "paginationOpt
 
 ```ts
 interface PaginatedQueryHandle<T> {
+    error: Readable<SubscriptionError | undefined>;
     isLoading: Readable<boolean>;
     loadMore: (numberItems: number) => void;
     results: Readable<T[]>;
@@ -416,6 +415,7 @@ interface PaginatedQueryHandle<T> {
 ```ts
 interface PaginatedQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -428,6 +428,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ```ts
 interface PresenceHandle<L extends ListPresentReference> {
+    error: Readable<SubscriptionError | undefined>;
     present: Readable<ReturnOf<L> | undefined>;
     sessionId: string;
     setData: (data: Record<string, unknown> | undefined) => void;
@@ -443,6 +444,7 @@ interface PresenceOptions<H extends HeartbeatReference, L extends ListPresentRef
     heartbeat: H;
     intervalMs?: number;
     listPresent: L;
+    onError?: SubscriptionErrorCallback;
     sessionId?: string;
     shardKey?: string;
 }
@@ -524,6 +526,7 @@ type StreamStatus = "complete" | "error" | "idle" | "streaming";
 
 ```ts
 interface StreamStoreOptions {
+    durable?: boolean;
     maxBuffer?: number;
     shardKey?: string;
 }
@@ -662,17 +665,17 @@ const connectionStatus: (client?: LunoraClient) => ConnectionStatusStore;
 ### `flag` (function)
 
 ```ts
-function flag<T extends FlagValue>(key: string, defaultValue: T, context?: FlagContext): Readable<T>;
+function flag<T extends FlagValue>(key: string, defaultValue: T): Readable<T>;
 
-function flag<T extends FlagValue>(client: LunoraClient, key: string, defaultValue: T, context?: FlagContext): Readable<T>;
+function flag<T extends FlagValue>(client: LunoraClient, key: string, defaultValue: T): Readable<T>;
 ```
 
 ### `flags` (function)
 
 ```ts
-function flags<T extends Record<string, FlagValue>>(flagDefaults: T, context?: FlagContext): Readable<T>;
+function flags<T extends Record<string, FlagValue>>(flagDefaults: T): Readable<T>;
 
-function flags<T extends Record<string, FlagValue>>(client: LunoraClient, flagDefaults: T, context?: FlagContext): Readable<T>;
+function flags<T extends Record<string, FlagValue>>(client: LunoraClient, flagDefaults: T): Readable<T>;
 ```
 
 ### `getLunoraClient` (const)
@@ -684,7 +687,9 @@ const getLunoraClient: () => LunoraClient;
 ### `hydratePreloaded` (const)
 
 ```ts
-const hydratePreloaded: <T>(preloaded: Preloaded<T>, client?: LunoraClient) => Readable<T>;
+const hydratePreloaded: <T>(preloaded: Preloaded<T>, client?: LunoraClient, options?: {
+    onError?: SubscriptionErrorCallback;
+}) => Readable<T>;
 ```
 
 ### `infiniteQuery` (function)

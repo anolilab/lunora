@@ -40,7 +40,7 @@ import { runCommand } from "./commands/run";
 import { sdkCommand } from "./commands/sdk";
 import { seedCommand } from "./commands/seed";
 import { verifyCommand } from "./commands/verify";
-import { viewCommand } from "./commands/view";
+import viewCommand from "./commands/view";
 import { detectPackageManager } from "./util/detect-package-manager";
 import { createLogger } from "./util/logger";
 import { renderLunoraError } from "./util/render-lunora-error";

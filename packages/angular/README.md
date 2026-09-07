@@ -58,8 +58,8 @@ export class MessagesComponent {
 Pass `"skip"` as the args to short-circuit (no network call, no socket).
 
 Pass a function/`Signal` instead of a plain object to make the args reactive —
-each change tears the old subscription down and opens a fresh one for the new
-args:
+each change tears the old subscription down, resets the signal to `undefined`,
+and opens a fresh one for the new args:
 
 ```ts
 export class MessagesComponent {
@@ -109,5 +109,22 @@ import { connectionStatus } from "@lunora/angular";
 
 readonly status = connectionStatus(); // Signal<"idle" | "connecting" | "connected" | "offline">
 ```
+
+## Agents
+
+```ts
+import { agentToolEvents, voiceAgent } from "@lunora/angular";
+
+// One thread's tool lifecycle: call / result / awaiting-approval / progress.
+readonly events = agentToolEvents({ api, threadKey: "t1", stream: api.chat.liveEvents }).events;
+
+// A full-duplex voice call against api.agents.<name>Voice.
+readonly call = voiceAgent({ threadKey: "t1", voice: api.agents.supportVoice });
+```
+
+`voiceAgent` opens nothing until `call.startCall()` — that call is what requests
+the microphone, so it must run from a user gesture. `call.endCall()` releases the
+socket, the mic tracks and the Web Audio graph, and the owning `DestroyRef` runs
+it on destroy.
 
 Part of the [Lunora](https://github.com/anolilab/lunora) framework.

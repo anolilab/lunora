@@ -22,6 +22,7 @@
  * The client half is `usePresence` in `@lunora/react`, which calls `heartbeat`
  * on an interval and subscribes to `listPresent`.
  */
+import { LunoraError } from "@lunora/errors";
 import { RateLimiter, rateLimit, createMemoryStore } from "@lunora/ratelimit";
 
 import { internalMutation, mutation, query, v } from "#lunora/_generated/server.js";
@@ -67,11 +68,16 @@ export const heartbeat = mutation
         // Awareness payload (cursor, status, color, …) — a bounded map of scalar
         // values rather than `v.any()`, so a public client can't smuggle an
         // unvalidated/oversized blob. Widen the value union if you need more.
-        data: v.optional(v.record(v.string(), v.union(v.string().meta({ schema: { maxLength: 1024 } }), v.number(), v.boolean()))),
-        roomId: v.string().meta({ schema: { maxLength: 256 } }),
-        sessionId: v.string().meta({ schema: { maxLength: 256 } }),
+        data: v.optional(v.record(v.string(), v.union(v.string().max(1024), v.number(), v.boolean()))),
+        roomId: v.string().max(256),
+        sessionId: v.string().max(256),
     })
-    .use(rateLimit(limiter, "heartbeat", { key: (ctx) => ctx.auth.userId ?? "anon" }))
+    // Keyed by the authenticated caller, falling back to the server-trusted
+    // `ctx.ip` (Cloudflare's `CF-Connecting-IP`, forwarded server-side, never read
+    // from a client header). Without the `ctx.ip` hop every anonymous client
+    // shares one `"anon"` bucket, so a single one exhausts the limit for all of
+    // them — see the `ratelimit_key_spoofable_or_global` advisor lint.
+    .use(rateLimit(limiter, "heartbeat", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .mutation(async ({ args: { data, roomId, sessionId }, ctx }): Promise<{ lastSeen: number }> => {
         const lastSeen = ctx.now;
         const userId = ctx.auth.userId ?? undefined;
@@ -88,7 +94,13 @@ export const heartbeat = mutation
         // *different* authenticated user; an anonymous caller (no `userId`)
         // likewise may not patch a row that belongs to an authenticated user.
         if (existing && existing["userId"] !== undefined && existing["userId"] !== userId) {
-            throw new Error("presence/heartbeat: sessionId belongs to a different user — refusing to overwrite another participant's presence.");
+            // Coded, not a bare `Error`: an uncoded throw is redacted to a
+            // generic 500, so the caller sees a server fault instead of the
+            // ownership refusal.
+            throw new LunoraError(
+                "FORBIDDEN",
+                "presence/heartbeat: sessionId belongs to a different user — refusing to overwrite another participant's presence.",
+            );
         }
 
         const row: Record<string, unknown> = {
@@ -108,37 +120,35 @@ export const heartbeat = mutation
  * Live query: the non-expired members of `roomId`, newest heartbeat first.
  * Subscribe to it for a reactive present-list.
  */
-export const listPresent = query
-    .input({ roomId: v.string().meta({ schema: { maxLength: 256 } }) })
-    .query(async ({ args: { roomId }, ctx }): Promise<PresenceMember[]> => {
-        const cutoff = ctx.now - PRESENCE_TTL_MS;
+export const listPresent = query.input({ roomId: v.string().max(256) }).query(async ({ args: { roomId }, ctx }): Promise<PresenceMember[]> => {
+    const cutoff = ctx.now - PRESENCE_TTL_MS;
 
-        const rows = await ctx.db
-            .query(PRESENCE_TABLE)
-            .withIndex("byRoomSession", (q) => q.eq("roomId", roomId))
-            .collect();
+    const rows = await ctx.db
+        .query(PRESENCE_TABLE)
+        .withIndex("byRoomSession", (q) => q.eq("roomId", roomId))
+        .collect();
 
-        return rows
-            .filter((row) => (row["lastSeen"] as number) > cutoff)
-            .map((row) => {
-                const member: PresenceMember = {
-                    lastSeen: row["lastSeen"] as number,
-                    roomId: row["roomId"] as string,
-                    sessionId: row["sessionId"] as string,
-                };
+    return rows
+        .filter((row) => (row["lastSeen"] as number) > cutoff)
+        .map((row) => {
+            const member: PresenceMember = {
+                lastSeen: row["lastSeen"] as number,
+                roomId: row["roomId"] as string,
+                sessionId: row["sessionId"] as string,
+            };
 
-                if (row["userId"] !== undefined) {
-                    member.userId = row["userId"] as string;
-                }
+            if (row["userId"] !== undefined) {
+                member.userId = row["userId"] as string;
+            }
 
-                if (row["data"] !== undefined) {
-                    member.data = row["data"] as Record<string, unknown>;
-                }
+            if (row["data"] !== undefined) {
+                member.data = row["data"] as Record<string, unknown>;
+            }
 
-                return member;
-            })
-            .toSorted((a, b) => b.lastSeen - a.lastSeen);
-    });
+            return member;
+        })
+        .toSorted((a, b) => b.lastSeen - a.lastSeen);
+});
 
 /**
  * Hard-delete every expired row for `roomId`. Internal (server-only) — schedule

@@ -7,8 +7,9 @@ description: Adds transactional email to a Lunora app. Use for sending mail (ver
 
 Wire transactional email into a Lunora app using the `mail` registry item, which
 is built on `@lunora/mail` (a Cloudflare Email Workers transport with
-header-injection-safe address handling) and exposes a `sendEmail` action plus a
-fire-and-forget `queueEmail` action. In dev, every send is captured into the
+header-injection-safe address handling) and exposes a `sendEmail` `internalAction`
+plus a fire-and-forget `queueEmail` `internalAction` — server-only, because a
+client-callable general-purpose mailer is an open relay. In dev, every send is captured into the
 Studio Mail tab instead of going out.
 
 ## When to Use
@@ -21,14 +22,14 @@ Studio Mail tab instead of going out.
 
 - The project has no Lunora backend yet — use `lunora-quickstart` first.
 - Mail is already installed and you just want to send — call
-  `ctx.runAction(api.mail.sendEmail, …)` or `client.action("mail/sendEmail", …)`.
+  `ctx.runAction(internal.mail.sendEmail, …)` from a server handler.
 
 ## Workflow
 
 1. Add the `mail` item.
 2. Configure the `SEND_EMAIL` binding (or a provider) and `MAIL_FROM`.
 3. Regenerate types with `lunora codegen`.
-4. Send mail from a function (or the client); render a React template if needed.
+4. Send mail from a server function; render a React template if needed.
 
 ## Step 1: Add the item
 
@@ -40,8 +41,8 @@ This:
 
 1. Adds `@lunora/mail` and `@lunora/server` to `package.json` (run
    `pnpm install` afterwards).
-2. Copies `lunora/mail/index.ts` (the `sendEmail` / `queueEmail` actions) into
-   your project — it is **yours** to edit.
+2. Copies `lunora/mail/index.ts` (the `sendEmail` / `queueEmail`
+   **`internalAction`s**) into your project — it is **yours** to edit.
 3. Adds a `send_email` binding (`SEND_EMAIL`, with a `destination_address`
    placeholder) to `wrangler.jsonc` and scaffolds `MAIL_FROM` (the default
    sender) into `.dev.vars`.
@@ -71,24 +72,27 @@ verification and forgot-password mail — is intercepted and surfaced in the
 lunora codegen
 ```
 
-The functions surface in the generated `api` as `api.mail.sendEmail` and
-`api.mail.queueEmail`.
+The functions surface in the generated **`internal`** (server-only) namespace as
+`internal.mail.sendEmail` and `internal.mail.queueEmail` — they are deliberately
+**not** in the client-reachable `api`.
 
 ## Step 4: Send mail
 
 ### From another function
 
-`sendEmail` is an **action** (sending is non-transactional network I/O). From a
-mutation, schedule it as a follow-up so the request is not blocked:
+`sendEmail` is an **`internalAction`** (sending is non-transactional network
+I/O). From a mutation, schedule it as a follow-up so the request is not blocked:
 
 ```ts
-import { mutation, v } from "@lunora/server";
+import { internalMutation, v } from "#lunora/_generated/server.js";
 
-import { api } from "./_generated/api";
+import { internal } from "./_generated/api";
 
-export const inviteUser = mutation.input({ email: v.string() }).mutation(async ({ ctx, args: { email } }) => {
-    // ...persist the invite, then send the mail as a follow-up action
-    await ctx.scheduler.runAfter(0, api.mail.sendEmail, {
+export const inviteUser = internalMutation.input({ email: v.string() }).mutation(async ({ ctx, args: { email } }) => {
+    // ...authenticate the caller and persist the invite, then send the mail as a
+    // follow-up action. The recipient is decided server-side — never forward a
+    // client-chosen `to`/`from`/`html` straight through.
+    await ctx.scheduler.runAfter(0, internal.mail.sendEmail, {
         to: email,
         subject: "You're invited",
         html: "<p>Click the link to join.</p>",
@@ -96,15 +100,15 @@ export const inviteUser = mutation.input({ email: v.string() }).mutation(async (
 });
 ```
 
-### From a client
+### Not from a client
 
-```ts
-await client.action("mail/sendEmail", {
-    to: "alice@example.com",
-    subject: "Welcome",
-    text: "Thanks for signing up!",
-});
-```
+There is no `client.action("mail/sendEmail", …)` path, and adding one is the
+mistake this item exists to prevent: a general-purpose mailer that lets the
+caller pick recipient, subject and body is an open relay for phishing through
+your verified domain. If you need a client-callable send, write a
+_purpose-specific_ public `action` that takes only safe business inputs (e.g.
+`{ orderId }`), checks `ctx.auth`/RBAC, derives the recipient server-side,
+rate-limits it (`@lunora/ratelimit`), and calls `internal.mail.sendEmail`.
 
 ### With a React email template
 
@@ -131,8 +135,10 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
 1. **Expecting prod email to "just work".** Dev captures into the Studio;
    production needs the `SEND_EMAIL` binding (a verified destination) or
    `RESEND_API_KEY`.
-2. **Calling `sendEmail` as a query/mutation.** It is an action — invoke it via
-   `ctx.runAction` / `ctx.scheduler.runAfter` / `client.action`, never `ctx.db`.
+2. **Calling `sendEmail` from the client, or as a query/mutation.** It is an
+   `internalAction` — invoke it via `ctx.runAction` / `ctx.scheduler.runAfter`
+   from a server handler. A client `client.action("mail/sendEmail", …)` is not
+   reachable and answers `FUNCTION_NOT_FOUND`.
 3. **Using `queueEmail` without a Queue binding.** It requires a Cloudflare
    Queue producer binding; until you add one, `@lunora/mail` throws
    `` `queue` binding is required for mailer.queue() ``. The item does not add
@@ -145,7 +151,7 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
 - [ ] `lunora registry add mail` run, `pnpm install` done.
 - [ ] `SEND_EMAIL` binding configured (verified destination) or
       `RESEND_API_KEY` set; `MAIL_FROM` set.
-- [ ] `lunora codegen` run so `api.mail.*` is generated.
-- [ ] Mail sent from a function (`ctx.scheduler.runAfter`/`ctx.runAction` with
-      `api.mail.sendEmail`) or the client (`client.action("mail/sendEmail", …)`).
+- [ ] `lunora codegen` run so `internal.mail.*` is generated.
+- [ ] Mail sent from a server function (`ctx.scheduler.runAfter` / `ctx.runAction`
+      with `internal.mail.sendEmail`) — never from the client.
 - [ ] Verified the send appears in the Studio Mail tab in dev.

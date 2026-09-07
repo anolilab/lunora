@@ -3,7 +3,7 @@
 
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
 import { applyCdcChanges, createD1CtxDb, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
-import type { R2BucketLike, Storage } from "@lunora/storage";
+import type { R2BucketLike, R2S3Credentials, Storage } from "@lunora/storage";
 import { createBucketStorage, createStorage } from "@lunora/storage";
 import type { AdminTableResolver, ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "@lunora/runtime";
 import { createCrossShardRelationCapabilities, createWorker, resolveLogArchiveFromEnv } from "@lunora/runtime";
@@ -18,6 +18,9 @@ import { createShardDO } from "./shard.js";
 /** Read a value off the per-request `env`. Returns `undefined` to leave the capability unconfigured (its `ctx.*`/admin surface stays a clear-error stub). */
 type Selector<Env, T> = (env: Env) => T | undefined;
 
+/** The generated `createShardDO` config — `.observability()`, `.maxRelationKeys()` and the long-tail `.ai()` / `.kv()` / … methods pass straight through to it. */
+type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
+
 /** `.storage(...)` declaration — one bucket (required) plus optional extra named buckets and signed-URL config. Backs `ctx.storage` AND the studio file browser. */
 interface StorageDeclaration<Env> {
     /** The default R2 bucket binding (the bare `ctx.storage`). */
@@ -26,6 +29,8 @@ interface StorageDeclaration<Env> {
     buckets?: Record<string, Selector<Env, R2BucketLike>>;
     /** Public base URL signed/public object URLs resolve against. */
     publicBaseUrl?: Selector<Env, string>;
+    /** R2 S3-API credentials (`{ accountId, accessKeyId, secretAccessKey, bucket, jurisdiction? }`) enabling `ctx.storage.getPresignedUrl` — native S3 presigned URLs that hit R2 directly, bypassing the worker. Omit to use only the worker-signed `getSignedUrl` path. */
+    s3?: Selector<Env, R2S3Credentials>;
     /** HMAC secret for signed URLs. */
     signingSecret?: Selector<Env, string>;
 }
@@ -55,6 +60,10 @@ interface ComposedApp extends LunoraWorker {
 class AppBuilder<Env extends object> {
     private adminToken?: Selector<Env, string>;
     private cdcEnabled = false;
+    private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;
+    private maxRelationKeysLimit?: ShardConfig["maxRelationKeys"];
+    private observabilitySink?: ShardConfig["observability"];
+    private relationExistsPushDownMode?: ShardConfig["relationExistsPushDown"];
     private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];
     private globalDeclaration?: GlobalDeclaration<Env>;
     private httpRouterApp?: HttpRouterLike;
@@ -80,6 +89,42 @@ class AppBuilder<Env extends object> {
      */
     public cdc(enabled = true): this {
         this.cdcEnabled = enabled;
+
+        return this;
+    }
+
+    /**
+     * Enable the per-shard reactive query cache: query results are memoized by `(functionPath, args, identity)` and invalidated by the ctx-db write hooks BEFORE the subscription broadcast, so a subscriber re-running its query always observes the post-write state.
+     *
+     * Off by default (every dispatch re-runs its handler). Pass an options object to tune the caps: `maxEntries` (default 1000) and `maxBytes` (default 4 MiB); either accepts `Number.POSITIVE_INFINITY` to disable that cap.
+     */
+    public reactiveCache(config: boolean | { maxBytes?: number; maxEntries?: number } = true): this {
+        this.reactiveCacheConfig = config;
+
+        return this;
+    }
+
+    /** Ceiling on the join keys ONE relation-crossing `where` predicate may pre-resolve via semijoin before failing closed. Omit for the engine default. */
+    public maxRelationKeys(limit: NonNullable<ShardConfig["maxRelationKeys"]>): this {
+        this.maxRelationKeysLimit = limit;
+
+        return this;
+    }
+
+    /**
+     * Route the shard's `ctx.log` lines, `ctx.trace` spans and `ctx.metrics` measurements to a telemetry sink.
+     *
+     * The DO half of observability: without it every in-handler signal stays in the shard's local ring buffer (the studio Logs panel) and reaches no collector. The worker half — one `onRpc` event per dispatched RPC — is a `createWorker` option; pass the SAME sink to both via `.extend((env) => ({ observability: sink(env) }))` to correlate them.
+     */
+    public observability(selector: NonNullable<ShardConfig["observability"]>): this {
+        this.observabilitySink = selector;
+
+        return this;
+    }
+
+    /** Resolution policy for a relation-crossing `where` whose child is co-located in this shard: `"auto"` (cost-based, the engine default), `"always"` (inline correlated EXISTS) or `"never"` (universal semijoin). All three return identical rows. */
+    public relationExistsPushDown(mode: NonNullable<ShardConfig["relationExistsPushDown"]>): this {
+        this.relationExistsPushDownMode = mode;
 
         return this;
     }
@@ -142,6 +187,10 @@ class AppBuilder<Env extends object> {
     private assemble(): ComposedApp {
         const ShardDO = createShardDO({
             cdc: this.cdcEnabled,
+            reactiveCache: this.reactiveCacheConfig,
+            ...(this.maxRelationKeysLimit === undefined ? {} : { maxRelationKeys: this.maxRelationKeysLimit }),
+            ...(this.observabilitySink === undefined ? {} : { observability: this.observabilitySink }),
+            ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),
             ...(this.globalDeclaration
                 ? {
                       d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string | null }) => {
@@ -167,6 +216,10 @@ class AppBuilder<Env extends object> {
                               // poll's changed-tables fast path is unreachable.
                               cdc: request?.cdc ?? false,
                               exec: buildExec(database, request?.bookmark, request?.onBookmark),
+                              // The binding outlives this per-request writer, so the
+                              // provisioning sweep runs once per isolate rather than
+                              // once per request. See `SqlCtxDbOptions.provisionScope`.
+                              provisionScope: database,
                               schema: schema as unknown as D1CtxDbOptions["schema"],
                           });
                       },
@@ -211,6 +264,25 @@ class AppBuilder<Env extends object> {
         return composed;
     }
 
+    /**
+     * One bucket's `Storage`, signing under the name it is registered as.
+     *
+     * `bucketName` is bound into every signed URL's HMAC canonical, so a bucket
+     * that signs as the default's name lets a URL minted for one bucket verify
+     * against another sharing the secret — and multi-bucket verification fails
+     * outright. Hence `"default"` for the bare `ctx.storage` bucket and the
+     * `buckets` key for every other.
+     */
+    private makeStorage(env: Env, declaration: StorageDeclaration<Env>, bucket: R2BucketLike, bucketName: string): Storage {
+        return createStorage({
+            bucket,
+            bucketName,
+            publicBaseUrl: declaration.publicBaseUrl?.(env),
+            s3: declaration.s3?.(env),
+            signingSecret: declaration.signingSecret?.(env),
+        });
+    }
+
     /** Resolve the storage capability (single or multi-bucket) for the DO side. */
     private resolveStorage(env: Env): Storage | undefined {
         const declaration = this.storageDeclaration;
@@ -225,20 +297,18 @@ class AppBuilder<Env extends object> {
             return undefined;
         }
 
-        const make = (bucket: R2BucketLike): Storage =>
-            createStorage({ bucket, publicBaseUrl: declaration.publicBaseUrl?.(env), signingSecret: declaration.signingSecret?.(env) });
         const extraEntries = Object.entries(declaration.buckets ?? {})
             .map(([name, selector]) => [name, selector(env)] as const)
             .filter((entry): entry is [string, R2BucketLike] => Boolean(entry[1]));
 
         if (extraEntries.length === 0) {
-            return make(defaultBucket);
+            return this.makeStorage(env, declaration, defaultBucket, "default");
         }
 
-        const map: Record<string, Storage> = { default: make(defaultBucket) };
+        const map: Record<string, Storage> = { default: this.makeStorage(env, declaration, defaultBucket, "default") };
 
         for (const [name, bucket] of extraEntries) {
-            map[name] = make(bucket);
+            map[name] = this.makeStorage(env, declaration, bucket, name);
         }
 
         return createBucketStorage(map, { default: "default" });
@@ -258,24 +328,30 @@ class AppBuilder<Env extends object> {
             return {};
         }
 
-        const make = (bucket: R2BucketLike): Storage =>
-            createStorage({ bucket, publicBaseUrl: declaration.publicBaseUrl?.(env), signingSecret: declaration.signingSecret?.(env) });
         // Held separately from the map so `pick`'s fallback is a plain binding:
         // under `noUncheckedIndexedAccess` a `Record<string, Storage>` lookup —
         // including `buckets.default` — widens to `Storage | undefined`, which
         // would not satisfy `pick`'s declared `Storage` return.
-        const fallbackStorage = make(defaultBucket);
+        const fallbackStorage = this.makeStorage(env, declaration, defaultBucket, "default");
         const buckets: Record<string, Storage> = { default: fallbackStorage };
 
         for (const [name, selector] of Object.entries(declaration.buckets ?? {})) {
             const bucket = selector(env);
 
             if (bucket) {
-                buckets[name] = make(bucket);
+                buckets[name] = this.makeStorage(env, declaration, bucket, name);
             }
         }
 
-        const pick = (name?: string): Storage => buckets[name !== undefined && name !== "" ? name : "default"] ?? fallbackStorage;
+        // `Object.hasOwn`, not a bare lookup: `buckets` is a plain object, so a
+        // prototype key (`?bucket=constructor`, `__proto__`, `toString`) resolves
+        // to an inherited Object.prototype member, `??` never engages, and the
+        // caller gets a method-less value instead of the default bucket.
+        const pick = (name?: string): Storage => {
+            const wanted = name !== undefined && name !== "" ? name : "default";
+
+            return (Object.hasOwn(buckets, wanted) ? buckets[wanted] : undefined) ?? fallbackStorage;
+        };
         const hasSigning = Boolean(declaration.publicBaseUrl?.(env) && declaration.signingSecret?.(env));
 
         return {
@@ -306,11 +382,12 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
+        options.listSchemaTables = () => ["messages", "users", "places", "sessions", "attachments"];
+
         if (this.globalDeclaration) {
             const database = this.globalDeclaration.d1(env);
 
             if (database) {
-                options.d1 = database;
                 options.globalIntrospector = buildGlobalIntrospector(database);
                 // `resolveTableSharding`/`importGlobals` wire the admin bulk-import
                 // endpoint: without the former, EVERY row (including a `.global()`
@@ -358,8 +435,8 @@ class AppBuilder<Env extends object> {
  * Opens a D1 Sessions API session pinned to `bookmark` (the caller's own
  * last-known write, when supplied) so reads observe it — read-your-writes
  * across replicas. `onBookmark`, when supplied, is invoked with the bookmark
- * produced by each write so the caller (the generated DO) can record it via
- * `setOutboundBookmark` and echo `x-d1-bookmark` on the response.
+ * produced by each write so the caller (the generated DO) can record it on the
+ * dispatch's bookmark sink and echo `x-d1-bookmark` on the response.
  *
  * Wrapped in `retryingExec` so D1's documented baseline of transient failures
  * (storage-object resets, isolate memory evictions, dropped connections) does
@@ -384,6 +461,19 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
                 .prepare(sql)
                 .bind(...parameters)
                 .all<Record<string, unknown>>();
+
+            // `all` carries writes, not just reads: D1 runs
+            // `UPDATE/DELETE … RETURNING` through it exactly like `.run()`, and
+            // that is precisely what `@lunora/sql-store` issues for its
+            // optimistic-concurrency compare-and-swap — so `patch`, `replace`
+            // and `delete` all land here and nowhere else. Without this the
+            // bookmark those writes produced was never reported, and the next
+            // read could pin a replica that has not seen them: read-your-writes
+            // lost on the exact path the bookmark exists for. Reporting it after
+            // a plain `SELECT` too is harmless and correct — the session's
+            // bookmark only ever moves forward, and the sink takes the last
+            // value.
+            onBookmark?.(session?.getBookmark() ?? undefined);
 
             return result.results;
         },

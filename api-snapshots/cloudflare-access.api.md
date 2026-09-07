@@ -39,11 +39,18 @@ interface AccessJwtFallbackOptions extends Omit<RequestVerifyOptions, "aud" | "t
 type AccessKeySet = CryptoKey | JWTVerifyGetKey | KeyObject | Uint8Array;
 ```
 
+### `AccessRoleMap` (type)
+
+```ts
+type AccessRoleMap = ((group: string) => string | string[] | undefined) | Record<string, string | string[]>;
+```
+
 ### `CreateAccessResolverOptions` (interface)
 
 ```ts
 interface CreateAccessResolverOptions extends AccessJwtFallbackOptions {
     mapClaims?: (claims: AccessClaims) => Record<string, unknown>;
+    roles?: AccessRoleMap;
 }
 ```
 
@@ -171,39 +178,4 @@ const accessContext: <Context extends AccessContextInput>() => Middleware<Contex
 
 ```ts
 const accessFacade: (identity: Record<string, unknown> | null | undefined, userId: string | null | undefined) => AccessFacade;
-```
-
-## `@lunora/cloudflare-access/roles`
-
-### `AccessRoleMap` (type)
-
-```ts
-type AccessRoleMap = ((group: string) => string | string[] | undefined) | Record<string, string | string[]>;
-```
-
-### `AccessRolesContext` (interface)
-
-```ts
-interface AccessRolesContext {
-    auth?: {
-        getIdentity?: () => (Record<string, unknown> | null) | Promise<Record<string, unknown> | null>;
-        roles?: ReadonlyArray<string>;
-        userId?: string | null;
-    };
-}
-```
-
-### `AccessRolesOptions` (interface)
-
-```ts
-interface AccessRolesOptions {
-    map?: AccessRoleMap;
-    readGroups?: (identity: Record<string, unknown>) => ReadonlyArray<string> | undefined;
-}
-```
-
-### `accessRoles` (const)
-
-```ts
-const accessRoles: <Context extends AccessRolesContext>(options?: AccessRolesOptions) => Middleware<Context, Context>;
 ```

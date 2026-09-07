@@ -75,7 +75,7 @@ import { api } from "../lunora/_generated/api";
 
 export function Chat() {
     const messages = useQuery(api.messages.list) ?? [];
-    const send = useMutation(api.messages.send);
+    const { mutate: send } = useMutation(api.messages.send);
     const [draft, setDraft] = useState("");
 
     return (

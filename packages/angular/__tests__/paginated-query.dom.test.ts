@@ -1,6 +1,6 @@
 import { Injector, provideZonelessChangeDetection, signal } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
-import type { FunctionReference, LunoraClient } from "@lunora/client";
+import type { FunctionReference, LunoraClient, SubscriptionError } from "@lunora/client";
 import type { PaginationResult } from "@lunora/client/pagination";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -86,10 +86,13 @@ describe(paginatedQuery, () => {
         const fake = createFakeClient();
         const destroy = createFakeDestroyRef();
 
-        const { status } = paginatedQuery(fn, "skip", { client: fake.asClient, destroyRef: destroy.asDestroyRef, initialNumItems: NUM_ITEMS });
+        const { isLoading, status } = paginatedQuery(fn, "skip", { client: fake.asClient, destroyRef: destroy.asDestroyRef, initialNumItems: NUM_ITEMS });
 
         expect(status()).toBe("LoadingFirstPage");
         expect(fake.subscriptions).toHaveLength(0);
+        // `status` alone is "LoadingFirstPage" for a skipped feed, so a spinner
+        // bound to `isLoading` would never stop — React's `!skipped` contract.
+        expect(isLoading()).toBe(false);
     });
 
     it("last page reports Exhausted", () => {
@@ -109,6 +112,56 @@ describe(paginatedQuery, () => {
         );
 
         expect(status()).toBe("Exhausted");
+    });
+
+    it("a page error surfaces on `error`, returns status to CanLoadMore, and lets loadMore retry", () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+        const errors: SubscriptionError[] = [];
+
+        const { error, isLoading, loadMore, results, status } = paginatedQuery(
+            fn,
+            {},
+            {
+                client: fake.asClient,
+                destroyRef: destroy.asDestroyRef,
+                initialNumItems: NUM_ITEMS,
+                onError: (e) => errors.push(e),
+            },
+        );
+
+        pushByArgs(
+            fake,
+            { paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS } },
+            { continueCursor: "cur-1", isDone: false, page: firstPageItems },
+        );
+
+        loadMore(NUM_ITEMS);
+
+        expect(status()).toBe("LoadingMore");
+
+        // An RLS denial on the new page: pending was cleared but the feed sat in
+        // `LoadingMore` forever with `isLoading` true and nothing surfaced.
+        const tailArgs = { cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS };
+        const tail = fake.subscriptions.find((sub) => JSON.stringify(sub.args) === JSON.stringify({ paginationOpts: tailArgs }));
+
+        tail?.emitError({ code: "FORBIDDEN", message: "denied" });
+
+        expect(errors).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
+        expect(error()).toStrictEqual({ code: "FORBIDDEN", message: "denied" });
+        expect(status()).toBe("CanLoadMore");
+        expect(isLoading()).toBe(false);
+        expect(results()).toStrictEqual(firstPageItems);
+        expect(tail?.unsubscribed).toBe(true);
+
+        // The failed tail was dropped, so `loadMore` re-opens exactly that range.
+        const before = fake.subscriptions.length;
+
+        loadMore(NUM_ITEMS);
+
+        expect(error()).toBeUndefined();
+        expect(status()).toBe("LoadingMore");
+        expect(fake.subscriptions.slice(before).map((sub) => sub.args["paginationOpts"])).toStrictEqual([tailArgs]);
     });
 
     it("tears down all subscriptions on destroy", () => {

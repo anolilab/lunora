@@ -77,7 +77,7 @@ re-running is a no-op.
 ```ts
 import { MigrationRunner } from "@lunora/d1";
 
-const runner = new MigrationRunner(env.DB, [{ version: 1, name: "init", sql: readFileSync("migrations/001_init.sql", "utf8") }]);
+const runner = new MigrationRunner(env.DB, [{ version: 1, name: "drop_legacy_sessions", sql: "DROP TABLE legacy_sessions" }]);
 
 const { applied, skipped } = await runner.run();
 ```
@@ -86,8 +86,16 @@ const { applied, skipped } = await runner.run();
 version }`); `skipped` is the ones whose SQL hash was already recorded. The
 constructor accepts a `D1Client` or a bare D1 binding (it wraps the binding for
 you). It rejects duplicate versions and two migrations with identical SQL at
-construction time. Use `lunora migrate generate` to **produce** the SQL;
-`MigrationRunner` is what **applies** it at deploy time.
+construction time.
+
+Each entry is **one** statement, so a `lunora migrate generate` file is not a
+`Migration`: it emits a `CREATE TABLE` plus a `CREATE INDEX` per index, and
+`MigrationRunner` throws on the second statement. Apply that file with
+`wrangler d1 execute <database> --file lunora/migrations/<file>.sql`, or split
+it into one entry per statement to get the runner's hash tracking. Most schema
+changes need neither: the worker provisions every `.global()` table on first
+use, additively and idempotently — what it never does is drop or retype, which
+is what a hand-written `Migration` is for.
 
 ## `Migration`
 

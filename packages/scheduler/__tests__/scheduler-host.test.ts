@@ -45,7 +45,7 @@ describe("createSchedulerHost", () => {
         expect.assertions(1);
 
         const ns = namespace();
-        const host = createSchedulerHost({ namespace: ns as never, originUrl: "https://worker.test" });
+        const host = createSchedulerHost({ namespace: ns as never });
 
         // `at` wins over `delayMs` per the contract. A host that adds them, or
         // prefers the delay, schedules at the wrong time silently.
@@ -59,7 +59,7 @@ describe("createSchedulerHost", () => {
 
         const before = Date.now();
         const ns = namespace();
-        const host = createSchedulerHost({ namespace: ns as never, originUrl: "https://worker.test" });
+        const host = createSchedulerHost({ namespace: ns as never });
 
         await host.schedule("jobs:cleanup", {}, { delayMs: 30_000 });
 
@@ -71,7 +71,7 @@ describe("createSchedulerHost", () => {
     it("maps cancel onto the client and returns the bare boolean", async () => {
         expect.assertions(1);
 
-        const host = createSchedulerHost({ namespace: namespace() as never, originUrl: "https://worker.test" });
+        const host = createSchedulerHost({ namespace: namespace() as never });
 
         await expect(host.cancel("job-1")).resolves.toBe(true);
     });

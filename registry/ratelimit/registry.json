@@ -3,14 +3,22 @@
     "name": "ratelimit",
     "title": "Rate limit",
     "description": "Durable, ORM-backed rate limiting (token-bucket / fixed-window / sliding-window) wired into your Lunora schema and procedures.",
-    "docs": "Attach the middleware with c.mutation.use(ratelimit.middleware), or call api.ratelimit.consume directly. Configure named limits in lunora/ratelimit/schema.ts.",
+    "docs": "Attach the middleware with c.mutation.use(ratelimit.middleware), or .use(rateLimit(limiter, name, { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? \"anon\" })) on the procedures you want limited — always derive the key server-side, never from args. Configure named limits in lunora/ratelimit/schema.ts. The scaffolded consume/check/reset are internal (server-only) on purpose: they take the bucket key from their caller, so as public RPC reset would let anyone nullify every limit and consume would let anyone lock a known victim out.",
     "requires": [],
     "deps": {
         "@lunora/ratelimit": "workspace:*",
         "@lunora/server": "workspace:*"
     },
     "files": [
-        { "from": "schema.ts", "to": "lunora/ratelimit/schema.ts", "merge": "schema-extension" },
-        { "from": "ratelimit.ts", "to": "lunora/ratelimit/index.ts", "merge": "create-or-skip" }
+        {
+            "from": "schema.ts",
+            "to": "lunora/ratelimit/schema.ts",
+            "merge": "schema-extension"
+        },
+        {
+            "from": "ratelimit.ts",
+            "to": "lunora/ratelimit/index.ts",
+            "merge": "create-or-skip"
+        }
     ]
 }

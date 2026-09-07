@@ -40,18 +40,33 @@ interface RunCommandResult {
     requestUrl: string;
 }
 
-const parseArgsJson = (raw: string | undefined, flag = "--args"): unknown => {
+/**
+ * Parse a JSON flag value into the argument/claims OBJECT the `/rpc` envelope
+ * needs. Both `args` and `identity` are object-shaped on the wire, so a scalar
+ * or array is rejected here rather than cast — `JSON.parse("5")` used to be
+ * handed on as a `Record<string, unknown>` and reached the worker as a
+ * malformed envelope with no local explanation.
+ */
+const parseArgsJson = (raw: string | undefined, flag = "--args"): Record<string, unknown> => {
     if (raw === undefined || raw.length === 0) {
         return {};
     }
 
+    let parsed: unknown;
+
     try {
-        return JSON.parse(raw);
+        parsed = JSON.parse(raw);
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
         throw new LunoraError("INTERNAL", `failed to parse ${flag} as JSON: ${message}`, { cause: error });
     }
+
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        throw new LunoraError("INTERNAL", `${flag} must be a JSON object (e.g. '{"id":1}'), got ${Array.isArray(parsed) ? "an array" : typeof parsed}`);
+    }
+
+    return parsed as Record<string, unknown>;
 };
 
 const TRAILING_SLASH = /\/$/u;
@@ -152,9 +167,45 @@ const resolveRunTarget = ({ cwd, logger, needsBearer, url }: { cwd: string; logg
     return (resolveWorkerUrl({ cwd, url }) ?? resolveDefaultAdminUrl(cwd)).replace(TRAILING_SLASH, "");
 };
 
+/**
+ * Parse the two JSON-bearing flags together.
+ *
+ * Both go through {@link parseArgsJson}, so both reject a non-object payload —
+ * `--args` because the RPC envelope's `args` is a record, `--claims` because
+ * forged identity claims are a record — and both report through the same
+ * message channel, keeping the two failures indistinguishable to the operator.
+ *
+ * Returns `undefined` (after logging) when either flag is unusable.
+ */
+const parseRunPayloads = (
+    { args, claims }: { args?: string; claims?: string },
+    logger: Logger,
+): { args: Record<string, unknown>; claims: Record<string, unknown> | undefined } | undefined => {
+    try {
+        return {
+            args: parseArgsJson(args),
+            claims: claims === undefined ? undefined : parseArgsJson(claims, "--claims"),
+        };
+    } catch (error: unknown) {
+        logger.error(error instanceof Error ? error.message : String(error));
+
+        return undefined;
+    }
+};
+
 const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const runAs = options.as !== undefined && options.as !== "";
+
+    // `--claims` only travels inside the `runAs` envelope. Without a non-empty
+    // `--as` it was parsed and then dropped on the floor: the command made an
+    // ANONYMOUS call and exited 0, which is an authoritative-looking wrong answer
+    // for exactly the person debugging a claims-gated procedure.
+    if (options.claims !== undefined && !runAs) {
+        options.logger.error("--claims requires --as <userId> — extra identity claims only travel inside the admin-gated `runAs` dispatch.");
+
+        return { body: undefined, code: 1, requestUrl: options.url ?? "" };
+    }
     // A forged identity and the reserved admin paths both travel with the
     // full-access admin bearer, which changes how the target may be chosen.
     const needsBearer = runAs || options.functionPath.startsWith(ADMIN_PREFIX);
@@ -173,15 +224,9 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
         throw new TypeError("no fetch implementation available — pass --fetch via dependency injection or run on Node >= 18");
     }
 
-    let parsedArgs: unknown;
-    let parsedClaims: Record<string, unknown> | undefined;
+    const parsed = parseRunPayloads(options, options.logger);
 
-    try {
-        parsedArgs = parseArgsJson(options.args);
-        parsedClaims = options.claims === undefined ? undefined : (parseArgsJson(options.claims, "--claims") as Record<string, unknown>);
-    } catch (error: unknown) {
-        options.logger.error(error instanceof Error ? error.message : String(error));
-
+    if (parsed === undefined) {
         return { body: undefined, code: 1, requestUrl };
     }
 
@@ -209,7 +254,7 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
         ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
     };
 
-    const payload = buildEnvelope({ args: parsedArgs, claims: parsedClaims, options, runAs });
+    const payload = buildEnvelope({ args: parsed.args, claims: parsed.claims, options, runAs });
 
     options.logger.info(`POST ${requestUrl} -> ${options.functionPath}${runAs ? ` (as ${options.as ?? ""})` : ""}`);
 

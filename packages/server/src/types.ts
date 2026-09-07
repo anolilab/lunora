@@ -576,12 +576,6 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
      */
     readonly lifecycle?: LifecycleEventKind;
 
-    /**
-     * Static per-procedure metadata declared with `.meta(...)`. Present so
-     * middleware (via `ctx.meta`) and tooling can read the same object; absent
-     * when the chain never called `.meta()`.
-     */
-    readonly meta?: Readonly<Record<string, unknown>>;
     readonly visibility?: FunctionVisibility;
 
     /**
@@ -773,9 +767,6 @@ interface RegisteredStream<A extends ArgsValidator, R> {
     readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
-
-    /** Static per-procedure metadata attached via `.meta()`. See {@link RegisteredFunction.meta}. */
-    readonly meta?: Readonly<Record<string, unknown>>;
     readonly visibility?: FunctionVisibility;
 }
 
@@ -827,14 +818,28 @@ interface ScheduledFunctionDoc {
     attempts?: number;
     /** When the job was enqueued (epoch ms). */
     enqueuedAt: number;
-    /** Fully-qualified path of the function to invoke. */
-    functionPath: string;
+
+    /**
+     * Fully-qualified `ns:fn` path of the function to invoke. Absent when the job
+     * targets a durable workflow/agent instead — exactly one of `functionPath` /
+     * {@link ScheduledFunctionDoc.workflow} is set on any given row.
+     */
+    functionPath?: string;
     /** The job's id (the `_scheduled_functions` row id). */
     id: string;
+    /** Logical workpool the job is concurrency-gated by, when any. */
+    pool?: string;
     /** When the job is scheduled to fire (epoch ms). */
     scheduledFor: number;
     /** Routing hint forwarded so dispatch lands on the right shard. */
     shardKey?: string;
+
+    /**
+     * The `WORKFLOW_*`/`AGENT_*` binding a fresh durable instance is started from
+     * on fire (the {@link ScheduledFunctionDoc.args} become its `params`). Set
+     * instead of {@link ScheduledFunctionDoc.functionPath}.
+     */
+    workflow?: string;
 }
 
 /** Maps each system table name to the document shape its reads return. */
@@ -1300,22 +1305,54 @@ interface AuthState {
 
 /**
  * A pending scheduled invocation as surfaced by {@link Scheduler.list} /
- * {@link Scheduler.get}. A clean public mirror of `@lunora/scheduler`'s internal
- * `ScheduleRecord` — re-declared here so the public ctx surface carries no
- * dependency on the scheduler package's internal types.
+ * {@link Scheduler.get}. A clean public mirror of `@lunora/scheduler`'s
+ * `ScheduleRecord`, re-declared so the public ctx surface names its own type
+ * rather than re-exporting the scheduler's. It must stay field-for-field
+ * identical: `__tests__/scheduler-mirror.test.ts` asserts mutual assignability
+ * against the real `ScheduleRecord` and fails `lint:types` if either side moves.
  */
+interface RetryPolicy {
+    /** Backoff growth across attempts. Default `"exponential"`. */
+    backoff?: "exponential" | "linear";
+    /** Base delay in milliseconds for the first retry. Default `30_000`. */
+    baseMs?: number;
+    /** Maximum number of dispatch attempts before dead-lettering. Default `5`. */
+    maxAttempts?: number;
+    /** Optional ceiling clamping the computed backoff delay. */
+    maxMs?: number;
+}
+
 interface ScheduledJob {
     args: Record<string, unknown>;
     /** Number of dispatch attempts already made (absent until the first retry). */
     attempts?: number;
     /** When the job was enqueued (epoch ms). */
     enqueuedAt: number;
-    functionPath: string;
+
+    /**
+     * The `ns:fn` path of the function to dispatch on fire. Absent when the job
+     * targets a durable workflow/agent instead — see {@link ScheduledJob.workflow}.
+     * Exactly one of `functionPath` / `workflow` is set.
+     */
+    functionPath?: string;
     id: string;
+    /** Scheduler/workpool instance the job was enqueued through. Absent for the default instance. */
+    instanceName?: string;
+    /** Logical workpool the job is concurrency-gated by. Absent for plain `runAfter`/`runAt` jobs. */
+    pool?: string;
+    /** Per-job retry policy; absent means the scheduler's built-in defaults. */
+    retry?: RetryPolicy;
     /** When the job is scheduled to fire (epoch ms). */
     scheduledFor: number;
     /** Routing hint forwarded so dispatch lands on the right shard. */
     shardKey?: string;
+
+    /**
+     * The `WORKFLOW_*`/`AGENT_*` binding name a fresh durable instance is started
+     * from on fire (the {@link ScheduledJob.args} become its `params`). Set
+     * instead of {@link ScheduledJob.functionPath}.
+     */
+    workflow?: string;
 }
 
 /**
@@ -1334,6 +1371,20 @@ interface SchedulableWorkflowReference {
     readonly name?: string;
 }
 
+/**
+ * What `ctx.scheduler.runAfter` / `runAt` accept as a target:
+ *
+ * - a generated `internal.<file>.<fn>` / `api.<file>.<fn>` reference to a
+ * mutation or action — the form the docs and the setup skills use, and the one
+ * `@lunora/scheduler` has always resolved at runtime (it reads `__lunoraRef`);
+ * - the equivalent `"file:fn"` path string;
+ * - a generated `workflows.<name>` / `agents.<name>` reference, which starts a
+ * fresh durable instance on fire.
+ *
+ * A `query` is not schedulable — a deferred job exists to have an effect.
+ */
+type SchedulableTarget = FunctionHandle<"action" | "mutation", unknown, unknown> | SchedulableWorkflowReference | string;
+
 interface Scheduler {
     /** Cancel a pending job by id. `cancelled` is `false` when no such job exists. */
     cancel: (id: string) => Promise<{ cancelled: boolean }>;
@@ -1343,14 +1394,13 @@ interface Scheduler {
     list: () => Promise<ScheduledJob[]>;
 
     /**
-     * Schedule a one-shot run `delayMs` from now. `target` is a function path
-     * (`"ns:fn"`) dispatched as a one-shot, or a generated `workflows.<name>` /
-     * `agents.<name>` reference which starts a fresh durable instance on fire
-     * (the args become its `params`).
+     * Schedule a one-shot run `delayMs` from now; see {@link SchedulableTarget}
+     * for the accepted targets. A workflow/agent reference starts a fresh
+     * durable instance on fire (the args become its `params`).
      */
-    runAfter: (delayMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
     /** Like {@link Scheduler.runAfter} but fires at an absolute epoch-ms timestamp. */
-    runAt: (timestampMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
+    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
 }
 
 // --- Durable workflows -------------------------------------------------------
@@ -1698,8 +1748,13 @@ interface StorageMetadata {
 interface StorageObjectHead {
     /** Custom metadata set at upload time, if any. */
     customMetadata?: Record<string, string>;
-    /** R2's unquoted etag (the MD5 hex for a single-part upload). */
-    etag?: string;
+
+    /**
+     * R2's unquoted etag (the MD5 hex for a single-part upload). Required: R2
+     * reports one on every object, and an HTTP layer built on `head()` (the
+     * `serveStorageObject` helper) needs it to emit a validator.
+     */
+    etag: string;
     /** The already-quoted form of {@link StorageObjectHead.etag}, when the binding reports one. */
     httpEtag?: string;
     /** Recorded HTTP metadata, notably the `Content-Type`. */
@@ -1714,6 +1769,24 @@ interface StorageObjectHead {
     size: number;
     /** When the object was last written. */
     uploaded?: Date;
+}
+
+/**
+ * Byte window forwarded to {@link ReadOnlyStorage.download} so R2 resolves the
+ * slice server-side and streams only those bytes back. Mirrors R2's own `range`
+ * option (`@lunora/platform`'s `R2RangeLike`), restated structurally so
+ * `@lunora/server` takes no dependency on the bindings package.
+ */
+type StorageRange = { length?: number; offset: number } | { length: number; offset?: number } | { suffix: number };
+
+/**
+ * A downloaded object: the same metadata {@link StorageObjectHead} carries, plus
+ * the body stream. This is what `download()` resolves to — R2's object, NOT a
+ * bare stream.
+ */
+interface StorageObjectBody extends StorageObjectHead {
+    /** The object body stream. `null` for a zero-byte object. */
+    body: ReadableStream | null;
 }
 
 /**
@@ -1737,8 +1810,27 @@ interface ReadOnlyStorage<Buckets extends string = string> {
     /** The bucket this accessor's operations target (the default for the bare `ctx.storage`). */
     readonly bucketName: string;
 
-    /** Fetch the body of an existing object. Returns `null` when absent. */
-    download: (key: string) => Promise<ReadableStream | null>;
+    /**
+     * Fetch an existing object. Returns the R2 object — metadata plus a `body`
+     * stream — or `null` when absent.
+     *
+     * NOT a bare stream: `new Response(await ctx.storage.download(key))` would
+     * stringify the object and serve the literal text `[object Object]`. Reach
+     * for the body explicitly:
+     *
+     * ```ts
+     * const object = await ctx.storage.download(key);
+     *
+     * return object ? new Response(object.body) : new Response("Not found", { status: 404 });
+     * ```
+     *
+     * (`serveStorageObject` from `@lunora/server` does this, plus range/ETag
+     * handling, for the common "serve a stored file over HTTP" case.)
+     *
+     * Pass `range` to have R2 resolve the byte window server-side, so the
+     * unwanted bytes never reach the worker.
+     */
+    download: (key: string, options?: { range?: StorageRange }) => Promise<StorageObjectBody | null>;
 
     /**
      * Read a file's metadata (size, content-type, sha256, upload time, custom
@@ -1795,6 +1887,21 @@ interface Storage<Buckets extends string = string> extends ReadOnlyStorage<Bucke
      * Convex's `storage.generateUploadUrl`.
      */
     generateUploadUrl: (key: string, options?: { contentType?: string; expiresInSeconds?: number }) => Promise<string>;
+
+    /**
+     * Mint a native S3 SigV4 URL that hits R2 **directly**, so the bytes never
+     * pass through the Worker — unlike {@link Storage.generateUploadUrl}, whose
+     * signed URL points back at this app so its storage rules still apply.
+     *
+     * Requires `s3` credentials on the `.storage({ s3 })` declaration; without
+     * them the call throws. That is the trade-off: no Worker in the path also
+     * means no rule enforcement in the path.
+     *
+     * Declared structurally rather than imported — `@lunora/server` does not
+     * depend on `@lunora/storage`, and this file mirrors that surface the same
+     * way `head` and `download` do.
+     */
+    getPresignedUrl: (key: string, options?: { expiresInSeconds?: number; method?: "GET" | "PUT" }) => Promise<string>;
 
     /**
      * Upload `body` to `key` from the server, returning the stored object's key
@@ -2034,7 +2141,26 @@ interface SpanHandle {
      * it in a bug report, to build a `traceparent` for a hand-rolled outbound
      * call, or to parent a third-party library's spans onto this request.
      */
-    spanContext: () => { spanId: string; traceId: string };
+    spanContext: () => SpanContextIds;
+}
+
+/**
+ * A span's W3C ids plus the trace's settled sampling verdict.
+ *
+ * `sampled` is the propagated head decision — absent means none reached this
+ * tier, which every consumer reads as keep. It rides with the ids because
+ * everything that announces this span downstream from them (a hand-built
+ * `traceparent`, an `@opentelemetry/api` `SpanContext`) needs the flag in the
+ * same breath: claiming SAMPLED on a trace that was sampled out leaves a
+ * collector holding the middle of a trace nobody kept.
+ */
+interface SpanContextIds {
+    /** The trace's settled W3C `sampled` verdict; absent when none was propagated. */
+    sampled?: boolean;
+    /** This span's id (16-hex). */
+    spanId: string;
+    /** The trace this span belongs to (32-hex). */
+    traceId: string;
 }
 
 /**
@@ -2120,10 +2246,41 @@ interface SpanOptions {
  * @param attributes Either a plain attribute bag to stamp on the span at start
  * (normalized like a log line's `fields`), or a {@link SpanOptions} object when
  * you need `kind` or `links`. It is read as options only when *every* key is one
- * of `attributes`/`kind`/`links`; `{ attributes: { kind: "premium" } }` is the
- * explicit form if your own attributes happen to be named that.
+ * of `attributes`/`kind`/`links` AND a `kind`, if present, actually names a
+ * {@link SpanKind}; `{ attributes: { kind: "premium" } }` is the explicit form if
+ * your own attributes happen to be named that.
+ * @param identity Adapter-only: record the span under ids the caller has ALREADY
+ * published (see {@link SpanIdentity}). A handler never passes this — it exists
+ * so the `@opentelemetry/api` bridge, which must hand a library a `SpanContext`
+ * synchronously, is recorded under the id it handed out rather than a phantom.
  */
-type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields | SpanOptions) => Promise<T>;
+type LunoraTracer = <T>(
+    name: string,
+    function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T,
+    attributes?: LogFields | SpanOptions,
+    identity?: SpanIdentity,
+) => Promise<T>;
+
+/**
+ * Caller-supplied ids for one `ctx.trace` span — the tracer's fourth argument.
+ *
+ * For adapters that must publish a span's identity BEFORE the body runs: the
+ * `@opentelemetry/api` bridge returns a `SpanContext` synchronously from
+ * `startSpan` and a library builds a `traceparent` from it, so the span has to be
+ * recorded under the id already announced or every downstream span parents to an
+ * id that never reaches the collector. `parentSpanId` lets such an adapter
+ * express its own parent/child structure without an ambient span stack.
+ *
+ * Both ids are required: an adapter that has published one has published the
+ * other, and `identity` is itself optional — omitting it, not passing a partial
+ * object, is how a caller says "no adapter involved".
+ */
+interface SpanIdentity {
+    /** Parent to this span id instead of the enclosing `ctx.trace` / dispatch span. */
+    parentSpanId: string;
+    /** Record the span under this id (16-hex) instead of a freshly minted one. */
+    spanId: string;
+}
 
 /**
  * `ctx.span` — a handle onto **this request's own span**, and with it the
@@ -2227,10 +2384,18 @@ interface QueryCtx {
     readonly env?: Record<string, unknown>;
 
     /**
-     * The caller's IP for this request — Cloudflare's trusted `CF-Connecting-IP`,
-     * forwarded server-side (never read from a client header). `undefined` when
-     * unknown: a live-subscription re-run, a server-initiated dispatch, or
-     * non-Cloudflare hosting. A convenient rate-limit key for anonymous traffic.
+     * The caller's IP for this request, or `undefined` when nothing trustworthy
+     * says who called.
+     *
+     * Populated only from Cloudflare's `CF-Connecting-IP`, forwarded server-side,
+     * and only while running ON Cloudflare — that is the one place the edge stamps
+     * the header over anything the client sent. On any other host it is a header
+     * the caller typed, so the runtime resolves nothing rather than hand a handler
+     * an attacker-chosen address; a rate limit keyed on a forgeable `ip` is worse
+     * than no limit, because it reads as enforced. `undefined` therefore covers: a
+     * live-subscription re-run, a server-initiated dispatch, and ANY non-Cloudflare
+     * host. A convenient rate-limit key for anonymous traffic on Cloudflare;
+     * elsewhere, key on something the caller cannot choose.
      */
     readonly ip?: string;
 
@@ -2241,9 +2406,10 @@ interface QueryCtx {
 
     /**
      * Static metadata declared on this procedure with `.meta(...)`, merged
-     * across calls. Present so middleware can read the policy it is meant to
-     * enforce (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each
-     * `.use()` site; absent when the procedure never called `.meta()`.
+     * across calls and deep-frozen. Present so middleware can read the policy it
+     * is meant to enforce (`ctx.meta.rateLimit`, …) instead of having it
+     * hard-wired at each `.use()` site; absent when the procedure never called
+     * `.meta()`.
      */
     readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
@@ -2292,10 +2458,9 @@ interface MutationCtx {
     readonly env?: Record<string, unknown>;
 
     /**
-     * The caller's IP for this request — Cloudflare's trusted `CF-Connecting-IP`,
-     * forwarded server-side (never read from a client header). `undefined` when
-     * unknown: a live-subscription re-run, a server-initiated dispatch, or
-     * non-Cloudflare hosting. A convenient rate-limit key for anonymous traffic.
+     * The caller's IP for this request, or `undefined` when nothing trustworthy
+     * says who called. Identical to {@link QueryCtx.ip} — see there for which
+     * host populates it and why every other one deliberately does not.
      */
     readonly ip?: string;
 
@@ -2306,9 +2471,10 @@ interface MutationCtx {
 
     /**
      * Static metadata declared on this procedure with `.meta(...)`, merged
-     * across calls. Present so middleware can read the policy it is meant to
-     * enforce (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each
-     * `.use()` site; absent when the procedure never called `.meta()`.
+     * across calls and deep-frozen. Present so middleware can read the policy it
+     * is meant to enforce (`ctx.meta.rateLimit`, …) instead of having it
+     * hard-wired at each `.use()` site; absent when the procedure never called
+     * `.meta()`.
      */
     readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
@@ -2359,9 +2525,13 @@ interface ActionCtx {
 
     /**
      * Programmatic Workers Cache purge; see {@link CachePurge}.
-     * **Action-only** — actions run in the Worker, which has a `cache` binding.
-     * Queries and mutations run inside the Durable Object and do not expose this.
-     * Optional at runtime because Workers Cache is only present when enabled.
+     *
+     * **HTTP actions only.** It is the Worker that holds the `cache` binding, and
+     * only `HttpActionCtx` is built there — an `action` reached over RPC runs
+     * inside the Durable Object like a query or a mutation, so `ctx.cache` is
+     * `undefined` for it. Declared here because `HttpActionCtx` is a `Pick` of
+     * this interface. Optional because Workers Cache is only present when
+     * enabled in `wrangler.jsonc`; always branch on it.
      */
     readonly cache?: CachePurge;
 
@@ -2379,10 +2549,9 @@ interface ActionCtx {
     readonly fetch: typeof globalThis.fetch;
 
     /**
-     * The caller's IP for this request — Cloudflare's trusted `CF-Connecting-IP`,
-     * forwarded server-side (never read from a client header). `undefined` when
-     * unknown: a live-subscription re-run, a server-initiated dispatch, or
-     * non-Cloudflare hosting. A convenient rate-limit key for anonymous traffic.
+     * The caller's IP for this request, or `undefined` when nothing trustworthy
+     * says who called. Identical to {@link QueryCtx.ip} — see there for which
+     * host populates it and why every other one deliberately does not.
      */
     readonly ip?: string;
 
@@ -2393,9 +2562,10 @@ interface ActionCtx {
 
     /**
      * Static metadata declared on this procedure with `.meta(...)`, merged
-     * across calls. Present so middleware can read the policy it is meant to
-     * enforce (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each
-     * `.use()` site; absent when the procedure never called `.meta()`.
+     * across calls and deep-frozen. Present so middleware can read the policy it
+     * is meant to enforce (`ctx.meta.rateLimit`, …) instead of having it
+     * hard-wired at each `.use()` site; absent when the procedure never called
+     * `.meta()`.
      */
     readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
@@ -2491,6 +2661,7 @@ export type {
     RegisteredStream,
     RelationDefinition,
     RestCacheConfig,
+    RetryPolicy,
     RunQueryOptions,
     ScheduledFunctionDoc,
     ScheduledJob,
@@ -2502,14 +2673,18 @@ export type {
     SecretsStoreSecretLike,
     ShardInitEvent,
     ShardMode,
+    SpanContextIds,
     SpanEvaluation,
     SpanHandle,
+    SpanIdentity,
     SpanKind,
     SpanLink,
     SpanOptions,
     Storage,
     StorageMetadata,
+    StorageObjectBody,
     StorageObjectHead,
+    StorageRange,
     SystemDatabaseReader,
     SystemDoc,
     SystemQuery,

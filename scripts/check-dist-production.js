@@ -9,6 +9,19 @@
  * dev runtime in a production build: `jsxDEV is not a function` the moment
  * `<LunoraProvider>` mounts.
  *
+ * What the markers below actually cover, stated plainly because this header
+ * once claimed more than the code did: the React dev runtime (three packages
+ * can emit it), an unfolded `process.env.NODE_ENV` and a surviving `__DEV__`
+ * guard (any package can emit either — a production bundle must carry neither,
+ * and `process.env` does not exist on Workers at all). What it does not cover
+ * is dev-only code that reads neither: no marker distinguishes that, and the
+ * gate that does is `build:packages:prod` in the release workflow.
+ *
+ * The coverage floor matters as much as the markers. Every package declaring a
+ * `build:prod` script must have a `dist/` — otherwise a partial build passed
+ * this check with a single package built, and the two artifact assertions below
+ * silently returned `true` for a `cli`/`mcp` that was never built at all.
+ *
  * This shipped for real — `@lunora/react@1.0.0-alpha.31` on npm imports
  * `react/jsx-dev-runtime`, because the release workflow ran `build:packages`
  * (→ `build`) and never `build:prod`. The workflow now runs
@@ -39,6 +52,13 @@ const DEV_MARKERS = [
     { marker: "react/jsx-dev-runtime", why: "React dev JSX runtime import — production bundlers may stub this to undefined" },
     { marker: "jsxDEV", why: "React dev JSX factory call" },
     { marker: "react/jsx-dev-runtime.js", why: "React dev JSX runtime import" },
+    // The two markers that are not React-specific, so the other 51 packages are
+    // checked for something rather than walked past.
+    {
+        marker: "process.env.NODE_ENV",
+        why: "unfolded NODE_ENV check — a production build folds these to a literal, and Workers has no `process.env` to read at runtime",
+    },
+    { marker: "__DEV__", why: "development guard left in the bundle — a production build eliminates the branch" },
 ];
 
 /** Extensions that are executed by a consumer (declarations can't crash at runtime). */
@@ -71,7 +91,17 @@ const dirExists = (path) => {
 const requested = process.argv.slice(2);
 const packageDirs = (requested.length > 0 ? requested : readdirSync(packagesDir)).filter((name) => dirExists(join(packagesDir, name)));
 
+/** Does this package declare a production build, i.e. must it have a `dist/`? */
+const buildsForProduction = (name) => {
+    try {
+        return JSON.parse(readFileSync(join(packagesDir, name, "package.json"), "utf8")).scripts?.["build:prod"] !== undefined;
+    } catch {
+        return false;
+    }
+};
+
 const violations = [];
+const unbuilt = [];
 let checkedPackages = 0;
 let checkedFiles = 0;
 
@@ -79,6 +109,14 @@ for (const name of packageDirs) {
     const distDir = join(packagesDir, name, "dist");
 
     if (!dirExists(distDir)) {
+        // Silently skipping was how a partial build passed: one package with a
+        // `dist/` satisfied the "did anything get checked?" test below while the
+        // other 53 went unexamined, and `@lunora/cli` / `@lunora/mcp` returned a
+        // clean bill of health having never been built.
+        if (buildsForProduction(name)) {
+            unbuilt.push(name);
+        }
+
         continue;
     }
 
@@ -103,6 +141,22 @@ if (checkedPackages === 0) {
     process.exit(1);
 }
 
+if (unbuilt.length > 0) {
+    console.error(`❌ ${unbuilt.length} package(s) declare \`build:prod\` but have no dist/, so this check never looked at them:`);
+    console.error("");
+
+    for (const name of unbuilt) {
+        console.error(`   packages/${name}`);
+    }
+
+    console.error("");
+    console.error("   A partial build is not something this gate can pass — build everything first:");
+    console.error("");
+    console.error("     pnpm run build:packages:prod");
+
+    process.exit(1);
+}
+
 /**
  * The built CLI must report its real version.
  *
@@ -120,8 +174,14 @@ const checkCliVersion = () => {
     const cliDir = join(packagesDir, "cli");
     const binary = join(cliDir, "dist", "bin.mjs");
 
+    // Not `return true`. An unbuilt CLI means this assertion did not run, and a
+    // check that did not run must not report a pass. Reachable only when `cli`
+    // was excluded by an explicit argument list — the coverage floor above
+    // catches a plain unbuilt tree first.
     if (!dirExists(join(cliDir, "dist"))) {
-        return true;
+        console.error("❌ packages/cli has no dist/, so the built CLI's version could not be verified.");
+
+        return false;
     }
 
     const { version } = JSON.parse(readFileSync(join(cliDir, "package.json"), "utf8"));
@@ -231,8 +291,11 @@ const chunkGraph = async (entry) => {
 const checkDocsEntryIsEdgeSafe = async () => {
     const entry = join(packagesDir, "mcp", "dist", "docs", "index.mjs");
 
+    // Same reasoning as the CLI check above: unbuilt is "not verified", not "fine".
     if (!dirExists(join(packagesDir, "mcp", "dist"))) {
-        return true;
+        console.error("❌ packages/mcp has no dist/, so the /docs entry's edge-safety could not be verified.");
+
+        return false;
     }
 
     let files;

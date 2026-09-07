@@ -1,4 +1,4 @@
-import type { ExecutionContextLike, ShardNamespaceLike } from "lunorash/runtime";
+import type { ExecutionContextLike, ScheduledControllerLike, ShardNamespaceLike } from "lunorash/runtime";
 
 import { defineApp } from "../lunora/_generated/app.js";
 
@@ -203,8 +203,20 @@ const WELCOME_HTML = `<!doctype html>
  * Wrap the composed app so `GET /` serves the branded welcome page and every
  * other request (the `/_lunora` RPC + WebSocket plane, the `/__lunora` Studio)
  * delegates to the Lunora worker unchanged.
+ *
+ * Every handler `.build()` composes is forwarded, not just `fetch`. `scheduled`,
+ * `queue` and `email` appear on the composed app the moment you add a
+ * `lunora/crons.ts`, a `defineQueue`, or `.onEmail(...)` — and `lunora deploy`
+ * provisions the matching `triggers.crons` / queue consumer from the same
+ * discovery. A hand-built entry that forwards only `fetch` therefore gets the
+ * trigger without the handler, and Cloudflare fires it into nothing: no error,
+ * no invocation, a cron that silently never runs.
  */
 export default {
+    email(message: unknown, env: Env, context: ExecutionContextLike): Promise<void> {
+        // Optional on the composed app — present only once `.onEmail(...)` is configured.
+        return app.email?.(message, env, context) ?? Promise.resolve();
+    },
     fetch(request: Request, env: Env, context: ExecutionContextLike): Promise<Response> | Response {
         const url = new URL(request.url);
 
@@ -215,5 +227,12 @@ export default {
         }
 
         return app.fetch(request, env, context);
+    },
+    queue(batch: unknown, env: Env, context: ExecutionContextLike): Promise<void> {
+        // Optional on the composed app — present only once a `defineQueue` is declared.
+        return app.queue?.(batch, env, context) ?? Promise.resolve();
+    },
+    scheduled(controller: ScheduledControllerLike, env: Env, context: ExecutionContextLike): Promise<void> {
+        return app.scheduled(controller, env, context);
     },
 };

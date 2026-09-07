@@ -1,5 +1,4 @@
 import emit from "../../finding";
-import type { AdvisorFlagSecurityDefault } from "../../flag-security-defaults";
 import type { Lint } from "../../types";
 
 /**
@@ -8,14 +7,31 @@ import type { Lint } from "../../types";
  * `true` (the protection stays on during a provider outage), so a `false`
  * default is unsafe.
  */
-const PROTECT_TOKENS = new Set(["enforce", "gate", "lockdown", "rls"]);
+const PROTECT_TOKENS = new Set(["disallow", "disallowed", "enforce", "enforced", "enforcement", "enforcing", "gate", "gated", "gating", "lockdown", "rls"]);
 
 /**
  * Security-shaped key tokens naming a *permission or bypass* the flag grants. The
  * fail-open-safe default for these is `false` (nothing is granted during a
  * provider outage), so a `true` default is unsafe.
  */
-const PERMIT_TOKENS = new Set(["allow", "bypass", "permit"]);
+const PERMIT_TOKENS = new Set(["allow", "allowed", "bypass", "bypassed", "permit", "permitted"]);
+
+/**
+ * Tokens that INVERT the key's polarity: they name turning the protection (or
+ * the permission) *off* rather than on.
+ *
+ * Without this, the whole kill-switch family is scored backwards.
+ * `ctx.flags.boolean("disableRls", true)` — RLS off for every request once the
+ * provider is unreachable — tokenizes to `["disable", "rls"]`, `rls` is a
+ * protect token, and a protect key defaulting `true` reads as safe: zero
+ * findings on the dangerous spelling, while the safe `disableRls: false` was
+ * flagged with a remediation telling the user to set it `true`.
+ *
+ * `disallow*` is deliberately NOT here: it names a restriction outright, so it
+ * scores as a protection token above (`disallowUploads: false` means uploads are
+ * allowed on an outage — unsafe, same as any protect key defaulting `false`).
+ */
+const NEGATION_TOKENS = new Set(["disable", "disabled", "no", "off", "skip", "skipped", "without"]);
 
 /**
  * Zero-width boundary between an acronym's last letter and a following
@@ -46,23 +62,74 @@ const tokenize = (key: string): string[] =>
         .filter((token) => token.length > 0);
 
 /**
- * Whether a security-shaped flag's boolean default selects the permissive branch
- * on a provider outage. A key with a *protection* token (`enforce`/`rls`/`gate`/
- * `lockdown`) is unsafe defaulting `false`; one with a *permission* token
- * (`allow`/`permit`/`bypass`) is unsafe defaulting `true`. A key with neither
- * family (e.g. a bare `auth`/`admin`, whose polarity is indeterminate) or with
- * both is deliberately not flagged — the lowest-false-positive subset.
+ * How many {@link NEGATION_TOKENS} negate the WHOLE key, counted as a run inward
+ * from each end.
+ *
+ * A negation only inverts the flag when it applies to the name entire —
+ * `disableRls`, `rlsDisabled`, `skipEnforcement`. In the middle it qualifies the
+ * noun beside it instead: `allowWithoutAuth` still GRANTS something (access
+ * without auth), so its safe default is a permission's `false`, not `true`.
+ * Counting every position flipped that key and had the rule suppress a genuinely
+ * unsafe `true` default while recommending the wrong value — the failure this
+ * rule exists to catch, produced by the rule itself.
+ *
+ * Runs rather than just the two end slots, so the double negation the parity
+ * count exists for still lands back on the un-negated polarity: `disableSkipRls`
+ * has a leading run of two.
+ * @param tokens The key's tokens, in order.
+ * @returns The number of negations that apply to the whole key.
  */
-const hasUnsafeDefault = (row: AdvisorFlagSecurityDefault): boolean => {
-    const tokens = tokenize(row.key);
+const negationsAtEdges = (tokens: ReadonlyArray<string>): number => {
+    let leading = 0;
+
+    while (leading < tokens.length && NEGATION_TOKENS.has(tokens[leading] as string)) {
+        leading += 1;
+    }
+
+    if (leading === tokens.length) {
+        return leading;
+    }
+
+    let trailing = 0;
+
+    while (trailing < tokens.length - leading && NEGATION_TOKENS.has(tokens[tokens.length - 1 - trailing] as string)) {
+        trailing += 1;
+    }
+
+    return leading + trailing;
+};
+
+/**
+ * What a security-shaped key guards, and the boolean default that fails CLOSED
+ * for it — or `undefined` when the key's polarity is indeterminate.
+ *
+ * A key with a *protection* token (`enforce`/`rls`/`gate`/`lockdown`/`disallow`)
+ * must default `true`; one with a *permission* token (`allow`/`permit`/`bypass`)
+ * must default `false`. A {@link NEGATION_TOKENS} token flips that when it negates
+ * the whole key — see {@link negationsAtEdges} — so
+ * `disableRls`/`rlsDisabled`/`skipEnforcement` must default `false`, counted by
+ * parity so a double negation (`disableSkipRls`) lands back on the un-negated
+ * polarity, while a mid-name qualifier (`allowWithoutAuth`) flips nothing.
+ *
+ * `protects` is reported ALONGSIDE `safeDefault` rather than derived from it,
+ * because negation decouples the two: `enforceRls` and `disableRls` both guard a
+ * protection but have opposite safe defaults. Reading "grants a permission" off
+ * the unsafe VALUE (`true` ⇒ permission) is what gets a negated key's finding
+ * detail backwards — `disableRls: true` disables RLS, it grants nothing.
+ *
+ * A key with neither family (a bare `auth`/`admin`) or with both is deliberately
+ * indeterminate and never flagged — the lowest-false-positive subset.
+ */
+const polarityOf = (key: string): { protects: boolean; safeDefault: boolean } | undefined => {
+    const tokens = tokenize(key);
     const isProtect = tokens.some((token) => PROTECT_TOKENS.has(token));
     const isPermit = tokens.some((token) => PERMIT_TOKENS.has(token));
 
     if (isProtect === isPermit) {
-        return false;
+        return undefined;
     }
 
-    return isProtect ? !row.defaultValue : row.defaultValue;
+    return { protects: isProtect, safeDefault: negationsAtEdges(tokens) % 2 === 1 ? !isProtect : isProtect };
 };
 
 /**
@@ -74,7 +141,9 @@ const hasUnsafeDefault = (row: AdvisorFlagSecurityDefault): boolean => {
  * a protection (`enforce*`/`rls*`/`gate*`/`lockdown*`) and defaults `false`, or
  * names a permission/bypass (`allow*`/`permit*`/`bypass*`) and defaults `true`,
  * a flag-backend outage silently disables the protection or grants the
- * permission for every request.
+ * permission for every request. A negating token in the key
+ * (`disable*`/`*Disabled`/`skip*`/`no*`) inverts that — see
+ * {@link polarityOf}.
  *
  * Runs only when the codegen feeder supplies flag-default evidence
  * (`context.flagSecurityDefaults`); a runtime caller flags nothing. Deliberately
@@ -86,26 +155,37 @@ const hasUnsafeDefault = (row: AdvisorFlagSecurityDefault): boolean => {
 const flagGatesSecurityWithUnsafeDefault: Lint = {
     categories: ["SECURITY"],
     description:
-        "A `ctx.flags.boolean(key, default)` read on a security-shaped key has a fail-open default that selects the permissive branch. OpenFeature returns the default when the provider errors, so an outage silently disables a protection (a `false` default on an `enforce`/`rls`/`gate`/`lockdown` key) or grants a permission (a `true` default on an `allow`/`permit`/`bypass` key).",
+        "A `ctx.flags.boolean(key, default)` read on a security-shaped key has a fail-open default that selects the permissive branch. OpenFeature returns the default when the provider errors, so an outage silently disables a protection (a `false` default on an `enforce`/`rls`/`gate`/`lockdown` key) or grants a permission (a `true` default on an `allow`/`permit`/`bypass` key). A negating token in the key (`disableRls`, `rlsDisabled`, `skipEnforcement`) inverts which default is the safe one.",
     facing: "EXTERNAL",
     level: "WARN",
     name: "flag_gates_security_with_unsafe_default",
     remediation:
-        "Flip the default so a provider outage fails closed: default a protection flag (`enforce*`/`rls*`/`gate*`/`lockdown*`) to `true`, and a permission/bypass flag (`allow*`/`permit*`/`bypass*`) to `false`. The safe default is always the restrictive branch — never let an unreachable flag backend open access.",
+        "Flip the default so a provider outage fails closed — the finding's own detail names the value to write. The safe default is always the RESTRICTIVE branch, which is not a fixed value: a protection flag (`enforce*`/`rls*`/`gate*`/`lockdown*`/`disallow*`) defaults `true` and a permission/bypass flag (`allow*`/`permit*`/`bypass*`) defaults `false`, but a negated key (`disableRls`, `rlsDisabled`, `skipEnforcement`) inverts both. Never let an unreachable flag backend open access.",
     run: (context) => {
         if (context.flagSecurityDefaults === undefined) {
             return [];
         }
 
-        return context.flagSecurityDefaults
-            .filter((row) => hasUnsafeDefault(row))
-            .map((row) =>
+        return context.flagSecurityDefaults.flatMap((row) => {
+            const polarity = polarityOf(row.key);
+
+            if (polarity === undefined || polarity.safeDefault === row.defaultValue) {
+                return [];
+            }
+
+            // Which harm the outage causes follows the key's FAMILY, not the
+            // default's value: a protection key is disabled, a permission key is
+            // granted, whether or not the key is negated.
+            const harm = polarity.protects ? "disabling the guarded protection" : "granting the guarded permission";
+
+            return [
                 emit(flagGatesSecurityWithUnsafeDefault, {
                     cacheKey: `flag_gates_security_with_unsafe_default:${row.file}:${row.line.toString()}`,
-                    detail: `\`ctx.flags.boolean("${row.key}", ${String(row.defaultValue)})\` in \`${row.exportName}\` (${row.file}:${row.line.toString()}) fails open to the permissive branch — a provider outage returns \`${String(row.defaultValue)}\`, ${row.defaultValue ? "granting the guarded permission" : "disabling the guarded protection"}.`,
+                    detail: `\`ctx.flags.boolean("${row.key}", ${String(row.defaultValue)})\` in \`${row.exportName}\` (${row.file}:${row.line.toString()}) fails open to the permissive branch — a provider outage returns \`${String(row.defaultValue)}\`, ${harm}. Fail closed: default it to \`${String(polarity.safeDefault)}\`.`,
                     metadata: { defaultValue: row.defaultValue, exportName: row.exportName, file: row.file, key: row.key, line: row.line },
                 }),
-            );
+            ];
+        });
     },
     source: "static",
     title: "Security flag fails open to the permissive branch",

@@ -1,3 +1,4 @@
+import { narrowSafeIntegers } from "./int64";
 import type { SqliteAdapter } from "./types";
 
 /**
@@ -14,7 +15,8 @@ export const createSqlJsAdapter = (database: {
     close: () => void;
     // sql.js `exec` also accepts bound `params` (same as `run`); type it so
     // the query path can forward them instead of running placeholders unbound.
-    exec: (sql: string, params?: unknown[]) => { columns: string[]; values: unknown[][] }[];
+    // The third argument is the per-call config that carries `useBigInt`.
+    exec: (sql: string, params?: unknown[], config?: { useBigInt?: boolean }) => { columns: string[]; values: unknown[][] }[];
     run: (sql: string, params?: unknown[]) => void;
 }): SqliteAdapter => {
     return {
@@ -31,7 +33,11 @@ export const createSqlJsAdapter = (database: {
         query<T = Record<string, unknown>>(sql: string, params?: ReadonlyArray<unknown>): T[] {
             // Forward bound params so placeholder queries (e.g. LocalMirror's
             // `#ensureTableSchema` existence check) don't run unbound.
-            const result = params && params.length > 0 ? database.exec(sql, [...params]) : database.exec(sql);
+            //
+            // `useBigInt` decodes INTEGER columns as `bigint` rather than
+            // through a double — see `./int64`. `narrowSafeIntegers` puts an
+            // ordinary integer back to a `number`, so only a real int64 stays wide.
+            const result = database.exec(sql, params && params.length > 0 ? [...params] : undefined, { useBigInt: true });
             const first = result[0];
 
             if (!first) {
@@ -39,17 +45,17 @@ export const createSqlJsAdapter = (database: {
             }
 
             const colNames = first.columns;
-            const rows: T[] = [];
+            const rows: Record<string, unknown>[] = [];
 
             for (const row of first.values) {
                 const object: Record<string, unknown> = {};
                 for (const [i, column] of colNames.entries()) {
                     object[column] = row[i];
                 }
-                rows.push(object as T);
+                rows.push(object);
             }
 
-            return rows;
+            return narrowSafeIntegers<T>(rows);
         },
 
         transaction(function_: () => void): void {
@@ -61,19 +67,6 @@ export const createSqlJsAdapter = (database: {
                 database.run("ROLLBACK");
                 throw error;
             }
-        },
-
-        lastInsertRowId(): number {
-            const result = database.exec("SELECT last_insert_rowid() AS id");
-            const firstRow = result[0];
-            if (result.length === 0 || !firstRow || firstRow.values.length === 0) {
-                return -1;
-            }
-            const value = firstRow.values[0];
-            if (!value || value.length === 0) {
-                return -1;
-            }
-            return Number(value[0]);
         },
 
         close(): void {

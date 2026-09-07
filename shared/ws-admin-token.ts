@@ -139,5 +139,30 @@ const verifyWsAdminToken = async (secret: string, token: string, now: number = D
     return verifyCanonical(secret, `${version}.${expString}`, signatureBytes);
 };
 
+/**
+ * Canonical string the socket binding is signed over. A constant: the binding
+ * identifies the master token, not the socket, so every socket authorized under
+ * one token derives the same value.
+ */
+const ADMIN_SOCKET_BINDING_CANONICAL = `${WS_ADMIN_TOKEN_VERSION}.admin-socket-binding`;
+
+/**
+ * Fingerprint of the master admin token, stamped on an admin socket's
+ * hibernation attachment at upgrade and re-derived from `env` on every later
+ * admin read.
+ *
+ * The token itself authorizes ONCE, at the upgrade; the socket then lives for
+ * hours. Rotating or clearing `LUNORA_ADMIN_TOKEN` closes the HTTP admin plane
+ * on the next request, and without this it closed nothing on the socket plane —
+ * a 60-second sub-token bought 60 seconds to OPEN a socket that then served
+ * `runSql` output for the rest of its life. Comparing the stamped fingerprint
+ * against the current one makes rotation a revocation there too.
+ *
+ * An HMAC rather than the token: the value rides a hibernation attachment that
+ * admin introspection can summarise, and a fingerprint that leaks tells an
+ * attacker nothing it can present.
+ */
+const adminSocketBinding = async (secret: string): Promise<string> => signCanonical(secret, ADMIN_SOCKET_BINDING_CANONICAL);
+
 export type { MintedWsAdminToken };
-export { isEnvFlagEnabled, mintWsAdminToken, verifyWsAdminToken, WS_ADMIN_TOKEN_TTL_MS, WS_ADMIN_TOKEN_VERSION };
+export { adminSocketBinding, isEnvFlagEnabled, mintWsAdminToken, verifyWsAdminToken, WS_ADMIN_TOKEN_TTL_MS, WS_ADMIN_TOKEN_VERSION };

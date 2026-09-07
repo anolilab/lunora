@@ -108,6 +108,11 @@ const clampCount = (count: number | undefined): number => {
  * Handle a generate-rows request: statically lift the schema, generate `count`
  * rows for `table` (linking foreign keys to the supplied existing ids rather
  * than fabricating parents), and return them JSON-safe for the client to insert.
+ *
+ * Only the requested table's rows are ever returned, so a foreign key with no
+ * `existingIds` to resolve against is answered with `409
+ * fk-parents-empty` naming the parent tables — the endpoint refuses
+ * rather than hand back children whose parents it just dropped.
  */
 const handleSeedRequest = (request: SeedRequest): SeedResponse => {
     if (request.method !== "POST") {
@@ -150,6 +155,22 @@ const handleSeedRequest = (request: SeedRequest): SeedResponse => {
         only: [table],
         seed: seed ?? 0,
     });
+
+    // `existingIds` covers a parent only when it supplies at least one id; where it
+    // does not, `seedPlan` FABRICATES that parent's rows and points the children at
+    // them. Those extra table plans are dropped one line down, so the returned
+    // children would carry `_id`s of parents that never reach `writeRow` — dangling
+    // foreign keys the caller inserts. Refuse instead, which is what this endpoint's
+    // own doc comment claims and what only the studio client enforced.
+    //
+    // `fk-parents-empty` is the code the studio client (and its tests) already
+    // decode into "no rows to reference in X — seed those tables first"; nothing
+    // ever emitted it, so that branch had never run against a real reply.
+    const fabricated = plan.filter((entry) => entry.table !== table).map((entry) => entry.table);
+
+    if (fabricated.length > 0) {
+        return { body: { error: "fk-parents-empty", ok: false, tables: fabricated }, status: 409 };
+    }
 
     const rows = plan.find((entry) => entry.table === table)?.rows ?? [];
     // Round-trip through the replacer so bigint/ArrayBuffer cells survive the

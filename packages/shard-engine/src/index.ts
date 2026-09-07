@@ -18,15 +18,7 @@ export type {
     ImportShardArgs,
     ImportShardResult,
 } from "./admin-export-import";
-export {
-    exportShardRows,
-    exportShardTable,
-    importShardRows,
-    parseExportShardArgs,
-    parseImportShardArgs,
-    selectExportTables,
-    validateImportRow,
-} from "./admin-export-import";
+export { exportShardRows, importShardRows, parseExportShardArgs, parseImportShardArgs, selectExportTables, validateImportRow } from "./admin-export-import";
 export { AGGREGATE_SQL_FUNCTION, aggregateSqlFunction, matchesStaticWhere, normalizeCountArgument, throwingScheduler } from "./aggregate-sql";
 export type { AggregateTally } from "./aggregate-tally";
 export { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "./aggregate-tally";
@@ -52,6 +44,7 @@ export type {
 } from "./ctx-db";
 export {
     applyCdcChanges,
+    assertNoExplicitUndefined,
     assertValidClientId,
     backfillAggregateIndexes,
     backfillRankIndexes,
@@ -84,6 +77,8 @@ export {
     readCdcCursor,
     readCdcEpoch,
 } from "./ctx-db-cdc";
+export type { CdcArchiveScope } from "./ctx-db-cdc-archive";
+export { archiveCdcSegment, readArchivedCdcChanges, readCdcArchivedThrough, writeCdcArchivedThrough } from "./ctx-db-cdc-archive";
 export { advanceClientWatermark, CLIENT_WATERMARK_TABLE, migrateClientWatermark, readClientWatermark } from "./ctx-db-client-watermark";
 export { allocateCommitSeq, COMMIT_SEQ_FIELD, COMMIT_SEQ_TABLE, migrateCommitSeq, readCommitSeq } from "./ctx-db-commit-seq";
 export type { CompanionSync, CompanionSyncDeps } from "./ctx-db-companions";
@@ -100,7 +95,7 @@ export type { IdempotentRecord } from "./ctx-db-idempotency";
 export { IDEMPOTENCY_TABLE, migrateIdempotency, readIdempotent, trimIdempotent, writeIdempotent } from "./ctx-db-idempotency";
 export { clearMemoryTables, isMemoryTable, memoryTableNames } from "./ctx-db-memory";
 export type { RankPageComputation, RankPageDeps } from "./ctx-db-rank-page";
-export { computeRankPage, hydrateDocsById } from "./ctx-db-rank-page";
+export { computeRankPage, resolveRankSeekTuple } from "./ctx-db-rank-page";
 export { migrateSearchState, readSearchBackfillState, SEARCH_STATE_TABLE, writeSearchBackfillState } from "./ctx-db-search-state";
 export type { ShapePokeCursorRow } from "./ctx-db-shape-poke-cursor";
 export {
@@ -269,9 +264,12 @@ export {
     CURSOR_PREFIX,
     decodeCursor,
     encodeCursor,
+    equalityPinnedFields,
     normalizeOrderKeys,
+    type OrderKeyConstraints,
     softDeleteScope,
     tiebreakDirectionFor,
+    uniqueIndexFields,
 } from "./query-args";
 // Consumed by `@lunora/do` internals rather than by end users: these were
 // module-private inside `@lunora/do` before the relocation, and are published
@@ -279,7 +277,16 @@ export {
 // part of `@lunora/do`'s frozen surface and it does not re-export them.
 export type { QueueMessageOutcome, QueueMessageRow, RecordQueueMessageInput } from "./queue-catcher";
 export { clearQueueMessages, isLossyBody, QUEUE_TABLE, readQueueMessageById, readQueueMessages, recordQueueMessages } from "./queue-catcher";
-export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankKeyFromDoc, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
+export {
+    encodePartitionKey,
+    matchesRankStaticWhere,
+    RANK_TIEBREAK,
+    rankKeyFromDoc,
+    rankPivotConditionSql,
+    rankTableName,
+    resolveRankPartition,
+    sortColumnName,
+} from "./rank";
 export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
 export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from "./reactive-cache";
 export type { ReactorDispatchResult, ReactorState, ReactorStats } from "./reactor-state";
@@ -308,9 +315,10 @@ export type {
     RelayShapePoke,
     RelayShapeSeed,
     RelayShapeSubscribe,
+    RelayShapeUnsubscribe,
 } from "./relay";
 export { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor, shapeRoutingKey } from "./relay";
-export type { RelayHost } from "./relay-hub";
+export type { RelayHost, RelayPokeDelivery } from "./relay-hub";
 export { createRelayLink, DEFAULT_MAX_RELAYS, OwnerRelay, RelayMember } from "./relay-hub";
 export type { ReplicaFollowerHost, ReplicaOwnerHost, ReplicaReadiness, ShardSiblingHost } from "./replica";
 export { createReplicaLink, gateReplicaDispatch, handleReplicaControl } from "./replica";
@@ -334,6 +342,7 @@ export type {
     ColumnMetaLike,
     CrossShardReadArgs,
     DatabaseWriterLike,
+    FanOutBudget,
     GeoFilterBuilderLike,
     GeoIndexDefinitionLike,
     GeoScoredDocument,
@@ -398,6 +407,10 @@ export type { SqlConsoleResult } from "./sql-console";
 export type { SqlLintResult } from "./sql-console";
 export { assertReadonly, MAX_SQL_ROWS, runReadonlySql } from "./sql-console";
 export { lintReadonlySql } from "./sql-console";
+// The canonical order-preserving bigint codec. `@lunora/sql-store` builds and
+// reverses the same key for the `.global()` plane and the two are compared by a
+// parity test, so there must be exactly one encoder and one decoder.
+export { BIGINT_KEY_DIGITS, bigintSqlKey, decodeBigintSqlKey } from "./sql-projection";
 export { awaitWsDrain, subscriptionFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 export type { ChangedKeys, SubscriptionReadFootprint } from "./subscription-range-gate";
 export { mergeChangedKeys, recordChangedKeys, writeTouchesMemo } from "./subscription-range-gate";

@@ -28,6 +28,11 @@ separate API service, no platform sign-up.
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }],
     "d1_databases": [{ "binding": "DB", "database_name": "my-lunora-app", "database_id": "<from-wrangler-d1-create>" }],
     "r2_buckets": [{ "binding": "FILES", "bucket_name": "my-lunora-files" }],
+    // Required whenever a SchedulerDO is declared. The DO reads its dispatch
+    // target from this binding on its own env — never off the schedule request,
+    // which would let a caller steer the callback — and refuses to enqueue
+    // without it, failing every ctx.scheduler.runAfter/runAt.
+    "vars": { "LUNORA_ORIGIN_URL": "https://my-lunora-app.example.workers.dev" },
 }
 ```
 
@@ -106,8 +111,9 @@ target worker's secrets first:
 
 The check is best-effort: a brand-new worker (nothing deployed yet) or an
 unauthenticated wrangler can't be queried, so the deploy proceeds. Lunora never
-logs secret values; the `wrangler-validator` plugin warns if a binding marked
-`secret: true` in your schema is missing.
+logs secret values. Nothing else covers this: the `wrangler-validator` has no
+notion of a "required secret" and emits no missing-secret warning, so on a first
+deploy this gate is the only net, and it is the one that skips.
 
 See Cloudflare's [Secrets](https://developers.cloudflare.com/workers/configuration/secrets/)
 and [Environments](https://developers.cloudflare.com/workers/wrangler/environments/) docs for the underlying model.
@@ -139,14 +145,33 @@ pnpm lunora deploy
 
 This runs:
 
-1. `lunora codegen` (no-op if up-to-date)
-2. D1 migration runner against the bound database
+1. `lunora codegen` (no-op if up-to-date), its `postcodegen` hook, and the
+   platform-portability diagnostics
+2. the schema-drift gate, then binding provisioning into `wrangler.jsonc` and
+   `wrangler.jsonc` validation
 3. a Docker preflight when Dockerfile-backed containers are declared
 4. `wrangler deploy` against the resolved Worker (building/pushing container images)
 
-CI should run `lunora verify` (or `lunora prepare`) first so codegen drift and a
-stale `_generated/` are a build failure, not a deploy that silently uses old
-types.
+No step applies the SQL that `lunora migrate generate` emits — see
+[Migrations](/docs/concepts/migrations). Data migrations run **after** the
+deploy, and only under `--migrate` (which also requires `--migrate-yes` and, on
+an unlinked checkout, `--migrate-url`).
+
+CI should run one of these before the deploy job, so codegen drift and a stale
+`_generated/` are a build failure rather than a deploy that silently ships old
+types:
+
+- **`lunora prepare`** shares the deploy's gate pipeline — codegen, the
+  `postcodegen` hook, the schema-drift gate, binding provisioning, the D1
+  placeholder and container/Docker preflights, and `wrangler.jsonc` validation —
+  so what it accepts is what `deploy` accepts. It writes (`_generated/`,
+  `wrangler.jsonc`), so reach for it when you want the reconciled config too.
+
+    It does **not** run migrations (step 2) or build and push images (step 4).
+    Migrations are a deploy-time action against a live database, not a check.
+
+- **`lunora verify`** writes nothing and adds `tsc --noEmit`, so it is the
+  lighter gate for a pull-request check.
 
 ## Worker size
 

@@ -1,4 +1,5 @@
 import type { ExecutionContextLike } from "../../../shared/execution-context";
+import { readIdentityGroups, rolesForGroups } from "./identity-groups";
 import readPlatformIdentity from "./platform-identity";
 import type { AccessClaims, CreateAccessResolverOptions, ResolvedAccessIdentity, ResolvedIdentityLike, ResolveIdentityFunction } from "./types";
 import { assertJwtFallbackOptions, verifyRequest } from "./verify";
@@ -39,16 +40,26 @@ const deriveUserId = (claims: AccessClaims): string | undefined => nonEmpty(clai
 
 /**
  * Build the resolved identity from verified claims. Promotes the common Access
- * fields to named keys and carries the full claim set under `access`. `exp`
- * (epoch seconds) is forwarded so the runtime can expire WebSocket sockets.
+ * fields to named keys, mints the mapped RLS `roles` claim, and carries the full
+ * claim set under `access`. `exp` (epoch seconds) is forwarded so the runtime can
+ * expire WebSocket sockets.
+ *
+ * `roles` is minted HERE, on the identity, rather than by a procedure middleware
+ * lifting `groups` into `ctx.auth.roles`: a live shape runs no procedure, so no
+ * middleware fires and a middleware-derived role set is simply absent there. RLS
+ * reads the identity's `roles` claim on both paths, so minting it at the resolver
+ * is what makes a role-gated policy resolve the same way for a query and for the
+ * subscription mirroring it. `mapClaims` merges over it and can replace it.
  */
-const toIdentity = (claims: AccessClaims, mapClaims?: CreateAccessResolverOptions["mapClaims"]): ResolvedAccessIdentity | null => {
-    const overrides = mapClaims?.(claims) ?? {};
+const toIdentity = (claims: AccessClaims, options?: CreateAccessResolverOptions): ResolvedAccessIdentity | null => {
+    const overrides = options?.mapClaims?.(claims) ?? {};
     const userId = nonEmpty(overrides.userId) ?? deriveUserId(claims);
 
     if (userId === undefined) {
         return ANONYMOUS;
     }
+
+    const roles = rolesForGroups(readIdentityGroups(claims), options?.roles);
 
     return {
         access: claims,
@@ -56,6 +67,7 @@ const toIdentity = (claims: AccessClaims, mapClaims?: CreateAccessResolverOption
         ...(claims.email === undefined ? {} : { email: claims.email }),
         ...(claims.exp === undefined ? {} : { exp: claims.exp }),
         ...(claims.groups === undefined ? {} : { groups: claims.groups }),
+        ...(roles === undefined ? {} : { roles }),
         ...overrides,
         userId,
     };
@@ -111,11 +123,25 @@ export const createAccessResolver = (options?: CreateAccessResolverOptions): Res
     return async (request: Request, _env?: unknown, context?: ExecutionContextLike): Promise<ResolvedAccessIdentity | null> => {
         // Platform identity wins when present: it is the stronger of the two
         // (authenticated by the edge, unforgeable, nothing to re-verify), and on a
-        // Worker-scoped Access deployment it is the only one that exists. Both
-        // paths fail closed to `undefined`.
-        const claims = (await readPlatformIdentity(context)) ?? (jwtOptions === undefined ? undefined : await verifyRequest(request, jwtOptions));
+        // Worker-scoped Access deployment it is the only one that exists.
+        const platform = await readPlatformIdentity(context);
+        const platformIdentity = platform === undefined ? ANONYMOUS : toIdentity(platform, options);
 
-        return claims === undefined ? ANONYMOUS : toIdentity(claims, options?.mapClaims);
+        if (platformIdentity !== ANONYMOUS) {
+            return platformIdentity;
+        }
+
+        // It only wins when it actually YIELDS an identity. `readPlatformIdentity`
+        // returns an object for any non-null object the platform hands back — `{}`
+        // included — so falling through on nullish alone would let an identity
+        // carrying none of `sub` / `email` / `common_name` suppress the configured
+        // JWT fallback entirely: the `Cf-Access-Jwt-Assertion` is never read, the
+        // caller resolves anonymous, RLS denies, and `onError` never fires because
+        // no verification was attempted. Fail closed to anonymous, but only after
+        // both paths have had their turn.
+        const claims = jwtOptions === undefined ? undefined : await verifyRequest(request, jwtOptions);
+
+        return claims === undefined ? ANONYMOUS : toIdentity(claims, options);
     };
 };
 

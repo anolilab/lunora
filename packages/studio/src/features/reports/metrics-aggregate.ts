@@ -52,7 +52,10 @@ export const aggregateMetrics = (results: ReadonlyArray<ShardMetricsResult>): Ag
         totalErrors += metrics.errors;
         totalDatabaseSize += metrics.databaseSize ?? 0;
 
-        if (metrics.cache !== null) {
+        // Truthy, not `!== null`: a shard that sends no `cache` key at all reads
+        // as `undefined`, and `undefined !== null` took the present branch and
+        // threw — killing the whole rollup over one bad shard, mid-render.
+        if (metrics.cache) {
             cacheHits += metrics.cache.hits;
             cacheTotal += metrics.cache.hits + metrics.cache.misses;
         }

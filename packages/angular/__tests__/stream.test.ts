@@ -35,6 +35,21 @@ describe(stream, () => {
         destroy.destroy();
     });
 
+    it("forwards `durable` to the client so a reconnect resumes the run", () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+
+        stream(makeStreamRef(TICK_REF), { since: 0 }, { client: fake.asClient, destroyRef: destroy.asDestroyRef, durable: true });
+
+        // `{ durable: true }` is what makes a dropped socket resume the same run
+        // instead of failing with `STREAM_DISCONNECTED`. The client reads it off the
+        // stream options, so a primitive that does not forward it silently gives the
+        // caller a non-durable stream — which only shows up on a reconnect.
+        expect(fake.streamCalls[0]?.options?.durable).toBe(true);
+
+        destroy.destroy();
+    });
+
     it('"skip" keeps the primitive mounted without opening a stream', () => {
         const fake = createFakeClient();
         const destroy = createFakeDestroyRef();

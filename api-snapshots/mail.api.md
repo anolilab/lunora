@@ -263,13 +263,22 @@ interface InboundAttachment {
 }
 ```
 
+### `InboundAuthResult` (interface)
+
+```ts
+interface InboundAuthResult {
+    domain: string | null;
+    result: string;
+}
+```
+
 ### `InboundAuthentication` (interface)
 
 ```ts
 interface InboundAuthentication {
-    dkim: string | null;
-    dmarc: string | null;
-    spf: string | null;
+    dkim: InboundAuthResult[];
+    dmarc: InboundAuthResult[];
+    spf: InboundAuthResult[];
 }
 ```
 
@@ -320,6 +329,7 @@ interface InboundEmailHandlerOptions<TEnv = Record<string, unknown>> {
     dispatch: InboundDispatch<TEnv>;
     onError?: (error: unknown, context: InboundDispatchContext<TEnv>) => Promise<void> | void;
     parse: (raw: RawInboundEmail) => Promise<InboundEmail>;
+    retain?: InboundRetain<TEnv>;
     verify?: InboundVerify<TEnv>;
 }
 ```
@@ -370,6 +380,12 @@ interface ShardStubLike {
         status?: number;
     }>;
 }
+```
+
+### `authenticatesFrom` (const)
+
+```ts
+const authenticatesFrom: (email: InboundEmail) => boolean;
 ```
 
 ### `createInboundEmailHandler` (const)

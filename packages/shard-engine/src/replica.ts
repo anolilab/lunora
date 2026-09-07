@@ -42,6 +42,7 @@
 
 import type { RegionHint } from "../../../shared/region-hint";
 import { parseMinSeq, parseReplicaName } from "../../../shared/replica-name";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ExportRow } from "./admin-export-import";
 import type { SqlExec } from "./ctx-db";
 import type { CdcChange } from "./ctx-db-cdc";
@@ -137,6 +138,15 @@ interface ShardSiblingHost {
     env: () => unknown;
     /** The env binding name holding the shard namespace, so a DO can address a sibling. */
     shardBinding: () => string | undefined;
+
+    /**
+     * The Cloudflare data-residency jurisdiction this DO itself lives in
+     * (`ctx.id.jurisdiction`), or `undefined` when unpinned. A sibling must be
+     * resolved through the SAME jurisdiction subnamespace — the worker pins the
+     * namespace it routes through but stamps the RAW env key as the binding
+     * name, and a pinned subnamespace maps a name to a different DO id.
+     */
+    shardJurisdiction: () => string | undefined;
     /** This DO's SQLite handle. */
     sql: () => SqlExec;
 }
@@ -292,19 +302,43 @@ const replicaControlRefusal = (host: ReplicaOwnerHost): Response | undefined => 
     return undefined;
 };
 
-/**
+/*
  * Serve the owner half of the `/_lunora/replica` control channel: authenticate
  * the frame, then answer a pull or a bootstrap. Stateless — an owner keeps no
  * per-replica bookkeeping, because a replica's position lives with the replica
  * and the changelog it reads is the one the shard already keeps.
+ *
+ * A section band for what follows, not a docblock: `replicaResponse` sits at the
+ * top of the section and documents itself.
  */
+
+/**
+ * The outbound bracket for every control-channel body, matched by the
+ * {@link decodeWire} in {@link ShardReplica.pull} / {@link ShardReplica.bootstrap}.
+ *
+ * The documents in these frames came back out of `decodeDocJson`, so a
+ * `v.bigint()` column is a REAL `bigint` here and `v.bytes()` a REAL
+ * `ArrayBuffer`. Uncoded, the first throws `TypeError: Do not know how to
+ * serialize a BigInt` inside `Response.json` — which is precisely the failure
+ * {@link servePull}'s docblock describes: a thrown response reaches the follower
+ * as a bare non-2xx, its pull path reads that as "owner unreachable", and it
+ * retries the identical doomed round trip for the life of the DO without ever
+ * latching `divergent`. The second flattens to `{}`, which the follower then
+ * writes into its copy of the shard.
+ *
+ * The same bracket `shard-do.ts`'s `adminResponse` puts around the admin plane,
+ * and identical in effect: both codecs are the identity on a pure-JSON body, so
+ * the frames carrying no document keep their bytes.
+ */
+const replicaResponse = (body: ReplicaBootstrapResult | ReplicaPullResult): Response => Response.json(encodeWire(body));
+
 /** Serve a `replica_bootstrap`: the whole shard, or a `truncated` refusal when it is too large for one response. */
 const serveBootstrap = async (host: ReplicaOwnerHost, epoch: string): Promise<Response> => {
     // Refuse BEFORE building the snapshot: the cap is the owner's memory budget,
     // and a shard past it would exhaust that budget producing rows nobody is
     // allowed to receive.
     if (host.rowCount() > maxBootstrapRows(host.env())) {
-        return Response.json({ cursor: 0, epoch, rows: [], truncated: true } satisfies ReplicaBootstrapResult);
+        return replicaResponse({ cursor: 0, epoch, rows: [], truncated: true });
     }
 
     // Read the cursor BEFORE the snapshot: a write that lands mid-export may or
@@ -314,7 +348,7 @@ const serveBootstrap = async (host: ReplicaOwnerHost, epoch: string): Promise<Re
     const cursor = host.ownerCursor() ?? 0;
     const rows = await host.exportRows();
 
-    return Response.json({ cursor, epoch, rows } satisfies ReplicaBootstrapResult);
+    return replicaResponse({ cursor, epoch, rows });
 };
 
 /**
@@ -334,12 +368,12 @@ const servePull = (host: ReplicaOwnerHost, epoch: string, sinceSeq: number): Res
     const floor = host.ownerFloor();
 
     if (cursorBelowRetainedFloor(floor, sinceSeq)) {
-        return Response.json({ changes: [], cursor: host.ownerCursor() ?? sinceSeq, epoch, floor } satisfies ReplicaPullResult);
+        return replicaResponse({ changes: [], cursor: host.ownerCursor() ?? sinceSeq, epoch, floor });
     }
 
     const { changes, cursor } = host.readChanges(sinceSeq, PULL_PAGE_SIZE);
 
-    return Response.json({ changes, cursor, epoch, ...(floor === undefined ? {} : { floor }) } satisfies ReplicaPullResult);
+    return replicaResponse({ changes, cursor, epoch, ...(floor === undefined ? {} : { floor }) });
 };
 
 const handleReplicaControl = async (host: ReplicaOwnerHost, request: Request): Promise<Response> => {
@@ -591,7 +625,7 @@ class ShardReplica {
             return undefined;
         }
 
-        const result = (await response.json()) as ReplicaBootstrapResult;
+        const result = decodeWire(await response.json()) as ReplicaBootstrapResult;
 
         if (result.truncated === true) {
             // Too big to copy in one reply. Reads go to the owner rather than to
@@ -632,7 +666,7 @@ class ShardReplica {
     private async pull(sinceSeq: number): Promise<ReplicaPullResult | undefined> {
         const response = await this.request({ sinceSeq, type: "replica_pull" });
 
-        return response === undefined ? undefined : ((await response.json()) as ReplicaPullResult);
+        return response === undefined ? undefined : (decodeWire(await response.json()) as ReplicaPullResult);
     }
 
     /**
@@ -642,7 +676,7 @@ class ShardReplica {
      */
     private async request(frame: ReplicaFrame): Promise<Response | undefined> {
         const binding = this.host.shardBinding();
-        const stub = siblingStub(this.host.env(), binding, this.ownerKey);
+        const stub = siblingStub(this.host.env(), binding, this.ownerKey, this.host.shardJurisdiction());
 
         if (stub === undefined) {
             return undefined;

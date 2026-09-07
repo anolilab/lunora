@@ -3,7 +3,7 @@
     "push":
         "branches": ["main", "alpha", "next", "beta"]
     "pull_request":
-        "branches": ["main", "alpha", "next", "beta"]
+        "branches": ["main", "alpha", "next", "beta", "fix/**"]
         # Only scan PRs that touch analyzable JS/TS source (or this workflow).
         # Docs/plans-only PRs skip; push + weekly schedule stay ungated so
         # branch heads always carry a complete code-scanning baseline.

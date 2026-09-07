@@ -29,7 +29,7 @@ const SNAPSHOTS: Record<string, string> = {
     bbbbbbbbbbbbbbbb: snapshotJson(["posts", "users"]),
 };
 
-const createClient = (options: { failHistory?: boolean; versions?: typeof VERSIONS } = {}): MockClientHooks =>
+const createClient = (options: { failHistory?: boolean; snapshots?: Record<string, string>; versions?: typeof VERSIONS } = {}): MockClientHooks =>
     createMockClient({
         query: (reference, args): unknown => {
             if (reference === ADMIN_FUNCTIONS.schemaHistory) {
@@ -42,7 +42,7 @@ const createClient = (options: { failHistory?: boolean; versions?: typeof VERSIO
 
             if (reference === ADMIN_FUNCTIONS.schemaVersion) {
                 const hash = (args as { hash?: string }).hash ?? "";
-                const stored = SNAPSHOTS[hash];
+                const stored = (options.snapshots ?? SNAPSHOTS)[hash];
 
                 return { version: stored === undefined ? undefined : { appliedAt: 0, hash, seq: 0, snapshotJson: stored } };
             }
@@ -130,6 +130,38 @@ describe("schemaHistoryPanel", () => {
         await waitFor(() => {
             expect(screen.getByTestId("sh-version-bbbbbbbbbbbbbbbb").className).toContain("border-s-primary");
         });
+    });
+
+    it("renders the constraint and shape changes the drift gate emits", async () => {
+        // `hasAssertions`, not a count: the `waitFor` below retries its assertion.
+        expect.hasAssertions();
+
+        // Every `DriftChange["type"]` needs a row shape; a missing one used to
+        // throw while destructuring it, blanking the whole change list. A field
+        // that gains `.unique()` is classified `addedFieldConstraint`.
+        const usersWith = (unique: boolean): string =>
+            JSON.stringify({
+                migrationIds: [],
+                tables: {
+                    users: {
+                        fields: { email: { kind: "string", nullable: false, optional: false, unique } },
+                        indexes: {},
+                        relations: {},
+                        shardMode: "root",
+                    },
+                },
+                version: 1,
+            });
+
+        render(renderPanel(createClient({ snapshots: { aaaaaaaaaaaaaaaa: usersWith(false), bbbbbbbbbbbbbbbb: usersWith(true) } })));
+
+        const changes = await screen.findByTestId("sh-changes");
+
+        await waitFor(() => {
+            expect(changes.textContent?.toLowerCase()).toContain("constraint");
+        });
+
+        expect(changes.textContent?.toLowerCase()).toContain("breaking");
     });
 
     it("shows an empty state only when the ledger is genuinely empty", async () => {

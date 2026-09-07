@@ -61,6 +61,7 @@ type SeedClient<InsertModel> = SeedClientState & {
 ```ts
 interface SeedClientOptions {
     defaultCount?: number;
+    now?: number;
     persist?: (table: string, rows: ReadonlyArray<Record<string, unknown>>) => Promise<void> | void;
     seed?: number;
 }

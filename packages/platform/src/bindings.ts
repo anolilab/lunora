@@ -330,8 +330,33 @@ export interface R2BucketLike {
      * need metadata fall back to a 0-length ranged `get()` when `head` is absent.
      */
     head?: (key: string) => Promise<R2ObjectLike | null>;
-    list: (options?: { cursor?: string; delimiter?: string; limit?: number; prefix?: string }) => Promise<{
+    // `startAfter` is in the real `R2Bucket.list` signature and was missing here
+    // — the same projection drift this file's `put` comments call out. It is what
+    // lets a caller resume a key-ordered scan from a known position instead of
+    // paging from the start and discarding the prefix, so its absence turns an
+    // indexed seek into a walk over every key ever written.
+    // `include` is in the real `R2Bucket.list` signature and its absence here
+    // meant nothing COULD ask for it: under `r2_list_honor_include` R2 leaves
+    // `httpMetadata`/`customMetadata` off every list entry unless the option
+    // names them, so a caller reading them off a list got empty objects while
+    // `head()` on the same key returned them.
+    list: (options?: {
         cursor?: string;
+        delimiter?: string;
+        // Mutable, not `ReadonlyArray`: R2's own `R2ListOptions` declares it that
+        // way, and a readonly parameter type is not assignable to it.
+        include?: ("customMetadata" | "httpMetadata")[];
+        limit?: number;
+        prefix?: string;
+        startAfter?: string;
+    }) => Promise<{
+        cursor?: string;
+        // The common-prefix roll-up R2 returns when `delimiter` is set. Without
+        // it a delimited list is lossy in the one case it exists for: every key
+        // under the delimiter lands here rather than in `objects`, so a caller
+        // that only reads `objects` sees an empty, untruncated page and renders
+        // an empty folder over a full bucket.
+        delimitedPrefixes?: string[];
         objects: R2ObjectLike[];
         truncated?: boolean;
     }>;

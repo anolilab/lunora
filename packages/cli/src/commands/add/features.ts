@@ -71,6 +71,18 @@ const isReactNativeProject = (dependencies: Readonly<Record<string, string>>): b
     Object.hasOwn(dependencies, "react-native") || Object.hasOwn(dependencies, "@lunora/react-native") || Object.hasOwn(dependencies, "expo");
 
 /**
+ * The single refusal for "auth-UI in a React Native project", shared by `lunora
+ * add` and `lunora init`'s feature offer.
+ *
+ * One message, one rule: `init --add auth-ui` defaulted an undetected project to
+ * `auth-ui-react` and copied ~85 DOM files into an Expo app, exiting 0, while
+ * `lunora add auth-ui` in that same project refused. The two front doors must
+ * agree, so neither owns its own copy of the sentence.
+ */
+const AUTH_UI_REACT_NATIVE_REFUSAL =
+    "auth-ui has no React Native port — the screens render DOM elements and a stylesheet, which Metro has nothing to mount. Build the screens with React Native primitives against the same better-auth client (`@lunora/react-native/auth`); `lunora add auth` still installs the server half.";
+
+/**
  * The lowest major a semver range admits — `^2.0.0-rc.0` → `2`, `>1` → `2`,
  * `^1.9.0 || ^2.0.0-rc.0` → `1`.
  *
@@ -227,6 +239,7 @@ const normalizeFeature = (raw: string): NormalizedFeature | undefined => {
 export {
     AUTH_PROVIDER_OPTIONS,
     AUTH_UI_OPTIONS,
+    AUTH_UI_REACT_NATIVE_REFUSAL,
     DEFAULT_AUTH_ITEM,
     DEFAULT_AUTH_UI_ITEM,
     detectAuthUiItem,

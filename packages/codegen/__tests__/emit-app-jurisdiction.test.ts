@@ -15,6 +15,7 @@ const baseOptions = {
     hasHyperdriveGlobal: false,
     hasImages: false,
     hasKv: false,
+    hasKvIntrospector: false,
     hasNotify: false,
     hasPayments: false,
     hasQueue: false,
@@ -24,6 +25,7 @@ const baseOptions = {
     hasVectors: false,
     hasWorkflow: false,
     hasX402: false,
+    tableNames: [],
     useUmbrella: false,
     wantsOpenApi: false,
     wantsOpenRpc: false,
@@ -51,7 +53,7 @@ describe("emitApp — schema jurisdiction", () => {
 
         const output = emitApp({ ...baseOptions, hasScheduler: true, jurisdiction: "eu" });
 
-        expect(output).toContain('createScheduler({ jurisdiction: "eu", namespace, originUrl: origin })');
+        expect(output).toContain('createScheduler({ jurisdiction: "eu", namespace })');
     });
 
     it("leaves ctx.scheduler un-pinned when no jurisdiction is declared", () => {
@@ -59,6 +61,6 @@ describe("emitApp — schema jurisdiction", () => {
 
         const output = emitApp({ ...baseOptions, hasScheduler: true });
 
-        expect(output).toContain("createScheduler({ namespace, originUrl: origin })");
+        expect(output).toContain("createScheduler({ namespace })");
     });
 });

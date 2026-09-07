@@ -330,4 +330,49 @@ describe("offerRegistryExtras", () => {
         expect(transformSeen).toStrictEqual([false, false]);
         expect(lines.join("\n")).toMatch(/doesn't look like an email/);
     });
+
+    describe("auth-ui in a project no port fits", () => {
+        // `detectAuthUiItem` returns `undefined` AS THE REFUSAL for React Native —
+        // `lunora add auth-ui` gates on it and refuses. Both offer paths used to
+        // `?? "auth-ui-react"` past that, so `lunora init my-app -t expo --add
+        // auth-ui` copied ~85 DOM files into an Expo project and exited 0.
+        it("refuses a --add auth-ui instead of defaulting to the React payload, and fails the run", async () => {
+            expect.assertions(3);
+
+            const { applyAll, plans } = captureApplyAll();
+            const { lines, logger } = makeLogger();
+
+            const ok = await offerRegistryExtras(
+                baseDeps({
+                    applyAll,
+                    logger,
+                    preselected: ["auth-ui", "storage"] as ReadonlyArray<StackFeature>,
+                    resolveAuthUiItem: () => undefined,
+                }),
+            );
+
+            expect(ok).toBe(false);
+            expect(plans().map((plan) => plan.label)).toStrictEqual(["storage"]);
+            expect(lines.join("\n")).toMatch(/no React Native port/);
+        });
+
+        it("drops the interactive auth-ui pick instead of applying the React payload", async () => {
+            expect.assertions(2);
+
+            const { applyAll, plans } = captureApplyAll();
+            const { lines, logger } = makeLogger();
+
+            await offerRegistryExtras(
+                baseDeps({
+                    applyAll,
+                    logger,
+                    multiSelect: async () => ["auth-ui"],
+                    resolveAuthUiItem: () => undefined,
+                }),
+            );
+
+            expect(plans()).toStrictEqual([]);
+            expect(lines.join("\n")).toMatch(/no React Native port/);
+        });
+    });
 });

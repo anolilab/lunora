@@ -365,6 +365,7 @@ describe("offlineQueue — persistence", () => {
                     { args: {}, functionPath: "a", id: "1" },
                 ]),
             remove: () => Promise.resolve(),
+            replace: () => Promise.resolve(),
         };
 
         const queue = new OfflineQueue({}, { persistence });
@@ -408,6 +409,141 @@ describe("offlineQueue — persistence", () => {
 });
 
 describe("offlineQueue — persistence error reporting", () => {
+    it("restampIdentity rewrites the record atomically — the mutation is never absent from durable storage", async () => {
+        expect.assertions(3);
+
+        const base = createInMemoryPersistence();
+
+        await base.append({ args: {}, functionPath: "posts:create", id: "1", identity: "old" });
+
+        // This used to be `remove` then `append`, and the window between them is
+        // not something compensation can close: a process stop after the remove
+        // commits leaves the mutation in NO durable store, while the in-memory
+        // entry has already advanced to the new stamp. A `remove` that never
+        // happens is the only version of this that survives a crash.
+        const removals: string[] = [];
+        const persistence: PersistenceAdapter = {
+            ...base,
+            remove: async (id) => {
+                removals.push(id);
+
+                return base.remove(id);
+            },
+        };
+        const queue = new OfflineQueue({}, { persistence });
+
+        await queue.hydrate();
+
+        queue.restampIdentity("old", "new");
+
+        await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
+
+        const persisted = await base.load();
+
+        expect(removals).toStrictEqual([]);
+        expect(persisted).toHaveLength(1);
+        expect(persisted[0]?.identity).toBe("new");
+    });
+
+    it("restampIdentity keeps the record's place in FIFO order", async () => {
+        expect.assertions(1);
+
+        const persistence = createInMemoryPersistence();
+
+        await persistence.append({ args: {}, functionPath: "posts:create", id: "1", identity: "old" });
+        await persistence.append({ args: {}, functionPath: "posts:create", id: "2", identity: "other" });
+
+        // Removing and re-appending put the restamped write at the BACK of the
+        // queue, so a reload replayed it after writes it was issued before.
+        const queue = new OfflineQueue({}, { persistence });
+
+        await queue.hydrate();
+
+        queue.restampIdentity("old", "new");
+
+        await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
+
+        await expect(persistence.load().then((loaded) => loaded.map((record) => record.id))).resolves.toStrictEqual(["1", "2"]);
+    });
+
+    it("restampIdentity leaves the record under its old stamp when the rewrite rejects, and reports it as 'replace'", async () => {
+        expect.assertions(3);
+
+        const base = createInMemoryPersistence();
+
+        await base.append({ args: {}, functionPath: "posts:create", id: "1", identity: "old" });
+
+        const replaceError = new Error("quota");
+        // A rejected `replace` changed nothing durably: the record stands under
+        // its old stamp, which a replay refuses with `OFFLINE_IDENTITY_CHANGED`
+        // — visible and recoverable, unlike a silent loss. So there is nothing to
+        // compensate, only to report, and it is reported under the op that failed.
+        const persistence: PersistenceAdapter = { ...base, replace: () => Promise.reject(replaceError) };
+        const handler = vi.fn<(context: PersistenceErrorContext) => void>();
+        const queue = new OfflineQueue({ onPersistenceError: handler }, { persistence });
+
+        await queue.hydrate();
+
+        queue.restampIdentity("old", "new");
+
+        await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
+
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(handler.mock.calls[0]?.[0]).toMatchObject({ error: replaceError, operation: "replace" });
+
+        const persisted = await base.load();
+
+        expect(persisted[0]?.identity).toBe("old");
+    });
+
+    it("restampIdentity's backstop names 'replace' too — the op it performs, not the one it never issued", async () => {
+        expect.assertions(2);
+
+        const base = createInMemoryPersistence();
+
+        await base.append({ args: {}, functionPath: "posts:create", id: "1", identity: "old" });
+
+        // The only way past `rewriteStamp`'s own try/catch is for the REPORTING to
+        // throw: a handler that throws falls through to `console.warn`, and a
+        // `console.warn` that throws rejects the promise the backstop catches. The
+        // backstop reported `"append"` — an operation `restampIdentity` never
+        // performs, which an app routing on `context.operation` acts on as a lost
+        // enqueue rather than a failed rewrite.
+        const persistence: PersistenceAdapter = { ...base, replace: () => Promise.reject(new Error("quota")) };
+        const handler = vi.fn<(context: PersistenceErrorContext) => void>(() => {
+            throw new Error("the app's own reporter is down too");
+        });
+        const warnings: string[] = [];
+        const warn = vi
+            .spyOn(console, "warn")
+            .mockImplementationOnce(() => {
+                throw new Error("console is gone");
+            })
+            .mockImplementation((message: unknown) => {
+                warnings.push(String(message));
+            });
+        const queue = new OfflineQueue({ onPersistenceError: handler }, { persistence });
+
+        await queue.hydrate();
+
+        queue.restampIdentity("old", "new");
+
+        await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
+
+        warn.mockRestore();
+
+        expect(handler.mock.calls.map((call) => call[0].operation)).toStrictEqual(["replace", "replace"]);
+        expect(warnings).toStrictEqual(["[lunora] offline-queue persistence replace failed"]);
+    });
+
     it("append failure invokes onPersistenceError handler with operation 'append'", async () => {
         expect.assertions(3);
 

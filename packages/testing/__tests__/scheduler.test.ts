@@ -140,8 +140,12 @@ const flakyThenSucceed = internalMutation.input({ failTimes: v.number(), key: v.
     await ctx.db.insert("log", { message: `succeeded:${args.key}` });
 });
 
+/** Internal mutation that records the `ctx.now` it observed — used to pin the clock a scheduled job sees. */
+const recordNow = internalMutation.mutation(async ({ ctx }) => ctx.db.insert("log", { message: `now:${String(ctx.now)}` }));
+
 const functions = {
     "log:appendLog": appendLog,
+    "log:recordNow": recordNow,
     "log:appendOrThrow": appendOrThrow,
     "log:appendThenThrow": appendThenThrow,
     "log:cancelPendingAppends": cancelPendingAppends,
@@ -395,12 +399,13 @@ describe("fake scheduler", () => {
 
         // Create a harness without functions — scheduler should still be a real
         // fake scheduler (not a throwing stub). Schedule a job with an unknown path;
-        // it should warn+drop, not throw.
+        // enqueueing succeeds, and the first dispatch failure is retried silently
+        // (production does not surface a mid-retry failure either).
         const t = lunoraTest(schema);
 
         open.push(t);
 
-        // runAfter itself should succeed (enqueue) and return a job id string; only dispatch will warn+drop.
+        // runAfter itself should succeed (enqueue) and return a job id string.
         const jobId = await t.mutation(scheduleAppend, { delayMs: 0, message: "unknown path" });
 
         expect(typeof jobId).toBe("string");
@@ -703,18 +708,28 @@ describe("fake scheduler", () => {
             await expect(t.scheduler.advance(1)).resolves.toBe(1);
         });
 
-        it("an unknown functionPath still drops the job without retrying", async () => {
-            expect.assertions(2);
+        it("an unknown functionPath retries then dead-letters, as production does", async () => {
+            expect.assertions(3);
 
             const t = start();
 
             await t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:doesNotExist", {}));
 
-            const executed = await t.scheduler.runPending();
+            // Production fires the job at the Worker, which answers FUNCTION_NOT_FOUND;
+            // the job then walks its retry budget into the dead-letter queue. It is a
+            // job failure, not a silent drop.
+            await expect(t.scheduler.runPending()).resolves.toBe(1);
+            expect(t.scheduler.list()).toHaveLength(1);
 
-            expect(executed).toBe(1);
-            // Dropped, not retried — an unknown path is not a transient failure.
-            expect(t.scheduler.list()).toHaveLength(0);
+            // One advance per retry — a job re-enqueued mid-sweep waits for the next one.
+            for (const delay of RETRY_BACKOFFS_MS) {
+                // eslint-disable-next-line no-await-in-loop -- sequential virtual-clock advances; each depends on the last
+                await t.scheduler.advance(delay, { throwOnError: false });
+            }
+
+            expect(t.scheduler.failures().map((failure) => (failure.error as Error).message)).toStrictEqual([
+                expect.stringContaining('unknown functionPath "log:doesNotExist"'),
+            ]);
         });
 
         it("a successful job runs exactly once and is never retried", async () => {
@@ -732,5 +747,105 @@ describe("fake scheduler", () => {
 
             await expect(t.query(readLog, {})).resolves.toHaveLength(1);
         });
+    });
+});
+
+/**
+ * The fake scheduler must reject what production rejects and fail what production
+ * fails — a divergence here is a test suite that passes on a job the deploy will
+ * refuse to schedule or never run.
+ */
+describe("fake scheduler production parity", () => {
+    afterEach(() => {
+        while (open.length > 0) {
+            open.pop()?.close();
+        }
+    });
+
+    it("rejects a negative or non-finite runAfter delay", async () => {
+        expect.assertions(2);
+
+        const t = start();
+
+        await expect(t.run(async (ctx) => ctx.scheduler.runAfter(-5, "log:appendLog", { message: "x" }))).rejects.toThrow(
+            "`delayMs` must be a non-negative finite number",
+        );
+        await expect(t.run(async (ctx) => ctx.scheduler.runAfter(Number.NaN, "log:appendLog", { message: "x" }))).rejects.toThrow(
+            "`delayMs` must be a non-negative finite number",
+        );
+    });
+
+    it("rejects a non-finite runAt instant, and accepts an overdue one", async () => {
+        expect.assertions(2);
+
+        const t = start();
+
+        // The fake is a THIRD `runAt` alongside `createScheduler` and the deferral
+        // facade; a harness that took a value production refuses would tell a test
+        // the opposite of what ships.
+        await expect(t.run(async (ctx) => ctx.scheduler.runAt(Number.NaN, "log:appendLog", { message: "x" }))).rejects.toThrow(
+            "`date` must be a non-negative finite number",
+        );
+        // An instant that has already passed is an overdue job, not a bad argument.
+        await expect(t.run(async (ctx) => ctx.scheduler.runAt(1, "log:appendLog", { message: "x" }))).resolves.toMatch(/\S/u);
+    });
+
+    it("accepts the args production accepts, bigint included", async () => {
+        expect.assertions(1);
+
+        const t = start();
+
+        // This used to assert the opposite, on the premise that "production posts
+        // the job as JSON, so a bigint arg throws at schedule time". That stopped
+        // being true when `createScheduler.runAt` / `createWorkpool.enqueue` began
+        // encoding args through the wire codec BEFORE `callDO`'s `JSON.stringify`:
+        // a bigint is carried as a tag and the job schedules. A harness that
+        // refuses a value production takes tells a test the opposite of what ships,
+        // which is the same failure the old assertion was written to prevent.
+        await expect(t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:appendLog", { message: 1n as unknown as string }))).resolves.toMatch(/\S/u);
+    });
+
+    it("gives a scheduled job the advanced clock as ctx.now", async () => {
+        expect.assertions(1);
+
+        const t = lunoraTest(schema, { functions, now: 1_000_000 });
+
+        open.push(t);
+
+        await t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:recordNow", {}));
+        await t.scheduler.advance(3_600_000);
+
+        // The job fired an hour into the virtual clock, so it must see that instant —
+        // not the harness's construction time.
+        await expect(t.query(readLog, {})).resolves.toStrictEqual([expect.objectContaining({ message: `now:${String(1_000_000 + 3_600_000)}` })]);
+    });
+});
+
+describe("fake scheduler — the wire hop production makes", () => {
+    it("round-trips args through the codec rather than handing them over by reference", async () => {
+        expect.assertions(4);
+
+        const t = start();
+        const dueAt = new Date("2026-06-01T12:00:00.000Z");
+
+        // Production's hop is `encodeWire` (in `createScheduler.runAt`) →
+        // `JSON.stringify` (in `callDO`) → the DO's storage → `decodeWire`. The
+        // fake runs the same bracket, so what a handler sees here is what it
+        // sees in production — including the two places that is NOT the
+        // caller's own object. A bare `JSON.stringify(args)` check threw on the
+        // `bigint` that production now carries fine.
+        await t.run(async (ctx) => ctx.scheduler.runAfter(1000, "log:appendLog", { amountCents: 42n, dueAt, message: "x", skipped: undefined }));
+
+        const [job] = await t.run(async (ctx) => ctx.scheduler.list());
+
+        expect(job?.args["amountCents"]).toBe(42n);
+        expect(job?.args["dueAt"]).toStrictEqual(dueAt);
+        // A rebuilt Date, not the caller's instance — a fake that handed `args`
+        // straight through would pass every value assertion above and still
+        // hide that production round-trips them.
+        expect(job?.args["dueAt"]).not.toBe(dueAt);
+        // `encodeWire` drops an `undefined` object field outright, so the
+        // handler never sees the key at all.
+        expect(job?.args).not.toHaveProperty("skipped");
     });
 });

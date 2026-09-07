@@ -67,10 +67,21 @@ const createRecordingFts = (matchRows: MatchRow[]): { exec: D1Exec; statements: 
         // (`RETURNING "id"`) reports one changed row so the CAS passes.
         const routes: { pattern: RegExp; rows: () => Record<string, unknown>[] }[] = [
             { pattern: /__fts_by_body__vocab/u, rows: () => matchRows as unknown as Record<string, unknown>[] },
+            // The read path refuses an index that is still backfilling, and this
+            // double answers every unrouted SELECT with `[]` — so without a row
+            // here the progress table reads as "nothing recorded" and every
+            // search below is refused. These tests are about the emitted SQL,
+            // not about backfill progress: report the index as complete.
+            { pattern: /FROM "__lunora_search_state"/u, rows: () => [{ covered: 1, cursor: null, done: 1, profile: null }] },
             // The migration-time backfill probes for the source table and then
             // pages through it; the canned rows stand in for a table that
             // already held data when the search index was declared.
             { pattern: /^SELECT name FROM sqlite_master WHERE type = 'table' AND name = \?$/u, rows: () => [{ name: "docs" }] },
+            // "Does the table hold rows?" — a `staged` index is only skipped by
+            // the migration pass when it does; over an empty table the pass
+            // walks it (finding nothing) so the index records coverage instead
+            // of refusing every search forever.
+            { pattern: /^SELECT 1 FROM "docs" LIMIT 1$/u, rows: () => (matchRows.length > 0 ? [{ 1: 1 }] : []) },
             { pattern: /^SELECT \* FROM "docs" ORDER BY/u, rows: () => matchRows as unknown as Record<string, unknown>[] },
             { pattern: /RETURNING "id"$/u, rows: () => (matchRows.length > 0 ? [{ id: matchRows[0]?.id }] : [{ id: "d1" }]) },
             { pattern: /WHERE "id" = \? LIMIT 1$/u, rows: () => (matchRows.length > 0 ? [{ 1: 1 }] : []) },

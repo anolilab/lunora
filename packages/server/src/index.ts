@@ -11,6 +11,7 @@ export type {
     InternalQueryBuilder,
     LunoraBuilders,
     Middleware,
+    MiddlewareContext,
     MiddlewareNext,
     MutationBuilder,
     QueryBuilder,
@@ -20,12 +21,11 @@ export { initLunora } from "./builder/index";
 export { createSecrets } from "./create-secrets";
 export type { DeferredDeleteFlushResult } from "./deferred-deletes";
 export { flushDeferredDeletes, withDeferredDeletes } from "./deferred-deletes";
+export { beginDeferredSchedules, withDeferredSchedules } from "./deferred-schedules";
 export type { DefineDocumentHistoryOptions, DocumentHistoryComponent, DocumentHistoryEntry, DocumentHistoryFunctions } from "./document-history";
 export { defineDocumentHistory, DOCUMENT_HISTORY_REDACTED_FIELDS, DOCUMENT_HISTORY_TABLE, documentHistoryExtension } from "./document-history";
 export type { EnvAccessor, EnvKeyFailure, EnvShape, InferEnv } from "./env";
 export { defineEnv, LunoraEnvError, redactSecrets } from "./env";
-export type { LunoraErrorCode } from "./error";
-export { LunoraError } from "./error";
 export type { FacadeEntry, FacadeWriterLike, OrmLike } from "./facade";
 export { bindOrm, bindTableFacade } from "./facade";
 export type {
@@ -36,12 +36,15 @@ export type {
     HttpRouteBuilder,
     HttpRouteFactory,
     HttpRouteHandlerOptions,
+    HttpRunners,
     HttpStreamHandlerOptions,
     LunoraHttpApp,
     LunoraHttpEnv,
     LunoraRouteHandler,
 } from "./http";
-export { httpAction, httpRoute, httpRouter, isSafeHeaderValue, serveStorageObject } from "./http";
+export { httpAction, httpRoute, httpRouter, isSafeHeaderValue } from "./http";
+export type { StorageServeAuthorizer, StorageServeAuthzContext } from "./http-storage";
+export { serveStorageObject } from "./http-storage";
 export type { DefineIdentityOptions, IdentityContract, IdentityRejectMode, IdentityValidation, InferIdentity } from "./identity";
 export { defineIdentity } from "./identity";
 export type { LifecycleHandler, ShardInitHandler } from "./lifecycle";
@@ -73,12 +76,14 @@ export type {
     RlsOptions,
     RlsReadRegistry,
     Role,
+    ShapeGuardDeclaration,
     ShapeReadWhereRequest,
     TypedDefinePolicyInput,
     WhereInput,
 } from "./rls/index";
 export {
     allowAll,
+    assertShapesDeclareReadPolicies,
     buildRlsReadRegistry,
     composeShapeReadWhere,
     createPolicyDsl,
@@ -157,6 +162,7 @@ export type {
     RegisteredStream,
     RelationDefinition,
     RestCacheConfig,
+    RetryPolicy,
     RunQueryOptions,
     ScheduledFunctionDoc,
     ScheduledJob,
@@ -166,14 +172,18 @@ export type {
     SearchIndexDefinition,
     ShardInitEvent,
     ShardMode,
+    SpanContextIds,
     SpanEvaluation,
     SpanHandle,
+    SpanIdentity,
     SpanKind,
     SpanLink,
     SpanOptions,
     Storage,
     StorageMetadata,
+    StorageObjectBody,
     StorageObjectHead,
+    StorageRange,
     SystemDatabaseReader,
     SystemDoc,
     SystemQuery,
@@ -221,6 +231,12 @@ export type {
     WorkflowStatusResult,
 } from "./types";
 export { anyApi } from "./types";
+// `LunoraError` is the ONE canonical error class, owned by `@lunora/errors` and
+// re-exported here so handlers can throw it without a second dependency. The
+// third argument is `LunoraErrorOptions` (`{ cause, data, status, … }`) — there
+// is deliberately no server-local subclass reinterpreting it as `data`.
+export type { LunoraErrorCode } from "@lunora/errors";
+export { LunoraError } from "@lunora/errors";
 // Re-export the code-first cron builder so users declare crons from the main
 // package alongside query/mutation/action (it lives in @lunora/scheduler).
 export type { CronJob, CronJobsBuilder, CronScheduleKind, DailySchedule, IntervalSchedule, MonthlySchedule, WeeklySchedule } from "@lunora/scheduler";

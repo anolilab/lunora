@@ -300,6 +300,7 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
 
         const result = await coordinator.orchestrateMigration(shardDO, {
             args: migrate.args,
+            defaultShardKey: defaultShard,
             functionPath: migrate.functionPath,
             headers: forwardedHeaders,
             table: migrate.table,

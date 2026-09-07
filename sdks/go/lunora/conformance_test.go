@@ -68,6 +68,18 @@ func fixtureScenario(t *testing.T, section string, name string) map[string]any {
 func canonical(t *testing.T, value any) string {
 	t.Helper()
 
+	return wireText(t, value)
+}
+
+// wireText renders a value the way client.go puts it on the socket, with
+// encoding/json. Separate from canonical, which is free to normalise: the other
+// seven suites route canonical through stableStringify, which spells every
+// number the ECMAScript way, so `1.0` and `1` compare EQUAL through it — the
+// divergence a round-trip case exists to catch. Dart's dates went out as
+// `1700000000000.0` for exactly that reason, on a green suite.
+func wireText(t *testing.T, value any) string {
+	t.Helper()
+
 	raw, err := json.Marshal(value)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -105,10 +117,66 @@ func TestWireCodecRoundTrip(t *testing.T) {
 				t.Fatalf("encode: %v", err)
 			}
 
-			if got, want := canonical(t, reEncoded), canonical(t, encoded); got != want {
+			// A handful of shapes are legitimately not fixed points — a bare
+			// [Tag] array is escaped on the way out, an `undefined` object
+			// field is dropped — and carry the expected re-encoding.
+			expected, ok := testCase["reencoded"]
+			if !ok {
+				expected = encoded
+			}
+
+			if got, want := canonical(t, reEncoded), canonical(t, expected); got != want {
 				t.Errorf("round-trip mismatch\n got: %s\nwant: %s", got, want)
 			}
+
+			// And again as the BYTES the transport sends: a round-trip
+			// assertion measured on a string the transport never sends cannot
+			// see the divergence it exists to catch.
+			if got, want := wireText(t, reEncoded), wireText(t, expected); got != want {
+				t.Errorf("wire-text mismatch\n got: %s\nwant: %s", got, want)
+			}
 		})
+	}
+}
+
+// TestEmptyShardKeyIsOmitted pins the one normalisation both the RPC body and
+// the socket URL depend on.
+//
+// `""` is ABSENT on the wire, not "the shard named empty string". The runtime
+// takes any string as a named shard and gives `""` its own Durable Object, while
+// this client treats `""` and absent as one shard everywhere it matches a
+// subscription or drains the queue. A port that sent it replayed a single queued
+// write to one Durable Object and a BATCHED replay of the same write to another,
+// with the optimistic overlay tracking neither.
+func TestEmptyShardKeyIsOmitted(t *testing.T) {
+	covers("empty_shard_key_is_omitted")
+
+	body, err := BuildRPCBody("messages:list", map[string]any{}, "")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	if _, present := body["shardKey"]; present {
+		t.Error("an empty shard key must not reach the RPC body")
+	}
+
+	named, err := BuildRPCBody("messages:list", map[string]any{}, "tenant_a")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	if named["shardKey"] != "tenant_a" {
+		t.Errorf("shardKey = %v, want tenant_a", named["shardKey"])
+	}
+
+	client := NewClient("https://app.example", nil)
+
+	if url := client.WSURL("", ""); strings.Contains(url, "shard=") {
+		t.Errorf("WSURL(%q) = %s, want no shard parameter", "", url)
+	}
+
+	if url := client.WSURL("tenant_a", ""); !strings.Contains(url, "shard=tenant_a") {
+		t.Errorf("WSURL(tenant_a) = %s, want a shard parameter", url)
 	}
 }
 
@@ -526,6 +594,158 @@ func TestShapeSubscribeFrame(t *testing.T) {
 
 	if got, want := canonical(t, frame), canonical(t, shape["shape-subscribe-cold"]); got != want {
 		t.Errorf("shape-subscribe mismatch\n got: %s\nwant: %s", got, want)
+	}
+}
+
+// TestShapeSubscriptionsResendAfterReconnect pins the reconnect path for shapes.
+// A resend that walks only the query registry leaves every shape view subscribed
+// to a socket that no longer exists — and a shape is fed only by pokes, so it
+// simply stops updating, silently, for the rest of the process's life.
+func TestShapeSubscriptionsResendAfterReconnect(t *testing.T) {
+	covers("shape_subscriptions_resend_after_reconnect")
+
+	client := NewClient("https://app.example", nil)
+	client.AttachSocket(func(map[string]any) error { return nil })
+	client.Subscribe("messages:list", map[string]any{"channel": "general"}, func(any) {}, nil, "")
+	client.SubscribeShape("roomMessages", map[string]any{"room": "general"}, func([]any) {}, nil)
+
+	// The cursors a resume carries are written by the frame handler, so they have
+	// to exist before the resend is built.
+	for _, frame := range []string{
+		`{"cursor":9,"data":[],"epoch":"e1","id":"sub_1","type":"data"}`,
+		`{"epoch":"e1","pokeId":"poke-1","type":"pokeStart"}`,
+		`{"pokeId":"poke-1","reset":true,"rowsPatch":[],"shapeId":"shape_1","type":"pokePart"}`,
+		`{"checkpoint":5,"epoch":"e1","pokeId":"poke-1","type":"pokeEnd"}`,
+	} {
+		if _, err := client.HandleFrame([]byte(frame)); err != nil {
+			t.Fatalf("handle %s: %v", frame, err)
+		}
+	}
+
+	var resent []map[string]any
+
+	client.AttachSocket(func(frame map[string]any) error {
+		resent = append(resent, frame)
+
+		return nil
+	})
+
+	if err := client.ResendSubscriptions(); err != nil {
+		t.Fatalf("resend: %v", err)
+	}
+
+	// BOTH registries, queries first.
+	if len(resent) != 2 {
+		t.Fatalf("resent %d frames, want 2 (one subscribe, one shape_subscribe): %#v", len(resent), resent)
+	}
+
+	if got := resent[0]["type"]; got != "subscribe" {
+		t.Errorf("frame 0 type = %v, want subscribe", got)
+	}
+
+	query, _ := resent[0]["query"].(map[string]any)
+	if got := canonical(t, query["sinceSeq"]); got != "9" {
+		t.Errorf("sinceSeq = %s, want 9", got)
+	}
+
+	shapeFrame := resent[1]
+	if got := shapeFrame["type"]; got != "shape_subscribe" {
+		t.Fatalf("frame 1 type = %v, want shape_subscribe", got)
+	}
+
+	if got := shapeFrame["id"]; got != "shape_1" {
+		t.Errorf("shape id = %v, want shape_1", got)
+	}
+
+	shape, _ := shapeFrame["shape"].(map[string]any)
+	if got := shape["name"]; got != "roomMessages" {
+		t.Errorf("shape name = %v, want roomMessages", got)
+	}
+
+	if got, want := canonical(t, shape["args"]), `{"room":"general"}`; got != want {
+		t.Errorf("shape args = %s, want %s", got, want)
+	}
+
+	if got := canonical(t, shapeFrame["sinceCheckpoint"]); got != "5" {
+		t.Errorf("sinceCheckpoint = %s, want 5", got)
+	}
+
+	if got := shapeFrame["sinceEpoch"]; got != "e1" {
+		t.Errorf("sinceEpoch = %#v, want e1", got)
+	}
+}
+
+// TestErrorFrameReachesAShapeSubscription pins the other half of the same
+// oversight: an error frame is addressed by subscription id, and a shape id is
+// one, so looking the id up only in the query registry made every server-side
+// shape failure unreportable.
+func TestErrorFrameReachesAShapeSubscription(t *testing.T) {
+	covers("server_frame_consumer")
+
+	client := NewClient("https://app.example", nil)
+	client.AttachSocket(func(map[string]any) error { return nil })
+
+	var reported []SubscriptionError
+
+	client.SubscribeShape("roomMessages", map[string]any{"room": "general"}, func([]any) {}, func(err SubscriptionError) {
+		reported = append(reported, err)
+	})
+
+	kind, err := client.HandleFrame([]byte(`{"error":{"code":"SHARD_ERROR","message":"shape failed"},"id":"shape_1","type":"error"}`))
+	if err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+
+	if kind != "error" {
+		t.Errorf("kind = %q, want error", kind)
+	}
+
+	if len(reported) != 1 || reported[0].Code != "SHARD_ERROR" || reported[0].Message != "shape failed" {
+		t.Fatalf("shape onError got %#v, want one SHARD_ERROR/shape failed", reported)
+	}
+}
+
+// TestARefusedPayloadStaysOnItsOwnSubscription pins the blast radius of one bad
+// frame. Returning the codec's error out of HandleFrame ended the caller's read
+// loop, and with it every OTHER subscription on the client — so one malformed
+// payload silently froze the whole client.
+func TestARefusedPayloadStaysOnItsOwnSubscription(t *testing.T) {
+	covers("server_frame_consumer")
+
+	client := NewClient("https://app.example", nil)
+	client.AttachSocket(func(map[string]any) error { return nil })
+
+	var (
+		firstErrors []SubscriptionError
+		secondData  []any
+	)
+
+	client.Subscribe("messages:list", nil, func(any) {}, func(err SubscriptionError) {
+		firstErrors = append(firstErrors, err)
+	}, "")
+	client.Subscribe("messages:count", nil, func(value any) { secondData = append(secondData, value) }, nil, "")
+
+	// A bigint tag whose literal is not one: the codec refuses it.
+	kind, err := client.HandleFrame([]byte(`{"data":["$lunora.wire$","bigint","not-a-number"],"id":"sub_1","type":"data"}`))
+	if err != nil {
+		t.Fatalf("a refused payload must not fail HandleFrame, got %v", err)
+	}
+
+	if kind != "error" {
+		t.Errorf("kind = %q, want error", kind)
+	}
+
+	if len(firstErrors) != 1 || firstErrors[0].Code != "INVALID_FRAME" {
+		t.Fatalf("sub_1 onError got %#v, want one INVALID_FRAME", firstErrors)
+	}
+
+	// The read loop survived, so the second subscription still delivers.
+	if _, err := client.HandleFrame([]byte(`{"data":7,"id":"sub_2","type":"data"}`)); err != nil {
+		t.Fatalf("second frame: %v", err)
+	}
+
+	if len(secondData) != 1 || secondData[0] != any(float64(7)) {
+		t.Fatalf("sub_2 onData got %#v, want [7]", secondData)
 	}
 }
 

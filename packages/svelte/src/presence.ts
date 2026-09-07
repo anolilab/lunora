@@ -1,7 +1,7 @@
-import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf } from "@lunora/client";
+import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 import { onDestroy } from "svelte";
 import type { Readable } from "svelte/store";
-import { readable } from "svelte/store";
+import { readable, writable } from "svelte/store";
 
 import { isBrowser } from "../../../shared/is-browser";
 import { randomSessionId } from "../../../shared/random-session-id";
@@ -40,6 +40,13 @@ interface PresenceOptions<H extends HeartbeatReference, L extends ListPresentRef
     listPresent: L;
 
     /**
+     * Called when the `listPresent` subscription reports an error (a session
+     * expiry, an RLS denial). Without it — and without reading `error` — such a
+     * failure is invisible and `present` freezes at its last value.
+     */
+    onError?: SubscriptionErrorCallback;
+
+    /**
      * Stable id for this presence row. Defaults to a fresh per-mount id.
      * Pass a user/connection id to control deduping across tabs.
      */
@@ -49,6 +56,8 @@ interface PresenceOptions<H extends HeartbeatReference, L extends ListPresentRef
 }
 
 interface PresenceHandle<L extends ListPresentReference> {
+    /** The `listPresent` subscription's last error, or `undefined`. */
+    error: Readable<SubscriptionError | undefined>;
     /** The present members for the room. `undefined` until the first push. */
     present: Readable<ReturnOf<L> | undefined>;
     /** This handle's session id. */
@@ -121,6 +130,8 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
         releaseConnectionContext = client.acquireConnectionContext({ roomId, sessionId }, { shardKey });
     }
 
+    const errorStore = writable<SubscriptionError | undefined>();
+
     // Subscribe to the live present-list; expose as a Readable store. Also
     // gated: `readable`'s start callback only runs once the store gets its
     // first subscriber, but a server-rendered page that reads `$present`
@@ -136,8 +147,15 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
             { roomId } as ArgsOf<L>,
             (value) => {
                 set(value);
+                errorStore.set(undefined);
             },
-            { shardKey },
+            {
+                onError: (subscriptionError) => {
+                    errorStore.set(subscriptionError);
+                    options.onError?.(subscriptionError);
+                },
+                shardKey,
+            },
         );
     });
 
@@ -175,7 +193,7 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
         // Not inside a component's init: the caller owns teardown.
     }
 
-    return { present, sessionId, setData, teardown };
+    return { error: { subscribe: errorStore.subscribe }, present, sessionId, setData, teardown };
 };
 
 /**

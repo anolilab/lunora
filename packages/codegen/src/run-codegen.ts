@@ -10,64 +10,72 @@ import { Project } from "ts-morph";
 import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 import { toAdvisorContext } from "./advisor";
+import assertNoNamespaceCollisions from "./assert-namespace-collisions";
 import { buildDeclarationSurface } from "./declaration-surface";
-import discoverAdminRoutes from "./discover-admin-routes";
-import discoverAiRawRuns from "./discover-ai-raw-runs";
-import discoverAiToolSideEffects from "./discover-ai-tool-side-effects";
-import discoverArgumentDerivedFetches from "./discover-argument-derived-fetches";
-import discoverArgumentValidators from "./discover-argument-validators";
-import discoverAuthConfig from "./discover-auth-config";
-import discoverAuthApiCalls from "./discover-authapi-calls";
-import discoverBrowserUrlAccesses from "./discover-browser-url-accesses";
-import discoverConfigCalls from "./discover-config-calls";
-import discoverContainerKeyAccesses from "./discover-container-key-accesses";
-import discoverContainerOverrides from "./discover-container-overrides";
-import discoverCrons from "./discover-crons";
-import discoverExportSinks from "./discover-export-sinks";
-import discoverFailOpenGuards from "./discover-fail-open-guards";
-import { buildStudioFeatures, hasPaymentStoreTables } from "./discover-feature-usage";
-import discoverFlagReads from "./discover-flag-reads";
-import discoverFlagSecurityDefaults from "./discover-flag-security-defaults";
-import { discoverFlagKeys } from "./discover-flags";
-import { discoverFunctions, listLunoraSourceFiles, resolveStandardSchemaType } from "./discover-functions";
-import discoverGeoIndexUsages from "./discover-geo-index-usages";
-import discoverHttpActionGuards from "./discover-http-action-guards";
-import discoverHttpHeaderWrites from "./discover-http-header-writes";
-import discoverHttpRoutes from "./discover-http-routes";
-import discoverIdentityClaimReads from "./discover-identity-claim-reads";
-import discoverImageDeliveryUrlAccesses from "./discover-image-delivery-url-accesses";
-import discoverInserts from "./discover-inserts";
-import discoverKvKeyAccesses from "./discover-kv-key-accesses";
-import discoverMailRecipientAccesses from "./discover-mail-recipient-accesses";
-import discoverMaskProcedures, { discoverMaskHasNonLiteralPolicy, discoverMaskMetadata, discoverMaskStrategies } from "./discover-mask-procedures";
-import discoverMigrations from "./discover-migrations";
-import discoverMutatorWrites from "./discover-mutator-writes";
-import { discoverMutators } from "./discover-mutators";
-import discoverNondeterministicCalls from "./discover-nondeterministic-calls";
-import discoverNormalizeIdAuthorization from "./discover-normalize-id-authorization";
-import { discoverNotifyCalls, discoverNotifyConfig } from "./discover-notify";
-import discoverOwnerFieldWrites from "./discover-owner-field-writes";
-import discoverPaymentWebhooks from "./discover-payment-webhooks";
-import discoverPrivilegedDispatches from "./discover-privileged-dispatches";
-import discoverProcedureMiddleware from "./discover-procedure-middleware";
-import discoverQueries from "./discover-queries";
-import discoverR2sqlCalls from "./discover-r2sql-calls";
-import discoverRatelimitKeySelectors from "./discover-ratelimit-key-selectors";
-import discoverRawRowReturns from "./discover-raw-row-returns";
-import discoverRelationLoads from "./discover-relation-loads";
-import discoverRlsProcedures, { discoverRlsMetadata } from "./discover-rls-procedures";
-import discoverSchema from "./discover-schema";
-import discoverSecrets from "./discover-secrets";
-import { discoverShapes } from "./discover-shapes";
-import discoverSoftDeleteReads from "./discover-soft-delete-reads";
-import discoverSqlInterpolation from "./discover-sql-interpolation";
-import discoverStaleMigrationImports from "./discover-stale-migration-imports";
-import discoverStorageKeyAccesses from "./discover-storage-key-accesses";
-import discoverStorageUploads from "./discover-storage-uploads";
-import discoverUnregisteredProcedures from "./discover-unregistered-procedures";
-import discoverUnrestrictedWhereBranches from "./discover-unrestricted-where-branches";
-import discoverVectorNamespaceAccesses from "./discover-vector-namespace-accesses";
-import discoverWorkflowCalls from "./discover-workflow-calls";
+import discoverAdminRoutes from "./discover/admin-routes";
+import discoverAiRawRuns from "./discover/ai-raw-runs";
+import discoverAiToolSideEffects from "./discover/ai-tool-side-effects";
+import discoverArgumentDerivedFetches from "./discover/argument-derived-fetches";
+import discoverArgumentValidators from "./discover/argument-validators";
+import { listLunoraSourceFiles } from "./discover/ast";
+import discoverAuthConfig from "./discover/auth-config";
+import discoverAuthApiCalls from "./discover/authapi-calls";
+import discoverBrowserUrlAccesses from "./discover/browser-url-accesses";
+import discoverConfigCalls from "./discover/config-calls";
+import discoverContainerKeyAccesses from "./discover/container-key-accesses";
+import discoverContainerOverrides from "./discover/container-overrides";
+import discoverExportSinks from "./discover/export-sinks";
+import discoverFailOpenGuards from "./discover/fail-open-guards";
+import { discoverFlagKeys } from "./discover/flag-keys";
+import discoverFlagReads from "./discover/flag-reads";
+import discoverFlagSecurityDefaults from "./discover/flag-security-defaults";
+import discoverFunctions from "./discover/functions";
+import resolveStandardSchemaType from "./discover/functions/resolve-standard-schema-type";
+import discoverGeoIndexUsages from "./discover/geo-index-usages";
+import discoverHttpActionGuards from "./discover/http-action-guards";
+import discoverHttpHeaderWrites from "./discover/http-header-writes";
+import discoverHttpRoutes from "./discover/http-routes";
+import discoverHyperdriveCalls from "./discover/hyperdrive-calls";
+import discoverIdentityClaimReads from "./discover/identity-claim-reads";
+import discoverImageDeliveryUrlAccesses from "./discover/image-delivery-url-accesses";
+import discoverInserts from "./discover/inserts";
+import discoverKvKeyAccesses from "./discover/kv-key-accesses";
+import discoverMailRecipientAccesses from "./discover/mail-recipient-accesses";
+import discoverMaskProcedures from "./discover/mask-procedures";
+import discoverMaskHasNonLiteralPolicy from "./discover/mask-procedures/has-non-literal-policy";
+import discoverMaskMetadata from "./discover/mask-procedures/metadata";
+import discoverMaskStrategies from "./discover/mask-procedures/strategies";
+import discoverMigrations from "./discover/migrations";
+import discoverMutatorWrites from "./discover/mutator-writes";
+import { discoverMutators } from "./discover/mutators";
+import discoverNondeterministicCalls from "./discover/nondeterministic-calls";
+import discoverNormalizeIdAuthorization from "./discover/normalize-id-authorization";
+import { discoverNotifyCalls, discoverNotifyConfig } from "./discover/notify";
+import discoverOwnerFieldWrites from "./discover/owner-field-writes";
+import hasPaymentStoreTables from "./discover/payment-store-tables";
+import discoverPaymentWebhooks from "./discover/payment-webhooks";
+import discoverPrivilegedDispatches from "./discover/privileged-dispatches";
+import discoverProcedureMiddleware from "./discover/procedure-middleware";
+import discoverQueries from "./discover/queries";
+import discoverR2sqlCalls from "./discover/r2sql-calls";
+import discoverRatelimitKeySelectors from "./discover/ratelimit-key-selectors";
+import discoverRawRowReturns from "./discover/raw-row-returns";
+import discoverRelationLoads from "./discover/relation-loads";
+import discoverRlsProcedures from "./discover/rls-procedures";
+import discoverRlsMetadata from "./discover/rls-procedures/metadata";
+import discoverSchema from "./discover/schema";
+import discoverSecrets from "./discover/secrets";
+import { discoverShapes } from "./discover/shapes";
+import discoverSoftDeleteReads from "./discover/soft-delete-reads";
+import discoverSqlInterpolation from "./discover/sql-interpolation";
+import discoverStaleMigrationImports from "./discover/stale-migration-imports";
+import discoverStorageKeyAccesses from "./discover/storage-key-accesses";
+import discoverStorageUploads from "./discover/storage-uploads";
+import { buildStudioFeatures } from "./discover/studio-features";
+import discoverUnregisteredProcedures from "./discover/unregistered-procedures";
+import discoverUnrestrictedWhereBranches from "./discover/unrestricted-where-branches";
+import discoverVectorNamespaceAccesses from "./discover/vector-namespace-accesses";
+import discoverWorkflowCalls from "./discover/workflow-calls";
 import {
     buildStorageColumns,
     emitAgents,
@@ -85,7 +93,19 @@ import {
     emitWranglerCronTriggers,
 } from "./emit";
 import { emitApp } from "./emit-app";
-import type { AgentIR, ContainerIR, MaskMetadataIR, QueueIR, ShapeIR, WorkflowIR, WranglerVariableIR } from "./ir";
+import type {
+    AgentIR,
+    ContainerIR,
+    FunctionIR,
+    HttpRouteIR,
+    MaskMetadataIR,
+    MigrationIR,
+    MutatorIR,
+    QueueIR,
+    ShapeIR,
+    WorkflowIR,
+    WranglerVariableIR,
+} from "./ir";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
 import { setStandardTypeResolver } from "./parse-validator";
@@ -331,6 +351,114 @@ const syncProjectFile = (project: Project, filePath: string, content: string): v
     existing.replaceWithText(content);
 };
 
+/** Whether `project` already holds `filePath` with exactly `content`. */
+const projectFileMatches = (project: Project, filePath: string, content: string): boolean => project.getSourceFile(filePath)?.getFullText() === content;
+
+/**
+ * Ceiling on the infer → render → re-infer loop below. Cold trees were measured
+ * converging on the fourth pass, so the cap sits above that with room. It is a spin guard, not a correctness guarantee — see
+ * {@link inferToFixpoint} for what happens when it is reached.
+ */
+const MAX_INFERENCE_PASSES = 8;
+
+/**
+ * Infer every handler's return type against a project that already contains the
+ * `api.ts` / `functions.ts` those types are read back through.
+ *
+ * `dataModel.ts` and `server.ts` are rendered into the project before any
+ * inference happens, precisely so a cold tree cannot collapse the types that
+ * depend on them. These two cannot be seeded that way, because their content IS
+ * the inference result: a handler doing `ctx.runQuery(api.messages.list)` — or a
+ * streaming route whose chunk type comes back through one — infers against a
+ * module that does not exist yet on a cold `_generated/`, collapses, and the
+ * collapse is written out. The tree then converges only on a later invocation,
+ * which is what pushes projects into wrapping the CLI in a
+ * run-until-the-hash-stops-changing loop (issue #283).
+ *
+ * So iterate: infer, render, feed the render back, re-infer. The loop returns as
+ * soon as a pass's render matches what inference already saw — the first pass on
+ * any warm tree, where `syncProjectFile` leaves an identical file alone and
+ * nothing is re-inferred, so a converged project pays one extra render and no
+ * extra inference.
+ *
+ * The render that matched is RETURNED rather than recomputed by the caller. Two
+ * call sites building the same emit arguments 150 lines apart is how the
+ * convergence check silently starts comparing something other than what gets
+ * written.
+ *
+ * **Reaching the cap is not an error.** A handler that embeds its own result —
+ * `{ deeper: await createCaller(ctx).grow.grow() }`, the shape of any
+ * self-referential tree query — grows its inferred type by one level per pass
+ * and has no fixpoint to reach. Throwing there would turn a project that
+ * previously built (with that one return typed `unknown`) into one that produces
+ * no `_generated/` at all. So the last render wins, exactly as it did before this
+ * loop existed: never worse than one run's output, usually better.
+ */
+const inferToFixpoint = (options: {
+    agents: ReadonlyArray<AgentIR>;
+    apiPath: string;
+    generatedFunctionsPath: string;
+    lunoraDirectory: string;
+    migrations: ReadonlyArray<MigrationIR>;
+    project: Project;
+    shapes: ReadonlyArray<ShapeIR>;
+    usesSandbox: boolean;
+    useUmbrella: boolean;
+    workflows: ReadonlyArray<WorkflowIR>;
+}): {
+    apiContent: string;
+    functions: ReadonlyArray<FunctionIR>;
+    functionsContent: string;
+    httpRoutes: ReadonlyArray<HttpRouteIR>;
+    mutators: ReadonlyArray<MutatorIR>;
+} => {
+    const { agents, apiPath, generatedFunctionsPath, lunoraDirectory, migrations, project, shapes, usesSandbox, useUmbrella, workflows } = options;
+
+    // The three discoverers that read an inferred return type through
+    // `unwrapHandlerReturn`, and therefore the three that have to be re-run when
+    // the files those types resolve against change. Everything else in the
+    // pipeline reads syntax, not inference, and stays outside.
+    let functions = discoverFunctions(project, lunoraDirectory);
+    let mutators = discoverMutators(project, lunoraDirectory);
+    let httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
+
+    // Two files whose sanitized namespaces collide (`a-b.ts` + `a_b.ts`) would
+    // emit the same key twice into `_generated/api.ts` — a TS2300 inside
+    // generated code, with no pointer back to the two files that caused it.
+    //
+    // Once per namespace SPACE: `api.*` and `httpStreams.*` are separate emitted
+    // objects, so a function file may share a namespace with a route file, but
+    // two streaming-route files may not — and only `.stream()` routes are
+    // grouped by namespace at all, so the plain verbs stay out of it.
+    assertNoNamespaceCollisions([...functions, ...mutators].map((definition) => definition.filePath));
+    assertNoNamespaceCollisions(
+        httpRoutes.filter((route) => route.stream).map((route) => route.filePath),
+        "http-stream",
+    );
+
+    for (let pass = 1; ; pass += 1) {
+        const apiContent = emitApi({ agents, functions, httpRoutes, mutators, useUmbrella, workflows });
+        const functionsContent = emitFunctions({ agents, functions, migrations, mutators, shapes, useUmbrella, usesSandbox });
+
+        // Converged, or out of budget — either way this render is the answer, and
+        // the budget check sits HERE so the final pass's re-inference is never
+        // computed and then discarded.
+        if (
+            pass >= MAX_INFERENCE_PASSES ||
+            (projectFileMatches(project, apiPath, apiContent) && projectFileMatches(project, generatedFunctionsPath, functionsContent))
+        ) {
+            return { apiContent, functions, functionsContent, httpRoutes, mutators };
+        }
+
+        syncProjectFile(project, apiPath, apiContent);
+        syncProjectFile(project, generatedFunctionsPath, functionsContent);
+
+        functions = discoverFunctions(project, lunoraDirectory);
+        mutators = discoverMutators(project, lunoraDirectory);
+        httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
+    }
+};
+
 /**
  * Construct the ts-morph `Project` codegen discovers over. Prefers the user's
  * `tsconfig.json` (when one is found walking up from `lunoraDirectory`) so
@@ -462,7 +590,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // `discoverFunctions` below are where `v.from(...)` is read, and an
     // unregistered resolver silently yields `unknown` for every one of them.
     // Recovering the type needs the checker plus the generated-file
-    // renderability guards, both of which live in `discover-functions`;
+    // renderability guards, both of which live in `discover/functions`;
     // registered here rather than imported by the parser, which would be a
     // cycle.
     setStandardTypeResolver(resolveStandardSchemaType);
@@ -477,11 +605,12 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const {
         agents,
         containers,
+        crons,
         dataModelContent,
         dependencies,
+        entryCronTriggers,
         env,
         featureUsage,
-        hasBrowser,
         hasFlags,
         hasNotify,
         identity,
@@ -497,6 +626,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const outputDirectory = join(lunoraDirectory, "_generated");
     const dataModelPath = join(outputDirectory, "dataModel.ts");
     const serverPath = join(outputDirectory, "server.ts");
+    const apiPath = join(outputDirectory, "api.ts");
+    const generatedFunctionsPath = join(outputDirectory, "functions.ts");
 
     // In MEMORY only — the disk write waits for the write phase with everything
     // else. `discoverFunctions` infers against the ts-morph `Project`, not the
@@ -512,8 +643,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     syncProjectFile(project, dataModelPath, dataModelContent);
     syncProjectFile(project, serverPath, serverContent);
 
-    const functions = discoverFunctions(project, lunoraDirectory);
-    const httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
     const migrations = discoverMigrations(project, lunoraDirectory);
 
     // Local-first sync engine (Phase 7): replication shapes (`lunora/shapes.ts`)
@@ -522,10 +651,22 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // mutators register into `LUNORA_FUNCTIONS` (transaction-wrapped) and the
     // `isCustomMutator` push-protocol override. Both return `[]` when their file
     // is absent, so a project without them emits byte-identical generated code.
+    // Neither reads a handler's inferred return type, so both sit outside the
+    // fixpoint below — unlike `discoverHttpRoutes`, which does.
     const shapes = discoverShapes(project, lunoraDirectory);
-    const mutators = discoverMutators(project, lunoraDirectory);
 
-    const crons = discoverCrons(project, lunoraDirectory, workflows, agents);
+    const { apiContent, functions, functionsContent, httpRoutes, mutators } = inferToFixpoint({
+        agents,
+        apiPath,
+        generatedFunctionsPath,
+        lunoraDirectory,
+        migrations,
+        project,
+        shapes,
+        useUmbrella,
+        usesSandbox,
+        workflows,
+    });
 
     // Static advisories (unindexed FKs, redundant indexes, unknown index/relation
     // fields, filter-without-index, …). Cheap, derived from the schema + the
@@ -562,10 +703,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   geoIndexUsages: discoverGeoIndexUsages(project, lunoraDirectory),
                   httpActionGuards: discoverHttpActionGuards(project, lunoraDirectory),
                   httpHeaderWrites: discoverHttpHeaderWrites(project, lunoraDirectory),
+                  hyperdriveCalls: discoverHyperdriveCalls(project, lunoraDirectory),
                   identityClaimReads: discoverIdentityClaimReads(project, lunoraDirectory),
                   imageDeliveryUrlAccesses: discoverImageDeliveryUrlAccesses(project, lunoraDirectory),
                   inserts: discoverInserts(project, lunoraDirectory),
-                  kvKeyAccesses: discoverKvKeyAccesses(project, lunoraDirectory),
+                  kvKeyAccesses: discoverKvKeyAccesses(project, lunoraDirectory, functions),
                   mailRecipientAccesses: discoverMailRecipientAccesses(project, lunoraDirectory),
                   maskProcedures: discoverMaskProcedures(project, lunoraDirectory),
                   maskStrategies: discoverMaskStrategies(project, lunoraDirectory),
@@ -634,13 +776,26 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // (`useFlag`) iterate these. Only meaningful when a provider is wired.
     const flagKeys = hasFlags ? discoverFlagKeys(project, lunoraDirectory) : [];
 
-    // Which optional, package-backed features the studio should show a nav page
-    // for. `buildStudioFeatures` OR's the code-usage flags with the schema/project
+    // The platform gate's `vectorStore` verdict, named once for every consumer
+    // below. `undefined` means the app never declared a vector index, which must
+    // not withhold anything; only an explicit `false` is a rejection. Spelling
+    // that three-state comparison out per call site is what let one of them —
+    // the studio nav — keep advertising the feature the other two withheld.
+    const vectorStoreSupported = platformGate.signals.vectorStore !== false;
+
+    // Which optional features the studio should show a nav page for.
+    // `buildStudioFeatures` OR's the code-usage flags with the schema/project
     // signals the `lunora/`-scoped scan can't see: storage columns + access rules,
-    // declared crons, vector indexes, and — crucially for packages wired only in
-    // the worker entry (e.g. `@lunora/mail`) — the project's declared dependencies.
-    // Emitted into the generated ShardDO's `studioFeatures()` override so the
-    // studio hides only pages whose backing package the app genuinely never wires.
+    // declared crons, and — crucially for packages wired only in the worker entry
+    // (e.g. `@lunora/mail`) — the project's declared dependencies. Emitted into the
+    // generated ShardDO's `studioFeatures()` override.
+    //
+    // The dependency arm fails OPEN: a page whose backing package is installed
+    // shows even when the scan cannot see the wiring, because those pages degrade
+    // to an empty state. `vectors` is the exception and gates on the schema
+    // declaration alone — its endpoints 400 without a registry to serve, so
+    // failing open there would fail open into an error. See
+    // `buildStudioFeatures`' docblock.
     const studioFeatures = buildStudioFeatures(featureUsage, {
         containerCount: containers.length,
         cronCount: crons.length,
@@ -655,6 +810,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         storageColumnCount: Object.keys(buildStorageColumns(schema)).length,
         storageRuleCount: storageRulesMetadata.rules.length,
         vectorIndexCount: schema.vectorIndexes.length,
+        vectorStoreSupported,
         workflowCount: workflows.length,
     });
 
@@ -667,8 +823,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // a throw between here and there leaves `_generated/` untouched.
     const emitStartedAt = timingEnabled ? performance.now() : 0;
 
-    const apiContent = emitApi({ agents, functions, httpRoutes, mutators, useUmbrella, workflows });
-    const functionsContent = emitFunctions({ agents, functions, migrations, mutators, shapes, useUmbrella, usesSandbox });
     // Structural schema snapshot for the pre-deploy drift gate. Built from the
     // discovered schema + the declared migration ids; the CLI gate diffs the
     // CURRENT snapshot against the committed baseline. Always computed (cheap,
@@ -694,7 +848,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasAccessFacade: featureUsage.access,
         hasAi: featureUsage.ai,
         hasAnalytics: featureUsage.analytics,
-        hasBrowser,
+        hasBrowser: featureUsage.browser,
         hasFlags,
         hasHyperdrive: featureUsage.hyperdrive,
         hasImages: featureUsage.images,
@@ -703,6 +857,12 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasPayments: featureUsage.payments,
         hasPipelines: featureUsage.pipelines,
         hasR2sql: featureUsage.r2sql,
+        // The gate's verdict, exactly as `emitServer`/`emitApp` receive it. The
+        // shard emitter recomputed the flag from `schema.vectorIndexes` instead,
+        // so the DO kept the whole Vectorize wiring on a host rating
+        // `vectorStore: "unsupported"` — a `generated.shard` byte-identical to
+        // the Cloudflare one while the type surface was withheld.
+        hasVectors: vectorStoreSupported,
         hasX402: featureUsage.x402,
         maskMetadata,
         mutators,
@@ -758,7 +918,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasAi: featureUsage.ai,
         hasAnalytics: featureUsage.analytics,
         hasAuth: dependencies.has("@lunora/auth"),
-        hasBrowser,
+        hasBrowser: featureUsage.browser,
         // Worker-composition framework adapters expose a `withLunora` over
         // `withFrameworkWorker`; when one is installed, surface `.buildFrameworkWorker()`.
         hasFramework: dependencies.has("@lunora/astro") || dependencies.has("@lunora/svelte") || dependencies.has("@lunora/vue"),
@@ -769,18 +929,26 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasHyperdrive: featureUsage.hyperdrive,
         hasHyperdriveGlobal: schema.tables.some((table) => table.shardMode === "global" && table.globalBackend === "hyperdrive"),
         hasImages: featureUsage.images,
+        // The `.kv()` builder's parameter type reads `ShardConfig["kv"]`, and that
+        // config field is emitted on the usage signal — so this MUST stay
+        // usage-only or the emitted method references a type that is not there.
+        hasKv: featureUsage.kv,
         // Auto-wire the studio's KV introspector on the SAME condition the nav
         // gates its tab on (`studioFeatures.kv` = ctx.kv usage OR a declared
-        // `@lunora/bindings/kv` dep), so a visible KV tab always has a working
-        // backend — never the reverse. The `ctx.kv` type-seam stays usage-only.
-        hasKv: studioFeatures.kv,
+        // `@lunora/bindings` dep), so a visible KV tab always has a working
+        // backend — never the reverse.
+        hasKvIntrospector: studioFeatures.kv,
         hasNotify,
         hasPayments: featureUsage.payments,
         hasR2sql: featureUsage.r2sql,
         hasQueue: queues.some((queue) => queue.mode === "push"),
         hasScheduler: studioFeatures.scheduler,
         hasStorage: studioFeatures.storage,
-        hasVectors: schema.vectorIndexes.length > 0,
+        // The gate's verdict, on the same convention `emitServer`/`emitShard`
+        // take it: the emitter AND's it with the declaration itself. This call
+        // site used to pass the CONJUNCTION under the same prop name, so the one
+        // flag meant two different things depending on which emitter read it.
+        hasVectors: vectorStoreSupported,
         hasWorkflow: workflows.length > 0,
         hasX402: featureUsage.x402,
         // The single `defineIdentity(...)` contract (Plan 080). Wires
@@ -790,7 +958,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         identity,
         // Schema `.jurisdiction("…")` → pin the generated worker's DOs to the region.
         jurisdiction: schema.jurisdiction,
+        // Drives the emitted `listSchemaTables` — export's seed for "every table".
+        tableNames: schema.tables.map((table) => table.name),
         useUmbrella,
+        // The app's own declaration, which `emitApp` AND's with `hasVectors`.
+        // `emitApp` takes no schema (it takes the table NAMES), so the count it
+        // needs to make the same decision its siblings make has to come in.
+        vectorIndexCount: schema.vectorIndexes.length,
         // Voice-enabled agents (`defineAgent({ voice: … })`) → wire the worker's
         // `/_lunora/voice/<exportName>` route to each agent's `VOICE_*` DO
         // namespace. Empty for voice-free (and agent-free) projects, so the
@@ -889,7 +1063,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         advisorContext,
         agents,
         containers,
-        cronTriggers: emitWranglerCronTriggers(crons),
+        // Declared jobs plus the schedules `createWorker` is configured with
+        // directly (`backupCron`, `crons` keys). Both need a wrangler trigger to
+        // fire, and both count against Cloudflare's per-worker Cron Trigger cap,
+        // so the reconciler and the CLI's limit warning have to see one list.
+        cronTriggers: [...new Set([...emitWranglerCronTriggers(crons), ...entryCronTriggers])],
         generated: {
             agents: agentsContent,
             api: apiContent,
@@ -912,6 +1090,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             vectors: vectorsContent,
             workflows: workflowsContent,
         },
+        migrations,
         outputDirectory,
         platformDiagnostics: platformGate.diagnostics,
         queues,
@@ -1087,6 +1266,14 @@ export interface CodegenResult {
         /** WorkflowEntrypoint classes (`_generated/workflows.ts`); `""` (and not written) when no workflows are declared. */
         workflows: string;
     };
+
+    /**
+     * Data migrations discovered from `defineMigration` exports under `lunora/`,
+     * each with the table it iterates. The drift gate matches a NEW id against
+     * its table so a backfill only excuses breaking drift on the table it
+     * actually visits. Empty when the project declares none.
+     */
+    migrations: ReadonlyArray<MigrationIR>;
     outputDirectory: string;
 
     /**

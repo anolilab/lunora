@@ -17,7 +17,11 @@ const makeDb = (): LunoraDatabaseLike => {
         },
         findFirst: async (_table, args) => [...rows.values()].find((row) => matches(row, args?.where)) ?? null,
         findMany: async (_table, args) => {
-            return { page: [...rows.values()].filter((row) => matches(row, args?.where)) };
+            const page = [...rows.values()].filter((row) => matches(row, args?.where));
+
+            // `ctx.db.findMany` always returns `continueCursor` (`string | null`);
+            // a double that omitted it would page once and call the rest absent.
+            return { continueCursor: null, page };
         },
         insert: async (_table, document) => {
             sequence += 1;

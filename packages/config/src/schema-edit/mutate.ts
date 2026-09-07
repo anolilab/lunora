@@ -361,10 +361,8 @@ const findTableProperty = (tablesObject: ObjectLiteralExpression, table: string)
 
 /** The innermost `defineTable({ ... })` shape object for a table property. */
 const findDefineTableShape = (tableProperty: PropertyAssignment): ObjectLiteralExpression | undefined => {
-    const defineTableCall = tableProperty
-        .getInitializer()
-        ?.getDescendantsOfKind(SyntaxKind.CallExpression)
-        .find((call) => call.getExpression().getText() === "defineTable");
+    const initializer = tableProperty.getInitializer();
+    const defineTableCall = initializer === undefined ? undefined : collectCalls(initializer).find((call) => call.getExpression().getText() === "defineTable");
     const shape = defineTableCall?.getArguments()[0];
 
     return shape?.getKind() === SyntaxKind.ObjectLiteralExpression ? shape.asKindOrThrow(SyntaxKind.ObjectLiteralExpression) : undefined;

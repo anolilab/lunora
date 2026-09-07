@@ -140,6 +140,7 @@ overrides:
   "@lunora/angular": "workspace:*"
   "@lunora/astro": "workspace:*"
   "@lunora/auth": "workspace:*"
+  "@lunora/auth-ui": "workspace:*"
   "@lunora/bindings": "workspace:*"
   "@lunora/browser": "workspace:*"
   "@lunora/cli": "workspace:*"
@@ -159,9 +160,12 @@ overrides:
   "@lunora/mail": "workspace:*"
   "@lunora/mcp": "workspace:*"
   "@lunora/notify": "workspace:*"
+  "@lunora/observability": "workspace:*"
   "@lunora/nuxt": "workspace:*"
   "@lunora/payment": "workspace:*"
   "@lunora/platform": "workspace:*"
+  "@lunora/platform-cloudflare": "workspace:*"
+  "@lunora/platform-node": "workspace:*"
   "@lunora/queue": "workspace:*"
   "@lunora/ratelimit": "workspace:*"
   "@lunora/react": "workspace:*"
@@ -169,6 +173,7 @@ overrides:
   "@lunora/replica": "workspace:*"
   "@lunora/runtime": "workspace:*"
   "@lunora/scheduler": "workspace:*"
+  "@lunora/search-core": "workspace:*"
   "@lunora/shard-engine": "workspace:*"
   "@lunora/seed": "workspace:*"
   "@lunora/server": "workspace:*"
@@ -249,6 +254,9 @@ catalogs:
     husky: ^9.1.7
     prettier: 3.9.6
     prettier-plugin-svelte: 4.1.1
+    # Bump `version` in .github/workflows/react-doctor.yml to match. Nothing
+    # enforces the pair, and CI running an older tool than the repo installs
+    # reports findings a contributor cannot reproduce locally.
     react-doctor: 0.9.11
   node:
     # Exact-pinned (no caret): this is the parser `wrangler dev` runs over
@@ -706,6 +714,7 @@ catalogs:
   # in-process servers those suites boot.
   sql:
     "@electric-sql/pglite": 0.5.4
+    "@electric-sql/pglite-pgvector": 0.0.5
     "@electric-sql/pglite-socket": 0.2.7
     "@types/pg": ^8.21.0
     kysely: ^0.29.5

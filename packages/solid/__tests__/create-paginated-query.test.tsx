@@ -1,4 +1,4 @@
-import type { FunctionReference, LunoraClient } from "@lunora/client";
+import type { FunctionReference, LunoraClient, SubscriptionError } from "@lunora/client";
 import { render } from "@solidjs/testing-library";
 import { describe, expect, it, vi } from "vitest";
 
@@ -100,11 +100,13 @@ describe("createPaginatedQuery (Solid)", () => {
     it("skip short-circuits to LoadingFirstPage", async () => {
         const fake = createFakeClient();
         let capturedStatus: (() => string) | undefined;
+        let capturedIsLoading: (() => boolean) | undefined;
 
         render(
             () => {
-                const { status } = createPaginatedQuery(fn, "skip", { initialNumItems: NUM_ITEMS });
+                const { isLoading, status } = createPaginatedQuery(fn, "skip", { initialNumItems: NUM_ITEMS });
                 capturedStatus = status;
+                capturedIsLoading = isLoading;
 
                 return <pre>{status()}</pre>;
             },
@@ -115,6 +117,9 @@ describe("createPaginatedQuery (Solid)", () => {
 
         expect(capturedStatus!()).toBe("LoadingFirstPage");
         expect(fake.subscriptions).toHaveLength(0);
+        // `status` alone is "LoadingFirstPage" for a skipped feed, so a spinner
+        // bound to `isLoading` would never stop — React's `!skipped` contract.
+        expect(capturedIsLoading!()).toBe(false);
     });
 
     it("last page reports Exhausted", async () => {
@@ -139,6 +144,56 @@ describe("createPaginatedQuery (Solid)", () => {
         await flushAsync();
 
         expect(capturedStatus!()).toBe("Exhausted");
+    });
+});
+
+describe("createPaginatedQuery page errors", () => {
+    it("a page error surfaces on `error`, returns status to CanLoadMore, and lets loadMore retry", async () => {
+        const fake = createFakeClient();
+        const errors: SubscriptionError[] = [];
+        let api: ReturnType<typeof createPaginatedQuery> | undefined;
+
+        render(
+            () => {
+                api = createPaginatedQuery(fn, {}, { initialNumItems: NUM_ITEMS, onError: (error) => errors.push(error) });
+
+                return <pre>{api.status()}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        const find = (opts: Record<string, unknown>) => fake.subscriptions.find((s) => JSON.stringify(s.args) === JSON.stringify({ paginationOpts: opts }));
+
+        find({ cursor: null, endCursor: null, numItems: NUM_ITEMS })?.push({ continueCursor: "cur-1", isDone: false, page: firstPageItems });
+        await flushAsync();
+
+        api!.loadMore(NUM_ITEMS);
+        await flushAsync();
+
+        expect(api!.status()).toBe("LoadingMore");
+
+        // An RLS denial on the new page: without an error channel the feed sat
+        // in `LoadingMore` forever with `isLoading` true and nothing surfaced.
+        const tailArgs = { cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS };
+
+        find(tailArgs)?.error({ code: "FORBIDDEN", message: "denied" });
+        await flushAsync();
+
+        expect(errors).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
+        expect(api!.error()).toStrictEqual({ code: "FORBIDDEN", message: "denied" });
+        expect(api!.status()).toBe("CanLoadMore");
+        expect(api!.isLoading()).toBe(false);
+        expect(api!.results()).toStrictEqual(firstPageItems);
+
+        // The failed tail was dropped, so `loadMore` re-opens exactly that range.
+        const before = fake.subscriptions.length;
+
+        api!.loadMore(NUM_ITEMS);
+        await flushAsync();
+
+        expect(api!.error()).toBeUndefined();
+        expect(api!.status()).toBe("LoadingMore");
+        expect(fake.subscriptions.slice(before).map((s) => s.args["paginationOpts"])).toStrictEqual([tailArgs]);
     });
 });
 

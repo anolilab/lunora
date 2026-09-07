@@ -94,9 +94,9 @@ the wiring is declared in `astro.config` the idiomatic Astro way, and so future
 build-time hooks (binding reconcile, dev middleware) have a home without changing
 the public surface. It accepts one option:
 
-| Option        | Type     | Default           | Description                                                                                              |
-| ------------- | -------- | ----------------- | -------------------------------------------------------------------------------------------------------- |
-| `serverEntry` | `string` | `"src/worker.ts"` | Path (or specifier) of the module that calls `withLunora` and is the composed worker's `export default`. |
+| Option        | Type     | Default           | Description                                                                                                                            |
+| ------------- | -------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `serverEntry` | `string` | `"src/server.ts"` | Path (or specifier) of the module that composes the Lunora plane with the Astro handler and is the composed worker's `export default`. |
 
 ## Single-worker composition with `withLunora`
 
@@ -125,7 +125,7 @@ withLunora(host, options): ComposedWorker
   bindings that only exist per request, like `env.SHARD` → `shardDO`.
 
 ```ts
-// src/worker.ts
+// src/server.ts
 import { handle } from "@astrojs/cloudflare/handler";
 import { withLunora } from "@lunora/astro";
 
@@ -232,7 +232,7 @@ at your `withLunora` wrapper and declare the `ShardDO` binding:
 ```jsonc
 // wrangler.jsonc
 {
-    "main": "src/worker.ts",
+    "main": "src/server.ts",
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
@@ -240,9 +240,15 @@ at your `withLunora` wrapper and declare the `ShardDO` binding:
 }
 ```
 
-wrangler bundles `src/worker.ts` (via `@cloudflare/vite-plugin` through the Astro
-adapter), so `@astrojs/cloudflare/handler`'s `handle` resolves at build time. Run
-the Astro build first so the adapter output exists, then deploy. See
+The adapter's embedded `@cloudflare/vite-plugin` builds `src/server.ts` into
+`dist/server/entry.mjs` and writes a `.wrangler/deploy/config.json` redirect, so
+`@astrojs/cloudflare/handler`'s `handle` resolves at build time and `wrangler deploy`
+ships the adapter-built bundle. Run the Astro build first, then deploy.
+
+Do **not** name that file `src/worker.ts`: `lunora deploy` treats that exact path
+as a SvelteKit-shaped composed entry and passes it to wrangler positionally, and
+the adapter redirect's `no_bundle: true` then uploads the raw TypeScript source
+as the worker. See
 [Deploy your framework](/docs/frameworks/deploy) for the one-worker deploy story.
 
 <Callout type="info">

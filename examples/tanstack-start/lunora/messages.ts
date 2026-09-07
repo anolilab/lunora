@@ -42,7 +42,7 @@ export const board = query.input({ limit: v.optional(v.number()) }).query(async 
 
 export const send = mutation
     .use(rateLimit(limiter, "send", byCaller))
-    .input({ author: v.string().meta({ schema: { maxLength: 80 } }), body: v.string().meta({ schema: { maxLength: 140 } }) })
+    .input({ author: v.string().max(80), body: v.string().max(140) })
     .mutation(async ({ args: { author, body }, ctx }): Promise<Id<"messages">> => {
         const id = await ctx.db.insert("messages", { author, body, postedAt: Date.now() });
 

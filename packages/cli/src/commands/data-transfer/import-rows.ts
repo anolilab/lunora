@@ -7,7 +7,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import type { StorageRemapReport } from "./storage-remap";
+import type { StorageRemapReport, UnresolvedStorageReference } from "./storage-remap";
 import { remapStorageReferences } from "./storage-remap";
 
 /**
@@ -44,11 +44,37 @@ interface RowTransformConfig {
 }
 
 /**
+ * Append the unresolved references this row produced, skipping any
+ * `(table, column, storageId)` already recorded.
+ *
+ * The dedup is here rather than at display time because both the count and the
+ * printed body read the array's length: deduping only for display made the
+ * summary contradict the list under it, and left the raw array — one entry per
+ * row — to be serialised whole.
+ */
+const appendUnresolved = (target: UnresolvedStorageReference[], seen: Set<string>, entries: ReadonlyArray<UnresolvedStorageReference>): void => {
+    for (const entry of entries) {
+        const key = `${entry.table}\u0000${entry.column}\u0000${entry.storageId}`;
+
+        if (!seen.has(key)) {
+            seen.add(key);
+            target.push(entry);
+        }
+    }
+};
+
+/**
  * Build the line→row transform for one run. Returns `undefined` for a blank
  * line, which the caller skips.
  */
 const createRowTransformer = (config: RowTransformConfig): ((line: string, lineNumber: number) => string | undefined) => {
     const { remapDocument, report, storageColumns, storageIdMap, table } = config;
+    // One entry per DISTINCT `(table, column, storageId)`, not per occurrence.
+    // A wholly-unmigrated import produces one per row, so the report's own counts
+    // disagreed with the deduped list beside them ("200000 ambiguous", then 20
+    // lines and "… and 5 more") and the array itself grew to hundreds of MB.
+    const seenAmbiguous = new Set<string>();
+    const seenUnmigrated = new Set<string>();
 
     const wrapBareDocument = (trimmed: string, lineNumber: number): string => {
         // `--table` wraps each bare doc — the source is `{...}\n{...}\n`, not
@@ -114,8 +140,8 @@ const createRowTransformer = (config: RowTransformConfig): ((line: string, lineN
 
                 document = remap.document;
                 report.rewritten += remap.rewritten;
-                report.ambiguous.push(...remap.ambiguous);
-                report.unmigrated.push(...remap.unmigrated);
+                appendUnresolved(report.ambiguous, seenAmbiguous, remap.ambiguous);
+                appendUnresolved(report.unmigrated, seenUnmigrated, remap.unmigrated);
             }
 
             // Rebuild from the parsed envelope so any field beyond

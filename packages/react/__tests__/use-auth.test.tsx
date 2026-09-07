@@ -1,7 +1,8 @@
+import { LunoraClient } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { useEffect } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
 import useAuth from "../src/use-auth";
@@ -182,5 +183,48 @@ describe("useAuth", () => {
         await Promise.resolve();
 
         expect(mock.getCurrentUser).toHaveBeenCalledTimes(callsBeforeUnmount);
+    });
+
+    // Against a REAL `LunoraClient`, not the mock: `setToken` takes no subject
+    // (and no shipped adapter passes one), so the offline-queue identity has to
+    // come from somewhere else or a routine JWT refresh reads as a user switch
+    // and discards the user's queued writes and read cache. The client
+    // establishes it from the session resolve this hook already triggers.
+    it("keys the client's offline identity on the resolved user id, not the token bytes", async () => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+            const authorization = ((init?.headers ?? {}) as Record<string, string>)["authorization"] ?? "";
+
+            const url = input instanceof Request ? input.url : String(input);
+
+            return url.includes("get-session") && authorization !== ""
+                ? Response.json({ user: { id: "u_42" } }, { status: 200 })
+                : Response.json({ result: null }, { status: 200 });
+        });
+        const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example" });
+
+        render(
+            <LunoraProvider client={client}>
+                <Display />
+            </LunoraProvider>,
+        );
+
+        act(() => {
+            setTokenHandle!("jwt-1");
+        });
+
+        await waitFor(() => {
+            expect(client.currentIdentity()).toBe("subj:u_42");
+        });
+
+        // The refresh every app does. Same identity ⇒ nothing is discarded.
+        act(() => {
+            setTokenHandle!("jwt-2");
+        });
+
+        expect(client.currentIdentity()).toBe("subj:u_42");
+
+        client.close();
     });
 });

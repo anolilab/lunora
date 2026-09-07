@@ -59,6 +59,16 @@ class TestEncodeNative(unittest.TestCase):
     def test_error(self):
         self.assertEqual(encode_wire(WireError("Error", "boom")), [TAG, "error", "Error", "boom", {}])
 
+    def test_error_labels_are_coerced_so_encode_stays_decodable(self):
+        # ``decode_wire`` refuses a non-string in either label slot, so an
+        # encoder that passed them through emitted a frame its own decoder
+        # rejects — and a decoder raise on a subscription frame kills the
+        # subscription rather than surfacing the error.
+        encoded = encode_wire(WireError(5, {"a": 1}))
+
+        self.assertEqual(encoded[2], "5")
+        self.assertEqual(decode_wire(encoded).name, "5")
+
     def test_array_sentinel_escape(self):
         self.assertEqual(encode_wire([TAG, "x"]), [TAG, "arr", [TAG, "x"]])
 

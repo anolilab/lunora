@@ -18,6 +18,11 @@ interface Env extends Record<string, unknown> {
  */
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
+    // Demo/local default: this app has no auth, so shard access is left OPEN
+    // (any caller may target any shard) and data is protected by per-row RLS.
+    // A PRODUCTION sharded app must gate this instead — e.g.
+    // `.extend(() => ({ authorizeShard: ({ identity, shardKey }) => shardKey === "__root__" || identity?.userId === ownerOf(shardKey) }))`.
+    .extend(() => ({ allowUnauthenticatedShardAccess: true }))
     .build();
 
 export const ShardDO = app.ShardDO;

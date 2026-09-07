@@ -25,21 +25,30 @@ interface RlsTag {
     readonly roles: ReadonlyArray<Role>;
 }
 
-/** Attach an {@link RlsTag} to a middleware function. Returns the same reference. */
-const tagRlsMiddleware = <M extends object>(middleware: M, tag: RlsTag): M => {
-    Object.defineProperty(middleware, RLS_TAG, { configurable: true, enumerable: false, value: tag });
+/**
+ * Attach {@link RlsTag}s to a middleware function. Returns the same reference.
+ *
+ * A LIST rather than a single tag because a composing middleware
+ * (`protectPublic`, `composePluginMiddleware`) collapses N inner middlewares
+ * into one function object and must carry every inner `rls()` step's tag — and
+ * the steps cannot be flattened into one tag: a policy's `auth.can(...)` must
+ * resolve against the role→permission map of the SAME middleware that declared
+ * it.
+ */
+const tagRlsMiddleware = <M extends object>(middleware: M, tags: ReadonlyArray<RlsTag>): M => {
+    Object.defineProperty(middleware, RLS_TAG, { configurable: true, enumerable: false, value: tags });
 
     return middleware;
 };
 
-/** Read the {@link RlsTag} a middleware carries, or `undefined` for a non-RLS middleware. */
-const readRlsTag = (middleware: unknown): RlsTag | undefined => {
+/** Read the {@link RlsTag}s a middleware carries; empty for a non-RLS middleware. */
+const readRlsTags = (middleware: unknown): ReadonlyArray<RlsTag> => {
     if (middleware === null || (typeof middleware !== "function" && typeof middleware !== "object")) {
-        return undefined;
+        return [];
     }
 
-    return (middleware as Record<PropertyKey, unknown>)[RLS_TAG] as RlsTag | undefined;
+    return ((middleware as Record<PropertyKey, unknown>)[RLS_TAG] as ReadonlyArray<RlsTag> | undefined) ?? [];
 };
 
 export type { RlsTag };
-export { readRlsTag, tagRlsMiddleware };
+export { readRlsTags, tagRlsMiddleware };

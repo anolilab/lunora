@@ -39,8 +39,25 @@ interface MicrophoneConfig {
     interruptChunks: number;
     /** RMS above which the user is considered to be barging in while the agent speaks. */
     interruptThreshold: number;
-    /** `true` while `status === "speaking"` — gates barge-in detection. */
-    isSpeaking: () => boolean;
+
+    /**
+     * `true` from the moment a turn is committed until it completes — the whole
+     * `thinking` + `speaking` window, not just the audible half.
+     *
+     * It gates BOTH branches below, and the wider span is the point. Gated only
+     * on "audibly speaking", turn detection kept running through the entire
+     * STT+LLM window after a `commit`: room noise at the (deliberately low)
+     * `silenceThreshold` re-armed `sawSpeech`, another quiet gap fired a SECOND
+     * `commit`, and the DO refused it with "a turn is already in progress" —
+     * a refusal that returns before draining the audio buffer, so the PCM
+     * captured since the first commit leaked into the next utterance.
+     *
+     * A genuine barge-in still works in that window: it routes through the
+     * `onInterrupt` branch, which needs `interruptChunks` consecutive chunks at
+     * `interruptThreshold` — an order of magnitude above `silenceThreshold` —
+     * and `interrupt` is exactly what the DO tells the client to send.
+     */
+    isTurnActive: () => boolean;
     /** One 16 kHz mono 16-bit little-endian PCM frame captured from the mic. */
     onAudio: (pcm: Uint8Array) => void;
     /** A barge-in was detected (RMS spike while the agent is speaking). */
@@ -139,8 +156,10 @@ const createBrowserMicrophone: CreateMicrophone = async (config): Promise<VoiceM
 
         config.onAudio(toPcm16(samples, context.sampleRate));
 
-        // Barge-in: sustained input while the agent is speaking.
-        if (config.isSpeaking()) {
+        // Barge-in: sustained input while a turn is in flight (thinking or
+        // speaking). Turn detection is parked for the whole window — see
+        // `isTurnActive`.
+        if (config.isTurnActive()) {
             loudChunks = rms >= config.interruptThreshold ? loudChunks + 1 : 0;
 
             if (loudChunks >= config.interruptChunks) {

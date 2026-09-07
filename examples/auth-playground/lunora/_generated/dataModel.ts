@@ -43,7 +43,7 @@ export type Doc<T extends keyof DataModel> = DataModel[T];
  * Used by `TableReader.withIndex()` to constrain callers to declared names.
  */
 export interface IndexNamesByTable {
-    documents: "by_org_created";
+    documents: "by_org_owner_created";
 }
 
 export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];

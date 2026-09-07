@@ -18,11 +18,24 @@
 import type { CallExpression, Node, SourceFile } from "ts-morph";
 import { Project, SyntaxKind } from "ts-morph";
 
+import { projectUsesUmbrella } from "../detect-framework";
+
 /** Builder terminal methods — the kinds a procedure chain can end in. */
 const TERMINAL_METHODS = new Set(["action", "mutation", "query", "stream"]);
 
 /** A JS identifier, so a generated symbol/file name can't inject arbitrary text. */
 const IDENTIFIER_PATTERN = /^[A-Za-z_$][\w$]*$/u;
+
+/** Both spellings of the module the scaffolded builders come from. */
+const SERVER_MODULES: ReadonlySet<string> = new Set(["@lunora/server", "lunorash/server"]);
+
+/**
+ * The server-module specifier to scaffold into a project's own source:
+ * `lunorash/server` when the project depends on the umbrella, `@lunora/server`
+ * when it installs the granular packages. Same detection codegen and the Vite
+ * compose plugin use, so a scaffolded file imports what the emitted code does.
+ */
+const resolveServerModule = (projectRoot: string): string => (projectUsesUmbrella(projectRoot) ? "lunorash/server" : "@lunora/server");
 
 /** Scaffold a new policy/role/permission stub file under `lunora/`. */
 interface ScaffoldPolicyEdit {
@@ -86,8 +99,13 @@ type WireResult = { ok: false; reason: PolicyScaffoldFailureReason } | { ok: tru
  * predicate is a `() => false` skeleton with a TODO — the scaffolder never
  * authors real logic, the developer fills it in. Pure (no I/O); the handler
  * writes the returned source and refuses to overwrite an existing file.
+ *
+ * `serverModule` is the specifier the PROJECT can resolve the builders from
+ * (see {@link resolveServerModule}) — an umbrella-only install has no
+ * `@lunora/server` on disk, so hard-coding it would scaffold a file that
+ * cannot be bundled.
  */
-const scaffoldPolicyFile = (edit: ScaffoldPolicyEdit): ScaffoldFileResult => {
+const scaffoldPolicyFile = (edit: ScaffoldPolicyEdit, serverModule: string): ScaffoldFileResult => {
     // Both `name` and `table` flow into the generated source — `name` as
     // identifiers, `table` raw into the JSDoc prose below — so both must be
     // bare identifiers. Without this, a `table` of `*/ maliciousCode; /*` (or a
@@ -102,7 +120,7 @@ const scaffoldPolicyFile = (edit: ScaffoldPolicyEdit): ScaffoldFileResult => {
     const rolesIdentifier = `${edit.name}Roles`;
     const table = JSON.stringify(edit.table);
 
-    const source = `import { definePermission, definePolicies, definePolicy, defineRole } from "@lunora/server";
+    const source = `import { definePermission, definePolicies, definePolicy, defineRole } from "${serverModule}";
 
 /**
  * Access rules for the ${edit.table} table — scaffolded by the Lunora studio
@@ -147,17 +165,19 @@ const builderReceiver = (initializer: CallExpression): Node | undefined => {
 };
 
 /**
- * Ensure `rls` is imported from `@lunora/server`, so the appended
+ * Ensure `rls` is imported from the project's server module, so the appended
  * `.use(rls(...))` resolves and codegen keeps recognising the procedure. Adds
- * `rls` to an existing `@lunora/server` import, or inserts a fresh import; a
- * no-op when it is already imported. Purely additive — never touches other
+ * `rls` to an existing import of that module — or of the other spelling of it,
+ * so a file already importing `lunorash/server` never gains a second, granular
+ * import the project cannot resolve — otherwise inserts a fresh one. A no-op
+ * when it is already imported. Purely additive — never touches other
  * specifiers or imports.
  */
-const ensureRlsImport = (sourceFile: SourceFile): void => {
-    const serverImport = sourceFile.getImportDeclaration((declaration) => declaration.getModuleSpecifierValue() === "@lunora/server");
+const ensureRlsImport = (sourceFile: SourceFile, serverModule: string): void => {
+    const serverImport = sourceFile.getImportDeclaration((declaration) => SERVER_MODULES.has(declaration.getModuleSpecifierValue()));
 
     if (serverImport === undefined) {
-        sourceFile.addImportDeclaration({ moduleSpecifier: "@lunora/server", namedImports: ["rls"] });
+        sourceFile.addImportDeclaration({ moduleSpecifier: serverModule, namedImports: ["rls"] });
 
         return;
     }
@@ -207,7 +227,7 @@ const chainHasRls = (receiver: Node): boolean => {
  * has no chain and is reported `unsupported-procedure-shape` so the editor can
  * tell the developer to convert it rather than silently rewriting their code.
  */
-const wireRlsIntoProcedure = (source: string, edit: WireRlsEdit): WireResult => {
+const wireRlsIntoProcedure = (source: string, edit: WireRlsEdit, serverModule: string): WireResult => {
     // `policies` is interpolated into the appended `rls(...)` call, so it must be
     // a bare identifier. Guard `typeof` first — `RegExp.test` would coerce a
     // non-string and could let it slip past the pattern.
@@ -240,8 +260,8 @@ const wireRlsIntoProcedure = (source: string, edit: WireRlsEdit): WireResult => 
     receiver.replaceWithText(`${receiver.getText()}.use(rls(${edit.policies}))`);
 
     // Keep the file compiling: the appended call references `rls`, which must
-    // come from `@lunora/server` for codegen to still recognise the procedure.
-    ensureRlsImport(sourceFile);
+    // come from the server module for codegen to still recognise the procedure.
+    ensureRlsImport(sourceFile, serverModule);
 
     return { ok: true, text: sourceFile.getFullText() };
 };
@@ -256,4 +276,4 @@ export type {
     WireResult,
     WireRlsEdit,
 };
-export { classifyPolicyEdit, scaffoldPolicyFile, wireRlsIntoProcedure };
+export { classifyPolicyEdit, resolveServerModule, scaffoldPolicyFile, wireRlsIntoProcedure };

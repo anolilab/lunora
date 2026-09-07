@@ -13,7 +13,10 @@
 import { LunoraError } from "./errors";
 
 /**
- * The maximum request-body size (1 MiB) the worker's `/_lunora/*` plane accepts.
+ * The maximum request-body size (1 MiB) the planes the framework dispatches
+ * accept — the reserved `/_lunora/*` surface and the `/api/auth/*` plane. An
+ * app's own `httpRouter` routes read their own bodies and so choose their own
+ * budget; the entry-point fast-path deliberately does not pre-reject them.
  * Enforced in two layers: a cheap (forgeable) `Content-Length` fast-path at the
  * entry point, and an authoritative byte budget applied while reading the body —
  * `parseEnvelope`, `parseMigrateRequest`, `parseExportBody`, and `streamingImport`

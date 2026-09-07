@@ -36,23 +36,26 @@ interface FakeStore {
  * call with the returned cursor genuinely returns only newer changes.
  */
 const createSyncWorker = (store: FakeStore) => {
-    const orchestrateCdcSync = vi.fn<(namespace: unknown, request: { cursors?: Record<string, number>; limit?: number }) => Promise<unknown>>(
-        async (_namespace, request) => {
-            const cursors = request.cursors ?? {};
-            const limit = request.limit ?? Number.MAX_SAFE_INTEGER;
-            const shards: CdcShardOutcome[] = [];
+    const orchestrateCdcSync = vi.fn<
+        (namespace: unknown, request: { cursors?: Record<string, number>; defaultShardKey?: string; limit?: number }) => Promise<unknown>
+    >(async (_namespace, request) => {
+        const cursors = request.cursors ?? {};
+        // Mirrors the real shard (`readCdcChanges`): an ABSENT limit is not
+        // "unbounded", it clamps to 1000. The endpoint's `hasMore` has to be
+        // computed against that, not against the caller's `undefined`.
+        const limit = request.limit ?? 1000;
+        const shards: CdcShardOutcome[] = [];
 
-            for (const [shardKey, log] of Object.entries(store.logs)) {
-                const since = cursors[shardKey] ?? 0;
-                const page = log.filter((change) => change.seq > since).slice(0, limit);
-                const cursor = page.at(-1)?.seq ?? since;
+        for (const [shardKey, log] of Object.entries(store.logs)) {
+            const since = cursors[shardKey] ?? 0;
+            const page = log.filter((change) => change.seq > since).slice(0, limit);
+            const cursor = page.at(-1)?.seq ?? since;
 
-                shards.push({ changes: page, cursor, shardKey });
-            }
+            shards.push({ changes: page, cursor, shardKey });
+        }
 
-            return { failed: 0, ok: shards.length, shards };
-        },
-    );
+        return { failed: 0, ok: shards.length, shards };
+    });
 
     return {
         orchestrateCdcSync,
@@ -186,6 +189,45 @@ describe("connector sync endpoint", () => {
         const page = await syncPage(worker, { limit: 2, tables: ["messages"] });
 
         expect(page.changes).toHaveLength(2);
+        expect(page.hasMore).toBe(true);
+    });
+
+    it("forwards `defaultShardKey` so a root-DO app is synced instead of fanning out to nothing", async () => {
+        expect.assertions(2);
+
+        // A registry only knows the keys registered for `.shardBy(...)` tables, so
+        // a plain root-DO app discovers `[]`. Without the fallback this route
+        // returned `200 { changes: [], hasMore: false }` — a warehouse connector
+        // reads "caught up" forever against a full database.
+        const { orchestrateCdcSync, worker } = createSyncWorker({
+            logs: { __root__: [{ doc: { _id: "m1" }, id: "m1", op: "insert", seq: 1, table: "messages" }] },
+        });
+
+        await syncPage(worker, { tables: ["messages"] });
+
+        expect(orchestrateCdcSync.mock.calls[0]?.[1].defaultShardKey).toBe("__root__");
+        // Same fallback the sibling `/sync` route has always passed.
+        expect(orchestrateCdcSync).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports hasMore on a full shard page when the caller passed no `limit`", async () => {
+        expect.assertions(2);
+
+        // `limit` is optional and the shard clamps an absent one to 1000, so
+        // comparing the page length against `undefined` claimed "caught up" while
+        // a full page was pending: a cron poking this route with no limit drained
+        // 1000 rows per tick out of an arbitrarily large backlog.
+        const { worker } = createSyncWorker({
+            logs: {
+                c1: Array.from({ length: 1200 }, (_value, index) => {
+                    return { doc: { _id: `m${String(index)}` }, id: `m${String(index)}`, op: "insert", seq: index + 1, table: "messages" };
+                }),
+            },
+        });
+
+        const page = await syncPage(worker, { tables: ["messages"] });
+
+        expect(page.changes).toHaveLength(1000);
         expect(page.hasMore).toBe(true);
     });
 

@@ -10,8 +10,10 @@
 import { createDispatchLogger, createDispatchRunner } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
+import { decodeWire } from "../../../shared/wire-codec";
 import { workflowBindingName } from "./define-workflow";
 import type { NativeNonRetryableErrorConstructor } from "./errors";
+import { raiseNonRetryable } from "./errors";
 import type { WorkflowBindingResolver } from "./fan-out";
 import { createParallel, createSpawn } from "./fan-out";
 import { createRunStep } from "./run-step";
@@ -31,10 +33,13 @@ interface RunContextOptions<Params> {
 /** Assemble the {@link WorkflowRunContext} passed to a `defineWorkflow` handler. */
 const createWorkflowRunContext = <Params = Record<string, unknown>>(options: RunContextOptions<Params>): WorkflowRunContext<Params> => {
     const log = createDispatchLogger(`[workflow:${options.exportName}]`);
-    // The shared runner's `ctx.run` is loosely typed (`Record<string, unknown>`
-    // args); workflow's `WorkflowRunFunction` keeps the precise `ArgsOf<F>`
-    // inference, so cast — the runtime dispatch is identical, only the arg type
-    // narrows. (The `FunctionReference`/`ArgsOf` types stay per-package by design.)
+    // `@lunora/dispatch`'s runner is deliberately loose at the boundary (its
+    // `ArgsOf` collapses to `Record<string, unknown>`); this package's
+    // `WorkflowRunFunction` reads the reference's `__lunoraPhantom` instead, so a
+    // call is checked against the target function's own args. The runtime
+    // dispatch is identical — only the arg type narrows — hence the cast. (The
+    // `FunctionReference`/`ArgsOf` types stay per-package by design; the mirror
+    // is pinned by `packages/client/__tests__/structural-mirrors.test.ts`.)
     const run = createDispatchRunner({ env: options.env, fetchImpl: options.fetchImpl, label: "@lunora/workflow" }) as unknown as WorkflowRunFunction;
 
     // Resolve a child workflow's `WORKFLOW_*` binding from its export name via the
@@ -57,6 +62,14 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
     // Deterministic child-id allocator: the handler replays in the same order, so
     // a per-invocation counter yields replay-stable ids and `step.do` memoization
     // re-attaches to the existing children instead of double-spawning.
+    //
+    // Deliberately unbounded: `options.event.instanceId` is the HOST's id, at
+    // whatever length and in whatever alphabet it mints (`@lunora/platform-node`
+    // issues `<definitionId>:<uuid>`), and an explicit id is returned verbatim.
+    // The engine's 100-character ceiling is applied where the id reaches `create`
+    // — `boundInstanceId` in `fan-out.ts` — so both `ctx.parallel` and `ctx.spawn`
+    // fold through one place and neither this allocator nor any other
+    // `nextChildId` implementation has to restate the rule.
     let childCounter = 0;
     const nextChildId = (explicit?: string): string => {
         if (explicit !== undefined) {
@@ -79,12 +92,38 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
         step: options.step,
     };
 
+    // `decodeWire`, not the raw payload: a scheduled workflow's args travel in
+    // wire form because Workflow `params` are JSON-serialised into durable
+    // storage, and this is the first point that can hand the handler real
+    // `bigint`/`Date`/bytes values. Identity for pure JSON, so a directly
+    // created or spawned instance is unaffected.
+    //
+    // A payload the codec refuses is PERMANENT — the params are already in
+    // durable storage and no retry re-serialises them — but `decodeWire` throws
+    // a bare `TypeError` (malformed tag) or `RangeError` (past its depth bound),
+    // which the platform treats as retryable and re-runs until the budget is
+    // gone. Raise it non-retryably, naming the workflow, so it fails once and
+    // says why.
+    const decodeParams = (): Readonly<Params> => {
+        try {
+            return decodeWire(options.event.payload) as Readonly<Params>;
+        } catch (error) {
+            return raiseNonRetryable(
+                `@lunora/workflow: workflow "${options.exportName}" params could not be decoded — ${error instanceof Error ? error.message : String(error)}`,
+                error,
+                options.nonRetryableErrorClass,
+            );
+        }
+    };
+
+    const params = decodeParams();
+
     return {
         env: options.env,
         event: options.event,
         log,
         parallel: createParallel(fanOutDeps),
-        params: options.event.payload,
+        params,
         run,
         runStep: createRunStep({ env: options.env, log, nonRetryableErrorClass: options.nonRetryableErrorClass, run, step: options.step }),
         spawn: createSpawn(fanOutDeps),

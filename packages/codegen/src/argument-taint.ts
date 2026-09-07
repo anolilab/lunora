@@ -53,25 +53,6 @@ const memberAccessRootIdentifier = (node: TsNode): Identifier | undefined => {
     return Node.isIdentifier(current) ? current : undefined;
 };
 
-/**
- * The simple callee name of a call/`new` expression's *callee* node — the bare
- * identifier (`createPayment`) or the trailing member name of a property access
- * (`payment.createPayment` → `createPayment`), else `undefined`. The shared
- * `import`-agnostic, fail-closed name match every config/argument feeder uses, so
- * a re-export or alias still resolves.
- */
-export const calleeName = (expression: TsNode): string | undefined => {
-    if (Node.isIdentifier(expression)) {
-        return expression.getText();
-    }
-
-    if (Node.isPropertyAccessExpression(expression)) {
-        return expression.getName();
-    }
-
-    return undefined;
-};
-
 /** True when `node` is, or textually contains, a value reference to the `args` binding. */
 export const referencesArgs = (node: TsNode): boolean => referencesBinding(node, "args");
 
@@ -251,7 +232,7 @@ export const isRequestInputDerived = (node: TsNode, requestName: string): boolea
  * The export name of the nearest *exported* `const x = …` ancestor, or `"<module>"`
  * when the node isn't inside one (e.g. an inline-mounted handler). Walks out past
  * any local `const result = …` bindings to the exported declaration — matching
- * {@link import("./discover-ast").enclosingExportName} — so a sink nested in a
+ * {@link import("./discover/ast").enclosingExportName} — so a sink nested in a
  * local `const` is still attributed to its exported handler, not the local.
  */
 export const enclosingExportName = (node: TsNode): string => {

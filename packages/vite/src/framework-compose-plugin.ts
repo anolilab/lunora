@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
@@ -6,7 +6,7 @@ import type { Plugin } from "vite";
 
 import type { DetectedFramework } from "./detect-framework";
 import type { LunoraPluginContext } from "./framework-detect-plugin";
-import type { ResolvedLunoraPluginOptions } from "./types";
+import type { LunoraShardConfig, ResolvedLunoraPluginOptions } from "./types";
 
 /**
  * The virtual module id the Lunora plugin resolves to a generated, class-A
@@ -112,34 +112,26 @@ const isAutoComposable = (context: LunoraPluginContext): boolean => {
 };
 
 /**
- * Whether the project depends on the unscoped `lunorash` umbrella. When it does,
- * the composed worker must import the runtime through the umbrella subpath
- * (`lunorash/runtime`) rather than the bare `@lunora/runtime`: a umbrella-only
- * install — the default for the starter templates — never installs the granular
- * `@lunora/runtime`, so the bare specifier is unresolvable and the dev server
- * dies with `Cannot find module '@lunora/runtime' imported from
- * 'virtual:lunora/worker'`. Mirrors codegen's detection
- * (`run-codegen`: `dependencies.has("lunorash")`).
+ * The `_generated/` modules whose exported classes wrangler validates a
+ * `class_name` against: container Durable Objects, workflow entrypoints, and
+ * agent (workflow) entrypoints — the same three kinds `reconcile-bindings`
+ * writes into `wrangler.jsonc`. The composed entry star-re-exports each module
+ * the project actually has.
  */
-const projectUsesUmbrella = (projectRoot: string): boolean => {
-    try {
-        const pkg = JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf8")) as Record<string, Record<string, string> | undefined>;
+const GENERATED_CLASS_MODULES = ["agents", "containers", "workflows"] as const;
 
-        return ["dependencies", "devDependencies", "peerDependencies"].some((field) => pkg[field]?.["lunorash"] !== undefined);
-    } catch {
-        // No readable package.json → assume granular `@lunora/*` (backward-compatible default).
-        return false;
-    }
-};
+/** One {@link GENERATED_CLASS_MODULES} entry. */
+type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
 
 /**
  * Build the source of the virtual class-A worker entry. Pure (no fs / no Vite),
  * so the emitted composition is unit-testable in isolation.
  *
- * The emitted module imports the framework SSR handler + the project's
- * generated artifacts (functions registry, OpenAPI doc, `createShardDO`) and
- * composes them through `composeWorker` — reserved `/_lunora/*` paths route to
- * Lunora, everything else falls through to the framework SSR handler. The
+ * The emitted module imports the framework SSR handler and the project's
+ * generated `defineApp()` builder, and mounts the handler as the app's
+ * `httpRouter` — reserved `/_lunora/*` paths route to Lunora, everything else
+ * falls through to the framework SSR handler. `.build()` yields the whole
+ * module worker (`fetch` / `scheduled` / `queue` / `email`) plus `ShardDO`. The
  * `generatedImportBase` MUST be an absolute filesystem path to the `_generated`
  * directory. Virtual modules have no real filesystem path, so relative specifiers
  * like `./lunora/_generated/functions` cannot be resolved by Vite/rolldown from a
@@ -149,9 +141,9 @@ const projectUsesUmbrella = (projectRoot: string): boolean => {
 const buildWorkerEntrySource = (
     framework: DetectedFramework,
     generatedImportBase: string,
-    hasContainers = false,
-    useUmbrella = false,
+    classModules: ReadonlyArray<GeneratedClassModule> = [],
     allowUnauthenticatedShardAccess = false,
+    shard: LunoraShardConfig = {},
 ): string => {
     const wiring = CLASS_A_WIRING[framework];
 
@@ -167,45 +159,60 @@ const buildWorkerEntrySource = (
     // resolve `C:/…` ids fine, so the emitted imports are valid in all environments.
     const base = generatedImportBase.replaceAll("\\", "/");
 
-    // Umbrella-aware runtime import (see `projectUsesUmbrella`): the generated
-    // `_generated/*` already use `lunorash/*` for umbrella projects, so the composed
-    // worker must match or the bare `@lunora/runtime` won't resolve.
-    const runtimeModule = useUmbrella ? "lunorash/runtime" : "@lunora/runtime";
+    // wrangler refuses to deploy a `class_name` the worker doesn't export, and
+    // that rule covers ALL THREE generated class kinds — containers
+    // (`durable_objects`), workflows and agents (both `workflows[]`), which is
+    // exactly the set `reconcile-bindings` provisions. A class-A app has no
+    // hand-written entry to add the re-exports to, so the composed entry must
+    // forward every generated class itself. Emitted per module that actually
+    // exists (codegen only writes the file when the project declares that kind),
+    // otherwise the import would fail to resolve.
+    const classReexports = classModules.map((module) => `\nexport * from "${base}/${module}";\n`).join("");
 
-    // wrangler refuses to deploy a `containers[].class_name` the worker doesn't
-    // export. A class-A app has no hand-written entry to add the re-export to,
-    // so the composed entry must forward the generated container DO classes
-    // itself — but only when the project declares containers (otherwise the
-    // file doesn't exist and the import would fail).
-    const containersReexport = hasContainers ? `\nexport * from "${base}/containers";\n` : "";
+    // Each declared `shard` knob as its `defineApp()` builder call. Every
+    // `LunoraShardConfig` key is named after the builder method that sets it, so
+    // this needs no mapping table. Sorted so the emitted entry is stable across
+    // config-object literal ordering; `undefined`-valued keys are dropped so an
+    // all-default `shard` adds nothing. Values are booleans, numbers, a closed
+    // string union and a flat options object, all of which `JSON.stringify`
+    // escapes, so nothing here can break out of the call.
+    const shardCalls = Object.entries(shard)
+        .filter(([, value]) => value !== undefined)
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([key, value]) => `\n    .${key}(${JSON.stringify(value)})`)
+        .join("");
 
+    // The composed entry goes through the generated `defineApp()` builder rather
+    // than calling `composeWorker` itself.
+    //
+    // A class-A app has no hand-written worker entry to call `defineApp()` FROM,
+    // so this file is its only route to it — and hand-rolling `composeWorker`
+    // here meant re-deriving, by hand, everything codegen already knows: the
+    // module worker's `scheduled` / `queue` / `email` entrypoints, `cronJobs`,
+    // `listSchemaTables`, `logArchive`, the studio's KV + vector introspectors,
+    // `identity`, `jurisdiction`, `workflowsClient`, `notifySubscriptionStore`,
+    // the `.global()` D1 writer, and the whole `createShardDO` config. It
+    // derived four of them, so `lunora deploy` would provision a cron trigger
+    // (or a queue consumer) into a worker with no `scheduled` (or `queue`)
+    // export and Cloudflare fired it into nothing.
+    //
+    // `.build()` returns the module-worker object itself, so every handler
+    // codegen wired is forwarded by construction — a handler added later cannot
+    // go missing here again.
     return `// Generated by @lunora/vite — class-A worker composition (PLAN4 M2).
 // Do not edit: emitted from the detected framework (${framework}). Point your
 // wrangler \`main\` here (or re-export it) instead of hand-wiring createWorker.
-import { composeWorker } from "${runtimeModule}";
 ${wiring.imports}
-import { LUNORA_FUNCTIONS } from "${base}/functions";
-import { openApiSpec } from "${base}/openapi";
-import { createShardDO } from "${base}/shard";
+import { defineApp } from "${base}/app";
 
-export const ShardDO = createShardDO();
-${containersReexport}
+const app = defineApp()
+    .shard((env) => env.SHARD)
+    .httpRouter(${wiring.handler})${shardCalls}${allowUnauthenticatedShardAccess ? "\n    .extend(() => ({ allowUnauthenticatedShardAccess: true }))" : ""}
+    .build();
 
-let worker;
-
-export default {
-    async fetch(request, env, context) {
-        worker ??= composeWorker({${allowUnauthenticatedShardAccess ? "\n            allowUnauthenticatedShardAccess: true," : ""}
-            functions: LUNORA_FUNCTIONS,
-            httpRouter: ${wiring.handler},
-            openApiSpec,
-            routes: {},
-            shardDO: env.SHARD,
-        });
-
-        return worker.fetch(request, env, context);
-    },
-};
+export const ShardDO = app.ShardDO;
+${classReexports}
+export default app;
 `;
 };
 
@@ -227,7 +234,9 @@ export default {
  * resolves/loads nothing. `cloudflare: false` does NOT disable the virtual
  * entry — it only means "don't add the Cloudflare Vite plugin a second time"
  * (the user supplied it themselves); the composed worker must still be
- * resolvable so the user-supplied CF plugin can find the wrangler `main`.
+ * resolvable so the user-supplied CF plugin can find the wrangler `main`. The
+ * vinext template depends on exactly that, so making this plugin honour the
+ * option would break it.
  */
 export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, context: LunoraPluginContext): Plugin => {
     // Virtual modules have no real filesystem path, so relative specifiers like
@@ -235,7 +244,6 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
     // `\0virtual:lunora/worker`. We must use an absolute path so the bundler can
     // locate the files regardless of the virtual module's (non-existent) base dir.
     const generatedImportBase = resolve(options.projectRoot, options.generatedDir.replace(TRAILING_SLASH, ""));
-    const useUmbrella = projectUsesUmbrella(options.projectRoot);
 
     return {
         load(id) {
@@ -249,17 +257,18 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
                     return CLIENT_WORKER_STUB;
                 }
 
-                // `_generated/containers.ts` exists only when the project declares
-                // containers; codegen has already run by load time, so this fs
-                // check decides whether the composed entry re-exports them.
-                const hasContainers = existsSync(join(generatedImportBase, "containers.ts"));
+                // `_generated/{agents,containers,workflows}.ts` each exist only when
+                // the project declares that kind; codegen has already run by load
+                // time, so these fs checks decide which star re-exports the composed
+                // entry carries.
+                const classModules = GENERATED_CLASS_MODULES.filter((module) => existsSync(join(generatedImportBase, `${module}.ts`)));
 
                 return buildWorkerEntrySource(
                     context.framework.framework,
                     generatedImportBase,
-                    hasContainers,
-                    useUmbrella,
+                    classModules,
                     options.allowUnauthenticatedShardAccess,
+                    options.shard,
                 );
             }
 
@@ -276,5 +285,5 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
     };
 };
 
-export type { ClassAWiring };
-export { buildWorkerEntrySource, CLASS_A_WIRING, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID, RESOLVED_LUNORA_WORKER_ID };
+export type { ClassAWiring, GeneratedClassModule };
+export { buildWorkerEntrySource, CLASS_A_WIRING, GENERATED_CLASS_MODULES, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID, RESOLVED_LUNORA_WORKER_ID };

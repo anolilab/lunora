@@ -11,6 +11,13 @@ import { LunoraError } from "@lunora/errors";
 
 import type { StreamingFetchLike } from "./shared";
 
+/**
+ * The status the admin import endpoint answers when at least one shard could not
+ * be reached. `Response.ok` is TRUE for 207, so it must be tested explicitly —
+ * an `ok` gate alone reports a partial import as a success.
+ */
+const PARTIAL_IMPORT_STATUS = 207;
+
 /** One row-scoped failure as the admin import endpoint reports it. */
 interface ImportRowError {
     code: string;
@@ -19,10 +26,25 @@ interface ImportRowError {
     table: string;
 }
 
+/**
+ * One SHARD the fan-out never reached, as the admin import endpoint reports it.
+ *
+ * Distinct from {@link ImportRowError}: the rows a dead shard owned contribute
+ * to neither `inserted` nor `errors`, so an unknown slice of the batch is simply
+ * missing. The endpoint answers 207 Multi-Status when this array is non-empty.
+ */
+interface ImportShardFailure {
+    message: string;
+    shardKey: string;
+    timedOut: boolean;
+}
+
 /** The admin import endpoint's response body. */
 interface AdminImportResponse {
     conflicts?: number;
     errors?: ImportRowError[];
+    /** Shards the fan-out never reached — non-empty means the endpoint answered 207. */
+    failed?: ImportShardFailure[];
     inserted?: Record<string, number>;
     received?: number;
     warnings?: string[];
@@ -32,6 +54,8 @@ interface AdminImportResponse {
 interface ImportTotals {
     conflicts: number;
     errors: ImportRowError[];
+    /** Shards no batch could reach. Non-empty means rows are missing, not merely rejected. */
+    failed: ImportShardFailure[];
     inserted: Record<string, number>;
     received: number;
     warnings: string[];
@@ -56,7 +80,7 @@ interface ImportBatcher {
 }
 
 const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
-    const totals: ImportTotals = { conflicts: 0, errors: [], inserted: {}, received: 0, warnings: [] };
+    const totals: ImportTotals = { conflicts: 0, errors: [], failed: [], inserted: {}, received: 0, warnings: [] };
     let batch: string[] = [];
     let batchBytes = 0;
 
@@ -67,6 +91,7 @@ const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
         }
 
         totals.errors.push(...(json.errors ?? []));
+        totals.failed.push(...(json.failed ?? []));
         totals.conflicts += json.conflicts ?? 0;
         totals.received += json.received ?? 0;
 
@@ -101,13 +126,31 @@ const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
         // with `inserted` unchanged when the server rejected a batch (auth
         // failure, 5xx, malformed bearer), silently dropping rows.
         // `response.json()` could also throw on a non-JSON error body.
-        if (!response.ok) {
+        //
+        // 207 Multi-Status is checked SEPARATELY and before anything reads
+        // `response.ok`, because `ok` is TRUE for 207: a partial import — some
+        // shard the fan-out never reached, its rows in neither `inserted` nor
+        // `errors` — otherwise reported as a clean success at the CLI, which is
+        // exactly the silent-success class this endpoint's 207 exists to remove.
+        if (!response.ok && response.status !== PARTIAL_IMPORT_STATUS) {
             const text = await response.text().catch(() => "<no body>");
 
             throw new LunoraError("INTERNAL", `import batch failed (HTTP ${String(response.status)}): ${text}`);
         }
 
-        merge((await response.json()) as AdminImportResponse);
+        const json = (await response.json()) as AdminImportResponse;
+
+        merge(json);
+
+        // A 207 whose body carries no `failed[]` is a contract violation, not a
+        // clean batch: record it rather than letting the run report success.
+        if (response.status === PARTIAL_IMPORT_STATUS && (json.failed ?? []).length === 0) {
+            totals.failed.push({
+                message: `the endpoint answered ${String(PARTIAL_IMPORT_STATUS)} without naming the failed shards`,
+                shardKey: "<unknown>",
+                timedOut: false,
+            });
+        }
     };
 
     const push = async (row: string): Promise<void> => {
@@ -138,5 +181,5 @@ const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
     return { flush, push, totals };
 };
 
-export type { AdminImportResponse, ImportBatcher, ImportRowError, ImportTotals };
-export { createImportBatcher };
+export type { AdminImportResponse, ImportBatcher, ImportRowError, ImportShardFailure, ImportTotals };
+export { createImportBatcher, PARTIAL_IMPORT_STATUS };

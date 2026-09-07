@@ -12,9 +12,12 @@
  * threw.
  */
 import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
-import { readLiveDevServerState } from "@lunora/config";
+import { DEV_STATE_DIR, readLiveDevServerState } from "@lunora/config";
 import type { McpTool, ToolResult } from "@lunora/mcp";
+
+import isInsideDirectory from "../../util/path-containment";
 
 /** Log lines returned when the caller doesn't ask for a specific number. */
 const DEFAULT_LOG_LINES = 100;
@@ -39,6 +42,29 @@ const readLineCount = (raw: unknown): number => {
     }
 
     return Math.min(MAX_LOG_LINES, Math.max(1, Math.floor(parsed)));
+};
+
+/**
+ * The `logFile` recorded in `.lunora/dev.json`, but only when it is the
+ * project's own `.lunora/` log.
+ *
+ * The record is data read off disk, not an argument this command was given: it
+ * is written by whatever last ran in the checkout and travels with a copied
+ * project directory. An absolute path there otherwise names any file on the
+ * machine, and `lunora_dev_logs` would read it back into the model's context
+ * verbatim (`~/.ssh/id_ed25519`, `.dev.vars`, another project's secrets). The
+ * only path a dev server legitimately records is one `@lunora/config` itself
+ * puts in `.lunora/`, so anything else is refused. `undefined` reads to the
+ * caller exactly like "no log file recorded".
+ */
+const containedLogFile = (projectRoot: string, logFile: string | undefined): string | undefined => {
+    if (logFile === undefined) {
+        return undefined;
+    }
+
+    const stateDirectory = resolve(projectRoot, DEV_STATE_DIR);
+
+    return isInsideDirectory(stateDirectory, resolve(projectRoot, logFile)) ? resolve(projectRoot, logFile) : undefined;
 };
 
 /** The last `count` lines of `path`. */
@@ -79,7 +105,7 @@ const devTools = (projectRoot: string): ReadonlyArray<McpTool> => [
 
             return ok({
                 background: state.background === true,
-                logFile: state.logFile,
+                logFile: containedLogFile(projectRoot, state.logFile),
                 mode: state.mode,
                 pid: state.pid,
                 running: true,
@@ -112,7 +138,9 @@ const devTools = (projectRoot: string): ReadonlyArray<McpTool> => [
                 return { content: [{ text: "no dev server is running — start one with `lunora dev`", type: "text" }], isError: true };
             }
 
-            if (state.logFile === undefined || !existsSync(state.logFile)) {
+            const logFile = containedLogFile(projectRoot, state.logFile);
+
+            if (logFile === undefined || !existsSync(logFile)) {
                 return {
                     content: [
                         {
@@ -125,7 +153,7 @@ const devTools = (projectRoot: string): ReadonlyArray<McpTool> => [
             }
 
             const lines = readLineCount(input.lines);
-            const body = tailLines(state.logFile, lines);
+            const body = tailLines(logFile, lines);
 
             return text(body.length === 0 ? "(the dev server log is empty)" : body);
         },

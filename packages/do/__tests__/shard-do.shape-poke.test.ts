@@ -74,6 +74,15 @@ class ShapePokeShard extends ShardDO {
 
                 break;
             }
+            // A write to a table no shape in this suite watches, so the flush it
+            // triggers carries `changed = {roomMembers}` and still advances the CDC
+            // cursor — the "unrelated table" half of the empty-advance path.
+            case "rooms:join": {
+                await writer.insert("roomMembers", { _id: args["_id"], roomId: args["roomId"] ?? "r1", userId: "u1" }, { allowExplicitId: true });
+                this.recordChangedTable("roomMembers");
+
+                return { ok: true };
+            }
             default: {
                 break;
             }
@@ -245,6 +254,71 @@ describe("shardDO shape poke protocol (dispatch path)", () => {
         await shard.fetch(write("messages:send", { _id: "m2", channelId: "c1", text: "three" }));
 
         expect(partBases(ws)[2]).toBe(afterFirst);
+    });
+
+    /**
+     * A failed poke has to survive the next flush on an UNRELATED table.
+     *
+     * The shape's memo is deliberately left where it was when a send fails, so the
+     * rows are re-emitted. But the next flush that does not touch the shape's table
+     * used to force-advance that memo's `cursor` straight past the undelivered
+     * range while `delivered` stayed behind — so the rows were never diffed again,
+     * and the poke after that stamped `baseCheckpoint = delivered`, exactly where
+     * the client already was. The client's own gap check therefore PASSED and it
+     * spliced newer rows onto a permanently incomplete view.
+     *
+     * Both flushes are required to see it: a suite that only fails one send watches
+     * the (correct) re-emit on the next write to the same table and never reaches
+     * the force-advance.
+     */
+    it("re-delivers rows a failed poke owes even when the next flush changes another table", async () => {
+        expect.assertions(4);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new ShapePokeShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+        sockets.push(ws);
+
+        await subscribeShape(shard, ws, "c1");
+        ws.sent.length = 0;
+
+        // Flush A — the shape's own table changes, but the poke never lands. The
+        // realistic trigger is an oversized `pokePart` frame on an otherwise
+        // healthy socket: `pokeStart` is already on the wire when the part throws.
+        const healthy = ws.send.bind(ws);
+
+        ws.send = (data: string): void => {
+            if ((JSON.parse(data) as { type: string }).type === "pokePart") {
+                throw new Error("frame too large");
+            }
+
+            healthy(data);
+        };
+
+        await shard.fetch(write("messages:send", { _id: "m1", channelId: "c1", text: "owed" }));
+
+        expect(pokeOps(ws)).toStrictEqual([]);
+
+        ws.send = healthy;
+        ws.sent.length = 0;
+
+        // Flush B — an unrelated table. The shape is absent from `changed`, which
+        // is the force-advance the client can never recover from.
+        await shard.fetch(write("rooms:join", { _id: "rm1", roomId: "r1" }));
+
+        expect(pokeOps(ws)).toStrictEqual([{ key: "m1", op: "insert", table: "messages", value: expect.objectContaining({ _id: "m1", text: "owed" }) }]);
+
+        // …and the shape is settled again afterwards: the next in-channel write
+        // carries only its own row, stamped against the checkpoint the re-delivery
+        // above actually reached.
+        const redeliveredAt = endCheckpoints(ws).at(-1);
+
+        ws.sent.length = 0;
+
+        await shard.fetch(write("messages:send", { _id: "m2", channelId: "c1", text: "after" }));
+
+        expect(pokeOps(ws)).toStrictEqual([{ key: "m2", op: "insert", table: "messages", value: expect.objectContaining({ _id: "m2", text: "after" }) }]);
+        expect(partBases(ws)[0]).toBe(redeliveredAt);
     });
 
     it("pokes an insert when a new row joins the shape", async () => {
@@ -643,6 +717,43 @@ describe("shardDO shape poke: durable poke-cursor survival (plan 326)", () => {
         expect(readShapePokeCursor(harness.sql, "conn-7", "s1")).toBeDefined();
     });
 
+    it("removes every durable cursor for a socket on webSocketError, which workerd dispatches INSTEAD of webSocketClose", async () => {
+        expect.assertions(3);
+
+        // workerd's hibernation manager dispatches exactly one termination event
+        // per socket (`legacy-hibernation-manager.c++`,
+        // `handleSocketTermination`): a premature `DISCONNECTED` becomes a
+        // synthetic 1006 close, and every OTHER exception — a protocol error, an
+        // event timeout, a `webSocketMessage` handler that threw — becomes an
+        // error event with no close to follow. An empty `webSocketError` stub
+        // therefore orphans this socket's `__shape_poke_cursor` rows under a
+        // `connectionId` that can never reconnect, and `minShapePokeCursor` is a
+        // `SELECT MIN(cursor)` over the whole table, so ONE orphan pins CDC
+        // retention permanently.
+        const sockets: FakeWebSocket[] = [];
+        const shard = new ShapePokeShard(makeState(sockets), {});
+        const wsA = createFakeWebSocket();
+        const wsB = createFakeWebSocket();
+
+        wsA.attachment = { connectionId: "conn-err-1", subs: {} };
+        wsB.attachment = { connectionId: "conn-err-2", subs: {} };
+        sockets.push(wsA, wsB);
+
+        await subscribeShape(shard, wsA, "c1");
+        await shard.webSocketMessage(
+            wsA as unknown as WebSocket,
+            JSON.stringify({ id: "s2", shape: { args: { channelId: "c2" }, name: "messagesByChannel" }, type: "shape_subscribe" }),
+        );
+        await subscribeShape(shard, wsB, "c1");
+
+        await shard.webSocketError(wsA as unknown as WebSocket, new Error("connection reset"));
+
+        expect(readShapePokeCursor(harness.sql, "conn-err-1", "s1")).toBeUndefined();
+        expect(readShapePokeCursor(harness.sql, "conn-err-1", "s2")).toBeUndefined();
+        // Untouched: a different socket's connection.
+        expect(readShapePokeCursor(harness.sql, "conn-err-2", "s1")).toBeDefined();
+    });
+
     it("still purges durable cursors and clears the attachment when lifecycle dispatch throws", async () => {
         expect.assertions(3);
 
@@ -698,8 +809,12 @@ describe("shardDO shape poke: durable poke-cursor survival (plan 326)", () => {
         // Install a relay whose drain rejects. The unit harness has no relay
         // (`announceDrain` is skipped), and close touches no other relay method
         // — but a subscribe does, so this lands after the subscribe above.
-        (shard as unknown as { relay: { announceDrain: () => Promise<void> } }).relay = {
+        (shard as unknown as { relay: { announceDrain: () => Promise<void>; releaseRelayShapes: () => Promise<void> } }).relay = {
             announceDrain: () => Promise.reject(new Error("relay detach failed")),
+            // The close path also releases this socket's relayed shape
+            // registrations; a relay double that omits it fails on the wrong
+            // call and hides the drain failure this test is about.
+            releaseRelayShapes: () => Promise.resolve(),
         };
 
         await expect(shard.webSocketClose(ws as unknown as WebSocket, 1000, "", true)).rejects.toThrow("dispatch machinery failed");
@@ -709,9 +824,10 @@ describe("shardDO shape poke: durable poke-cursor survival (plan 326)", () => {
         consoleError.mockRestore();
     });
 
-    it("surfaces a relay drain failure when the lifecycle dispatch succeeded", async () => {
-        expect.assertions(2);
+    it("logs a relay drain failure rather than failing the close handler", async () => {
+        expect.assertions(3);
 
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
         const sockets: FakeWebSocket[] = [];
         const shard = new ShapePokeShard(makeState(sockets), {});
         const ws = createFakeWebSocket();
@@ -723,13 +839,51 @@ describe("shardDO shape poke: durable poke-cursor survival (plan 326)", () => {
         // Install a relay whose drain rejects. The unit harness has no relay
         // (`announceDrain` is skipped), and close touches no other relay method
         // — but a subscribe does, so this lands after the subscribe above.
-        (shard as unknown as { relay: { announceDrain: () => Promise<void> } }).relay = {
+        (shard as unknown as { relay: { announceDrain: () => Promise<void>; releaseRelayShapes: () => Promise<void> } }).relay = {
             announceDrain: () => Promise.reject(new Error("relay detach failed")),
+            // The close path also releases this socket's relayed shape
+            // registrations; a relay double that omits it fails on the wrong
+            // call and hides the drain failure this test is about.
+            releaseRelayShapes: () => Promise.resolve(),
         };
 
-        // Nothing else in flight → the relay error is the one the runtime sees…
-        await expect(shard.webSocketClose(ws as unknown as WebSocket, 1000, "", true)).rejects.toThrow("relay detach failed");
+        // The detach is a fire-and-forget control frame — a dropped one falls
+        // back to the coarser reclamation. Rejecting out of `webSocketClose`
+        // would instead fail a Durable Object close event, which the runtime can
+        // only answer by breaking the actor and every OTHER socket on this
+        // shard. So it resolves and the failure is logged…
+        await expect(shard.webSocketClose(ws as unknown as WebSocket, 1000, "", true)).resolves.toBeUndefined();
+        expect(consoleError).toHaveBeenCalledWith("[@lunora/do] relay drain failed during socket close:", expect.any(Error));
         // …and the teardown ahead of it still ran.
         expect(readShapePokeCursor(harness.sql, "conn-10", "s1")).toBeUndefined();
+
+        consoleError.mockRestore();
+    });
+
+    it("logs a relayed-shape release failure rather than failing the close handler", async () => {
+        expect.assertions(3);
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const sockets: FakeWebSocket[] = [];
+        const shard = new ShapePokeShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+
+        ws.attachment = { connectionId: "conn-11", subs: {} };
+        sockets.push(ws);
+
+        await subscribeShape(shard, ws, "c1");
+        // Same contract as the drain above: the release is a best-effort
+        // cross-DO post whose loss is reclaimed on detach/full drain. It must
+        // not be able to fail the close handler either.
+        (shard as unknown as { relay: { announceDrain: () => Promise<void>; releaseRelayShapes: () => Promise<void> } }).relay = {
+            announceDrain: () => Promise.resolve(),
+            releaseRelayShapes: () => Promise.reject(new Error("relay shape release failed")),
+        };
+
+        await expect(shard.webSocketClose(ws as unknown as WebSocket, 1000, "", true)).resolves.toBeUndefined();
+        expect(consoleError).toHaveBeenCalledWith("[@lunora/do] relay shape release failed during socket close:", expect.any(Error));
+        expect(ws.attachment).toBeUndefined();
+
+        consoleError.mockRestore();
     });
 });

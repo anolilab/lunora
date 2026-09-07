@@ -15,7 +15,7 @@ import { mask } from "lunorash/server";
 
 import { query } from "./_generated/server";
 
-export const listUsers = query.use(mask({ users: { email: "redact" } })).query(async ({ ctx }) => ctx.db.findMany("users"));
+export const listUsers = query.use(mask({ users: { email: "redact" } })).query(async ({ ctx }) => ctx.db.users.findMany());
 // every `email` in the result comes back as null
 ```
 
@@ -40,7 +40,7 @@ export const listUsers = query
             },
         }),
     )
-    .query(async ({ ctx }) => ctx.db.findMany("users"));
+    .query(async ({ ctx }) => ctx.db.users.findMany());
 ```
 
 ## Roles and bypass
@@ -68,7 +68,7 @@ export const listUsers = query
             },
         ),
     )
-    .query(async ({ ctx }) => ctx.db.findMany("users"));
+    .query(async ({ ctx }) => ctx.db.users.findMany());
 ```
 
 A `MaskFn` also sees the **original, un-masked row** as `context.row`, so it can

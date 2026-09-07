@@ -1,10 +1,11 @@
+import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
-import { LunoraError } from "../src/error";
-
 /**
- * `LunoraError` is the canonical thrown type: the runtime's structural error
- * mapper keys off `name === "LunoraError"` plus the numeric `status`, so the
+ * `LunoraError` is the canonical thrown type, and there is exactly one class —
+ * `@lunora/server` re-exports `@lunora/errors`' rather than subclassing it. The
+ * structural mapper keys off `isLunoraError` (an `Error` carrying the
+ * `VisulimaError` brand, a string `code` and a numeric `status`), so the
  * code→status table is a wire contract. These lock the mapping (a regression
  * would mis-status every handler/middleware throw) and the message defaulting.
  */

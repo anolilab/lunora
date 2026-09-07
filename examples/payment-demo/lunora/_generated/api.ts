@@ -19,7 +19,7 @@ export const api = anyApi as unknown as ApiTypes;
 /** Internal functions — callable only server-side via `ctx.run*`, never from a client. */
 export interface InternalApiTypes {
     billing: {
-        processWebhook: FunctionReference<"action", { body: string; signature: string }, { applied: boolean; status: number; }>;
+        processWebhook: FunctionReference<"action", { body: string; headers: Record<string, string> }, { applied: boolean; status: number; }>;
     };
 }
 

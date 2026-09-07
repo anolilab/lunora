@@ -28,7 +28,7 @@ import { isInteractive, promptYesNo } from "@lunora/config";
 import type { BackupManifestEntry, BackupRetentionPreview, PrunedBackups } from "@lunora/runtime";
 import { backupObjectKeyOfManifest } from "@lunora/runtime";
 
-import { resolveAdminBearer } from "../../util/admin-token";
+import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -297,14 +297,6 @@ interface PitrRequest {
 
 /** Validate the guards and resolve the token / URL / fetch for a `pitr` call. Logs and returns `undefined` on any failure. */
 const resolvePitrRequest = (options: BackupCommandOptions): PitrRequest | undefined => {
-    const token = options.token ?? process.env.LUNORA_ADMIN_TOKEN;
-
-    if (!token) {
-        options.logger.error("admin token required — pass --token or set LUNORA_ADMIN_TOKEN");
-
-        return undefined;
-    }
-
     if (options.prod && options.url === undefined) {
         options.logger.error("--prod requires an explicit --url (refusing to target the implicit localhost worker)");
 
@@ -317,15 +309,29 @@ const resolvePitrRequest = (options: BackupCommandOptions): PitrRequest | undefi
         return undefined;
     }
 
-    if (options.restore === true && options.prod === true && options.yes !== true) {
-        options.logger.error("pitr --restore --prod restores production data in place. Re-run with --yes to confirm.");
+    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
+
+    if (baseUrl === undefined) {
+        return undefined;
+    }
+
+    // Gated on the RESOLVED destination, not on `--prod`: a `--restore` at a
+    // deployed `--url` is an in-place restore of live data whether or not the
+    // operator remembered to also declare the flag.
+    if (options.restore === true && targetsRemoteWorker({ prod: options.prod, url: baseUrl }) && options.yes !== true) {
+        options.logger.error(`pitr --restore restores data in place at ${baseUrl}, which is not local. Re-run with --yes to confirm.`);
 
         return undefined;
     }
 
-    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
+    // Through the shared resolver, like this file's other two admin paths, and
+    // after `baseUrl` because the `.dev.vars` fallback is loopback-gated. `pitr`
+    // was the one leg still reading `--token`/the environment only.
+    const { token } = resolveAdminBearer({ cwd: options.cwd ?? process.cwd(), token: options.token, url: baseUrl });
 
-    if (baseUrl === undefined) {
+    if (!token) {
+        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
+
         return undefined;
     }
 
@@ -393,7 +399,24 @@ const runBackupPitr = async (options: BackupCommandOptions): Promise<BackupComma
  */
 const resolveDestination = (options: BackupCommandOptions, cwd: string): BackupDestination | undefined => {
     if (options.bucket === undefined) {
+        // `--prefix` selects a key prefix INSIDE an R2 bucket; a local directory
+        // has no such thing. Refused rather than ignored, exactly as `retention`
+        // and `prune` refuse a destination flag that does not apply to them:
+        // `backup list --prefix archive/` silently listed the local directory and
+        // reported "no backups found" for an archive that was there all along.
+        if (options.prefix !== undefined) {
+            options.logger.error("--prefix applies only to an R2 destination — pass --bucket alongside it, or use --dir to point at a local directory.");
+
+            return undefined;
+        }
+
         return createDirectoryDestination(join(cwd, options.dir ?? DEFAULT_BACKUP_DIR));
+    }
+
+    if (options.dir !== undefined) {
+        options.logger.error("--dir applies only to a local destination and does not apply alongside --bucket — drop one.");
+
+        return undefined;
     }
 
     if (options.prod === true && options.url === undefined) {

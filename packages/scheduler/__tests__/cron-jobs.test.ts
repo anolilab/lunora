@@ -14,7 +14,7 @@ interface ParityCase {
 
 const parityCases: ParityCase[] = (JSON.parse(readFileSync(new URL("cron-parity.json", import.meta.url), "utf8")) as { cases: ParityCase[] }).cases;
 
-const fnRef = (ref: string): FunctionReference => {
+const fnRef = (ref: string): FunctionReference<"mutation"> => {
     return { __lunoraRef: ref };
 };
 

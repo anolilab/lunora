@@ -212,6 +212,56 @@ describe("relation_references_unknown_field", () => {
 
         expect(relationReferencesUnknownField.run({ schema: fromServerSchema(schema) })).toHaveLength(0);
     });
+
+    // `many` reverses which table owns which column: the FK `field` lives on the
+    // TARGET (`@lunora/server`'s `many: … the FK field lives on the target table,
+    // matching this table's references`), `references` on the holder. Without
+    // these two cases the swap could be dropped or inverted and every to-many
+    // relation in every schema would raise a false build-failing ERROR.
+    it("flags a `many` relation whose FK column is missing from the TARGET table", () => {
+        expect.assertions(2);
+
+        const schema = defineSchema({
+            posts: defineTable({ title: v.string() }),
+            users: defineTable({ name: v.string() }).relations((r) => {
+                return { posts: r.many("posts", { field: "authorId" }) };
+            }),
+        });
+
+        const findings = relationReferencesUnknownField.run({ schema: fromServerSchema(schema) });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]?.metadata).toMatchObject({ column: "authorId", owner: "posts", side: "field" });
+    });
+
+    it("flags a `many` relation whose `references` column is missing from the HOLDER table", () => {
+        expect.assertions(2);
+
+        const schema = defineSchema({
+            posts: defineTable({ authorId: v.string() }),
+            users: defineTable({ name: v.string() }).relations((r) => {
+                return { posts: r.many("posts", { field: "authorId", references: "ghostKey" }) };
+            }),
+        });
+
+        const findings = relationReferencesUnknownField.run({ schema: fromServerSchema(schema) });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]?.metadata).toMatchObject({ column: "ghostKey", owner: "users", side: "references" });
+    });
+
+    it("stays silent on a correctly-wired `many` relation", () => {
+        expect.assertions(1);
+
+        const schema = defineSchema({
+            posts: defineTable({ authorId: v.string() }),
+            users: defineTable({ name: v.string() }).relations((r) => {
+                return { posts: r.many("posts", { field: "authorId" }) };
+            }),
+        });
+
+        expect(relationReferencesUnknownField.run({ schema: fromServerSchema(schema) })).toHaveLength(0);
+    });
 });
 
 describe("global_table_near_column_limit", () => {

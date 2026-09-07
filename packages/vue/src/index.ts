@@ -31,6 +31,8 @@ export type {
     PaginationStatus,
     Preloaded,
     ReturnOf,
+    SubscriptionError,
+    SubscriptionErrorCallback,
     Unsubscribe,
     UseQueryOptions,
     User,
@@ -56,7 +58,7 @@ export { useAgentToolEvents } from "./use-agent-tool-events";
 export type { UseAuthResult } from "./use-auth";
 export { useAuth } from "./use-auth";
 export { default as useConnectionStatus } from "./use-connection-status";
-export type { FlagContext, FlagValue } from "./use-flag";
+export type { FlagValue } from "./use-flag";
 export { useFlag, useFlags } from "./use-flag";
 export type { MutationHandle } from "./use-mutation";
 export { useMutation } from "./use-mutation";

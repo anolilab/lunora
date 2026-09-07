@@ -54,6 +54,14 @@ export interface AgentStepLike {
  * @experimental
  */
 export interface AgentToolContext {
+    /**
+     * How many sub-agent delegations deep this run already is — 0 for a run a
+     * user started, one more per `agent.asTool` hop. The loop copies it off
+     * {@link AgentRunInput.depth}; `agent.asTool` reads it to refuse spawning a
+     * child past the delegation-depth bound (see `as-tool.ts`). Absent is 0.
+     */
+    depth?: number;
+
     /** The Worker environment bindings. */
     env: Record<string, unknown>;
 
@@ -75,6 +83,15 @@ export interface AgentToolContext {
     idempotencyKey: string;
 
     /**
+     * Verified owner of the thread this run belongs to (the loop copies it off
+     * {@link AgentRunInput.owner}); `undefined` on an anonymous/single-tenant
+     * thread. `agent.asTool` forwards it to the CHILD run, so a sub-agent thread
+     * under an owned parent inherits the same RLS scope instead of being created
+     * ownerless — which left it readable by anyone who knew its key.
+     */
+    owner?: string;
+
+    /**
      * Emit an EPHEMERAL progress event for this tool call on the agent's live
      * channel — the same live-only sink the streamed token deltas ride. NOT
      * persisted and NEVER replayed: it fires only while `execute` runs inside the
@@ -85,6 +102,7 @@ export interface AgentToolContext {
      * {@link AgentToolContext.toolCallId}. `data` must be JSON-serializable.
      */
     reportProgress: (data: unknown) => void;
+
     /** Dispatch a Lunora function (the workflow `ctx.run`). */
     run: AgentRunFunction;
 
@@ -851,8 +869,21 @@ export interface AgentVoiceConfig {
     /**
      * Spoken on connect before the first user turn — a fixed greeting synthesized
      * through the TTS model. Omit for a silent-until-spoken-to session.
+     *
+     * Synthesized once per THREAD, not once per socket: the greeting's persisted
+     * row is keyed per thread, and a reconnect onto a thread that already exists
+     * gets the `ready` frame without paying for the same line again.
      */
     greeting?: string;
+
+    /**
+     * Cap on how many turns one voice socket may run before it is closed with
+     * code `4002`. Every turn is a full LLM generation plus sentence-by-sentence
+     * TTS — billed and persisted — on a hibernatable socket that can live for
+     * days, and the one-turn-in-flight guard throttles nothing. Defaults to 100;
+     * a client that hits the cap reconnects for a fresh budget.
+     */
+    maxTurns?: number;
 
     /**
      * TTS voice/speaker id forwarded to the TTS model (e.g. a Deepgram Aura voice
@@ -893,7 +924,7 @@ export interface AgentAsToolOptions {
     /** What the sub-agent does — shown to the parent's model (it decides from it). */
     description: string;
 
-    /** Cap on child-run status polls before giving up. Default 120. */
+    /** Cap on child-run status polls before giving up — a positive integer. Default 600 (with the 500 ms default interval, a five-minute budget). */
     maxPolls?: number;
 
     /**
@@ -959,6 +990,15 @@ export type EnsureThreadOutcome =
  * @experimental
  */
 export interface AgentRunInput {
+    /**
+     * Sub-agent delegation depth. A run a user starts omits it (0); each
+     * `agent.asTool` hop stamps its child one deeper, and the tool refuses to
+     * delegate past the bound — `maxTurns` bounds one level's turns, this bounds
+     * the TREE (every hop mints a distinct child `threadKey`, so the per-thread
+     * run-queue cap never applies across them).
+     */
+    depth?: number;
+
     /** The user message that starts (or continues) the thread. */
     input: string;
 
@@ -1076,6 +1116,15 @@ export interface AgentMessageRow {
 export interface AgentToolCall {
     id: string;
     input: unknown;
+
+    /**
+     * Why this call was REJECTED before it could run: the model's arguments
+     * failed the tool's input schema, or did not parse as JSON. Present only on
+     * a rejected call — the loop records it as a recoverable tool result and
+     * never executes the tool, because the `input` above is the raw value the
+     * provider sent, not a validated one.
+     */
+    invalid?: string;
     name: string;
 }
 

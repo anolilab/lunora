@@ -145,6 +145,54 @@ describe("createWorker — code-defined cron jobs", () => {
 
         await expect(worker.scheduled({ cron: CRON, scheduledTime: 0 }, {}, fakeContext)).rejects.toThrow(/WORKFLOW_MISSING/u);
     });
+
+    it("warns when a firing cron expression matches nothing at all", async () => {
+        expect.assertions(3);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        try {
+            const shard = createShardSpy();
+            const worker = createWorker({
+                cronJobs: { [CRON]: [{ args: {}, functionPath: "presence:clear", name: "clear presence" }] },
+                shardDO: shard.namespace,
+            });
+
+            // `wrangler.jsonc`'s triggers.crons drifted from the generated map:
+            // Cloudflare fires this expression, nothing is registered under it,
+            // and without the warning the invocation is a silent success.
+            await worker.scheduled({ cron: "0 0 * * *", scheduledTime: 0 }, {}, fakeContext);
+
+            const message = warn.mock.calls.flat().join(" ");
+
+            expect(shard.calls).toHaveLength(0);
+            expect(message).toContain("0 0 * * *");
+            expect(message).toContain(CRON);
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    it("does not warn when the firing expression did run a job", async () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        try {
+            const shard = createShardSpy();
+            const worker = createWorker({
+                cronJobs: { [CRON]: [{ args: {}, functionPath: "presence:clear", name: "clear presence" }] },
+                shardDO: shard.namespace,
+            });
+
+            await worker.scheduled({ cron: CRON, scheduledTime: 0 }, {}, fakeContext);
+
+            expect(shard.calls).toHaveLength(1);
+            expect(warn.mock.calls.flat().join(" ")).not.toContain("no cron handler");
+        } finally {
+            warn.mockRestore();
+        }
+    });
 });
 
 describe("createWorker — `authorizeShard` gates callers, never system dispatch", () => {
@@ -201,6 +249,30 @@ describe("createWorker — `authorizeShard` gates callers, never system dispatch
 
         expect(response.status).toBe(200);
         expect(shard.calls[0]?.shardKey).toBe("tenant-7");
+    });
+
+    it("refuses a wrong bearer with DISPATCH_UNAUTHENTICATED, not the per-call FORBIDDEN", async () => {
+        expect.assertions(3);
+
+        const shard = createShardSpy();
+        const worker = createWorker({ adminToken: "admin-secret", shardDO: shard.namespace });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/scheduler/dispatch", {
+                body: JSON.stringify({ args: {}, functionPath: "digests:flush", id: "job-1", shardKey: "tenant-7" }),
+                headers: { authorization: "Bearer stale-secret" }, // gitleaks:allow -- test fixture bearer, deliberately not the admin token above
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(403);
+        // The code is what dispatch consumers classify on: a rotated token fails
+        // every message identically, so it must stay retryable rather than being
+        // acked as a poison message.
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "DISPATCH_UNAUTHENTICATED" } });
+        expect(shard.calls).toHaveLength(0);
     });
 
     it("still rejects an anonymous end user with that same gate", async () => {

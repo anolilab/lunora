@@ -1,4 +1,4 @@
-import type { FunctionReference, Preloaded } from "@lunora/client";
+import type { FunctionReference, Preloaded, SubscriptionErrorCallback } from "@lunora/client";
 import type { Accessor } from "solid-js";
 import { createSignal } from "solid-js";
 
@@ -26,8 +26,12 @@ import { onMounted } from "./solid-compat";
  * Mount callbacks do not run on the server during SSR (both Solid majors defer
  * them until after hydration), so the subscription is strictly client-side —
  * the seed is the only value the server render ever sees.
+ *
+ * Pass `onError` to surface a subscription-scoped error the server pushes (a
+ * session expiry, an RLS denial). Without it such an error is dropped and the
+ * accessor keeps rendering the SSR snapshot as if it were live.
  */
-const hydratePreloaded = <T>(preloaded: Preloaded<T>): Accessor<T> => {
+const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: { onError?: SubscriptionErrorCallback } = {}): Accessor<T> => {
     const client = useLunora();
 
     const { args, functionPath, shardKey, value } = preloaded;
@@ -38,7 +42,7 @@ const hydratePreloaded = <T>(preloaded: Preloaded<T>): Accessor<T> => {
 
     const functionRef: FunctionReference = { __lunoraRef: functionPath };
 
-    onMounted(() => client.subscribe(functionRef, args, (next) => setData(() => next as T), { shardKey }));
+    onMounted(() => client.subscribe(functionRef, args, (next) => setData(() => next as T), { onError: options.onError, shardKey }));
 
     return data;
 };

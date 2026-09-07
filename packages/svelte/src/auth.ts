@@ -3,6 +3,7 @@ import { getIdentityStore } from "@lunora/client/auth";
 import type { Readable } from "svelte/store";
 import { derived, readable } from "svelte/store";
 
+import { isBrowser } from "../../../shared/is-browser";
 import { getLunoraClient } from "./context";
 
 interface AuthStore {
@@ -20,6 +21,14 @@ interface AuthStore {
  * reader and close when the last unsubscribes. Calling `setToken(jwt)` after
  * sign-in refreshes both stores.
  *
+ * Both subscribes are client-only, like every other subscribing primitive here:
+ * `$token` / `$user` in a template subscribe during `renderToString`. For the
+ * user store that is not just a stray listener — the identity store kicks off
+ * `getCurrentUser()` on its first subscriber, so an unguarded server render
+ * issues a round-trip against a client whose URL does not resolve there. Both
+ * stores still report the client's current values on the server; only the live
+ * updates are withheld, until hydration.
+ *
  * Pass an explicit client to bypass the ambient context (useful in tests).
  */
 const auth = (explicitClient?: ReturnType<typeof getLunoraClient>): AuthStore => {
@@ -29,6 +38,10 @@ const auth = (explicitClient?: ReturnType<typeof getLunoraClient>): AuthStore =>
     const token = readable<string | null>(client.getAuthToken(), (set) => {
         set(client.getAuthToken());
 
+        if (!isBrowser()) {
+            return () => {};
+        }
+
         return client.onAuthTokenChange((next) => {
             set(next);
         });
@@ -36,6 +49,10 @@ const auth = (explicitClient?: ReturnType<typeof getLunoraClient>): AuthStore =>
 
     const user = readable<User | null>(store.getUser(), (set) => {
         set(store.getUser());
+
+        if (!isBrowser()) {
+            return () => {};
+        }
 
         return store.subscribe(() => {
             set(store.getUser());

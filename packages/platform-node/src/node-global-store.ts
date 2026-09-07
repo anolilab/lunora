@@ -177,6 +177,10 @@ export const createNodeGlobalStore = (options: NodeGlobalStoreOptions = {}): Nod
                 await runSqlCdcMigration(exec, sqliteDialect);
             }
         },
-        writer: (writerOptions) => createSqlCtxDb({ ...writerOptions, dialect: sqliteDialect, exec }),
+        // `exec` doubles as the provisioning scope: it is built once per store
+        // (closed over above, not per call), while the host builds a writer per
+        // request — so without it each writer would re-run the whole
+        // CREATE-IF-NOT-EXISTS sweep before its first `.global()` access.
+        writer: (writerOptions) => createSqlCtxDb({ ...writerOptions, dialect: sqliteDialect, exec, provisionScope: exec }),
     };
 };

@@ -60,7 +60,7 @@ const CRON_FIELD_SPLIT_PATTERN = /\s+/u;
  * Exported (not module-private) because it is the ONE place this advisory is
  * written: the runtime `cronJobs()` builder reaches it via
  * {@link assertValidCronExpression}, and `@lunora/codegen`'s static
- * `discover-crons.ts` calls it directly after its own `isValidCronExpression`
+ * `discover/crons.ts` calls it directly after its own `isValidCronExpression`
  * check — so a hand-authored 6-field `.cron()` warns whether it's discovered
  * from source at build time or registered at runtime, with one shared message.
  */

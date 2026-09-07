@@ -3,6 +3,7 @@ import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useState } from "react";
 
+import { decodeWire, encodeWire } from "../../../../../shared/wire-codec";
 import { ConfirmButton } from "../../components/confirm-button";
 import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";
@@ -23,13 +24,27 @@ interface ExportImportPanelProps {
 const EXPORT_SHARD = adminRef(ADMIN_FUNCTIONS.exportShard);
 const IMPORT_SHARD = adminRef(ADMIN_FUNCTIONS.importShard);
 
-/** Serialise export rows to NDJSON — one `{table,doc}` object per line. */
-const toNdjson = (rows: ExportRow[]): string => rows.map((row) => JSON.stringify(row)).join("\n");
+/**
+ * Serialise export rows to NDJSON — one `{table,doc}` object per line.
+ *
+ * Encoded with `encodeWire`, not stringified bare. The client `decodeWire`s
+ * every admin reply, so a `v.bigint()` column reaches this panel as a real
+ * `bigint` (which `JSON.stringify` THROWS on — the whole export fails) and a
+ * `v.bytes()` column as an `ArrayBuffer` (which flattens to `{}` — the export
+ * "succeeds" and the bytes are gone). The wire codec is identity for pure JSON,
+ * so an ordinary table's NDJSON is byte-identical to before, and
+ * {@link parseNdjson} decodes symmetrically so the round trip restores types.
+ */
+const toNdjson = (rows: ExportRow[]): string => rows.map((row) => JSON.stringify(encodeWire(row))).join("\n");
 
 /**
  * Parse NDJSON back into export rows, skipping blank lines. Throws on the first
  * line that is not a valid `{table, doc}` object so the operator gets a precise
  * failure instead of a partial import.
+ *
+ * Each line is `decodeWire`d — the inverse of {@link toNdjson} — so a bigint /
+ * bytes cell is a native value again before `client.query` re-encodes it for the
+ * wire. Decoding is identity for pure JSON, so hand-written NDJSON still imports.
  */
 const parseNdjson = (text: string): ExportRow[] => {
     const rows: ExportRow[] = [];
@@ -43,7 +58,7 @@ const parseNdjson = (text: string): ExportRow[] => {
             continue;
         }
 
-        const parsed = JSON.parse(line) as unknown;
+        const parsed = decodeWire(JSON.parse(line));
 
         if (typeof parsed !== "object" || parsed === null) {
             throw new LunoraError("INTERNAL", `line ${(index + 1).toString()}: expected a { table, doc } object`);

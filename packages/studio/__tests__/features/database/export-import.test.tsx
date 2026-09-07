@@ -84,4 +84,44 @@ describe("exportImportPanel", () => {
 
         expect(importResult.textContent).toContain("Inserted 1");
     });
+
+    it("round-trips a bigint / bytes row through export and import with its types intact", async () => {
+        expect.assertions(3);
+
+        // The client wire-decodes every admin reply, so a `v.bigint()` column
+        // reaches the panel as a real bigint (which `JSON.stringify` THROWS on,
+        // failing the whole export) and a `v.bytes()` column as an ArrayBuffer
+        // (which flattens to `{}`, so the export "succeeds" and the bytes are
+        // gone). The exported text has to be re-importable as the same values.
+        const blob = Uint8Array.from([1, 2, 3, 4]).buffer;
+        const imported: ExportRow[] = [];
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.exportShard) {
+                    return { rows: [{ doc: { __id__: "l1", amount: 42n, blob }, table: "ledger" }] };
+                }
+
+                imported.push(...(args as { rows: ExportRow[] }).rows);
+
+                return { conflicts: 0, errors: [], inserted: { ledger: 1 } };
+            },
+        });
+
+        render(renderPanel(mock));
+        fireEvent.click(screen.getByTestId("ei-export"));
+
+        await screen.findByText("Exported 1 rows.");
+
+        // Round-trip the exported text straight back through Import.
+        fireEvent.click(screen.getByTestId("ei-import"));
+        fireEvent.click(screen.getByTestId("ei-import-confirm"));
+
+        await screen.findByTestId("ei-import-result");
+
+        const [row] = imported;
+
+        expect(imported).toHaveLength(1);
+        expect((row?.doc as Record<string, unknown>)["amount"]).toBe(42n);
+        expect(new Uint8Array((row?.doc as Record<string, unknown>)["blob"] as ArrayBuffer)).toStrictEqual(new Uint8Array([1, 2, 3, 4]));
+    });
 });

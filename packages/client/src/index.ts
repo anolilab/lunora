@@ -18,7 +18,16 @@ export { TabCoordinator } from "./cross-tab";
 export type { MutationDelta } from "./delta-merge";
 export { applyDelta, isMutationDelta } from "./delta-merge";
 export type { LunoraErrorCode } from "./errors";
-export { CONFLICT_ERROR_CODE, getErrorCode, getRetryAfterMs, isConflictError, isForbiddenError, isRateLimitedError, isUnauthorizedError } from "./errors";
+export {
+    CONFLICT_ERROR_CODE,
+    getErrorCode,
+    getRetryAfterMs,
+    isConflictError,
+    isForbiddenError,
+    isRateLimitedError,
+    isUnauthorizedError,
+    TransportError,
+} from "./errors";
 export type { HttpStreamOptions } from "./http-stream";
 export { httpStream } from "./http-stream";
 export type { OptimisticLocalStore, OptimisticUpdate } from "./local-store";
@@ -107,6 +116,7 @@ export type {
     RpcEnvelope,
     RpcResponseBody,
     ScheduleRecord,
+    ScheduleRetryPolicy,
     SchedulerPoolStatus,
     SchedulerStatus,
     ServerMessage,

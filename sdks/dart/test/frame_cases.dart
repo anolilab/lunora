@@ -233,3 +233,83 @@ void casePokePartsDoNotApplyBeforePokeEnd() {
 
   equals(fired, 0, 'the view would be torn if parts applied before pokeEnd');
 }
+
+/// A reconnect has to re-subscribe the SHAPE views too.
+///
+/// `resendSubscriptions` walked only the query registry, so after the first
+/// socket drop every `subscribeShape` view stopped receiving pokes for the rest
+/// of the process's life, and nothing said so.
+void caseShapeSubscriptionsResendAfterReconnect() {
+  covers('shape_subscriptions_resend_after_reconnect');
+
+  final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+
+  client.subscribe('messages:list', args: <String, Object?>{'channel': 'general'});
+  client.subscribeShape('roomMessages', args: <String, Object?>{'room': 'general'});
+
+  // The cursors a resume carries are written by the frame handler, so they have
+  // to exist before the resend is built.
+  client.handleFrame(jsonEncode(<String, Object?>{'type': 'data', 'id': 'sub_1', 'data': <Object?>[], 'cursor': 9, 'epoch': 'e1'}));
+  client.handleFrame(jsonEncode(<String, Object?>{'type': 'pokeStart', 'pokeId': 'poke-1', 'epoch': 'e1'}));
+  client.handleFrame(jsonEncode(<String, Object?>{'type': 'pokePart', 'pokeId': 'poke-1', 'shapeId': 'shape_1', 'reset': true, 'rowsPatch': <Object?>[]}));
+  client.handleFrame(jsonEncode(<String, Object?>{'type': 'pokeEnd', 'pokeId': 'poke-1', 'checkpoint': 5, 'epoch': 'e1'}));
+
+  final resent = <Map<String, Object?>>[];
+
+  client
+    ..attachSocket(resent.add)
+    ..resendSubscriptions();
+
+  equals(canonical(<Object?>[for (final frame in resent) frame['type']]), canonical(<Object?>['subscribe', 'shape_subscribe']), 'BOTH registries resend');
+
+  if (resent.length != 2) {
+    return;
+  }
+
+  equals((resent[0]['query']! as Map<String, Object?>)['sinceSeq'], 9, 'the query frame carries its resume cursor');
+  equals(resent[1]['id'], 'shape_1', 'the shape frame is addressed at the live view');
+  equals((resent[1]['shape']! as Map<String, Object?>)['name'], 'roomMessages', 'the shape frame names the shape');
+  equals(canonical((resent[1]['shape']! as Map<String, Object?>)['args']), canonical(<String, Object?>{'room': 'general'}), 'and carries its args');
+  equals(resent[1]['sinceCheckpoint'], 5, 'the shape resumes from the checkpoint it materialised');
+  equals(resent[1]['sinceEpoch'], 'e1', 'and from the epoch it saw');
+}
+
+/// A payload the codec refuses must not end the socket read loop.
+///
+/// It reaches THAT subscription's error callback coded `INVALID_FRAME`; letting
+/// it escape `handleFrame` killed the caller's loop and with it every other
+/// subscription on the client, over one bad frame.
+void caseRefusedPayloadReachesTheSubscriptionNotTheReadLoop() {
+  covers('server_frame_consumer');
+
+  final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+  final errors = <LunoraSubscriptionError>[];
+  final second = <Object?>[];
+
+  client.subscribe('messages:list', onError: errors.add);
+  client.subscribe('messages:other', onData: second.add);
+
+  // A bigint tag whose payload is not a number — the codec rejects it.
+  final Object? kind = client.handleFrame(
+    jsonEncode(<String, Object?>{
+      'type': 'data',
+      'id': 'sub_1',
+      'data': <String, Object?>{
+        'amount': <Object?>[wireTag, 'bigint', 'not-a-number'],
+      },
+    }),
+  );
+
+  equals(kind, 'error', 'the refusal is reported as an error frame rather than thrown');
+  equals(errors.length, 1, 'the refusal reaches the addressed subscription');
+  equals(errors.isEmpty ? null : errors.first.code, 'INVALID_FRAME', 'coded so a consumer can classify it');
+
+  pushData(client, 'sub_2', <Object?>['still here']);
+
+  equals(
+      canonical(second),
+      canonical(<Object?>[
+        <Object?>['still here'],
+      ]),
+      'every OTHER subscription keeps delivering');
+}

@@ -47,6 +47,25 @@ export interface MiddlewareNext<ContextIn> {
  */
 export type Middleware<ContextIn, ContextOut> = (options: { ctx: ContextIn; next: MiddlewareNext<ContextIn> }) => ContextOut | Promise<ContextOut>;
 
+/**
+ * The context a `.use(...)` step actually receives: the procedure context plus
+ * `args`, the call's arguments as declared by `.input(...)` up to this point in
+ * the chain.
+ *
+ * A middleware that gates on the payload — a CAPTCHA token, a signup email —
+ * has nowhere else to read it from: the procedure context carries the resolved
+ * identity, not the request body. `args` is surfaced only AFTER the validators
+ * have run, and as a frozen shallow copy, so a middleware cannot rewrite what
+ * the handler is then handed.
+ *
+ * This is a PROCEDURE-builder surface. `httpAction` / `httpRoute` have no
+ * `.use()` chain at all (`HttpActionCtx` is not a builder context) — an HTTP
+ * handler reads its own `request` / `searchParams` / `body` and calls the
+ * underlying helper (`verifyTurnstile(...)`, `assertEmailAllowed(...)`) inline,
+ * or mounts a hono middleware.
+ */
+export type MiddlewareContext<Context, Args extends ArgsValidator> = Context & { readonly args: Readonly<InferArgs<Args>> };
+
 /** Options accepted by `initLunora.dataModel<DM>().create(...)`. Reserved for transformer/error-formatter wiring. */
 export type CreateOptions = Record<never, never>;
 
@@ -72,14 +91,17 @@ export interface QueryBuilder<Context, Args extends ArgsValidator, Output = unde
     input: <A extends ArgsValidator>(validators: A) => QueryBuilder<Context, A & Args, Output>;
 
     /**
-     * Attach static, per-procedure metadata. Merges across calls, is readable
-     * from middleware as `ctx.meta`, and is stamped onto the registration as
-     * `fn.meta` so codegen and other tooling can enumerate it.
+     * Attach static, per-procedure metadata. Merges across calls and is readable
+     * from middleware as `ctx.meta`.
      *
      * The point is policy that is DATA rather than a call: `.meta({ rateLimit:
-     * "pins/create" })` can be walked to generate a rate-limit registry or docs,
-     * where the same policy expressed only as `.use(rateLimit("pins/create"))`
-     * can only be executed. Mirrors tRPC's `.meta()`.
+     * "pins/create" })` lets ONE generic middleware read the policy it is meant
+     * to enforce off `ctx.meta`, where the same policy expressed only as
+     * `.use(rateLimit("pins/create"))` has to be re-parameterised at every
+     * `.use()` site. Mirrors tRPC's `.meta()`. The value is structured-cloned
+     * and deep-frozen: the same copy reaches every request, so it must not be
+     * mutable, and the object you passed stays yours (unfrozen). It must be
+     * structured-cloneable data — a function or class instance is rejected.
      */
     meta: (value: Record<string, unknown>) => QueryBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => QueryBuilder<Context, Args, Infer<V>>;
@@ -92,8 +114,14 @@ export interface QueryBuilder<Context, Args extends ArgsValidator, Output = unde
      * async generator (or any function returning an `AsyncIterable<R>`) that
      * yields one chunk per server-pushed frame. The third `signal` argument is
      * tripped when the client cancels — break out of the loop or check
-     * `signal.aborted` between yields. `.output()` does not apply: per-chunk
-     * validation is opt-in via the handler itself.
+     * `signal.aborted` between yields.
+     *
+     * **Unavailable after `.output()`, deliberately.** Chunks are yielded as-is —
+     * there is no per-chunk validation — so `.output(...).stream(...)` used to
+     * compile and quietly enforce nothing, which is worse than not offering the
+     * combination: the author asked for validation and was told yes. Declaring an
+     * output on a stream is now a type error rather than a false promise. Validate
+     * inside the handler, or return the whole payload from `.query()` instead.
      *
      * Pass `{ durable: true }` to make the run outlive the socket that opened
      * it: chunks are persisted as they are produced, so a reload resumes the
@@ -101,11 +129,13 @@ export interface QueryBuilder<Context, Args extends ArgsValidator, Output = unde
      * second client with the same arguments attaches to the same transcript.
      * That is what an LLM response wants; a progress ticker does not need it.
      */
-    stream: <R>(
-        handler: (options: { args: InferArgs<Args>; ctx: Context; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
-        options?: StreamOptions,
-    ) => RegisteredStream<Args, R>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => QueryBuilder<ContextOut, Args, Output>;
+    stream: [Output] extends [undefined]
+        ? <R>(
+              handler: (options: { args: InferArgs<Args>; ctx: Context; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
+              options?: StreamOptions,
+          ) => RegisteredStream<Args, R>
+        : never;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => QueryBuilder<ContextOut, Args, Output>;
 
     /**
      * Mark this query as paid. The origin worker answers an unpaid client RPC
@@ -129,21 +159,24 @@ export interface MutationBuilder<Context, Args extends ArgsValidator, Output = u
     input: <A extends ArgsValidator>(validators: A) => MutationBuilder<Context, A & Args, Output>;
 
     /**
-     * Attach static, per-procedure metadata. Merges across calls, is readable
-     * from middleware as `ctx.meta`, and is stamped onto the registration as
-     * `fn.meta` so codegen and other tooling can enumerate it.
+     * Attach static, per-procedure metadata. Merges across calls and is readable
+     * from middleware as `ctx.meta`.
      *
      * The point is policy that is DATA rather than a call: `.meta({ rateLimit:
-     * "pins/create" })` can be walked to generate a rate-limit registry or docs,
-     * where the same policy expressed only as `.use(rateLimit("pins/create"))`
-     * can only be executed. Mirrors tRPC's `.meta()`.
+     * "pins/create" })` lets ONE generic middleware read the policy it is meant
+     * to enforce off `ctx.meta`, where the same policy expressed only as
+     * `.use(rateLimit("pins/create"))` has to be re-parameterised at every
+     * `.use()` site. Mirrors tRPC's `.meta()`. The value is structured-cloned
+     * and deep-frozen: the same copy reaches every request, so it must not be
+     * mutable, and the object you passed stays yours (unfrozen). It must be
+     * structured-cloneable data — a function or class instance is rejected.
      */
     meta: (value: Record<string, unknown>) => MutationBuilder<Context, Args, Output>;
     mutation: [Output] extends [undefined]
         ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredMutation<Args, Awaited<R>>
         : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredMutation<Args, Output>;
     output: <V extends Validator>(validator: V) => MutationBuilder<Context, Args, Infer<V>>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => MutationBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => MutationBuilder<ContextOut, Args, Output>;
 
     /**
      * Mark this mutation as paid. The origin worker answers an unpaid client RPC
@@ -170,18 +203,21 @@ export interface ActionBuilder<Context, Args extends ArgsValidator, Output = und
     input: <A extends ArgsValidator>(validators: A) => ActionBuilder<Context, A & Args, Output>;
 
     /**
-     * Attach static, per-procedure metadata. Merges across calls, is readable
-     * from middleware as `ctx.meta`, and is stamped onto the registration as
-     * `fn.meta` so codegen and other tooling can enumerate it.
+     * Attach static, per-procedure metadata. Merges across calls and is readable
+     * from middleware as `ctx.meta`.
      *
      * The point is policy that is DATA rather than a call: `.meta({ rateLimit:
-     * "pins/create" })` can be walked to generate a rate-limit registry or docs,
-     * where the same policy expressed only as `.use(rateLimit("pins/create"))`
-     * can only be executed. Mirrors tRPC's `.meta()`.
+     * "pins/create" })` lets ONE generic middleware read the policy it is meant
+     * to enforce off `ctx.meta`, where the same policy expressed only as
+     * `.use(rateLimit("pins/create"))` has to be re-parameterised at every
+     * `.use()` site. Mirrors tRPC's `.meta()`. The value is structured-cloned
+     * and deep-frozen: the same copy reaches every request, so it must not be
+     * mutable, and the object you passed stays yours (unfrozen). It must be
+     * structured-cloneable data — a function or class instance is rejected.
      */
     meta: (value: Record<string, unknown>) => ActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => ActionBuilder<Context, Args, Infer<V>>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => ActionBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => ActionBuilder<ContextOut, Args, Output>;
 
     /**
      * Mark this action as paid. The origin worker answers an unpaid client RPC
@@ -204,14 +240,17 @@ export interface InternalQueryBuilder<Context, Args extends ArgsValidator, Outpu
     input: <A extends ArgsValidator>(validators: A) => InternalQueryBuilder<Context, A & Args, Output>;
 
     /**
-     * Attach static, per-procedure metadata. Merges across calls, is readable
-     * from middleware as `ctx.meta`, and is stamped onto the registration as
-     * `fn.meta` so codegen and other tooling can enumerate it.
+     * Attach static, per-procedure metadata. Merges across calls and is readable
+     * from middleware as `ctx.meta`.
      *
      * The point is policy that is DATA rather than a call: `.meta({ rateLimit:
-     * "pins/create" })` can be walked to generate a rate-limit registry or docs,
-     * where the same policy expressed only as `.use(rateLimit("pins/create"))`
-     * can only be executed. Mirrors tRPC's `.meta()`.
+     * "pins/create" })` lets ONE generic middleware read the policy it is meant
+     * to enforce off `ctx.meta`, where the same policy expressed only as
+     * `.use(rateLimit("pins/create"))` has to be re-parameterised at every
+     * `.use()` site. Mirrors tRPC's `.meta()`. The value is structured-cloned
+     * and deep-frozen: the same copy reaches every request, so it must not be
+     * mutable, and the object you passed stays yours (unfrozen). It must be
+     * structured-cloneable data — a function or class instance is rejected.
      */
     meta: (value: Record<string, unknown>) => InternalQueryBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => InternalQueryBuilder<Context, Args, Infer<V>>;
@@ -223,7 +262,7 @@ export interface InternalQueryBuilder<Context, Args extends ArgsValidator, Outpu
         handler: (options: { args: InferArgs<Args>; ctx: Context; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
         options?: StreamOptions,
     ) => RegisteredStream<Args, R>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalQueryBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalQueryBuilder<ContextOut, Args, Output>;
 }
 
 export interface InternalMutationBuilder<Context, Args extends ArgsValidator, Output = undefined> {
@@ -232,21 +271,24 @@ export interface InternalMutationBuilder<Context, Args extends ArgsValidator, Ou
     input: <A extends ArgsValidator>(validators: A) => InternalMutationBuilder<Context, A & Args, Output>;
 
     /**
-     * Attach static, per-procedure metadata. Merges across calls, is readable
-     * from middleware as `ctx.meta`, and is stamped onto the registration as
-     * `fn.meta` so codegen and other tooling can enumerate it.
+     * Attach static, per-procedure metadata. Merges across calls and is readable
+     * from middleware as `ctx.meta`.
      *
      * The point is policy that is DATA rather than a call: `.meta({ rateLimit:
-     * "pins/create" })` can be walked to generate a rate-limit registry or docs,
-     * where the same policy expressed only as `.use(rateLimit("pins/create"))`
-     * can only be executed. Mirrors tRPC's `.meta()`.
+     * "pins/create" })` lets ONE generic middleware read the policy it is meant
+     * to enforce off `ctx.meta`, where the same policy expressed only as
+     * `.use(rateLimit("pins/create"))` has to be re-parameterised at every
+     * `.use()` site. Mirrors tRPC's `.meta()`. The value is structured-cloned
+     * and deep-frozen: the same copy reaches every request, so it must not be
+     * mutable, and the object you passed stays yours (unfrozen). It must be
+     * structured-cloneable data — a function or class instance is rejected.
      */
     meta: (value: Record<string, unknown>) => InternalMutationBuilder<Context, Args, Output>;
     mutation: [Output] extends [undefined]
         ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredMutation<Args, Awaited<R>>
         : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredMutation<Args, Output>;
     output: <V extends Validator>(validator: V) => InternalMutationBuilder<Context, Args, Infer<V>>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalMutationBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalMutationBuilder<ContextOut, Args, Output>;
 }
 
 export interface InternalActionBuilder<Context, Args extends ArgsValidator, Output = undefined> {
@@ -258,18 +300,21 @@ export interface InternalActionBuilder<Context, Args extends ArgsValidator, Outp
     input: <A extends ArgsValidator>(validators: A) => InternalActionBuilder<Context, A & Args, Output>;
 
     /**
-     * Attach static, per-procedure metadata. Merges across calls, is readable
-     * from middleware as `ctx.meta`, and is stamped onto the registration as
-     * `fn.meta` so codegen and other tooling can enumerate it.
+     * Attach static, per-procedure metadata. Merges across calls and is readable
+     * from middleware as `ctx.meta`.
      *
      * The point is policy that is DATA rather than a call: `.meta({ rateLimit:
-     * "pins/create" })` can be walked to generate a rate-limit registry or docs,
-     * where the same policy expressed only as `.use(rateLimit("pins/create"))`
-     * can only be executed. Mirrors tRPC's `.meta()`.
+     * "pins/create" })` lets ONE generic middleware read the policy it is meant
+     * to enforce off `ctx.meta`, where the same policy expressed only as
+     * `.use(rateLimit("pins/create"))` has to be re-parameterised at every
+     * `.use()` site. Mirrors tRPC's `.meta()`. The value is structured-cloned
+     * and deep-frozen: the same copy reaches every request, so it must not be
+     * mutable, and the object you passed stays yours (unfrozen). It must be
+     * structured-cloneable data — a function or class instance is rejected.
      */
     meta: (value: Record<string, unknown>) => InternalActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => InternalActionBuilder<Context, Args, Infer<V>>;
-    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalActionBuilder<ContextOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalActionBuilder<ContextOut, Args, Output>;
 }
 
 /** The public root builders plus their `internal*` counterparts, returned by `.create()`. */

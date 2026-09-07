@@ -80,31 +80,26 @@ const toStream = (input: ImageInput): ReadableStream<Uint8Array> => {
  * Clamp `width`/`height` to `[1, maxDimension]` (integers) so a malformed or
  * hostile request can't request an absurd canvas. Other transform keys pass
  * through untouched — the binding owns their validation.
- *
- * The URL-form `draw` key (overlays referenced by `url`) is dropped: on the
- * binding path overlays are applied via the `overlays` argument and the `draw`
- * step, so passing it to `binding.transform(...)` would be a confusing no-op.
  */
 const sanitizeTransform = (transform: TransformOptions | undefined, maxDimension: number): TransformOptions => {
     if (transform === undefined) {
         return {};
     }
 
+    // `Math.max(1, …)` is what makes the range the docblock promises real: the
+    // positivity guard runs on the RAW value, so a fractional `0.5` passed it
+    // and then floored to `width: 0` — a dimension the binding rejects, for a
+    // request that named a legitimate (if sub-pixel) size.
     const clampDimension = (value: number): number => {
         if (!Number.isFinite(value) || value <= 0) {
             throw new TypeError("@lunora/bindings/images: width/height must be a positive finite number");
         }
 
-        return Math.min(Math.floor(value), maxDimension);
+        return Math.max(1, Math.min(Math.floor(value), maxDimension));
     };
 
-    // The URL-form `draw` overlays are not a binding-transform key; drop them.
-    const rest: TransformOptions = { ...transform };
-
-    delete rest.draw;
-
     return {
-        ...rest,
+        ...transform,
         ...(transform.width === undefined ? {} : { width: clampDimension(transform.width) }),
         ...(transform.height === undefined ? {} : { height: clampDimension(transform.height) }),
     };

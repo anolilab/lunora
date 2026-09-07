@@ -1,7 +1,7 @@
-import type { FunctionReference, OptimisticMessage } from "@lunora/client";
+import type { FunctionReference, OptimisticMessage, SubscriptionErrorCallback } from "@lunora/client";
 import { maxSeq, reconcileOptimistic } from "@lunora/client";
 import type { ComputedRef, MaybeRefOrGetter } from "vue";
-import { computed, ref, toValue } from "vue";
+import { computed, ref, toValue, watch } from "vue";
 
 import type { AgentThreadRecord, AgentThreadStatus } from "./use-agent";
 import { NO_MUTATION_REF } from "./use-agent";
@@ -123,6 +123,13 @@ interface UseAgentChatOptions {
     limit?: number;
 
     /**
+     * Called when the live history or thread subscription reports an error (a
+     * session expiry, an RLS denial). Without it — and without reading `error` —
+     * such a failure is invisible and `messages` / `status` are cleared until a later frame arrives.
+     */
+    onError?: SubscriptionErrorCallback;
+
+    /**
      * The app mutation that starts (or continues) a run — a thin wrapper over
      * `ctx.agents.<name>.run(...)`. Called with `{ threadKey, input }` merged with
      * {@link UseAgentChatOptions.sendArgs} and the per-call args.
@@ -150,6 +157,8 @@ interface UseAgentChatResult {
      * no-op when no `cancel` mutation was supplied or no run is in flight.
      */
     cancel: () => Promise<void>;
+    /** The history or thread subscription's last error, or `undefined`. */
+    error: ComputedRef<Error | undefined>;
     /** Durable thread history (oldest first) plus any un-acknowledged optimistic user turns. */
     messages: ComputedRef<ReadonlyArray<AgentChatMessage>>;
     /** Reject a paused human-in-the-loop tool call (optionally with a reason). */
@@ -191,16 +200,27 @@ const NO_STREAM_REF: AgentTokenStreamReference = { __lunoraRef: "" };
  * replay-safe, live-only delta design.
  */
 const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
-    const { api, cancel: cancelReference, limit, send: sendReference, sendArgs, stream: streamReference, threadKey } = options;
+    const { api, cancel: cancelReference, limit, onError, send: sendReference, sendArgs, stream: streamReference, threadKey } = options;
 
-    const { data: history } = useSubscription(api.agents.agentMessages, () => {
-        const key = toValue(threadKey);
+    const { data: history, error: historyError } = useSubscription(
+        api.agents.agentMessages,
+        () => {
+            const key = toValue(threadKey);
 
-        return limit === undefined ? { key } : { key, limit };
-    });
-    const { data: threadData } = useSubscription(api.agents.agentThread, () => {
-        return { key: toValue(threadKey) };
-    });
+            return limit === undefined ? { key } : { key, limit };
+        },
+        { onError },
+    );
+    const { data: threadData, error: threadError } = useSubscription(
+        api.agents.agentThread,
+        () => {
+            return { key: toValue(threadKey) };
+        },
+        { onError },
+    );
+    // Named for the return key it feeds; `error` itself is taken by the `catch`
+    // binding in `send` below.
+    const subscriptionError = computed(() => historyError.value ?? threadError.value);
 
     // The token stream is optional: with no reference we pass the sentinel + "skip"
     // so `useStream` never opens a stream (and `streamingText` stays empty).
@@ -219,6 +239,18 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
     const optimistic = ref<ReadonlyArray<OptimisticMessage>>([]);
     // A monotonic id source for optimistic rows — composable-instance local.
     let nextId = 0;
+
+    // Optimistic rows belong to the thread they were sent in. `reconcileOptimistic`
+    // retires them by comparing `maxDurableSeqAtSend` against durable `seq`s, and
+    // `seq` is monotonic PER THREAD — so a row carried into another thread can never
+    // be claimed there and renders as a ghost user bubble. Drop them whenever the
+    // resolved thread key changes, alongside the re-subscribed history/thread/stream.
+    watch(
+        () => toValue(threadKey),
+        () => {
+            optimistic.value = [];
+        },
+    );
 
     const thread = computed(() => threadData.value as unknown as AgentThreadRecord | undefined);
     const status = computed(() => thread.value?.status);
@@ -321,7 +353,7 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
         await cancelMutation.mutate({ instanceId, threadKey: toValue(threadKey) });
     };
 
-    return { approve, cancel, messages, reject, send, status, streamingText };
+    return { approve, cancel, error: subscriptionError, messages, reject, send, status, streamingText };
 };
 
 export type { AgentChatMessage, AgentLiveEvent, AgentProgressEvent, AgentTokenDelta, UseAgentChatApi, UseAgentChatOptions, UseAgentChatResult };

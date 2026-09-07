@@ -100,8 +100,11 @@ data export/import, migrations, the Studio, scheduled-job admin.
 Lunora has two migration surfaces; see [Migrations](/docs/concepts/migrations).
 
 - [ ] **D1 schema migrations** for `.global()` tables are generated
-      (`lunora migrate generate`) and committed. `lunora deploy` runs the D1
-      migration runner before `wrangler deploy`.
+      (`lunora migrate generate`) and committed as a review artifact. Nothing
+      applies them: the runtime provisions global tables from the schema on
+      first use (`CREATE TABLE IF NOT EXISTS` + additive `ADD COLUMN`), so any
+      hand-written SQL in a generated file must be applied yourself
+      (`wrangler d1 execute <DB> --remote --file=…`) before the deploy.
 - [ ] **Data migrations** (`lunora migrate create --table …`, run with
       `lunora migrate up`) have been dry-run against a copy where the change
       is destructive. Runs are admin-gated: set `LUNORA_ADMIN_TOKEN` or pass
@@ -162,8 +165,13 @@ Checklist:
       but a monitor polling it must then send the token.
 - [ ] Tune `cacheTtlMs` if needed. The last computed report is reused within the
       window so repeated probes (or an unauthenticated flood) don't re-hit the
-      bindings on every request. It defaults to `5000` ms in the `"public"`
-      posture and `0` (no cache) in `"admin"`; set `0` to always run live.
+      bindings on every request. The defaults differ per endpoint:
+      `/_lunora/health` (aggregate) defaults to `5000` ms in the `"public"`
+      posture and `0` in `"admin"`, while `/_lunora/health/ready` defaults to
+      `0` in **both** — a load-balancer readiness poll must see a dependency
+      drop on the very next poll. An explicit `cacheTtlMs` overrides the default
+      for **both** endpoints, so damping the aggregate probe also starts caching
+      the readiness gate; set `0` to always run live.
 - [ ] The Studio's **Deployment health** page (under Observability) reads these
       same endpoints live: a quick operator view of liveness, readiness, and
       per-binding status.

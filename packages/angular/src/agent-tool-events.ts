@@ -1,5 +1,5 @@
-import type { Signal } from "@angular/core";
-import { computed, DestroyRef, inject } from "@angular/core";
+import type { DestroyRef, Signal } from "@angular/core";
+import { computed } from "@angular/core";
 import type { FunctionReference, LunoraClient } from "@lunora/client";
 
 import type { AgentChatMessage, AgentLiveEvent } from "./agent";
@@ -154,7 +154,12 @@ const agentToolEvents = (options: AgentToolEventsOptions): AgentToolEventsResult
     const { api, limit, stream: streamReference, threadKey } = options;
 
     const client = resolveLunoraClient(options.client);
-    const destroyRef = options.destroyRef ?? inject(DestroyRef);
+    // Forward the caller's `destroyRef` verbatim (`undefined` when they are in an
+    // injection context) rather than a resolved one: each child primitive then
+    // injects its own and keeps its SSR platform gate, because an explicitly
+    // passed `destroyRef` marks a manual-lifetime caller that drives the socket
+    // itself and bypasses that gate (see `shouldOpenSubscription`).
+    const { destroyRef } = options;
 
     const messagesArguments = limit === undefined ? { key: threadKey } : { key: threadKey, limit };
     const { data: history } = subscription(api.agents.agentMessages, messagesArguments, { client, destroyRef });

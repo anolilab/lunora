@@ -85,6 +85,18 @@ const emitScalarGuard = (kind: string, inExpr: string): string => {
     }
 };
 
+/**
+ * The extra guard for a `v.string().max(n)`, or `""` when the node carries no
+ * modelled bound.
+ *
+ * `return DEFER`, not a rejection: an over-long value hands the row back to the
+ * interpreted parser, which produces the same `ValidationError` — message,
+ * `path` and `received` — the runtime has always produced. The fast path only
+ * ever answers for input it is certain about.
+ */
+const emitStringMaxGuard = (node: ValidatorIR, inExpr: string): string =>
+    node.stringMaxLength === undefined ? "" : `if (${inExpr}.length > ${String(node.stringMaxLength)}) return DEFER;\n`;
+
 /** Compile `v.literal(value)` for a primitive literal; declines for any non-primitive literal source. */
 const compileLiteral = (node: ValidatorIR, inExpr: string): NodeEmit | undefined => {
     const literal = node.literalValue?.trim();
@@ -111,8 +123,12 @@ const compileNode = (node: ValidatorIR, inExpr: string, context: EmitContext): N
 
     // Decline two classes of node the compiler can't soundly model:
     //
-    // - `hasRefinement` — a `.check(...)` predicate (a runtime closure the IR
-    //   can't represent); compiling it would silently skip the predicate.
+    // - `unmodelledRefinement` — a `.check(...)` predicate (a runtime closure the
+    //   IR can't represent), `.email()`, `.pattern(re)`; compiling one would
+    //   silently skip the predicate. A `v.string().max(<literal>)` is the
+    //   exception: its predicate is exactly `value.length <= n`, which the guard
+    //   below emits, so a length-bounded public argument keeps the fast path
+    //   rather than losing it for adding the bound the advisor asks for.
     // - `sourceText` — an expression the AST→IR step could NOT resolve to a
     //   concrete validator, most importantly a referenced validator identifier
     //   (`args: { name: sharedV }` → `{ kind: "any", sourceText: "sharedV" }`).
@@ -122,7 +138,7 @@ const compileNode = (node: ValidatorIR, inExpr: string, context: EmitContext): N
     //
     // In both cases keep the function on the interpreted path. Genuine `v.any()`
     // carries neither flag and still compiles to a pass-through below.
-    if (node.hasRefinement || node.sourceText !== undefined) {
+    if (node.unmodelledRefinement || node.sourceText !== undefined) {
         return undefined;
     }
 
@@ -132,7 +148,7 @@ const compileNode = (node: ValidatorIR, inExpr: string, context: EmitContext): N
             return { out: inExpr, pre: "" };
         }
 
-        return { out: inExpr, pre: emitScalarGuard(node.kind, inExpr) };
+        return { out: inExpr, pre: emitScalarGuard(node.kind, inExpr) + emitStringMaxGuard(node, inExpr) };
     }
 
     switch (node.kind) {
@@ -210,10 +226,12 @@ const compileField = (key: string, node: ValidatorIR, access: string, context: E
         // The optional wrapper itself may carry a `.check(...)` refinement, an
         // unresolved `sourceText`, or a column modifier — e.g.
         // `v.optional(v.string()).check(isEmail)` lowers to an optional node with
-        // `hasRefinement: true`. Recursing into `inner` alone would compile a bare
-        // string guard and silently skip the predicate, accepting input the
+        // `unmodelledRefinement: true`. Recursing into `inner` alone would compile
+        // a bare string guard and silently skip the predicate, accepting input the
         // interpreted parser rejects. Decline here exactly as compileNode does for
-        // every other node so the function keeps the interpreted path.
+        // every other node so the function keeps the interpreted path. (A bound on
+        // the wrapper itself is not modelled: `stringMaxLength` is recorded only
+        // for a string base, and `v.optional(...)`'s kind is `optional`.)
         if (node.hasRefinement || node.sourceText !== undefined || hasColumnModifier(node)) {
             return undefined;
         }

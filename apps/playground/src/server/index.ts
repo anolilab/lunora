@@ -3,7 +3,7 @@ import { admin, organization, passkey, twoFactor } from "@lunora/auth/plugins";
 import type { D1DatabaseLike } from "@lunora/d1";
 import { createMailerFromEnv } from "@lunora/mail";
 import type { ForwardableEmailMessageLike, ShardNamespaceLike as InboundShardNamespaceLike } from "@lunora/mail/inbound";
-import { createInboundEmailHandler, dispatchToLunoraFunction, parseInboundEmail } from "@lunora/mail/inbound";
+import { authenticatesFrom, createInboundEmailHandler, dispatchToLunoraFunction, parseInboundEmail } from "@lunora/mail/inbound";
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
 import { createScheduler } from "@lunora/scheduler";
 import type { R2BucketLike } from "@lunora/storage";
@@ -37,8 +37,14 @@ interface Env extends Record<string, unknown> {
      * `tests/e2e/globalSetup.ts` — *never* set this in production.
      */
     LUNORA_E2E?: string;
-    /** Origin the SchedulerDO dispatches HTTP callbacks back to (job execution). */
-    LUNORA_WORKER_ORIGIN?: string;
+
+    /**
+     * This worker's own public origin — the one binding every loopback back
+     * into it uses. The SchedulerDO reads it off its own env to dispatch jobs
+     * (never off the schedule request, which would be an SSRF vector), and
+     * `.global({ origin })` fans reverse cross-shard relations across it.
+     */
+    LUNORA_ORIGIN_URL?: string;
     /** Sender address for auth (verification / reset) email; captured into the studio Mail tab in dev. */
     MAIL_FROM?: string;
     /** Public base URL R2 objects resolve against — used to mint signed URLs. */
@@ -118,8 +124,8 @@ const app = defineApp<Env>()
         publicBaseUrl: (env) => env.PUBLIC_STORAGE_BASE_URL,
         signingSecret: (env) => env.STORAGE_SECRET,
     })
-    .scheduler({ namespace: (env) => env.SCHEDULER, origin: (env) => env.LUNORA_WORKER_ORIGIN })
-    .global({ d1: (env) => env.DB, origin: (env) => env.LUNORA_WORKER_ORIGIN })
+    .scheduler({ namespace: (env) => env.SCHEDULER })
+    .global({ d1: (env) => env.DB, origin: (env) => env.LUNORA_ORIGIN_URL })
     .auth({ d1: (env) => env.DB, options: authOptions })
     .admin((env) => env.LUNORA_ADMIN_TOKEN)
     .onEmail((env) => async (message, _workerEnv, context) => {
@@ -144,6 +150,20 @@ const app = defineApp<Env>()
                 shardKey: ROOT_SHARD_KEY,
             }),
             parse: parseInboundEmail,
+            // SECURITY: Cloudflare Email Routing authenticates the RECIPIENT
+            // domain, never the sender, and this dispatch reaches
+            // `inbound:onEmail` over the root shard's ADMIN RPC — a Lunora
+            // function running with the admin bearer and RLS disabled. Without
+            // this gate anyone who can send mail to the routed address reaches
+            // that, choosing `from` freely.
+            //
+            // `authenticatesFrom` is `@lunora/mail`'s one implementation of the
+            // rule: accept only when some reported DMARC/SPF/DKIM clause both
+            // passes AND names the `From` address's own domain. Do not hand-roll
+            // it — the copy that used to live here asked only "did any clause
+            // pass?", which an attacker satisfies with a genuine `spf=pass` +
+            // `dkim=pass` for the domain THEY control while forging `From`.
+            verify: authenticatesFrom,
         });
 
         await handler(message as ForwardableEmailMessageLike, env, context);
@@ -202,16 +222,20 @@ const clearD1 = async (database: D1Reset): Promise<void> => {
     }
 };
 
+/**
+ * `/test/reset` — clears the **D1** state the e2e suite shares (users, channels
+ * and every other `.global()` table). Gated by `LUNORA_E2E === "true"`.
+ *
+ * It does NOT reset Durable Object state, and does not pretend to. It used to
+ * POST `https://do/internal/reset` at a DO named `__e2e_reset__` behind a
+ * swallowing `catch`: `ShardDO.fetch` 404s anything that is not `/rpc` or its
+ * WS/relay routes, and that name is neither `__root__` nor any channel shard, so
+ * the call cleared nothing and reported success either way. Deleted rather than
+ * implemented — shard-local rows (`messages`) are reachable only through their
+ * channel, and every spec mints a fresh channel, so nothing depends on clearing
+ * them. A spec that ever does needs a real per-shard admin op, not this.
+ */
 const handleTestReset = async (env: Env): Promise<Response> => {
-    try {
-        const id = env.SHARD.idFromName("__e2e_reset__");
-        const stub = env.SHARD.get(id);
-
-        await stub.fetch(new Request("https://do/internal/reset", { method: "POST" }));
-    } catch {
-        // best-effort
-    }
-
     try {
         await clearD1(env.DB);
     } catch {
@@ -226,7 +250,12 @@ const handleTestSign = async (request: Request, env: Env): Promise<Response> => 
         return Response.json({ error: "STORAGE_SECRET and PUBLIC_STORAGE_BASE_URL must both be configured", url: null }, { status: 500 });
     }
 
-    const body = (await request.json().catch(() => null)) as { expiresInSeconds?: number; key?: string; method?: "GET" | "PUT" } | null;
+    const body = (await request.json().catch(() => null)) as {
+        contentType?: string;
+        expiresInSeconds?: number;
+        key?: string;
+        method?: "GET" | "PUT";
+    } | null;
 
     if (!body?.key) {
         return Response.json({ error: "`key` is required", url: null }, { status: 400 });
@@ -234,6 +263,16 @@ const handleTestSign = async (request: Request, env: Env): Promise<Response> => 
 
     const signed = await buildSignedUrl({
         baseUrl: env.PUBLIC_STORAGE_BASE_URL,
+        // PUT-only pin, forwarded so a harness upload can send a real
+        // `content-type`: the PUT handler compares the header against the
+        // signed value unconditionally, so an unpinned URL only accepts a body
+        // with no content type.
+        contentType: body.contentType,
+        // The app declares two buckets (`FILES` as the default, `AVATARS` under
+        // the `avatars` tag). `createStorage` signs the unnamed one under the
+        // canonical `"default"` tag — mint the e2e URLs the same way or they
+        // verify against a different canonical.
+        bucketName: "default",
         expiresInSeconds: body.expiresInSeconds,
         key: body.key,
         method: body.method ?? "GET",
@@ -255,13 +294,14 @@ const handleTestSchedule = async (request: Request, env: Env): Promise<Response>
         return Response.json({ error: "`functionPath` is required", jobId: null }, { status: 400 });
     }
 
-    const originUrl = new URL(request.url).origin;
-    const scheduler = createScheduler({ namespace: env.SCHEDULER, originUrl });
+    const scheduler = createScheduler({ namespace: env.SCHEDULER });
     const scheduledFor = body.scheduledFor ?? Date.now() + (body.delayMs ?? 0);
 
-    const result = await scheduler.runAt(scheduledFor, { __lunoraRef: body.functionPath }, body.args ?? {});
+    // `runAt` resolves the bare job id; `scheduledFor` is the instant we just
+    // computed and passed in, so the response shape is unchanged.
+    const jobId = await scheduler.runAt(scheduledFor, { __lunoraRef: body.functionPath }, body.args ?? {});
 
-    return Response.json({ jobId: result.id, scheduledFor: result.scheduledFor });
+    return Response.json({ jobId, scheduledFor });
 };
 
 /**
@@ -298,11 +338,11 @@ const handleTestRoute = async (request: Request, env: Env): Promise<Response | n
     if (url.pathname === "/test/job-status" && method === "GET") {
         const id = url.searchParams.get("id");
 
-        if (!id || !env.SCHEDULER || !env.LUNORA_WORKER_ORIGIN) {
+        if (!id || !env.SCHEDULER) {
             return Response.json({ status: "unknown" });
         }
 
-        const scheduler = createScheduler({ namespace: env.SCHEDULER, originUrl: env.LUNORA_WORKER_ORIGIN });
+        const scheduler = createScheduler({ namespace: env.SCHEDULER });
         const record = await scheduler.get(id);
 
         // The SchedulerDO deletes a job's rows once it completes successfully, so
@@ -347,10 +387,37 @@ const handleStorageAsset = async (request: Request, env: Env): Promise<null | Re
         return new Response("forbidden", { status: 403 });
     }
 
+    // The bucket is HMAC-bound, so this is the URL's own claim about which
+    // binding to serve — never a caller-supplied parameter. Only the default
+    // bucket is served here: the app also declares `avatars`, but nothing mints
+    // a URL against it (`lunora/avatars.ts` writes `avatars/`-prefixed keys into
+    // the default bucket), so a URL naming any other bucket was minted for an
+    // app we are not. Serving `avatars` means resolving the binding here first.
+    if (verdict.bucketName !== "default") {
+        return new Response("forbidden", { status: 403 });
+    }
+
     const key = decodeURIComponent(url.pathname.slice(1));
 
     if (request.method === "PUT") {
-        await env.FILES.put(key, request.body, { httpMetadata: { contentType: request.headers.get("content-type") ?? undefined } });
+        // The signed `Content-Type` pin is bound into the HMAC precisely so the
+        // uploader can't swap it. Storing the request's header verbatim would let
+        // a URL pinned to `image/png` land a `text/html` body that the GET branch
+        // below then serves back as HTML from this origin — stored XSS.
+        //
+        // The comparison is UNCONDITIONAL. Skipping it when the URL carries no
+        // pin (`verdict.contentType === undefined`) hands the choice straight
+        // back to the uploader — exactly the hole the pin exists to close — so
+        // an unpinned URL accepts only a body with no `content-type` at all,
+        // which stores (and later serves) as `application/octet-stream`. Mint a
+        // pinned URL (`buildSignedUrl({ contentType })`) to upload a typed body.
+        const contentType = request.headers.get("content-type") ?? undefined;
+
+        if (contentType !== verdict.contentType) {
+            return new Response("content-type does not match the signed URL", { status: 415 });
+        }
+
+        await env.FILES.put(key, request.body, { httpMetadata: { contentType } });
 
         return new Response(null, { status: 200 });
     }

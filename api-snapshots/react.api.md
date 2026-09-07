@@ -136,11 +136,23 @@ type AgentToolEvent = {
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `AuthImpersonation` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `AuthLoading` (const)
 
 ```ts
 const AuthLoading: ({ children }: AuthGateProps) => ReactNode;
 ```
+
+### `AuthPage` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `AuthSession` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `AuthState` (interface)
 
@@ -151,49 +163,19 @@ interface AuthState {
 }
 ```
 
+### `AuthUser` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `Authenticated` (const)
 
 ```ts
 const Authenticated: ({ children }: AuthGateProps) => ReactNode;
 ```
 
-### `CheckoutButton` (const)
-
-```ts
-const CheckoutButton: ({ onCheckout, ...rest }: CheckoutButtonProps) => ReactNode;
-```
-
-### `CheckoutButtonProps` (interface)
-
-```ts
-interface CheckoutButtonProps extends RedirectButtonOwnProps {
-    onCheckout: RedirectTrigger;
-}
-```
-
 ### `ClientQueryRef` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
-
-### `CustomerPortalButton` (const)
-
-```ts
-const CustomerPortalButton: ({ onPortal, ...rest }: CustomerPortalButtonProps) => ReactNode;
-```
-
-### `CustomerPortalButtonProps` (interface)
-
-```ts
-interface CustomerPortalButtonProps extends RedirectButtonOwnProps {
-    onPortal: RedirectTrigger;
-}
-```
-
-### `FlagContext` (type)
-
-```ts
-type FlagContext = Record<string, unknown>;
-```
 
 ### `FlagValue` (type)
 
@@ -243,7 +225,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `LunoraErrorCode` (type)
 
-Re-exported from `@lunora/client` — signature tracked at its source.
+Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `LunoraProvider` (const)
 
@@ -339,20 +321,6 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
-### `RedirectTarget` (interface)
-
-```ts
-interface RedirectTarget {
-    readonly url: string;
-}
-```
-
-### `RedirectTrigger` (type)
-
-```ts
-type RedirectTrigger = () => Promise<RedirectTarget>;
-```
-
 ### `RestrictionError` (class)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
@@ -361,22 +329,13 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
-### `Subscription` (interface)
+### `SubscriptionError` (interface)
 
-```ts
-interface Subscription {
-    readonly cancelAtPeriodEnd: boolean;
-    readonly createdAt: number;
-    readonly currentPeriodEnd?: number;
-    readonly id: string;
-    readonly priceId: string;
-    readonly provider: "polar" | "stripe";
-    readonly quantity: number;
-    readonly referenceId: string;
-    readonly state: "active" | "canceled" | "past_due" | "paused" | "trialing";
-    readonly updatedAt: number;
-}
-```
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `SubscriptionErrorCallback` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `Unauthenticated` (const)
 
@@ -435,6 +394,7 @@ interface UseAgentChatOptions {
     api: UseAgentChatApi;
     cancel?: FunctionReference<"mutation">;
     limit?: number;
+    onError?: SubscriptionErrorCallback;
     send: FunctionReference<"mutation">;
     sendArgs?: Record<string, unknown>;
     stream?: AgentTokenStreamReference;
@@ -448,6 +408,7 @@ interface UseAgentChatOptions {
 interface UseAgentChatResult {
     approve: (toolCallId: string, note?: string) => Promise<void>;
     cancel: () => Promise<void>;
+    error: Error | undefined;
     messages: ReadonlyArray<AgentChatMessage>;
     reject: (toolCallId: string, note?: string) => Promise<void>;
     send: (input: string, args?: Record<string, unknown>) => Promise<void>;
@@ -462,6 +423,7 @@ interface UseAgentChatResult {
 interface UseAgentOptions {
     api: UseAgentApi;
     cancel?: FunctionReference<"mutation">;
+    onError?: SubscriptionErrorCallback;
     run: FunctionReference<"mutation">;
     runArgs?: Record<string, unknown>;
     threadKey: string;
@@ -473,6 +435,7 @@ interface UseAgentOptions {
 ```ts
 interface UseAgentResult {
     cancel: () => Promise<void>;
+    error: Error | undefined;
     pending: boolean;
     run: (input: string, args?: Record<string, unknown>) => Promise<void>;
     status: AgentThreadStatus | undefined;
@@ -570,16 +533,6 @@ interface UseAuthUsersOptions extends AdminAuthQueryOptions {
 }
 ```
 
-### `UseCheckoutResult` (interface)
-
-```ts
-interface UseCheckoutResult {
-    checkout: () => Promise<void>;
-    error: Error | undefined;
-    pending: boolean;
-}
-```
-
 ### `UseChunkedRestUploadOptions` (interface)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
@@ -621,6 +574,7 @@ interface UseImpersonateResult {
 ```ts
 interface UseInfiniteQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -629,6 +583,7 @@ interface UseInfiniteQueryOptions {
 
 ```ts
 interface UseInfiniteQueryResult<T> {
+    error: SubscriptionError | undefined;
     fetchNextPage: (numberItems?: number) => void;
     hasNextPage: boolean;
     isFetchingNextPage: boolean;
@@ -667,6 +622,7 @@ type UseOrganizationsOptions = AdminAuthQueryOptions;
 ```ts
 interface UsePaginatedQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -675,6 +631,7 @@ interface UsePaginatedQueryOptions {
 
 ```ts
 interface UsePaginatedQueryResult<T> {
+    error: SubscriptionError | undefined;
     isLoading: boolean;
     loadMore: (numberItems: number) => void;
     results: T[];
@@ -698,6 +655,7 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
     heartbeat: H;
     intervalMs?: number;
     listPresent: L;
+    onError?: SubscriptionErrorCallback;
     sessionId?: string;
     shardKey?: string;
 }
@@ -707,6 +665,7 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
 
 ```ts
 interface UsePresenceResult<L extends ListPresentReference> {
+    error: SubscriptionError | undefined;
     present: ReturnOf<L> | undefined;
     sessionId: string;
     setData: (data: Record<string, unknown> | undefined) => void;
@@ -717,6 +676,7 @@ interface UsePresenceResult<L extends ListPresentReference> {
 
 ```ts
 interface UseQueryOptions {
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -741,6 +701,12 @@ interface UseRateLimitResult {
     reset: () => void;
     retryAfter: number;
 }
+```
+
+### `UseSignUpInvitationsOptions` (type)
+
+```ts
+type UseSignUpInvitationsOptions = AdminAuthQueryOptions;
 ```
 
 ### `UseStreamOptions` (interface)
@@ -868,7 +834,9 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 ### `hydratePreloaded` (const)
 
 ```ts
-const hydratePreloaded: <T>(preloaded: Preloaded<T>) => T;
+const hydratePreloaded: <T>(preloaded: Preloaded<T>, options?: {
+    onError?: SubscriptionErrorCallback;
+}) => T;
 ```
 
 ### `isConflictError` (const)
@@ -949,12 +917,6 @@ const useAuthState: () => AuthState;
 const useAuthUsers: (options?: UseAuthUsersOptions) => AdminAuthListResult<AuthUser>;
 ```
 
-### `useCheckout` (const)
-
-```ts
-const useCheckout: (trigger: RedirectTrigger) => UseCheckoutResult;
-```
-
 ### `useChunkedRestUpload` (const)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
@@ -981,13 +943,13 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 ### `useFlag` (const)
 
 ```ts
-const useFlag: <T extends FlagValue>(key: string, defaultValue: T, context?: FlagContext) => T;
+const useFlag: <T extends FlagValue>(key: string, defaultValue: T) => T;
 ```
 
 ### `useFlags` (const)
 
 ```ts
-const useFlags: <T extends Record<string, FlagValue>>(flags: T, context?: FlagContext) => T;
+const useFlags: <T extends Record<string, FlagValue>>(flags: T) => T;
 ```
 
 ### `useHttpStream` (const)
@@ -1047,7 +1009,9 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 ### `usePreloadedQuery` (const)
 
 ```ts
-const usePreloadedQuery: <T>(preloaded: Preloaded<T>) => T;
+const usePreloadedQuery: <T>(preloaded: Preloaded<T>, options?: {
+    onError?: SubscriptionErrorCallback;
+}) => T;
 ```
 
 ### `usePresence` (const)
@@ -1066,6 +1030,12 @@ const useQuery: <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "s
 
 ```ts
 const useRateLimit: (config: RateLimitConfig, options?: UseRateLimitOptions) => UseRateLimitResult;
+```
+
+### `useSignUpInvitations` (const)
+
+```ts
+const useSignUpInvitations: (options?: UseSignUpInvitationsOptions) => AdminAuthListResult<Record<string, unknown>>;
 ```
 
 ### `useStream` (const)
@@ -1092,6 +1062,90 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 ```ts
 const useVoiceAgent: (options: UseVoiceAgentOptions) => UseVoiceAgentResult;
+```
+
+## `@lunora/react/payment`
+
+### `CheckoutButton` (const)
+
+```ts
+const CheckoutButton: ({ onCheckout, ...rest }: CheckoutButtonProps) => ReactNode;
+```
+
+### `CheckoutButtonProps` (interface)
+
+```ts
+interface CheckoutButtonProps extends RedirectButtonOwnProps {
+    onCheckout: RedirectTrigger;
+}
+```
+
+### `CustomerPortalButton` (const)
+
+```ts
+const CustomerPortalButton: ({ onPortal, ...rest }: CustomerPortalButtonProps) => ReactNode;
+```
+
+### `CustomerPortalButtonProps` (interface)
+
+```ts
+interface CustomerPortalButtonProps extends RedirectButtonOwnProps {
+    onPortal: RedirectTrigger;
+}
+```
+
+### `ProviderId` (type)
+
+```ts
+type ProviderId = "autumn" | "creem" | "dodopayments" | "polar" | "stripe";
+```
+
+### `RedirectTarget` (interface)
+
+```ts
+interface RedirectTarget {
+    readonly url: string;
+}
+```
+
+### `RedirectTrigger` (type)
+
+```ts
+type RedirectTrigger = () => Promise<RedirectTarget>;
+```
+
+### `Subscription` (interface)
+
+```ts
+interface Subscription {
+    readonly cancelAtPeriodEnd: boolean;
+    readonly createdAt: number;
+    readonly currentPeriodEnd?: number;
+    readonly currentPeriodStart?: number;
+    readonly id: string;
+    readonly priceId: string;
+    readonly provider: ProviderId;
+    readonly quantity: number;
+    readonly referenceId: string;
+    readonly state: "active" | "canceled" | "past_due" | "paused" | "trialing";
+    readonly updatedAt: number;
+}
+```
+
+### `UseCheckoutResult` (interface)
+
+```ts
+interface UseCheckoutResult {
+    checkout: () => Promise<void>;
+    error: Error | undefined;
+    pending: boolean;
+}
+```
+
+### `useCheckout` (const)
+
+```ts
+const useCheckout: (trigger: RedirectTrigger) => UseCheckoutResult;
 ```
 
 ## `@lunora/react/server`

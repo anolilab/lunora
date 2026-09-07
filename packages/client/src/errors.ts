@@ -1,30 +1,45 @@
 /**
- * The machine-readable error codes a client can observe on a failed
- * RPC/batch/subscription. Mirrors the server's `CODE_STATUS` keys
- * (`@lunora/server`'s `error.ts`) by hand — the client is framework-neutral and
- * must never import the server package (wrong dependency direction / would pull
- * the server into the browser bundle). Keep this list in sync when a server code
- * is added or removed (see the drift-guard note in the plan/maintenance docs).
+ * Client-side helpers over the machine-readable `code` the worker attaches to a
+ * failed RPC/batch/subscription.
+ *
+ * The set of codes is DERIVED from `@lunora/errors`' `ERROR_CATALOG` — the one
+ * registry every `LunoraError` is minted against — rather than hand-copied. The
+ * hand-copied list this replaced had drifted to 12 of the ~60 registered codes,
+ * and `getErrorCode` narrows through the set, so each omission (`VALIDATION_ERROR`,
+ * the code a failed args validator throws, among them) read back as `undefined`
+ * with nothing to notice it. `@lunora/errors` is zero-dependency and already in
+ * the client's runtime graph (`LunoraError` itself reads the catalog), so this
+ * costs no extra bundle.
  */
-const LUNORA_ERROR_CODES = [
-    "BAD_REQUEST",
-    "CONFLICT",
-    "COUNT_RLS_UNSUPPORTED",
-    "FORBIDDEN",
-    "INTERNAL_SERVER_ERROR",
-    "MASK_UNSUPPORTED",
-    "NOT_FOUND",
-    "NOT_IMPLEMENTED",
-    "RELATION_PREDICATE_UNSUPPORTED",
-    "TOO_MANY_REQUESTS",
-    "UNAUTHORIZED",
-    "UNPROCESSABLE",
-] as const;
+import type { LunoraErrorCode } from "@lunora/errors";
+import { ERROR_CATALOG, LunoraError } from "@lunora/errors";
 
-/** A machine-readable error `code` the client may observe. Mirror of the server's `LunoraErrorCode`. */
-type LunoraErrorCode = (typeof LUNORA_ERROR_CODES)[number];
+const KNOWN_ERROR_CODES = new Set<string>(Object.keys(ERROR_CATALOG));
 
-const KNOWN_ERROR_CODES = new Set<string>(LUNORA_ERROR_CODES);
+/**
+ * A failure the SERVER reached no verdict on: the response carried no
+ * `{ error }` envelope at all — no `fetch` implementation, a non-JSON body from
+ * a proxy, a bare 5xx gateway page.
+ *
+ * The distinction matters because a durable write must be re-queued rather than
+ * dropped, and `code` cannot carry it: these arrive as `INTERNAL`, which is also
+ * what a server that DID reach a verdict sends. It used to be a `Symbol` stamped
+ * on with `Object.assign` and read back through a `Record<symbol, unknown>`
+ * cast, so the one classifier that knew the convention was the only reader that
+ * could ever see it. As a kind, every reader can: `error instanceof
+ * TransportError`.
+ *
+ * Still `INTERNAL` on the wire, so nothing that switches on `code` changes.
+ *
+ * `data` carries the structured payload such an error can still have — the
+ * `{ retryAfterMs }` a `Retry-After` on the unreadable response named, which
+ * {@link getRetryAfterMs} reads back and the outbox paces its retry on.
+ */
+class TransportError extends LunoraError {
+    public constructor(message: string, data?: unknown) {
+        super("INTERNAL", message, { data });
+    }
+}
 
 /** Error code the server uses for optimistic-concurrency conflicts (HTTP 409). */
 const CONFLICT_ERROR_CODE = "CONFLICT";
@@ -60,8 +75,9 @@ const isRateLimitedError = (error: unknown): error is Error & { code: "TOO_MANY_
 /**
  * Read the server's machine-readable `code` off a rejection, narrowed to the
  * known {@link LunoraErrorCode} union. Returns `undefined` for a non-`Error`, a
- * missing code, or an unrecognized code string (forward-compat server codes read
- * as `undefined` here rather than being falsely narrowed).
+ * missing code, or a code string absent from the catalog (an app-minted code
+ * passed to `LunoraError` reads as `undefined` here rather than being falsely
+ * narrowed).
  */
 const getErrorCode = (error: unknown): LunoraErrorCode | undefined => {
     if (!(error instanceof Error)) {
@@ -85,5 +101,6 @@ const getRetryAfterMs = (error: unknown): number | undefined => {
     return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 };
 
-export { CONFLICT_ERROR_CODE, getErrorCode, getRetryAfterMs, isConflictError, isForbiddenError, isRateLimitedError, isUnauthorizedError };
-export type { LunoraErrorCode };
+export { CONFLICT_ERROR_CODE, getErrorCode, getRetryAfterMs, isConflictError, isForbiddenError, isRateLimitedError, isUnauthorizedError, TransportError };
+
+export { type LunoraErrorCode } from "@lunora/errors";

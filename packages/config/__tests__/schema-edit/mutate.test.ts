@@ -79,6 +79,18 @@ describe("applyAdditiveEdit", () => {
         ]);
     });
 
+    it("keeps the existing columns when adding one to a chain-less table", () => {
+        expect.assertions(1);
+
+        // A `defineTable({ … })` with no chain is the initializer node itself, so
+        // a descendants-only lookup found no shape and rewrote the table empty.
+        const chainless = `import { defineSchema, defineTable, v } from "@lunora/server";\n\nexport default defineSchema({\n    todos: defineTable({\n        text: v.string(),\n        done: v.boolean(),\n    }),\n});\n`;
+        const text = textOf(applyAdditiveEdit(chainless, { column: "due", kind: "addOptionalColumn", table: "todos", validator: "v.number()" }));
+        const parsed = parseSchema(text);
+
+        expect(parsed.ok ? parsed.tables[0]?.columns.map((column) => column.name) : undefined).toStrictEqual(["text", "done", "due"]);
+    });
+
     it("refuses destructive edits without touching the source", () => {
         expect.assertions(1);
 

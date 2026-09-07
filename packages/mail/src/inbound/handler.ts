@@ -21,10 +21,14 @@
  *   *sender*. The envelope `from` and message body are trivially spoofable, so a
  *   handler MUST NOT make trust/authorization decisions on `email.from`. Gate on
  *   `email.authentication` (DKIM/SPF/DMARC verdicts) and/or the `verify` hook.
- * - `dispatchToLunoraFunction` authenticates the shard RPC with the admin bearer
- *   (`LUNORA_ADMIN_TOKEN`), so the target function runs in a **system/admin
- *   context with RLS bypassed**. Combined with the spoofable sender, this means
- *   an inbound function must treat its input as fully attacker-controlled.
+ * - `dispatchToLunoraFunction` marks the shard RPC a **trusted system dispatch**
+ *   (the same marker the scheduler/cron path sets), so the target may be an
+ *   `internalMutation`/`internalAction` — and it should be, because a public
+ *   `mutation` reachable this way is equally reachable from any browser client,
+ *   which can forge the whole message. The dispatch carries no caller identity,
+ *   so an `rls()` policy on the target sees an anonymous caller rather than
+ *   being bypassed. Combined with the spoofable sender, an inbound function must
+ *   treat its input as fully attacker-controlled and do its own authorization.
  * - `onError` reasons are delivered to the (attacker-controlled) sender as a
  *   bounce, so the default never reflects internal error detail (see
  *   `rejectOnError`).
@@ -54,7 +58,15 @@ interface ForwardableEmailMessageLike {
     readonly raw: ReadableStream<Uint8Array>;
     /** Reply to the sender with a new message. */
     reply: (message: { from: string; raw: string; to: string }) => Promise<unknown>;
-    /** Reject the message with a permanent SMTP error (Cloudflare bounces/retries). */
+
+    /**
+     * Reject the message with a PERMANENT SMTP error — Cloudflare returns it to
+     * the connecting client with this reason, and it is never redelivered.
+     * Documented at https://developers.cloudflare.com/email-routing/email-workers/runtime-api/
+     * ("Reject this email message by returning a permanent SMTP error back to
+     * the connecting client, including the given reason") and mirrored in
+     * workerd's own `types/defines/email.d.ts`.
+     */
     setReject: (reason: string) => void;
     /** Envelope `To`. */
     readonly to: string;
@@ -77,11 +89,30 @@ type InboundDispatch<TEnv = Record<string, unknown>> = (email: InboundEmail, con
  * Opt-in sender-verification gate. Runs after `parse` and before `dispatch` with
  * the parsed message. Return `false` (or throw) to reject the message before it
  * reaches the privileged dispatch — use it to enforce DKIM/SPF/DMARC via
- * `email.authentication`, an allow-list, etc. Returning `true`/`undefined`
- * proceeds.
+ * `email.authentication`, an allow-list, etc.
+ *
+ * `true` and `undefined` are the ONLY answers that proceed — `undefined` so a
+ * `(): void` hook that rejects by throwing type-checks. Anything else is read as a
+ * rejection: this is the gate whose failure mode would otherwise grant.
  */
 // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- public API: `void` lets a verify hook with no explicit return (`() => {}`) type-check; `undefined` alone wouldn't accept a `(): void` arrow
 type InboundVerify<TEnv = Record<string, unknown>> = (email: InboundEmail, context: InboundDispatchContext<TEnv>) => Promise<boolean | void> | boolean | void;
+
+/**
+ * Opt-in durable sink for a failed `dispatch`. Hand the parsed message to
+ * something that owns the retry — a queue producer, a Durable Object, an alarm
+ * — and the handler ACCEPTS the SMTP session instead of bouncing, because the
+ * message is now owned rather than lost. Returning normally means "I have it";
+ * throwing means the hand-off itself failed and the message bounces with the
+ * generic reason (see {@link createInboundEmailHandler}).
+ *
+ * `error` is the dispatch failure, for classification/logging by the sink.
+ *
+ * NOTE: binary attachment `content` is an `ArrayBuffer`/`Uint8Array`, which
+ * survives structured clone (Cloudflare Queues, DO storage) but is corrupted by
+ * `JSON.stringify` — encode it yourself if the sink is JSON-bodied.
+ */
+type InboundRetain<TEnv = Record<string, unknown>> = (email: InboundEmail, context: InboundDispatchContext<TEnv>, error: unknown) => Promise<void> | void;
 
 /** Options for {@link createInboundEmailHandler}. */
 interface InboundEmailHandlerOptions<TEnv = Record<string, unknown>> {
@@ -89,16 +120,35 @@ interface InboundEmailHandlerOptions<TEnv = Record<string, unknown>> {
     dispatch: InboundDispatch<TEnv>;
 
     /**
-     * Called when `parse`/`verify`/`dispatch` throws. The default rejects the
-     * message via `message.setReject` so Cloudflare bounces/retries rather than
-     * silently dropping it. SECURITY: the reject reason is delivered to the
-     * (attacker-controlled) sender as a bounce, so the default reason is a fixed,
-     * generic string and the real error is logged server-side. Override to log,
-     * forward, or swallow — but never pass internal error text to `setReject`.
+     * Called when `parse`, `verify`, or `dispatch` fails — but with two DIFFERENT
+     * contracts, because only the first two decide the message's fate here:
+     *
+     * - `parse` / `verify` — this hook DECIDES the outcome. The default
+     * ({@link rejectOnError}) rejects via `message.setReject`; supplying your own
+     * replaces that, so the message is accepted unless you reject it yourself.
+     * - `dispatch` — this hook is OBSERVABILITY ONLY. It is called for the side
+     * effect (log, alert, forward) and the outcome is then decided by `retain`
+     * (accept) or a generic reject, regardless of what it does; the built-in
+     * default is deliberately NOT applied there. A `setReject` from inside it
+     * still takes effect, which would bounce a message `retain` went on to
+     * accept — almost certainly not what you want. A throw from the hook itself
+     * is logged and swallowed so it cannot mask the original dispatch error.
+     *
+     * SECURITY: a reject reason is delivered to the (attacker-controlled) sender
+     * as a bounce, so the default reason is a fixed, generic string and the real
+     * error is logged server-side. Never pass internal error text to `setReject`.
      */
     onError?: (error: unknown, context: InboundDispatchContext<TEnv>) => Promise<void> | void;
     /** Parses raw bytes into an {@link InboundEmail} (e.g. `parseInboundEmail`). */
     parse: (raw: RawInboundEmail) => Promise<InboundEmail>;
+
+    /**
+     * Opt-in: take durable ownership of a message whose `dispatch` failed, so a
+     * transient fault (a shard 502, a briefly-absent admin token) is retried
+     * instead of bounced. Omit it and a dispatch failure bounces, as it always
+     * has. See {@link InboundRetain}.
+     */
+    retain?: InboundRetain<TEnv>;
 
     /**
      * Opt-in sender-authentication gate run before `dispatch`. SECURITY: inbound
@@ -121,7 +171,8 @@ const GENERIC_REJECT_REASON = "message could not be processed";
 /**
  * Default `onError`: reject the message so Cloudflare reports a permanent
  * failure, but with a fixed generic reason — the detailed error is logged
- * server-side, never reflected to the sender's bounce.
+ * server-side, never reflected to the sender's bounce. Only reached for
+ * `parse`/`verify` failures, which are permanent by nature.
  */
 const rejectOnError = <TEnv = Record<string, unknown>>(error: unknown, context: InboundDispatchContext<TEnv>): void => {
     // eslint-disable-next-line no-console -- intentional server-side log of the detailed error before rejecting with a generic, non-reflecting reason
@@ -133,29 +184,135 @@ const rejectOnError = <TEnv = Record<string, unknown>>(error: unknown, context: 
 /**
  * Build the `email(message, env, ctx)` handler. It (a) reads `message.raw`,
  * (b) parses it via `parse`, (c) runs the optional `verify` gate, then
- * (d) calls `dispatch(parsed, { message, env, ctx })`. Any throw (or a falsy
- * `verify`) routes through `onError` (default: a generic `message.setReject`).
+ * (d) calls `dispatch(parsed, { message, env, ctx })`.
+ *
+ * The two failure classes are routed differently:
+ *
+ * - `parse` / `verify` (including a falsy `verify`) → `onError` (default: a
+ * generic `message.setReject`). A malformed or unauthenticated message fails
+ * the same way on every redelivery, so bouncing it is the honest answer.
+ * - `dispatch` (or its transport) → a custom `onError` is called for
+ * observability, then the message is handed to `retain` if one is configured
+ * (SMTP ACCEPTs — the retry is now owned elsewhere) and otherwise bounced with
+ * the same generic reason. A `retain` that throws bounces too.
+ *
+ * WHY THE RETRY IS ABSORBED IN-WORKER RATHER THAN SIGNALLED OVER SMTP — there is
+ * no transient-reject API and no inbound redelivery to appeal to:
+ *
+ * - `setReject` is documented as a PERMANENT SMTP error
+ * (https://developers.cloudflare.com/email-routing/email-workers/runtime-api/),
+ * with no "try later" variant.
+ * - Cloudflare does not document what an uncaught throw from `email()` does. The
+ * full Email Routing and Email Service docs corpora
+ * (`developers.cloudflare.com/email-routing/llms-full.txt`,
+ * `.../email-service/llms-full.txt`) say nothing about an unhandled exception,
+ * and describe NO redelivery mechanism for inbound Email Workers at all. The
+ * documented lifecycle
+ * (https://developers.cloudflare.com/email-service/concepts/email-lifecycle/)
+ * lists exactly three worker outcomes — `forward()`, `reply()`, `setReject()` —
+ * with no branch for "the worker threw". (Its 4xx-retry prose is about OUTBOUND
+ * delivery to the destination MTA, not about invoking the worker.)
+ * - The behaviour reported in practice is a PERMANENT in-session rejection:
+ * `521 5.3.0 Upstream error`, i.e. the same permanence as `setReject` but with
+ * an opaque reason instead of ours. See
+ * https://community.cloudflare.com/t/is-it-possible-to-return-a-transient-failure-from-an-email-worker/599938
+ * ("If the email function raises an exception, a permanent failure is returned
+ * to the client after the DATA command") — a question Cloudflare never answered
+ * — and https://community.cloudflare.com/t/email-worker-upstream-error/457228.
+ * Email Routing also states it forwards upstream SMTP errors back to the sender
+ * in-session rather than generating a bounce later
+ * (https://developers.cloudflare.com/email-service/reference/postmaster/#smtp-errors).
+ *
+ * So every SMTP-visible outcome is permanent, and the only way not to lose a
+ * legitimate message to a two-second shard 502 is to accept it and take durable
+ * ownership: that is `retain`. It stays opt-in — with no `retain`, a dispatch
+ * failure bounces exactly as before.
+ *
+ * A dispatch that KNOWS one of its own failures is permanent should call
+ * `context.message.setReject(...)` and return normally rather than throw, so it
+ * bounces without being handed to `retain` (see `@lunora/agent`'s inbound
+ * handler for both cases).
  */
+
+/**
+ * Whether a `verify` hook's answer admits the message — deny by default.
+ *
+ * `true` and `undefined` are the two documented "proceed" answers (`undefined` so
+ * a `(): void` hook that rejects by throwing type-checks). EVERYTHING else — a
+ * `null`, a `0`, an empty string out of a hook that forgot a branch — is a
+ * rejection. Testing only for `=== false` made this the one gate in the package
+ * whose failure mode granted access to the privileged dispatch.
+ */
+// eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- mirrors InboundVerify's public return type, which admits `void` for a no-return hook
+const verifyPassed = (verified: boolean | void): boolean => verified === true || verified === undefined;
+
 const createInboundEmailHandler = <TEnv = Record<string, unknown>>(options: InboundEmailHandlerOptions<TEnv>): InboundEmailHandler<TEnv> => {
     const onError = options.onError ?? rejectOnError;
 
     return async (message, env, context_) => {
         const context: InboundDispatchContext<TEnv> = { ctx: context_, env, message };
+        let parsed: InboundEmail;
 
         try {
-            const parsed = await options.parse(message.raw);
+            parsed = await options.parse(message.raw);
 
             if (options.verify) {
                 const verified = await options.verify(parsed, context);
 
-                if (verified === false) {
+                if (!verifyPassed(verified)) {
                     throw new LunoraError("INTERNAL", "@lunora/mail/inbound: sender verification rejected the message");
                 }
             }
+        } catch (error) {
+            // Permanent by nature — a redelivery of the same bytes parses and
+            // verifies exactly the same way.
+            await onError(error, context);
 
+            return;
+        }
+
+        try {
             await options.dispatch(parsed, context);
         } catch (error) {
-            await onError(error, context);
+            // A custom `onError` is the app's only observability hook on this
+            // path — narrowing it to parse/verify meant an app that wired error
+            // reporting into it saw no dispatch failure at all. It is called for
+            // the side effect only; the outcome below is decided by `retain`.
+            // The BUILT-IN default (`rejectOnError`) is deliberately skipped
+            // here: it calls `setReject`, which would bounce a message `retain`
+            // is about to accept.
+            if (options.onError) {
+                try {
+                    await options.onError(error, context);
+                } catch (hookError) {
+                    // Never let the observability hook mask the real failure.
+                    // eslint-disable-next-line no-console -- intentional server-side log; the message is rejected below regardless
+                    console.error("@lunora/mail/inbound: onError threw while reporting a dispatch failure —", hookError);
+                }
+            }
+
+            // Absorb the retry in-worker when the app supplied somewhere durable
+            // to put the message: accept the SMTP session, because the message is
+            // owned rather than lost. Cloudflare offers no transient-reject path
+            // and no inbound redelivery (see the note above), so this is the only
+            // outcome that survives a two-second shard 502.
+            if (options.retain) {
+                try {
+                    await options.retain(parsed, context, error);
+
+                    return;
+                } catch (retainError) {
+                    // The hand-off failed too — nothing durable owns the message,
+                    // so fall through to the controlled permanent bounce below.
+                    // eslint-disable-next-line no-console -- server-side log; the sender only ever sees the generic reason
+                    console.error("@lunora/mail/inbound: retain failed to take ownership of the message —", retainError);
+                }
+            }
+
+            // No durable sink (or it failed): both SMTP outcomes are permanent,
+            // so pick the one whose reason we control — generic to the sender,
+            // detailed in the server log.
+            rejectOnError(error, context);
         }
     };
 };
@@ -229,13 +386,16 @@ const toJsonSafeEmail = (email: InboundEmail): InboundEmail => {
  * Build a {@link InboundDispatch} that posts an {@link RpcEnvelope} to the root
  * shard stub — the same admin-RPC-over-shard path the dev capture sink uses
  * (`from-env.ts`) — routing the parsed message into a named Lunora
- * mutation/action. Throws on a non-2xx RPC or a missing admin token so the
- * handler's `onError` (default `setReject`) bounces the message.
+ * mutation/action. Throws on a non-2xx RPC or a missing admin token — both
+ * transient in principle, so the handler reports it through a custom `onError`
+ * and then hands the message to `retain` if one is configured, bouncing only
+ * when there is nowhere durable to put it (see {@link createInboundEmailHandler}).
  *
- * SECURITY: the RPC carries the admin bearer, so the target function runs with
- * RLS bypassed over fully attacker-controlled, spoofable input — see the module
- * docstring. Verify the sender (`verify` hook / `email.authentication`) before
- * making any trust decision in the target function.
+ * SECURITY: the RPC is marked a trusted system dispatch, so `functionPath` may
+ * (and should) name an `internalMutation`/`internalAction` — a public `mutation`
+ * target is callable by any browser client with a forged message. The input is
+ * fully attacker-controlled and spoofable; verify the sender (`verify` hook /
+ * `email.authentication`) before making any trust decision in the target.
  */
 const dispatchToLunoraFunction = <TEnv extends Record<string, unknown> = Record<string, unknown>>(
     options: DispatchToLunoraFunctionOptions<TEnv>,
@@ -257,8 +417,8 @@ const dispatchToLunoraFunction = <TEnv extends Record<string, unknown> = Record<
         };
 
         // The shared helper owns the URL, headers, `response.ok` check, and error
-        // envelope check; a throw here routes through the handler's `onError`
-        // (default `setReject`) so the message is rejected upstream.
+        // envelope check; a throw here reaches the handler's dispatch-failure
+        // path (custom `onError` for observability, then `retain` or a bounce).
         await postShardRpc(options.shard, {
             adminToken,
             envelope,
@@ -277,6 +437,7 @@ export type {
     InboundDispatchContext,
     InboundEmailHandler,
     InboundEmailHandlerOptions,
+    InboundRetain,
     InboundVerify,
     RpcEnvelope,
 };

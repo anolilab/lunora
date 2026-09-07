@@ -92,14 +92,18 @@ export default defineConfig({
         },
         test: {
             cache: true,
-            dependsOn: ["^build"],
+            // `codegen` (self) emits each app's generated dir that its tests import
+            // (the playground's `lunora/_generated` is gitignored, so a fresh CI
+            // checkout has none of it until codegen runs). Same reason as lint:eslint.
+            dependsOn: ["codegen", "^build"],
             inputs: ["testing", "^production", "{projectRoot}/vite.config.ts", "{projectRoot}/vitest.config.ts"],
         },
         "test:coverage": {
             cache: true,
             // Mirror `test`: build upstream @lunora/* deps so coverage runs resolve
-            // their dist entries (vitest imports the built package, not src).
-            dependsOn: ["^build"],
+            // their dist entries (vitest imports the built package, not src), and
+            // run the app's own codegen first for the same reason as `test`.
+            dependsOn: ["codegen", "^build"],
             inputs: ["testing", "^production", "{projectRoot}/vite.config.ts", "{projectRoot}/vitest.config.ts"],
             outputs: ["{projectRoot}/coverage"],
         },

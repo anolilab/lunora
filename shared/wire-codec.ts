@@ -166,7 +166,8 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> => {
  * identity answers `true` — a false positive costs one wasted encode, while a
  * false negative writes different bytes than the store expects, which is silent
  * corruption. It lives next to `encodeWire` for the same reason: the two must
- * agree, so they have to be read together. `shared/__tests__` fuzzes the
+ * agree, so they have to be read together.
+ * `packages/shard-engine/__tests__/needs-wire-encoding.test.ts` fuzzes the
  * property that matters — `needsWireEncoding(v) === false` implies
  * `JSON.stringify(encodeWire(v)) === JSON.stringify(v)`.
  * @returns `true` when the value must go through {@link encodeWire}
@@ -307,12 +308,37 @@ const encodeWire = (value: unknown, depth = 0): unknown => {
         const properties: Record<string, unknown> = {};
 
         for (const key of Object.keys(error)) {
-            if (error[key] !== undefined) {
-                properties[key] = encodeWire(error[key], depth + 1);
+            if (error[key] === undefined) {
+                continue;
+            }
+
+            const encoded = encodeWire(error[key], depth + 1);
+
+            // Same `UNSAFE_KEY` guard as the plain-object branch below and both
+            // decode branches: a plain `properties[key] = …` for `"__proto__"`
+            // fires the prototype SETTER, so the field never becomes an own
+            // property (it re-encodes as `{}`, silently dropped) and `properties`
+            // itself ends up with an attacker-chosen prototype. `defineProperty`
+            // installs it as an own data property instead (Cap'n Web #190).
+            if (key === UNSAFE_KEY) {
+                Object.defineProperty(properties, key, { configurable: true, enumerable: true, value: encoded, writable: true });
+            } else {
+                properties[key] = encoded;
             }
         }
 
-        const encodedError: unknown[] = [TAG, "error", error.name, error.message, properties];
+        // Coerced, because `decodeWire` now REFUSES a non-string in either slot
+        // and an encoder must not emit a frame its own decoder rejects. Both are
+        // writable and neither is type-checked by the platform:
+        // `error.message = { a: 1 }` leaves `typeof` as `"object"`. The old
+        // decoder tolerated that by accident (`new Error(5)` ToString-coerces),
+        // so the strictness landed on the decode side alone and turned a
+        // malformed-but-survivable error into a decoder throw — which, on a
+        // subscription frame, kills the subscription rather than surfacing the
+        // error. The ports whose labels are statically `String` cannot express
+        // the shape; python and ruby coerce at the same place for the same
+        // reason.
+        const encodedError: unknown[] = [TAG, "error", String(error.name), String(error.message), properties];
 
         // `cause` (from `new Error(msg, { cause })`) is a non-enumerable own prop, so
         // the `Object.keys` loop above misses it — carry it in a positional slot so an
@@ -439,20 +465,86 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
                     return BigInt(raw);
                 }
                 case "date": {
-                    return new Date(decodeWire(value[2], depth + 1) as number);
+                    // A conforming encoder always emits an epoch-ms NUMBER in the
+                    // payload slot. The arity check alone was not that guard: it
+                    // stopped `[TAG,"date"]` (which decoded `undefined` into an
+                    // Invalid Date and re-encoded as `[TAG,"date",[TAG,"nan"]]`)
+                    // while `[TAG,"date",null]` still coerced to epoch 0 and
+                    // `[TAG,"date","abc"]` to an Invalid Date — inventing a
+                    // timestamp out of a malformed frame either way, which is the
+                    // silent corruption this codec exists to refuse. Every non-JS
+                    // port already rejects a non-number epoch; this makes the
+                    // reference agree rather than asking eight languages to
+                    // reproduce `new Date(null)`.
+                    const epoch = decodeWire(value[2], depth + 1);
+
+                    if (typeof epoch !== "number") {
+                        throw new TypeError("wire-codec: malformed date — epoch must be a number");
+                    }
+
+                    return new Date(epoch);
                 }
                 case "map": {
-                    return new Map((value[2] as [unknown, unknown][]).map(([k, v]) => [decodeWire(k, depth + 1), decodeWire(v, depth + 1)]));
+                    const entries = value[2] as unknown[];
+
+                    return new Map(
+                        entries.map((entry) => {
+                            // A conforming encoder always emits a 2-element entry.
+                            // Destructuring a shorter one would silently invent an
+                            // `undefined` value from malformed wire input — the exact
+                            // silent corruption this codec promises not to do — so a
+                            // malformed entry is refused instead.
+                            if (!Array.isArray(entry) || entry.length !== 2) {
+                                throw new TypeError("wire-codec: malformed map entry — expected a [key, value] pair");
+                            }
+
+                            return [decodeWire(entry[0], depth + 1), decodeWire(entry[1], depth + 1)] as [unknown, unknown];
+                        }),
+                    );
                 }
                 case "set": {
                     return new Set((value[2] as unknown[]).map((item) => decodeWire(item, depth + 1)));
                 }
                 case "url": {
-                    return new URL(value[2] as string);
+                    // `new URL` ToString-coerces, so an asserted non-string href
+                    // was accepted whenever its coercion happened to parse:
+                    // `[TAG,"url",["http://x/"]]` decoded to a real URL and
+                    // re-encoded as the string form. Every port refuses a
+                    // non-string href; so does this one.
+                    const href = value[2];
+
+                    if (typeof href !== "string") {
+                        throw new TypeError("wire-codec: malformed url — href must be a string");
+                    }
+
+                    // `new URL` also refuses an href that does not PARSE, which
+                    // is the one decode divergence where this side was the
+                    // strict one: all eight ports stored the string verbatim and
+                    // accepted `"not a url"` — a frame that kills a JS peer's
+                    // subscription and is waved through everywhere else. The
+                    // fail-loud rule wins, so the ports gained the check rather
+                    // than this side losing it. They are held to the floor of it
+                    // (an href must be absolute — a scheme, then the rest) since
+                    // no language parser reproduces WHATWG in the deep end.
+                    return new URL(href);
                 }
                 case "error": {
-                    const name = value[2] as string;
-                    const message = value[3] as string;
+                    // Type-CHECK both label slots, like every other slot here.
+                    // These were the last two that were not, and the leniency
+                    // split nine implementations three ways on one malformed
+                    // frame: six ports substituted `""` (accepting the frame
+                    // while erasing the error's identity), two carried the
+                    // non-string through verbatim, and this one ToString-coerced
+                    // the message via `new Error(5)` while passing the name
+                    // straight into `error.name`. A slot that must hold a string
+                    // and does not is a malformed frame.
+                    const name = value[2];
+                    const message = value[3];
+
+                    if (typeof name !== "string" || typeof message !== "string") {
+                        throw new TypeError("wire-codec: malformed error — name and message must be strings");
+                    }
+
                     // Allow-list lookup only (`Object.hasOwn`), never a bare bracket
                     // index — a wire-supplied name must not walk the prototype chain
                     // and dispatch `new` to an unexpected target.
@@ -474,6 +566,17 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
                     // value lands as an own data property instead (Cap'n Web #190).
                     const props = decodeWire(value[4], depth + 1) as Record<string, unknown>;
 
+                    // The props slot must be a real object. `Object.keys` on a
+                    // primitive is not an error in JS — it enumerates a string's
+                    // indices — so `[TAG,"error","E","m","ab"]` used to decode as
+                    // `{ 0: "a", 1: "b" }` here while every port produced `{}`. That
+                    // divergence is a JS accident, not a contract, and the honest
+                    // fix is to refuse the frame rather than teach eight languages
+                    // to reproduce it.
+                    if (props === null || typeof props !== "object" || Array.isArray(props)) {
+                        throw new TypeError("wire-codec: malformed error — props must be an object");
+                    }
+
                     for (const key of Object.keys(props)) {
                         if (key === UNSAFE_KEY) {
                             Object.defineProperty(error, key, { configurable: true, enumerable: true, value: props[key], writable: true });
@@ -491,7 +594,35 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
                     return error;
                 }
                 case "bytes": {
-                    const bytes = fromBase64(value[2] as string);
+                    // Type-CHECK, not a type-assert: `atob` takes a string, so an
+                    // asserted `null`/`true`/`1234` was ToString-coerced and
+                    // decoded as the base64 of `"null"` — three invented bytes
+                    // that re-encode as a legitimate-looking `bytes` tag. The
+                    // sibling `date`, `map` and `error` cases each refuse their
+                    // slot the same way, as do all eight ports.
+                    const encoded = value[2];
+
+                    if (typeof encoded !== "string") {
+                        throw new TypeError("wire-codec: malformed bytes — payload must be a base64 string");
+                    }
+
+                    const bytes = fromBase64(encoded);
+
+                    // CANONICITY, not merely decodability. `atob` implements
+                    // WHATWG "forgiving base64": it strips embedded whitespace,
+                    // infers missing padding, and discards the unused low bits
+                    // of a short final quantum. The last of those is a silent
+                    // rewrite rather than leniency — `"AQJ="` decodes to 01 02
+                    // and re-encodes as `"AQI="`, different bytes than the peer
+                    // wrote — and the other two split the eight ports 3-accept /
+                    // 5-reject, because each inherited whatever its language's
+                    // decoder happened to allow. Re-encoding and comparing is
+                    // the whole rule in one line: the payload must be exactly
+                    // what a conforming encoder would have written.
+                    if (toBase64(bytes) !== encoded) {
+                        throw new TypeError("wire-codec: malformed bytes — payload must be canonical padded base64");
+                    }
+
                     const ctorName = (value[3] as string | undefined) ?? "Uint8Array";
 
                     if (ctorName === "ArrayBuffer") {
@@ -572,4 +703,29 @@ const decodeDocument = (text: string): Record<string, unknown> | undefined => {
     }
 };
 
-export { decodeDocument, decodeWire, encodeWire, isPlainObject, needsWireEncoding };
+/**
+ * {@link encodeWire} an outbound call's `args`, re-throwing the bare codec error
+ * with the calling surface and the target function attached.
+ *
+ * Every producer of a Lunora call envelope encodes here — `@lunora/client`'s
+ * service binding, `@lunora/dispatch`'s runner, `ctx.scheduler` (from a shard and
+ * from an HTTP action), and the workpool. `encodeWire` REJECTS any non-plain
+ * object (a `RegExp`, a `Headers`, a class instance, one with a working
+ * `toJSON()`), where `JSON.stringify` used to swallow it into `{}`. Loud beats
+ * silently wrong, but the codec's own message names only the offending type: an
+ * unattributed `TypeError` out of `pool.enqueue` or a scheduled job's log line
+ * cannot be traced back to the call that carried the bad argument. `label` is the
+ * surface (`@lunora/queue`, `ctx.scheduler.runAt`), `path` the target function.
+ */
+const encodeArgsOrThrow = (label: string, path: string, args: unknown): unknown => {
+    try {
+        return encodeWire(args);
+    } catch (error: unknown) {
+        throw new TypeError(
+            `${label}: cannot encode args for '${path}' — ${error instanceof Error ? error.message : String(error)}`,
+            error instanceof Error ? { cause: error } : undefined,
+        );
+    }
+};
+
+export { decodeDocument, decodeWire, encodeArgsOrThrow, encodeWire, isPlainObject, needsWireEncoding, TAG as WIRE_TAG };

@@ -3,7 +3,7 @@
  * the `ctx.*` helpers and `defineApp` builder methods each backed by an
  * `@lunora/*` add-on. Before this table the same capability was described four
  * times, each drifting independently: the code-usage probe
- * (`discover-feature-usage.ts`), the typed `ctx.*` field seam (`emit.ts`), the
+ * (`discover/feature-usage.ts`), the typed `ctx.*` field seam (`emit.ts`), the
  * fluent `defineApp` builder method (`emit-app.ts`), and the `has*` flag
  * plumbing (`run-codegen.ts`). Adding a capability now means one row here.
  *
@@ -55,6 +55,23 @@ interface CapabilityDescriptor {
     key: string;
     /** The `@lunora/*` package whose import flips the usage probe. */
     moduleSpecifier: string;
+
+    /**
+     * The npm package `_generated/` will import when this capability's USAGE flag
+     * alone is on — the `moduleSpecifier`'s package, without its subpath.
+     * `assert-required-packages.ts` demands it before emit, so a bare `ctx.kv`
+     * read in a project that never installed `@lunora/bindings` fails as an
+     * actionable diagnostic instead of as `Cannot find module` reported inside a
+     * generated file.
+     *
+     * Omitted where the emitted import is gated on a DECLARATION rather than on
+     * usage — a `lunora/flags.ts` / `lunora/notify.ts` / `lunora/containers.ts`
+     * file, a `defineWorkflow`, a `.vectorize()` index — because there the
+     * declaration is the user's own code and already names the package; and for
+     * `scheduler` / `storage`, whose broader signals (a declared cron, a
+     * `v.storage()` column, a storage rule) are handled explicitly there.
+     */
+    requiredPackage?: string;
     /** The typed `ctx.*` field seam facet — present only for the uniform binding capabilities emitted inline in `emit.ts` (NOT `flags`/`access`). */
     serverCtxField?: ServerContextFieldFacet;
 }
@@ -68,18 +85,19 @@ interface CapabilityDescriptor {
  * interface templates, so their order here is not output-affecting.
  */
 const CAPABILITY_ROWS = [
-    // The middleware (`accessContext()` / `accessRoles()`) imports the `/context`
-    // and `/roles` subpaths, NOT the bare `@lunora/cloudflare-access` specifier —
-    // so the per-procedure middleware never trips the global `ctx.access` wiring.
+    // The `accessContext()` middleware imports the `/context` subpath, NOT the
+    // bare `@lunora/cloudflare-access` specifier — so the per-procedure
+    // middleware never trips the global `ctx.access` wiring.
     // A handler reading `ctx.access` is the signal that wires it onto every ctx.
     // `access` has a synchronous facade type, so its ctx field stays bespoke in
     // `emit.ts` (no `serverCtxField` here).
-    { contextProperty: "access", key: "access", moduleSpecifier: "@lunora/cloudflare-access" },
+    { contextProperty: "access", key: "access", moduleSpecifier: "@lunora/cloudflare-access", requiredPackage: "@lunora/cloudflare-access" },
     {
         appMethod: { configKey: "ai", doc: "Override the Workers AI binding backing `ctx.ai` (defaults to `env.AI`).", method: "ai" },
         contextProperty: "ai",
         key: "ai",
         moduleSpecifier: "@lunora/ai",
+        requiredPackage: "@lunora/ai",
     },
     {
         appMethod: {
@@ -90,6 +108,7 @@ const CAPABILITY_ROWS = [
         contextProperty: "analytics",
         key: "analytics",
         moduleSpecifier: "@lunora/bindings/analytics",
+        requiredPackage: "@lunora/bindings",
         // `ctx.analytics` — Analytics Engine write helper. EVERY ctx: a write-only,
         // fire-and-forget side effect, not a determinism hazard for reads.
         serverCtxField: {
@@ -106,6 +125,7 @@ const CAPABILITY_ROWS = [
         contextProperty: "browser",
         key: "browser",
         moduleSpecifier: "@lunora/browser",
+        requiredPackage: "@lunora/browser",
         // `ctx.browser` — Browser Rendering. ActionCtx ONLY: non-deterministic network I/O.
         serverCtxField: {
             field: `\n    /** Browser Rendering (screenshots/PDF/scrape). Non-deterministic — available only in actions. */\n    readonly browser: import("@lunora/browser").Browser;`,
@@ -129,6 +149,7 @@ const CAPABILITY_ROWS = [
         contextProperty: "sql",
         key: "hyperdrive",
         moduleSpecifier: "@lunora/hyperdrive",
+        requiredPackage: "@lunora/hyperdrive",
         // `ctx.sql` — Hyperdrive (external Postgres/MySQL). ActionCtx ONLY: external,
         // non-deterministic I/O whose writes are invisible to Lunora live queries.
         serverCtxField: {
@@ -141,6 +162,7 @@ const CAPABILITY_ROWS = [
         contextProperty: "images",
         key: "images",
         moduleSpecifier: "@lunora/bindings/images",
+        requiredPackage: "@lunora/bindings",
         // `ctx.images` — Cloudflare Images binding transforms. ActionCtx ONLY: non-deterministic compute/network I/O.
         serverCtxField: {
             field: `\n    /** Cloudflare Images transforms (resize/format/optimize). Non-deterministic — available only in actions. */\n    readonly images: import("@lunora/bindings/images").Images;`,
@@ -152,6 +174,7 @@ const CAPABILITY_ROWS = [
         contextProperty: "kv",
         key: "kv",
         moduleSpecifier: "@lunora/bindings/kv",
+        requiredPackage: "@lunora/bindings",
         // `ctx.kv` — Workers KV. Typed on EVERY ctx (a KV read is allowed in a
         // deterministic read path the way `ctx.db` is; the binding is user-named).
         serverCtxField: { field: `\n    readonly kv: import("@lunora/bindings/kv").Kv;`, tier: "every" },
@@ -173,6 +196,7 @@ const CAPABILITY_ROWS = [
         contextProperty: "payments",
         key: "payments",
         moduleSpecifier: "@lunora/payment",
+        requiredPackage: "@lunora/payment",
     },
     // `ctx.x402` — the x402 agent-wallet pay rail. ActionCtx ONLY: it signs and
     // settles real USDC over the network per request. Like `payments`, its ctx
@@ -187,6 +211,7 @@ const CAPABILITY_ROWS = [
         contextProperty: "x402",
         key: "x402",
         moduleSpecifier: "@lunora/x402/pay",
+        requiredPackage: "@lunora/x402",
     },
     // Pipelines is its own `@lunora/bindings/pipelines` subpath (distinct from
     // `/analytics`), so a real import is a clean signal that won't be flipped by a
@@ -195,6 +220,7 @@ const CAPABILITY_ROWS = [
         contextProperty: "pipelines",
         key: "pipelines",
         moduleSpecifier: "@lunora/bindings/pipelines",
+        requiredPackage: "@lunora/bindings",
         // `ctx.pipelines` — Pipelines (R2-backed) ingestion sink. ActionCtx ONLY
         // (write-only fire-and-forget, but external I/O — kept off query/mutation).
         serverCtxField: {
@@ -211,6 +237,7 @@ const CAPABILITY_ROWS = [
         contextProperty: "r2sql",
         key: "r2sql",
         moduleSpecifier: "@lunora/bindings/r2sql",
+        requiredPackage: "@lunora/bindings",
         // `ctx.r2sql` — R2 SQL (serverless query engine over Apache Iceberg tables).
         // ActionCtx ONLY: external REST I/O, non-deterministic, and non-reactive
         // (reads are not tracked by Lunora live queries).

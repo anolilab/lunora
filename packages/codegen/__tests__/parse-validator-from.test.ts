@@ -9,7 +9,8 @@ import { dirname, join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverFunctions, resolveStandardSchemaType } from "../src/discover-functions";
+import discoverFunctions from "../src/discover/functions";
+import resolveStandardSchemaType from "../src/discover/functions/resolve-standard-schema-type";
 import { setStandardTypeResolver } from "../src/parse-validator";
 
 let workdir: string;

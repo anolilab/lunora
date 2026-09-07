@@ -115,10 +115,6 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
-### `FlagContext` (type)
-
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
-
 ### `FlagOptions` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._

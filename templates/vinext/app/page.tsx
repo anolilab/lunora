@@ -137,7 +137,7 @@ export default function Home() {
                                 </svg>
                             </span>
                         </a>
-                        <a className="card mini" href="/_lunora">
+                        <a className="card mini" href="/__lunora">
                             <div className="mc">
                                 <span className="ic">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7}>

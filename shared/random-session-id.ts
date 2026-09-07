@@ -13,10 +13,19 @@
  *
  * Resolution order — every path returns a bare, unprefixed id:
  *   1. `crypto.randomUUID()` — every modern browser, workerd, and Node 22+.
- *   2. `crypto.getRandomValues()` — older runtimes without `randomUUID` still
- *      ship Web Crypto's CSPRNG; hex-encode 16 bytes.
- *   3. `Date.now()` — no Web Crypto at all (very old/exotic runtime); acceptable
- *      because the id is a non-secret correlation handle, not a token.
+ *   2. `crypto.getRandomValues()` — a non-secure origin (a plain-HTTP LAN
+ *      dev/preview server) leaves `crypto.randomUUID` UNDEFINED while still
+ *      shipping Web Crypto's CSPRNG; hex-encode 16 bytes.
+ *
+ * There is deliberately no third arm. It used to fall back to
+ * `Date.now().toString(36)`, which is not an id: two presence sessions opened in
+ * the same millisecond get the SAME string and collapse onto one presence row,
+ * and the value is trivially guessable by anyone who knows roughly when a peer
+ * joined. Every target this runs on (browsers, workerd, Node 22+) ships
+ * `crypto.getRandomValues` — it predates `randomUUID` by a decade and, unlike
+ * it, is available on insecure origins — so arm 2 always answers and the throw
+ * below is unreachable in practice. Failing loudly on a runtime with no Web
+ * Crypto at all beats minting colliding session ids there.
  *
  * The whole `crypto` reference is guarded (not just `randomUUID`): some SSR /
  * older runtimes leave `crypto` undefined, where reading `.randomUUID` off it
@@ -44,7 +53,7 @@ const randomSessionId = (): string => {
         }
     }
 
-    return Date.now().toString(36);
+    throw new Error("randomSessionId: no Web Crypto available — a session id needs crypto.randomUUID or crypto.getRandomValues");
 };
 
 export { randomSessionId };

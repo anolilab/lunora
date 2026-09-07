@@ -106,6 +106,32 @@ describe("createAccessResolver — platform identity (Worker-scoped Access)", ()
         expect(identity?.userId).toBe("platform-user");
     });
 
+    it("falls through to the JWT when the platform identity yields no usable id", async () => {
+        expect.assertions(2);
+
+        const onError = vi.fn<(error: unknown, request: Request) => void>();
+        const resolve = createAccessResolver({ aud: AUD, keySet: publicKey, onError, teamDomain: TEAM });
+        const token = await sign({ email: "jwt@acme.test", sub: "jwt-user" });
+
+        // `{}` is an object, so a nullish-coalescing fallthrough keeps it and
+        // the configured JWT fallback is never consulted: the caller presenting
+        // a valid Cf-Access-Jwt-Assertion resolves anonymous, RLS denies, and
+        // `onError` never fires because nothing was verified.
+        const identity = await resolve(request({ "cf-access-jwt-assertion": token }), undefined, contextWith({}));
+
+        expect(identity?.userId).toBe("jwt-user");
+        expect(onError).not.toHaveBeenCalled();
+    });
+
+    it("stays anonymous when neither the platform identity nor the JWT yields an id", async () => {
+        expect.assertions(1);
+
+        const resolve = createAccessResolver({ aud: AUD, keySet: publicKey, teamDomain: TEAM });
+
+        // Fail-closed is unchanged: no usable platform id and no token at all.
+        await expect(resolve(request(), undefined, contextWith({ country: "DE" }))).resolves.toBeNull();
+    });
+
     it("still verifies the JWT when the request carries no platform identity", async () => {
         expect.assertions(1);
 

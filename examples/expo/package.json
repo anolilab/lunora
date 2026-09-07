@@ -4,6 +4,9 @@
     "private": true,
     "license": "FSL-1.1-Apache-2.0",
     "main": "index.ts",
+    "imports": {
+        "#lunora/*": "./lunora/*"
+    },
     "scripts": {
         "start": "expo start --dev-client",
         "android": "expo run:android",

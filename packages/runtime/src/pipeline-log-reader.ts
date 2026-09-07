@@ -254,7 +254,7 @@ export interface PipelineLogQuery {
     functionPathPrefix?: string;
     /** Match only this exact severity. When set, `minLevel` is ignored for the same field. */
     level?: ContextLogLevel;
-    /** Max rows to return. Clamped to `[1, 10000]`; defaults to {@link DEFAULT_LOG_LIMIT}. */
+    /** Max rows to return. Clamped to `[1, 10000]`; defaults to 500. */
     limit?: number;
     /** Severity floor: keep every level at or above this in {@link LOG_LEVEL_ORDER} (e.g. `warn` keeps warn, error, fatal). */
     minLevel?: ContextLogLevel;
@@ -334,9 +334,6 @@ export interface PipelineLogReader {
 
 /** The written-column contract exposed publicly: canonical field to default physical column name. */
 export const DEFAULT_LOG_COLUMNS: Readonly<Record<PipelineLogField, string>> = DEFAULT_COLUMNS;
-
-/** Default page size when a query omits `limit`. */
-export const DEFAULT_LOG_LIMIT: number = DEFAULT_LIMIT;
 
 /**
  * Build a durable-log reader over one R2 Data Catalog (Iceberg) table.

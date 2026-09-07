@@ -14,6 +14,7 @@ import { getVitestConfig } from "../../tools/get-vitest-config";
 // they touch Storage APIs, so they stay in `component`).
 const unitTestFiles = [
     "__tests__/features/advisors/derive-insights.test.ts",
+    "__tests__/features/auth/invitation-status.test.ts",
     "__tests__/features/advisors/derive-runtime-advisories.test.ts",
     "__tests__/features/api/openapi/json-highlight.test.ts",
     "__tests__/features/containers/fold-container-instances.test.ts",
@@ -38,6 +39,7 @@ const unitTestFiles = [
     "__tests__/features/sql/sql-autocomplete.test.ts",
     "__tests__/features/sql/sql-diagnostics.test.ts",
     "__tests__/features/sql/sql-tabs.test.ts",
+    "__tests__/features/storage/enumerate-live-keys.test.ts",
     "__tests__/features/storage/storage-entries.test.ts",
     "__tests__/lib/admin-functions.test.ts",
     "__tests__/lib/data-view-params.test.ts",
@@ -45,6 +47,7 @@ const unitTestFiles = [
     "__tests__/lib/mask-preview-heuristic.test.ts",
     "__tests__/lib/operation-log.test.ts",
     "__tests__/lib/rest-dispatch.test.ts",
+    "__tests__/lib/seed-data.test.ts",
     "__tests__/lib/ws-token-provider.test.ts",
 ];
 
@@ -94,8 +97,8 @@ export default getVitestConfig(
     // ratchet: the jsdom `component` project is deliberately ungated — a full
     // component run under v8 coverage stalls, so `test:coverage` runs
     // `--project unit` only and these floors are the unit project's measured
-    // coverage (2026-08-21, rounded down; coverage counts all of `src`, so the
+    // coverage (2026-09-02, rounded down; coverage counts all of `src`, so the
     // component-only files sit at 0%). Raise when unit tests are added; never
     // lower to admit a regression.
-    { branches: 9, functions: 7, lines: 11, statements: 10 },
+    { branches: 11, functions: 8, lines: 12, statements: 12 },
 );

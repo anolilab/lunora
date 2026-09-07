@@ -70,6 +70,7 @@ const createOwner = (): Owner => {
                 },
                 rowCount: () => owner.snapshot.length,
                 shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
                 sql: () => ({}) as SqlExec,
             };
 
@@ -130,6 +131,7 @@ describe("read replicas", () => {
                 return { errors: importErrors };
             },
             shardBinding: () => "SHARD",
+            shardJurisdiction: () => undefined,
             sql: () => sql,
         };
     });
@@ -168,6 +170,57 @@ describe("read replicas", () => {
         expect(replica?.isDivergent()).toBe(false);
     });
 
+    it("addresses its owner through its OWN jurisdiction subnamespace, not the raw binding", async () => {
+        expect.assertions(3);
+
+        owner.snapshot = [{ doc: { _id: "a", title: "first" }, table: "posts" }];
+        owner.changes = [change(4, "a")];
+
+        // Cloudflare mints a DIFFERENT `DurableObjectId` for the same name inside
+        // a jurisdiction subnamespace (`ns.idFromName(n) !== ns.jurisdiction("eu")
+        // .idFromName(n)`), and the worker stamps the RAW env key as
+        // `x-lunora-shard-binding` while routing its own traffic through the
+        // pinned namespace. Resolving off that raw binding therefore woke a
+        // stranger DO — empty, and outside the declared residency.
+        let phantomHits = 0;
+        const phantom = {
+            fetch: async () => {
+                phantomHits += 1;
+
+                return new Response("shard has no changelog to replicate", { status: 409 });
+            },
+        };
+        const toOwner = { fetch: async (_url: string, init?: RequestInit) => owner.serve(typeof init?.body === "string" ? init.body : "{}", init?.headers) };
+        const pinned = { get: () => toOwner, getByName: () => toOwner, idFromName: (name: string) => name };
+
+        env["SHARD"] = {
+            get: () => phantom,
+            getByName: () => phantom,
+            idFromName: (name: string) => name,
+            jurisdiction: (jurisdiction: string) =>
+                jurisdiction === "eu" ? pinned : { get: () => phantom, getByName: () => phantom, idFromName: (name: string) => name },
+        };
+
+        const replica = createReplicaLink({ ...host, shardJurisdiction: () => "eu" });
+
+        await expect(gateReplicaDispatch(replica!, replicaRead(), "posts:list")).resolves.toBeUndefined();
+        expect(imported).toStrictEqual(owner.snapshot);
+        expect(phantomHits).toBe(0);
+    });
+
+    it("stays inert rather than reaching an unpinned sibling when the binding cannot express its jurisdiction", async () => {
+        expect.assertions(1);
+
+        owner.snapshot = [{ doc: { _id: "a", title: "first" }, table: "posts" }];
+        owner.changes = [change(4, "a")];
+
+        // The harness namespace has no `jurisdiction()`. Falling back to it would
+        // open a stub outside the compliance boundary the app declared, so the
+        // tier goes inert and the read falls back to the worker-routed owner —
+        // which IS pinned.
+        await expect(createReplicaLink({ ...host, shardJurisdiction: () => "eu" })?.ensureFresh()).resolves.toBe("unavailable");
+    });
+
     it("applies the changelog past its cursor and remembers where it got to", async () => {
         expect.assertions(3);
 
@@ -180,6 +233,42 @@ describe("read replicas", () => {
         await expect(replica?.ensureFresh(2)).resolves.toBe("fresh");
         expect(applied.map((entry) => entry.seq)).toStrictEqual([1, 2]);
         expect(replica?.appliedSeq()).toBe(2);
+    });
+
+    it("carries wire-typed leaves across the control channel intact", async () => {
+        expect.assertions(4);
+
+        // `decodeDocJson` hands the owner REAL `bigint` / `ArrayBuffer` / `Date`
+        // values, so both directions of this channel have to run the codec: an
+        // unencoded `bigint` throws inside `Response.json`, which the follower
+        // reads as "owner unreachable" and retries forever, and unencoded bytes
+        // flatten to `{}` for the follower to write into its copy of the shard.
+        owner.snapshot = [{ doc: { _id: "a", blob: new Uint8Array([1, 2, 3]).buffer, views: 7n }, table: "posts" }];
+
+        const replica = createReplicaLink(host);
+
+        // The snapshot crosses on the bootstrap frame…
+        await replica?.ensureFresh();
+
+        expect(imported[0]?.doc).toStrictEqual({ _id: "a", blob: new Uint8Array([1, 2, 3]).buffer, views: 7n });
+
+        // …and a later write crosses on a pull frame. `9007199254740993` is past
+        // `Number.MAX_SAFE_INTEGER`, so a codec that round-tripped it through a
+        // JSON number would come back off by one rather than merely mistyped.
+        owner.changes = [
+            {
+                doc: { _id: "b", at: new Date("2024-01-01T00:00:00.000Z"), views: 9_007_199_254_740_993n },
+                id: "b",
+                op: "insert",
+                seq: 1,
+                table: "posts",
+                ts: 1,
+            },
+        ];
+
+        await expect(replica?.ensureFresh(1)).resolves.toBe("fresh");
+        expect(applied[0]?.doc).toStrictEqual({ _id: "b", at: new Date("2024-01-01T00:00:00.000Z"), views: 9_007_199_254_740_993n });
+        expect(replica?.appliedSeq()).toBe(1);
     });
 
     it("serves inside the staleness window without touching the owner", async () => {
@@ -451,6 +540,7 @@ describe("read replicas", () => {
             },
             rowCount: () => 0,
             shardBinding: () => "SHARD",
+            shardJurisdiction: () => undefined,
             sql: () => sql,
         };
 
@@ -485,6 +575,7 @@ describe("replica dispatch gate", () => {
                 return { errors: [] };
             },
             shardBinding: () => undefined,
+            shardJurisdiction: () => undefined,
             sql: () => harness.sql,
         };
     };

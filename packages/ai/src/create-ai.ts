@@ -3,7 +3,7 @@ import type { EmbeddingModel, LanguageModel } from "ai";
 import { createWorkersAI } from "workers-ai-provider";
 
 import type { AiGatewayMetadata } from "./gateway";
-import { buildAiGatewayMetadataFields, resolveAiGateway } from "./gateway";
+import { AI_DEFAULT_EMBEDDING_MODEL_ENV, AI_DEFAULT_MODEL_ENV, buildAiGatewayMetadataFields, readEnv, resolveAiGateway } from "./gateway";
 import type { AiBindingLike, AiGatewayOptions, EmbeddingModelInput, LunoraAi, LunoraAiOptions, ModelInput, WorkersAiProviderLike } from "./types";
 
 /**
@@ -83,15 +83,29 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
     // it (opt-in), so token + dollar-cost telemetry is computed by the gateway.
     // Resolved once so the raw `ai.run()` path below routes through the same gateway.
     const resolvedGateway = resolveGatewayOption(gateway, env, metadata);
+
+    // The model defaults come from `env` when the caller did not pass them, for
+    // the same reason the gateway does: the generated shard builds this facade as
+    // `createAi({ binding, env, metadata })` with those three fields fixed, so
+    // `env` is the ONLY seam an app can reach. Without this, `defaultModel` /
+    // `defaultEmbeddingModel` were unsettable by any Lunora app and the no-argument
+    // `ctx.ai.model()` / `ctx.ai.embeddingModel()` always threw — including through
+    // `defineRag`, whose `embeddingModel` is documented as optional. An explicit
+    // option still wins.
+    const effectiveDefaultModel = defaultModel ?? readEnv(env, AI_DEFAULT_MODEL_ENV);
+    const effectiveDefaultEmbeddingModel = defaultEmbeddingModel ?? readEnv(env, AI_DEFAULT_EMBEDDING_MODEL_ENV);
     const workersai: WorkersAiProviderLike = provider ?? createWorkersAI({ binding: binding as AiBindingLike, gateway: resolvedGateway });
 
     const model = (input?: ModelInput): LanguageModel => {
         if (input === undefined) {
-            if (!defaultModel) {
-                throw new LunoraError("INTERNAL", "@lunora/ai: no model supplied and no `defaultModel` configured — pass a model id or an AI SDK model");
+            if (!effectiveDefaultModel) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `@lunora/ai: no model supplied and no default configured — pass a model id, or set ${AI_DEFAULT_MODEL_ENV} in the Worker env (wrangler \`vars\` / \`.dev.vars\`)`,
+                );
             }
 
-            return workersai(defaultModel);
+            return workersai(effectiveDefaultModel);
         }
 
         // A string is a Workers AI model id; anything else is an already-built
@@ -124,12 +138,12 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
             return input;
         }
 
-        const modelId = input ?? defaultEmbeddingModel;
+        const modelId = input ?? effectiveDefaultEmbeddingModel;
 
         if (!modelId) {
             throw new LunoraError(
                 "INTERNAL",
-                "@lunora/ai: no embedding model supplied and no `defaultEmbeddingModel` configured — pass an embedding model id or an AI SDK EmbeddingModel",
+                `@lunora/ai: no embedding model supplied and no default configured — pass an embedding model id or an AI SDK EmbeddingModel, or set ${AI_DEFAULT_EMBEDDING_MODEL_ENV} in the Worker env (wrangler \`vars\` / \`.dev.vars\`)`,
             );
         }
 

@@ -78,6 +78,20 @@ const readProjectDependencyNames = (root: string): ReadonlySet<string> => {
 };
 
 /**
+ * Whether the project depends on the unscoped `lunorash` umbrella rather than
+ * the granular `@lunora/*` packages.
+ *
+ * Every generator that writes an import INTO the user's project has to ask:
+ * an umbrella-only install — the default for every starter template — never
+ * installs `@lunora/server`, so under pnpm's strict layout a scaffolded
+ * `from "@lunora/server"` is unresolvable and the worker stops bundling.
+ * Codegen answers the same question from its own dependency set
+ * (`dependencies.has("lunorash")`); this is that answer for every consumer
+ * that has only a project root.
+ */
+const projectUsesUmbrella = (root: string): boolean => readProjectDependencyNames(root).has("lunorash");
+
+/**
  * Detect which meta-framework a project uses by inspecting its `package.json`
  * dependencies, and classify it under void's class-A/B/C model (PLAN4 §3).
  *
@@ -102,4 +116,4 @@ const detectFramework = (root: string): FrameworkDetection => {
 };
 
 export type { DetectedFramework, FrameworkClass, FrameworkDetection };
-export { detectFramework, readProjectDependencyNames };
+export { detectFramework, projectUsesUmbrella, readProjectDependencyNames };

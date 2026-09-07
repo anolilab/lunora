@@ -286,3 +286,158 @@ describe("serverQuery — in-process fast-path (PLAN4 §2.2 / §5.3)", () => {
         expect(JSON.stringify(seen[0])).not.toContain("s3cret");
     });
 });
+
+describe("serverQuery — x402 paywall parity", () => {
+    /** Structural shape of the injected `x402Charge` gate (the type is internal to create-worker). */
+    type ChargeGateStub = (
+        request: Request,
+        spec: { functionPath: string; price: number | string },
+        dispatch: () => Promise<Response>,
+        deps?: { waitUntil?: (promise: Promise<unknown>) => void },
+    ) => Promise<Response>;
+
+    const paidReport = { __lunoraRef: "reports:premium" } as const;
+    const paidFunctions = { "reports:premium": { kind: "query", x402: { price: "$0.05" } } } as const;
+
+    it("runs the charge gate and withholds the shard when unpaid", async () => {
+        expect.assertions(4);
+
+        // Before the fix `serverQuery` called `dispatchSingleShard` directly, so an
+        // SSR loader served every paid result free: no 402, no settlement, while
+        // the same procedure was paywalled over RPC and REST.
+        const shard = createEchoShardSpy();
+        const x402Charge = vi.fn<ChargeGateStub>(() => Promise.resolve(new Response(undefined, { status: 402 })));
+        const worker = createWorker({ functions: paidFunctions, shardDO: shard.namespace, x402Charge });
+
+        const response = await worker.serverQuery(new Request("https://app.example/page"), {}, paidReport, {});
+
+        expect(response.status).toBe(402);
+        expect(x402Charge).toHaveBeenCalledTimes(1);
+        expect(x402Charge.mock.calls[0]![1]).toStrictEqual({ functionPath: "reports:premium", price: "$0.05" });
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("dispatches once the gate settles the payment", async () => {
+        expect.assertions(2);
+
+        const shard = createEchoShardSpy();
+        const x402Charge = vi.fn<ChargeGateStub>((_request, _spec, dispatch) => dispatch());
+        const worker = createWorker({ functions: paidFunctions, shardDO: shard.namespace, x402Charge });
+
+        const response = await worker.serverQuery(new Request("https://app.example/page"), {}, paidReport, {});
+
+        expect(response.status).toBe(200);
+        expect(shard.calls).toHaveLength(1);
+    });
+
+    it("fail-closes a paid procedure with no gate configured (500), never serving it free", async () => {
+        expect.assertions(2);
+
+        const shard = createEchoShardSpy();
+        const worker = createWorker({ functions: paidFunctions, shardDO: shard.namespace });
+
+        const response = await worker.serverQuery(new Request("https://app.example/page"), {}, paidReport, {});
+
+        expect(response.status).toBe(500);
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("leaves a free procedure untouched by the gate", async () => {
+        expect.assertions(3);
+
+        const shard = createEchoShardSpy();
+        const x402Charge = vi.fn<ChargeGateStub>((_request, _spec, dispatch) => dispatch());
+        const worker = createWorker({ functions: paidFunctions, shardDO: shard.namespace, x402Charge });
+
+        const response = await worker.serverQuery(new Request("https://app.example/page"), {}, messagesList, {});
+
+        expect(response.status).toBe(200);
+        expect(x402Charge).not.toHaveBeenCalled();
+        expect(shard.calls).toHaveLength(1);
+    });
+
+    it("forwards the SSR host's `waitUntil` to the gate so the settlement receipt survives the response", async () => {
+        expect.assertions(2);
+
+        const shard = createEchoShardSpy();
+        const x402Charge = vi.fn<ChargeGateStub>((_request, _spec, dispatch) => dispatch());
+        const worker = createWorker({ functions: paidFunctions, shardDO: shard.namespace, x402Charge });
+        const waitUntil = vi.fn<(promise: Promise<unknown>) => void>();
+
+        await worker.serverQuery(new Request("https://app.example/page"), {}, paidReport, {}, { waitUntil });
+
+        const receipt = Promise.resolve();
+
+        x402Charge.mock.calls[0]![3]!.waitUntil!(receipt);
+
+        expect(waitUntil).toHaveBeenCalledWith(receipt);
+        expect(shard.calls).toHaveLength(1);
+    });
+});
+
+describe("reserved-prefix parity — the fan-out-only relation read is refused on every dispatch surface", () => {
+    /**
+     * `__lunora_relation__:*` reads RAW, RLS-blind rows for whatever `args.table`
+     * names. The binding that pins `args.table` to the AUTHORIZED `fanOut.table`
+     * lives in `parseEnvelope` and runs only when a `fanOut` is present, and the
+     * DO applies no gate of its own — its comment cites the worker's refusal as
+     * the reason ("worker refuses this prefix on a single-shard envelope, so it's
+     * only reachable through the authorizeFanOut-gated fan-out path"). So the
+     * guard being skipped on a surface means nothing checks it at all.
+     */
+    const relationRead = { __lunoraRef: "__lunora_relation__:read" } as const;
+
+    it("serverQuery refuses it, byte-identically to /_lunora/rpc", async () => {
+        expect.assertions(4);
+
+        const shard = createEchoShardSpy();
+        const worker = createWorker({ shardDO: shard.namespace });
+
+        const httpRes = await worker.fetch(rpcRequest({ args: { table: "payments" }, functionPath: "__lunora_relation__:read" }), {}, fakeContext);
+        const serverRes = await worker.serverQuery(
+            new Request("https://app.example/loader"),
+            {},
+            relationRead,
+            { table: "payments" },
+            { context: fakeContext },
+        );
+
+        expect(httpRes.status).toBe(403);
+        expect(serverRes.status).toBe(403);
+        // `serverQuery`'s stated contract is a byte-identical result to the HTTP path.
+        await expect(serverRes.text()).resolves.toBe(await httpRes.text());
+        // Nothing reached a shard on either path.
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("an httpRoute's ctx.run* refuses it", async () => {
+        expect.assertions(2);
+
+        const shard = createEchoShardSpy();
+        let thrown: unknown;
+
+        const worker = createWorker({
+            httpRouter: {
+                fetch: async (_request: Request, env: unknown) => {
+                    const ctx = (env as { __lunoraCtx: { runQuery: (reference: unknown, args: Record<string, unknown>) => Promise<unknown> } }).__lunoraCtx;
+
+                    try {
+                        await ctx.runQuery(relationRead, { table: "payments" });
+                    } catch (error: unknown) {
+                        thrown = error;
+                    }
+
+                    return new Response("ok");
+                },
+            },
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/webhook", { method: "POST" }), {}, fakeContext);
+
+        // `ctx.run*` additionally stamps `x-lunora-system: "1"`, so an unguarded
+        // dispatch here reaches the shard as a TRUSTED caller.
+        expect((thrown as { code?: string } | undefined)?.code).toBe("FORBIDDEN");
+        expect(shard.calls).toHaveLength(0);
+    });
+});

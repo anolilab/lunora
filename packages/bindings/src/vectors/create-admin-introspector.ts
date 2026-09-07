@@ -3,13 +3,18 @@ import { LunoraError } from "@lunora/errors";
 import type { EmbedFunction, VectorizeIndexLike, VectorMetric } from "./types";
 
 /**
- * Vectorize lowers the `topK` ceiling to 20 (from the 100 cap that applies to
+ * Vectorize V2 lowers the `topK` ceiling to 50 (from the 100 cap that applies to
  * id/score-only queries) whenever a query also asks for full metadata. Admin
  * similarity queries always request `returnMetadata: "all"`, so the tighter
- * bound is the one that applies here — clamping to 100 would let a `topK: 50`
- * studio query through only for Vectorize to reject it remotely.
+ * bound is the one that applies here.
+ *
+ * The same number `createVectors` enforces on the user path, and the same one
+ * the limits documentation publishes: a lower one here truncated a studio query
+ * the app's own `ctx.vectors.query` would have served in full. (Legacy V1
+ * indexes really do cap at 20 and reject more remotely, but a binding handle
+ * does not expose its index version, so V2's limit is what both paths enforce.)
  */
-const MAX_TOP_K = 20;
+const MAX_TOP_K = 50;
 
 /** Default neighbours returned by an admin similarity query when the caller omits `topK`. */
 const DEFAULT_TOP_K = 10;
@@ -130,10 +135,17 @@ export const createVectorAdminIntrospector = (options: VectorAdminIntrospectorOp
             throw new LunoraError("INTERNAL", `@lunora/bindings/vectors: no embedder registered for index "${name}" — it lists read-only`);
         }
 
+        // Rejected, not clamped. A silent `Math.min` returned a short page that
+        // looked like an exhausted index, so the caller could not tell the
+        // difference — and it disagreed with the user path, which throws.
+        if (topK !== undefined && (!Number.isInteger(topK) || topK < 1 || topK > MAX_TOP_K)) {
+            throw new RangeError(`@lunora/bindings/vectors: topK must be an integer in [1, ${String(MAX_TOP_K)}] (got ${String(topK)})`);
+        }
+
         const vector = await embed(text);
         const result = await binding.query(vector, {
             returnMetadata: "all",
-            topK: Math.min(topK ?? DEFAULT_TOP_K, MAX_TOP_K),
+            topK: topK ?? DEFAULT_TOP_K,
         });
 
         return {

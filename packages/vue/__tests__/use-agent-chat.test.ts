@@ -1,6 +1,6 @@
 import type { FunctionReference } from "@lunora/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { effectScope } from "vue";
+import { effectScope, nextTick, ref } from "vue";
 
 import type { AgentLiveEvent, UseAgentChatApi, UseAgentChatResult } from "../src/use-agent-chat";
 import { useAgentChat } from "../src/use-agent-chat";
@@ -141,6 +141,46 @@ describe(useAgentChat, () => {
         fake.push(MESSAGES_REF, { key: "t1" }, [{ content: "hello there", role: "user", seq: 0 }]);
 
         expect(chat.messages.value).toStrictEqual([{ content: "hello there", role: "user", seq: 0 }]);
+
+        scope.stop();
+    });
+
+    it("drops un-acked optimistic rows when threadKey changes, so they never ghost into the new thread", async () => {
+        expect.hasAssertions();
+
+        // Regression: a reactive `threadKey` re-subscribed history/thread/stream but
+        // left the `optimistic` array alone. `reconcileOptimistic` retires a row by
+        // comparing `maxDurableSeqAtSend` against durable `seq`s, and `seq` is PER
+        // THREAD — so a row sent in a 40-message thread A, still un-acked when the
+        // user switched to an empty thread B, could never be claimed there (B's max
+        // seq is -1) and rendered as a ghost `optimistic: true` bubble in B.
+        const fake = createFakeClient();
+        const threadKey = ref("thread-a");
+        const scope = effectScope();
+        const chat = scope.run(() =>
+            fake.provide((): UseAgentChatResult => useAgentChat({ api: buildApi(), send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey })),
+        )!;
+
+        const threadA = Array.from({ length: 40 }, (_unused, index) => {
+            return {
+                content: `row-${String(index)}`,
+                role: index % 2 === 0 ? "user" : "assistant",
+                seq: index,
+            };
+        });
+
+        fake.push(MESSAGES_REF, { key: "thread-a" }, threadA);
+
+        await chat.send("only meant for A");
+
+        expect(chat.messages.value).toHaveLength(41);
+
+        // Switch threads before the ack lands; thread B's history lands empty.
+        threadKey.value = "thread-b";
+        await nextTick();
+        fake.push(MESSAGES_REF, { key: "thread-b" }, []);
+
+        expect(chat.messages.value).toStrictEqual([]);
 
         scope.stop();
     });
@@ -289,6 +329,34 @@ describe(useAgentChat, () => {
         )!;
 
         await expect(chat.approve("call-1")).rejects.toThrow("no in-flight run");
+
+        scope.stop();
+    });
+
+    // A session expiry or RLS denial on the history/thread subscriptions used to be
+    // dropped: `messages` / `status` simply froze with nothing to read and no
+    // handler to call. Matches React's `useAgentChat` error channel.
+    it("surfaces a history subscription error on `error` and through `onError`", () => {
+        expect.hasAssertions();
+
+        const fake = createFakeClient();
+        const seen: { code?: string; message: string }[] = [];
+        const scope = effectScope();
+        const chat = scope.run(() =>
+            fake.provide((): UseAgentChatResult =>
+                useAgentChat({
+                    api: buildApi(),
+                    onError: (subscriptionError) => seen.push(subscriptionError),
+                    send: makeRef(SEND_REF) as FunctionReference<"mutation">,
+                    threadKey: "t1",
+                }),
+            ),
+        )!;
+
+        fake.subscribeCalls.find((call) => call.functionPath === MESSAGES_REF)?.options.onError?.({ code: "FORBIDDEN", message: "denied" });
+
+        expect(chat.error.value?.message).toBe("denied");
+        expect(seen).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
 
         scope.stop();
     });

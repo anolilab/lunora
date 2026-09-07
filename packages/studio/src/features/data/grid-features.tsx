@@ -31,9 +31,13 @@ const CSV_FORMULA_RE = /^[=+\-@\t\r]/u;
 
 /**
  * Render one value for a CSV cell: empty for null/undefined, the raw text for
- * strings/numbers/booleans, JSON for anything structured. The field is quoted
- * (and embedded quotes doubled) only when it contains a comma, quote, or newline —
- * so simple values stay unquoted and diff-friendly.
+ * strings/numbers/booleans, and `formatCell` for anything structured. The field
+ * is quoted (and embedded quotes doubled) only when it contains a comma, quote,
+ * or newline — so simple values stay unquoted and diff-friendly.
+ *
+ * `formatCell` rather than a bare `JSON.stringify`, so a `v.bytes()` cell reads
+ * `<bytes: 8 B>` the way the grid renders it instead of the `{}` an
+ * `ArrayBuffer` flattens to, and a nested bigint does not throw mid-export.
  */
 const csvCell = (value: unknown): string => {
     if (value === null || value === undefined) {
@@ -50,7 +54,7 @@ const csvCell = (value: unknown): string => {
     } else if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
         text = String(value);
     } else {
-        text = JSON.stringify(value);
+        text = formatCell(value);
     }
 
     return CSV_QUOTE_RE.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
@@ -74,8 +78,12 @@ const SQL_INSERT_BATCH = 500;
  * Render one value as a SQL literal for an `INSERT`: `NULL` for null/undefined,
  * a bare numeral for finite numbers/bigints, `1`/`0` for booleans (SQLite has no
  * boolean type), a single-quoted string (embedded quotes doubled) for text, and
- * single-quoted JSON for anything structured. A non-finite number (`NaN`/`±∞`,
- * which SQLite can't represent) degrades to `NULL`.
+ * the single-quoted `formatCell` rendering for anything structured. A non-finite
+ * number (`NaN`/`±∞`, which SQLite can't represent) degrades to `NULL`.
+ *
+ * Structured values go through `formatCell` for the same reason the CSV cell
+ * does: a `v.bytes()` column is an `ArrayBuffer` here, and `JSON.stringify`
+ * emitted `'{}'` for it — a dump that silently loses the column.
  */
 const sqlLiteral = (value: unknown): string => {
     if (value === null || value === undefined) {
@@ -94,7 +102,7 @@ const sqlLiteral = (value: unknown): string => {
         return value ? "1" : "0";
     }
 
-    const text = typeof value === "string" ? value : JSON.stringify(value);
+    const text = typeof value === "string" ? value : formatCell(value);
 
     return `'${text.replaceAll("'", "''")}'`;
 };

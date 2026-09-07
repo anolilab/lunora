@@ -151,6 +151,7 @@ const declaredIndexesFor = (table: string, indexes: ReadonlyArray<TableIndexInfo
  *
  * Pure and side-effect-free, so the panel can call it inside a `useMemo` and it
  * unit-tests without a client.
+ *
  */
 const deriveRuntimeAdvisories = (inputs: RuntimeAdvisoryInputs): AdvisorRow[] => {
     const inDoIndexHits = reconcileIndexHits(inputs.declaredIndexes ?? [], inputs.indexHits ?? []);

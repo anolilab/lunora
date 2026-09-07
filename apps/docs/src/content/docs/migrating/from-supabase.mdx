@@ -161,7 +161,7 @@ Lunora:
 ```ts
 // client
 import { useMutation } from "@lunora/react";
-const send = useMutation(api.messages.send);
+const { mutate: send } = useMutation(api.messages.send);
 await send({ channelId, text });
 ```
 

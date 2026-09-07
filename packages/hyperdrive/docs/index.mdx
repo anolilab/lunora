@@ -98,19 +98,45 @@ binding for you.
 
 ## The canonical recipe
 
-Construct your driver from the connection string and wrap it with the matching
-adapter to get a `ctx.sql`. **Do this only inside an action:**
+`ctx.sql` is **wired once, at the app level**, not inside a handler: the
+generated `ctx.sql` is a `readonly` property (assigning to it is a `TS2540`).
+Codegen cannot build the client for you — `createHyperdrive` returns connection
+info, and turning that into a `SqlClient` needs the driver you chose — so it
+emits a `sql` config thunk instead. Wire it on the app builder:
 
-```ts
+```ts title="src/server/index.ts"
+import type { HyperdriveLike } from "@lunora/hyperdrive";
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
 import postgres from "postgres";
 
+import { defineApp } from "../../lunora/_generated/app";
+
+const app = defineApp<Env>()
+    .shard((env) => env.SHARD)
+    // Called once per shard construction, not per request.
+    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString)))
+    .build();
+
+export const ShardDO = app.ShardDO;
+```
+
+Hand-composing the worker instead? The same thunk is `createShardDO({ sql })`:
+
+```ts
+export const ShardDO = createShardDO({
+    sql: (env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString)),
+});
+```
+
+Without the thunk `ctx.sql` is a stub whose every method throws a message
+pointing back at this wiring.
+
+Handlers then just read it. **Only inside an action:**
+
+```ts
 import { action, v } from "@/lunora/_generated/server";
 
 export const importLegacyOrders = action.input({ orgId: v.string() }).action(async ({ ctx, args: { orgId } }) => {
-    const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
-    ctx.sql = fromPostgresJs(postgres(connectionString));
-
     // Read from external Postgres ($1, $2, … placeholders).
     const orders = await ctx.sql.query<{ id: string; total: number }>("select id, total from orders where org = $1", [orgId]);
 
@@ -140,16 +166,10 @@ table won't re-fire when Postgres changes. To make external data reactive,
 the change-feed, so live queries reading the projection re-run:
 
 ```ts
-import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
-import postgres from "postgres";
-
 import { api } from "@/lunora/_generated/api";
 import { action, v } from "@/lunora/_generated/server";
 
 export const syncOrder = action.input({ id: v.string() }).action(async ({ ctx, args: { id } }) => {
-    const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
-    ctx.sql = fromPostgresJs(postgres(connectionString));
-
     const [row] = await ctx.sql.query<{ id: string; total: number }>("select id, total from orders where id = $1", [id]);
 
     // This write is tracked — a `query` over `orders` re-runs for subscribers.
@@ -178,23 +198,21 @@ export const tenantDocs = defineShape({ table: "documents", where: () => ({}) })
 ```ts
 // The action pulls THIS tenant's slice (the shard key binds into the WHERE — the
 // tenant-isolation boundary), then a mutation materializes it.
-import { createHyperdrive, fromPostgresJs, pullSourceRows } from "@lunora/hyperdrive";
-import postgres from "postgres";
+import { pullSourceRows } from "@lunora/hyperdrive";
 
 import { api } from "@/lunora/_generated/api";
 import { action, mutation, v } from "@/lunora/_generated/server";
 import { materializeExternalRows } from "@lunora/shard-engine";
 
 export const refreshTenant = action.input({ orgId: v.string() }).action(async ({ ctx, args: { orgId } }) => {
-    const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
-    ctx.sql = fromPostgresJs(postgres(connectionString));
-
     const docs = await pullSourceRows(ctx.sql, {
         query: 'select id, title, body, org_id as "orgId" from documents where org_id = $1',
         params: [orgId], // ← tenant scope. NEVER omit this on a sharded source.
         map: (row) => ({ body: row.body, orgId: row.orgId, title: row.title }),
     });
 
+    // One mutation, so the whole slice materializes atomically: a failure part
+    // way through leaves the tenant's DO on its previous snapshot, not half-updated.
     await ctx.runMutation(api.documents.ingest, { orgId, docs });
 });
 
@@ -385,6 +403,99 @@ lower-level pieces are also exported:
 - `createHyperdriveGlobalCtxDb({ engine, exec, ...storeOptions })` is the
   general factory the two convenience constructors call.
 
+## Vector search on your own Postgres
+
+`.vectorize()` normally writes through to a Cloudflare Vectorize binding. If you
+have already moved the relational tier onto your own Postgres, that split is
+awkward: full-text search runs natively (see `strategy: "native"` above) while
+vectors alone still reach for a Cloudflare service.
+
+`createPgVectorIndex` closes it. The shard takes
+`vectors: (env) => Record<string, VectorizeIndexLike>`, and everything above that
+— the write-through sync hook, `ctx.vectors`, codegen — is written against the
+interface rather than the provider, so a `pgvector` index drops in where the
+binding went:
+
+```ts title="src/server/index.ts"
+import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
+import { createPgVectorIndex } from "@lunora/hyperdrive/global";
+import postgres from "postgres";
+
+// Built once, not per request: `vectors` is called on every dispatch, and a fresh
+// index object means a fresh provisioning memo — five extra round trips each time.
+let index: ReturnType<typeof createPgVectorIndex> | undefined;
+
+createShardDO({
+    vectors: (env) => {
+        index ??= createPgVectorIndex({
+            client: fromPostgresJs(postgres(createHyperdrive((env as Env).HYPERDRIVE).connectionString)),
+            dimensions: 768,
+            metric: "cosine",
+            name: "posts_search",
+        });
+
+        return { posts_search: index };
+    },
+});
+```
+
+Nothing else changes: `.vectorize()` in the schema, `ctx.vectors.query(...)` in a
+function, and the automatic write-through sync all behave the same.
+
+The table (`__vec_<name>`), the `vector` extension, an HNSW index in the metric's
+operator class, and btree/GIN indexes on the two filterable columns are
+provisioned lazily on first use — every
+statement is `IF NOT EXISTS`, so it is safe against a live table. The connecting
+role needs to be able to run `CREATE EXTENSION vector`; on a managed Postgres
+where it cannot, install the extension once out-of-band and the statement becomes
+a no-op.
+
+<Callout type="warn">
+    Four deliberate differences from Vectorize. **Metadata filters are JSONB
+    containment** — equality for scalars, but for containers it is containment, not
+    equality: `{ tags: ["x"] }` also matches a row whose tags are `["x", "y"]`, and
+    `{ author: {} }` matches every row carrying an `author` key. A filter value
+    JSON cannot represent (`undefined`, a function, a symbol) is rejected, because
+    dropping it would widen the filter to match every row. A comparison operator
+    like `{ views: { $gt: 10 } }` and Vectorize's dot-addressed `"author.role"`
+    syntax throw for the same reason. **`returnMetadata: "indexed"` behaves as
+    `"all"`**, since Postgres indexes the whole JSONB document — note this defeats
+    a deliberate default: `ctx.vectors` asks for `"indexed"` precisely so a query
+    that opted into nothing does not return every stored field. And **`dimensions`
+    is fixed at first provisioning**: `CREATE TABLE IF NOT EXISTS` no-ops on a
+    later change, so writes fail against the original width. Finally **`mutationId`
+    is a local counter**: Vectorize's is a handle for an async mutation queue,
+    while a Postgres write is already durable when its promise resolves.
+
+</Callout>
+
+<Callout type="info">
+    Two ceilings worth knowing. `dimensions` is capped at 2000, pgvector's HNSW limit — rejected at construction rather than failing opaquely at `CREATE INDEX`
+    (Vectorize itself tops out at 1536, so most ports are unaffected). And `name` is capped at 34 characters, because the longest index name derived from it
+    (`__vec_` + name + `__ann_` + the operator class) has to stay under Postgres' 63-byte identifier truncation — past that, two indexes would collapse onto one
+    name and the second `CREATE INDEX IF NOT EXISTS` would silently no-op.
+</Callout>
+
+Pass the **same `metric` the schema's `.vectorize(...)` declares**. Nothing
+cross-checks the two: mismatch them and the index is built for one operator and
+queried with another, so the ordering is wrong for the declared metric and every
+score is on a different scale — with no error at any layer.
+
+The indexes on `namespace` and `metadata` are not an optimisation. pgvector
+applies `WHERE` **after** scanning the ANN index, so without a usable index on the
+filtered column the planner's only path is the approximate one, and a filter
+matching a small slice of the table returns a short page with no error. Indexing
+both lets the planner answer the filter exactly instead. (`hnsw.iterative_scan` is
+pgvector's own answer to this, but it is a session setting, and a pooled client can
+run the `SET` and the query on different sessions.)
+
+`metric` picks the distance operator and the matching index operator class —
+`cosine` (default), `euclidean`, or `dot-product`. `score` is reported the way
+Vectorize reports it: cosine similarity (1 = identical), raw L2 distance
+(0 = identical), or the NEGATIVE inner
+dot product — Cloudflare's own convention, where a score of -1000 is more similar
+than -500.
+
 ## Non-goals
 
 - **No CDC / logical replication.** Lunora does not ingest your Postgres
@@ -408,13 +519,14 @@ lower-level pieces are also exported:
 
 From `@lunora/hyperdrive/global` (reactive `.global()` backend):
 
-| Export                                             | Purpose                                                        |
-| -------------------------------------------------- | -------------------------------------------------------------- |
-| `createPostgresGlobalCtxDb(client, options)`       | Build a reactive Postgres `.global()` writer (`globalDb`)      |
-| `createMysqlGlobalCtxDb(connection, options)`      | Build a reactive MySQL `.global()` writer (needs `FOUND_ROWS`) |
-| `createHyperdriveGlobalCtxDb({ engine, exec, … })` | General factory the two convenience constructors call          |
-| `buildPgExec(client)` / `buildMysqlExec(conn)`     | Wrap a driver as the store's `SqlExec`                         |
-| `postgresDialect` / `mysqlDialect`                 | The engine dialects                                            |
+| Export                                              | Purpose                                                                                                                           |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `createPostgresGlobalCtxDb(client, options)`        | Build a reactive Postgres `.global()` writer (`globalDb`)                                                                         |
+| `createMysqlGlobalCtxDb(connection, options)`       | Build a reactive MySQL `.global()` writer (needs `FOUND_ROWS`)                                                                    |
+| `createHyperdriveGlobalCtxDb({ engine, exec, … })`  | General factory the two convenience constructors call                                                                             |
+| `buildPgExec(client)` / `buildMysqlExec(conn)`      | Wrap a driver as the store's `SqlExec`                                                                                            |
+| `postgresDialect` / `mysqlDialect`                  | The engine dialects                                                                                                               |
+| `createPgVectorIndex({ client, name, dimensions })` | A `pgvector`-backed index for `ctx.vectors` (no Vectorize binding); `name` is the SQL table identifier, not the `vectors` map key |
 
 ## See also
 

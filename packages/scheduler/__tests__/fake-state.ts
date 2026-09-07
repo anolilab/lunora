@@ -32,7 +32,7 @@ export const createFakeState = (): SchedulerDOState & {
             },
             get: async <T = unknown>(key: string) => storageMap.get(key) as T | undefined,
             getAlarm: async () => alarm,
-            list: async <T = unknown>(options: { limit?: number; prefix?: string; startAfter?: string } = {}) => {
+            list: async <T = unknown>(options: { end?: string; limit?: number; prefix?: string; startAfter?: string } = {}) => {
                 const result = new Map<string, T>();
                 const prefix = options.prefix ?? "";
                 // Code-unit ordering (NOT locale-aware): the time index relies on
@@ -55,6 +55,18 @@ export const createFakeState = (): SchedulerDOState & {
                     const { startAfter } = options;
 
                     keys = keys.filter((key) => byteCompare(key, startAfter) > 0);
+                }
+
+                // `end` is the EXCLUSIVE upper bound, matching the real Durable
+                // Object storage.list(). Modelling it is not optional detail: the
+                // alarm path bounds its due-slice with `end: t:<paddedNow>:~`, so a
+                // fake that ignores `end` silently returns rows the real runtime
+                // would never hand back — and every bug that turns on a key sorting
+                // outside that bound becomes invisible to this whole suite.
+                if (options.end !== undefined) {
+                    const { end } = options;
+
+                    keys = keys.filter((key) => byteCompare(key, end) < 0);
                 }
 
                 for (const key of keys.slice(0, options.limit ?? keys.length)) {

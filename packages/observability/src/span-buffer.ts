@@ -10,10 +10,9 @@
  */
 import type { LogFields } from "../../../shared/log-fields";
 import type { SpanEvent, SpanEventPoint, SpanKind } from "../../../shared/span-event";
+import { DEFAULT_CAPACITY, normalizeCapacity } from "./log-buffer";
 
 /* eslint-disable import/exports-last -- a data + types module: the public TraceSpan/TraceSummary shapes are declared next to the ring buffer and fold that produce them; grouping all exports at the end would scatter the contract. */
-
-const DEFAULT_CAPACITY = 500;
 
 /**
  * One span in a folded trace, flattened for rendering: `depth` is its nesting
@@ -96,8 +95,21 @@ export class SpanBuffer {
 
     private readonly capacity: number;
 
+    /** How many spans the ring has evicted since it was last cleared. */
+    private droppedCount = 0;
+
     public constructor(capacity: number = DEFAULT_CAPACITY) {
-        this.capacity = capacity > 0 ? Math.trunc(capacity) : DEFAULT_CAPACITY;
+        this.capacity = normalizeCapacity(capacity);
+    }
+
+    /**
+     * Spans evicted for capacity since the last {@link SpanBuffer.clear}. The
+     * ring silently drops its oldest span once full, which makes a busy instance
+     * look identical to one that recorded exactly `capacity` spans; this count
+     * is the difference between the two.
+     */
+    public get dropped(): number {
+        return this.droppedCount;
     }
 
     /** Number of spans currently buffered. */
@@ -105,9 +117,10 @@ export class SpanBuffer {
         return this.buffer.length;
     }
 
-    /** Drop every buffered span. */
+    /** Drop every buffered span, including the eviction count. */
     public clear(): void {
         this.buffer.length = 0;
+        this.droppedCount = 0;
     }
 
     /** Snapshot of the buffered spans in insertion order. Fresh array per call. */
@@ -130,6 +143,7 @@ export class SpanBuffer {
 
         if (this.buffer.length > this.capacity) {
             this.buffer.shift();
+            this.droppedCount += 1;
         }
     }
 }

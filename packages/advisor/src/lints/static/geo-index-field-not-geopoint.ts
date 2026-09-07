@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { columnKind } from "../helpers";
 
 /**
  * A correctness lint exploiting Lunora's static edge: a `.geoIndex(name, { field })`
@@ -33,7 +34,9 @@ const geoIndexFieldNotGeopoint: Lint = {
                 }
 
                 // Skip when the feeder doesn't carry column kinds (can't decide).
-                const kind = table.columnKinds?.[field];
+                // Own-property lookup, so an index over an undeclared `toString`
+                // reads as unknown instead of inheriting from `Object.prototype`.
+                const kind = columnKind(table, field);
 
                 if (kind === undefined || kind === "geoPoint") {
                     continue;

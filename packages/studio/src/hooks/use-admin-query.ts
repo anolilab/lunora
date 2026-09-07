@@ -295,9 +295,17 @@ function useAdminQuery<T>(path: string, args: Record<string, unknown>, options: 
             operationLog.endSubscription(seq);
             unsubscribe();
         };
-        // `args`/`queryKey` are tracked via `keySignature`; `client`/`queryClient` are provider-stable.
+        // `args`/`path`/`shardKey`/`queryKey` are all tracked via `keySignature`;
+        // `queryClient` IS provider-stable (`LunoraProvider` builds it once per
+        // mount with `useState`). `client` is NOT — the studio shell rebuilds the
+        // `LunoraClient` whenever the admin token changes (a `useMemo` on the
+        // debounced token in `app/app.tsx`) and closes the old one, without
+        // remounting, so it must re-subscribe: see `clientScopedKey` above, which
+        // exists for the read leg of the same swap. Omitting it left the live
+        // bridge bound to the closed client for the life of the mount — the panel
+        // re-fetched and looked fixed while it had silently stopped streaming.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [keySignature, enabled, live]);
+    }, [client, keySignature, enabled, live]);
 
     // When the read is gated off or live mode is disabled the subscription effect
     // returns early without re-running, so a `liveError` captured from a previous

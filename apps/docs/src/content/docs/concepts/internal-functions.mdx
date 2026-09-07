@@ -38,6 +38,9 @@ export const applyStripeSync = internalMutation.input({ id: v.id("customers"), r
 The three builders mirror their public counterparts and produce the same
 `ctx`. `internalQuery` gets a read-only `QueryCtx`, `internalMutation` a
 transactional `MutationCtx`, and `internalAction` the side-effectful `ActionCtx`.
+An `internalMutation` reached through `ctx.runMutation` is transactional however
+it was reached: from an action it opens its own all-or-nothing span, and from
+another mutation it rides the caller's.
 
 | Public     | Internal           | `ctx`         |
 | ---------- | ------------------ | ------------- |

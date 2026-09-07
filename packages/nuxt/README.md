@@ -79,19 +79,20 @@ export { ShardDO } from "./lunora/server";
 `lunora/server.ts` is your built Lunora app (`defineApp().build()`) — its default
 export is the worker (a `fetch` entrypoint), and it re-exports `ShardDO`. The
 module aliases the `#lunora/app` virtual to it (configurable via the `lunora.appEntry`
-option, default `~/lunora/server`) and serves it at the `/_lunora/**` route
-(prefix configurable via `lunora.prefix`).
+option, default `~/lunora/server`) and serves it at the `/_lunora/**` route.
 
 ## Options
 
 | Option     | Default           | Description                                               |
 | ---------- | ----------------- | --------------------------------------------------------- |
 | `appEntry` | `~/lunora/server` | Module specifier of the Lunora app entry (`#lunora/app`). |
-| `prefix`   | `/_lunora`        | URL prefix the Lunora realtime plane is mounted at.       |
+
+The `/_lunora/**` mount is fixed: the worker routes on those exact paths and the
+generated client calls them.
 
 ## How it works
 
-- **The route** (`addServerHandler` at `prefix/**`): reconstructs a Web `Request`
+- **The route** (`addServerHandler` at `/_lunora/**`): reconstructs a Web `Request`
   from the H3 event, resolves the Cloudflare `env`/`ExecutionContext` off it
   (tolerating both `event.context.cloudflare` and `event.req.runtime.cloudflare`),
   and forwards to your app's `fetch`. A missing Cloudflare runtime answers a clear 500.

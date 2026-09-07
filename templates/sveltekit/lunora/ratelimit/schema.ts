@@ -9,8 +9,14 @@ import { defineSchemaExtension, defineTable, definePlugin, v } from "lunorash/se
 import { createDbStore, RateLimiter } from "lunorash/ratelimit";
 import type { RateLimitConfigMap } from "lunorash/ratelimit";
 
+/**
+ * Named limits this app enforces. This is the one place they live — add your own
+ * and reference them by name from `rateLimit(limiter, "<name>", …)` (see
+ * `lunora/messages.ts`).
+ */
 export const limits = {
-    default: { kind: "token bucket", period: 60_000, rate: 10 },
+    /** Chat writes: 30 per caller per minute, refilling continuously over 60s. */
+    send: { kind: "token bucket", period: 60_000, rate: 30 },
 } as const satisfies RateLimitConfigMap;
 
 export type LimitName = keyof typeof limits;

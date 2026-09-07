@@ -21,14 +21,7 @@ export type {
     LunoraCollectionConfig,
     LunoraCollectionOptions,
 } from "./collection-options";
-export {
-    CHECKPOINT_FALLBACK_MS,
-    createCheckpointRegistry,
-    getShardCheckpoints,
-    lunoraCollectionOptions,
-    releaseShardCheckpoints,
-    shardCheckpointStats,
-} from "./collection-options";
+export { CHECKPOINT_FALLBACK_MS, createCheckpointRegistry, getShardCheckpoints, lunoraCollectionOptions, releaseShardCheckpoints } from "./collection-options";
 export type { CollectionDef, DefineCollectionsOptions, InsertBinding, LunoraDb, WriteRejectedEvent } from "./define-collections";
 export { defineCollections } from "./define-collections";
 export type {

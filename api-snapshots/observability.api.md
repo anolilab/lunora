@@ -109,7 +109,7 @@ interface ContextMetrics {
 ### `ContextTracer` (type)
 
 ```ts
-type ContextTracer = <T>(name: string, function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T, options?: LogFields | SpanOptions) => Promise<T>;
+type ContextTracer = <T>(name: string, function_: (trace: ContextTracer, span: SpanHandle) => Promise<T> | T, options?: LogFields | SpanOptions, identity?: SpanIdentity) => Promise<T>;
 ```
 
 ### `DEFAULT_EXPLAIN_ISSUE_MODEL` (const)
@@ -408,6 +408,7 @@ interface IssuesResult {
 ```ts
 class LogBuffer {
     constructor(capacity?: number);
+    get dropped(): number;
     get size(): number;
     clear(): void;
     entries(): LogEntry[];
@@ -746,6 +747,7 @@ type SecurityFindingLevel = "error" | "info" | "warning";
 ```ts
 class SpanBuffer {
     constructor(capacity?: number);
+    get dropped(): number;
     get size(): number;
     clear(): void;
     entries(): SpanEvent[];
@@ -819,10 +821,7 @@ interface SpanHandle {
     recordException: (error: unknown) => void;
     setAttribute: (key: string, value: LogFields[string]) => void;
     setAttributes: (fields: LogFields) => void;
-    spanContext: () => {
-        spanId: string;
-        traceId: string;
-    };
+    spanContext: () => SpanContextIds;
 }
 ```
 
@@ -903,6 +902,7 @@ interface TraceSummary {
 ```ts
 interface TracedFetchDeps {
     anchor: TraceAnchor;
+    captureRaw?: boolean;
     functionPath: string;
     propagate?: ((url: URL) => boolean) | boolean;
     record: (span: SpanEvent) => void;
@@ -955,10 +955,7 @@ const createMetrics: (deps: MetricsDeps) => ContextMetrics;
 ### `createSpanCollector` (const)
 
 ```ts
-const createSpanCollector: (ids: {
-    spanId: string;
-    traceId: string;
-}, captureRaw?: boolean) => SpanCollector;
+const createSpanCollector: (ids: SpanContextIds, captureRaw?: boolean) => SpanCollector;
 ```
 
 ### `createTracedFetch` (const)

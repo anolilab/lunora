@@ -11,6 +11,10 @@
  * @experimental
  */
 
+import { LunoraError } from "@lunora/errors";
+
+import { isBareIdentifier } from "../../../../shared/bare-identifier";
+
 /**
  * Run one statement and return its rows.
  *
@@ -60,29 +64,42 @@ const inListBatches = <T>(items: ReadonlyArray<T>, budget: number = IN_LIST_BUDG
     return batches;
 };
 
-/** A bare SQL identifier: letters, digits and underscore, not starting with a digit. */
-const BARE_IDENTIFIER = /^[A-Z_]\w*$/i;
-
 /**
  * Reject an identifier that is not a bare `[A-Za-z_][A-Za-z0-9_]*` name.
  *
- * Table names cannot be bound as parameters, so they are interpolated into the
- * statement — which makes them the one injection surface these stores have.
- * The allowlist is deliberately narrower than what SQL permits: a caller who
- * needs a quoted or schema-qualified name should be told so at construction,
- * not have their input concatenated in.
+ * The test itself lives in `shared/bare-identifier.ts` — it is the sole defense
+ * against identifier injection wherever a name is spliced into raw SQL, so it has
+ * one definition across the three packages that need it. The message stays here,
+ * because it names this package's option.
  */
 const assertSafeIdentifier = (name: string, label: string): string => {
-    if (!BARE_IDENTIFIER.test(name)) {
+    if (!isBareIdentifier(name)) {
         throw new TypeError(`@lunora/ai/rag: ${label} must be a bare SQL identifier (letters, digits, underscore; not starting with a digit) — got "${name}"`);
     }
 
     return name;
 };
 
-/** Cosine similarity of two equal-length vectors; `0` when either has no magnitude. */
+/**
+ * Cosine similarity of two equal-length vectors; `0` when either has no magnitude.
+ *
+ * Unequal widths are an ERROR, not a score of 0. Returning 0 made a dimension
+ * mismatch invisible in the worst possible way: every row in the namespace tied
+ * at 0, so the ranking degenerated to table order and `query` returned the first
+ * `topK` rows — unrelated passages, with no error, straight into the model's
+ * context. That is what changing an index's `embeddingModel` without reindexing
+ * looked like from the outside.
+ */
 const cosineSimilarity = (left: ReadonlyArray<number>, right: ReadonlyArray<number>): number => {
-    if (left.length !== right.length || left.length === 0) {
+    if (left.length !== right.length) {
+        throw new LunoraError(
+            "RAG_DIMENSION_MISMATCH",
+            `@lunora/ai/rag: the stored vectors are ${String(right.length)}-dimension but the query embedding is ${String(left.length)}-dimension — ` +
+                "they were written by a different embedding model. Restore the previous `embeddingModel`, or reindex this namespace (bump `embeddingModelVersion`)",
+        );
+    }
+
+    if (left.length === 0) {
         return 0;
     }
 

@@ -16,19 +16,62 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-search" mirrors its parent "ctx-db.ts", the established module name in this package. */
 
+import { LunoraError } from "@lunora/errors";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { planSearchBackfillPass, searchTextUnchanged } from "@lunora/search-core";
 import type { SchemaLike, SearchIndexDefinitionLike, TableDefinitionLike } from "@lunora/shard-engine";
 import { sql } from "drizzle-orm";
 
-import { migrateSearchState, readSearchBackfillState, writeSearchBackfillState } from "./ctx-db-search-state";
+import {
+    clearSearchBackfillState,
+    migrateSearchState,
+    readSearchBackfillState,
+    readSearchIndexCoverage,
+    writeSearchBackfillState,
+} from "./ctx-db-search-state";
 import type { SqlDialect } from "./dialect";
 import type { SearchStage } from "./search-layout";
 import { companionFor, companionProfile, globalSearchIndexes, purgeDocument, resolveSearchLayout } from "./search-layout";
 import type { SqlCtxExec } from "./sql-exec";
 import { forEachRowPaged, queryAll, queryRun } from "./sql-exec";
 
-/** Run a staged search against whichever layout this index uses. */
+/**
+ * Does this companion hold a row for every document in its table?
+ *
+ * The finished case first, and on its own: it is every read of a healthy index,
+ * and it answers from a single primary-key lookup. Only where the shared plan
+ * says the walk is unfinished — the path that is about to refuse or serve a
+ * rebuild — is the second lookup paid for.
+ */
+const searchIndexCoversTable = async (exec: SqlCtxExec, dialect: SqlDialect, tableName: string, index: SearchIndexDefinitionLike): Promise<boolean> => {
+    const companion = companionFor(tableName, index);
+
+    if (planSearchBackfillPass(await readSearchBackfillState(exec, dialect, companion), companionProfile(index, dialect)).finished) {
+        return true;
+    }
+
+    return readSearchIndexCoverage(exec, dialect, companion);
+};
+
+/**
+ * Run a staged search against whichever layout this index uses — refusing
+ * rather than answering from a half-built index.
+ *
+ * A NEW search index declared over a table that already holds rows covers a
+ * growing PREFIX of it (`id ASC`) until its backfill finishes, and every layout
+ * queries the companion regardless — so a matching document past the cursor is
+ * simply absent from a result set that looks complete. `ensureMigrated` is
+ * memoised per ctx-db, so a table advances one page per request: a million-row
+ * table would serve partial results, with no error and no signal, for thousands
+ * of them.
+ *
+ * Only that case. An index REBUILDING under a changed profile holds every row
+ * throughout — the re-walk rewrites each one in place — and refusing there would
+ * take the table's search offline for the whole rebuild, which on an analyzer
+ * version bump is every table at once. It serves, some rows still analyzed by
+ * the previous rules. {@link searchIndexCoversTable} is where the two are told
+ * apart, and it is the same distinction `@lunora/shard-engine` makes.
+ */
 const runSqlSearch = async (
     exec: SqlCtxExec,
     dialect: SqlDialect,
@@ -36,7 +79,25 @@ const runSqlSearch = async (
     tableName: string,
     stage: SearchStage,
     limit: number,
-): Promise<Record<string, unknown>[]> => resolveSearchLayout(stage.definition, dialect).runSearch(exec, dialect, definition, tableName, stage, limit);
+): Promise<Record<string, unknown>[]> => {
+    if (!(await searchIndexCoversTable(exec, dialect, tableName, stage.definition))) {
+        throw new LunoraError(
+            "SEARCH_INDEX_BUILDING",
+            `search index "${stage.indexName}" on table "${tableName}" is still backfilling and currently covers only part of the table — retry once it finishes, or run the backfillSearch admin operation to complete it now`,
+        );
+    }
+
+    return resolveSearchLayout(stage.definition, dialect).runSearch(exec, dialect, definition, tableName, stage, limit);
+};
+
+/**
+ * The layout half of a recorded profile — the suffix `companionProfile` appends.
+ *
+ * Read off the end rather than parsed: a layout name is one of three fixed
+ * words and holds no `/`, while the analysis half in front of it carries a
+ * dot-separated field path that one day might.
+ */
+const layoutOf = (profile: string): string => profile.slice(profile.lastIndexOf("/") + 1);
 
 /**
  * Rows indexed per backfill pass. `ensureMigrated` runs once per ctx-db — per
@@ -74,10 +135,19 @@ const backfillSearchIndexPage = async (
     }
 
     if (pass.wipe) {
-        // The stored tokens were analyzed by rules the query side no longer
-        // uses (a changed `language`, a new analyzer version). Half-matching
-        // forever is the worst outcome, so discard and walk the table again.
-        await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(companion)}`);
+        // A REBUILD: the stored rows were built under a profile the query side
+        // no longer uses (a changed `language` or `field`, a new analyzer
+        // version), so the walk restarts at the top of the table.
+        //
+        // It deliberately does NOT empty the companion first. Emptying took a
+        // COMPLETE index down to nothing and then refilled it one page per
+        // request — on a large table, thousands of requests answered from an
+        // index covering a fraction of the rows, with the read path querying it
+        // either way; on a `staged` index, which the migration pass never
+        // backfills, it never refilled at all. Every layout writes a document
+        // DELETE-then-INSERT, so the re-walk converges on the new profile in
+        // place while each row keeps serving the old one until its turn: stale
+        // analysis on a shrinking suffix, rather than no row at all.
         await writeSearchBackfillState(exec, dialect, companion, undefined, false, profile);
     }
 
@@ -142,29 +212,85 @@ const ensureSearchCompanions = async (exec: SqlCtxExec, schema: SchemaLike, dial
         // eslint-disable-next-line no-await-in-loop -- one indexed probe per index, on the shared connection.
         const recorded = await readSearchBackfillState(exec, dialect, companion);
 
-        // A companion built for a different layout has different *columns*, so
+        // A companion built for a different LAYOUT has different *columns*, so
         // `CREATE TABLE IF NOT EXISTS` leaves the old shape in place and the
         // index DDL below then references a column that isn't there — a throw
         // that escapes `ensureMigrated` and takes every read and write on this
-        // binding down, not just search. Drop it and rebuild; the profile
-        // mismatch makes the backfill repopulate.
-        if (recorded.profile !== undefined && recorded.profile !== profile) {
+        // binding down, not just search. That one is unsalvageable: drop it, and
+        // forget the progress row with it, so the walk restarts over a companion
+        // that really is empty and the read path refuses until it finishes.
+        //
+        // A change to the analysis or the indexed field is NOT that. Those keep
+        // the same columns, so the rows stay readable and the backfill rewrites
+        // each one in place (see `backfillSearchIndexPage`). Dropping there
+        // emptied a complete index — and on a `staged` index, which the
+        // migration pass never backfills, nothing ever refilled it: zero hits on
+        // every request from then on.
+        //
+        // Clearing the row rather than rewriting it also keeps this a one-time
+        // event: the guard needs a profile to be recorded, and there no longer
+        // is one.
+        if (recorded.profile !== undefined && layoutOf(recorded.profile) !== layoutOf(profile)) {
             // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
             await queryRun(exec, dialect, sql`DROP TABLE IF EXISTS ${sql.identifier(companion)}`);
-
-            // Record the rebuild here, not only in the backfill. A `staged`
-            // index is skipped by the backfill entirely, so leaving the old
-            // profile recorded would re-enter this branch on *every* request:
-            // DDL per request under load, every write since the last one
-            // destroyed by the next drop, and an index that returns nothing
-            // until a host happens to re-run the out-of-band backfill.
             // eslint-disable-next-line no-await-in-loop -- state writes run sequentially on the shared connection.
-            await writeSearchBackfillState(exec, dialect, companion, undefined, false, profile);
+            await clearSearchBackfillState(exec, dialect, companion);
         }
 
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
         await resolveSearchLayout(index, dialect).ensureCompanion(exec, dialect, companion);
     }
+};
+
+/**
+ * Record the starting point of a `staged: true` index the first time it is seen.
+ *
+ * `staged` defers the backfill of rows that PREDATE the index — and a table
+ * holding none has nothing to defer. But with no progress row written at all,
+ * `planSearchBackfillPass` says "not finished" and `readSearchIndexCoverage` says
+ * "not covered", so {@link runSqlSearch} refuses every query on the index with
+ * `SEARCH_INDEX_BUILDING`. Nothing lifts it: the migration pass never backfills a
+ * staged index, so declaring one alongside a new table took search on that table
+ * permanently offline, including for the rows `createSearchSync` indexed on every
+ * write after the deploy.
+ *
+ * So: an empty table is recorded as covered (`done`, which latches `covered`),
+ * and a non-empty one is recorded as at-the-top (`done: false`) and left to
+ * {@link backfillSqlSearchIndexes} as documented. Writing the profile either way
+ * is what makes this a one-time probe — the next migration sees a recorded row
+ * and returns on the read above.
+ */
+const recordStagedIndexBaseline = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    definition: TableDefinitionLike,
+    tableName: string,
+    index: SearchIndexDefinitionLike,
+): Promise<void> => {
+    const companion = companionFor(tableName, index);
+    const recorded = await readSearchBackfillState(exec, dialect, companion);
+
+    if (recorded.profile !== undefined) {
+        return;
+    }
+
+    let rows = 0;
+    const sourceRows = await queryAll(exec, dialect, dialect.tableExists(tableName));
+
+    if (sourceRows.length > 0) {
+        await forEachRowPaged(
+            exec,
+            dialect,
+            definition,
+            tableName,
+            () => {
+                rows += 1;
+            },
+            { limit: 1 },
+        );
+    }
+
+    await writeSearchBackfillState(exec, dialect, companion, undefined, rows === 0, companionProfile(index, dialect));
 };
 
 /**
@@ -180,6 +306,9 @@ const runSqlSearchMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dial
 
     for (const [tableName, definition, index] of globalSearchIndexes(schema)) {
         if (index.staged) {
+            // eslint-disable-next-line no-await-in-loop -- one indexed probe per staged index, on the shared connection.
+            await recordStagedIndexBaseline(exec, dialect, definition, tableName, index);
+
             continue;
         }
 

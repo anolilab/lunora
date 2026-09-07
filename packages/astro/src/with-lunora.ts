@@ -25,7 +25,7 @@
  * function — and wrap it at that boundary:
  *
  * ```ts
- * // src/worker.ts
+ * // src/server.ts
  * import { handle } from "@astrojs/cloudflare/handler";
  * import { withLunora } from "@lunora/astro";
  *
@@ -36,7 +36,7 @@
  * );
  * ```
  *
- * Set `"main": "src/worker.ts"` in `wrangler.jsonc` — wrangler bundles this file
+ * Set `"main": "src/server.ts"` in `wrangler.jsonc` — wrangler bundles this file
  * (via `@cloudflare/vite-plugin` through the Astro adapter) so `handle` resolves
  * at build time. Add the `lunora()` integration (from this package) to
  * `astro.config.*` to declare the composition in the idiomatic Astro place and

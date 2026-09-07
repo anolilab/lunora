@@ -21,6 +21,7 @@ loop uses the ``websockets`` package when present.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import json
 import threading
@@ -42,7 +43,7 @@ from .submit import (
     hydrate_queue,
     submit_write,
 )
-from .wire import decode_wire, encode_wire, stable_wire_key
+from .wire import WireFormatError, decode_wire, encode_wire, stable_wire_key
 
 RPC_PATH = "/_lunora/rpc"
 RPC_BATCH_PATH = "/_lunora/rpc-batch"
@@ -115,10 +116,18 @@ def parse_rpc_response(body: dict, status: int) -> Any:
     if "error" in body:
         err = body["error"]
         data = decode_wire(err["data"]) if "data" in err and err["data"] is not None else None
-        raise LunoraError(err.get("code", "INTERNAL"), err.get("message", "request failed"), data)
+        # A 5xx is the shard or the edge failing under the call, not a verdict on
+        # it, so a queued write replayed under the same idempotency key is still
+        # good. See `lunora.submit.is_transient`.
+        raise LunoraError(err.get("code", "INTERNAL"), err.get("message", "request failed"), data, transient=status >= 500)
 
     if not 200 <= status <= 299:
-        raise LunoraError("INTERNAL", f"HTTP {status} without an error envelope")
+        # No envelope at all, so this body never came from a Lunora function: an
+        # edge error page, a WAF block, a proxy. Nothing reached the shard, which
+        # makes it transport rather than a verdict — the batch path already
+        # classified the identical response that way, and a lone queued write
+        # must not be dropped for being alone.
+        raise LunoraError("INTERNAL", f"HTTP {status} without an error envelope", transient=True)
 
     return decode_wire(body.get("result"))
 
@@ -268,6 +277,10 @@ class LunoraClient:
         #: itself an identity a write can be stamped with.
         self.identity = identity
         self._settled_listeners: list[Callable[[MutationSettled], None]] = []
+        #: `time.monotonic()` before which a flush is a no-op, set when a replay
+        #: came back rate-limited and the envelope named a delay. Monotonic, so a
+        #: wall-clock adjustment cannot strand a queue for hours.
+        self._flush_not_before = 0.0
         self._was_ever_connected = False
         self._closed = False
         self._subs: dict[str, _Subscription] = {}
@@ -689,7 +702,18 @@ class LunoraClient:
         # mutation-delta into the server base; a wholesale replace is a correct
         # fallback and keeps the SDK dependency-free).
         has_data = "data" in frame and frame["data"] is not None
-        value = decode_wire(frame["data"]) if has_data else decode_wire(frame.get("delta"))
+        try:
+            value = decode_wire(frame["data"]) if has_data else decode_wire(frame.get("delta"))
+        except WireFormatError as error:
+            # A malformed payload belongs on the subscription's error callback,
+            # not on the socket read loop's stack. Letting it escape here ended
+            # the loop — and with it every OTHER subscription on this client —
+            # over one bad frame, where the reference and the Java port both
+            # surface it and keep reading.
+            reported = SubscriptionError(str(error), "INVALID_FRAME")
+            if sub is not None:
+                deferred.extend(partial(cb, reported) for cb in sub.error_callbacks)
+            return {"kind": "error", "id": frame.get("id"), "error": reported}
         displayed = value
         if sub is not None:
             sub.server_base = value
@@ -832,7 +856,14 @@ class LunoraClient:
                         frame = json.loads(raw)
                     except (ValueError, TypeError):
                         continue
-                    self.handle_frame(frame)
+                    # `_handle_data` already routes a codec rejection to the
+                    # subscription that owns it. This is the backstop for
+                    # everything else — a frame shape no branch expects, or a
+                    # user callback that raises — because an exception out of
+                    # here terminates the read loop and silently stops every
+                    # subscription on the client.
+                    with contextlib.suppress(Exception):
+                        self.handle_frame(frame)
                     await flush()
             finally:
                 # Writes submitted after this point queue instead of failing.
@@ -845,14 +876,56 @@ def _percent(value: str) -> str:
     return quote(value, safe="")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse to follow a redirect, so the bearer token is never replayed.
+
+    CPython's default handler copies EVERY request header except ``content-*``
+    onto the redirected request — ``authorization: Bearer ...`` included — and
+    sends it to whatever host the ``Location`` names. The reference client's
+    ``fetch`` drops ``Authorization`` on a cross-origin redirect per the Fetch
+    standard, so a WAF challenge page, a misconfigured proxy or an open
+    redirect on the real endpoint would harvest the caller's token here and
+    nowhere else. An RPC POST has no legitimate 3xx: 301/302/303 also turn the
+    POST into a GET, which would drop the call's own body. Refuse, and let the
+    status surface as the non-2xx it is.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ARG002
+        return None
+
+
+#: Module-level so the handler chain is built once; it holds no per-call state.
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _urllib_post(url: str, headers: dict, body: bytes, timeout: float = DEFAULT_HTTP_TIMEOUT) -> tuple[int, dict]:
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _NO_REDIRECT_OPENER.open(request, timeout=timeout) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:  # error envelopes still carry a JSON body
-        raw = exc.read().decode("utf-8")
-        return exc.code, json.loads(raw) if raw else {"error": {"code": "INTERNAL", "message": str(exc)}}
+        try:
+            raw = exc.read().decode("utf-8", errors="replace")
+        except OSError:
+            # A refused redirect or a proxy's challenge page often closes the
+            # socket with no body — and resets a POST whose body it never read.
+            # The STATUS is what the caller needs; a failed body read must not
+            # replace it with a socket error.
+            raw = ""
+        finally:
+            exc.close()
+
+        try:
+            return exc.code, json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            # An HTML error page from a proxy, or a refused redirect's empty
+            # body. Reported as the status with NO envelope, never a synthesized
+            # one: `parse_rpc_response` raises an envelope-less non-2xx as
+            # `transient=True` precisely because nothing reached the shard, and
+            # a manufactured `INTERNAL` verdict is in neither of `submit`'s
+            # replayable code sets — it settles a queued durable write
+            # terminally against a body no Lunora function wrote.
+            return exc.code, {}
     # A timeout raises `socket.timeout` (`TimeoutError` from 3.10+), which is not
     # an `HTTPError` and so is left to propagate — it is not a server response
     # and must not be dressed up as one.

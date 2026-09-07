@@ -29,6 +29,20 @@ const DEMO_ENTRIES: ReadonlyArray<{ key: string; options?: { expirationTtl?: num
  *
  * Run it once from the Studio's function runner (Functions → `seedKv` → Run),
  * then open the KV page under the Storage domain.
+ *
+ * Deliberately a PUBLIC `action`, not an `internalAction`, even though it reads
+ * like an operator tool. Nothing can dispatch an internal function on demand:
+ * the internal-visibility gate keys off the `x-lunora-system` header, which only
+ * the worker's own server-initiated dispatch path (scheduler/cron/queue) sets —
+ * the Studio's function runner goes through the ordinary client RPC, and
+ * `lunora run --as` goes through the admin `runAs` op, which re-enters
+ * `handleRpc` without the system flag. Marking it internal would strand it with
+ * no caller at all.
+ *
+ * What that costs is bounded on purpose: the write takes NO caller input. It
+ * puts fixed values at the six fixed keys in {@link DEMO_ENTRIES}, so the worst
+ * an authenticated caller achieves is resetting the demo data, at 10/min. Any
+ * seeder that writes caller-supplied keys or values must not follow this shape.
  */
 export const seedKv = action
     .use(dbRateLimit(limits, "seedKv", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anonymous" }))

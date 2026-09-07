@@ -13,22 +13,29 @@ require_relative "fixtures"
 require_relative "manifest"
 
 # A persistence adapter that records every call.
+#
+# It JSON round-trips every record, which an adapter holding the objects by
+# reference does not — and that is the whole point: a file, a SQLite text column
+# or a preferences store all serialise, so a record carrying the codec's native
+# Wire* wrappers either raises here or is written as something that does not read
+# back. Holding references made this suite blind to both.
 class MemoryStore
   attr_reader :records, :appended, :removed, :cleared
 
   def initialize(records = [])
-    @records = records.dup
+    @records = records.map { |record| serialise(record) }
     @appended = []
     @removed = []
     @cleared = 0
   end
 
   def append(record)
-    @appended << record
-    @records << record
+    serialised = serialise(record)
+    @appended << serialised
+    @records << serialised
   end
 
-  def load = @records.dup
+  def load = @records.map { |record| serialise(record) }
 
   def remove(mutation_id)
     @removed << mutation_id
@@ -39,6 +46,10 @@ class MemoryStore
     @cleared += 1
     @records = []
   end
+
+  private
+
+  def serialise(record) = JSON.parse(JSON.generate(record))
 end
 
 module QueueFixtures
@@ -298,6 +309,64 @@ class TestQueueHydration < Minitest::Test
     # Read from the entry's own live_awaiter, never restated here: it is the one
     # field that tells a restored write's ONLY report from a live caller's second.
     assert_equal case_data["settledHadAwaiter"], settled.first.had_awaiter
+  end
+
+  def test_a_queued_write_with_typed_args_survives_a_serialising_store
+    ConformanceManifest.covers("offline_queue_hydrates_persisted_writes")
+
+    # Every one of these is a native wrapper the codec understands and
+    # +JSON.generate+ does not. Persisting the native form reported the write
+    # "queued" while the adapter wrote a Struct's stringification, so the record
+    # never read back as the write the caller made.
+    args = {
+      "amount" => Lunora::WireBigInt.new(7),
+      "blob" => Lunora::WireBytes.new("\x01\x02\x03\x04".b, "Int32Array"),
+      "when" => Lunora::WireDate.new(1_700_000_000_000)
+    }
+    store = MemoryStore.new
+    errors = []
+    queue = Lunora::OfflineQueue.new(
+      persistence: store, on_persistence_error: ->(operation, _error, id) { errors << [operation, id] }
+    )
+
+    queue.enqueue(Lunora::QueuedMutation.new(args: args, function_path: "ledger:add", id: "m-typed"))
+
+    assert_empty errors, "the record must serialise, so nothing is reported as a failed append"
+    assert_equal [Lunora::TAG, "bigint", "7"], store.appended.first["args"]["amount"]
+
+    restored = Lunora::OfflineQueue.new(persistence: store)
+    restored.hydrate
+
+    assert_equal %w[m-typed], ids(restored.items)
+    # Decoded back to the SAME native values, so the replay sends the write that
+    # was made rather than whatever the adapter's stringification left.
+    assert_equal args, restored.items.first.args
+  end
+
+  # Driven through the CLIENT: a restored record has no caller left, so the
+  # settle listener is the only report the purge ever produces.
+  def test_a_persisted_record_that_cannot_be_decoded_settles_rejected
+    ConformanceManifest.covers("offline_queue_hydrates_persisted_writes")
+
+    # A bigint tag whose payload is not a number: the store was corrupted, or
+    # written by an incompatible build. Replaying it with substitute args would
+    # commit a DIFFERENT write than the caller made, which is corruption rather
+    # than failure.
+    store = MemoryStore.new([{
+                              "args" => { "amount" => [Lunora::TAG, "bigint", "not-a-number"] },
+                              "functionPath" => "ledger:add", "id" => "m-bad"
+                            }])
+    settled = []
+    client = Lunora::Client.new("https://app.example")
+    client.offline_queue = Lunora::OfflineQueue.new(persistence: store)
+    client.on_mutation_settled(->(event) { settled << event })
+
+    client.hydrate_offline_queue
+
+    assert_empty ids(client.offline_queue.items)
+    assert_equal([["m-bad", :rejected, Lunora::OFFLINE_WRITE_UNDECODABLE]],
+                 settled.map { |event| [event.mutation_id, event.status, event.error.code] })
+    assert_equal %w[m-bad], store.removed, "the unreadable record is purged, not left to fail every restart"
   end
 
   def test_version_gating_is_off_until_a_version_is_configured
@@ -619,6 +688,133 @@ class TestFlushIntegration < Minitest::Test
     assert_equal [[case_data["committed"].first, case_data["confirmedCommitCursor"]]], confirmed
   end
 
+  # The worker reads a batch body under a 1 MiB budget
+  # (packages/runtime/src/body-readers.ts) and answers 413 PAYLOAD_TOO_LARGE past
+  # it. A whole-batch coded envelope is a verdict on every entry, so a count-only
+  # chunker settled the lot rejected.
+  def test_a_batch_the_worker_refuses_for_size_is_split_and_retried
+    ConformanceManifest.covers("offline_flush_batch_splits_on_payload_too_large")
+    budget = 400
+    bodies = []
+
+    client = Lunora::Client.new(
+      "https://app.example",
+      client_id: "c-1",
+      http_post: lambda { |_url, _headers, body|
+        bodies << body.bytesize
+        next [413, { "error" => { "code" => "PAYLOAD_TOO_LARGE", "message" => "Body too large" } }] if body.bytesize > budget
+
+        slots = JSON.parse(body)["calls"].map do |call|
+          { "id" => call["id"], "body" => { "commitCursor" => 1, "result" => nil } }
+        end
+        [200, { "results" => slots }]
+      }
+    )
+    client.offline_queue = Lunora::OfflineQueue.new(persistence: MemoryStore.new)
+
+    queued = Array.new(4) { |index| "m-#{index}" }
+    queued.each do |id|
+      client.offline_queue.enqueue(
+        Lunora::QueuedMutation.new(args: { "text" => "x" * 120 }, function_path: "messages:send", id: id)
+      )
+    end
+
+    report = client.flush_offline_queue
+
+    assert_equal queued, report.committed, "every write commits; none is dropped for the size of the batch it shared"
+    assert_empty report.rejected
+    assert_empty ids(client.offline_queue.items)
+    assert_operator bodies.max, :>, budget, "the first attempt has to be the over-budget one, or nothing was split"
+  end
+
+  # The same response on the batch path (two or more writes) was already
+  # classified transient, so whether a gateway blip LOST a durable write depended
+  # on the queue's depth.
+  def test_a_lone_queued_write_survives_an_envelope_less_gateway_error
+    ConformanceManifest.covers("non_2xx_without_error_envelope_fails")
+    settled = []
+    store = MemoryStore.new
+
+    client = Lunora::Client.new(
+      "https://app.example",
+      http_post: ->(_url, _headers, _body) { [502, { "message" => "bad gateway" }] }
+    )
+    client.offline_queue = Lunora::OfflineQueue.new(persistence: store)
+    client.on_mutation_settled(->(event) { settled << event })
+    client.offline_queue.enqueue(Lunora::QueuedMutation.new(args: {}, function_path: "messages:send", id: "m-502"))
+
+    report = client.flush_offline_queue
+
+    assert_empty report.rejected
+    assert_equal %w[m-502], report.requeued
+    assert_equal %w[m-502], ids(client.offline_queue.items)
+    assert_empty settled, "nothing settled: no verdict was ever reached"
+    assert_empty store.removed, "the durable record stays, because the write is still good"
+  end
+
+  # "Not now", not "no": the write is valid and the server asked for it later, so
+  # dropping it loses data for being punctual.
+  def test_a_rate_limited_replay_requeues_and_defers_the_next_flush
+    ConformanceManifest.covers("offline_flush_replays_and_confirms_optimistic")
+    posts = 0
+
+    client = Lunora::Client.new(
+      "https://app.example",
+      http_post: lambda { |_url, _headers, _body|
+        posts += 1
+        [429, { "error" => { "code" => "TOO_MANY_REQUESTS", "data" => { "retryAfterMs" => 60_000 },
+                             "message" => "slow down" } }]
+      }
+    )
+    client.offline_queue = Lunora::OfflineQueue.new(persistence: MemoryStore.new)
+    client.offline_queue.enqueue(Lunora::QueuedMutation.new(args: {}, function_path: "messages:send", id: "m-429"))
+
+    report = client.flush_offline_queue
+
+    assert_empty report.rejected
+    assert_equal %w[m-429], report.requeued
+    assert_equal 60_000, report.retry_after_ms
+
+    again = client.flush_offline_queue
+
+    assert_equal 1, posts, "the second flush must wait out the delay rather than earn the same 429"
+    assert_operator again.retry_after_ms, :>, 0
+    assert_equal %w[m-429], ids(client.offline_queue.items)
+  end
+
+  # A rate-limited SLOT is transient too, and classified by the same predicate as
+  # the whole-batch and single-call paths — a second code set here is how one
+  # entry came to be terminal for a code its siblings retried.
+  def test_a_rate_limited_slot_is_requeued_and_its_delay_clamped
+    ConformanceManifest.covers("offline_flush_batches_multiple_writes")
+
+    client = Lunora::Client.new(
+      "https://app.example",
+      client_id: "c-1",
+      http_post: lambda { |_url, _headers, _body|
+        [200, { "results" => [
+          { "id" => 0, "body" => { "commitCursor" => 1, "result" => nil } },
+          { "id" => 1, "body" => { "error" => { "code" => "TOO_MANY_REQUESTS",
+                                                "data" => { "retryAfterMs" => 600_000 },
+                                                "message" => "slow down" } } }
+        ] }]
+      }
+    )
+    client.offline_queue = Lunora::OfflineQueue.new(persistence: MemoryStore.new)
+    %w[m-a m-b].each do |id|
+      client.offline_queue.enqueue(Lunora::QueuedMutation.new(args: {}, function_path: "messages:send", id: id))
+    end
+
+    report = client.flush_offline_queue
+
+    assert_equal %w[m-a], report.committed
+    assert_empty report.rejected
+    assert_equal %w[m-b], report.requeued
+    # Clamped: a server naming ten minutes would otherwise strand the queue for
+    # ten minutes with no way to tell a backoff from a stuck client.
+    assert_equal Lunora::MAX_RETRY_AFTER_MS, report.retry_after_ms
+  end
+
   def test_an_unencodable_write_settles_terminally_instead_of_looping_forever
     ConformanceManifest.covers("offline_flush_unencodable_write_settles_terminal")
     case_data = queue_case("unencodableWrite")
@@ -695,5 +891,16 @@ class TestFlushIntegration < Minitest::Test
 
     assert_raises(Lunora::ApiError) { client.submit("messages:list", {}, optimistic: ->(current) { (current || []) + ["c"] }) }
     assert_equal %w[a], seen.last
+  end
+
+  # The entry cap is not a port's to choose: the worker and the shard DO both
+  # refuse a larger batch with a coded 400, which protocol/README.md 4.3 makes a
+  # TERMINAL verdict — so a client chunking at a stale value discards durable
+  # writes instead of retrying them. It was a bare 500 in ten independent places
+  # with nothing reconciling them.
+  def test_batch_entry_cap_matches_protocol
+    ConformanceManifest.covers("batch_entry_cap_matches_protocol")
+
+    assert_equal queue_case("batchReplay")["maxEntries"], Lunora::MAX_BATCH_ENTRIES
   end
 end

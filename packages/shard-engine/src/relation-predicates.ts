@@ -30,6 +30,9 @@
 
 import { LunoraError } from "@lunora/errors";
 
+import type { RelationOperator } from "../../../shared/relation-operators";
+import { isRelationPredicate as isSharedRelationPredicate, RELATION_OPERATOR_SET } from "../../../shared/relation-operators";
+import { isMemoryTable } from "./ctx-db-memory";
 import { distinctValues } from "./relations";
 import type { QueryArgs, QueryPage, RelationDefinitionLike, TableDefinitionLike } from "./schema-types";
 import type { WhereInput } from "./where-types";
@@ -62,7 +65,12 @@ interface RelationOperatorMeta {
     nullDisjunct?: boolean;
 }
 
-const RELATION_OPERATOR_META: Record<string, RelationOperatorMeta> = {
+// `Record<RelationOperator, …>` deliberately, not `Record<string, …>`: the names
+// live in `shared/relation-operators.ts` because `@lunora/server` needs the same
+// set and cannot depend on this package. Keying the meta map off that union is
+// what makes them one fact — add a sixth name there without a row here and this
+// file stops compiling, rather than the server's guards silently walking past it.
+const RELATION_OPERATOR_META: Record<RelationOperator, RelationOperatorMeta> = {
     every: { kind: "many", negateChild: true, negated: true },
     is: { kind: "one", negated: false },
     isNot: { kind: "one", negated: true, nullDisjunct: true },
@@ -70,11 +78,14 @@ const RELATION_OPERATOR_META: Record<string, RelationOperatorMeta> = {
     some: { kind: "many", negated: false },
 };
 
-const RELATION_OPERATORS = new Set(Object.keys(RELATION_OPERATOR_META));
+/** Narrow an arbitrary key to a relation operator, so the union-keyed meta map can be indexed with it. */
+const asRelationOperator = (operator: string): RelationOperator | undefined =>
+    RELATION_OPERATOR_SET.has(operator) ? (operator as RelationOperator) : undefined;
 
 /** Look up an operator's meta row, throwing on an unknown operator. */
 const requireOperatorMeta = (operator: string): RelationOperatorMeta => {
-    const meta = RELATION_OPERATOR_META[operator];
+    const key = asRelationOperator(operator);
+    const meta = key === undefined ? undefined : RELATION_OPERATOR_META[key];
 
     if (!meta) {
         throw new LunoraError("INTERNAL", `unknown relation operator "${operator}"`);
@@ -202,15 +213,7 @@ const combineAnd = (clauses: WhereInput[]): WhereInput => {
  * `isOperatorObject` "all keys known" disambiguation so a relation-named key
  * holding an ordinary literal/filter is left untouched.
  */
-const isRelationPredicate = (value: unknown): value is Record<string, WhereInput> => {
-    if (value === null || typeof value !== "object" || Array.isArray(value)) {
-        return false;
-    }
-
-    const keys = Object.keys(value);
-
-    return keys.length > 0 && keys.every((key) => RELATION_OPERATORS.has(key));
-};
+const isRelationPredicate = (value: unknown): value is Record<string, WhereInput> => isSharedRelationPredicate(value);
 
 /**
  * Cheap synchronous scan: does `where` contain any relation predicate for
@@ -364,7 +367,8 @@ const buildExistsMarker = async (
 
 /** Reject a relation operator applied to a relation of the wrong cardinality. */
 const assertCardinality = (operator: string, name: string, relation: RelationDefinitionLike): void => {
-    const meta = RELATION_OPERATOR_META[operator];
+    const key = asRelationOperator(operator);
+    const meta = key === undefined ? undefined : RELATION_OPERATOR_META[key];
 
     if (meta && meta.kind !== relation.kind) {
         throw new LunoraError("INTERNAL", `relation operator "${operator}" requires a to-${meta.kind} relation, but "${name}" is to-${relation.kind}`);
@@ -484,13 +488,17 @@ const resolveRelationPredicates = async (where: WhereInput | undefined, options:
     });
 };
 
-type ShardedRelationHit = { relation: string; target: string };
+/**
+ * A relation predicate whose target table a live shape cannot observe, and which
+ * of the two reasons applies — they need different remedies in the message.
+ */
+type UnreplicableRelationHit = { kind: "memory" | "shard"; relation: string; target: string };
 
-/** First sharded hit across a set of sibling sub-wheres (each scanned under `tableName`). */
-const firstShardedHit = (branches: Iterable<WhereInput>, schema: ResolveContext["schema"], tableName: string): ShardedRelationHit | undefined => {
+/** First unreplicable hit across a set of sibling sub-wheres (each scanned under `tableName`). */
+const firstShardedHit = (branches: Iterable<WhereInput>, schema: ResolveContext["schema"], tableName: string): UnreplicableRelationHit | undefined => {
     for (const branch of branches) {
         // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: a branch is itself a where to re-scan.
-        const hit = findShardedRelationTarget(branch, schema, tableName);
+        const hit = findUnreplicableRelationTarget(branch, schema, tableName);
 
         if (hit) {
             return hit;
@@ -500,8 +508,8 @@ const firstShardedHit = (branches: Iterable<WhereInput>, schema: ResolveContext[
     return undefined;
 };
 
-/** Scan one `where` key (boolean branch or relation predicate) for a sharded-join hit. */
-const inspectKey = (key: string, value: WhereInput[string], schema: ResolveContext["schema"], tableName: string): ShardedRelationHit | undefined => {
+/** Scan one `where` key (boolean branch or relation predicate) for an unreplicable-join hit. */
+const inspectKey = (key: string, value: WhereInput[string], schema: ResolveContext["schema"], tableName: string): UnreplicableRelationHit | undefined => {
     if (key === "AND" || key === "OR") {
         return firstShardedHit(branchesOf(value), schema, tableName);
     }
@@ -517,22 +525,32 @@ const inspectKey = (key: string, value: WhereInput[string], schema: ResolveConte
     }
 
     if (schema.tables[relation.table]?.shardMode?.kind === "shardBy") {
-        return { relation: key, target: relation.table };
+        return { kind: "shard", relation: key, target: relation.table };
     }
 
-    // The relation target isn't sharded itself, but its OWN nested predicate may
-    // still hop into a shard — keep descending under the target table.
+    // A `.memory()` target is invisible for the same reason a memory-backed
+    // shape table is (`recordCdc` never appends one), and it is invisible one
+    // hop away: a write to the related table produces no changed key, so the
+    // SOURCE table is never re-probed and the shape keeps whatever membership it
+    // seeded with. Same refusal, different remedy.
+    if (isMemoryTable(schema.tables[relation.table])) {
+        return { kind: "memory", relation: key, target: relation.table };
+    }
+
+    // The relation target isn't itself unreplicable, but its OWN nested predicate
+    // may still hop into one — keep descending under the target table.
     return firstShardedHit(Object.values(value), schema, relation.table);
 };
 
 /**
  * Walk every relation predicate reachable from `where` (descending through
  * `AND`/`OR`/`NOT` branches and the nested where of each relation operator),
- * returning the first one whose target table is `.shardBy()`. Relations to a
- * `root` (same Durable Object) or `.global()` (D1) table are fine — only a hop
- * into another shard's DO is unreachable from a live poke loop.
+ * returning the first one whose target table a live shape cannot observe:
+ * `.shardBy()` (the rows live in another DO) or `.memory()` (the rows never
+ * reach the changelog). Relations to a `root` (same Durable Object) or
+ * `.global()` (D1) table are fine.
  */
-const findShardedRelationTarget = (where: WhereInput, schema: ResolveContext["schema"], tableName: string): ShardedRelationHit | undefined => {
+const findUnreplicableRelationTarget = (where: WhereInput, schema: ResolveContext["schema"], tableName: string): UnreplicableRelationHit | undefined => {
     for (const key of Object.keys(where)) {
         const hit = inspectKey(key, where[key], schema, tableName);
 
@@ -545,23 +563,62 @@ const findShardedRelationTarget = (where: WhereInput, schema: ResolveContext["sc
 };
 
 /**
- * Registration-time guard for partial-replication shapes. A live shape can only
- * be poked from the op-log of its OWN shard Durable Object, so an
- * `effectiveWhere` that joins to a `.shardBy()` table reaches rows that live in
- * other DOs the poke loop can never observe. Reject such a shape up front with
- * the two supported remedies. Called from the generated `resolveShape` override
- * the moment a socket subscribes (the first point the compiled predicate and the
- * schema's shard modes are both in hand).
+ * Registration-time guard for partial-replication shapes: both ways a shape can
+ * name rows its poke loop is unable to observe. Called from the generated
+ * `resolveShape` override the moment a socket subscribes — the first point the
+ * compiled predicate and the schema are both in hand.
+ *
+ * **1. The shape's own table is `.memory()`.** A shard-local shape replicates FROM
+ * `__cdc_log`, and `recordCdc` deliberately never appends a memory table (see
+ * `ctx-db.ts`: its rows do not survive the next eviction, and log retention is
+ * opt-in, so a heartbeat-rate presence table would grow the log without bound).
+ * So `readCdcChangeKeys` returns nothing for it on every flush, `buildShapeDiff`
+ * returns `[]` before it ever probes membership, and the shape seeds once and
+ * then never moves again — no error, no counter, nothing to grep. Refused here
+ * rather than left to freeze silently.
+ *
+ * There is no fix available further down: a full-membership re-probe per poke
+ * would emit upserts but could never emit a DELETE, because without the log
+ * nothing records which keys left, and the snapshot-diff tier that solves exactly
+ * this for `.global()` tables (`diffGlobalMembership` against
+ * `__global_shape_snapshot`) is wired to the D1 read path.
+ *
+ * **2. The predicate joins a `.shardBy()` or `.memory()` table.** A live shape can
+ * only be poked from the op-log of its OWN Durable Object, so an `effectiveWhere`
+ * that joins to a sharded table reaches rows that live in other DOs the poke loop
+ * can never observe — and a `.memory()` target is invisible for reason 1 one hop
+ * away: its writes never enter CDC, so the source table gets no changed key and
+ * the shape retains stale membership indefinitely. Both are found by the same
+ * recursive walk over the relation predicates, which is what carries the check
+ * through `AND`/`OR`/`NOT` branches and nested relation wheres.
  */
 const assertShapeShardable = (effectiveWhere: WhereInput | undefined, schema: ResolveContext["schema"], table: string): void => {
+    if (isMemoryTable(schema.tables[table])) {
+        throw Object.assign(
+            new Error(
+                `shape on "${table}" replicates from the changelog, which never records a .memory() table — the shape would seed once and never update again. Fix it by (a) dropping .memory() from "${table}" so its writes reach the changelog, or (b) reading it through a live query (\`useQuery\`), which refreshes off the changed-table set rather than the log.`,
+            ),
+            { code: "SHAPE_MEMORY_TABLE", name: "LunoraError", status: 400 },
+        );
+    }
+
     if (!effectiveWhere) {
         return;
     }
 
-    const offending = findShardedRelationTarget(effectiveWhere, schema, table);
+    const offending = findUnreplicableRelationTarget(effectiveWhere, schema, table);
 
     if (!offending) {
         return;
+    }
+
+    if (offending.kind === "memory") {
+        throw Object.assign(
+            new Error(
+                `shape on "${table}" joins the .memory() table "${offending.target}" via relation "${offending.relation}" — writes to a .memory() table never reach the changelog, so the shape is never told its membership changed and would serve stale rows indefinitely. Fix it by (a) dropping .memory() from "${offending.target}", or (b) reading it through a live query (\`useQuery\`), which refreshes off the changed-table set rather than the log.`,
+            ),
+            { code: "SHAPE_MEMORY_TABLE", name: "LunoraError", status: 400 },
+        );
     }
 
     throw Object.assign(

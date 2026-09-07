@@ -180,6 +180,22 @@ interface NumberColumnValidator extends ColumnValidator<number, number> {
 }
 ```
 
+### `ObjectColumnValidator` (interface)
+
+```ts
+interface ObjectColumnValidator<T> extends ColumnValidator<T, T> {
+    strip: () => ObjectColumnValidator<T>;
+}
+```
+
+### `ParseOptions` (interface)
+
+```ts
+interface ParseOptions {
+    rejectUnknownKeys?: boolean;
+}
+```
+
 ### `SchemaNodeReader` (interface)
 
 ```ts
@@ -187,6 +203,7 @@ interface SchemaNodeReader<TNode> {
     constraints: (node: TNode) => JsonSchema | undefined;
     inner: (node: TNode) => TNode | undefined;
     isNullable: (node: TNode) => boolean;
+    keyChild: (node: TNode) => TNode | undefined;
     kind: (node: TNode) => ValidatorKind;
     literalSchema: (node: TNode) => JsonSchema;
     members: (node: TNode) => ReadonlyArray<TNode>;
@@ -265,8 +282,8 @@ interface Validator<T = unknown> extends StandardSchemaV1<T, T> {
     check: (predicate: (value: T) => boolean, options?: CheckOptions | string) => Validator<T>;
     readonly kind: ValidatorKind;
     meta: (options: MetaOptions) => Validator<T>;
-    parse: (value: unknown) => T;
-    safeParse: (value: unknown) => {
+    parse: (value: unknown, options?: ParseOptions) => T;
+    safeParse: (value: unknown, options?: ParseOptions) => {
         error: ValidationError;
         ok: false;
     } | {

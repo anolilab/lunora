@@ -16,6 +16,14 @@
         "optimistic-layers.ts and offline-queue.ts. Where an SDK deliberately diverges",
         "from it, sdks/README.md says so and this file encodes the SDK behaviour.",
         "",
+        "The reference is held to it too, by packages/client/__tests__/",
+        "protocol-conformance.test.ts — the queue orderings, the empty-vs-absent",
+        "shard key, the overflow verdict and the entry cap. For a long while only",
+        "the eight ports read this file: the reference could move and leave all",
+        "eight pinned to numbers it no longer produced, with nothing red anywhere.",
+        "The optimistic-layer block is still asserted per port only, because a",
+        "transform is a closure and a closure is not data.",
+        "",
         "Every layer transform below is the same primitive so it ports without an",
         "interpreter: `append` pushes `appended` onto a copy of the list it is handed,",
         "and `constant` ignores its input and returns `value`."
@@ -207,6 +215,8 @@
         },
         "batchReplay": {
             "$comment": "Two or more queued writes coalesce into ONE `/_lunora/rpc-batch` round trip instead of N single calls — the flaky-reconnect win. The worker forwards each entry to its shard, which dispatches it through the ordinary single-call path, so per-entry `mutationId` idempotency is inherited rather than re-implemented: the key rides in the ENTRY, not in a request header, because a batch is one hop carrying independent calls. `clientId` rides with it for the same reason the header does — the shard namespaces an anonymous caller's de-duplication rows by it. Slot classification mirrors the single-call path exactly, with one rule that only a batch can express: a slot carrying a TRANSIENT shard code is not a verdict, so that write goes back on the queue rather than being reported as failed. A slot the server never returned (`m4`) is likewise retried, since it may or may not have committed and the idempotency key makes that safe.",
+            "$maxEntriesComment": "The normative entry cap. It is the server's — `shared/batch-wire.ts`, enforced by both the worker and the shard DO with a coded 400, which protocol/README.md §4.3 makes a TERMINAL verdict — and every client chunks its flush to it. It was a bare `500` written out in ten independent places with nothing reconciling them, so lowering the server's value would have left eight clients chunking at the old one and discarding those durable writes as rejected. `batch_entry_cap_matches_protocol` in protocol/conformance-cases.json makes each port read it from here.",
+            "maxEntries": 500,
             "path": "/_lunora/rpc-batch",
             "requests": 1,
             "queued": ["m1", "m2", "m3", "m4"],

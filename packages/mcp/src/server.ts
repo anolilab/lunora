@@ -77,6 +77,19 @@ interface LunoraMcpServerOptions {
     allowAgents?: boolean;
 
     /**
+     * Expose the observability tools (`lunora_get_logs`, `lunora_get_issues`,
+     * `lunora_get_advisories`, `lunora_get_query_insights`,
+     * `lunora_get_migration_status`). Defaults to `false`, mirroring
+     * `allowWrites`: they are read-only, but every row they return — log lines,
+     * request metadata, grouped error messages — is production user data that
+     * lands in the model's context and therefore at its provider. Holding the
+     * admin bearer is not consent to ship that, so it is a separate opt-in;
+     * without it the tools are omitted from the advertised list AND refused at
+     * dispatch. Only takes effect when a `token` resolved.
+     */
+    allowObservability?: boolean;
+
+    /**
      * Expose the write tools (`lunora_run_mutation` / `lunora_run_action`).
      * Defaults to `false`: the server is READ-ONLY unless explicitly opted in,
      * so a prompt-injected or misaligned agent can't mutate the deployment with
@@ -94,26 +107,37 @@ interface LunoraMcpServerOptions {
     fetch?: typeof fetch;
 
     /**
-     * Bearer token sent on every RPC. This must be the deployment's **admin
-     * bearer**: the introspection/allowlist path every tool depends on
-     * (`lunora_list_functions`, `lunora_list_tables`, and the `assertRunnable`
-     * precheck that runs before every `run` tool) hits admin-gated
-     * `/_lunora/admin/*` routes, so no scoped/app token works today — it would
-     * 403 (`ADMIN_FORBIDDEN`) on the first tool call. The read-only guarantee is
-     * therefore NOT enforced by the token's scope; it is enforced in-process via
-     * `allowWrites: false` (the default), which omits the write tools from the
-     * advertised list and refuses them at dispatch.
+     * Bearer token sent on every RPC. **Required** alongside `url`, and it must
+     * be the deployment's **admin bearer**: the introspection/allowlist path
+     * every tool depends on (`lunora_list_functions`, `lunora_list_tables`, and
+     * the `assertRunnable` precheck that runs before every `run` tool) hits
+     * admin-gated `/_lunora/admin/*` routes, so no scoped/app token works
+     * today — it would 403 (`ADMIN_FORBIDDEN`) on the first tool call. The
+     * read-only guarantee is therefore NOT enforced by the token's scope; it is
+     * enforced in-process via `allowWrites: false` (the default), which omits
+     * the write tools from the advertised list and refuses them at dispatch.
      *
-     * Its presence is also what gates the observability tools (logs, Issues,
-     * advisories, query insights, migration status): without a token they are
-     * omitted from `ListTools` and refused at dispatch.
+     * Because EVERY tool needs it, omitting it is a misconfiguration rather than
+     * a reduced-capability mode, and `createLunoraMcpServer` says so at
+     * construction instead of advertising a surface that 403s on first use. The
+     * one exception is the `client` injection seam (tests / a pre-authenticated
+     * client), where this server cannot know what the client can reach and so
+     * reads "unknown" fail-closed: the privileged observability tools stay
+     * unadvertised and are refused at dispatch.
      */
     token?: string;
     /** Base URL of the deployed Lunora Worker. Required unless `client` is given. */
     url?: string;
 }
 
-/** Build the `LunoraClient` the tools dispatch against. */
+/**
+ * Build the `LunoraClient` the tools dispatch against.
+ *
+ * Exported for the HTTP handlers, which build one client for the lifetime of
+ * the handler instead of one per request: `listFunctionsCached` in `./tools`
+ * keys its memo on client identity, so a fresh client per request turns every
+ * tool call back into two admin round trips.
+ */
 const resolveClient = (options: LunoraMcpServerOptions): LunoraClient => {
     if (options.client !== undefined) {
         return options.client;
@@ -123,11 +147,16 @@ const resolveClient = (options: LunoraMcpServerOptions): LunoraClient => {
         throw new LunoraError("INTERNAL", "createLunoraMcpServer requires either a `client` or a `url`");
     }
 
+    if (options.token === undefined || options.token.length === 0) {
+        throw new LunoraError(
+            "UNAUTHENTICATED",
+            "createLunoraMcpServer requires a `token` (LUNORA_ADMIN_TOKEN) alongside `url`: every tool reaches admin-gated /_lunora/admin/* routes, so an unauthenticated server can only 403. Writes stay off unless `allowWrites` is set.",
+        );
+    }
+
     const client = new LunoraClient({ fetch: options.fetch, url: options.url });
 
-    if (options.token !== undefined) {
-        client.setAuthToken(options.token);
-    }
+    client.setAuthToken(options.token);
 
     return client;
 };
@@ -146,15 +175,18 @@ const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
     const allowWrites = options.allowWrites ?? false;
     const allowAgents = options.allowAgents ?? false;
     const agents = options.agents ?? [];
-    // The observability tools' gate. Read off `options.token` rather than the
-    // client, because a caller that injects a pre-built `client` has not told
-    // this server what that client can reach — and the fail-closed reading of
-    // "unknown" is "no privileged tools".
+    // The observability tools' gate: BOTH an explicit opt-in and a resolved admin
+    // bearer. The bearer alone is not enough — every tool already needs it, so
+    // deriving the gate from it made the privileged reads on by default on every
+    // server. The token half still matters for the `client` injection seam, where
+    // this server has not been told what the injected client can reach and the
+    // fail-closed reading of "unknown" is "no privileged tools".
     const hasAdminToken = typeof options.token === "string" && options.token.length > 0;
+    const allowObservability = options.allowObservability === true && hasAdminToken;
     const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
 
     server.setRequestHandler(ListToolsRequestSchema, () => {
-        return { tools: [...toolDefinitions(allowWrites, hasAdminToken), ...agentToolDefinitions(agents, allowAgents)] };
+        return { tools: [...toolDefinitions(allowWrites, allowObservability), ...agentToolDefinitions(agents, allowAgents)] };
     });
 
     server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
@@ -170,7 +202,7 @@ const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
                   ...(options.agentMaxWaitMs === undefined ? {} : { maxWaitMs: options.agentMaxWaitMs }),
                   ...(options.agentPollIntervalMs === undefined ? {} : { pollIntervalMs: options.agentPollIntervalMs }),
               })
-            : await callTool(client, name, input, allowWrites, hasAdminToken);
+            : await callTool(client, name, input, allowWrites, allowObservability);
 
         return result as CallToolResult;
     });
@@ -192,4 +224,4 @@ const connectStdio = async (options: LunoraMcpServerOptions): Promise<Server> =>
 };
 
 export type { LunoraMcpServerOptions };
-export { connectStdio, createLunoraMcpServer };
+export { connectStdio, createLunoraMcpServer, resolveClient };

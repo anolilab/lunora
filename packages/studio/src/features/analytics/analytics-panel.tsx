@@ -1,7 +1,6 @@
 import type { AnalyticsSqlResult } from "@lunora/bindings/analytics";
-import { createAnalyticsSqlClient } from "@lunora/bindings/analytics";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { Card } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -10,25 +9,7 @@ import type { MessageId } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget, formatCell } from "../../lib/internal";
 
-/**
- * Account-scoped credentials for the Analytics Engine SQL API. A *secret*, never
- * a binding — the host threads `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`
- * (Analytics Read) through from `.dev.vars`/env. Absent ⇒ the panel renders a
- * "configure a token" empty state rather than hard-failing (the analytics panel
- * is optional).
- */
-interface AnalyticsConfig {
-    readonly accountId: string;
-    readonly apiToken: string;
-}
-
 interface AnalyticsPanelProps {
-    /**
-     * SQL-API credentials. When omitted (the default), the panel shows a
-     * config-needed empty state — the Studio never ships a real token.
-     */
-    readonly config?: AnalyticsConfig;
-
     /**
      * Dataset name to query (the `analytics_engine_datasets[].dataset`, default
      * `ANALYTICS` — the value the config layer reconciles).
@@ -36,8 +17,12 @@ interface AnalyticsPanelProps {
     readonly dataset?: string;
 
     /**
-     * Run a SQL-API query. Defaults to a {@link createAnalyticsSqlClient} built
-     * from `config`. Injected in tests so the panel never touches the network.
+     * Run one Analytics Engine SQL statement and resolve its result. The panel has
+     * no default: the AE SQL API authenticates with an **account-scoped Cloudflare
+     * API token**, and a browser bundle is the last place that may hold one. The
+     * host supplies a runner that proxies the statement through its own worker
+     * (thread it in as `StudioProps.analyticsQuery`); with none, the panel renders
+     * an empty state and makes no network call.
      */
     readonly runQuery?: (sql: string) => Promise<AnalyticsSqlResult>;
 }
@@ -147,34 +132,21 @@ const PanelResult = ({ state, title }: { readonly state: PanelState; readonly ti
  * usage panels — request volume per function, p50/p95 latency, hot shards —
  * against the data points `ctx.analytics.track("function_call", …)` emits.
  *
- * The SQL API needs an account-scoped read token, a *secret* the host provides
- * (never a binding, never auto-scaffolded). With no `config` (and no `runQuery`
- * override) the panel renders a "configure a token" empty state and makes **no**
- * network call — the analytics panel is optional and degrades gracefully, it
- * never hard-fails when AE is unconfigured.
+ * The SQL API authenticates with an account-scoped Cloudflare API token, which
+ * must never reach a browser bundle — so this panel builds no SQL client of its
+ * own. The host injects a `runQuery` that proxies the statement through its
+ * worker; with none the panel renders an empty state and makes **no** network
+ * call. The analytics panel is optional and degrades gracefully, it never
+ * hard-fails when AE is unwired.
  */
-export const AnalyticsPanel = ({ config, dataset = DEFAULT_DATASET, runQuery }: AnalyticsPanelProps = {}): ReactElement => {
+export const AnalyticsPanel = ({ dataset = DEFAULT_DATASET, runQuery }: AnalyticsPanelProps = {}): ReactElement => {
     const t = useT();
 
     const [states, setStates] = useState<Record<string, PanelState>>({});
 
-    // Resolve the query runner: an explicit override wins (tests); otherwise build
-    // a SQL client from the token config. `null` when neither is available — the
-    // panel then renders the config-needed empty state and never fetches.
-    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: feeds `load`, which an effect depends on; a fresh one re-fires the query every render
-    const run = useMemo<((sql: string) => Promise<AnalyticsSqlResult>) | null>(() => {
-        if (runQuery !== undefined) {
-            return runQuery;
-        }
-
-        if (config === undefined) {
-            return null;
-        }
-
-        const client = createAnalyticsSqlClient({ accountId: config.accountId, apiToken: config.apiToken });
-
-        return (sql: string) => client.query(sql);
-    }, [config, runQuery]);
+    // `null` when the host wired no runner — the panel then renders the
+    // not-wired empty state and never fetches.
+    const run = runQuery ?? null;
 
     // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: an effect depends on this, so a fresh one re-runs the load every render
     const load = useCallback(
@@ -230,7 +202,9 @@ export const AnalyticsPanel = ({ config, dataset = DEFAULT_DATASET, runQuery }: 
     if (run === null) {
         return (
             <EmptyState
-                description={t("Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN (Analytics Read) in your .dev.vars to enable usage panels.")}
+                description={t(
+                    "Analytics Engine reads need an account-scoped Cloudflare API token, which cannot be shipped to a browser. The host must pass studio.analyticsQuery — a runner that proxies the SQL through your worker — to enable these panels.",
+                )}
                 icon={
                     <svg
                         aria-hidden="true"
@@ -245,7 +219,7 @@ export const AnalyticsPanel = ({ config, dataset = DEFAULT_DATASET, runQuery }: 
                     </svg>
                 }
                 testId="analytics-not-configured"
-                title={t("Analytics is not configured.")}
+                title={t("Analytics usage panels are not wired up.")}
             />
         );
     }
@@ -259,4 +233,4 @@ export const AnalyticsPanel = ({ config, dataset = DEFAULT_DATASET, runQuery }: 
     );
 };
 
-export type { AnalyticsConfig, AnalyticsPanelProps };
+export type { AnalyticsPanelProps };

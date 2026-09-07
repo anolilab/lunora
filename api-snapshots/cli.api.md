@@ -86,6 +86,7 @@ const COMMANDS: readonly [
 
 ```ts
 interface ColumnSnapshot {
+    field?: FieldSnapshot;
     nullable: boolean;
     sqlType: "BLOB" | "INTEGER" | "REAL" | "TEXT";
 }
@@ -109,9 +110,11 @@ const DEFAULT_IMPORT_BATCH_SIZE = 500;
 interface DeployCommandOptions {
     allowSchemaDrift?: boolean;
     apiSpec?: ApiSpec;
+    commandName?: PreDeployCommand;
     cwd?: string;
     dockerAvailable?: DockerProbe;
     dryRun?: boolean;
+    emitBindings?: string;
     env?: string;
     fetchImpl?: FetchLike;
     format?: string;
@@ -183,21 +186,25 @@ interface DevCommandOptions {
     apiSpec?: ApiSpec;
     codegen?: boolean;
     cwd?: string;
+    emitBindings?: string;
     ensureEnv?: typeof ensureDevVariables;
     ensureExample?: typeof ensureDevVarsExample;
     fillSecrets?: typeof fillDevSecrets;
     findFreePort?: (preferred: number) => Promise<number>;
     flavor?: DevFlavor;
     hasIpv6Loopback?: () => boolean;
+    jsonLogs?: boolean;
     logger: Logger;
     materializeRemote?: typeof materializeRemoteWranglerConfig;
     port?: number;
+    probeReady?: ReadinessProbe;
     remote?: boolean;
     startCodegen?: typeof startCodegenWatch;
     startStudio?: typeof startStudioServer;
     startWorker?: WorkerSpawner;
     studio?: boolean;
     target?: string;
+    waitForInterrupt?: (logger: Logger) => Promise<number>;
     worker?: boolean;
     workerPort?: number;
 }

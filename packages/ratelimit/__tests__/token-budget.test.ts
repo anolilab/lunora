@@ -61,6 +61,20 @@ describe("tokenBudget", () => {
         await expect(budget.check("user-s")).resolves.toMatchObject({ ok: false });
     });
 
+    it("clamps a sliding-window budget to rate, which is what it enforces", async () => {
+        expect.assertions(2);
+
+        // `capacity` is documented as ignored by sliding windows — their ceiling is
+        // `rate`. Clamping to `capacity` hands `limit` a count above the enforced
+        // ceiling, which throws an INTERNAL error out of `record` and charges
+        // nothing, letting the oversized call escape the budget entirely.
+        const sliding = new RateLimiter({ config: { tokens: { capacity: 50_000, kind: "sliding window", period: 60_000, rate: 10_000 } } });
+        const budget = tokenBudget(sliding, "tokens");
+
+        await expect(budget.record("user-w", 20_000)).resolves.toMatchObject({ ok: true });
+        await expect(budget.check("user-w")).resolves.toMatchObject({ ok: false });
+    });
+
     it("keeps budgets separate per key", async () => {
         expect.assertions(1);
 

@@ -323,6 +323,18 @@ describe("documentation resources", () => {
         expect(read.contents[0]?.mimeType).toBe("text/markdown");
     });
 
+    it("refuses a traversal uri without touching the index", async () => {
+        expect.assertions(3);
+
+        const getPage = vi.fn<DocsIndex["getPage"]>(async () => undefined);
+        const server = createDocsMcpServer({ index: { ...index, getPage } });
+        const read = handlerFor(server, ReadResourceRequestSchema.shape.method.value);
+
+        await expect(read({ params: { uri: "lunora-docs:/../../admin/secrets" } })).rejects.toThrow(/must not contain/);
+        await expect(read({ params: { uri: "lunora-docs:/%2e%2e/%2e%2e/admin/secrets" } })).rejects.toThrow(/must not contain/);
+        expect(getPage).not.toHaveBeenCalled();
+    });
+
     it("rejects a uri it does not own", async () => {
         expect.assertions(1);
 

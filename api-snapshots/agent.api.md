@@ -525,12 +525,6 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
-### `isDuplicateInstanceError` (const)
-
-```ts
-const isDuplicateInstanceError: (error: unknown) => boolean;
-```
-
 ### `verifyDiscord` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -731,6 +725,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `SentryLike` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `SentrySpan` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 

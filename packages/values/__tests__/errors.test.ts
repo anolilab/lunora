@@ -77,6 +77,18 @@ describe("describeValue", () => {
         expect(describeValue(Object.create(null))).toBe("object");
     });
 
+    it("caps a genuine constructor name like every primitive branch", () => {
+        expect.assertions(1);
+
+        class Long {
+            public readonly id = 0;
+        }
+
+        Object.defineProperty(Long, "name", { value: "X".repeat(200) });
+
+        expect(describeValue(new Long()).length).toBeLessThan(100);
+    });
+
     it("does not throw on a hostile object whose constructor getter throws", () => {
         expect.assertions(2);
 
@@ -93,6 +105,19 @@ describe("describeValue", () => {
 
         expect(() => describeValue(hostile)).not.toThrow();
         expect(describeValue(hostile)).toBe("object");
+    });
+
+    it("truncates a client-supplied constructor name", () => {
+        expect.assertions(2);
+
+        // A JSON body carrying its OWN `constructor` property is a plain object
+        // whose `constructor.name` is whatever was sent — so this branch is
+        // client-sized, and `received` goes back on the wire and into logs.
+        // Every other branch truncates; this one did not.
+        const described = describeValue(structuredClone({ constructor: { name: "A".repeat(100_000) } }));
+
+        expect(described.endsWith("…")).toBe(true);
+        expect(described.length).toBeLessThan(100);
     });
 
     it("falls through to typeof for other values (undefined, symbol, function)", () => {

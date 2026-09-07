@@ -36,15 +36,14 @@ interface SchedulerHostOptions {
      */
     jurisdiction?: "eu" | "fedramp" | "us";
 
-    /** The `SchedulerDO` namespace binding. */
-    namespace: Parameters<typeof createScheduler>[0]["namespace"];
-
     /**
-     * Public origin the Worker is mounted at. `SchedulerDO` dispatches back to
-     * this base URL when an alarm fires, so a wrong value means jobs fire into
-     * nothing.
+     * The `SchedulerDO` namespace binding.
+     *
+     * The origin the DO dispatches back to is not configured here — it reads
+     * `env.LUNORA_ORIGIN_URL` off its own binding at fire time, so a wrong value
+     * there (or none) is what makes jobs fire into nothing.
      */
-    originUrl: string;
+    namespace: Parameters<typeof createScheduler>[0]["namespace"];
 }
 
 /**
@@ -72,7 +71,6 @@ const createSchedulerHost = (options: SchedulerHostOptions): SchedulerHost => {
         instanceName: options.instanceName,
         jurisdiction: options.jurisdiction,
         namespace: options.namespace,
-        originUrl: options.originUrl,
     });
 
     /**
@@ -115,7 +113,7 @@ const createSchedulerHost = (options: SchedulerHostOptions): SchedulerHost => {
             return records.map((record) => toStatus(record));
         },
 
-        schedule: async (functionPath, args, scheduleOptions) => {
+        schedule: async (functionPath, args, scheduleOptions): Promise<ScheduledJob> => {
             // `runAt` is generic over its target so it can infer the arg shape
             // from a typed `FunctionReference` / `WorkflowReference`. The neutral
             // contract deals in an opaque path plus a `Record`, which is that
@@ -126,14 +124,20 @@ const createSchedulerHost = (options: SchedulerHostOptions): SchedulerHost => {
                 target: string,
                 args: Record<string, unknown>,
                 options?: { retry?: ScheduleOptions["retry"]; shardKey?: string },
-            ) => Promise<ScheduledJob>;
+            ) => Promise<string>;
 
             // A single absolute instant, which is how the contract reads once
             // `at`/`delayMs` are collapsed — one path, not a branch per shape.
-            return runAt(resolveScheduledFor(scheduleOptions), functionPath, args, {
+            const scheduledFor = resolveScheduledFor(scheduleOptions);
+            // `runAt` resolves the id (the `ctx.scheduler` contract); the
+            // instant it fires at is the one we just handed it, so the
+            // contract's `ScheduledJob` is assembled here rather than read back.
+            const id = await runAt(scheduledFor, functionPath, args, {
                 retry: scheduleOptions?.retry,
                 shardKey: scheduleOptions?.shardKey,
             });
+
+            return { id, scheduledFor };
         },
     };
 };

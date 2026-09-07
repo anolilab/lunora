@@ -12,7 +12,7 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "sql-exec" sits beside "ctx-db", the established module naming in this package. */
 /* eslint-disable no-restricted-syntax -- `sql\`…\` here is the drizzle tagged-template SQL builder, not a string conversion; the rule misfires on the inner TemplateLiteral. */
 
-import type { TableDefinitionLike } from "@lunora/shard-engine";
+import type { ColumnMetaLike, TableDefinitionLike } from "@lunora/shard-engine";
 import { renderSql } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
@@ -25,6 +25,21 @@ const physicalColumn = (field: string): string => (field === "_id" || field === 
 
 /** Logical-field → physical column reference as a drizzle {@link SQL}; the engine's dialect quotes it at render time (`_id`/`id` → `id`). */
 const columnRefSql = (field: string): SQL => sql`${sql.identifier(physicalColumn(field))}`;
+
+/** A table's fields paired with their column meta, skipping fields that declare none. */
+const tableColumns = (definition: TableDefinitionLike): [string, ColumnMetaLike][] => {
+    const columns: [string, ColumnMetaLike][] = [];
+
+    for (const [field, validator] of Object.entries(definition.shape)) {
+        const column = validator._meta?.column;
+
+        if (column) {
+            columns.push([field, column]);
+        }
+    }
+
+    return columns;
+};
 
 /**
  * Run a composable drizzle {@link SQL} read through the (string-based) exec:
@@ -49,9 +64,17 @@ const queryRun = (exec: SqlCtxExec, dialect: SqlDialect, query: SQL): Promise<Sq
 
 /**
  * Run several write statements as one round trip when the exec exposes
- * {@link SqlCtxExec.batch}, in the given array ORDER; falls back to the
- * historical sequential `run()`-per-statement loop when it doesn't, so an
- * exec built before `batch` existed keeps working unchanged.
+ * {@link SqlCtxExec.batch}; falls back to the historical sequential
+ * `run()`-per-statement loop when it doesn't, so an exec built before `batch`
+ * existed keeps working unchanged.
+ *
+ * **The statements must be mutually independent.** An implementation MAY
+ * reorder or parallelize across the array — the Hyperdrive Postgres and MySQL
+ * adapters dispatch every element with `Promise.all` — so nothing here may rely
+ * on array order between elements. A purge-then-insert pair belongs in separate
+ * sequential {@link queryRun} calls, not one `queryBatch`. (D1's own
+ * `client.batch` happens to preserve order and run atomically; that is one
+ * engine's guarantee, not this function's contract.)
  *
  * The one place that renders and dispatches a companion write batch — the
  * search-index chunk insert, the aggregate tally backfill, and the rank-tuple
@@ -130,30 +153,104 @@ interface SqlCtxExec {
     run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<SqlRunResult | void>;
 }
 
-/** SQLite storage encode for `.global()` column values — the shared `@lunora/sql-store` codec (SQLite has no boolean, so true/false → 1/0). */
+/**
+ * SQLite storage encode for `.global()` column values — the shared
+ * `@lunora/sql-store` codec (SQLite has no boolean, so true/false → 1/0).
+ *
+ * Kind-blind, because it is also what binds every WHERE comparison and the rank
+ * companion's sort keys, where the two sides have to agree byte for byte.
+ * A write that knows which column it is filling uses
+ * {@link serializeDocumentColumn} instead.
+ */
 const serializeColumnValue: (value: unknown) => unknown = sqliteEncode;
 
+/** Structural read of a validator's `.nullable()` flag — `.nullable()` is the one thing that clears `notNull`. */
+const acceptsNull = (validator: { readonly _meta?: { readonly column?: { readonly notNull?: boolean } } } | undefined): boolean =>
+    validator?._meta?.column?.notNull === false;
+
 /**
- * The `field → effective column kind` mapping for a table, derived once per
- * (immutable) definition and memoized. `effectiveColumnKind` is pure over the
- * validator and the shape never mutates after `defineSchema`, so the mapping is
- * static per definition — precomputing it removes the per-row
+ * Does a stored SQL NULL in this column mean the field is ABSENT rather than
+ * null?
+ *
+ * The DO store keeps documents as JSON, where an unset `v.optional(...)` field
+ * simply has no key. A `.global()` table keeps real columns, so the same field is
+ * a NULL — and decoding that back as `null` is a lie about the declared type
+ * (`v.optional(v.string())` is `string | undefined`, never `null`). It also broke
+ * the export/import round trip outright: the exported line carried
+ * `"field": null` and the importer ran `optional(string).parse(null)`, which
+ * throws, so every row that simply had no value for an optional column was
+ * missing from the restore.
+ *
+ * `v.string().nullable()` and `v.optional(v.string().nullable())` are the
+ * opposite case — NULL is a value the column genuinely holds — so those keep it.
+ */
+const nullMeansAbsent = (validator: TableDefinitionLike["shape"][string]): boolean => {
+    if (validator.kind !== "optional" || acceptsNull(validator)) {
+        return false;
+    }
+
+    // `@lunora/values` stashes the wrapped validator on `_meta.inner`; the
+    // package's own `ValidatorLike` does not declare it (see `shared/effective-kind`,
+    // which reads it the same way for the same reason).
+    const inner = (validator._meta as { inner?: { readonly _meta?: { readonly column?: { readonly notNull?: boolean } } } } | undefined)?.inner;
+
+    return !acceptsNull(inner);
+};
+
+/**
+ * The `field → [effective column kind, NULL means absent]` mapping for a table,
+ * derived once per (immutable) definition and memoized. Both halves are pure over
+ * the validator and the shape never mutates after `defineSchema`, so the mapping
+ * is static per definition — precomputing it removes the per-row
  * `Object.entries(definition.shape)` + `effectiveColumnKind` recomputation on the
  * decode hot path (a page/global read decodes R rows × M columns). Keyed on the
  * definition object identity (stable: definitions come from `defineSchema`).
  */
-const columnKindCache = new WeakMap<TableDefinitionLike, [string, string | undefined][]>();
+const columnKindCache = new WeakMap<TableDefinitionLike, [string, string | undefined, boolean][]>();
 
-const columnKinds = (definition: TableDefinitionLike): [string, string | undefined][] => {
+const columnKinds = (definition: TableDefinitionLike): [string, string | undefined, boolean][] => {
     let kinds = columnKindCache.get(definition);
 
     if (kinds === undefined) {
-        kinds = Object.entries(definition.shape).map(([field, validator]) => [field, effectiveColumnKind(validator)] as [string, string | undefined]);
+        kinds = Object.entries(definition.shape).map(
+            ([field, validator]) => [field, effectiveColumnKind(validator), nullMeansAbsent(validator)] as [string, string | undefined, boolean],
+        );
         columnKindCache.set(definition, kinds);
     }
 
     return kinds;
 };
+
+/**
+ * `field → effective column kind` for the write path, keyed and memoized like
+ * {@link columnKinds} (which is ordered for the row decode; a write looks one
+ * field up at a time, so it wants a map).
+ */
+const columnKindByFieldCache = new WeakMap<TableDefinitionLike, Map<string, string | undefined>>();
+
+const columnKindOf = (definition: TableDefinitionLike, field: string): string | undefined => {
+    let byField = columnKindByFieldCache.get(definition);
+
+    if (byField === undefined) {
+        byField = new Map(columnKinds(definition).map(([name, kind]) => [name, kind]));
+        columnKindByFieldCache.set(definition, byField);
+    }
+
+    return byField.get(field);
+};
+
+/**
+ * Storage encode for one column of a document being WRITTEN, with the column's
+ * declared kind in hand.
+ *
+ * The inverse of {@link decodeGlobalRow}, and it exists for the same reason:
+ * `v.any()`/`v.union()`/`v.from()` store in a TEXT column whatever their runtime
+ * value happens to be, so a number or boolean was coerced to text on the way in
+ * and had no type to be reversed with on the way out — `42` read back `"42.0"`.
+ * Only a caller that knows the column can encode those unambiguously.
+ */
+const serializeDocumentColumn = (definition: TableDefinitionLike, field: string, value: unknown): unknown =>
+    sqliteEncode(value, columnKindOf(definition, field));
 
 /**
  * Decode a SELECTed row back into a document: `id` → `_id`, `_creationTime`
@@ -162,7 +259,7 @@ const columnKinds = (definition: TableDefinitionLike): [string, string | undefin
  * (`introspect.ts`) and admin export/import paths share the exact same decode.
  *
  * The decode is engine-agnostic: every backend stores SQLite-shaped values
- * (boolean → 1/0, JSON → text, bigint → decimal string), and `sqliteDecode` is
+ * (boolean → 1/0, JSON → text, bigint → an order-preserving text key), and `sqliteDecode` is
  * robust to a driver returning either the stored string OR a natively-parsed
  * value (e.g. mysql2 returns JSON columns pre-parsed) — so the same decoder is
  * correct on SQLite, Postgres and MySQL.
@@ -170,10 +267,10 @@ const columnKinds = (definition: TableDefinitionLike): [string, string | undefin
 const decodeGlobalRow = (definition: TableDefinitionLike, row: Record<string, unknown>): Record<string, unknown> => {
     const decoded: Record<string, unknown> = {};
 
-    for (const [field, kind] of columnKinds(definition)) {
+    for (const [field, kind, absentOnNull] of columnKinds(definition)) {
         const raw = row[field];
 
-        if (raw === undefined) {
+        if (raw === undefined || (absentOnNull && raw === null)) {
             continue;
         }
 
@@ -282,4 +379,8 @@ export {
     queryBatch,
     queryRun,
     serializeColumnValue,
+    serializeDocumentColumn,
+    tableColumns,
 };
+
+export { OCC_VERSION_COLUMN } from "../../../shared/occ-version-column";

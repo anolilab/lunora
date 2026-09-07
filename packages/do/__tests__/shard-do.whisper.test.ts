@@ -200,6 +200,30 @@ describe("shardDO token-expiry", () => {
         expect(ws.closes[0]).toEqual({ code: 4001, reason: "token_expired" });
     });
 
+    it("stops DELIVERING whispers to an expired socket, not just accepting them from it", async () => {
+        expect.assertions(4);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        // A passive receiver: it joined the topic while its credential was live
+        // and then never sends another inbound frame. No write flush, no shape
+        // poke and no global poll fire on a pure presence/cursor workload, so
+        // this fan-out is the ONLY outbound path that can notice the expiry.
+        const b = new FakeSocket({ subs: {} });
+        const shard = makeShard([a, b]);
+
+        await send(shard, a, { topic: "t", type: "whisper_subscribe" });
+        await send(shard, b, { topic: "t", type: "whisper_subscribe" });
+
+        b.serializeAttachment({ ...(b.deserializeAttachment() as Record<string, unknown>), expiresAt: 1000 });
+
+        await send(shard, a, { data: { x: 1 }, topic: "t", type: "whisper" });
+
+        expect(b.frames).toHaveLength(1);
+        expect(b.frames[0]?.type).not.toBe("whisper");
+        expect(b.frames[0]?.code).toBe("TOKEN_EXPIRED");
+        expect(b.closes[0]).toEqual({ code: 4001, reason: "token_expired" });
+    });
+
     it("processes a socket whose token has not yet expired", async () => {
         expect.assertions(1);
 

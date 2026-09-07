@@ -43,6 +43,17 @@ const defineNotify = (config: NotifyConfig): NotifyDefinition => {
         throw new TypeError('defineNotify: `allowedPushOrigins` must be an array of origin strings (e.g. ["https://fcm.googleapis.com"]) when provided');
     }
 
+    // Clamped with `Math.max(1, …)` downstream, which turns a `NaN` into `NaN`
+    // and would page a broadcast zero rows forever. Reject here instead, where
+    // the app can see it.
+    for (const key of ["broadcastPageSize", "concurrency"] as const) {
+        const value = config[key];
+
+        if (value !== undefined && (!Number.isInteger(value) || value < 1)) {
+            throw new TypeError(`defineNotify: \`${key}\` must be a positive integer when provided`);
+        }
+    }
+
     if (config.webPush === undefined && config.fcm === undefined) {
         throw new TypeError("defineNotify: configure at least one push channel — `webPush` and/or `fcm`");
     }

@@ -1,4 +1,5 @@
 import { LunoraError } from "@lunora/errors";
+import { sqliteEncode } from "@lunora/sql-store";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { mysqlDialect, postgresDialect } from "../src/global-dialect";
@@ -32,21 +33,66 @@ describe("postgresDialect", () => {
 });
 
 describe("mysqlDialect", () => {
-    it("maps kinds to MySQL types (TINYINT / DOUBLE / JSON / LONGTEXT)", () => {
-        expect.assertions(4);
+    it("maps kinds to MySQL types (TINYINT / DOUBLE / LONGTEXT)", () => {
+        expect.assertions(3);
 
         expect(mysqlDialect.columnType("boolean")).toBe("TINYINT");
         expect(mysqlDialect.columnType("number")).toBe("DOUBLE");
-        expect(mysqlDialect.columnType("object")).toBe("JSON");
         // strings are unbounded LONGTEXT so they never truncate (a bounded VARCHAR
         // would silently cut values >768 chars); index keys get a prefix instead.
-        expect(mysqlDialect.columnType("string")).toBe("LONGTEXT");
+        expect(mysqlDialect.columnType("string")).toBe("LONGTEXT COLLATE utf8mb4_0900_bin");
+    });
+
+    it("stores composites as LONGTEXT, not JSON — the wire-marked form is not valid JSON", () => {
+        expect.assertions(4);
+
+        // `sqliteEncode` writes a composite carrying a bigint/bytes/Date/Map/Set/NaN
+        // leaf as `$lunora.wire$[…]`, which MySQL's `JSON` column validation rejects
+        // on insert (ER_3140). Postgres already stores these as plain TEXT.
+        const encoded = sqliteEncode({ n: 1n });
+
+        expect(String(encoded).startsWith("{")).toBe(false);
+
+        for (const kind of ["array", "object", "record"]) {
+            expect(mysqlDialect.columnType(kind)).toBe("LONGTEXT COLLATE utf8mb4_0900_bin");
+        }
+    });
+
+    /**
+     * MySQL 8's server default is `utf8mb4_0900_ai_ci` — case- and
+     * accent-insensitive — where SQLite and Postgres compare bytes. Inherited, it
+     * made `.global()` mean something different per engine: `"Acme"` and `"acme"`
+     * shared an `__agg_` counter row, `.unique()` rejected `alice@` against
+     * `Alice@`, and a `rankPage` partitioned on a tenant key returned the other
+     * tenant's rows. Every character column this dialect declares pins the
+     * comparison instead.
+     *
+     * This is the always-runs half of that guarantee. The behavioural proof is
+     * `global-collation-parity.test.ts`, which needs a real mysqld and therefore
+     * skips where one cannot be provisioned.
+     */
+    it("pins a binary, NO PAD collation on every character column it declares", () => {
+        expect.assertions(6);
+
+        // Character columns: the declared field types…
+        for (const kind of ["bigint", "string", "object"]) {
+            expect(mysqlDialect.columnType(kind)).toMatch(/ COLLATE utf8mb4_0900_bin$/u);
+        }
+
+        // …the companion key/text columns (`__key__`, `__partition__`, `__id__`,
+        // the CDC post-image)…
+        expect(mysqlDialect.companionTypes.key).toMatch(/ COLLATE utf8mb4_0900_bin$/u);
+        expect(mysqlDialect.companionTypes.text).toMatch(/ COLLATE utf8mb4_0900_bin$/u);
+
+        // …and the framework `id` primary key, where COLLATE precedes PRIMARY KEY.
+        expect(mysqlDialect.frameworkColumns().find((column) => column.name === "id")?.type).toBe("VARCHAR(768) COLLATE utf8mb4_0900_bin PRIMARY KEY");
     });
 
     it("requires a key prefix only for TEXT/BLOB columns (InnoDB key limit)", () => {
         expect.assertions(3);
 
-        // a LONGTEXT string column needs a 191-char key prefix to be indexable on InnoDB.
+        // a LONGTEXT string column needs a 191-char key prefix to be indexable on
+        // InnoDB — the appended COLLATE must not change that answer.
         // 191 (not 768): a flat 768-char prefix is 3072 bytes under utf8mb4 — exactly
         // InnoDB's whole-index key limit — so any composite index that also contains a
         // string field would exceed 3072 and fail CREATE INDEX with ER_TOO_LONG_KEY.
@@ -55,6 +101,21 @@ describe("mysqlDialect", () => {
         expect(mysqlDialect.indexKeyPrefix?.("number")).toBeUndefined();
         // SQLite/Postgres index TEXT directly, so they omit the hook entirely.
         expect(postgresDialect.indexKeyPrefix).toBeUndefined();
+    });
+
+    it("bounds a `.unique()` character column so InnoDB indexes it whole", () => {
+        expect.assertions(4);
+
+        // A prefixed UNIQUE index constrains the PREFIX, not the value: two
+        // distinct 200-character emails agreeing on their first 191 characters
+        // raised ER_DUP_ENTRY and surfaced as "unique constraint violation".
+        // VARCHAR(768) is 3072 bytes under utf8mb4 — exactly InnoDB's
+        // single-column key limit — so the index covers the whole value.
+        expect(mysqlDialect.columnType("string", { unique: true })).toBe("VARCHAR(768) COLLATE utf8mb4_0900_bin");
+        expect(mysqlDialect.columnType("bytes", { unique: true })).toBe("VARBINARY(768)");
+        // Already indexable whole — unchanged.
+        expect(mysqlDialect.columnType("number", { unique: true })).toBe("DOUBLE");
+        expect(mysqlDialect.columnType("bigint", { unique: true })).toBe("VARCHAR(64) COLLATE utf8mb4_0900_bin");
     });
 
     it("keeps a composite [string, string] index within InnoDB's 3072-byte key limit", () => {

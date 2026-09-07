@@ -92,24 +92,41 @@ that's a remote resource only `wrangler hyperdrive create` can mint. Importing
 lunora codegen
 ```
 
-When codegen sees `ctx.sql` used, it adds `sql: SqlClient` to **`ActionCtx`
-only** — never `QueryCtx`/`MutationCtx` — with a JSDoc restating the
-determinism/realtime caveat.
+When codegen sees `ctx.sql` used, it adds `readonly sql: SqlClient` to
+**`ActionCtx` only** — never `QueryCtx`/`MutationCtx` — with a JSDoc restating
+the determinism/realtime caveat, and emits a `.hyperdrive()` method on the
+generated app builder for you to supply the client (step 4).
 
-## Step 4: Use `ctx.sql` from an action
+## Step 4: Wire the client once, on the app builder
 
-```ts
+`ctx.sql` is `readonly` — assigning to it inside a handler is a `TS2540`.
+Codegen cannot build the client for you (turning a connection string into a
+`SqlClient` needs the driver you chose), so it emits a config thunk you fill in
+at the app level. It is called once per shard construction, not per request:
+
+```ts title="src/server/index.ts"
+import type { HyperdriveLike } from "@lunora/hyperdrive";
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
 import postgres from "postgres";
 
-import { action, v } from "@lunora/server";
+import { defineApp } from "../lunora/_generated/app.js";
 
-export const listLegacyOrders = action.input({ orgId: v.string() }).action(async ({ ctx, args: { orgId } }) => {
-    const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
-    ctx.sql = fromPostgresJs(postgres(connectionString));
+const app = defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString)))
+    .build();
 
-    return ctx.sql.query<{ id: string; total: number }>("select id, total from orders where org = $1", [orgId]);
-});
+export const ShardDO = app.ShardDO;
+```
+
+Then read it from any action:
+
+```ts
+import { action, v } from "@/lunora/_generated/server";
+
+export const listLegacyOrders = action
+    .input({ orgId: v.string() })
+    .action(async ({ ctx, args: { orgId } }) => ctx.sql.query<{ id: string; total: number }>("select id, total from orders where org = $1", [orgId]));
 ```
 
 The package never rewrites SQL — use your driver's native placeholders (`$1` for
@@ -122,10 +139,13 @@ Postgres change. To make external data reactive, write a projection into a
 `defineSchema` table from the same action — that write _is_ tracked:
 
 ```ts
+import { api } from "@/lunora/_generated/api";
+
 const [row] = await ctx.sql.query<{ id: string; total: number }>("select id, total from orders where id = $1", [id]);
 
-// This write re-runs live queries reading `orders`:
-await ctx.runMutation("orders:upsert", { id: row.id, total: row.total });
+// This write re-runs live queries reading `orders`. Pass the generated
+// reference — `ctx.run*` takes a reference, not a "file:fn" string.
+await ctx.runMutation(api.orders.upsert, { id: row.id, total: row.total });
 ```
 
 ## Common Pitfalls

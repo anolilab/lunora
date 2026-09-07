@@ -44,6 +44,12 @@ Future<void> run(FutureOr<void> Function() body) async {
   } on TimeoutException {
     failures.add('case #$ordinal did not complete within ${caseTimeout.inSeconds}s '
         '(count the `await run(...)` lines in conformance.dart to name it)');
+  } on Object catch (error, stack) {
+    // A case that THROWS is one failure, not the end of the run. Letting it
+    // escape abandoned `main()` part-way: every case after it went unexecuted
+    // and the manifest check never ran, so a regression in one area silently
+    // stopped testing all the others.
+    failures.add('case #$ordinal threw: $error\n$stack');
   }
 }
 
@@ -66,6 +72,14 @@ void equals(Object? got, Object? want, String what) {
 /// Re-serialises so two structures compare as text with a canonical key order,
 /// independent of the order the fixture file happens to use.
 String canonical(Object? value) => stableStringify(value);
+
+/// Renders a value the way `transport.dart` puts it on the socket, with
+/// `jsonEncode`. Separate from [canonical], which is free to normalise:
+/// `stableStringify` spells every number the ECMAScript way, so `1.0` and `1`
+/// compare EQUAL through it — the divergence a round-trip case exists to catch.
+/// This port's dates went out as `1700000000000.0` for exactly that reason, on a
+/// green suite.
+String wireText(Object? value) => jsonEncode(value);
 
 void throws(void Function() body, String what) {
   try {

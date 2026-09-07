@@ -26,6 +26,20 @@ const MAX_VIEWPORT_WIDTH = 3840;
 const MAX_VIEWPORT_HEIGHT = 4320;
 
 /**
+ * The window Browser Rendering accepts for `keep_alive`, expressed in the
+ * SECONDS this package's `launch({ keepAlive })` takes (the provider's own unit
+ * is milliseconds: `keep_alive?: number // from 10_000ms to 600_000ms`).
+ *
+ * Outside it the launch is rejected by the provider, so a `keepAlive: 1` or
+ * `keepAlive: 3600` reaches Cloudflare only to come back as an opaque launch
+ * failure — after the caller has already been told, by this package's own
+ * types, that any finite positive number of seconds holds the session open.
+ * Checking it here names the bound that was actually violated.
+ */
+const MIN_KEEP_ALIVE_SECONDS = 10;
+const MAX_KEEP_ALIVE_SECONDS = 600;
+
+/**
  * Hard ceiling on a single DoH lookup. Without it the `fetch` could stall
  * indefinitely and pin the worker before the browser even launches — a hung
  * resolver would defeat the whole point of paying for the pre-launch re-check.
@@ -250,7 +264,32 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
      * so this is the one real footgun. The close error is swallowed (we never
      * mask the caller's original error with a close failure).
      */
-    const withBrowser = async <T>(use: (browser: BrowserLike) => Promise<T>, keepAlive?: number): Promise<T> => {
+    const withBrowser = async <T>(use: (browser: BrowserLike) => Promise<T>, requestedKeepAlive?: number): Promise<T> => {
+        // Only a FINITE, POSITIVE duration asks for a held-open session. `0` is
+        // the natural spelling of "do not keep alive", and what a `Number(...)`
+        // over an unset env var yields; `NaN` is what a failed parse of one
+        // yields. Treating either as a
+        // keep-alive request both sent a nonsense `keep_alive` AND skipped the
+        // always-close `finally`, leaking exactly the billed session that
+        // `finally` exists to prevent. The sibling numeric inputs are
+        // non-finite-safe the same way — see `resolveTimeout`, `clampDimension`.
+        const keepAlive = requestedKeepAlive !== undefined && Number.isFinite(requestedKeepAlive) && requestedKeepAlive > 0 ? requestedKeepAlive : undefined;
+
+        // A positive duration outside the provider's window is a DIFFERENT
+        // failure from the ambiguous values above: the caller did ask for a
+        // held-open session, and Browser Rendering will refuse the launch. Say
+        // which bound was missed rather than forwarding it and surfacing a
+        // provider error, and rather than silently degrading to the always-close
+        // path (which would hand back a session id that is already dead).
+        if (keepAlive !== undefined && (keepAlive < MIN_KEEP_ALIVE_SECONDS || keepAlive > MAX_KEEP_ALIVE_SECONDS)) {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `@lunora/browser: keepAlive must be between ${String(MIN_KEEP_ALIVE_SECONDS)} and ${String(
+                    MAX_KEEP_ALIVE_SECONDS,
+                )} seconds (Browser Rendering accepts keep_alive from 10s to 10min; got ${String(requestedKeepAlive)})`,
+            );
+        }
+
         // `keep_alive` (seconds) holds the Browser Rendering session open after
         // this worker detaches so a later `connect(sessionId)` can re-attach.
         // Closing it here would defeat that, so the close is skipped — the
@@ -323,8 +362,11 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
          * assets are legitimate and network-unreachable, so they pass), and it must
          * NOT do a per-request DNS lookup (a DoH query per sub-resource would be a
          * DoS footgun). It mirrors validateUrl's allowlist + `isPrivateHost` arms
-         * only. Returns `true` when the request should be aborted (fail-closed on an
-         * unparseable/private/off-allowlist http(s) host), `false` to continue.
+         * only — including the `allowPrivateTargets` gate on the latter, without
+         * which the route handler refuses the very sub-resources of the internal
+         * page it was registered to render. Returns `true` when the request should
+         * be aborted (fail-closed on an unparseable/private/off-allowlist http(s)
+         * host), `false` to continue.
          */
         const isBlockedSubresource = (rawUrl: string): boolean => {
             let parsed: URL;
@@ -332,7 +374,11 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
             try {
                 parsed = new URL(rawUrl);
             } catch {
-                return false;
+                // Fail closed, as the navigation sibling does. Playwright hands
+                // back an absolute URL so this is unreachable in practice, but
+                // the two guards must not diverge on the answer to "I could not
+                // tell what this is".
+                return true;
             }
 
             // Non-http(s) schemes (data:/blob:/about:) can't reach a network host.
@@ -348,7 +394,15 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
                 }
             }
 
-            return isPrivateHost(parsed.hostname);
+            // Gated on `allowPrivateTargets`, exactly as validateUrl's arm is.
+            // Ungated, the documented Tunnel config —
+            // `{ allowPrivateTargets: true, allowedHosts: ["dashboard.internal"] }`
+            // — navigated to the internal page successfully and then aborted
+            // every stylesheet, script and image the page loaded from that same
+            // allowlisted host, silently returning an unstyled render. The
+            // allowlist arm above is NOT relaxed by the flag, so an off-list
+            // private host (the metadata endpoint) is still refused.
+            return !allowPrivateTargets && isPrivateHost(parsed.hostname);
         };
 
         return withBrowser(async (browser) => {

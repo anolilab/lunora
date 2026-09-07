@@ -110,6 +110,26 @@ describe("errors", () => {
         await expect(client.query("SELECT 1")).rejects.toMatchObject({ status: 429 });
     });
 
+    it("caps the upstream body in the message and keeps the whole of it on cause", async () => {
+        expect.assertions(4);
+
+        // `R2_SQL_ERROR` is a catalogued (non-internal) code, so `toErrorBody`
+        // echoes this message VERBATIM to whoever called the action — an
+        // uncapped body puts a multi-KB gateway page, or the engine's SQL error
+        // text (which quotes the query), on the wire to a browser.
+        const body = `<html>${"A".repeat(10_000)}</html>`;
+        const { client } = setup({ body, nonJson: true, ok: false, status: 502 });
+
+        const error = (await client.query("SELECT 1").catch((error_: unknown) => error_)) as R2SqlError;
+
+        expect(error).toBeInstanceOf(R2SqlError);
+        expect(error.status).toBe(502);
+        expect(error.message.length).toBeLessThan(400);
+        // The full text is still available server-side, on `cause` — which
+        // `toErrorBody` never serialises.
+        expect(error.cause).toBe(body);
+    });
+
     it("throws on a success:false envelope with a 2xx status", async () => {
         expect.assertions(1);
 

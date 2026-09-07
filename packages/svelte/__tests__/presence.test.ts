@@ -7,15 +7,25 @@ import { presence } from "../src/presence";
 
 const HEARTBEAT = { __lunoraRef: "presence:heartbeat" } as unknown as HeartbeatReference;
 const LIST_PRESENT = { __lunoraRef: "presence:listPresent" } as unknown as ListPresentReference;
-// `randomSessionId`'s fallback path is unprefixed (shared/random-session-id.ts);
-// this just asserts the no-`crypto` path yields a non-empty id without throwing.
-const SESS_ID_PATTERN = /^[\da-z]+$/;
+// `randomSessionId`'s non-`randomUUID` arm (shared/random-session-id.ts) hex-encodes
+// 16 bytes of `crypto.getRandomValues`, so the id is exactly 32 lowercase hex chars.
+// There is deliberately no arm below that: a runtime with no Web Crypto throws
+// rather than mint a `Date.now()` string two sessions can share.
+const SESS_ID_PATTERN = /^[\da-f]{32}$/;
+/** The message `randomSessionId` throws when no Web Crypto is present at all. */
+const NO_WEB_CRYPTO = /no Web Crypto available/;
 
 const createPresenceFakeClient = () => {
     type Callback = (value: unknown) => void;
 
     const mutationCalls: { args: unknown; functionPath: string }[] = [];
-    const subscribeCalls: { args: unknown; callback: Callback; functionPath: string; unsubscribed: boolean }[] = [];
+    const subscribeCalls: {
+        args: unknown;
+        callback: Callback;
+        functionPath: string;
+        onError?: (error: { code?: string; message: string }) => void;
+        unsubscribed: boolean;
+    }[] = [];
     const setConnectionContextCalls: unknown[] = [];
 
     // Refcounted connection-context model mirroring the real client: holders keyed
@@ -74,11 +84,17 @@ const createPresenceFakeClient = () => {
         setConnectionContext: (context: Record<string, unknown> | undefined) => {
             setConnectionContextCalls.push(context);
         },
-        subscribe: (function_: FunctionReference, args: Record<string, unknown>, callback: Callback) => {
+        subscribe: (
+            function_: FunctionReference,
+            args: Record<string, unknown>,
+            callback: Callback,
+            options?: { onError?: (error: { code?: string; message: string }) => void },
+        ) => {
             const call = {
                 args,
                 callback,
                 functionPath: function_["__lunoraRef"],
+                onError: options?.onError,
                 unsubscribed: false,
             };
 
@@ -177,12 +193,17 @@ describe("presence (Svelte)", () => {
         handle.teardown();
     });
 
-    it("generates fallback session id when crypto is unavailable", () => {
+    it("mints a session id from getRandomValues when crypto.randomUUID is unavailable", () => {
         const fake = createPresenceFakeClient();
         // eslint-disable-next-line n/no-unsupported-features/node-builtins -- accessing globalThis.crypto to save/restore it for the test
         const originalCrypto = globalThis.crypto;
 
-        Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+        // A non-secure origin (a plain-HTTP LAN dev/preview server) leaves
+        // `crypto.randomUUID` undefined while still shipping `getRandomValues`.
+        Object.defineProperty(globalThis, "crypto", {
+            configurable: true,
+            value: { getRandomValues: (array: Uint8Array) => array.fill(171) },
+        });
 
         try {
             const handle = presence(fake.client, "room-1", {
@@ -194,6 +215,29 @@ describe("presence (Svelte)", () => {
             expect(handle.sessionId).toMatch(SESS_ID_PATTERN);
 
             handle.teardown();
+        } finally {
+            Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
+        }
+    });
+
+    it("refuses to mint a session id when Web Crypto is absent entirely", () => {
+        const fake = createPresenceFakeClient();
+        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- accessing globalThis.crypto to save/restore it for the test
+        const originalCrypto = globalThis.crypto;
+
+        Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+
+        try {
+            // `randomSessionId` used to fall back to `Date.now().toString(36)` here.
+            // That is not an id: two sessions opened in the same millisecond collide
+            // onto one presence row, and the value is guessable. Throwing is correct.
+            expect(() =>
+                presence(fake.client, "room-1", {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 500,
+                    listPresent: LIST_PRESENT,
+                }),
+            ).toThrow(NO_WEB_CRYPTO);
         } finally {
             Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
         }
@@ -322,5 +366,39 @@ describe("presence (Svelte)", () => {
         expect(() => {
             handle.teardown();
         }).not.toThrow();
+    });
+
+    // An RLS denial or a session expiry on the `listPresent` subscription used to be
+    // dropped on the floor: `present` simply froze at its last value with nothing to
+    // read and no handler to call. Matches React's `usePresence` error channel.
+    it("surfaces a listPresent subscription error on `error` and through `onError`", async () => {
+        const fake = createPresenceFakeClient();
+        const seen: { code?: string; message: string }[] = [];
+
+        const handle = presence(fake.client, "room-1", {
+            heartbeat: HEARTBEAT,
+            listPresent: LIST_PRESENT,
+            onError: (subscriptionError) => seen.push(subscriptionError),
+            sessionId: "sess-fixed",
+        });
+
+        const stopPresent = handle.present.subscribe(() => undefined);
+        const stopError = handle.error.subscribe(() => undefined);
+
+        await flushAsync();
+
+        const call = fake.subscribeCalls[0]!;
+
+        call.callback([{ sessionId: "sess-fixed" }]);
+        call.onError?.({ code: "FORBIDDEN", message: "denied" });
+
+        expect(get(handle.error)?.message).toBe("denied");
+        expect(seen).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
+        // The last good value is retained — the error is additive, not a reset.
+        expect(get(handle.present)).toStrictEqual([{ sessionId: "sess-fixed" }]);
+
+        stopError();
+        stopPresent();
+        handle.teardown();
     });
 });

@@ -57,19 +57,21 @@ The _public API_ is what a package exports from its documented entry points
 
 ## Stability tiers
 
-Not all 47 packages make the stable promise at the same time. The current
-plan tiers them as follows.
+Not all 52 published packages make the stable promise at the same time. The
+current plan tiers them as follows; the same taxonomy drives the public-API
+snapshot gate (`scripts/api-snapshot.js`), so the table below and what CI
+enforces cannot drift apart unnoticed.
 
 <Callout type="warn">
     This tier assignment is **provisional**: it is the working plan on the road to 1.0 and will be ratified (and this page updated) when `1.0.0` ships. Until
     then, treat tier membership as a statement of intent, not a guarantee.
 </Callout>
 
-| Tier                    | Packages                                                                                                                                                                                                                                                                           | 1.0 treatment                                                                                     |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| **Core (stable 1.0)**   | `lunorash`, `@lunora/server`, `values`, `errors`, `runtime`, `do`, `client`, `codegen`, `cli`, `vite`, `config`, `d1`, `react`, `testing`                                                                                                                                          | Full SemVer commitment, API-guarded in CI                                                         |
-| **Stable adapters**     | `vue`, `solid`, `svelte`, `astro`, `nuxt`, `auth`, `storage`, `scheduler`, `mail`, `ratelimit`, `seed`, `db`, `sql-store` (internal), `studio`, `advisor`, `mcp`, `bindings`, `hyperdrive`, `cloudflare-access`, `queue`, `workflow`, `flags`, `fingerprint`, `dispatch` (private) | 1.0 if they pass the same gates; any that don't hold at `0.x` / `-beta`                           |
-| **Experimental at 1.0** | `agent`, `replica`, `x402`, `react-native`, `angular`, `ai`, `browser`, `container`, `payment`                                                                                                                                                                                     | Published as `1.0.0-beta.*` or `0.x`, tagged experimental in docs; not part of the stable promise |
+| Tier                    | Packages                                                                                                                                                                                                                                                                                               | 1.0 treatment                                                                                     |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| **Core (stable 1.0)**   | `lunorash`, `@lunora/server`, `values`, `errors`, `runtime`, `do`, `shard-engine`, `client`, `codegen`, `cli`, `vite`, `config`, `d1`, `react`, `testing`, `observability`, `platform`, `platform-cloudflare`                                                                                          | Full SemVer commitment, API-guarded in CI                                                         |
+| **Stable adapters**     | `vue`, `solid`, `svelte`, `astro`, `nuxt`, `auth`, `auth-ui` (private), `storage`, `scheduler`, `mail`, `notify`, `ratelimit`, `seed`, `db`, `sql-store`, `studio`, `advisor`, `mcp`, `bindings`, `hyperdrive`, `cloudflare-access`, `queue`, `workflow`, `flags`, `fingerprint`, `dispatch` (private) | 1.0 if they pass the same gates; any that don't hold at `0.x` / `-beta`                           |
+| **Experimental at 1.0** | `agent`, `replica`, `x402`, `react-native`, `angular`, `ai`, `browser`, `container`, `payment`, `platform-node`                                                                                                                                                                                        | Published as `1.0.0-beta.*` or `0.x`, tagged experimental in docs; not part of the stable promise |
 
 What the tiers buy you:
 
@@ -88,7 +90,11 @@ An experimental package (or a stable package's `@experimental`-tagged export):
 
 - may change behavior or shape in a **minor** release, with changelog notice
   but without a major bump;
-- is excluded from the public-API snapshot gate;
+- **is** in the public-API snapshot gate, at the experimental tier: an export
+  appearing, disappearing, being renamed, or changing kind still fails
+  `api:check`. What the tier drops is _signature_ tracking — a tagged export's
+  parameters and return type may move freely. Coverage here is evidence that
+  the surface has (or has not) settled, not a SemVer promise;
 - graduates by dropping the tag / shipping its own `1.0.0`; that promotion is
   itself announced as a feature, never done silently.
 

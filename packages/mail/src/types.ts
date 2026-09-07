@@ -42,8 +42,12 @@ export interface SendOptions {
      * redelivery. Only meaningful for `mailer.queue()` — `mailer.send()` ignores it.
      * When omitted, `queue()` generates one at enqueue time so it survives redelivery
      * (a key minted in the consumer would change on every retry, defeating the point).
-     * Not forwarded to the mail provider — a consumer wanting exactly-once delivery
-     * must dedupe against its own store using this key.
+     * Not forwarded to the mail provider, and no transport can: Resend dedupes on an
+     * `Idempotency-Key` REQUEST header, and the provider client exposes no hook for
+     * one (its own `headers` field becomes message headers in the JSON body). So a
+     * consumer that wants to collapse redeliveries MUST dedupe against its own store
+     * using this key — see `consumeQueuedSend` for the shape, and for why that is a
+     * narrowed at-least-once rather than exactly-once.
      */
     idempotencyKey?: string;
     react?: ReactElement;

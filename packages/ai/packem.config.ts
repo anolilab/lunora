@@ -13,5 +13,4 @@ export default defineConfig({
         },
     },
     transformer,
-    failOnWarn: false,
 }) as BuildConfig;

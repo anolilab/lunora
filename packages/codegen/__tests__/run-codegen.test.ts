@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { ModuleKind, ModuleResolutionKind, Project, ScriptTarget } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { UMBRELLA_BASE_PACKAGES } from "../src/emit";
@@ -36,6 +37,64 @@ const ctxInterface = (server: string, name: "ActionCtx" | "MutationCtx" | "Query
     const close = server.indexOf("\n}", open);
 
     return server.slice(open, close);
+};
+
+/** Every relative `import("…")` qualifier the emitted text carries — the ones that must resolve from inside `_generated/`. */
+const RELATIVE_QUALIFIER_RE = /import\("(?<specifier>\.\.?\/[^"]+)"\)/gu;
+
+/** TS2307 unresolved module, TS2835 missing extension, TS5097 a `.ts` extension the config does not allow. */
+const UNRESOLVED_DIAGNOSTIC_CODES = new Set([2307, 2835, 5097]);
+
+/**
+ * Every relative qualifier in `rendered` that does not resolve from
+ * `lunora/_generated/`, asked of the compiler rather than of a path heuristic.
+ *
+ * Seven distinct compile errors have shipped inside generated output — each
+ * caught late, then pinned afterwards by a `toContain` on the one string that
+ * was wrong at the time. A qualifier is not a string though, it is a promise
+ * that a module exists, so this writes the qualifiers into a probe file beside
+ * the files that will carry them and lets TypeScript answer.
+ *
+ * Deliberately compiled under a config of its own rather than the app's: what
+ * makes these failures unrepairable is that the generated files are read
+ * elsewhere — by a sibling package, or under a dedicated strict config for
+ * generated output, the pattern this repo itself ships. A qualifier that needs
+ * the authoring project's own settings to resolve has already lost.
+ *
+ * Scoped to the probe file, so a fixture workdir with no `node_modules` does not
+ * drown the answer in unresolved `@lunora/*` imports from `api.ts` itself.
+ */
+const unresolvableQualifiers = (root: string, rendered: ReadonlyArray<string>): string[] => {
+    const specifiers = [...new Set(rendered.flatMap((text) => [...text.matchAll(RELATIVE_QUALIFIER_RE)].map((match) => match.groups?.specifier ?? "")))];
+
+    if (specifiers.length === 0) {
+        return [];
+    }
+
+    const probePath = join(root, "lunora", "_generated", "qualifier-probe.ts");
+
+    writeFileSync(probePath, specifiers.map((specifier, index) => `export type Probe${String(index)} = import("${specifier}");`).join("\n"));
+
+    const project = new Project({
+        compilerOptions: {
+            module: ModuleKind.NodeNext,
+            moduleResolution: ModuleResolutionKind.NodeNext,
+            noEmit: true,
+            strict: true,
+            target: ScriptTarget.ES2022,
+        },
+        skipAddingFilesFromTsConfig: true,
+        useInMemoryFileSystem: false,
+    });
+    const unresolved = project
+        .addSourceFileAtPath(probePath)
+        .getPreEmitDiagnostics()
+        .filter((diagnostic) => UNRESOLVED_DIAGNOSTIC_CODES.has(diagnostic.getCode()))
+        .map((diagnostic) => specifiers[(diagnostic.getSourceFile()?.getLineAndColumnAtPos(diagnostic.getStart() ?? 0).line ?? 1) - 1] ?? "");
+
+    rmSync(probePath, { force: true });
+
+    return unresolved;
 };
 
 let workdir: string;
@@ -109,6 +168,32 @@ export default defineSchema({
             // …but an app enumerating its own tables never has to mention it.
             expect(result.generated.dataModel).toContain('AppTableName = "nodes"');
             expect(result.generated.dataModel).not.toContain('AppTableName = "nodes" | "ratelimit_buckets"');
+        });
+
+        it("rejects two http-stream route files whose namespaces collide", () => {
+            expect.assertions(1);
+
+            // `renderHttpStreamsRef` groups streaming routes by `sanitizeNamespace(file)`
+            // into both the `HttpStreamsRef` interface and the `httpStreams` object
+            // literal, but http routes were never fed to the collision assert — so
+            // `feed-a.ts` + `feed_a.ts` emitted the key `feed_a` twice (TS2300 in the
+            // interface, TS1117 in the literal) inside generated code, with nothing
+            // naming either source file. That is the exact failure the assert exists
+            // to replace.
+            writeFileSync(
+                join(workdir, "lunora", "feed-a.ts"),
+                `import { httpRoute } from "@lunora/server";
+                 export const feed = httpRoute.get("/api/a").stream(async function* () { yield "a"; });
+                `,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "feed_a.ts"),
+                `import { httpRoute } from "@lunora/server";
+                 export const other = httpRoute.get("/api/b").stream(async function* () { yield "b"; });
+                `,
+            );
+
+            expect(() => runCodegen({ lint: false, projectRoot: workdir })).toThrow(/both map to the http-stream namespace "feed_a"/u);
         });
 
         it("rejects a workflow and an agent that share a deployed name (CODEGEN-01 cross-kind)", () => {
@@ -186,7 +271,7 @@ export default defineSchema({
         it("rejects a defineShape whose table isn't a string literal when the project masks a column (fail closed on a non-literal shape table)", () => {
             expect.assertions(1);
 
-            // `tableLiteralFrom` (discover-shapes.ts) returns `undefined` for any
+            // `tableLiteralFrom` (discover/shapes.ts) returns `undefined` for any
             // `table` that isn't a plain string-literal AST node — a hoisted `const
             // t = "users"` passed as `table: t` is exactly that case. Without this
             // guard the shape would silently skip the mask collision check and ship
@@ -231,7 +316,7 @@ export default defineSchema({
         it("rejects a shape when a mask() policies argument is a hoisted reference (fail closed on a non-literal mask policy)", () => {
             expect.assertions(1);
 
-            // `extractMaskColumns`/`extractMaskColumnMetadata` (discover-mask-procedures.ts)
+            // `extractMaskColumns`/`extractMaskColumnMetadata` (discover/mask-procedures.ts)
             // both return `[]` when `mask(...)`'s first argument isn't an object
             // literal, so `mask(sharedPolicies)` contributes ZERO masked columns to
             // `maskMetadata` — a shape over "users" then collides with nothing and
@@ -254,6 +339,34 @@ export default defineSchema({
             );
 
             expect(() => runCodegen({ projectRoot: workdir })).toThrow(/mask\(\.\.\.\)` policy whose argument isn't a plain object literal/u);
+        });
+
+        it("rejects a shape when the mask() policy names its table with a quoted key", () => {
+            expect.assertions(1);
+
+            // A quoted key is ordinary TypeScript and fully enumerable, so neither
+            // non-literal guard fires. `memberName` used to hand back the name
+            // node's SOURCE TEXT, recording the table as `"users"` — quotes and all
+            // — while `ShapeIR.table` is the unquoted `users`. The masked-column map
+            // lookup missed, `assertNoMaskedShapeTable` cleared the shape, and the
+            // masked column shipped raw to every subscriber. Both names must
+            // normalize to the same string for the guard to see the collision.
+            writeFileSync(
+                join(workdir, "lunora", "userMask.ts"),
+                `
+                import { mask, query } from "@lunora/server";
+                export const listUsers = query.use(mask({ "users": { "email": "redact" } })).query(async ({ ctx }) => ctx.db.findMany("users"));
+            `,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "shapes.ts"),
+                `
+                import { defineShape } from "@lunora/server";
+                export const allUsers = defineShape({ table: "users", where: () => ({}) });
+            `,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/replicates table "users", which masks column\(s\) "email"/u);
         });
 
         it("rejects a shape when a mask() policies object literal spreads a variable (fail closed on spread/computed mask keys, plan 257)", () => {
@@ -371,7 +484,10 @@ export default defineSchema({
         it("imports base packages through the lunorash umbrella subpaths when the project depends on `lunorash`", () => {
             expect.assertions(9);
 
-            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*", lunorash: "*" }, name: "umbrella-app" }));
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", lunorash: "*" }, name: "umbrella-app" }),
+            );
 
             const result = runCodegen({ projectRoot: workdir });
 
@@ -435,14 +551,46 @@ export const sendMessage = defineMutator({
                 // The cross-shard-join guard is imported + called against the compiled predicate.
                 expect(result.generated.shard).toContain("assertShapeShardable");
                 expect(result.generated.shard).toContain("assertShapeShardable(effectiveWhere, schema as unknown as SchemaLike, shape.table)");
-                // The shape predicate is AND-merged with the table's RLS read base-where:
-                // a module-scope registry is built from the function table, the helper is
-                // imported, and the resolver composes it before the shardability guard.
-                // eslint-disable-next-line no-secrets/no-secrets -- asserting on generated TS, not a credential
-                expect(result.generated.shard).toContain("const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCTIONS));");
-                expect(result.generated.shard).toContain("buildRlsReadRegistry, composeShapeReadWhere");
-                // eslint-disable-next-line no-secrets/no-secrets -- asserting on generated TS, not a credential
-                expect(result.generated.shard).toContain("composeShapeReadWhere(LUNORA_RLS_READ_REGISTRY,");
+                // The shape predicate is AND-merged with the read policies the SHAPE
+                // declares (`defineShape({ use })`, pre-indexed by `defineShape` into
+                // `shape.rlsRegistry`), before the shardability guard.
+                expect(result.generated.shard).toContain("composeShapeReadWhere(shape.rlsRegistry,");
+                // NOT a project-wide registry. Folding in every registered function's
+                // read policies unions them, and a single allow-all policy inside an
+                // admin-only procedure then unrestricted every shape on that table.
+                expect(result.generated.shard).not.toContain("buildRlsReadRegistry");
+                // No read policy anywhere in the project ⇒ nothing for a shape to
+                // replicate around, so the boot-time guard is not stamped either.
+                expect(result.generated.shard).not.toContain("assertShapesDeclareReadPolicies");
+            });
+
+            it("stamps the boot-time guard when a shape's table is governed on read but the shape names no use()", () => {
+                expect.assertions(2);
+
+                writeShapes();
+                // A query tenant-scopes `messages` on read. The shape above declares no
+                // `use`, so its registry is empty and it would replicate the channel
+                // filter alone — every tenant's rows, silently. Codegen hands the runtime
+                // the governed tables; `@lunora/server` holds the verdict, because only
+                // the registry knows whether `use` was written.
+                writeFileSync(
+                    join(workdir, "lunora", "guarded.ts"),
+                    `import { query, rls } from "@lunora/server";
+export const listMessages = query
+    .use(rls([{ on: "read", table: "messages", when: ({ auth }) => ({ tenantId: auth.userId }) }]))
+    .query(async () => []);
+`,
+                    "utf8",
+                );
+
+                const result = runCodegen({ lint: false, projectRoot: workdir });
+
+                /* eslint-disable no-secrets/no-secrets -- dense generated-code assertions, not credentials */
+                expect(result.generated.shard).toContain("assertShapesDeclareReadPolicies, beginDeferredSchedules");
+                expect(result.generated.shard).toContain(
+                    'assertShapesDeclareReadPolicies(LUNORA_SHAPES, ["messages"], (schema as unknown as { rlsMode?: string }).rlsMode === "required");',
+                );
+                /* eslint-enable no-secrets/no-secrets */
             });
 
             it("registers mutators into the dispatch table + LUNORA_MUTATOR_PATHS and overrides isCustomMutator", () => {
@@ -483,7 +631,10 @@ export const sendMessage = defineMutator({
                 expect.assertions(9);
 
                 writeShapes();
-                writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/db": "*" }, name: "db-app" }));
+                writeFileSync(
+                    join(workdir, "package.json"),
+                    JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", "@lunora/db": "*" }, name: "db-app" }),
+                );
 
                 const result = runCodegen({ lint: false, projectRoot: workdir });
 
@@ -511,7 +662,7 @@ export const sendMessage = defineMutator({
                 writeShapes();
                 writeFileSync(
                     join(workdir, "package.json"),
-                    JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/db": "*", lunorash: "*" }, name: "umbrella-db-app" }),
+                    JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", "@lunora/db": "*", lunorash: "*" }, name: "umbrella-db-app" }),
                 );
 
                 const result = runCodegen({ lint: false, projectRoot: workdir });
@@ -541,7 +692,10 @@ export const sendMessage = defineMutator({
 
                 // Feature present: shapes + @lunora/db → collections.ts is written to disk.
                 writeShapes();
-                writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/db": "*" }, name: "db-app" }));
+                writeFileSync(
+                    join(workdir, "package.json"),
+                    JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", "@lunora/db": "*" }, name: "db-app" }),
+                );
                 runCodegen({ lint: false, projectRoot: workdir });
 
                 expect(existsSync(collectionsPath)).toBe(true);
@@ -549,7 +703,7 @@ export const sendMessage = defineMutator({
                 // Feature removed: drop the @lunora/db dependency. The emitter now
                 // returns "" and the prior file must be deleted, not left dangling
                 // (it imports @lunora/db, which the app no longer installs).
-                writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*" }, name: "db-app" }));
+                writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" }, name: "db-app" }));
 
                 const result = runCodegen({ lint: false, projectRoot: workdir });
 
@@ -891,7 +1045,10 @@ export default defineFlags({ provider: (env) => env.PROVIDER, identify: (auth) =
         it("routes ctx.flags imports through the lunorash umbrella when the project depends on `lunorash`", () => {
             expect.assertions(4);
 
-            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*", lunorash: "*" }, name: "umbrella-flags-app" }));
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", lunorash: "*" }, name: "umbrella-flags-app" }),
+            );
             writeFileSync(
                 join(workdir, "lunora", "flags.ts"),
                 `import { defineFlags } from "lunorash/flags";
@@ -955,7 +1112,10 @@ export default defineNotify({ webPush: (env) => webPushFromEnv(env) });
         it("wires ctx.notify (every ctx) even under the lunorash umbrella — @lunora/notify is an add-on, never remapped", () => {
             expect.assertions(3);
 
-            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*", lunorash: "*" }, name: "umbrella-notify-app" }));
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", lunorash: "*" }, name: "umbrella-notify-app" }),
+            );
             writeFileSync(
                 join(workdir, "lunora", "notify.ts"),
                 `import { defineNotify, webPushFromEnv } from "@lunora/notify";
@@ -1051,6 +1211,130 @@ export default crons;
             expect(result.generated.shard).toContain('"vectors": false');
         });
 
+        it("wires the vector introspector on exactly the condition studioFeatures.vectors gates the nav on", () => {
+            expect.assertions(6);
+
+            // A visible tab with no backend: `studioFeatures.vectors` was true for
+            // every vector-indexed app (and for any app merely depending on
+            // `@lunora/bindings`), while `defineApp().build()` wired no
+            // `vectorIntrospector` at all — so the Vectors page and the home
+            // screen's "Vectorize Indexes" card both answered 400
+            // `VECTORS_NOT_CONFIGURED`. The two must move together.
+            writeFileSync(
+                join(workdir, "package.json"),
+                `{ "name": "vectorish", "dependencies": { "@lunora/bindings": "*", "@lunora/d1": "*", "@lunora/storage": "*" } }`,
+                "utf8",
+            );
+
+            const withoutIndex = runCodegen({ lint: false, projectRoot: workdir });
+
+            // A bare `@lunora/bindings` dependency (installed for `ctx.kv` /
+            // `ctx.images`) declares no index, so there is no registry to serve and
+            // the tab stays hidden rather than failing open into an error.
+            expect(withoutIndex.generated.shard).toContain('"vectors": false');
+            expect(withoutIndex.generated.app).not.toContain("vectorIntrospector");
+            expect(withoutIndex.generated.shard).toContain('"kv": true');
+
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    docs: defineTable({ body: v.string() }).vectorize("body", { dimensions: 768, index: "docs_search", metric: "cosine" }),
+});
+
+export default schema;
+`,
+                "utf8",
+            );
+
+            const withIndex = runCodegen({ lint: false, projectRoot: workdir });
+
+            expect(withIndex.generated.shard).toContain('"vectors": true');
+            expect(withIndex.generated.app).toContain("options.vectorIntrospector = createVectorAdminIntrospector({");
+            // The index map is the app's own `.vectors(...)` selector, not a re-scan
+            // of `env` — an arbitrary binding name still resolves to its logical index.
+            expect(withIndex.generated.app).toContain("indexes: this.shardExtras.vectors(env as unknown as Record<string, unknown>),");
+        });
+
+        it("adds a worker entry's static backupCron and crons keys to the wrangler trigger set", () => {
+            expect.assertions(4);
+
+            mkdirSync(join(workdir, "src", "server"), { recursive: true });
+            writeFileSync(
+                join(workdir, "src", "server", "index.ts"),
+                `import { createWorker } from "@lunora/runtime";
+
+export default createWorker({
+    backupCron: "0 3 * * *",
+    crons: { "*/15 * * * *": async () => {} },
+});
+`,
+                "utf8",
+            );
+            writeFileSync(
+                join(workdir, "lunora", "crons.ts"),
+                `import { cronJobs } from "@lunora/scheduler";
+import { internal } from "./_generated/api.js";
+const crons = cronJobs();
+crons.cron("ping", "0 * * * *", internal.messages.list, {});
+export default crons;
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            // Declared crons lead, in the order `emitWranglerCronTriggers` renders
+            // them; entry-derived expressions append.
+            expect(result.cronTriggers).toStrictEqual(["0 * * * *", "0 3 * * *", "*/15 * * * *"]);
+            // Neither entry expression names a dispatchable job — `createWorker`
+            // runs those itself — so the generated dispatcher map must not grow one.
+            expect(result.generated.crons).toContain('"0 * * * *"');
+            expect(result.generated.crons).not.toContain("0 3 * * *");
+            expect(result.generated.crons).not.toContain("*/15 * * * *");
+        });
+
+        it("leaves a computed backupCron out of the trigger set, for the ownership record to preserve", () => {
+            expect.assertions(1);
+
+            mkdirSync(join(workdir, "src", "server"), { recursive: true });
+            writeFileSync(
+                join(workdir, "src", "server", "index.ts"),
+                `import { createWorker } from "@lunora/runtime";
+
+export default createWorker({ backupCron: process.env.NIGHTLY_CRON });
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            // Out of reach for any AST scan, which is why `package.json`'s
+            // `lunora.crons` ownership record stays: `reconcileWranglerCrons` keeps
+            // an entry that is in neither the generated set nor that record — see
+            // `@lunora/config`'s reconcile-crons tests.
+            expect(result.cronTriggers).toStrictEqual([]);
+        });
+
+        it("reads a backupCron out of an `.extend()` callback's returned literal", () => {
+            expect.assertions(1);
+
+            mkdirSync(join(workdir, "src", "server"), { recursive: true });
+            writeFileSync(
+                join(workdir, "src", "server", "index.ts"),
+                `import app from "../../lunora/_generated/app.js";
+
+export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            expect(result.cronTriggers).toStrictEqual(["0 4 * * *"]);
+        });
+
         it("does not emit a seed client for a project that doesn't depend on @lunora/seed", () => {
             expect.assertions(1);
 
@@ -1064,7 +1348,11 @@ export default crons;
 
             writeFileSync(
                 join(workdir, "package.json"),
-                JSON.stringify({ dependencies: { "@lunora/d1": "*" }, devDependencies: { "@lunora/seed": "workspace:*" }, name: "demo" }),
+                JSON.stringify({
+                    dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" },
+                    devDependencies: { "@lunora/seed": "workspace:*" },
+                    name: "demo",
+                }),
                 "utf8",
             );
 
@@ -1250,6 +1538,22 @@ export default crons;
 
             // Args are required when the function declares any, typed against dataModel.
             expect(result.generated.functions).toContain('list: (args: { channelId: Id<"channels">; limit?: number }) => Promise<unknown>;');
+        });
+
+        it("routes a mutation reached through createCaller into the caller's transaction", () => {
+            expect.assertions(2);
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            // `createCaller(ctx).ns.someMutation()` used to invoke the handler
+            // directly, so a mutation composed this way from an action or a stream
+            // got none of what `ctx.runMutation` gets: no BEGIN/COMMIT span, no
+            // deferred schedules, no deferred-delete flush. Its writes autocommitted
+            // one row at a time and its `ctx.scheduler` calls dispatched at once, so
+            // a mid-handler throw left the earlier writes durable and the job
+            // already enqueued.
+            expect(result.generated.functions).toContain('if (registered.kind === "mutation") {');
+            expect(result.generated.functions).toContain("await runMutation.call(context, { __lunoraRef: functionPath }, args ?? {})");
         });
 
         it("keeps dataModel.ts importable by a package with no server dependency (#18)", () => {
@@ -1489,7 +1793,11 @@ export default crons;
         it("threads package.json version into info.version of both OpenAPI and OpenRPC docs", () => {
             expect.assertions(2);
 
-            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*" }, name: "test-app", version: "1.2.3" }), "utf8");
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" }, name: "test-app", version: "1.2.3" }),
+                "utf8",
+            );
 
             const result = runCodegen({ apiSpec: "both", projectRoot: workdir });
             const openApiDoc = JSON.parse(result.generated.openApi) as { info: { version: string } };
@@ -1778,7 +2086,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
 
             writeFileSync(
                 join(workdir, "package.json"),
-                `${JSON.stringify({ dependencies: { "@lunora/auth": "*", "@lunora/d1": "*" }, name: "fixture-app" }, undefined, 2)}\n`,
+                `${JSON.stringify({ dependencies: { "@lunora/auth": "*", "@lunora/d1": "*", "@lunora/storage": "*" }, name: "fixture-app" }, undefined, 2)}\n`,
                 "utf8",
             );
 
@@ -1797,7 +2105,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
 
             writeFileSync(
                 join(workdir, "package.json"),
-                `${JSON.stringify({ dependencies: { "@lunora/auth": "*", "@lunora/d1": "*" }, name: "fixture-app" }, undefined, 2)}\n`,
+                `${JSON.stringify({ dependencies: { "@lunora/auth": "*", "@lunora/d1": "*", "@lunora/storage": "*" }, name: "fixture-app" }, undefined, 2)}\n`,
                 "utf8",
             );
 
@@ -1834,7 +2142,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
             // Depending on @lunora/svelte surfaces the framework terminal + the runtime composer import.
             writeFileSync(
                 join(workdir, "package.json"),
-                `${JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/svelte": "*" }, name: "fixture-app" }, undefined, 2)}\n`,
+                `${JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", "@lunora/svelte": "*" }, name: "fixture-app" }, undefined, 2)}\n`,
                 "utf8",
             );
 
@@ -2102,7 +2410,7 @@ export const run = query.input({ tool: v.from(toolSchema) }).query(async () => 1
             }
         });
 
-        it("expands a type IMPORTED into the handler's module instead of leaking a bare name", () => {
+        it("qualifies a type IMPORTED into the handler's module instead of leaking a bare name", () => {
             expect.assertions(4);
 
             // The other half of the same leak. When the handler DOES import the
@@ -2112,6 +2420,10 @@ export const run = query.input({ tool: v.from(toolSchema) }).query(async () => 1
             // reachability guard only covered types declared in the handler's OWN
             // file, so a shared `./lib/types` interface — the ordinary way to
             // write one — leaked straight through.
+            //
+            // The handler's own `import` names the module, so the alias survives
+            // as an `import("…")` qualifier rebased out of `_generated/`, rather
+            // than being flattened to its members.
             mkdirSync(join(workdir, "lunora", "lib"), { recursive: true });
             writeFileSync(
                 join(workdir, "lunora", "lib", "shapes.ts"),
@@ -2132,9 +2444,225 @@ export const get = query.input({}).query(async (): Promise<Badge> => ({ label: "
             const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
 
             for (const rendered of [api, functions]) {
-                // Expanded structurally, so it resolves with no import at all.
+                // Qualified and rebased one level out of `_generated/`, so it
+                // resolves without an import statement of its own.
+                expect(rendered).toContain('import("../lib/shapes.js").Badge');
+                expect(rendered).not.toMatch(/(?<![.\w])Badge\b/u);
+            }
+        });
+
+        it("names the index module when the handler imports the type through a DIRECTORY", () => {
+            expect.assertions(5);
+
+            // `emit.ts` appends `.js` to a rebased relative qualifier, because
+            // the generated files are consumed under NodeNext. Extension
+            // substitution covers a file — `./lib/shapes.js` finds
+            // `lib/shapes.ts` — but a directory has nothing to substitute, so
+            // `../agent/client.js` for `agent/client/index.ts` was a TS2307 in a
+            // file the user did not write and could not repair: `paths` does not
+            // apply to a relative specifier and no ambient declaration satisfies
+            // a qualified `import("…").T`.
+            mkdirSync(join(workdir, "lunora", "agent", "client"), { recursive: true });
+            writeFileSync(join(workdir, "lunora", "agent", "messages.ts"), `export interface UIMessage {\n    text: string;\n}\n`);
+            writeFileSync(join(workdir, "lunora", "agent", "client", "index.ts"), `export type { UIMessage } from "../messages";\n`);
+            writeFileSync(
+                join(workdir, "lunora", "chat.ts"),
+                `import { query } from "./_generated/server.js";
+import type { UIMessage } from "./agent/client";
+
+export const get = query.input({}).query(async (): Promise<UIMessage> => ({ text: "x" }));
+`,
+            );
+
+            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+
+            for (const rendered of [api, functions]) {
+                expect(rendered).toContain('import("../agent/client/index.js").UIMessage');
+                expect(rendered).not.toContain('import("../agent/client.js")');
+            }
+
+            expect(unresolvableQualifiers(workdir, [api, functions])).toStrictEqual([]);
+        });
+
+        it("names a directory module by the file it resolved to, whatever that file is called", () => {
+            expect.assertions(5);
+
+            // Every shape below reads as a FILE to a heuristic over the written
+            // string, and is a directory on disk — so each one emitted a
+            // confidently wrong specifier rather than declining:
+            //
+            // - `./here/index` where `here/index/` is itself a directory, and
+            //   `./at` where the directory is literally named `at`: an "already
+            //   ends in /index" test suppresses the append that was needed.
+            // - `./vendor`, resolved through its own `package.json` to a file
+            //   not called `index` at all: a "the index file is named index"
+            //   test never fires.
+            // - `./shim`, whose index is `index.d.ts`: ts-morph reports that
+            //   extension whole rather than as `.ts`, so a map of source
+            //   extensions misses it and the blanket `.js` suffix applies.
+            //
+            // None of them are questions about the string. Rebuilding the
+            // specifier from the resolved path answers all four at once.
+            const directories: ReadonlyArray<readonly [string, string, string]> = [
+                ["here/index", "index.ts", "Nested"],
+                ["at", "index.ts", "Named"],
+                ["shim", "index.d.ts", "Declared"],
+                ["vendor/src", "main.ts", "Manifest"],
+            ];
+
+            for (const [directory, file, exported] of directories) {
+                mkdirSync(join(workdir, "lunora", directory), { recursive: true });
+                writeFileSync(join(workdir, "lunora", directory, file), `export interface ${exported} {\n    a: string;\n}\n`);
+            }
+
+            writeFileSync(join(workdir, "lunora", "vendor", "package.json"), `{ "types": "./src/main.ts" }\n`);
+            writeFileSync(
+                join(workdir, "lunora", "shapes.ts"),
+                `import { query } from "./_generated/server.js";
+import type { Nested } from "./here/index";
+import type { Named } from "./at";
+import type { Declared } from "./shim";
+import type { Manifest } from "./vendor";
+
+export const nested = query.input({}).query(async (): Promise<Nested> => ({ a: "x" }));
+export const named = query.input({}).query(async (): Promise<Named> => ({ a: "x" }));
+export const declared = query.input({}).query(async (): Promise<Declared> => ({ a: "x" }));
+export const manifest = query.input({}).query(async (): Promise<Manifest> => ({ a: "x" }));
+`,
+            );
+
+            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+
+            expect(api).toContain('import("../here/index/index.js").Nested');
+            expect(api).toContain('import("../at/index.js").Named');
+            expect(api).toContain('import("../shim/index.js").Declared');
+            expect(api).toContain('import("../vendor/src/main.js").Manifest');
+            expect(unresolvableQualifiers(workdir, [api, functions])).toStrictEqual([]);
+        });
+
+        it("retargets a TypeScript-extension specifier onto the extension its own family is emitted as", () => {
+            expect.assertions(7);
+
+            // `./lib/shapes.ts` is legal in the app's own source, and illegal
+            // wherever the flag permitting it is off — which includes a dedicated
+            // strict config for generated output, the pattern this repo itself
+            // ships. Written through verbatim it is a TS5097 in a file the user
+            // did not write.
+            //
+            // The replacement is per FAMILY, not a blanket `.js`: TypeScript
+            // substitutes `.js`→`.ts` and `.cjs`→`.cts` but never across the two,
+            // so a `.cts` module named `.js` is a TS2307 instead.
+            writeFileSync(
+                join(workdir, "tsconfig.json"),
+                `{
+    "compilerOptions": { "moduleResolution": "bundler", "module": "ESNext", "target": "ES2022", "strict": true, "noEmit": true, "allowImportingTsExtensions": true },
+    "include": ["lunora/**/*"]
+}
+`,
+            );
+            mkdirSync(join(workdir, "lunora", "lib"), { recursive: true });
+            writeFileSync(join(workdir, "lunora", "lib", "shapes.ts"), `export interface Badge {\n    label: string;\n}\n`);
+            writeFileSync(join(workdir, "lunora", "lib", "legacy.cts"), `export interface Stamp {\n    at: number;\n}\n`);
+            writeFileSync(
+                join(workdir, "lunora", "badges.ts"),
+                `import { query } from "./_generated/server.js";
+import type { Badge } from "./lib/shapes.ts";
+import type { Stamp } from "./lib/legacy.cts";
+
+export const get = query.input({}).query(async (): Promise<Badge> => ({ label: "x" }));
+export const stamp = query.input({}).query(async (): Promise<Stamp> => ({ at: 1 }));
+`,
+            );
+
+            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+
+            for (const rendered of [api, functions]) {
+                expect(rendered).toContain('import("../lib/shapes.js").Badge');
+                expect(rendered).toContain('import("../lib/legacy.cjs").Stamp');
+                expect(rendered).not.toMatch(/import\("\.\.\/lib\/(?:shapes|legacy)\.[cm]?ts"\)/u);
+            }
+
+            expect(unresolvableQualifiers(workdir, [api, functions])).toStrictEqual([]);
+        });
+
+        it("declines to name an imported type carrying a member the wire cannot encode", () => {
+            expect.assertions(4);
+
+            // Naming a type publishes every member of it. `Money` is a class, so
+            // `encodeWire` throws on the value at the send site
+            // (`shared/wire-codec.ts`) — but `import("../lib/money.js").Envelope`
+            // would type `result.at.format()` for every caller, a runtime
+            // TypeError with no compile error anywhere. Structural expansion
+            // already declined a bare class for exactly this reason; qualifying
+            // must not become the way around it.
+            mkdirSync(join(workdir, "lunora", "lib"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "lib", "money.ts"),
+                `export class Money {
+    format(): string {
+        return "x";
+    }
+}
+
+export interface Envelope {
+    at: Money;
+    label: string;
+}
+`,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "wallet.ts"),
+                `import { query } from "./_generated/server.js";
+import type { Envelope } from "./lib/money";
+
+export const get = query.input({}).query(async (): Promise<Envelope> => null as never);
+`,
+            );
+
+            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+
+            expect(api).toContain('get: FunctionReference<"query", {}, unknown>');
+            expect(functions).toContain("Promise<unknown>");
+
+            for (const rendered of [api, functions]) {
+                expect(rendered).not.toMatch(/Envelope|Money/u);
+            }
+        });
+
+        it("declines a tsconfig `paths` alias — it resolves under the app's config and nowhere else", () => {
+            expect.assertions(4);
+
+            // The emitted qualifier is the specifier the USER wrote, and none of
+            // emit.ts's three rebasers touch an alias. Written out verbatim it
+            // resolves under the authoring project's own tsconfig and fails from a
+            // sibling package or under a dedicated strict config for generated
+            // output — which is the pattern this repo itself ships. Falling back
+            // to structural expansion is what the type got before qualifying
+            // existed, and it always resolves.
+            writeFileSync(
+                join(workdir, "tsconfig.json"),
+                `{
+    "compilerOptions": { "moduleResolution": "bundler", "module": "ESNext", "target": "ES2022", "strict": true, "baseUrl": ".", "paths": { "~/*": ["./lunora/lib/*"] } },
+    "include": ["lunora/**/*"]
+}
+`,
+            );
+            mkdirSync(join(workdir, "lunora", "lib"), { recursive: true });
+            writeFileSync(join(workdir, "lunora", "lib", "aliased.ts"), `export interface Badge {\n    label: string;\n}\n`);
+            writeFileSync(
+                join(workdir, "lunora", "aliased.ts"),
+                `import { query } from "./_generated/server.js";
+import type { Badge } from "~/aliased";
+
+export const get = query.input({}).query(async (): Promise<Badge> => ({ label: "x" }));
+`,
+            );
+
+            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+
+            for (const rendered of [api, functions]) {
+                expect(rendered).not.toContain('import("~/aliased")');
                 expect(rendered).toContain("{ label: string }");
-                expect(rendered).not.toMatch(/,\s*Badge>/u);
             }
         });
 
@@ -2352,6 +2880,50 @@ export default schema;
             expect(message).toContain("Inline the fields into the defineTable(...) call");
         });
 
+        it("emits a hyphenated index name rather than refusing it", () => {
+            expect.assertions(2);
+
+            // `emitDataModel` quotes non-identifier index names into its union and
+            // its comment calls them legitimate; `.searchIndex("search-body")`
+            // ships today. The drizzle renderer nonetheless asserted the name was
+            // an identifier, so `.index("by-author")` died with an INTERNAL error
+            // naming no file and no line — while the sibling index kinds accepted
+            // the identical spelling.
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+                 export default defineSchema({ posts: defineTable({ author: v.string() }).index("by-author", ["author"]) });`,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
+
+            const drizzle = readFileSync(join(workdir, "lunora", "_generated", "drizzle.shard.ts"), "utf8");
+
+            // Quoted key, JSON-escaped literal — valid JS, and the same spelling
+            // `emitDataModel` already put in the index-name union.
+            expect(drizzle).toContain(`"by-author": index("by-author").on(t.author)`);
+        });
+
+        it("emits a `__proto__` index name as a computed key so the entry survives", () => {
+            expect.assertions(2);
+
+            // `__proto__` passes the identifier test AND survives quoting, but in
+            // a VALUE position both `{ __proto__: x }` and `{ "__proto__": x }`
+            // are the prototype setter — neither creates an own property, so the
+            // index entry silently vanished from the emitted object.
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+                 export default defineSchema({ posts: defineTable({ author: v.string() }).index("__proto__", ["author"]) });`,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
+
+            const drizzle = readFileSync(join(workdir, "lunora", "_generated", "drizzle.shard.ts"), "utf8");
+
+            expect(drizzle).toContain(`["__proto__"]: index("__proto__").on(t.author)`);
+        });
+
         it("names the constraint and the workaround for a nested index path", () => {
             expect.assertions(3);
 
@@ -2423,7 +2995,10 @@ export default schema;
             expect(existsSync(join(workdir, "lunora", "_generated", "app.ts"))).toBe(false);
 
             // Declaring it clears the gate.
-            writeFileSync(manifest, JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/server": "*" }, name: "app", version: "0.0.0" }));
+            writeFileSync(
+                manifest,
+                JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", "@lunora/server": "*" }, name: "app", version: "0.0.0" }),
+            );
 
             expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
         });
@@ -4029,7 +4604,12 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;");
 
             // It is passed into the ORM writer (so DO triggers get ctx.scheduler) and reused on ctx via shorthand.
-            const databaseOptions = output.slice(output.indexOf("createShardCtxDb({"), output.indexOf("createShardCtxDb({") + 400);
+            // Sliced to the call's own closing `});` rather than a fixed byte window:
+            // a comment added inside the options object pushed `scheduler,` past the
+            // old 400-char cutoff and failed this test for a reason unrelated to what
+            // it checks.
+            const writerStart = output.indexOf("createShardCtxDb({");
+            const databaseOptions = output.slice(writerStart, output.indexOf("});", writerStart));
 
             expect(databaseOptions).toContain("scheduler,");
         });

@@ -21,6 +21,7 @@ interface OtlpKeyValue {
 interface ParsedSpan {
     attributes: OtlpKeyValue[];
     endTimeUnixNano: string;
+    flags?: number;
     kind: number;
     name: string;
     parentSpanId?: string;
@@ -34,9 +35,12 @@ interface ParsedSpan {
 interface ParsedLogRecord {
     attributes: OtlpKeyValue[];
     body: { stringValue: string };
+    flags?: number;
     severityNumber: number;
     severityText: string;
+    spanId?: string;
     timeUnixNano: string;
+    traceId?: string;
 }
 
 const TRACE_ID_HEX = /^[0-9a-f]{32}$/;
@@ -72,15 +76,22 @@ const spanFrom = (body: string): { resourceAttributes: OtlpKeyValue[]; scopeName
     return { resourceAttributes: resourceSpan.resource.attributes, scopeName: scopeSpan.scope.name, span: scopeSpan.spans[0]! };
 };
 
-/** Decode a POSTed OTLP log-export body into its single record. */
-const logFrom = (body: string): { record: ParsedLogRecord; resourceAttributes: OtlpKeyValue[]; scopeName: string } => {
+/** Decode a POSTed OTLP log-export body into its records (a body may carry a whole batch). */
+const logsFrom = (body: string): { records: ParsedLogRecord[]; resourceAttributes: OtlpKeyValue[]; scopeName: string } => {
     const parsed = JSON.parse(body) as {
         resourceLogs: { resource: { attributes: OtlpKeyValue[] }; scopeLogs: { logRecords: ParsedLogRecord[]; scope: { name: string } }[] }[];
     };
     const resourceLog = parsed.resourceLogs[0]!;
     const scopeLog = resourceLog.scopeLogs[0]!;
 
-    return { record: scopeLog.logRecords[0]!, resourceAttributes: resourceLog.resource.attributes, scopeName: scopeLog.scope.name };
+    return { records: scopeLog.logRecords, resourceAttributes: resourceLog.resource.attributes, scopeName: scopeLog.scope.name };
+};
+
+/** Decode a POSTed OTLP log-export body into its FIRST record. */
+const logFrom = (body: string): { record: ParsedLogRecord; resourceAttributes: OtlpKeyValue[]; scopeName: string } => {
+    const { records, resourceAttributes, scopeName } = logsFrom(body);
+
+    return { record: records[0]!, resourceAttributes, scopeName };
 };
 
 describe(createContainerTelemetry, () => {
@@ -165,6 +176,63 @@ describe(createContainerTelemetry, () => {
         // ...but keeps its own child span id.
         expect(span.spanId).toMatch(SPAN_ID_HEX);
         expect(span.spanId).not.toBe("b7ad6b7169203331");
+    });
+
+    it("obeys a sampled-OUT traceparent: no span export, logs still flow", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            // Flags `00` — the worker settled this trace as dropped and propagated
+            // the verdict. Exporting anyway leaves the collector holding container
+            // spans for a trace whose worker and shard spans were thrown away.
+            traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00",
+        });
+
+        telemetry.emitSpan({ endMs: 10, name: "transcode", startMs: 5 });
+        telemetry.emitLog({ message: "hello" });
+        await telemetry.flush();
+
+        expect(calls.map((call) => call.url)).toStrictEqual(["https://collect.example.com/v1/logs"]);
+
+        // Logs are never sampled — but they carry the verdict so a collector can see it.
+        const { records } = logsFrom(calls[0]!.body);
+
+        expect(records[0]?.flags).toBe(0);
+    });
+
+    it("stamps every log record with the propagated trace context", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        });
+
+        telemetry.emitLog({ message: "hello" });
+        await telemetry.flush();
+
+        const { records } = logsFrom(calls[0]!.body);
+
+        // Without these a container log record is unreachable from the trace it
+        // belongs to, so "show me this request's container logs" cannot be asked.
+        expect(records[0]?.traceId).toBe("0af7651916cd43dd8448eb211c80319c");
+        expect(records[0]?.spanId).toBe("b7ad6b7169203331");
+        expect(records[0]?.flags).toBe(1);
+    });
+
+    it("carries the sampled bit in the exported span flags", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        });
+
+        telemetry.emitSpan({ endMs: 10, name: "transcode", startMs: 5 });
+        await telemetry.flush();
+
+        expect(spanFrom(calls[0]!.body).span.flags).toBe(1);
     });
 
     it("mints a fresh root trace when the traceparent is malformed", async () => {
@@ -289,7 +357,7 @@ describe(createContainerTelemetry, () => {
     });
 
     it("maps each log level to its OTLP severity number and defaults to info", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const { calls, fetch } = stubFetch();
         const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch });
@@ -301,7 +369,9 @@ describe(createContainerTelemetry, () => {
         telemetry.emitLog({ level: "warn", message: "w" });
         await telemetry.flush();
 
-        expect(calls.map((call) => logFrom(call.body).record.severityNumber)).toStrictEqual([5, 17, 9, 9, 13]);
+        // One POST carrying all five records — the batcher coalesces them.
+        expect(calls).toHaveLength(1);
+        expect(logsFrom(calls[0]!.body).records.map((record) => record.severityNumber)).toStrictEqual([5, 17, 9, 9, 13]);
     });
 
     it("tolerates a trailing slash on the endpoint", async () => {
@@ -444,6 +514,11 @@ describe(createContainerTelemetry, () => {
         expect(() => {
             telemetry.emitSpan({ endMs: 10, name: "op", startMs: 0 });
         }).not.toThrow();
+
+        // Emitting only buffers; the missing-`fetch` error surfaces when the
+        // batch drains, which is what `flush()` forces.
+        await telemetry.flush();
+
         expect(onError).toHaveBeenCalledWith(expect.any(TypeError));
     });
 
@@ -525,6 +600,41 @@ describe(createContainerTelemetry, () => {
         expect(onError).toHaveBeenCalledWith(expect.any(Error));
         // The socket is released for keep-alive reuse even on a rejected export.
         expect(cancel).toHaveBeenCalledTimes(1);
+    });
+
+    it("batches many spans and logs into one POST per signal", async () => {
+        expect.assertions(4);
+
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch });
+
+        // The docblock's worked example: twenty spans and thirty log lines. One
+        // POST per span/line would be fifty round-trips (and fifty subrequests
+        // against the worker's budget on the sibling sink); batched it is two.
+        for (let index = 0; index < 20; index += 1) {
+            telemetry.emitSpan({ endMs: index + 1, name: `span-${String(index)}`, startMs: index });
+        }
+
+        for (let index = 0; index < 30; index += 1) {
+            telemetry.emitLog({ message: `line-${String(index)}` });
+        }
+
+        await telemetry.flush();
+
+        expect(calls).toHaveLength(2);
+
+        const traces = calls.find((call) => call.url.endsWith("/v1/traces"))!;
+        const logs = calls.find((call) => call.url.endsWith("/v1/logs"))!;
+        const parsedSpans = (
+            JSON.parse(traces.body) as {
+                resourceSpans: { scopeSpans: { spans: ParsedSpan[] }[] }[];
+            }
+        ).resourceSpans[0]!.scopeSpans[0]!.spans;
+
+        expect(parsedSpans).toHaveLength(20);
+        // Buffer order is emit order, so the batch is not just the right size.
+        expect(parsedSpans.map((span) => span.name)).toStrictEqual(Array.from({ length: 20 }, (_, index) => `span-${String(index)}`));
+        expect(logsFrom(logs.body).records).toHaveLength(30);
     });
 
     it("encodes non-finite and unsafe-integer attributes as valid OTLP", async () => {

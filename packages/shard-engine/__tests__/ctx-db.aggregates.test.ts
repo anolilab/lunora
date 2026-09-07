@@ -99,6 +99,10 @@ const makeSchema = (...indexes: AggregateIndexDefinitionLike[]): SchemaLike => {
                 indexes: [{ fields: ["projectId"], name: "by_project" }],
                 shape: {
                     archived: { kind: "boolean" },
+                    // Declared but never seeded: the tombstone-marker shape a
+                    // filtered index most often keys on, where a live row simply
+                    // has no such key at all.
+                    deletedAt: { kind: "optional" },
                     projectId: { kind: "string" },
                     seq: { kind: "number" },
                 },
@@ -174,11 +178,13 @@ describe("ctx-db aggregates", () => {
 
             await seed(writer);
 
-            // The reader can't route this directly through the index for users
-            // because the user request doesn't carry { archived: false }, but the
-            // counter table still reflects only active rows. We verify the
-            // structural counter by reading via aggregate scan with the same
-            // baseline.
+            // The request DOES carry `{ archived: false }`, which is exactly the
+            // index's static `where` — so it asks the counter's own question and
+            // routes to it (`archived` is not a `by`-key; being fixed by the
+            // index's filter is what makes it acceptable). A request without that
+            // filter is a broader question and falls to the scan; that half is
+            // pinned in "sum > honors the index static `where` when the request
+            // carries it".
             await expect(writer.count("todos", { archived: false, projectId: "p1" })).resolves.toBe(3);
             await expect(writer.count("todos", { archived: false, projectId: "p2" })).resolves.toBe(1);
 
@@ -253,6 +259,85 @@ describe("ctx-db aggregates", () => {
             // Both indexes match; the planner picks `byProjectArchived` (longer by).
             await expect(writer.count("todos", { archived: false, projectId: "p1" })).resolves.toBe(3);
         });
+
+        it("refuses a filtered counter for a request that does not carry its filter", async () => {
+            expect.assertions(3);
+
+            // `activeByProject` is `by: ["projectId"], where: { archived: false }`,
+            // so its counter holds the ACTIVE p1 count (3) and the table holds 4.
+            // Routing `{ projectId: "p1" }` to it answered the narrower question
+            // the caller did not ask — `{ projectId }` does not imply
+            // `archived === false`.
+            const writer = setupWriter(makeSchema(activeByProject));
+
+            await seed(writer);
+
+            await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(4);
+
+            // Carrying the filter DOES route: the source rows are gone, so a
+            // non-zero answer can only have come from the counter.
+            harness.raw(`DELETE FROM "todos"`);
+
+            await expect(writer.count("todos", { archived: false, projectId: "p1" })).resolves.toBe(3);
+            await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(0);
+        });
+
+        it("counts documents that simply OMIT a field the index filters on `null`", async () => {
+            expect.assertions(3);
+
+            // The dominant filtered-index shape is a tombstone marker the live
+            // rows never carry at all. The read path renders `{ deletedAt: null }`
+            // as `IS NULL` and an absent key extracts to SQL NULL, so the scan
+            // counts those rows; the companion's predicate test used a strict
+            // `undefined !== null` and counted NONE of them. Every read routed to
+            // the counter answered 0 while the table held rows.
+            const liveByProject: AggregateIndexDefinitionLike = {
+                by: ["projectId"],
+                name: "liveByProject",
+                on: "todos",
+                op: "count",
+                where: { deletedAt: null },
+            };
+            const writer = setupWriter(makeSchema(liveByProject));
+
+            // `deletedAt` is absent on every seeded row except the last.
+            await seed(writer);
+            await writer.patch("t5", { deletedAt: 1 });
+
+            await expect(writer.count("todos", { deletedAt: null, projectId: "p1" })).resolves.toBe(3);
+
+            harness.raw(`DELETE FROM "todos"`);
+
+            await expect(writer.count("todos", { deletedAt: null, projectId: "p1" })).resolves.toBe(3);
+            await expect(writer.count("todos", { deletedAt: null, projectId: "p2" })).resolves.toBe(1);
+        });
+
+        it("does not route an UNFILTERED groupBy to a filtered index's counter", async () => {
+            expect.assertions(3);
+
+            // The index's static `where` used to be folded into the "partial key"
+            // the caller counts against the `by` arity. For a groupBy with no
+            // `where` at all that made a 0-key partial look like a fully-pinned
+            // 1-key one, so the read took the single-row lookup with a `by`-tuple
+            // of NULLs — which matches no counter row — and returned no groups.
+            // Even had it matched, `activeByProject` excludes archived rows and
+            // this request asked for all of them.
+            const writer = setupWriter(makeSchema(activeByProject));
+
+            await seed(writer);
+
+            const byProjectId = (groups: ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>): Record<string, null | number> =>
+                Object.fromEntries(groups.map((group) => [String(group.key["projectId"]), group.value]));
+            const all = await writer.groupBy("todos", { by: ["projectId"] });
+
+            expect(byProjectId(all)).toStrictEqual({ p1: 4, p2: 1 });
+
+            // No group key ever carries a field the caller did not group by.
+            expect(all.every((group) => Object.keys(group.key).length === 1)).toBe(true);
+
+            // Carrying the index's own filter asks the counter's question.
+            expect(byProjectId(await writer.groupBy("todos", { by: ["projectId"], where: { archived: false } }))).toStrictEqual({ p1: 3, p2: 1 });
+        });
     });
 
     describe("rLS coupling seam", () => {
@@ -326,6 +411,40 @@ describe("ctx-db aggregates", () => {
             const tally = Object.fromEntries(groups.map((g) => [g.key["projectId"], g.value]));
 
             expect(tally).toEqual({ p1: 4, p2: 1 });
+        });
+
+        it("groups a boolean column on `false`/`true`, whether or not an index covers it", async () => {
+            expect.assertions(2);
+
+            // The scan groups on `json_extract(__doc__, '$.archived')`, and SQLite
+            // has no boolean — a stored JSON `true` extracts as the INTEGER 1. The
+            // companion-indexed path decodes its key tuple and hands back a real
+            // `true`, so the same query answered two different TYPES depending on
+            // whether an aggregate index happened to cover it, and a caller's
+            // `groups.find((group) => group.key.archived === true)` was
+            // `undefined` on the scan. Asserting both paths together is the point.
+            const countByArchived: AggregateIndexDefinitionLike = {
+                by: ["archived"],
+                name: "countByArchived",
+                on: "todos",
+                op: "count",
+            };
+            const byKey = (groups: ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>): Record<string, null | number> =>
+                Object.fromEntries(groups.map((group) => [String(group.key["archived"]), group.value]));
+
+            const scanned = setupWriter(makeSchema());
+
+            await seed(scanned);
+
+            const scanGroups = await scanned.groupBy("todos", { by: ["archived"] });
+
+            expect(scanGroups.filter((group) => group.key["archived"] === true)).toStrictEqual([{ key: { archived: true }, value: 1 }]);
+
+            // Same rows, same harness — only the declared index differs, so the
+            // reader lazily backfills the companion and takes the indexed path.
+            const indexed = setupWriter(makeSchema(countByArchived));
+
+            expect(byKey(await indexed.groupBy("todos", { by: ["archived"] }))).toStrictEqual(byKey(scanGroups));
         });
 
         it("does not answer a PARTIALLY-pinned groupBy from the companion", async () => {
@@ -445,8 +564,8 @@ describe("ctx-db aggregates", () => {
                 await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p2" } })).resolves.toBeNull();
             });
 
-            it("honors the index static `where`", async () => {
-                expect.assertions(1);
+            it("honors the index static `where` when the request carries it", async () => {
+                expect.assertions(2);
 
                 const writer = setupWriter(makeSchema(activeSumSeqByProject));
 
@@ -455,7 +574,15 @@ describe("ctx-db aggregates", () => {
                 harness.raw(`DELETE FROM "todos"`);
 
                 // Only active p1 rows (seq 1,2,0) contribute → 3 (the archived t3 is excluded).
-                await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(3);
+                // The source rows are gone, so a non-null answer proves the counter was read.
+                await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { archived: false, projectId: "p1" } })).resolves.toBe(3);
+
+                // The SAME request minus the index's own filter must NOT be answered
+                // from that counter: `{ projectId: "p1" }` is a broader question than
+                // `{ projectId: "p1", archived: false }`, and the counter only ever
+                // tallied the narrower one. It falls to the scan, which sees the
+                // emptied table.
+                await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBeNull();
             });
 
             it("whole-table sum keys on the empty tuple", async () => {

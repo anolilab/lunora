@@ -182,19 +182,36 @@ the details.
 ## Step 5: migrate the data you already have
 
 Adding `.shardBy()` to a table with rows in it is a data migration, not just a
-schema edit: existing rows live in `__root__` and need to move to their shards.
-Do it with the widen-migrate-narrow pattern rather than in one step:
+schema edit. The edit routes _future_ rows by `channelId`; the rows already in
+`__root__` stay there, unreadable and still consuming the bytes you sharded to
+reclaim.
+
+Move them with an export/import round trip — dump the table, deploy the edit,
+then import the dump back so `lunora import` routes each row to its new shard:
 
 ```bash
-lunora migrate create --name shard_messages
-lunora migrate up --prod --url <url> --yes
-lunora migrate status
+lunora export --tables messages --out messages.ndjson --prod --url <url>
+# stop writes
+lunora codegen && lunora deploy --allow-schema-drift
+lunora import messages.ndjson --prod --url <url> --yes --verify
+# resume writes, then clear the table at shard __root__ in the Studio
 ```
 
-[Migrations](/docs/concepts/migrations) covers the pattern, and
-[Backups](/docs/concepts/backups) covers what to take before you start. Take the
-snapshot. A sharding migration is exactly the kind of change you want a
-point-in-time recovery for.
+The root DO keeps its own copies of every row it held before the edit. Your app
+can no longer see them, but the Studio's **Data** page can — set the shard key
+to `__root__` and use **Clear table**. That step is off the critical path, so do
+it after writes resume.
+
+[Migrating a populated table](/docs/concepts/sharding#migrating-a-populated-table)
+has the full sequence. The table is unavailable for the length of that window,
+so take it deliberately — and take a snapshot first.
+[Backups](/docs/concepts/backups) covers point-in-time recovery, which is
+exactly what you want behind a sharding migration.
+
+<Callout type="warn">
+    `lunora migrate` is not the tool here. A `defineMigration` transform runs inside a single shard's Durable Object and can only rewrite the row it was handed,
+    so it cannot move a row between DOs. Reach for it to backfill a column, not to re-home a table.
+</Callout>
 
 ## Checking your work
 

@@ -44,19 +44,17 @@ const attachmentKeyFor = (channelId: string, userId: string): string => `files/c
  * subscriber. Everything a query returns must be a function of the data;
  * `attachmentUrl` below mints the URL on demand instead.
  */
-export const list = query
-    .input({ channelId: v.string().meta({ schema: { maxLength: 128 } }) })
-    .query(async ({ args: { channelId }, ctx }): Promise<Doc<"messages">[]> => {
-        if (!ctx.auth.userId) {
-            return [];
-        }
+export const list = query.input({ channelId: v.string().max(128) }).query(async ({ args: { channelId }, ctx }): Promise<Doc<"messages">[]> => {
+    if (!ctx.auth.userId) {
+        return [];
+    }
 
-        return ctx.db
-            .query("messages")
-            .withIndex("by_channel", (q) => q.eq("channelId", channelId))
-            .order("asc")
-            .collect();
-    });
+    return ctx.db
+        .query("messages")
+        .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+        .order("asc")
+        .collect();
+});
 
 /**
  * Full-text search within one channel, through the `search_content` index.
@@ -64,7 +62,7 @@ export const list = query
  * searching everywhere would be a fan-out across every channel DO.
  */
 export const search = query
-    .input({ channelId: v.string().meta({ schema: { maxLength: 128 } }), text: v.string().meta({ schema: { maxLength: 200 } }) })
+    .input({ channelId: v.string().max(128), text: v.string().max(200) })
     .query(async ({ args: { channelId, text }, ctx }): Promise<Doc<"messages">[]> => {
         if (!ctx.auth.userId || !text.trim()) {
             return [];
@@ -85,7 +83,7 @@ export const search = query
  */
 export const attachmentUrl = action
     .use(rateLimit(actionLimiter, "upload", byUser))
-    .input({ channelId: v.string().meta({ schema: { maxLength: 128 } }), key: v.string().meta({ schema: { maxLength: 512 } }) })
+    .input({ channelId: v.string().max(128), key: v.string().max(512) })
     .action(async ({ args: { channelId, key }, ctx }): Promise<string> => {
         if (!ctx.auth.userId) {
             throw new LunoraError("UNAUTHENTICATED", "sign in to download");
@@ -109,10 +107,10 @@ export const attachmentUrl = action
 export const send = mutation
     .use(rateLimit(mutationLimiter, "send", byUser))
     .input({
-        channelId: v.string().meta({ schema: { maxLength: 128 } }),
-        content: v.string().meta({ schema: { maxLength: 4096 } }),
-        attachmentKey: v.optional(v.string().meta({ schema: { maxLength: 512 } })),
-        attachmentName: v.optional(v.string().meta({ schema: { maxLength: 256 } })),
+        channelId: v.string().max(128),
+        content: v.string().max(4096),
+        attachmentKey: v.optional(v.string().max(512)),
+        attachmentName: v.optional(v.string().max(256)),
     })
     .mutation(async ({ args: { attachmentKey, attachmentName, channelId, content }, ctx }): Promise<Id<"messages">> => {
         if (!ctx.auth.userId) {
@@ -147,7 +145,7 @@ export const send = mutation
  */
 export const requestAttachmentUpload = action
     .use(rateLimit(actionLimiter, "upload", byUser))
-    .input({ channelId: v.string().meta({ schema: { maxLength: 128 } }), contentType: v.string().meta({ schema: { maxLength: 128 } }) })
+    .input({ channelId: v.string().max(128), contentType: v.string().max(128) })
     .action(async ({ args: { channelId, contentType }, ctx }): Promise<{ key: string; url: string }> => {
         if (!ctx.auth.userId) {
             throw new LunoraError("UNAUTHENTICATED", "sign in to upload");

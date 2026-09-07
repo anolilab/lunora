@@ -80,7 +80,11 @@ describe("lunora prepare", () => {
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
             writeFileSync(
                 join(workdir, "package.json"),
-                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0" }, name: "app", scripts: { postcodegen: "node ./patch.mjs" } }),
+                JSON.stringify({
+                    dependencies: { "@lunora/d1": "1.0.0", "@lunora/storage": "1.0.0" },
+                    name: "app",
+                    scripts: { postcodegen: "node ./patch.mjs" },
+                }),
                 "utf8",
             );
 
@@ -105,7 +109,7 @@ describe("lunora prepare", () => {
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
             writeFileSync(
                 join(workdir, "package.json"),
-                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0" }, name: "app", scripts: { postcodegen: "exit 1" } }),
+                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0", "@lunora/storage": "1.0.0" }, name: "app", scripts: { postcodegen: "exit 1" } }),
                 "utf8",
             );
 
@@ -123,7 +127,7 @@ describe("lunora prepare", () => {
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
             writeFileSync(
                 join(workdir, "package.json"),
-                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0" }, name: "app", scripts: { build: "tsc" } }),
+                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0", "@lunora/storage": "1.0.0" }, name: "app", scripts: { build: "tsc" } }),
                 "utf8",
             );
 
@@ -139,11 +143,14 @@ describe("lunora prepare", () => {
     it("returns code 1 and surfaces problems when wrangler.jsonc has a stale compatibility_date", async () => {
         expect.assertions(3);
 
+        // A real database_id, so the D1 placeholder guard does not abort before
+        // validation runs — this test is about the stale date, not that guard.
         writeFileSync(
             join(workdir, "wrangler.jsonc"),
             `{
     "name": "x",
-    "compatibility_date": "2020-01-01"
+    "compatibility_date": "2020-01-01",
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-db-id-abc123" }]
 }`,
             "utf8",
         );
@@ -167,14 +174,14 @@ describe("lunora prepare", () => {
         expect(errors.length).toBeGreaterThan(0);
     });
 
-    it("auto-provisions DO bindings and warns about D1 placeholder, but does not abort", async () => {
+    it("blocks on a D1 placeholder id, exactly as deploy does", async () => {
         expect.assertions(4);
 
-        // Wrangler with a D1 placeholder (simulate a first-run after reconcile
-        // wrote the DB binding). prepare does NOT hard-block on the placeholder
-        // — that is a deploy-time guard only. prepare is intentionally softer:
-        // it surfaces the warning from reconcileWranglerBindings so the user
-        // can act before deploying.
+        // This asserted the opposite until `prepare` and `deploy` were made one
+        // pipeline: prepare reported "project is ready to deploy" for a project
+        // `lunora deploy` refuses outright, because a placeholder database_id
+        // means the D1 database does not exist yet. A pre-deploy check that
+        // passes where the deploy fails is worse than no check.
         mkdirSync(join(workdir, "src", "server"), { recursive: true });
         writeFileSync(join(workdir, "src", "server", "index.ts"), "export const ShardDO = class {};\nexport default { fetch() {} };", "utf8");
         writeFileSync(
@@ -193,20 +200,18 @@ describe("lunora prepare", () => {
             "utf8",
         );
 
-        const { logger, warns } = silentLogger();
+        const { logger } = silentLogger();
         const result = await runPrepareCommand({ cwd: workdir, logger });
 
-        // Validation passes (wrangler schema is valid; the placeholder id is not
-        // a wrangler-validator concern — it only verifies the binding exists)
-        expect(result.code).toBe(0);
-        expect(result.error).toBeUndefined();
-
-        // The D1 placeholder warning from reconcileWranglerBindings is surfaced
-        // (only when the binding was freshly written; here it already exists so
-        // reconcile is a no-op). Assert the warns array was captured at least.
-        expect(Array.isArray(warns)).toBe(true);
-        // No hard error on placeholder (that guard lives in deploy, not prepare)
-        expect(result.validation.problems).toEqual([]);
+        expect(result.code).toBe(1);
+        expect(result.error).toContain("placeholder database_id");
+        // And it names the fix, rather than leaving the user to discover it at
+        // deploy time.
+        expect(result.error).toContain("wrangler d1 create");
+        // Worded for the command the operator actually ran. These checks are
+        // shared with `deploy`, and a blocked `prepare` naming a command nobody
+        // typed reads as a bug in the tool rather than a problem in the project.
+        expect(result.error?.startsWith("prepare blocked:")).toBe(true);
     });
 
     it("syncs code-first cron schedules into wrangler.jsonc triggers.crons", async () => {
@@ -237,9 +242,11 @@ export default crons;
         expect(written).toContain("0 * * * *");
     });
 
-    it("clears a stale triggers.crons array when the project declares no crons", async () => {
+    it("keeps a triggers.crons entry the project never generated", async () => {
         expect.assertions(2);
 
+        // A hand-written `backupCron` trigger: codegen cannot see it, so prepare
+        // must not treat "not generated" as "stale".
         writeFileSync(
             join(workdir, "wrangler.jsonc"),
             VALID_WRANGLER.replace('"d1_databases"', '"triggers": { "crons": ["0 0 * * *"] },\n    "d1_databases"'),
@@ -253,7 +260,7 @@ export default crons;
 
         const parsed = parseJsonc(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")) as { triggers?: { crons?: string[] } };
 
-        expect(parsed.triggers?.crons).toEqual([]);
+        expect(parsed.triggers?.crons).toStrictEqual(["0 0 * * *"]);
     });
 
     it("returns code 1 when codegen fails (no schema.ts)", async () => {
@@ -281,5 +288,80 @@ export default crons;
         // the plumbing (logger.error called on non-zero) is tested.
         expect(typeof result.code).toBe("number");
         expect(errors).toBeInstanceOf(Array);
+    });
+
+    // `--update-schema-baseline` is the documented way to refresh a stale
+    // `lunora/.lunora-schema.json`, and nothing exercised it end to end: the
+    // gate's unit tests stop at the `rebless` thunk, so a break anywhere between
+    // the flag and the file on disk went unnoticed by this suite.
+    it("re-blesses a stale schema baseline that would otherwise block, under --update-schema-baseline", async () => {
+        expect.assertions(4);
+
+        writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+        const baselinePath = join(workdir, "lunora", ".lunora-schema.json");
+        const { logger } = silentLogger();
+
+        // First run captures the baseline (no baseline is never blocking).
+        await runPrepareCommand({ cwd: workdir, logger });
+
+        // Age it: drop a required field the current schema still declares, on a
+        // table no fixture migration iterates (`backfill-read-by` is on
+        // `messages`), so the drift is breaking AND uncovered.
+        const baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as { tables: { users: { fields: Record<string, unknown> } } };
+
+        delete baseline.tables.users.fields.role;
+        writeFileSync(baselinePath, JSON.stringify(baseline), "utf8");
+
+        const blocked = await runPrepareCommand({ cwd: workdir, logger });
+
+        expect(blocked.code).toBe(1);
+        expect(blocked.schemaDrift?.blocked).toBe(true);
+
+        const reblessed = await runPrepareCommand({ cwd: workdir, logger, updateSchemaBaseline: true });
+
+        expect(reblessed.code).toBe(0);
+        expect(JSON.parse(readFileSync(baselinePath, "utf8")).tables.users.fields.role).toBeDefined();
+    });
+
+    describe("advisory gate", () => {
+        /** `index_references_unknown_field` is an ERROR-level advisory. */
+        const addBogusIndexToSchema = (): void => {
+            const schemaPath = join(workdir, "lunora", "schema.ts");
+            const schema = readFileSync(schemaPath, "utf8");
+            const patched = schema.replace(
+                `.searchIndex("by_text", { field: "text", filterFields: ["channelId"] }),`,
+                `.searchIndex("by_text", { field: "text", filterFields: ["channelId"] })\n        .index("by_bogus", ["doesNotExist"]),`,
+            );
+
+            expect(patched).not.toBe(schema);
+
+            writeFileSync(schemaPath, patched, "utf8");
+        };
+
+        it("blocks on an ERROR-level advisory under --strict-advisories", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            addBogusIndexToSchema();
+
+            const { logger } = silentLogger();
+            const result = await runPrepareCommand({ cwd: workdir, logger, strictAdvisories: true });
+
+            expect(result.code).toBe(1);
+            expect(result.error).toContain("ERROR-level");
+        });
+
+        it("passes the same project under --no-strict-advisories, the opt-out the docs name", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            addBogusIndexToSchema();
+
+            const { logger } = silentLogger();
+            const result = await runPrepareCommand({ cwd: workdir, logger, strictAdvisories: false });
+
+            expect(result.code).toBe(0);
+        });
     });
 });

@@ -19,4 +19,14 @@ export interface AdvisorKvKeyAccess {
     line: number;
     /** The `ctx.kv` method invoked: `get` / `getRaw` / `getWithMetadata` / `put` / `delete`. */
     method: string;
+
+    /**
+     * Visibility of the enclosing procedure. `internal` procedures are not
+     * reachable by a caller, so the "any caller can read/overwrite/delete
+     * another user's entry" premise does not hold there and the finding drops
+     * to `INFO` (mirrors `AdvisorStorageKeyAccess.visibility` and
+     * `AdvisorOwnerFieldWrite.visibility`). `undefined` when the feeder could
+     * not attribute the access to a registered procedure.
+     */
+    visibility?: "internal" | "public";
 }

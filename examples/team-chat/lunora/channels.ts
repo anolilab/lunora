@@ -29,7 +29,7 @@ export const list = query.query(async ({ ctx }): Promise<Doc<"channels">[]> => {
  */
 export const create = mutation
     .use(rateLimit(mutationLimiter, "send", byUser))
-    .input({ name: v.string().meta({ schema: { maxLength: 64 } }) })
+    .input({ name: v.string().max(64) })
     .mutation(async ({ args: { name }, ctx }): Promise<Id<"channels">> => {
         if (!ctx.auth.userId) {
             throw new LunoraError("UNAUTHENTICATED", "sign in to create a channel");

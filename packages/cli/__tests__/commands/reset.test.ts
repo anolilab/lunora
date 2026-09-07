@@ -92,6 +92,45 @@ describe("lunora reset", () => {
             expect(existsSync(stateDir)).toBe(true);
         });
 
+        it("names every directory it is about to delete in the confirmation", async () => {
+            expect.assertions(4);
+
+            const prompts: string[] = [];
+
+            // Both confirmation strings hardcoded ".wrangler/state" while `--all`
+            // also removes `.lunora-cache`, so the operator agreed to less than the
+            // loop below then deleted.
+            await runResetCommand({
+                all: true,
+                confirm: async (prompt) => {
+                    prompts.push(prompt);
+
+                    return false;
+                },
+                cwd: workdir,
+                logger: silentLogger(),
+            });
+
+            expect(prompts[0]).toContain(".wrangler");
+            expect(prompts[0]).toContain(".lunora-cache");
+
+            const plainPrompts: string[] = [];
+
+            await runResetCommand({
+                confirm: async (prompt) => {
+                    plainPrompts.push(prompt);
+
+                    return false;
+                },
+                cwd: workdir,
+                logger: silentLogger(),
+            });
+
+            // …and without `--all` it must NOT name a directory it will not touch.
+            expect(plainPrompts[0]).toContain(".wrangler");
+            expect(plainPrompts[0]).not.toContain(".lunora-cache");
+        });
+
         it("refuses without --yes when stdin is not a TTY", async () => {
             expect.assertions(3);
 

@@ -162,10 +162,13 @@ describe("liveQuery — reactive args (plan 340)", () => {
         expect(fake.subscriptions[1]?.unsubscribed).toBe(false);
         expect(fake.subscriptions[1]?.args).toStrictEqual({ channelId: "random" });
 
-        // A late frame from the torn-down subscription must not leak into the signal.
+        // The previous args' value does not survive the switch, and a late frame
+        // from the torn-down subscription must not leak into the signal.
+        expect(data()).toBeUndefined();
+
         fake.subscriptions[0]?.push({ messages: ["stale"] });
 
-        expect(data()).toStrictEqual({ messages: ["hi"] });
+        expect(data()).toBeUndefined();
 
         fake.subscriptions[1]?.push({ messages: ["fresh"] });
 

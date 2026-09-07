@@ -23,22 +23,20 @@ const byUser = { key: (ctx: { auth: { userId?: string | null }; ip?: string }): 
  * typed. Heartbeats already poke every subscriber; the client applies the TTL
  * as it renders, and nothing has to sweep expired rows on an alarm.
  */
-export const list = query
-    .input({ channelId: v.string().meta({ schema: { maxLength: 128 } }) })
-    .query(async ({ args: { channelId }, ctx }): Promise<Doc<"presence">[]> =>
-        ctx.db
-            .query("presence")
-            .withIndex("by_channel_session", (q) => q.eq("channelId", channelId))
-            .collect(),
-    );
+export const list = query.input({ channelId: v.string().max(128) }).query(async ({ args: { channelId }, ctx }): Promise<Doc<"presence">[]> =>
+    ctx.db
+        .query("presence")
+        .withIndex("by_channel_session", (q) => q.eq("channelId", channelId))
+        .collect(),
+);
 
 /** Called by every open tab on an interval, and once on channel switch. */
 export const heartbeat = mutation
     .use(rateLimit(mutationLimiter, "presence", byUser))
     .input({
-        channelId: v.string().meta({ schema: { maxLength: 128 } }),
-        sessionId: v.string().meta({ schema: { maxLength: 64 } }),
-        name: v.string().meta({ schema: { maxLength: 80 } }),
+        channelId: v.string().max(128),
+        sessionId: v.string().max(64),
+        name: v.string().max(80),
     })
     .mutation(async ({ args: { channelId, name, sessionId }, ctx }): Promise<void> => {
         if (!ctx.auth.userId) {
@@ -63,7 +61,7 @@ export const heartbeat = mutation
 /** Best-effort goodbye on tab close, so the roster updates without waiting out the TTL. */
 export const leave = mutation
     .use(rateLimit(mutationLimiter, "presence", byUser))
-    .input({ channelId: v.string().meta({ schema: { maxLength: 128 } }), sessionId: v.string().meta({ schema: { maxLength: 64 } }) })
+    .input({ channelId: v.string().max(128), sessionId: v.string().max(64) })
     .mutation(async ({ args: { channelId, sessionId }, ctx }): Promise<void> => {
         const existing = await ctx.db
             .query("presence")

@@ -514,8 +514,8 @@ describe("offline lifecycle (e2e)", () => {
         client.close();
     });
 
-    it("5. drops cached reads and queued writes from a different identity across sessions", async () => {
-        expect.assertions(3);
+    it("5. HOLDS a queued write across a reload whose session has not resolved yet, then replays it once the token lands", async () => {
+        expect.assertions(6);
 
         const indexedDB = new IDBFactory();
         const storage = createFakeAsyncStorage();
@@ -524,7 +524,7 @@ describe("offline lifecycle (e2e)", () => {
         // A prior, signed-in session left both a cached read and a queued write
         // stamped with its identity fingerprint.
         await createIndexedDbQueryCache({ indexedDB }).put(queryCacheKey("messages:list", "{}"), {
-            identity: "12:userastamp",
+            identity: "subj:user-a",
             serverCursor: 9,
             ts: 1,
             value: [{ _id: "secret" }],
@@ -533,10 +533,13 @@ describe("offline lifecycle (e2e)", () => {
             args: { title: "user-a" },
             functionPath: "posts:create",
             id: "m1",
-            identity: "12:userastamp",
+            identity: "subj:user-a",
         });
 
-        // --- Reload as a different (here: signed-out) identity ---------------
+        // --- Reload: the socket opens BEFORE the app resolves its session ----
+        // The durable replay starts in the constructor; `setAuthToken` lands a
+        // tick later, once the app's own token read resolves. Signed-out is the
+        // normal state of EVERY reload up to that point — not a different user.
         const client = new LunoraClient({
             fetch: fetchMock,
             persistence: createAsyncStoragePersistence({ storage }),
@@ -551,17 +554,109 @@ describe("offline lifecycle (e2e)", () => {
 
         client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
 
-        // The cached read is not replayed under the new identity.
+        // The cached read is not surfaced to a session with no resolved identity.
         expect(received).toEqual([]);
 
-        // Let any hydrated-write flush attempt settle.
         latestSocket().open();
+        await settleIndexedDb();
+
+        // The write is HELD, not replayed and not purged: there is no other
+        // identity to replay it as, so dropping here would destroy the queuing
+        // user's own offline write, irreversibly.
+        expect(fetchMock).not.toHaveBeenCalled();
+        await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toHaveLength(1);
+
+        // --- The app's session resolves — as the SAME user -------------------
+        client.setAuthToken("token-a", "user-a");
+        await settleIndexedDb();
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(JSON.parse((fetchMock.mock.calls[0]?.[1] as { body?: string } | undefined)?.body ?? "{}")).toMatchObject({ args: { title: "user-a" } });
+        await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toEqual([]);
+
+        client.close();
+    });
+
+    it("5b. drops (and purges) a queued write stamped by a DIFFERENT signed-in identity", async () => {
+        expect.assertions(3);
+
+        const storage = createFakeAsyncStorage();
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+
+        await createAsyncStoragePersistence({ storage }).append({
+            args: { title: "user-a" },
+            functionPath: "posts:create",
+            id: "m1",
+            identity: "subj:user-a",
+        });
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            persistence: createAsyncStoragePersistence({ storage }),
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        const settled: string[] = [];
+
+        client.onMutationSettled((event) => settled.push(event.status));
+
+        // Let the durable queue hydrate, then sign in as a genuinely different
+        // user and open the socket so the replay runs.
         await flushMicrotasks();
 
-        // The queued write is dropped, not replayed under the new identity, and
-        // is purged from durable storage.
+        client.setAuthToken("token-b", "user-b");
+
+        latestSocket().open();
+        await settleIndexedDb();
+
+        // Replaying would attribute user-a's write to user-b — terminal, and
+        // purged so a later hydrate can't resurrect it.
         expect(fetchMock).not.toHaveBeenCalled();
+        expect(settled).toEqual(["rejected"]);
         await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toEqual([]);
+
+        client.close();
+    });
+
+    it("5c. opens a socket for a hydrated write's shard after a crossTabSync tab self-promotes, with no subscription on it", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const storage = createFakeAsyncStorage();
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+
+        await createAsyncStoragePersistence({ storage }).append({
+            args: { title: "write-only" },
+            functionPath: "posts:create",
+            id: "m1",
+            identity: "subj:user-a",
+            shardKey: "s1",
+        });
+
+        // No `subscribe()` anywhere: this shard is write-only, which is exactly
+        // the case `onBecomeLeader`'s subscription replay does not cover.
+        const client = new LunoraClient({
+            crossTabSync: true,
+            fetch: fetchMock,
+            persistence: createAsyncStoragePersistence({ storage }),
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.setAuthToken("token-a", "user-a");
+
+        // Hydration runs inside the coordinator's startup claim window, where
+        // `ensureSocket` is a no-op because this tab is not (yet) the leader.
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(sockets).toHaveLength(0);
+
+        // Self-promotion after a full `leaderTimeout` with no other tab answering.
+        await vi.advanceTimersByTimeAsync(3000);
+
+        expect(sockets.map((socket) => new URL(socket.url).searchParams.get("shard"))).toEqual(["s1"]);
 
         client.close();
     });
@@ -821,6 +916,539 @@ describe("offline lifecycle (e2e)", () => {
         expect(fetchMock).not.toHaveBeenCalled();
         // ...and is purged from durable storage.
         await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toEqual([]);
+
+        client.close();
+    });
+
+    it("14. splits a batch chunk the worker refuses with 413 instead of rejecting every write in it", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        const attempted: number[] = [];
+        const accepted: number[] = [];
+
+        const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+            if (!(input as string).endsWith("/_lunora/rpc-batch")) {
+                throw new Error(`unexpected single-call fetch to ${input as string}`);
+            }
+
+            const { calls } = JSON.parse((init as RequestInit).body as string) as { calls: { id: number }[] };
+
+            attempted.push(calls.length);
+
+            // Stands in for the worker's 1 MiB body cap, shrunk to two entries.
+            // The refusal covers the WHOLE chunk, exactly as `PAYLOAD_TOO_LARGE`
+            // does — treating it as a verdict would drop every write in it.
+            if (calls.length > 2) {
+                return jsonResponse({ error: { code: "PAYLOAD_TOO_LARGE", message: "request body too large" } }, { status: 413 });
+            }
+
+            accepted.push(calls.length);
+
+            return jsonResponse({
+                results: calls.map((call) => {
+                    return { body: { result: { ok: true } }, id: call.id };
+                }),
+            });
+        });
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        const pending = Promise.all(Array.from({ length: 5 }, (_, index) => client.mutation(fnRef("posts:create"), { index })));
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.runAllTimersAsync();
+
+        const results = await pending;
+
+        // The over-cap chunk was attempted whole...
+        expect(attempted[0]).toBe(5);
+        // ...refused, then halved until it fit — never over the server's cap...
+        expect(Math.max(...accepted)).toBeLessThanOrEqual(2);
+        // ...with every write sent exactly once in an accepted chunk...
+        expect(accepted.reduce((sum, size) => sum + size, 0)).toBe(5);
+        // ...so all five committed instead of settling `rejected` wholesale.
+        expect(results).toHaveLength(5);
+
+        client.close();
+    });
+
+    it("15. splits a batch chunk over the body budget before sending it", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const bodyBytes: number[] = [];
+
+        const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+            if (!(input as string).endsWith("/_lunora/rpc-batch")) {
+                throw new Error(`unexpected single-call fetch to ${input as string}`);
+            }
+
+            const body = (init as RequestInit).body as string;
+            const bytes = new TextEncoder().encode(body).length;
+
+            bodyBytes.push(bytes);
+
+            const { calls } = JSON.parse(body) as { calls: { id: number }[] };
+
+            // The worker's real cap: a body over 1 MiB never reaches a handler.
+            if (bytes > 1_048_576) {
+                return jsonResponse({ error: { code: "PAYLOAD_TOO_LARGE", message: "request body too large" } }, { status: 413 });
+            }
+
+            return jsonResponse({
+                results: calls.map((call) => {
+                    return { body: { result: { ok: true } }, id: call.id };
+                }),
+            });
+        });
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        // Three writes well under the 500-entry cap but ~1.2 MiB together:
+        // count-only chunking sends them as one body the worker refuses.
+        const blob = "x".repeat(400_000);
+        const pending = Promise.all(Array.from({ length: 3 }, (_, index) => client.mutation(fnRef("posts:create"), { blob, index })));
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.runAllTimersAsync();
+
+        const results = await pending;
+
+        // Split BEFORE sending — no request ever went out over the cap...
+        expect(Math.max(...bodyBytes)).toBeLessThanOrEqual(1_048_576);
+        expect(bodyBytes.length).toBeGreaterThan(1);
+        // ...and every write committed.
+        expect(results).toHaveLength(3);
+
+        client.close();
+    });
+
+    it("16. re-queues a lone write when a gateway answers with no error envelope", async () => {
+        expect.assertions(5);
+
+        vi.useFakeTimers();
+
+        let attempt = 0;
+        const fetchMock = vi.fn<typeof fetch>(async () => {
+            attempt += 1;
+
+            // An edge/proxy blip: a 502 HTML page, no `{ error }` envelope. The
+            // server reached no verdict, so the durable write must survive it —
+            // as it already does when two or more writes are queued (the batch path).
+            if (attempt === 1) {
+                return new Response("<html><body>502 Bad Gateway</body></html>", { headers: { "content-type": "text/html" }, status: 502 });
+            }
+
+            return jsonResponse({ result: { id: "recovered" } });
+        });
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        const settled: { status: string }[] = [];
+
+        client.onMutationSettled((event) => settled.push(event));
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        // Exactly ONE queued write — the depth at which the single-call replay
+        // path is taken.
+        let outcome: string | undefined;
+        const pending = client.mutation(fnRef("posts:create"), { title: "lone" }).then(
+            (value) => {
+                outcome = "committed";
+
+                return value;
+            },
+            (error: unknown) => {
+                outcome = "rejected";
+
+                return error;
+            },
+        );
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Nothing settled: the write is still queued, waiting for the next flush.
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(settled).toEqual([]);
+        expect(outcome).toBeUndefined();
+
+        // Next reconnect → the same write replays and commits.
+        latestSocket().triggerClose();
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+        await pending;
+
+        expect(outcome).toBe("committed");
+        expect(settled.map((event) => event.status)).toEqual(["committed"]);
+
+        client.close();
+    });
+
+    it("17. waits out a 429's retry hint instead of dropping the queued write", async () => {
+        expect.assertions(6);
+
+        vi.useFakeTimers();
+
+        let attempt = 0;
+        const fetchMock = vi.fn<typeof fetch>(async () => {
+            attempt += 1;
+
+            // Round 1 — the runtime's REST limiter: a `RATE_LIMITED` envelope
+            // whose hint rides in the `Retry-After` header (whole seconds).
+            if (attempt === 1) {
+                return jsonResponse(
+                    { error: { code: "RATE_LIMITED", message: "Rate limit exceeded" } },
+                    { headers: { "content-type": "application/json", "retry-after": "3" }, status: 429 },
+                );
+            }
+
+            // Round 2 — the protocol fixture's shape: `TOO_MANY_REQUESTS` with
+            // `data.retryAfterMs`.
+            if (attempt === 2) {
+                return jsonResponse({ error: { code: "TOO_MANY_REQUESTS", data: { retryAfterMs: 1000 }, message: "slow down" } }, { status: 429 });
+            }
+
+            return jsonResponse({ result: { id: "accepted" } });
+        });
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        const settled: { status: string }[] = [];
+
+        client.onMutationSettled((event) => settled.push(event));
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        const pending = client.mutation(fnRef("posts:create"), { title: "limited" }).catch(() => "rejected");
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // A rate limiter reached no verdict on the write — nothing settled.
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(settled).toEqual([]);
+
+        // The hint is honoured, not ignored: no retry a millisecond early.
+        await vi.advanceTimersByTimeAsync(2999);
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(1);
+
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+
+        // Round 2's `data.retryAfterMs` schedules the next attempt just the same.
+        await vi.advanceTimersByTimeAsync(1000);
+
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+
+        await expect(pending).resolves.toEqual({ id: "accepted" });
+
+        client.close();
+    });
+});
+
+/**
+ * The outbox's retry policy under failures the server left no readable verdict
+ * on: a refusal with no `Retry-After` hint, a hint per shard key, the HTTP-date
+ * form of `Retry-After`, and a non-2xx that is not a Lunora error envelope at
+ * all. Same harness as the lifecycle suite above — a real client, a mock socket,
+ * and a `fetch` that answers the way a limiter or an edge proxy does.
+ */
+describe("outbox replay backoff", () => {
+    beforeEach(() => {
+        sockets.length = 0;
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
+    const offlineClient = (fetchMock: typeof fetch): LunoraClient =>
+        new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+    it("backs off a rate-limit refusal that carried no hint at all", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+        // Pin the jitter so the backoff is one number a test can wait on:
+        // 1000ms base * (0.5 + 0.5 * 0.5) = 750ms.
+        vi.spyOn(Math, "random").mockReturnValue(0.5);
+
+        let attempt = 0;
+        const fetchMock = vi.fn<typeof fetch>(async () => {
+            attempt += 1;
+
+            // A limiter that refused the write and said nothing about when to
+            // come back — no `Retry-After` header, no `data.retryAfterMs`.
+            if (attempt === 1) {
+                return jsonResponse({ error: { code: "TOO_MANY_REQUESTS", message: "slow down" } }, { status: 429 });
+            }
+
+            return jsonResponse({ result: { id: "accepted" } });
+        });
+
+        const client = offlineClient(fetchMock);
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        const pending = client.mutation(fnRef("posts:create"), { title: "hintless" });
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        // The socket stays open through a 429, so nothing else will ever
+        // schedule this flush — without a default backoff the write is stranded.
+        await vi.advanceTimersByTimeAsync(749);
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(1);
+
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        await expect(pending).resolves.toEqual({ id: "accepted" });
+
+        client.close();
+    });
+
+    it("keys the retry hint per shard, so one limited shard cannot strand another", async () => {
+        expect.assertions(5);
+
+        vi.useFakeTimers();
+
+        const attempts: unknown[] = [];
+        const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+            const { shardKey } = JSON.parse((init?.body ?? "{}") as string) as { shardKey?: string };
+
+            attempts.push(shardKey);
+
+            // First refusal per shard, with two very different hints: the long
+            // one must not become the short one's wait, and neither flush may
+            // consume the other's.
+            if (attempts.filter((key) => key === shardKey).length === 1) {
+                return jsonResponse(
+                    { error: { code: "TOO_MANY_REQUESTS", data: { retryAfterMs: shardKey === "room-a" ? 30_000 : 500 }, message: "slow down" } },
+                    { status: 429 },
+                );
+            }
+
+            return jsonResponse({ result: { id: `${String(shardKey)}-accepted` } });
+        });
+
+        const client = offlineClient(fetchMock);
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined, { shardKey: "room-a" });
+        client.subscribe(fnRef("posts:list"), {}, () => undefined, { shardKey: "room-b" });
+
+        sockets[0]?.open();
+        sockets[1]?.open();
+        sockets[0]?.triggerClose();
+        sockets[1]?.triggerClose();
+
+        const pendingA = client.mutation(fnRef("posts:create"), { title: "a" }, { shardKey: "room-a" });
+        const pendingB = client.mutation(fnRef("posts:create"), { title: "b" }, { shardKey: "room-b" });
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        sockets[2]?.open();
+        sockets[3]?.open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(attempts.toSorted((a, b) => String(a).localeCompare(String(b)))).toEqual(["room-a", "room-b"]);
+
+        // `room-b` waits out its own 500ms hint, not `room-a`'s 30s one.
+        await vi.advanceTimersByTimeAsync(500);
+
+        expect(attempts.filter((key) => key === "room-b")).toHaveLength(2);
+        await expect(pendingB).resolves.toEqual({ id: "room-b-accepted" });
+
+        // ...and `room-a` still retries on its own, rather than having had its
+        // hint consumed by the shard that flushed alongside it.
+        await vi.advanceTimersByTimeAsync(29_500);
+
+        expect(attempts.filter((key) => key === "room-a")).toHaveLength(2);
+        await expect(pendingA).resolves.toEqual({ id: "room-a-accepted" });
+
+        client.close();
+    });
+
+    it("waits out a `Retry-After` sent as an HTTP-date", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+        vi.spyOn(Math, "random").mockReturnValue(0.5);
+
+        let attempt = 0;
+        const fetchMock = vi.fn<typeof fetch>(async () => {
+            attempt += 1;
+
+            // RFC 9110 allows delta-seconds OR an HTTP-date, and a proxy in
+            // front of the worker sends the form the client never parsed.
+            if (attempt === 1) {
+                return jsonResponse(
+                    { error: { code: "TOO_MANY_REQUESTS", message: "slow down" } },
+                    { headers: { "retry-after": "Thu, 01 Jan 2026 00:00:02 GMT" }, status: 429 },
+                );
+            }
+
+            return jsonResponse({ result: { id: "accepted" } });
+        });
+
+        const client = offlineClient(fetchMock);
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        const pending = client.mutation(fnRef("posts:create"), { title: "dated" });
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        // The date is 2s out — honoured as 2s, neither read as `NaN` nor left to
+        // the 750ms hintless backoff.
+        await vi.advanceTimersByTimeAsync(1979);
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(20);
+
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        await expect(pending).resolves.toEqual({ id: "accepted" });
+
+        client.close();
+    });
+
+    it("settles a lone write on an envelope-less 4xx instead of replaying it forever", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        const fetchMock = vi.fn<typeof fetch>(
+            async () => new Response("<html><body>403 Forbidden</body></html>", { headers: { "content-type": "text/html" }, status: 403 }),
+        );
+        const client = offlineClient(fetchMock);
+        const settled: { status: string }[] = [];
+
+        client.onMutationSettled((event) => settled.push(event));
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        const pending = client.mutation(fnRef("posts:create"), { title: "refused" }).catch((error: unknown) => error);
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // A proxy that refused the REQUEST outright: no `{ error }` envelope to
+        // classify, but a status that says replaying can only reproduce it. The
+        // write settles, and the queue moves.
+        await expect(pending).resolves.toMatchObject({ code: "FORBIDDEN" });
+        expect(settled.map((event) => event.status)).toEqual(["rejected"]);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(client.pendingCount()).toBe(0);
+
+        client.close();
+    });
+
+    it("settles a whole batch on an envelope-less 4xx instead of wedging the outbox head", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const fetchMock = vi.fn<typeof fetch>(
+            async () => new Response("<html><body>400 Bad Request</body></html>", { headers: { "content-type": "text/html" }, status: 400 }),
+        );
+        const client = offlineClient(fetchMock);
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        // Two writes take the batch path, where the same unreadable reply used
+        // to re-queue the whole chunk unconditionally.
+        const first = client.mutation(fnRef("posts:create"), { title: "one" }).catch((error: unknown) => error);
+        const second = client.mutation(fnRef("posts:create"), { title: "two" }).catch((error: unknown) => error);
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        await expect(first).resolves.toMatchObject({ code: "BAD_REQUEST" });
+        await expect(second).resolves.toMatchObject({ code: "BAD_REQUEST" });
+        expect(client.pendingCount()).toBe(0);
 
         client.close();
     });

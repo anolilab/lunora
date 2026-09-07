@@ -113,6 +113,30 @@ describe(agentToolDefinitions, () => {
         expect(tools[0]?.inputSchema.required).toStrictEqual(["prompt"]);
     });
 
+    // A client that badges (or confirms) from `annotations` saw nothing here, so
+    // the one tool that starts a durable, billed run was the one it never
+    // prompted for.
+    it("annotates agent_<name> as a non-read-only side effect and the status tool as read-only", () => {
+        expect.assertions(2);
+
+        const tools = agentToolDefinitions(exposures, true);
+
+        expect(tools[0]?.annotations).toStrictEqual({
+            destructiveHint: true,
+            idempotentHint: false,
+            openWorldHint: true,
+            readOnlyHint: false,
+            title: "Run the support agent (starts a durable run)",
+        });
+        expect(tools[2]?.annotations).toStrictEqual({
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: true,
+            readOnlyHint: true,
+            title: "Check a durable agent run",
+        });
+    });
+
     it("honours a toolName override", () => {
         expect.assertions(1);
 
@@ -277,5 +301,46 @@ describe(callAgentTool, () => {
         const result = await callAgentTool(asClient, "lunora_agent_status", { threadKey: "t-1" }, baseOptions());
 
         expect(parseText(result)).toStrictEqual({ status: "running", threadKey: "t-1" });
+    });
+});
+
+describe("awaiting_input is a stopped state", () => {
+    // `AgentThreadStatus` is "awaiting_input" | "cancelled" | "error" | "idle" |
+    // "running". Treating `awaiting_input` as still-running burned the whole
+    // `maxWaitMs` budget — one admin query per poll — on every human-in-the-loop
+    // pause, then returned `status: "running"` with a hint to poll a tool that
+    // would answer `awaiting_input` forever. MCP has no way to supply the input.
+    it("returns immediately instead of polling out the budget", async () => {
+        expect.assertions(4);
+
+        const client = mockClient({
+            messages: [{ content: "Ready to charge the card. Approve?", role: "assistant" }],
+            threads: [{ status: "awaiting_input" }],
+        });
+
+        const result = await callAgentTool(
+            client.asClient,
+            "agent_billing",
+            { prompt: "refund order 7" },
+            baseOptions({ maxWaitMs: 60_000, pollIntervalMs: 600 }),
+        );
+        const payload = parseText(result);
+
+        expect(result.isError).toBeUndefined();
+        expect(payload["status"]).toBe("awaiting_input");
+        expect(String(payload["hint"])).toContain("approval");
+        // One thread poll + one message read — not ~100 polls.
+        expect(client.query).toHaveBeenCalledTimes(2);
+    });
+
+    it("reports awaiting_input from the generic status tool too", async () => {
+        expect.assertions(2);
+
+        const client = mockClient({ messages: [], threads: [{ status: "awaiting_input" }] });
+        const result = await callAgentTool(client.asClient, "lunora_agent_status", { threadKey: "t-x" }, baseOptions());
+        const payload = parseText(result);
+
+        expect(result.isError).toBeUndefined();
+        expect(payload["status"]).toBe("awaiting_input");
     });
 });

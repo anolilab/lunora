@@ -24,32 +24,21 @@ export type {
     DockerLike,
 } from "./container-logs";
 export { streamContainerLogs } from "./container-logs";
-export type {
-    DeployDriver,
-    DeployRequest,
-    DevRequest,
-    DriverContext,
-    DriverToolchain,
-    NamedResource,
-    ProvisionResult,
-    ResourceGraph,
-    SecretRequest,
-    ShardNamespaceResource,
-    TailRequest,
-    ToolchainCommand,
-} from "./deploy-driver";
+export type { DeployDriver, DeployRequest, DevRequest, DriverToolchain, SecretRequest, TailRequest, ToolchainCommand } from "./deploy-driver";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
-export { detectFramework, readProjectDependencyNames } from "./detect-framework";
+export { detectFramework, projectUsesUmbrella, readProjectDependencyNames } from "./detect-framework";
 export type { ClaimDevServerStateResult, DevServerMode, DevServerState } from "./dev-server-state";
 export {
     claimDevServerState,
     clearDevServerState,
+    DEV_BINDINGS_FILE,
     DEV_DAEMON_ENV,
     DEV_HANDOFF_ENV,
     DEV_LOG_FILE,
     DEV_LOG_FILE_ENV,
     DEV_STATE_DIR,
     DEV_STATE_FILE,
+    isDevServerReady,
     isProcessAlive,
     isRecordedProcessCurrent,
     readDevServerState,
@@ -66,9 +55,9 @@ export {
     removeDevVariableLine,
     upsertDevVariableLine,
 } from "./dev-variables-format";
-export { DEFAULT_DEPLOY_TARGET, deployTargetIds, resolveDeployDriver } from "./driver-registry";
+export { DEFAULT_DEPLOY_TARGET, deployTargetIds, isRunnableTarget, resolveDeployDriver, runnableTargetIds } from "./driver-registry";
 export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
-export { inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
+export { COMPOSED_WORKER_ENTRY, inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
 export type { LinkedProject } from "./linked-project";
 export { LINKED_PROJECT_DIR, LINKED_PROJECT_FILE, readLinkedProject, writeLinkedProject } from "./linked-project";
 export type { LintIgnoreOutcome, LintIgnoreStatus, LintTool } from "./lint-ignores";
@@ -76,8 +65,12 @@ export { applyLintIgnores, detectLintTools, LUNORA_IGNORED_PATHS } from "./lint-
 export type { LunoraFormattedLine, LunoraLineLevel } from "./log-format";
 export { formatLunoraEvent, LUNORA_EVENT_SOURCE } from "./log-format";
 export { default as LunoraReporter } from "./lunora-reporter";
+export type { PackageManager, PackageManagerProbe } from "./package-manager";
+export { addArgsFor, detectInstalledManagers, detectPackageManager, execArgsFor, installArgsFor, runScriptArgsFor, runScriptCommand } from "./package-manager";
 export type { SecretEntry } from "./package-secrets-registry";
 export { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
+export type { HookLogger, HookSpawnDescriptor, HookSpawner, PostCodegenHookResult } from "./post-codegen-hook";
+export { runPostCodegenHook } from "./post-codegen-hook";
 export type { LunoraProjectConfig, RemotePreference } from "./project-config";
 export {
     interpretRemote,
@@ -135,7 +128,7 @@ export type {
     WireResult,
     WireRlsEdit,
 } from "./schema-edit/policy-scaffold";
-export { classifyPolicyEdit, scaffoldPolicyFile, wireRlsIntoProcedure } from "./schema-edit/policy-scaffold";
+export { classifyPolicyEdit, resolveServerModule, scaffoldPolicyFile, wireRlsIntoProcedure } from "./schema-edit/policy-scaffold";
 export type { DiscoverSchemaInfoResult, SchemaInfo } from "./schema-info";
 export { discoverSchemaInfo } from "./schema-info";
 export type { BadgeName, BadgeSpec, LevelBadgeName, StepBadgeName } from "./tui-theme";

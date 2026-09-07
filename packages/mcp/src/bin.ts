@@ -6,7 +6,7 @@ import { BinError, runBin } from "./run-bin";
  * stays a plain `{ command, env }`:
  *
  * - `LUNORA_URL` (required) — base URL of the deployed Worker.
- * - `LUNORA_ADMIN_TOKEN` (optional) — bearer token sent on every RPC.
+ * - `LUNORA_ADMIN_TOKEN` (required) — the deployment's admin bearer, sent on every RPC.
  *
  * The validation/startup logic lives in `runBin` (testable in isolation); this
  * entry is just the top-level-await shim that maps a `BinError` onto a non-zero

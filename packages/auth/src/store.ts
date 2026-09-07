@@ -190,27 +190,34 @@ export interface AuthStore {
 }
 
 /**
- * Evaluate a better-auth where clause list against a row. Clauses fold
- * left-to-right by their `connector` (`AND` by default, `OR` when set) — the
- * same precedence better-auth's own adapters use. An empty list matches every
- * row. Exported so any in-memory-style {@link AuthStore} can reuse it.
+ * Evaluate a better-auth where clause list against a row.
+ *
+ * better-auth hands an adapter a FLAT list in which each clause carries its own
+ * `connector` (`AND` by default). Every persistent adapter it ships resolves that
+ * by PARTITIONING: `AND(and-clauses) AND OR(or-clauses)`. The OR clauses are
+ * alternatives among themselves, never an escape hatch from the AND clauses —
+ * `@better-auth/kysely-adapter` pushes each group into its own `.where()` (two
+ * `.where()` calls are ANDed), `@better-auth/drizzle-adapter` ends in
+ * `and(andClause, orClause)`, and `@better-auth/prisma-adapter` emits
+ * `{ AND: […], OR: […] }`, which Prisma also ANDs.
+ *
+ * This used to fold the list left-associatively instead, so `[A, B(OR), C(OR)]`
+ * meant `A OR B OR C` — strictly BROADER than any of them. On a credential lookup
+ * that is an authentication bypass in shape: a row failing the primary condition
+ * is still returned because a secondary one matched. `@better-auth/memory-adapter`
+ * does fold left, but it is the only one and it re-evaluates `where[0]` inside the
+ * same loop; the persistent adapters are the contract worth mirroring, and they
+ * are also what a plugin author will have tested against.
+ *
+ * An empty list matches every row, and a list with no OR clause is unaffected —
+ * which is every clause list better-auth 1.7.1 itself builds. Exported so any
+ * in-memory-style {@link AuthStore} can reuse it.
  */
 export const matchesWhere = (row: AuthRow, where: ReadonlyArray<AuthWhereClause>): boolean => {
-    let result = true;
+    const alternatives = where.filter((clause) => clause.connector === "OR");
+    const required = where.filter((clause) => clause.connector !== "OR");
 
-    for (const [index, clause] of where.entries()) {
-        const clauseResult = evaluateClause(row, clause);
-
-        if (index === 0) {
-            result = clauseResult;
-        } else if (clause.connector === "OR") {
-            result = result || clauseResult;
-        } else {
-            result = result && clauseResult;
-        }
-    }
-
-    return result;
+    return required.every((clause) => evaluateClause(row, clause)) && (alternatives.length === 0 || alternatives.some((clause) => evaluateClause(row, clause)));
 };
 
 /**

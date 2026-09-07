@@ -21,7 +21,7 @@ lunora init [name] [-t <template>]      # scaffold a new project (default: react
 lunora add <auth|email>                 # add a feature to the current project
 lunora view [--remote]                  # open the Lunora studio in your browser
 lunora docs [section]                   # open the docs site in your browser
-lunora info [--json]                    # print versions, wrangler summary, schema overview
+lunora info [--json] [--bindings]       # versions + wrangler summary; --bindings for the manifest
 lunora doctor [--format <pretty|json>]  # preflight the project (bindings, placeholders, secrets)
 lunora registry <add|list|view|build>   # component registry
 lunora rules <install|check>            # install the AI agent skills into .agents/skills/
@@ -46,10 +46,11 @@ lunora insights [--shard <key>]         # write-conflict / error / latency hot-s
 lunora reset [--all] [--yes]            # clear local Miniflare state
 
 # Deploy
-lunora prepare [--api-spec <spec>]      # codegen + wrangler validation — for CI
+lunora prepare [--api-spec <spec>]      # every pre-deploy gate, without deploying — for CI
 lunora build [--out-dir <dir>]          # bundle the worker to disk without deploying
 lunora deploy [--env <name>]            # codegen, validate wrangler, then wrangler deploy
-              [--migrate] [--prebuilt]  #   --preview uploads a version (no live traffic)
+              [--migrate --migrate-yes] #   --migrate also needs --migrate-url unless linked
+              [--prebuilt]              #   --preview uploads a version (no live traffic)
               [--preview] [--dry-run]   #   --dry-run validates + bundles, never publishes
               [--temporary]             #   --temporary deploys with no account (~60min, then claim)
               [--health-check]          #   --health-check probes /_lunora/health/ready after deploying
@@ -138,14 +139,21 @@ Flags: `--provider <auth\|clerk\|auth0>`, `--yes`, `--from <dir>` (local registr
 
 ### `lunora view`
 
-Opens the Lunora studio in your browser. Defaults to the local dev studio;
-`--remote` opens the deployed worker's studio instead (resolved from
-`.lunora/project.json`, see `lunora link`).
+Opens the Lunora studio in your browser. The studio is always local: the
+running dev server records where it is serving it in `.lunora/dev.json`, so
+`view` opens that — the embedded studio server for the wrangler flavor, or
+Vite's `/__lunora` route when `@lunora/vite` owns the dev server. With no dev
+server running it falls back to the studio server's default,
+`http://127.0.0.1:6173`.
 
 ```bash
-lunora view            # local dev studio
-lunora view --remote   # the deployed studio
+lunora view   # the running dev server's studio
 ```
+
+<Callout type="info">
+    A deployed worker serves no studio — its `/_lunora/*` routes are RPC, WebSocket, status, migrate and admin only — so there is no remote URL to open. The
+    `--remote` flag this command used to take opened a 404 and has been removed.
+</Callout>
 
 ### `lunora docs`
 
@@ -168,6 +176,28 @@ bug reports and CI diagnostics.
 lunora info
 lunora info --json
 ```
+
+#### `--bindings`: what this Worker needs provisioned
+
+`--bindings` narrows the command to one question a machine asks — the binding
+manifest. It is the same document `lunora build --emit-bindings` hands a deployer
+and `lunora dev` writes for a task runner, from the same derivation, so those
+consumers cannot be told different things.
+
+```bash
+lunora info --bindings                  # bindings, crons and var NAMES
+lunora info --bindings --json           # the manifest itself
+lunora info --bindings --out reqs.json  # write it
+```
+
+The manifest is a pure function of the project, so this answers without starting
+a dev server or producing a bundle — which is what a supervisor planning a
+multi-worker graph needs _before_ it starts anything. It never carries variable
+values, only their names.
+
+A project with no readable `wrangler.jsonc` exits non-zero rather than reporting
+an empty manifest: "this Worker needs nothing" is a claim a deployer acts on by
+provisioning nothing. `--out` without `--bindings` is an error.
 
 ### `lunora doctor`
 
@@ -227,25 +257,28 @@ describes everything that was checked, not only what went wrong.
 Branch on `finding.code`, never on `message`: the codes are the contract, the
 prose is not. New codes are added over time; treat an unknown one as advisory.
 
-| Code                             | Level | Meaning                                                                      |
-| -------------------------------- | ----- | ---------------------------------------------------------------------------- |
-| `admin-token-missing`            | info  | `LUNORA_ADMIN_TOKEN` is not set (studio / admin RPCs stay disabled).         |
-| `admin-token-set`                | pass  | `LUNORA_ADMIN_TOKEN` is set.                                                 |
-| `cli-shadowed`                   | warn  | The running `lunora` is not the project's own install.                       |
-| `d1-placeholder-id`              | fail  | A D1 binding still carries a scaffold `database_id`.                         |
-| `declared-export-missing`        | fail  | A declared container / workflow / agent is not exported by the worker entry. |
-| `declared-export-ok`             | pass  | A declared container / workflow / agent is exported by the worker entry.     |
-| `dev-vars-missing-secret`        | warn  | `.dev.vars` has secret-looking keys left at placeholder values.              |
-| `email-destination-placeholder`  | warn  | A `send_email` binding has a placeholder `destination_address`.              |
-| `vector-metadata-index-required` | info  | A declared Vectorize metadata filter needs its metadata index created.       |
-| `vector-metadata-unfilterable`   | warn  | A metadata property has a type Vectorize cannot filter on.                   |
-| `version-counter-spread`         | info  | Same-channel `@lunora/*` pre-release counters differ (normal, worth noting). |
-| `version-skew-channels`          | warn  | `@lunora/*` packages mix release channels (stable + alpha).                  |
-| `version-skew-cores`             | warn  | `@lunora/*` packages span different `major.minor.patch` versions.            |
-| `wrangler-missing`               | fail  | No `wrangler.jsonc` was found.                                               |
-| `wrangler-shard-binding-missing` | fail  | `wrangler.jsonc` is missing the `SHARD` durable-object binding.              |
-| `wrangler-shard-binding-ok`      | pass  | `wrangler.jsonc` declares the `SHARD` durable-object binding.                |
-| `wrangler-unparseable`           | fail  | `wrangler.jsonc` was found but is not valid JSONC.                           |
+| Code                             | Level | Meaning                                                                        |
+| -------------------------------- | ----- | ------------------------------------------------------------------------------ |
+| `admin-token-missing`            | info  | `LUNORA_ADMIN_TOKEN` is not set (studio / admin RPCs stay disabled).           |
+| `admin-token-set`                | pass  | `LUNORA_ADMIN_TOKEN` is set.                                                   |
+| `cli-shadowed`                   | warn  | The running `lunora` is not the project's own install.                         |
+| `d1-placeholder-id`              | fail  | A D1 binding still carries a scaffold `database_id`.                           |
+| `declared-export-missing`        | fail  | A declared container / workflow / agent is not exported by the worker entry.   |
+| `declared-export-ok`             | pass  | A declared container / workflow / agent is exported by the worker entry.       |
+| `declared-export-unchecked`      | warn  | Binding inference failed, so the worker-entry export check could not run.      |
+| `dev-vars-missing-secret`        | warn  | `.dev.vars` has secret-looking keys left at placeholder values.                |
+| `email-destination-placeholder`  | warn  | A `send_email` binding has a placeholder `destination_address`.                |
+| `scheduler-origin-missing`       | warn  | A `SchedulerDO` is declared but `LUNORA_ORIGIN_URL` is missing from wrangler.  |
+| `schema-unreadable`              | fail  | `lunora/schema.ts` could not be parsed, so schema-derived checks were skipped. |
+| `vector-metadata-index-required` | info  | A declared Vectorize metadata filter needs its metadata index created.         |
+| `vector-metadata-unfilterable`   | warn  | A metadata property has a type Vectorize cannot filter on.                     |
+| `version-counter-spread`         | info  | Same-channel `@lunora/*` pre-release counters differ (normal, worth noting).   |
+| `version-skew-channels`          | warn  | `@lunora/*` packages mix release channels (stable + alpha).                    |
+| `version-skew-cores`             | warn  | `@lunora/*` packages span different `major.minor.patch` versions.              |
+| `wrangler-missing`               | fail  | No `wrangler.jsonc` was found.                                                 |
+| `wrangler-shard-binding-missing` | fail  | `wrangler.jsonc` is missing the `SHARD` durable-object binding.                |
+| `wrangler-shard-binding-ok`      | pass  | `wrangler.jsonc` declares the `SHARD` durable-object binding.                  |
+| `wrangler-unparseable`           | fail  | `wrangler.jsonc` was found but is not valid JSONC.                             |
 
 ### `lunora dev`
 
@@ -255,10 +288,17 @@ In a project on `@lunora/vite` it spawns `vite dev` instead: the Vite plugin
 already runs the worker, studio, and codegen inside the Vite dev server.
 
 ```bash
-lunora dev                # default ports: studio 6173, worker 8787
-lunora dev --port 7000    # custom studio port
-lunora dev --no-studio    # Worker + codegen only
+lunora dev                     # default ports: studio 6173, worker 8787
+lunora dev --port 7000         # custom studio port
+lunora dev --worker-port 8790  # custom wrangler dev port
+lunora dev --no-studio         # Worker + codegen only
 ```
+
+When 8787 is taken, the worker lands on the next free port so two projects can
+run side by side. That silent move is refused when `.dev.vars` pins the worker
+origin to 8787 — an `AUTH_URL`/`BETTER_AUTH_URL` (or any other loopback origin
+on that port) would be left pointing at nothing. Free 8787, or pass
+`--worker-port` and update the pinned values to match.
 
 #### Background mode (AI agents)
 
@@ -276,6 +316,33 @@ lunora dev logs           # captured output of a background run (--lines n, 0 = 
 lunora dev stop           # SIGTERM, SIGKILL escalation after 10s; clears the record
 ```
 
+#### Files a supervisor reads
+
+`lunora dev` writes into the gitignored `.lunora/`, and names in its startup
+banner, whichever of these it produced:
+
+| File                                    | Carries                                                            |
+| --------------------------------------- | ------------------------------------------------------------------ |
+| `.lunora/dev.json`                      | live state — URL, PID, and `readyAt` once the server first answers |
+| `.lunora/dev-bindings.json` _(default)_ | the binding manifest, plus the origin it serves on                 |
+
+The manifest path is a default, not a fixed location — `--emit-bindings <file>`
+writes it elsewhere. And it is skipped entirely for a project with no readable
+`wrangler.jsonc`, since there is nothing to derive it from. So poll for it with
+your own timeout rather than blocking forever on a file this project may never
+produce; the banner names the path that was actually written.
+
+`readyAt` is what separates "the process exists" from "it is accepting
+requests" — the rest of the record is written before anything is listening.
+`lunora dev status` reports it as `ready` or `starting`, and `--json` carries
+`ready` / `readyAt`, so a task runner can gate a dependent step on a fact rather
+than a guessed sleep. A missing `readyAt` means _not ready yet_, never _never_.
+
+Naming a path with `--emit-bindings` also makes a derivation failure fatal, where
+the default write skips quietly: a named path means something is waiting on it.
+See [Monorepos and external IaC](/docs/concepts/monorepos-and-iac) for the full
+supervisor workflow.
+
 When an AI coding agent is detected (Claude Code, Cursor, Codex, Gemini CLI,
 Cline, …) background mode and JSON logging turn on automatically, so agent
 workflows need no flags. Set `LUNORA_AGENT_MODE=0` to opt out (or `=1` to
@@ -289,12 +356,17 @@ JSON log lines are available to everyone via `lunora dev --json` or
 
 Runs codegen, validates `wrangler.jsonc`, then invokes `wrangler deploy`.
 Pass `--migrate` to apply pending data migrations against the live worker
-immediately after a successful deploy.
+immediately after a successful deploy. It also requires `--migrate-yes` (an
+explicit confirmation; there is no environment variable for it), an admin token
+(`--migrate-token` or `LUNORA_ADMIN_TOKEN`), and `--migrate-url` unless this
+checkout is linked for the same `--env`. All three are checked **before**
+`wrangler deploy`, so a missing one aborts the deploy rather than skipping the
+migration.
 
 ```bash
 lunora deploy
 lunora deploy --env staging
-lunora deploy --migrate --migrate-token $LUNORA_ADMIN_TOKEN
+lunora deploy --migrate --migrate-yes --migrate-url https://app.example.com --migrate-token $LUNORA_ADMIN_TOKEN
 lunora deploy --temporary     # no Cloudflare account needed
 lunora deploy --dry-run       # run every pre-deploy gate, publish nothing
 lunora deploy --health-check  # …then prove the new version answers
@@ -459,9 +531,25 @@ lunora deployments promote <version-id> --yes # send 100% of traffic to a versio
 
 ### `lunora prepare`
 
-Same pipeline as `lunora deploy` but stops before `wrangler deploy`, with no
-Vite step and no network traffic. Use it in CI to catch codegen drift and
-`wrangler.jsonc` validation errors before the deploy job runs.
+Literally the same pipeline as `lunora deploy`, stopped before anything ships —
+one implementation, so what `prepare` accepts is what `deploy` accepts. No Vite
+step, no container image build, no `wrangler` invocation, no network traffic.
+
+It runs, and fails on, every pre-deploy gate:
+
+- codegen, its `postcodegen` hook, and platform-portability diagnostics
+- **ERROR-level advisories** (CI-default; `--no-strict-advisories` opts out)
+- the schema-drift gate — breaking schema changes with no new migration
+- binding provisioning into `wrangler.jsonc`
+- a placeholder D1 `database_id`, localhost origins in `vars`, missing container
+  sources, and an unavailable Docker daemon when Dockerfile containers are
+  declared
+- `wrangler.jsonc` validation
+
+<Callout type="info">
+    Earlier versions checked less than `deploy` did, so `prepare` could report "project is ready to deploy" for a project the deploy then refused. If you pinned
+    a CI job to the old behaviour, expect it to start failing on exactly the things the deploy would have.
+</Callout>
 
 ### `lunora verify`
 
@@ -469,23 +557,42 @@ Validates `wrangler.jsonc`, runs a codegen dry-run, and type-checks the
 project with `tsc --noEmit`. Nothing is written to disk. Exits non-zero on
 any error so you can gate merges on it.
 
+The codegen dry-run applies all three of codegen's gates — portability
+diagnostics, the schema-drift gate, and ERROR-level advisories — so a project
+`verify` passes is one `prepare` and `deploy` accept. The advisory gate takes the
+same `--no-strict-advisories` opt-out and the same CI-on/local-off default as
+everywhere else.
+
 ### `lunora migrate`
 
 Manages both schema migrations (D1 SQL) and online data migrations (row
 transforms that run against a live worker):
 
 ```bash
-lunora migrate generate add_email_index   # diff schema.ts → emit D1 SQL
-lunora migrate create --name backfill_at  # scaffold a data-migration stub
-lunora migrate up                         # run pending data migrations (dev)
-lunora migrate up --prod --url <url>      # run against production (requires --yes)
-lunora migrate status                     # show pending / applied / failed
+lunora migrate generate add_email_index        # diff schema.ts → emit D1 SQL
+lunora migrate create --name backfill_at       # scaffold a data-migration stub
+lunora migrate up backfill_at                  # run one data migration (dev)
+lunora migrate up backfill_at --prod --url <url>  # against production (requires --yes)
+lunora migrate down backfill_at                # run its `down` direction
+lunora migrate status backfill_at              # applied / pending / failed
 ```
+
+`up`, `down` and `status` each take the migration id declared in
+`lunora/migrations.ts` — there is no "run everything pending" mode here;
+`lunora deploy --migrate` is what iterates the declared ids in order.
 
 `generate` parses `lunora/schema.ts`, filters to `.global()` tables (sharded
 tables live in per-DO SQLite, so they need no migration), diffs against
 `lunora/migrations/.snapshot.json`, and emits a timestamped SQL file. Commit
 both the SQL and the snapshot: they are deterministic.
+
+Apply the SQL with `wrangler d1 execute <database> --file
+lunora/migrations/<file>.sql`. It is a multi-statement file, so it is not a
+`@lunora/d1` `Migration` — that API takes one statement per entry. In practice
+most of the file is redundant: the worker provisions every `.global()` table on
+first use, idempotently and additively. What it will never do is drop or
+retype, so the `DROP TABLE` / `DROP INDEX` statements and the hand-written
+block under "NOT auto-generated" are the parts worth applying.
 
 ### `lunora run`
 
@@ -509,6 +616,16 @@ lunora codegen
 lunora codegen --api-spec both     # also emit openapi.json and openrpc.json
 lunora codegen --format json       # machine-readable output
 ```
+
+It also keeps your linter and formatter skipping what it just wrote. `lunora
+init` offers this and `lunora add` re-applies it, which covers a project Lunora
+scaffolded — but a codebase that adopted Lunora later runs neither, so nothing
+ever told its ESLint / Prettier / Biome / oxlint about `_generated/`, and the
+first lint after adoption buries the real findings under thousands of
+generated-file errors. Detection is driven by the tools already in the project,
+every writer is idempotent, and a config it cannot safely edit (an ESLint flat
+config is arbitrary JavaScript; a monorepo-root config belongs to the workspace)
+is printed for you to paste rather than rewritten.
 
 `--api-spec` selects which API description to emit alongside the generated
 modules: `openapi` (the default) writes `openapi.json`, `openrpc` writes
@@ -636,8 +753,10 @@ snapshot format, restore drills, and moving data between deployments.
 
 Generates deterministic fake data from `lunora/schema.ts` and bulk-inserts it
 through the worker's admin endpoint. Rows are derived from a seed number, so the
-same `--seed` always produces identical data, which makes seeded fixtures
-reproducible across machines and CI runs.
+same `--seed` always produces identical ids and non-time columns. Columns named
+like a timestamp (`createdAt`, `expiresAt`, …) are generated relative to the
+wall clock, so a fixture that must be byte-identical across machines and CI runs
+needs `--now <epoch-ms>` pinned alongside `--seed`.
 
 ```bash
 lunora seed                          # every table, default 10 rows each
@@ -721,8 +840,8 @@ Copilot) how to use Lunora. `lunora dev`, the Vite plugin, and the studio nudge
 you to run this when the rules are missing.
 
 ```bash
-lunora rules install              # copy the skills into .agents/skills/ (skips edited files)
-lunora rules install --overwrite  # reinstall, replacing local edits
+lunora rules install              # copy the skills into .agents/skills/ (skips files that exist)
+lunora rules install --overwrite  # reinstall, replacing every existing file
 lunora rules check                # report which skills are present
 lunora rules check --strict       # exit non-zero when missing (CI gate)
 ```
@@ -853,5 +972,6 @@ loop.
 - `server.ts`: `internalQuery`, `internalMutation` exports re-typed against your schema
 - `dataModel.ts`: `Doc<"messages">`, `Id<"users">`, etc.
 
-These files are deterministic, so commit them. CI re-runs codegen and diffs
-the result to catch drift.
+These files are deterministic, so commit them. Nothing checks the committed
+copy for you — `verify` runs codegen as a dry run and `prepare` overwrites it —
+so gate it explicitly: `lunora codegen && git diff --exit-code lunora/_generated`.

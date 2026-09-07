@@ -255,6 +255,14 @@ export const mediaPipeline = defineWorkflow<{ key: string }>({
 - **Replay-safe**: child instance ids are derived deterministically from the
   parent, so a parent replay re-attaches to the existing children instead of
   double-spawning. There is a cap of `MAX_BRANCHES` (100) per call.
+- **Bounded branch output**: a branch reports back over Cloudflare's event
+  channel, which caps a payload at **1 MiB**. A larger return value can never
+  reach the parent, so the branch is failed immediately with
+  `BranchOutputTooLarge` naming its byte count — rather than leaving the parent
+  hibernating on its join until the branch `timeout` (Cloudflare's default is
+  24 hours) and then compensating a branch that had succeeded. Return a
+  reference the parent can dereference (an R2 key, a row id) instead of the
+  payload itself.
 
 For fire-and-forget (start a child pipeline without awaiting it), use
 `ctx.spawn(name, params)`, which returns a live instance handle:
@@ -344,6 +352,14 @@ export const create = mutation.input({ channelId: v.id("channels") }).mutation(a
 - `create({ id?, params?, retention? })`: start an instance. `create()` resolves
   once the instance is **queued** (not when it finishes); the workflow runs on
   Cloudflare's infrastructure.
+
+    <Callout type="warn">
+        The queue is **immediate and not transactional**: `create()` is an RPC that leaves the shard as it is called, and nothing defers it to the surrounding
+        mutation's commit. A mutation that starts a workflow and then throws has already queued an instance, and that instance runs against state the mutation
+        never wrote. Start workflows from an **action** that calls the mutation first (`await ctx.runMutation(...)`, then `create()`), so the write is committed
+        before the instance exists.
+    </Callout>
+
 - `createBatch([...])`: start many in one batch.
 - `get(id)`: a handle to an existing instance.
 

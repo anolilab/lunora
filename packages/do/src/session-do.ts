@@ -1,14 +1,17 @@
 /**
- * Durable Object that owns auth session state.
+ * Durable Object that owns TTL'd session records.
  *
- * `@lunora/auth` used to write sessions directly into D1 alongside user
- * records. That worked but coupled session lifecycle to a global database —
- * every read had to cross the region, every write contended with user
- * inserts. SessionDO owns sessions in a DO-local KV store: same-prefix
- * tokens co-locate (via `idFromName(token.slice(0, 16))`) so the DO instance
- * count stays bounded; reads and writes never round-trip to D1.
+ * A standalone TTL'd token store, NOT the auth package's session backend.
+ * `@lunora/auth` has never called this class — sessions live in the auth
+ * database, and the Durable Object path for auth is `LunoraAuthDO` /
+ * `.auth({ namespace })`, which puts the whole better-auth schema in an object
+ * with real transactions. Exporting this DO and binding it as `SESSION` gets a
+ * correctly-configured object that nothing calls. It stays because a TTL'd
+ * token store keyed by prefix is independently useful: same-prefix tokens
+ * co-locate (via `idFromName(token.slice(0, 16))`) so the instance count stays
+ * bounded, and neither read nor write round-trips to a global database.
  *
- * Wire shape: HTTP only, never RPC. The auth package calls
+ * Wire shape: HTTP only, never RPC. A caller does
  *
  * `await env.SESSION.get(env.SESSION.idFromName(prefix)).fetch(...)`
  *
@@ -18,15 +21,14 @@
  * GET    /get      header: `x-lunora-session-token: <token>`
  * DELETE /revoke   header: `x-lunora-session-token: <token>`
  *
- * Every request must additionally carry an `x-lunora-session-secret` header
+ * Every request must additionally carry an `x-lunora-session-do-secret` header
  * whose value matches `env.SESSION_DO_SECRET`. The DO is reachable from any
  * worker bound to its namespace, so a shared secret is the only thing that
  * prevents a compromised or misbehaving worker from reading arbitrary
  * sessions — the binding alone is not an auth surface.
  *
- * The DO returns JSON bodies that `@lunora/auth` reshapes into its public
- * `AuthSession` type. Keep the surface narrow — anything more elaborate
- * should ride on top via a wrapper, not by widening this contract.
+ * The DO returns plain JSON bodies. Keep the surface narrow — anything more
+ * elaborate should ride on top via a wrapper, not by widening this contract.
  *
  * # Subclassing
  *

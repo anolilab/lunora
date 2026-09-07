@@ -106,7 +106,10 @@ const hexSlice = (buffer: Uint8Array, start: number, bytes: number): string => {
  * per-call draw. This is the SAME CSPRNG byte stream — every byte is handed out
  * exactly once and the offset only advances — so the distribution is unchanged,
  * which matters beyond aesthetics: `resolveTraceSampling` derives the head
- * sampling verdict from the span id, so a biased id would bias what gets traced.
+ * sampling verdict from one of these ids (the freshly-minted SPAN id when the
+ * inbound `traceparent` is untrusted, the TRACE id when it is trusted — see
+ * `otel-trace.ts`'s `beginDispatchTrace`), so a biased id would bias what gets
+ * traced.
  * The pool is filled lazily (never at module scope) so importing this file does
  * no work, and it is per-isolate like every other module-level value here.
  */

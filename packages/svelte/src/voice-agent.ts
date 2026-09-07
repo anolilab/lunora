@@ -2,6 +2,7 @@ import type { FunctionReference, LunoraClient } from "@lunora/client";
 import type { Readable } from "svelte/store";
 import { get, writable } from "svelte/store";
 
+import { agentNameFromReference, voiceCloseError, voiceSocketUrl, watchVoiceIdentity } from "../../../shared/voice-socket";
 import { isClient } from "./agent";
 import { getLunoraClient } from "./context";
 import type { CreateMicrophone, CreateSpeaker, VoiceAudioFormat, VoiceMicrophone, VoiceSpeaker } from "./voice-audio";
@@ -60,7 +61,12 @@ interface VoiceAgentOptions {
      * Audio graph stays isolated (and mockable in a non-browser test env).
      */
     createMicrophone?: CreateMicrophone;
-    /** Advanced/test seam: open the transport. Defaults to `new WebSocket(url)`. */
+
+    /**
+     * Advanced/test seam: open the transport. Defaults to the WebSocket
+     * implementation the client was built with (`client.getWebSocketImpl()`),
+     * NOT a raw `globalThis.WebSocket`.
+     */
     createSocket?: CreateSocket;
     /** Advanced/test seam: build the audio playback subsystem. Defaults to a Web Audio implementation. */
     createSpeaker?: CreateSpeaker;
@@ -112,46 +118,23 @@ const DEFAULT_SILENCE_DURATION_MS = 1200;
 const DEFAULT_INTERRUPT_THRESHOLD = 0.15;
 const DEFAULT_INTERRUPT_CHUNKS = 3;
 
-/** Swap an http(s) origin for its ws(s) equivalent — mirrors the client's own derivation. */
-const deriveWebSocketUrl = (url: string): string => {
-    if (url.startsWith("https://")) {
-        return `wss://${url.slice("https://".length)}`;
-    }
-
-    if (url.startsWith("http://")) {
-        return `ws://${url.slice("http://".length)}`;
-    }
-
-    return url;
-};
-
-/**
- * Derive the agent's export name from its voice reference. Codegen emits the
- * member as `agents.<name>Voice` (ref `agents:<name>Voice`), so strip the
- * `agents:` namespace and the `Voice` suffix.
- */
-const agentNameFromReference = (voice: VoiceReference): string => {
-    const reference = voice["__lunoraRef"];
-    const withoutNamespace = reference.startsWith("agents:") ? reference.slice("agents:".length) : reference;
-
-    return withoutNamespace.endsWith("Voice") ? withoutNamespace.slice(0, -"Voice".length) : withoutNamespace;
-};
-
-/** Build the voice-session WebSocket URL for `agent` on `threadKey`. */
-const voiceSocketUrl = (baseUrl: string, agent: string, threadKey: string): string => {
-    const base = deriveWebSocketUrl(baseUrl);
-    const trimmed = base.endsWith("/") ? base.slice(0, -1) : base;
-    const search = new URLSearchParams({ threadKey });
-
-    return `${trimmed}/_lunora/voice/${encodeURIComponent(agent)}?${search.toString()}`;
-};
-
 /** Mutable per-call connection state, held in a closure so callbacks share one source of truth. */
 interface VoiceConnection {
     audioFormat: VoiceAudioFormat;
+
+    /**
+     * `true` from the moment a turn is committed (`commit` / `text`) until it
+     * completes — the `thinking` half of a turn, which `speaking` does not cover
+     * because that only flips once the first `assistant_delta` lands. Together
+     * they are the mic's `isTurnActive` gate: without the first half, turn
+     * detection kept running through the whole STT+LLM window and ambient noise
+     * fired a second, refused `commit`.
+     */
+    awaitingTurn: boolean;
     microphone: VoiceMicrophone | undefined;
     socket: VoiceSocket;
     speaker: VoiceSpeaker | undefined;
+
     speaking: boolean;
 
     /**
@@ -161,6 +144,9 @@ interface VoiceConnection {
      * on the next `interrupted` / `user_transcript` / `ready` frame.
      */
     suppressAudio: boolean;
+
+    /** Releases the `onAuthTokenChange` watch that ends the call on an identity switch. */
+    unwatchIdentity: (() => void) | undefined;
 }
 
 const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions): VoiceAgentHandle => {
@@ -208,8 +194,22 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
         current = undefined;
 
         if (connection) {
+            connection.unwatchIdentity?.();
             connection.microphone?.stop();
             connection.speaker?.stop();
+
+            // Detach before closing: a frame that arrives (or was already queued)
+            // after teardown would otherwise still run the handlers and write the
+            // status/transcript/error of a call that no longer exists — the
+            // handlers guard the CONNECTION mutations, not the UI writes.
+            /* eslint-disable unicorn/prefer-add-event-listener */
+            // eslint-disable-next-line unicorn/no-null -- the socket seam types its handler slots as `... | null`
+            connection.socket.onmessage = null;
+            // eslint-disable-next-line unicorn/no-null -- as above
+            connection.socket.onerror = null;
+            // eslint-disable-next-line unicorn/no-null -- as above
+            connection.socket.onclose = null;
+            /* eslint-enable unicorn/prefer-add-event-listener */
 
             try {
                 connection.socket.close();
@@ -242,6 +242,7 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
             }
             case "assistant_done": {
                 if (connection) {
+                    connection.awaitingTurn = false;
                     connection.speaking = false;
                 }
 
@@ -254,6 +255,7 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
                 // A non-fatal turn failure: surface it and return the call to a
                 // usable state rather than leaving it stuck "speaking"/"thinking".
                 if (connection) {
+                    connection.awaitingTurn = false;
                     connection.speaking = false;
                 }
 
@@ -264,6 +266,7 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
             }
             case "interrupted": {
                 if (connection) {
+                    connection.awaitingTurn = false;
                     connection.speaking = false;
                     connection.suppressAudio = false;
                 }
@@ -324,24 +327,55 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
         transcriptStore.set("");
         interimTranscriptStore.set("");
 
+        let connection: VoiceConnection | undefined;
+
         try {
-            const url = voiceSocketUrl(client.url, agentNameFromReference(voice), threadKey);
+            const url = voiceSocketUrl({ agent: agentNameFromReference(voice["__lunoraRef"]), httpUrl: client.url, threadKey, wsUrl: client.wsUrl });
+            // Default to the CLIENT's configured WebSocket implementation (not a
+            // raw `globalThis.WebSocket`) — on React Native the client wraps this
+            // constructor to inject the auth-headers factory's credential onto the
+            // upgrade request, which a bare global reference would silently bypass,
+            // leaving the voice socket uncredentialed on the cookie-jar-less runtime
+            // the auth design exists for.
             const openSocket: CreateSocket =
-                createSocket ?? ((target) => new (globalThis as unknown as { WebSocket: new (u: string) => VoiceSocket }).WebSocket(target));
+                createSocket ??
+                ((target) => {
+                    const WebSocketImpl = client.getWebSocketImpl() as unknown as (new (u: string) => VoiceSocket) | undefined;
+
+                    if (!WebSocketImpl) {
+                        throw new Error("voiceAgent: no WebSocket implementation available (pass createSocket explicitly)");
+                    }
+
+                    return new WebSocketImpl(target);
+                });
             const socket = openSocket(url);
 
             socket.binaryType = "arraybuffer";
 
-            const connection: VoiceConnection = {
+            connection = {
                 audioFormat: "mp3",
                 microphone: undefined,
                 socket,
                 speaker: undefined,
                 speaking: false,
+                awaitingTurn: false,
                 suppressAudio: false,
+                unwatchIdentity: undefined,
             };
 
             current = connection;
+
+            // A voice socket's credential is fixed at the upgrade, so a sign-out
+            // or user switch mid-call would otherwise leave the session running
+            // (and writing its thread) as the previous user.
+            connection.unwatchIdentity = watchVoiceIdentity(client, "voiceAgent", (identityError) => {
+                if (current !== connection) {
+                    return;
+                }
+
+                errorStore.set(identityError);
+                teardown();
+            });
 
             // The injectable `VoiceSocket` exposes only `on*` handler slots (not a
             // real EventTarget), so assign them directly.
@@ -364,17 +398,25 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
                 errorStore.set(new Error("voiceAgent: voice socket error"));
             };
 
-            socket.onclose = (): void => {
-                if (current === connection) {
-                    teardown();
+            socket.onclose = (event): void => {
+                if (current !== connection) {
+                    return;
                 }
+
+                const closeError = voiceCloseError("voiceAgent", event);
+
+                if (closeError) {
+                    errorStore.set(closeError);
+                }
+
+                teardown();
             };
             /* eslint-enable unicorn/prefer-add-event-listener */
 
             const microphone = await createMicrophone({
                 interruptChunks,
                 interruptThreshold,
-                isSpeaking: () => current?.speaking ?? false,
+                isTurnActive: () => (current?.speaking ?? false) || (current?.awaitingTurn ?? false),
                 onAudio: (pcm) => {
                     if (socket.readyState === WS_OPEN) {
                         socket.send(pcm);
@@ -385,6 +427,7 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
                     current?.speaker?.interrupt();
 
                     if (current) {
+                        current.awaitingTurn = false;
                         current.speaking = false;
                         // Drop any audio already in flight until the server acks —
                         // cleared on the next `interrupted`/`user_transcript`/`ready`.
@@ -398,6 +441,11 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
                 },
                 onSilence: () => {
                     sendFrame({ type: "commit" });
+
+                    if (current) {
+                        current.awaitingTurn = true;
+                    }
+
                     statusStore.set("thinking");
                 },
                 silenceDurationMs,
@@ -409,14 +457,27 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
                 connection.microphone = microphone;
                 isMutedStore.set(false);
                 // Optimistically show "listening" once the mic is live — the server's
-                // `ready` frame follows and flips `connected` true.
-                statusStore.set("listening");
+                // `ready` frame follows and flips `connected` true. Unless the agent is
+                // ALREADY speaking: the DO streams its greeting right after `ready`,
+                // routinely before `getUserMedia` resolves, and overwriting that would
+                // report "listening" over audio the user is hearing.
+                if (!connection.speaking) {
+                    statusStore.set("listening");
+                }
             } else {
                 microphone.stop();
             }
         } catch (error_) {
-            errorStore.set(error_ instanceof Error ? error_ : new Error(String(error_)));
-            teardown();
+            // `endCall()` then a second `startCall()` while `getUserMedia` was still
+            // pending leaves this start owning a connection that is no longer current;
+            // reporting its failure — or tearing down — would kill the NEWER call. The
+            // success path above already checks the same identity. `connection` is
+            // still `undefined` when the socket itself failed to open, which matches
+            // the equally-undefined `current` and so reports normally.
+            if (current === connection) {
+                errorStore.set(error_ instanceof Error ? error_ : new Error(String(error_)));
+                teardown();
+            }
         } finally {
             starting = false;
         }
@@ -435,6 +496,12 @@ const createVoiceAgentHandle = (client: LunoraClient, options: VoiceAgentOptions
         // Only advance to "thinking" if the frame actually reached an open socket;
         // otherwise the UI would stick in "thinking" with no call.
         if (sendFrame({ text, type: "text" })) {
+            // A typed turn commits just like a spoken one, so park the mic's
+            // silence timer for its duration too.
+            if (current) {
+                current.awaitingTurn = true;
+            }
+
             statusStore.set("thinking");
         }
     };

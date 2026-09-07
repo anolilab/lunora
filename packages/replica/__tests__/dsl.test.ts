@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { defineEvents, defineMaterializer, EventLog, InMemorySnapshotStore, MaterializerRuntime } from "../src/index";
+import { defineEvents, defineMaterializer, EventLog, InMemorySnapshotStore, MaterializerRuntime, UNHANDLED } from "../src/index";
 
 // ─── defineEvents ─────────────────────────────────────────────────────
 
@@ -377,13 +377,41 @@ describe(MaterializerRuntime, () => {
         expect(counts.state).toBe(0);
     });
 
+    it("does not read a recognised event's idempotent no-op as an unhandled event", () => {
+        expect.assertions(3);
+
+        // `MaterializerDef.handle` documents "return the current state unchanged
+        // to skip the event" — the way a reducer says "I handled this and there
+        // is nothing to do". Reference equality cannot tell that apart from "I do
+        // not recognise this type" (REPLICA-07), which is why `UNHANDLED` exists.
+        const counts = defineMaterializer({
+            name: "counts",
+            initial: () => 0,
+            // eslint-disable-next-line sonarjs/function-return-type -- reducer contract is `S | typeof UNHANDLED`; the number/symbol arms trip the heuristic
+            handle: (state, entry) => {
+                if (entry.type !== "inc") {
+                    return UNHANDLED;
+                }
+
+                // Idempotent: this event was already counted, so nothing to do.
+                return state === 0 ? state + 1 : state;
+            },
+        });
+
+        const runtime = new MaterializerRuntime([counts], { unknownEventHandling: "fail" });
+
+        expect(runtime.applyEntries([{ seq: 0, type: "inc", payload: null, timestamp: 1 }])).toBe(1);
+        expect(() => runtime.applyEntries([{ seq: 1, type: "inc", payload: null, timestamp: 2 }])).not.toThrow();
+        expect(counts.state).toBe(1);
+    });
+
     it("'fail' strategy on an unknown event leaves the watermark re-surfaceable — a catch-and-retry does not skip it", () => {
         expect.assertions(5);
 
         const counts = defineMaterializer({
             name: "counts",
             initial: () => 0,
-            handle: (s, e) => (e.type === "inc" ? s + 1 : s),
+            handle: (s, e) => (e.type === "inc" ? s + 1 : UNHANDLED),
         });
 
         const runtime = new MaterializerRuntime([counts], { unknownEventHandling: "fail" });
@@ -410,6 +438,7 @@ describe(MaterializerRuntime, () => {
                 defineMaterializer({
                     name: "counts",
                     initial: () => 0,
+                    // eslint-disable-next-line sonarjs/function-return-type -- reducer contract is `S | typeof UNHANDLED`; the number/symbol arms trip the heuristic
                     handle: (s, e) => {
                         if (e.type === "mystery") {
                             handled += 1;
@@ -417,7 +446,7 @@ describe(MaterializerRuntime, () => {
                             return s + 1;
                         }
 
-                        return e.type === "inc" ? s + 1 : s;
+                        return e.type === "inc" ? s + 1 : UNHANDLED;
                     },
                 }),
             ],
@@ -431,6 +460,47 @@ describe(MaterializerRuntime, () => {
 
         expect(applied).toBe(2);
         expect(handled).toBe(1);
+    });
+
+    it("does not call an entry unknown when a materializer already past it handled it", async () => {
+        expect.assertions(3);
+
+        // The scenario per-materializer watermarks exist for (REPLICA-04): one
+        // materializer recovered from a snapshot, a sibling has none and catches
+        // up from 0 over events the first already applied. On that replay the
+        // snapshotted materializer is SKIPPED — it is at or past the seq — so the
+        // only reducer that runs is the lagging one, which declines this type.
+        // "Unknown" means no materializer handled the entry; an entry that was
+        // already applied is not unknown, and `"fail"` must not abort the
+        // catch-up over it.
+        const store = new InMemorySnapshotStore();
+
+        await store.save("handles-inc", { appliedSeq: 1, state: 1 });
+
+        const handlesInc = defineMaterializer({
+            name: "handles-inc",
+            initial: () => 0,
+            handle: (s, e) => (e.type === "inc" ? s + 1 : UNHANDLED),
+        });
+
+        const declinesInc = defineMaterializer({
+            name: "declines-inc",
+            initial: () => 0,
+            handle: (s, e) => (e.type === "other" ? s + 1 : UNHANDLED),
+        });
+
+        const runtime = new MaterializerRuntime([handlesInc, declinesInc], { snapshotStore: store, unknownEventHandling: "fail" });
+
+        await runtime.recoverFromSnapshots();
+
+        expect(runtime.appliedSeq).toBe(0);
+
+        const entries = [{ payload: null, seq: 0, timestamp: 1, type: "inc" }];
+
+        expect(() => runtime.applyEntries(entries)).not.toThrow();
+
+        // The lagging materializer still advanced over the entry it declined.
+        expect(runtime.appliedSeq).toBe(1);
     });
 
     it("ignores a malformed snapshot with a watermark but no state — replays from 0 rather than skipping events", async () => {

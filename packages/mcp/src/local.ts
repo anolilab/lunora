@@ -148,7 +148,16 @@ const createClientCache = (fetchImplementation: typeof fetch | undefined): ((dep
     };
 };
 
-/** True when `deployment` carries a usable admin bearer — the observability tools' gate. */
+/**
+ * True when `deployment` carries a usable admin bearer — the observability
+ * tools' gate on THIS server.
+ *
+ * The remote/deployment server (`./server`) additionally requires an explicit
+ * `allowObservability` opt-in, because there the reads are production user data
+ * shipped to a model provider. Here the target is the developer's own
+ * `lunora dev` server on their own machine, started by them for this purpose, so
+ * the resolved dev token is the opt-in.
+ */
 const hasAdminToken = (deployment: LocalDeployment | undefined): boolean => deployment?.token !== undefined && deployment.token.length > 0;
 
 /**

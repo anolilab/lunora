@@ -1,4 +1,4 @@
-import type { Preloaded } from "@lunora/client";
+import type { Preloaded, SubscriptionError } from "@lunora/client";
 import { render } from "@solidjs/testing-library";
 import { describe, expect, it } from "vitest";
 
@@ -58,6 +58,27 @@ describe(hydratePreloaded, () => {
         fake.subscriptions[0]?.push({ messages: ["seeded", "live"] });
 
         expect(container.textContent).toBe(JSON.stringify({ messages: ["seeded", "live"] }));
+    });
+
+    it("forwards onError so a server-pushed subscription error reaches the caller", () => {
+        // Regression: the live subscription behind the SSR seed had no error
+        // channel, so a session expiry after hydration was fanned to nobody and
+        // the snapshot kept rendering as if it were live.
+        const fake = createFakeClient();
+        const errors: SubscriptionError[] = [];
+
+        render(
+            () => {
+                const data = hydratePreloaded(makePreloaded("seed"), { onError: (error) => errors.push(error) });
+
+                return <pre>{data()}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        fake.subscriptions[0]?.error({ code: "UNAUTHORIZED", message: "session expired" });
+
+        expect(errors).toStrictEqual([{ code: "UNAUTHORIZED", message: "session expired" }]);
     });
 
     it("tears down the subscription when the owner is disposed", () => {

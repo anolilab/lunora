@@ -88,6 +88,36 @@ describe("dispatchQueueBatch", () => {
         expect(m.acked).toBe(true);
     });
 
+    it("gives the handler's ctx.run the consumer invocation's traceparent", async () => {
+        expect.assertions(1);
+
+        const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+        const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ result: null }, { status: 200 }));
+
+        const q = defineQueue({
+            handler: async (context, b) => {
+                for (const m of b.messages) {
+                    m.ack();
+                }
+
+                await context.run({ __lunoraRef: "digests:flush" } as never, undefined);
+            },
+        });
+
+        await dispatchQueueBatch(
+            batch("q", [message({})]),
+            { q: { definition: q, exportName: "q" } },
+            { env: { LUNORA_ADMIN_TOKEN: "tok", LUNORA_ORIGIN_URL: "https://app.example.com" }, fetchImpl, traceparent },
+        );
+
+        // The queue span is the parent of the work the handler dispatches; without
+        // this the shard minted a fresh trace per call and one batch's work read as
+        // a pile of unrelated root traces.
+        const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+
+        expect((init.headers as Record<string, string>).traceparent).toBe(traceparent);
+    });
+
     it("throws when no handler is registered for the delivered queue", async () => {
         expect.assertions(1);
 
@@ -265,11 +295,12 @@ describe("dispatchQueueBatch capture", () => {
         expect(records[0]).toMatchObject({ deadLettered: false, outcome: "retry" });
     });
 
-    it("flags deadLettered once attempts exceeds maxRetries (retries exhausted)", async () => {
+    it("flags deadLettered once attempts exceeds maxRetries on a queue with a DLQ", async () => {
         expect.assertions(1);
 
         const capture = vi.fn<QueueCaptureSink>();
         const queue = defineQueue({
+            deadLetterQueue: "q-dlq",
             handler: (_context, b) => {
                 b.messages[0]?.retry();
             },
@@ -282,6 +313,28 @@ describe("dispatchQueueBatch capture", () => {
         const [records] = capture.mock.calls[0] as [{ deadLettered: boolean; outcome: string }[]];
 
         expect(records[0]).toMatchObject({ deadLettered: true, outcome: "retry" });
+    });
+
+    it("does not flag deadLettered when the queue declares no dead-letter queue", async () => {
+        expect.assertions(1);
+
+        const capture = vi.fn<QueueCaptureSink>();
+        // No `deadLetterQueue`: Cloudflare DELETES a message that exhausts
+        // maxRetries. Recording it as dead-lettered points an operator at a queue
+        // that does not exist and hides the fact that the message is simply gone.
+        const queue = defineQueue({
+            handler: (_context, b) => {
+                b.messages[0]?.retry();
+            },
+            maxRetries: 3,
+        });
+        const m = captureMessage({ n: 2 }, { attempts: 4 });
+
+        await dispatchQueueBatch(batch("q", [m]), { q: { definition: queue, exportName: "q" } }, { capture, env: {} });
+
+        const [records] = capture.mock.calls[0] as [{ deadLettered: boolean; outcome: string }[]];
+
+        expect(records[0]).toMatchObject({ deadLettered: false, outcome: "retry" });
     });
 
     it("never flags deadLettered for an ack, even past maxRetries", async () => {
@@ -446,7 +499,9 @@ const dispatchFetchFailingFor = (failFor: string, status: number, code: string) 
         return Response.json({ error: { code, message: `dispatch failed for ${failFor}` } }, { status });
     }
 
-    return Response.json({ ok: true });
+    // The shard's dispatch response always carries a `result` key, so a bare body
+    // is not a shape it can produce and the runner now rejects one.
+    return Response.json({ result: { ok: true } });
 };
 
 /** A handler that scopes its own `ctx.run` call per message via `messageId` — the shape attribution requires. */
@@ -481,7 +536,11 @@ const scopedDispatchQueueAckingAsItGoes = defineQueue({
  * `{ messageId }` option. The per-message runner pins the id itself, so the
  * failure comes back attributed without the handler doing anything.
  */
+// Declares a `deadLetterQueue` so the dead-letter assertions below are about the
+// disposition under test and not about whether a DLQ exists at all — an
+// exhausted message on a queue WITHOUT one is dropped, never dead-lettered.
 const perMessageRunQueue = defineQueue({
+    deadLetterQueue: "q-dlq",
     handler: async (_context, b) => {
         for (const m of b.messages) {
             // eslint-disable-next-line no-await-in-loop -- see scopedDispatchQueue
@@ -513,7 +572,8 @@ const dedupingDispatchFetch = (): { executed: string[]; fetchImpl: typeof fetch 
 
         executed.push(functionPath);
 
-        const result = { ran: functionPath };
+        // Wrapped in the `{ result }` envelope the DO always emits.
+        const result = { result: { ran: functionPath } };
 
         if (id !== undefined) {
             cache.set(id, result);
@@ -559,6 +619,90 @@ describe("dispatchQueueBatch — poison message isolation (deterministic dispatc
             m2: { error: expect.stringContaining("dispatch failed for m2"), outcome: "error" },
             m3: { outcome: "retry" },
         });
+    });
+
+    it("logs the drop even with NO capture sink configured — the production shape", async () => {
+        expect.assertions(4);
+
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        try {
+            const m1 = captureMessage({ id: "m1" }, { id: "m1" });
+            const m2 = captureMessage({ id: "m2" }, { id: "m2" });
+
+            // No `capture`: `shouldCaptureQueue(env)` needs an explicit
+            // `LUNORA_QUEUE_CAPTURE=1` or a dev-shaped `WORKER_ENV`, so a
+            // production deployment passes `undefined` and the capture record
+            // that describes the drop is never built. The ack is terminal — no
+            // retry, no DLQ — so without a log the message vanishes with no
+            // signal anywhere.
+            await expect(
+                dispatchQueueBatch(
+                    batch("q", [m1, m2]),
+                    { q: { definition: scopedDispatchQueue, exportName: "q" } },
+                    { env: DISPATCH_ENV, fetchImpl: dispatchFetchFailingFor("m2", 404, "NOT_FOUND") },
+                ),
+            ).resolves.toBeUndefined();
+
+            expect(m2.acked).toBe(true);
+            expect(error).toHaveBeenCalledTimes(1);
+            expect(error.mock.calls[0]?.[0]).toContain("dropped message m2");
+        } finally {
+            error.mockRestore();
+        }
+    });
+
+    it("redacts the dropped-message log and names the real disposition", async () => {
+        expect.assertions(6);
+
+        // A deterministic 4xx envelope whose INTERNAL-coded message carries the
+        // upstream response text VERBATIM. That text is whatever the upstream
+        // wrote — here a bearer token — and the drop log is a Workers log line,
+        // so it must go through the same redaction every other error-to-output
+        // path uses. (A non-envelope body is no longer deterministic, so it
+        // would be retried rather than dropped and never reach this log.)
+        const secret = "Bearer sk-live-4f9c1a";
+        const leakyFetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+            const { args } = JSON.parse((init?.body ?? "{}") as string) as { args?: { id?: string } };
+
+            if (args?.id === "m2") {
+                return Response.json({ error: { code: "INTERNAL", message: `upstream rejected: authorization=${secret}` } }, { status: 400 });
+            }
+
+            // The shard's dispatch response always carries a `result` key, so a bare body
+            // is not a shape it can produce and the runner now rejects one.
+            return Response.json({ result: { ok: true } });
+        }) as typeof fetch;
+
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        try {
+            const m1 = captureMessage({ id: "m1" }, { id: "m1" });
+            const m2 = captureMessage({ id: "m2" }, { id: "m2" });
+
+            await expect(
+                dispatchQueueBatch(
+                    batch("q", [m1, m2]),
+                    { q: { definition: scopedDispatchQueue, exportName: "q" } },
+                    { env: DISPATCH_ENV, fetchImpl: leakyFetch },
+                ),
+            ).resolves.toBeUndefined();
+
+            expect(m2.acked).toBe(true);
+            expect(error).toHaveBeenCalledTimes(1);
+
+            const logged = (error.mock.calls[0] ?? []).map((part) => (part instanceof Error ? part.message : String(part))).join(" ");
+
+            expect(logged).toContain("dropped message m2");
+            // Redacted to its code — the raw upstream body never reaches the log.
+            expect(logged).not.toContain(secret);
+            // And the disposition is named exactly: a deterministic dispatch
+            // failure, NOT an exhausted retry budget. An operator told the wrong
+            // one goes looking in a dead-letter queue this message never enters.
+            expect(logged).toContain("deterministic 400 (INTERNAL");
+        } finally {
+            error.mockRestore();
+        }
     });
 
     it("keeps an explicit ack the handler already made and only retries the genuinely undecided message", async () => {
@@ -610,6 +754,46 @@ describe("dispatchQueueBatch — poison message isolation (deterministic dispatc
         ).rejects.toThrow(/dispatch failed for m2/);
 
         expect(m2.acked).toBe(false);
+    });
+
+    it("acks the attributed message for an RLS 403 — a per-message verdict is still poison", async () => {
+        expect.assertions(3);
+
+        const m1 = captureMessage({ id: "m1" }, { id: "m1" });
+        const m2 = captureMessage({ id: "m2" }, { id: "m2" });
+
+        await expect(
+            dispatchQueueBatch(
+                batch("q", [m1, m2]),
+                { q: { definition: scopedDispatchQueue, exportName: "q" } },
+                { env: DISPATCH_ENV, fetchImpl: dispatchFetchFailingFor("m2", 403, "FORBIDDEN") },
+            ),
+        ).resolves.toBeUndefined();
+
+        expect(m2.acked).toBe(true);
+        expect(m1.retried).toBe(true);
+    });
+
+    it("rethrows the whole batch for a DISPATCH_UNAUTHENTICATED 403 — the worker is misconfigured, not the message", async () => {
+        expect.assertions(3);
+
+        const m1 = captureMessage({ id: "m1" }, { id: "m1" });
+        const m2 = captureMessage({ id: "m2" }, { id: "m2" });
+
+        // Same status and same envelope shape as the RLS 403 above; only the
+        // `code` separates them. A wrong/rotated `LUNORA_ADMIN_TOKEN` fails every
+        // message identically, so acking the attributed one would drop the next
+        // message on every redelivery until the queue drained.
+        await expect(
+            dispatchQueueBatch(
+                batch("q", [m1, m2]),
+                { q: { definition: scopedDispatchQueue, exportName: "q" } },
+                { env: DISPATCH_ENV, fetchImpl: dispatchFetchFailingFor("m2", 403, "DISPATCH_UNAUTHENTICATED") },
+            ),
+        ).rejects.toThrow(/dispatch failed for m2/);
+
+        expect(m2.acked).toBe(false);
+        expect(m1.acked).toBe(false);
     });
 
     it("still rethrows the whole batch for a 429 (transient — guards against widening the deterministic set)", async () => {

@@ -195,14 +195,31 @@ describe("createAuthAdmin", () => {
         expect(oauthOnlyDatabase["account"]).toHaveLength(0);
     });
 
-    it("mints an impersonation token for a user", async () => {
-        expect.assertions(2);
+    /** Persisted session rows for a user, newest last, as better-auth wrote them. */
+    const sessionRows = (userId: string): Record<string, unknown>[] =>
+        (database["session"] ?? []).filter((row) => (row as { userId: string }).userId === userId) as Record<string, unknown>[];
+
+    const asMillis = (value: unknown): number => (value instanceof Date ? value.getTime() : new Date(String(value)).getTime());
+
+    it("mints an impersonation token that IS a freshly persisted session's token", async () => {
+        expect.assertions(6);
 
         const user = await adminApi.createUser({ email: "imp@example.com", name: "Imp" });
-        const result = await adminApi.impersonateUser({ userId: user.id });
+        const first = await adminApi.impersonateUser({ userId: user.id });
+        const second = await adminApi.impersonateUser({ userId: user.id });
 
-        expect(typeof result.token).toBe("string");
-        expect(result.token.length).toBeGreaterThan(0);
+        const rows = sessionRows(user.id);
+
+        // Exactly the two sessions just minted, and the returned credentials are exactly their
+        // stored tokens — not a value the caller could have derived (the user id) and not a
+        // constant that would impersonate everyone.
+        expect(rows).toHaveLength(2);
+        expect(new Set(rows.map((row) => row["token"]))).toStrictEqual(new Set([first.token, second.token]));
+        expect(first.token).not.toBe(second.token);
+        expect(first.token).not.toBe(user.id);
+        expect(first.user.id).toBe(user.id);
+        // The session is marked as an impersonation, not an ordinary login.
+        expect(rows.every((row) => row["impersonatedBy"] !== undefined && row["impersonatedBy"] !== null)).toBe(true);
     });
 
     it("never leaks the session token through listSessions", async () => {
@@ -427,7 +444,7 @@ describe("createAuthAdmin", () => {
     });
 
     it("impersonateUser respects a custom impersonationSeconds TTL", async () => {
-        expect.assertions(2);
+        expect.assertions(4);
 
         const customTtl = 7200; // 2 hours
         const adminWithTtl = createAuthAdmin(auth, { impersonationSeconds: customTtl });
@@ -443,6 +460,13 @@ describe("createAuthAdmin", () => {
 
         expect(result.expiresAt).toBeGreaterThanOrEqual(expectedMin);
         expect(result.expiresAt).toBeLessThanOrEqual(expectedMax);
+
+        // The returned number is worthless if the row the token points at expires at a different
+        // time (or carries no expiry at all) — that is what actually ends the impersonation.
+        const rows = sessionRows(user.id);
+
+        expect(rows).toHaveLength(1);
+        expect(asMillis(rows[0]?.["expiresAt"])).toBe(result.expiresAt);
     });
 
     it("impersonateUser rejects invalid impersonationSeconds values", async () => {

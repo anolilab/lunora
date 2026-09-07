@@ -80,13 +80,17 @@ Run against the declared schema alone: deterministic, no running shard needed.
 
 Need observed signal from a live shard, aggregated by the Studio backend.
 
-| Lint                   | Level     | Detects                                                                                                                                                              |
-| ---------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hot_shard`            | warn      | One shard takes >50% of a `shardBy(...)` function's traffic while siblings idle (fires above a minimum request volume).                                              |
-| `index_utilization`    | info/warn | Two checks: a **dead index** with zero recorded reads (info), and a **hot unindexed scan**, a table full-scanned ≥25× with no index (warn).                          |
-| `constraint_validator` | warn      | Sampled rows that violate a declared constraint: a dangling foreign key, a null in a non-optional column, or a duplicate on a unique index. (Bounded sample window.) |
-| `error_rate_outlier`   | warn      | A function whose failure rate stands well clear of the rest of the deployment.                                                                                       |
-| `fan_out_breadth`      | warn      | A shard group with enough active shards that a cross-shard read over it would approach the per-invocation internal-subrequest ceiling.                               |
+| Lint                | Level     | Detects                                                                                                                                     |
+| ------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hot_shard`         | warn      | One shard takes >50% of a `shardBy(...)` function's traffic while siblings idle (fires above a minimum request volume).                     |
+| `index_utilization` | info/warn | Two checks: a **dead index** with zero recorded reads (info), and a **hot unindexed scan**, a table full-scanned ≥25× with no index (warn). |
+| `fan_out_breadth`   | warn      | A shard group with enough active shards that a cross-shard read over it would approach the per-invocation internal-subrequest ceiling.      |
+
+<Callout type="warn">
+    Nothing samples existing rows against the declared constraints. A unique index declared in the schema *is* enforced by both backends on the normal write
+    path, but dangling foreign keys, nulls in non-optional columns and duplicates that predate the constraint or arrived through a bulk import are **unchecked**
+    today rather than clean.
+</Callout>
 
 ## Running advisors
 

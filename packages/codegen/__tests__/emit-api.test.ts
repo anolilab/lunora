@@ -741,4 +741,28 @@ describe("emitFunctions Caller types", () => {
 
         expect(rendered).toContain("list: (args?: {}) => Promise<string>;");
     });
+
+    it("draws the dataModel import for a BARE `Doc<…>` and not for a qualified one", () => {
+        expect.assertions(4);
+
+        // The generated files import `Doc`/`Id` from `./dataModel.js` only when a
+        // rendered body actually references them, because an unused import fails
+        // the emitted file under `noUnusedLocals`. A handler may import its own
+        // generic `Doc` from its own module, which renders as
+        // `import("../lib/mydoc.js").Doc<"posts">` — that names its own module and
+        // needs nothing from here, so counting it would emit an import nobody uses
+        // and break the very file it was added to help.
+        const bare: ReadonlyArray<FunctionIR> = [{ args: {}, exportName: "get", filePath: "posts", kind: "query", returnType: 'Doc<"posts">' }];
+        const qualified: ReadonlyArray<FunctionIR> = [
+            { args: {}, exportName: "get", filePath: "posts", kind: "query", returnType: 'import("../lib/mydoc.js").Doc<"posts">' },
+        ];
+
+        for (const rendered of [emitApi({ functions: bare }), emitFunctions({ functions: bare })]) {
+            expect(rendered).toContain('import type { Doc } from "./dataModel.js";');
+        }
+
+        for (const rendered of [emitApi({ functions: qualified }), emitFunctions({ functions: qualified })]) {
+            expect(rendered).not.toContain('from "./dataModel.js"');
+        }
+    });
 });

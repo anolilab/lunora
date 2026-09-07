@@ -64,14 +64,6 @@ interface EmailGateConfig {
     denyDomains?: ReadonlyArray<string>;
 
     /**
-     * Reserved for callers that branch on free-vs-business (e.g. gate a feature
-     * behind a business email). Purely advisory — {@link EmailClassification}'s
-     * `emailClass` already reports `free`, so this flag exists for symmetry/intent
-     * and never blocks. Defaults to `false`.
-     */
-    flagFreeEmail?: boolean;
-
-    /**
      * Opt-in MX deliverability verification. Off by default because it needs DNS
      * (`@visulima/email-verifier/checks/mx` → `node:dns`), which is not available
      * on the default workerd path. When `true`, {@link assertEmailAllowed} rejects
@@ -93,10 +85,18 @@ interface EmailGateConfig {
 /** Options for {@link emailGateMiddleware}: the base gate config plus how to read the email from `ctx`. */
 interface EmailGateMiddlewareOptions<Context> extends EmailGateConfig {
     /**
-     * Selector that pulls the signup email from `ctx`. The procedure context
-     * carries only the resolved identity, not the raw request body, so route the
-     * email through the function `args` and read it out here (mirrors
-     * `verifyTurnstileMiddleware`'s `token` selector).
+     * Selector that pulls the signup email off `ctx`. The procedure context
+     * carries only the resolved identity, not the raw request body, so the email
+     * travels in the function `args` — which the builder surfaces to middleware
+     * as `ctx.args` (validated, frozen). Mirrors `verifyTurnstileMiddleware`'s
+     * `token` selector:
+     *
+     * ```ts
+     * export const signUp = mutation
+     *     .input({ email: v.string() })
+     *     .use(emailGateMiddleware({ email: (ctx) => ctx.args.email }))
+     *     .mutation(async ({ args, ctx }) => { … });
+     * ```
      */
     email: (context: Context) => string | undefined;
 
@@ -132,14 +132,35 @@ let listsPromise: Promise<void> | undefined;
  * the gating path is always edge-safe. Idempotent — repeat calls share one load.
  */
 const loadEmailDomainLists = async (): Promise<void> => {
-    listsPromise ??= (async (): Promise<void> => {
-        const [disposable, free] = await Promise.all([import("@visulima/disposable-email-domains/domains"), import("@visulima/free-email-domains/domains")]);
+    if (listsPromise) {
+        return listsPromise;
+    }
+
+    const run = (async (): Promise<void> => {
+        const [disposable, free] = await Promise.all([
+            import("@visulima/disposable-email-domains/domains"),
+            // `with { type: "json" }` is load-bearing: this specifier resolves to a raw
+            // `dist/domains.json`, and native ESM rejects a JSON module imported without
+            // the attribute (`ERR_IMPORT_ATTRIBUTE_MISSING`). Vite and wrangler's esbuild
+            // inline the JSON, so the bundled paths never notice — only the published
+            // `dist/email-guard.mjs` hits it, where it turns every signup into a 500.
+            import("@visulima/free-email-domains/domains", { with: { type: "json" } }),
+        ]);
 
         setDisposableDomains(listFromModule(disposable));
         setFreeDomains(listFromModule(free));
     })();
 
-    return listsPromise;
+    // Recorded synchronously so concurrent callers single-flight onto this run, and
+    // evicted on rejection so a transient failure doesn't brick the gate for the
+    // isolate's life — a memoised rejection would make `emailGateMiddleware` answer
+    // 500 forever. Mirrors `audit.ts`'s `ensured` and `migrate.ts`'s `migrating`.
+    listsPromise = run;
+    run.catch(() => {
+        listsPromise = undefined;
+    });
+
+    return run;
 };
 
 /**
@@ -259,7 +280,8 @@ const assertEmailAllowed = async (email: string, config: EmailGateConfig = {}): 
 /**
  * Lunora procedure middleware that gates a non-auth, signup-shaped
  * `mutation`/`action` on the email-domain policy. Attach it with `.use()`; it
- * reads the email from `ctx` via the `email` selector (route it through `args`)
+ * reads the email from `ctx` via the `email` selector (declare it with
+ * `.input(...)` and read it back as `ctx.args.email`)
  * and runs {@link assertEmailAllowed}, which throws a coded {@link LunoraError}
  * (`EMAIL_DOMAIN_BLOCKED` / `EMAIL_UNDELIVERABLE` / `VALIDATION_ERROR`) the
  * runtime maps to the matching status.

@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
-import { fnv1aHex } from "../../../../shared/fnv1a";
+import { fnv1a64Hex, fnv1aHex } from "../../../../shared/fnv1a";
 import { isPrivateHost } from "../../../../shared/ssrf-host";
 import type { RegisterInput, StoredSubscription } from "../types";
 
@@ -19,6 +19,33 @@ interface LooseSubscription {
  * (device name, locale, topic tags) while bounding worst-case row growth.
  */
 const MAX_METADATA_BYTES = 4096;
+
+/**
+ * Cap on each client-controlled DELIVERY field written to the same row
+ * (NOTIFY-02, second half): the Web Push `endpoint`, the FCM `token` and the
+ * RFC 8291 `keys`. These are as client-controlled as `metadata` and land in the
+ * same D1 row, so capping only `metadata` bounded nothing — a 4 KB `metadata`
+ * was refused while a 1 MB `endpoint` and a 2 MB `token` went straight in.
+ *
+ * The caps are generous against reality so no live device is refused: a real
+ * push endpoint is ~200 bytes and an FCM registration token ~160, while the
+ * RFC 8291 keys are fixed-width base64url (`p256dh` 87 chars, `auth` 22).
+ */
+const MAX_ENDPOINT_BYTES = 2048;
+const MAX_TOKEN_BYTES = 2048;
+const MAX_KEY_BYTES = 512;
+
+/** Refuse a client-supplied string field that exceeds its byte cap (see {@link MAX_ENDPOINT_BYTES}). */
+const assertFieldSize = (value: string, max: number, field: string): void => {
+    const byteLength = new TextEncoder().encode(value).length;
+
+    if (byteLength > max) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `@lunora/notify: register() \`${field}\` is ${byteLength.toString()} bytes, exceeding the ${max.toString()}-byte cap`,
+        );
+    }
+};
 
 /**
  * Validate a `register()` input's `metadata` (NOTIFY-02) before it is
@@ -72,64 +99,22 @@ const validateMetadata = (metadata: unknown): Record<string, unknown> | undefine
     return metadata as Record<string, unknown>;
 };
 
-/** One 16-bit limb of a 64-bit hash as 4 lowercase hex digits. */
-const hex4 = (limb: number): string => limb.toString(16).padStart(4, "0");
-
 /**
- * FNV-1a (64-bit) as 16 lowercase hex digits — a tiny, dependency-free,
- * synchronous, edge-safe hash used to derive a compact, deterministic
- * subscription id from its (long) endpoint/token. Deterministic so re-registering
- * the same device upserts rather than duplicates; not security-sensitive (ids are
- * opaque store keys, never a secret).
+ * Stable store id for a web-push endpoint — `fnv1a64Hex` of the (long) endpoint,
+ * so re-registering the same device upserts rather than duplicates.
+ *
+ * The digest comes from the canonical `shared/fnv1a`, not a local copy. This id
+ * is a PERSISTED primary key: a digest that drifts in one copy silently re-keys
+ * every existing subscription — the old row goes dark and the device
+ * re-registers as a duplicate — so the implementation must have exactly one
+ * home. `shared/fnv1a`'s is bit-verified against a BigInt reference in
+ * `packages/replica/__tests__/apply-diff.test.ts`.
  *
  * Widened from the previous 32-bit FNV-1a (8 hex): at 100K devices a 32-bit key
  * collides with ~68% probability (birthday bound), and a collision silently
  * overwrites another device's row under the store's `ON CONFLICT(id) DO UPDATE` —
  * so the wrong user gets the push and the victim goes dark. 64 bits drops that to
  * negligible at any realistic device count.
- *
- * The hash state is four 16-bit limbs in plain `number`s (not a `BigInt`, which
- * allocates per op). The FNV-1a prime `0x0000_0100_0000_01b3` has only two
- * non-zero limbs, so the 4×4 limb product collapses to two multiplications per
- * limb; every intermediate stays under 2^32, so `>>> 16` is a valid carry.
- * Algorithm lifted from `@lunora/replica`'s bit-verified `fnv1a64Hex`.
- */
-const fnv1a64Hex = (input: string): string => {
-    /* eslint-disable no-bitwise -- FNV-1a is defined over XOR and multiplication; the bit ops ARE the algorithm */
-    // Offset basis 0xcbf29ce484222325, low limb first.
-    let h0 = 0x23_25;
-    let h1 = 0x84_22;
-    let h2 = 0x9c_e4;
-    let h3 = 0xcb_f2;
-
-    for (let index = 0; index < input.length; index += 1) {
-        const point = input.codePointAt(index) ?? 0;
-
-        // A code point above the BMP occupies limbs 0 and 1.
-        h0 ^= point & 0xff_ff;
-        h1 ^= (point >>> 16) & 0xff_ff;
-
-        const p0 = h0 * 0x01_b3;
-        const p1 = h1 * 0x01_b3;
-        const p2 = h2 * 0x01_b3 + h0 * 0x01_00;
-        const p3 = h3 * 0x01_b3 + h1 * 0x01_00;
-
-        const c1 = p1 + (p0 >>> 16);
-        const c2 = p2 + (c1 >>> 16);
-        const c3 = p3 + (c2 >>> 16);
-
-        h0 = p0 & 0xff_ff;
-        h1 = c1 & 0xff_ff;
-        h2 = c2 & 0xff_ff;
-        h3 = c3 & 0xff_ff;
-    }
-
-    return hex4(h3) + hex4(h2) + hex4(h1) + hex4(h0);
-    /* eslint-enable no-bitwise */
-};
-
-/**
- * Stable store id for a web-push endpoint.
  *
  * The `wp2_` prefix is a version tag (see also {@link fcmId}'s `fcm2_`): it marks
  * the 64-bit-id revision so the pre-existing 32-bit `wp_` rows stay readable and a
@@ -141,6 +126,23 @@ const webPushId = (endpoint: string): string => `wp2_${fnv1a64Hex(endpoint)}`;
 
 /** Stable store id for an FCM device token. See {@link webPushId} for the `_2` version-prefix contract. */
 const fcmId = (token: string): string => `fcm2_${fnv1a64Hex(token)}`;
+
+/**
+ * The delivery kind a store id encodes, or `undefined` for an id this package did
+ * not mint (a hand-built {@link StoredSubscription}, or a future scheme).
+ *
+ * Lives HERE, next to the minters and the legacy prefixes, so the mapping has one
+ * home. It exists for the one caller that has an id and a receipt but no row: a
+ * `retryIds` job answers per subscription id, and `isGoneError`'s provider-scoping
+ * needs the kind that id was minted for.
+ */
+const kindOfId = (id: string): StoredSubscription["kind"] | undefined => {
+    if (id.startsWith("fcm2_") || id.startsWith("fcm_")) {
+        return "fcm";
+    }
+
+    return id.startsWith("wp2_") || id.startsWith("wp_") ? "web-push" : undefined;
+};
 
 /**
  * The PREVIOUS 32-bit FNV-1a digest (8 hex) — the pre-`_2` id scheme. Kept ONLY so
@@ -176,6 +178,49 @@ const legacyIdFor = (subscription: StoredSubscription): string | undefined => {
     }
 
     return subscription.endpoint === undefined ? undefined : legacyWebPushId(subscription.endpoint);
+};
+
+/**
+ * The error a `put` that would move a stored subscription to a different owner
+ * must fail with, or `undefined` when the claim is allowed — the shared owner
+ * predicate both stores enforce (see `SubscriptionStore.put`).
+ *
+ * Returned rather than thrown so each store can surface it in its own shape: the
+ * D1 store is inside an `async` function and throws it; the in-memory one is a
+ * synchronous arrow typed as returning a promise, and a bare throw there escapes
+ * a `.catch()` the interface promises.
+ *
+ * `stored` is the row as it exists AFTER the store's own conditional write, so
+ * this doubles as the refusal DETECTOR for a store whose write is silent when the
+ * predicate fails (D1's `ON CONFLICT … DO UPDATE … WHERE`): a stored owner that
+ * still disagrees with the one just written is a write that did not land. In the
+ * memory store it is called before the write instead, on the row as found. Either
+ * way the answer is the same, because the ONLY way the two can disagree is a
+ * refusal.
+ *
+ * A row with no owner is claimable (the device signed in); a row this caller
+ * already owns is theirs to refresh. Everything else throws, loudly rather than
+ * silently, because unlike `unregister` there is nothing safe to return: the
+ * caller's own record is what `register` echoes back, and the stored row is
+ * someone else's delivery keys.
+ *
+ * The operational consequence — written up in the README's register recipe — is
+ * that an app MUST `unregister` at sign-out. `subscribeToPush` reuses the
+ * browser's existing subscription while the VAPID key is unchanged, so every
+ * account signing in on one browser derives the SAME id, and the second one is
+ * refused here until the first releases the row.
+ */
+const claimRefusal = (stored: StoredSubscription | undefined, incoming: StoredSubscription): LunoraError | undefined => {
+    const owner = stored?.userId ?? null;
+
+    if (stored === undefined || owner === null || owner === (incoming.userId ?? null)) {
+        return undefined;
+    }
+
+    return new LunoraError(
+        "FORBIDDEN",
+        `@lunora/notify: subscription "${incoming.id}" is registered to a different user; a device must be unregistered by its owner before another account can claim it`,
+    );
 };
 
 const parseSubscription = (subscription: unknown): LooseSubscription => {
@@ -275,12 +320,21 @@ const assertPushEndpoint = (endpoint: string, allowedPushOrigins?: string[]): vo
  * {@link validateMetadata}), and stamps `createdAt`/`lastSeenAt`.
  */
 const normalizeRegisterInput = (input: RegisterInput, now: number = Date.now(), options: NormalizeOptions = {}): StoredSubscription => {
-    if ("token" in input) {
-        const { token } = input;
+    // `kind` is the DECLARED discriminator (see `RegisterInput`), so branch on it
+    // and fall back to the token's presence only when it is absent. Branching on
+    // `"token" in input` alone routed `{ ...spread, token: undefined }` — a
+    // web-push registration whose source object merely declares an optional token
+    // field — into the FCM path, where it was rejected as a missing token.
+    const isFcm = input.kind === undefined ? (input as { token?: unknown }).token !== undefined : input.kind === "fcm";
+
+    if (isFcm) {
+        const { token } = input as { token?: unknown };
 
         if (typeof token !== "string" || token === "") {
             throw new LunoraError("BAD_REQUEST", "@lunora/notify: register() fcm input requires a non-empty `token`");
         }
+
+        assertFieldSize(token, MAX_TOKEN_BYTES, "token");
 
         return {
             createdAt: now,
@@ -293,7 +347,7 @@ const normalizeRegisterInput = (input: RegisterInput, now: number = Date.now(), 
         };
     }
 
-    const subscription = parseSubscription(input.subscription);
+    const subscription = parseSubscription((input as { subscription?: unknown }).subscription);
     const { endpoint } = subscription;
     const p256dh = subscription.keys?.p256dh;
     const auth = subscription.keys?.auth;
@@ -302,6 +356,9 @@ const normalizeRegisterInput = (input: RegisterInput, now: number = Date.now(), 
         throw new LunoraError("BAD_REQUEST", "@lunora/notify: register() web-push subscription requires `endpoint` and `keys.{p256dh, auth}`");
     }
 
+    assertFieldSize(endpoint, MAX_ENDPOINT_BYTES, "endpoint");
+    assertFieldSize(auth, MAX_KEY_BYTES, "keys.auth");
+    assertFieldSize(p256dh, MAX_KEY_BYTES, "keys.p256dh");
     assertPushEndpoint(endpoint, options.allowedPushOrigins);
 
     return {
@@ -340,11 +397,27 @@ const targetOf = (subscription: StoredSubscription): string => {
 const WEB_PUSH_GONE_PATTERN = /\bhttp\s*4(?:04|10)\b/iu;
 
 /**
- * Structured "permanently gone" signal from FCM: the canonical `UNREGISTERED`
- * (HTTP v1) / `NotRegistered` (legacy) error codes — a.k.a.
- * `registration-token-not-registered` — meaning the device token is dead.
+ * "Permanently gone" signal from FCM: the canonical `UNREGISTERED` (HTTP v1) /
+ * `NotRegistered` (legacy) error codes — a.k.a.
+ * `registration-token-not-registered` — plus the HTTP v1 `NOT_FOUND` PROSE,
+ * meaning the device token is dead.
+ *
+ * The prose alternative is not a nicety, it is the only branch that ever fires
+ * against the real transport. `@visulima/notification`'s FCM provider surfaces
+ * `body.error.message` and nothing else, while FCM HTTP v1 answers a dead token
+ * with HTTP 404, `error.status: "NOT_FOUND"`, `error.message: "Requested entity
+ * was not found."` and the `UNREGISTERED` code inside `error.details[].errorCode`
+ * — a field the provider drops. So the codes above can only arrive from a
+ * different/legacy transport, and matching them alone left FCM pruning inert:
+ * every uninstalled device stayed in the store forever, re-POSTed on every
+ * broadcast, while the README, the docs and `LunoraPush.broadcast`'s JSDoc all
+ * promised it was pruned.
+ *
+ * Scoped to FCM by {@link isGoneError}'s `kind`, for the same reason the codes
+ * are: the web-push provider echoes the push service's response body into
+ * `HTTP ${status}: ${body}`, where "not found" is ordinary transient prose.
  */
-const FCM_GONE_PATTERN = /\b(?:unregistered|not[\s-]?registered|registration-token-not-registered)\b/iu;
+const FCM_GONE_PATTERN = /\b(?:unregistered|not[\s-]?registered|registration-token-not-registered|requested entity was not found)\b/iu;
 
 /**
  * Last-resort text fallback for a provider that phrases "gone" in prose without a
@@ -360,18 +433,32 @@ const GONE_TEXT_FALLBACK = /\bsubscription (?:is )?(?:gone|expired|no longer val
  * (the browser/device unsubscribed) and should be pruned — as opposed to a
  * transient failure worth retrying.
  *
- * Gates on STRUCTURED signals first: a Web Push `HTTP 404/410` status or an FCM
- * `UNREGISTERED`/`NOT_REGISTERED` code, both of which the providers surface in
- * their failure receipts. The free-text {@link GONE_TEXT_FALLBACK} is a tightened
- * last resort only, so a transient error that happens to contain `expired`
- * (a cert/session expiry) can never permanently drop a valid subscription.
+ * Gates on STRUCTURED signals first: an `HTTP 404/410` status (both providers
+ * answer one for a dead endpoint/token, though FCM's is usually replaced by its
+ * error body before it reaches here) or, for FCM only, an
+ * `UNREGISTERED`/`NOT_REGISTERED` code or the `NOT_FOUND` prose that is the one
+ * signal its provider actually forwards (see {@link FCM_GONE_PATTERN}). The
+ * free-text {@link GONE_TEXT_FALLBACK} is a tightened last resort only, so a
+ * transient error that happens to contain `expired` (a cert/session expiry) can
+ * never permanently drop a valid subscription.
+ *
+ * `kind` scopes the PROVIDER-SPECIFIC patterns to the provider that emits them.
+ * The web-push provider echoes the push service's response body into
+ * `HTTP ${status}: ${body}`, so a 4xx whose prose merely contains "not
+ * registered" matched the FCM-only codes and permanently deleted a live
+ * subscription. Omit `kind` (the third-party/unknown-provider case) to test
+ * every pattern, as before.
  */
-const isGoneError = (message: string | undefined): boolean => {
+const isGoneError = (message: string | undefined, kind?: StoredSubscription["kind"]): boolean => {
     if (message === undefined) {
         return false;
     }
 
-    return WEB_PUSH_GONE_PATTERN.test(message) || FCM_GONE_PATTERN.test(message) || GONE_TEXT_FALLBACK.test(message);
+    if (WEB_PUSH_GONE_PATTERN.test(message) || GONE_TEXT_FALLBACK.test(message)) {
+        return true;
+    }
+
+    return kind !== "web-push" && FCM_GONE_PATTERN.test(message);
 };
 
-export { fcmId, isGoneError, legacyFcmId, legacyIdFor, legacyWebPushId, normalizeRegisterInput, targetOf, webPushId };
+export { claimRefusal, fcmId, isGoneError, kindOfId, legacyFcmId, legacyIdFor, legacyWebPushId, normalizeRegisterInput, targetOf, webPushId };

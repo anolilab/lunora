@@ -11,12 +11,13 @@ export { serveRelationFanout } from "./relation-fanout";
 export type { SessionRecord } from "./session-do";
 export { SESSION_DO_TTL_DEFAULT, SessionDO } from "./session-do";
 export type {
+    DispatchBookmark,
     HibernatableWebSocket,
-    LogSink,
+    QueryReadScope,
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
-    RunShardBulkDeleteArgs,
-    RunShardBulkDeleteResult,
+    RunShardBulkRowArgs,
+    RunShardBulkRowResult,
     RunShardExportArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,

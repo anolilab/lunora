@@ -1,7 +1,9 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import type { CronJobInfo } from "@lunora/client";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { StudioApp } from "../../src/app/app";
+import { createMockClient } from "../mock-client";
 
 const TOKEN_KEY = "lunora-studio-admin-token";
 
@@ -101,6 +103,40 @@ describe("studioApp", () => {
         fireEvent.click(screen.getByTestId("dash-app-clear-token"));
 
         expect(sessionStorage.getItem(TOKEN_KEY)).toBeNull();
+    });
+});
+
+describe("studioApp — studio prop forwarding", () => {
+    afterEach(() => {
+        sessionStorage.clear();
+        localStorage.clear();
+    });
+
+    it("forwards scheduledCron to the Cron triggers sub-view", async () => {
+        expect.assertions(2);
+
+        const loadCronJobs = vi.fn<() => Promise<CronJobInfo[]>>(async () => []);
+        // A permissive admin mock: every optional feature flag reads back as shown
+        // (`coerceFeatures` defaults unknown keys to `true`), so the schedule page
+        // is reachable.
+        const mock = createMockClient({
+            query: (): unknown => {
+                return { columns: [], rows: [], total: 0 };
+            },
+        });
+
+        render(<StudioApp adminToken={DEV_TOKEN} client={mock.asClient} studio={{ scheduledCron: loadCronJobs }} />);
+
+        fireEvent.click(await screen.findByTestId("dash-tab-schedule"));
+        fireEvent.click(await screen.findByTestId("schedule-view-cron", undefined, { timeout: 5000 }));
+
+        await waitFor(() => {
+            expect(loadCronJobs).toHaveBeenCalledWith();
+        });
+
+        // …and the client's default endpoint is never consulted once a host
+        // supplied its own loader.
+        expect(mock.getCronJobs).not.toHaveBeenCalled();
     });
 });
 

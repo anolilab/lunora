@@ -67,9 +67,17 @@ interface RedirectConfig {
     afterSignIn?: string;
     /** Where to send the user after signing out. */
     afterSignOut?: string;
-    /** The route hosting the sign-in screen (used by redirect-to-sign-in guards). */
+
+    /**
+     * The route hosting the sign-in screen (used by redirect-to-sign-in guards).
+     * Defaults to `viewPaths.base` + `viewPaths.signIn`.
+     */
     signIn?: string;
-    /** Where to send a user whose account requires a second factor. */
+
+    /**
+     * Where to send a user whose account requires a second factor. Defaults to
+     * `viewPaths.base` + `viewPaths.twoFactor`.
+     */
     twoFactor?: string;
 }
 
@@ -79,6 +87,21 @@ interface RedirectConfig {
  */
 interface ViewPaths {
     acceptInvitation?: string;
+
+    /**
+     * The route the segments below live under — `"/auth"` for `<AuthView>`
+     * mounted at `/auth/:view`. Defaults to `""`, i.e. root-level routes
+     * (`/sign-in`, `/sign-up`, …).
+     *
+     * Every link between the screens is derived from this plus a segment, and so
+     * are `redirects.signIn` and `redirects.twoFactor` and the reset link
+     * `ForgotPasswordCard` mails. That single source is the point: with the
+     * routes spelled out independently, an app that mounted `<AuthView>` at
+     * `/auth/:view` — the arrangement the component documents — got a sign-in
+     * card linking to `/sign-up` and a two-factor hop to `/two-factor`, neither
+     * of which existed. A correct password landed on a 404.
+     */
+    base?: string;
     deviceAuthorization?: string;
     emailOtp?: string;
     forgotPassword?: string;
@@ -206,6 +229,7 @@ interface ControllerContext {
     forgotPasswordMethod: "link" | "otp";
     localization: Localization;
     nav: NavAdapter;
+    /** The app's handler, wrapped by {@link guardCallback} — calling it cannot throw. */
     onError?: (error: unknown) => void;
     onSessionChange?: () => void;
     /** Organization sub-features, server-derived when discovery answers. */
@@ -288,19 +312,41 @@ const resolvePlugins = (authClient: AnyAuthClient, plugins?: PluginFlags, discov
     return resolved;
 };
 
-const resolveRedirects = (redirects?: RedirectConfig): Required<RedirectConfig> => {
+const resolveRedirects = (viewPaths: Required<ViewPaths>, redirects?: RedirectConfig): Required<RedirectConfig> => {
     return {
         afterSignIn: redirects?.afterSignIn ?? "/",
         afterSignOut: redirects?.afterSignOut ?? "/",
-        signIn: redirects?.signIn ?? "/sign-in",
-        twoFactor: redirects?.twoFactor ?? "/two-factor",
+        signIn: redirects?.signIn ?? `${viewPaths.base}/${viewPaths.signIn}`,
+        twoFactor: redirects?.twoFactor ?? `${viewPaths.base}/${viewPaths.twoFactor}`,
     };
+};
+
+/**
+ * `""` for the default (root-level routes), else exactly one leading slash and
+ * no trailing one, so `${base}/${segment}` is a well-formed path whether the app
+ * wrote `"/auth"`, `"auth"`, or `"/auth/"`.
+ */
+const normalizeViewBase = (base: string | undefined): string => {
+    // A loop rather than `/\/+$/`: that pattern backtracks super-linearly on a
+    // long run of slashes, and this string comes from config an app may well
+    // build from user input.
+    let trimmed = (base ?? "").trim();
+
+    while (trimmed.endsWith("/")) {
+        trimmed = trimmed.slice(0, -1);
+    }
+
+    if (trimmed === "") {
+        return "";
+    }
+
+    return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 };
 
 const resolveViewPaths = (viewPaths?: ViewPaths): Required<ViewPaths> => {
     return {
         acceptInvitation: viewPaths?.acceptInvitation ?? "accept-invitation",
-
+        base: normalizeViewBase(viewPaths?.base),
         deviceAuthorization: viewPaths?.deviceAuthorization ?? "device",
         emailOtp: viewPaths?.emailOtp ?? "email-otp",
         // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- a URL segment for the forgot-password screen, not a credential.
@@ -316,6 +362,35 @@ const resolveViewPaths = (viewPaths?: ViewPaths): Required<ViewPaths> => {
 };
 
 /**
+ * Wrap an app-supplied callback so a throw inside it cannot abort the caller.
+ *
+ * Every controller reports a failure with `context.onError?.(error)` on its way
+ * to a terminal state, and most do it *before* the `store.update` that leaves
+ * that state. An app whose handler throws would therefore strand the flow in
+ * `submitting`: the button stays disabled, and the email-OTP request step has no
+ * `back()` to escape with, so the card is dead until a reload. Containing it
+ * here rather than at each of the ~25 call sites keeps the guard un-forgettable
+ * for the next controller.
+ *
+ * The throw is swallowed on purpose: it is a defect in the app's own handler,
+ * and rethrowing it — synchronously or on a later tick — is the wedge this
+ * exists to prevent.
+ */
+const guardCallback = (callback: ((error: unknown) => void) | undefined): ((error: unknown) => void) | undefined => {
+    if (callback === undefined) {
+        return undefined;
+    }
+
+    return (error: unknown): void => {
+        try {
+            callback(error);
+        } catch {
+            // Intentionally empty — see the docblock.
+        }
+    };
+};
+
+/**
  * Normalize a user-facing config into a fully-defaulted controller context.
  *
  * `discovered` is the settled result of `discoverAuthConfig`, or undefined while
@@ -323,6 +398,8 @@ const resolveViewPaths = (viewPaths?: ViewPaths): Required<ViewPaths> => {
  * first paint uses the client's registration and the second the server's.
  */
 const resolveContext = (config: AuthUIConfig, discovered?: DiscoveredConfig): ControllerContext => {
+    const viewPaths = resolveViewPaths(config.viewPaths);
+
     return {
         /*
          * The one narrowing cast in the package, and it is load-bearing rather
@@ -343,7 +420,7 @@ const resolveContext = (config: AuthUIConfig, discovered?: DiscoveredConfig): Co
         forgotPasswordMethod: config.forgotPassword?.method ?? "link",
         localization: resolveLocalization(config.localization),
         nav: config.nav,
-        onError: config.onError,
+        onError: guardCallback(config.onError),
         onSessionChange: config.onSessionChange,
         organization: {
             allowUserToCreate: discovered?.organization?.allowUserToCreate ?? true,
@@ -356,13 +433,25 @@ const resolveContext = (config: AuthUIConfig, discovered?: DiscoveredConfig): Co
         },
         password: config.password ?? {},
         plugins: resolvePlugins(config.authClient, config.plugins, discovered),
-        redirects: resolveRedirects(config.redirects),
+        redirects: resolveRedirects(viewPaths, config.redirects),
         signUp: discovered?.signUp ?? true,
         social: config.social ?? discovered?.socialProviders ?? [],
         themeVariables: resolveThemeVariables(config.theme),
-        viewPaths: resolveViewPaths(config.viewPaths),
+        viewPaths,
     };
 };
 
-export type { AuthUIConfig, AvatarConfig, ControllerContext, NavAdapter, PluginFlags, RedirectConfig, ViewPaths };
-export { DEFAULT_AVATAR_MAX_SIZE, DEFAULT_BASE_PATH, resolveContext };
+/** Every {@link ViewPaths} key that names a screen, as opposed to the base they hang off. */
+type ViewName = Exclude<keyof ViewPaths, "base">;
+
+/**
+ * The route one auth screen lives at — the configured base plus its segment.
+ *
+ * Every link between the screens goes through here rather than spelling a path,
+ * so renaming a segment or moving the whole set under `viewPaths.base` moves the
+ * links with it. See {@link ViewPaths.base}.
+ */
+const viewHref = (context: Pick<ControllerContext, "viewPaths">, view: ViewName): string => `${context.viewPaths.base}/${context.viewPaths[view]}`;
+
+export type { AuthUIConfig, AvatarConfig, ControllerContext, NavAdapter, PluginFlags, RedirectConfig, ViewName, ViewPaths };
+export { DEFAULT_AVATAR_MAX_SIZE, DEFAULT_BASE_PATH, resolveContext, viewHref };

@@ -383,6 +383,20 @@ describe("parseAdvisorMap", () => {
         ["an unknown coverage verdict", { ...valid(), procedures: [{ coverage: "dark", id: "f#a", score: 10 }] }],
         ["a NaN global score", { ...valid(), score: Number.NaN }],
         ["a missing project bucket", { ...valid(), project: undefined }],
+        // `compareToBaseline` calls `.map` on every row's `checks`, and `?? []`
+        // only guards null/undefined — an object there throws inside the gate.
+        ["a procedure row whose checks is not an array", { ...valid(), procedures: [{ checks: {}, coverage: "clean", id: "f#a", score: 100 }] }],
+        // The entries matter for the same reason the container does: `checksWorsened`
+        // keys a Map on `check.name` and compares `check.occurrences` with `>`. A null
+        // entry throws there, and a non-numeric `occurrences` makes every comparison
+        // false — the growth signal then reads "no regression" for a corrupt baseline.
+        ["a null entry in a procedure row's checks", { ...valid(), procedures: [{ checks: [null], coverage: "clean", id: "f#a", score: 100 }] }],
+        ["a check entry with no name", { ...valid(), procedures: [{ checks: [{ occurrences: 1 }], coverage: "clean", id: "f#a", score: 100 }] }],
+        [
+            "a check entry whose occurrences is not a number",
+            { ...valid(), procedures: [{ checks: [{ name: "r", occurrences: "many" }], coverage: "clean", id: "f#a", score: 100 }] },
+        ],
+        ["a null entry in the project bucket's checks", { ...valid(), project: { checks: [null], score: 100 } }],
     ])("rejects %s", (_label, candidate) => {
         expect.assertions(1);
 
@@ -406,5 +420,16 @@ describe("parseAdvisorMap", () => {
 
         // The pre-fix failure: this parsed, then `compareToBaseline` threw on `entry.id`.
         expect(parseAdvisorMap({ procedures: [null], score: 0, version: MAP_VERSION })).toBeUndefined();
+    });
+
+    it("rejects a checks entry the gate would throw on", () => {
+        expect.assertions(2);
+
+        const baseline = { ...valid(), procedures: [{ checks: [null], coverage: "clean", id: "f#a", score: 100 }] };
+
+        // Guarding only the array container left this one level in: the row parsed,
+        // and then `checksWorsened` threw reading `name` off the null entry.
+        expect(() => compareToBaseline(valid(), baseline as unknown as AdvisorMap)).toThrow(TypeError);
+        expect(parseAdvisorMap(baseline)).toBeUndefined();
     });
 });

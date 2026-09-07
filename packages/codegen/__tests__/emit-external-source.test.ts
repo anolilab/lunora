@@ -1,7 +1,7 @@
 import { Project } from "ts-morph";
 import { describe, expect, it } from "vitest";
 
-import discoverSchema from "../src/discover-schema";
+import discoverSchema from "../src/discover/schema";
 import { emitShard } from "../src/emit";
 
 /**

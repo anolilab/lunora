@@ -13,7 +13,7 @@ export const NotFound: FC<PropsWithChildren<NotFoundRouteProps>> = ({ children }
         data-nav-theme="dark"
         data-theme="dark"
     >
-        <SpaceBackdrop className="absolute inset-0 z-0" id="photo-1708559831534-44c30eb3ab0e" opacity={0.5} />
+        <SpaceBackdrop className="absolute inset-0 z-0" opacity={0.5} />
 
         {/* top — error label + return panel */}
         <div className="relative z-10 flex items-start justify-between gap-8">

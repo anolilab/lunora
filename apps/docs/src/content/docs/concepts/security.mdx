@@ -119,8 +119,16 @@ HTTP guard reads.
 
 ### Body cap
 
-Request bodies are capped at 1 MiB before they reach a handler, so an oversized
-upload can't exhaust the worker's memory. This is always on.
+Request bodies on the planes the framework itself dispatches — the reserved
+`/_lunora/*` surface (RPC, REST, admin, import/export) and the `/api/auth/*`
+plane — are capped at 1 MiB before they reach a handler, so an oversized upload
+can't exhaust the worker's memory. This is always on, and a few routes that move
+real bytes declare a larger budget of their own (the Studio's KV value `PUT`, the
+storage object upload).
+
+Your own `httpRouter` routes are **not** capped: the request body is yours to
+read, so the budget is yours to choose. Read it with a limit if the route accepts
+uploads.
 
 ## Auth, cookies, and secrets
 
@@ -130,9 +138,12 @@ them:
 - **Cookie attributes**: `httpOnly: true`, `sameSite: "lax"`, `path: "/"` are
   filled in when you don't supply `advanced.defaultCookieAttributes`.
 - **Secure cookies**: `useSecureCookies` is forced on for an HTTPS `baseURL`.
-- **Auth secret strength**: `AUTH_SECRET` shorter than 32 characters logs a
-  warning (not a throw, so dev isn't blocked) pointing at `openssl rand -hex 32`.
-  A missing secret still throws.
+- **Auth secret strength**: `AUTH_SECRET` shorter than 32 characters **throws**
+  at construction, pointing at `openssl rand -hex 32`. The one exception is an
+  explicitly `http://` `baseURL` — a local dev origin — where it logs a warning
+  instead so a prototype isn't blocked. An unset `baseURL` and any `https://`
+  one both count as production and throw, so a weak secret 500s every request
+  rather than shipping. A missing secret throws everywhere.
 
 ## Protecting public procedures
 

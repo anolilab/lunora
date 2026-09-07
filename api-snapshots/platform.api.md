@@ -268,11 +268,13 @@ const NOOP_EXECUTION_CONTEXT: ExecutionContextLike;
 ```ts
 interface PlatformCapabilities {
     features: {
+        agents?: Capability;
         ai?: Capability;
         analytics?: Capability;
         browser?: Capability;
         commitOrderedTables?: Capability;
         containers?: Capability;
+        cronTriggers?: Capability;
         crossShardFanout?: Capability;
         durableStreams?: Capability;
         globalTables?: Capability;
@@ -286,6 +288,7 @@ interface PlatformCapabilities {
         memoryTables?: Capability;
         objectStorage?: Capability;
         objectStorageBackups?: Capability;
+        objectStorageCdcArchive?: Capability;
         pipelines?: Capability;
         queues?: Capability;
         scheduler?: Capability;
@@ -394,10 +397,13 @@ interface R2BucketLike {
     list: (options?: {
         cursor?: string;
         delimiter?: string;
+        include?: ("customMetadata" | "httpMetadata")[];
         limit?: number;
         prefix?: string;
+        startAfter?: string;
     }) => Promise<{
         cursor?: string;
+        delimitedPrefixes?: string[];
         objects: R2ObjectLike[];
         truncated?: boolean;
     }>;
@@ -782,8 +788,10 @@ interface ConformanceHost {
     awaitJobDispatched?: (id: string) => Promise<boolean>;
     cleanup?: () => void;
     createSocket?: () => unknown;
+    cronTicks?: (functionPath: string) => number;
     directory: ShardDirectory;
     disposeTerminally?: () => void;
+    isolatesByDispatch?: true;
     kv?: ShardKvStore;
     readFrames?: (socket: SocketHandle) => string[];
     restoreSocket?: (id: string, attachment: unknown) => SocketHandle;

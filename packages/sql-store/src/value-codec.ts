@@ -1,21 +1,73 @@
 /**
  * Shared value encode/decode building blocks for SQL dialects.
  *
- * The SQLite forms here are what the store core actually runs on **every**
- * engine: `serializeColumnValue`/`decodeGlobalRow` hard-code {@link sqliteEncode}
+ * The SQLite forms here are what the store core runs on **every** engine:
+ * `serializeColumnValue`/`decodeGlobalRow` hard-code {@link sqliteEncode}
  * /{@link sqliteDecode}, so global-table storage is SQLite-shaped on D1,
- * Postgres, and MySQL alike (booleans as 1/0, JSON as TEXT, `bigint` as a decimal
- * string). The `SqlDialect.encode`/`decode` members are **not** consulted by the
- * core today — a concrete dialect that "overrides" them (PG `jsonb`/`bytea`,
- * MySQL `JSON`/`TINYINT`) would find them silently unused. Do not rely on that
- * seam without first routing the core through it.
+ * Postgres, and MySQL alike (booleans as 1/0, JSON as TEXT, `bigint` as the
+ * order-preserving text key {@link bigintSqlKey} builds). `SqlDialect` deliberately carries NO codec member: an engine-native
+ * one there would never run, and a dialect author writing one would only learn
+ * that at runtime. Adding one means routing the core through it first.
  */
+import { LunoraError } from "@lunora/errors";
 import type { ValidatorLike } from "@lunora/shard-engine";
+import { BIGINT_KEY_DIGITS, bigintSqlKey, decodeBigintSqlKey } from "@lunora/shard-engine";
 
 import { effectiveKind } from "../../../shared/effective-kind";
+import { decodeWire, encodeWire, needsWireEncoding, WIRE_TAG } from "../../../shared/wire-codec";
+
+/**
+ * Marks a stored column as wire-encoded. Reuses {@link WIRE_TAG} rather than
+ * minting a second sentinel — as a *prefix* it cannot be confused with the tag
+ * appearing *inside* a value, because `JSON.stringify` output always starts with
+ * `{`, `[`, `"`, a digit, `-`, `t`, `f`, or `n`, never `$`.
+ */
+const WIRE_PREFIX = WIRE_TAG;
+
+/**
+ * Decode a stored JSON column, honouring the wire marker written by
+ * {@link sqliteEncode}.
+ *
+ * Testing an explicit prefix rather than sniffing for the tag anywhere in the
+ * text is what makes this unambiguous: a legacy row that merely *contains* an
+ * array shaped like a wire payload is ordinary data and is returned as parsed,
+ * where a content sniff would decode it and the next write would persist the
+ * corruption.
+ *
+ * It is also the cheaper test. `decodeWire` is identity for pure JSON but still
+ * walks and rebuilds the whole structure to prove it — pure overhead on the
+ * per-column path of every global read, measuring ~1.3x on an object column and
+ * ~1.25x on a 100-row page. A `startsWith` is O(1) against the O(n) scan a
+ * content sniff needs.
+ */
+const decodeJsonColumn = (raw: string, parse: (text: string) => unknown): unknown =>
+    raw.startsWith(WIRE_PREFIX) ? decodeWire(parse(raw.slice(WIRE_PREFIX.length))) : parse(raw);
+
+/**
+ * Column kinds whose storage type is TEXT on every engine (see
+ * `sqlAffinityForKind` / the Hyperdrive dialects) but whose VALUE can be any JS
+ * scalar, because {@link sqliteEncode} keys off the runtime type.
+ */
+const UNTYPED_KINDS = new Set(["any", "from", "union"]);
 
 /** Map a JS value onto its SQLite storage form — SQLite has no boolean, so true/false → 1/0. */
-export const sqliteEncode = (value: unknown): unknown => {
+export const sqliteEncode = (value: unknown, kind?: string): unknown => {
+    // A number or boolean bound to one of the untyped kinds' TEXT column is
+    // COERCED by the engine — `42` lands as the text `42.0`, `true` (encoded 1)
+    // as `1.0` — and the decode has no type to reverse it with, so the caller
+    // read back a string. Store those two in the marked, self-describing form
+    // the composites already use; `sqliteDecode` reverses it by the marker
+    // alone, so no kind is needed on the way out.
+    //
+    // Strings, bigints and composites keep the storage form they already had:
+    // the WHERE path binds through this same function WITHOUT a kind, so
+    // changing them would stop every existing equality filter from matching.
+    // Equality on an untyped numeric column does not match today either (the
+    // stored `42.0` never equalled a bound `42`), so nothing regresses.
+    if (kind !== undefined && (typeof value === "number" || typeof value === "boolean") && UNTYPED_KINDS.has(kind)) {
+        return WIRE_PREFIX + JSON.stringify(value);
+    }
+
     if (typeof value === "boolean") {
         return value ? 1 : 0;
     }
@@ -25,7 +77,7 @@ export const sqliteEncode = (value: unknown): unknown => {
     }
 
     if (typeof value === "bigint") {
-        return value.toString();
+        return bigintSqlKey(value);
     }
 
     // Bytes bind directly as a BLOB (SQLite) / BYTEA (Postgres). Must precede the
@@ -39,7 +91,30 @@ export const sqliteEncode = (value: unknown): unknown => {
         return new Uint8Array(value);
     }
 
-    return JSON.stringify(value);
+    // Wire-encode a composite so a nested `bigint`/bytes leaf survives. A bare
+    // `JSON.stringify` threw an untyped `TypeError` on `{ n: 1n }` (surfacing as
+    // an opaque 500) and silently flattened `{ b: <ArrayBuffer> }` to `{"b":{}}`
+    // — data destroyed with no error at all.
+    //
+    // Only a value that actually needs it is wire-encoded, and that form is
+    // marked with a leading `WIRE_PREFIX` so the reader can tell it apart from
+    // ordinary JSON with certainty rather than by sniffing the content. Without
+    // the marker, a row already holding the array `["$lunora.wire$","bigint","42"]`
+    // — legitimate app data, written before this path existed and so never passed
+    // through `encodeWire`'s `"arr"` escape — decodes as `42n`, and the next
+    // `patch`/`replace` persists that corruption. `encodeWire` escapes such an
+    // array on the way in, so only pre-existing rows are exposed; the marker
+    // closes them too.
+    //
+    // An ordinary document is untouched: no prefix, byte-identical to before.
+    try {
+        return needsWireEncoding(value) ? WIRE_PREFIX + JSON.stringify(encodeWire(value)) : JSON.stringify(value);
+    } catch (error: unknown) {
+        // `encodeWire` throws a bare `TypeError` for a non-plain object and a
+        // `RangeError` past its depth cap; re-thrown typed so the writer names
+        // what it could not store, matching the shard twin.
+        throw new LunoraError("BAD_REQUEST", `this value cannot be stored: ${error instanceof Error ? error.message : String(error)}`);
+    }
 };
 
 /** Parse `raw` as JSON, returning `raw` unchanged when it is not valid JSON. */
@@ -51,10 +126,20 @@ export const tryJsonParse = (raw: string): unknown => {
     }
 };
 
-/** Decode a `bigint` column: a decimal string back into a `BigInt`, else verbatim. */
+/**
+ * Decode a `bigint` column: the order-preserving key {@link bigintSqlKey} writes,
+ * or — for a row stored by a build that wrote plain decimal text — the decimal
+ * string, else verbatim.
+ */
 export const decodeBigint = (raw: unknown): unknown => {
     if (typeof raw !== "string") {
         return raw;
+    }
+
+    const key = decodeBigintSqlKey(raw);
+
+    if (key !== undefined) {
+        return key;
     }
 
     try {
@@ -86,20 +171,51 @@ export const effectiveColumnKind = (validator: ValidatorLike): string | undefine
  *   `ArrayBuffer` passes through. Required because `v.bytes()` validates
  *   `value instanceof ArrayBuffer` and different backends return different BLOB
  *   shapes (workerd D1 `ArrayBuffer`, node:sqlite `Uint8Array`, pg/mysql2 `Buffer`).
- * - `object`/`array`/`record`: JSON string → parsed value.
- * - `union`/`any`/`from`: parsed back only when the stored string is a JSON
- *   non-scalar (a scalar member round-trips through SQLite's native column type).
+ * - `object`/`array`/`record`/`geoPoint`: JSON string → parsed value. `geoPoint`
+ *   belongs here because {@link sqliteEncode} keys off the runtime JS type and
+ *   stores the `{ lat, lng }` object as JSON in a TEXT column; without the case
+ *   it fell through to `default:` and every client read back the raw JSON text.
+ * - `union`/`any`/`from`: parsed back when the stored string is a JSON
+ *   non-scalar, or when it carries the {@link WIRE_PREFIX} marker.
+ *   A `number` or `boolean` does NOT round-trip through the column's native
+ *   type — all three kinds store as TEXT on every engine, which coerces a bound
+ *   `42` to the text `42.0` — so {@link sqliteEncode} writes those two in the
+ *   marked form and this branch reverses them by the marker alone.
  *   `from` belongs to THIS group, not to `object`/`array`/`record`: an external
  *   Standard Schema can describe a string just as easily as an object, and
  *   {@link sqliteEncode} keys off the runtime JS type — so a `v.from(z.string())`
  *   column holding `"123"` is stored verbatim, and unconditional parsing would
  *   read it back as the NUMBER 123.
+ *   A `bigint` member decodes too, by SHAPE: {@link sqliteEncode} keys off the
+ *   runtime type, so a bigint here is stored as the same order-preserving key a
+ *   declared `v.bigint()` column gets, and returning that verbatim handed the
+ *   caller 40 characters of padding instead of the value it wrote. See the
+ *   ambiguity this buys, and why the wire marker cannot carry it instead, below.
  *   CAVEAT: a union/any/from member is stored verbatim by {@link sqliteEncode}, so
  *   a legitimate *string* value that itself looks like JSON (`'{"a":1}'`, `'[1,2]'`)
  *   is ambiguous on read and decodes back to the parsed object/array, not the
- *   original string. This is inherent to sharing one TEXT column between a string
- *   and an object member; disambiguating would require a breaking storage-format
- *   change (tagging encoded non-scalars), so it is documented rather than fixed.
+ *   original string. The bigint test admits the same class of ambiguity, narrower
+ *   but real: `decodeBigintSqlKey` accepts EXACTLY 40 characters — `"0"` or `"1"`,
+ *   then 39 digits — and a stored *string* of that shape (a zero-padded account
+ *   number, a numeric external id) is byte-identical on disk to a key and reads
+ *   back as a `bigint`. Pinned by a test in `ctx-db.test.ts` so the trade is
+ *   visible rather than rediscovered.
+ *
+ *   Preferred anyway, because the alternative is not "no ambiguity" but
+ *   guaranteed corruption: WITHOUT the test, every bigint any code writes to an
+ *   untyped column comes back as padding, on every read. The narrow false
+ *   positive costs a specific 40-character digit string its type; the absent test
+ *   cost every such column its value.
+ *
+ *   The unambiguous {@link WIRE_PREFIX} marker cannot carry this instead. It is
+ *   not reached: {@link sqliteEncode} returns at its `bigint` branch first, and it
+ *   takes no `kind`, so it cannot encode an untyped column differently from a
+ *   declared one. It is also `serializeColumnValue`, which builds every WHERE
+ *   binding — a prefixed bigint would never match a row stored as a key, and the
+ *   padded key is order-preserving on purpose (indexes, range predicates, MIN/MAX
+ *   all read it). Two storage forms for one runtime type breaks comparison
+ *   between them. Disambiguating properly means tagging every encoded non-scalar,
+ *   a breaking storage-format change, so it is documented rather than fixed.
  * - everything else (string/number/date/timestamp/id/literal): verbatim.
  */
 export const sqliteDecode = (raw: unknown, kind: string | undefined): unknown => {
@@ -111,12 +227,31 @@ export const sqliteDecode = (raw: unknown, kind: string | undefined): unknown =>
         case "any":
         case "from":
         case "union": {
-            return typeof raw === "string" && (raw.startsWith("{") || raw.startsWith("[")) ? tryJsonParse(raw) : raw;
+            if (typeof raw !== "string") {
+                return raw;
+            }
+
+            // The wire marker joins `{`/`[` as a shape this branch must decode —
+            // a marked value is not raw JSON, so it would otherwise fall through
+            // and be returned as its own storage string.
+            if (raw.startsWith("{") || raw.startsWith("[") || raw.startsWith(WIRE_PREFIX)) {
+                return decodeJsonColumn(raw, tryJsonParse);
+            }
+
+            // A bigint in an untyped column is stored as the same
+            // order-preserving key a declared `v.bigint()` one gets, because
+            // {@link sqliteEncode} keys off the RUNTIME type. Without this the
+            // column reads back as 40 characters of padding. The shape test is
+            // narrow, not exact: a stored string of the same 40-character shape
+            // decodes as a bigint too — see the CAVEAT above for why that trade
+            // is the right way round.
+            return decodeBigintSqlKey(raw) ?? raw;
         }
         case "array":
+        case "geoPoint":
         case "object":
         case "record": {
-            return typeof raw === "string" ? tryJsonParse(raw) : raw;
+            return typeof raw === "string" ? decodeJsonColumn(raw, tryJsonParse) : raw;
         }
         case "bigint": {
             return decodeBigint(raw);
@@ -146,3 +281,13 @@ export const sqliteDecode = (raw: unknown, kind: string | undefined): unknown =>
         }
     }
 };
+
+/**
+ * Full width of a stored key: one sign character plus {@link BIGINT_KEY_DIGITS}
+ * of magnitude. Exported for the provisioning pass in `ctx-db-migrations.ts`, whose
+ * `WHERE LENGTH(col) <> 40` probe is how it finds a column still holding the
+ * plain decimal text an earlier build wrote.
+ */
+export const BIGINT_KEY_LENGTH: number = BIGINT_KEY_DIGITS + 1;
+
+export { bigintSqlKey } from "@lunora/shard-engine";

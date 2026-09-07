@@ -1,7 +1,7 @@
 /**
  * Runtime resolution of a schema extension defined inside a published package
  * (Plan 056). When `.extend(pkg.extension)`'s `defineSchemaExtension(...)` lives
- * in `node_modules` (only a `.d.ts` is reachable by AST), `discover-schema.ts`
+ * in `node_modules` (only a `.d.ts` is reachable by AST), `discover/schema.ts`
  * falls back here: we find the import that bound the receiver, `require()` the
  * package from the project root, read the RUNTIME `SchemaExtension` value, and
  * convert its tables to bare {@link TableIR}s — the same IR the AST path

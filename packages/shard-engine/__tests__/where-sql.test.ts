@@ -85,6 +85,25 @@ describe("compileWhereSql — per-engine rendering", () => {
         });
     });
 
+    it("does NOT treat `undefined` as SQL NULL, so a dropped variable fails loudly", () => {
+        expect.assertions(2);
+
+        // `undefined` is a JS absence, not SQL NULL. Folding it into `IS NULL`
+        // would turn `where: { status: { eq: someVarThatIsUndefined } }` — a
+        // dropped variable, a typo'd destructure — into a query that silently
+        // matches every null row. It binds a placeholder instead, so the driver
+        // rejects it at the boundary where the mistake is still visible.
+        //
+        // The keyset cursor is the one producer of a legitimately absent ordered
+        // value, and `encodeCursor` collapses that to `null` at the source rather
+        // than teaching this shared compiler about `undefined`.
+        // The property is "not IS NULL", not a particular rendering: an unusable
+        // comparison is caught at the driver either way, and pinning the exact
+        // broken SQL would make this brittle without making it stronger.
+        expect(render({ status: { eq: undefined } }, "postgres").sql).not.toContain("IS NULL");
+        expect(render({ status: undefined }, "postgres").sql).not.toContain("IS NULL");
+    });
+
     it("preserves global placeholder numbering across nested OR / NOT / IN groups (Postgres)", () => {
         expect.assertions(1);
 
@@ -149,6 +168,23 @@ describe("compileWhereSql — per-engine rendering", () => {
 
         expect(render({ x: { in: [] } }, "sqlite")).toEqual({ params: [], sql: `0 = 1` });
         expect(render({ x: { notIn: [] } }, "sqlite")).toEqual({ params: [], sql: `1 = 1` });
+    });
+
+    it("refuses a scalar IN / NOT IN instead of compiling one that matches everything", () => {
+        expect.assertions(4);
+
+        // A non-array used to fall back to the empty list, whose complement is
+        // `1 = 1`: an RLS policy `{ role: { notIn: deniedRoles } }` where
+        // `deniedRoles` arrived as a single string dropped the restriction
+        // entirely, while the same mistake on `in` silently matched nothing.
+        // Neither is an answer the caller can act on, so both refuse.
+        expect(() => render({ role: { notIn: "admin" } }, "sqlite")).toThrow(/`notIn` on "role" expects an array/u);
+        expect(() => render({ role: { in: "admin" } }, "sqlite")).toThrow(/`in` on "role" expects an array/u);
+        expect(() => render({ role: { in: undefined } }, "sqlite")).toThrow(/`in` on "role" expects an array/u);
+
+        // An explicitly empty list stays a legitimate predicate — it says
+        // something, and it says it in both directions.
+        expect(render({ role: { notIn: [] } }, "sqlite")).toEqual({ params: [], sql: `1 = 1` });
     });
 
     it("returns undefined for an empty / absent where", () => {

@@ -37,6 +37,26 @@ const MaxDepth = 64
 // Applied only on decode — the untrusted direction.
 const MaxBigIntDigits = 1024
 
+// typedArrayElementSizes gives the bytes per element of each typed-array view
+// the codec round-trips. A view whose payload is not a whole number of elements
+// is not a view the reference can rebuild — new Float32Array(buffer) raises a
+// RangeError there — so accepting it would hand the consumer bytes it cannot
+// reconstruct. ArrayBuffer is absent deliberately: it is untyped, so there is
+// nothing to align.
+var typedArrayElementSizes = map[string]int{
+	"BigInt64Array":     8,
+	"BigUint64Array":    8,
+	"Float32Array":      4,
+	"Float64Array":      8,
+	"Int16Array":        2,
+	"Int32Array":        4,
+	"Int8Array":         1,
+	"Uint16Array":       2,
+	"Uint32Array":       4,
+	"Uint8Array":        1,
+	"Uint8ClampedArray": 1,
+}
+
 // undefinedType is the type of Undefined. It is unexported so Undefined is the
 // only value of it, making `== Undefined` a total test.
 type undefinedType struct{}
@@ -445,6 +465,62 @@ func encodeSlice(items []any, depth int) ([]any, error) {
 	return encoded, nil
 }
 
+// maxTimeValue is the largest epoch a Date holds (ECMAScript TimeClip). Past
+// it, and for any non-finite epoch, `new Date(v)` is an Invalid Date.
+const maxTimeValue = 8.64e15
+
+// timeClip is what `new Date(epoch).getTime()` returns: the epoch truncated
+// toward zero, or NaN when it is non-finite or out of range. Keeping the epoch
+// verbatim put a date back on the wire carrying a value the reference's own
+// Date never holds — an out-of-range epoch re-encodes there as a NaN tag.
+func timeClip(epoch float64) float64 {
+	if math.IsNaN(epoch) || math.IsInf(epoch, 0) || math.Abs(epoch) > maxTimeValue {
+		return math.NaN()
+	}
+
+	truncated := math.Trunc(epoch)
+
+	// TimeClip is ToIntegerOrInfinity, not truncation, and the two differ on
+	// exactly one window: an epoch in (-1, 0] gives +0 there and -0 here,
+	// because Trunc keeps the sign of zero. The window is one value wide, and
+	// the stable subscription key spells -0 as the bare token `-0`, distinct
+	// from `0` — so without this a Date built from -0.5 opens a different
+	// subscription than the TS client's does.
+	if truncated == 0 {
+		return 0
+	}
+
+	return truncated
+}
+
+// isAbsoluteHref reports whether an href carries a URL scheme, per RFC 3986:
+// an ASCII letter followed by letters, digits, "+", "-" or ".", then ":".
+//
+// The reference builds a real URL, which throws on anything unparseable, while
+// every port stored the string verbatim and accepted "not a url" — a frame that
+// kills a JS peer's subscription and is waved through here. Reproducing WHATWG
+// URL parsing in eight languages is not on offer (their own parsers disagree
+// with it in the deep end), so the contract, and protocol/README.md §2.1, is the
+// floor of it: an href must be ABSOLUTE.
+func isAbsoluteHref(href string) bool {
+	for index := 0; index < len(href); index++ {
+		char := href[index]
+
+		switch {
+		case char == ':':
+			return index > 0
+		case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z':
+			continue
+		case index > 0 && (char >= '0' && char <= '9' || char == '+' || char == '-' || char == '.'):
+			continue
+		default:
+			return false
+		}
+	}
+
+	return false
+}
+
 // maxExactInteger is the largest integer a float64 represents exactly (2^53-1).
 // JSON numbers are float64, so an integer above this cannot cross the wire as a
 // number without changing value — v.bigint() and its tag exist for that case.
@@ -547,7 +623,7 @@ func decodeTagged(value []any, depth int) (any, error) {
 			return nil, fmt.Errorf("wire-codec: date epoch is %T, want number", epoch)
 		}
 
-		return Date{EpochMs: milliseconds}, nil
+		return Date{EpochMs: timeClip(milliseconds)}, nil
 	case "url":
 		if len(value) < 3 {
 			return nil, fmt.Errorf("wire-codec: malformed url tag")
@@ -556,6 +632,10 @@ func decodeTagged(value []any, depth int) (any, error) {
 		href, ok := value[2].(string)
 		if !ok {
 			return nil, fmt.Errorf("wire-codec: url href is %T, want string", value[2])
+		}
+
+		if !isAbsoluteHref(href) {
+			return nil, fmt.Errorf("wire-codec: url href %q is not absolute", href)
 		}
 
 		return URL{Href: href}, nil
@@ -613,10 +693,11 @@ func decodeMap(value []any, depth int) (any, error) {
 	}
 
 	entries := make([]MapEntry, 0, len(raw))
+	seen := map[string]int{}
 
 	for _, item := range raw {
 		pair, ok := item.([]any)
-		if !ok || len(pair) < 2 {
+		if !ok || len(pair) != 2 {
 			return nil, fmt.Errorf("wire-codec: malformed map entry")
 		}
 
@@ -630,10 +711,61 @@ func decodeMap(value []any, depth int) (any, error) {
 			return nil, err
 		}
 
+		// Last write wins, at the FIRST occurrence's position — the reference
+		// builds a real Map, and Map.prototype.set on a key already present
+		// overwrites the value in place rather than appending. Keeping both
+		// entries left two peers of one deployment reading a different value
+		// from identical bytes.
+		identity, collapses := mapKeyIdentity(key)
+
+		if collapses {
+			if index, duplicate := seen[identity]; duplicate {
+				// Only the VALUE. `Map.prototype.set` on a key already present
+				// keeps the key it holds, so a later `-0` never replaces the
+				// `0` already stored under it.
+				entries[index].Value = decoded
+
+				continue
+			}
+
+			seen[identity] = len(entries)
+		}
+
 		entries = append(entries, MapEntry{Key: key, Value: decoded})
 	}
 
 	return Map{Entries: entries}, nil
+}
+
+// mapKeyIdentity returns a map key's collapse identity, and whether it collapses
+// at all.
+//
+// The reference's Map compares keys by SameValueZero: primitives by value (NaN
+// equal to itself), everything else by reference — so two structurally identical
+// Date/Bytes keys stay two entries there and must stay two here.
+func mapKeyIdentity(key any) (string, bool) {
+	switch typed := key.(type) {
+	case nil:
+		return "null", true
+	case undefinedType:
+		return "undefined", true
+	case bool:
+		return fmt.Sprintf("bool:%t", typed), true
+	case string:
+		return "str:" + typed, true
+	case BigInt:
+		return "big:" + typed.Value.String(), true
+	case float64:
+		if math.IsNaN(typed) {
+			return "num:nan", true
+		}
+
+		// `+ 0` clears the sign of a zero and changes nothing else: SameValueZero
+		// holds -0 equal to 0, while %v keeps the sign ("-0").
+		return fmt.Sprintf("num:%v", typed+0), true
+	}
+
+	return "", false
 }
 
 func decodeSet(value []any, depth int) (any, error) {
@@ -646,9 +778,31 @@ func decodeSet(value []any, depth int) (any, error) {
 		return nil, fmt.Errorf("wire-codec: set payload is %T, want array", value[2])
 	}
 
-	items, err := decodeSlice(raw, depth)
+	decoded, err := decodeSlice(raw, depth)
 	if err != nil {
 		return nil, err
+	}
+
+	// The reference builds a real Set, which de-duplicates by SameValueZero and
+	// keeps the FIRST occurrence's position — the same rule as a Map's keys, so
+	// the same identity helper decides it. Carrying both copies through re-encoded
+	// a set the reference would never emit, and left two peers of one deployment
+	// disagreeing about a set's membership.
+	items := make([]any, 0, len(decoded))
+	seen := map[string]struct{}{}
+
+	for _, item := range decoded {
+		identity, collapses := mapKeyIdentity(item)
+
+		if collapses {
+			if _, duplicate := seen[identity]; duplicate {
+				continue
+			}
+
+			seen[identity] = struct{}{}
+		}
+
+		items = append(items, item)
 	}
 
 	return Set{Items: items}, nil
@@ -659,20 +813,43 @@ func decodeError(value []any, depth int) (any, error) {
 		return nil, fmt.Errorf("wire-codec: malformed error tag")
 	}
 
-	name, _ := value[2].(string)
-	message, _ := value[3].(string)
+	// Both label slots are type-CHECKED, like every other slot. Substituting ""
+	// for a non-string accepted the frame while erasing the error's identity,
+	// and the eight ports did not even agree on that: two carried the
+	// non-string through verbatim. A slot that must hold a string and does not
+	// is a malformed frame.
+	name, ok := value[2].(string)
+	if !ok {
+		return nil, fmt.Errorf("wire-codec: error name is %T, want string", value[2])
+	}
+
+	message, ok := value[3].(string)
+	if !ok {
+		return nil, fmt.Errorf("wire-codec: error message is %T, want string", value[3])
+	}
+
 	decoded := Error{Message: message, Name: name, Props: map[string]any{}, Cause: Undefined}
 
-	if len(value) > 4 {
-		props, err := decodeWire(value[4], depth+1)
-		if err != nil {
-			return nil, err
-		}
-
-		if asMap, ok := props.(map[string]any); ok {
-			decoded.Props = asMap
-		}
+	// The props slot is NOT optional, NOT nullable and NOT a primitive: the
+	// reference reads it with Object.keys, which throws on a null or missing
+	// slot and ENUMERATES a string/number/boolean/array — so `[TAG,"error",
+	// "E","m","ab"]` would decode with the invented props {0:"a",1:"b"} there
+	// while quietly substituting an empty map accepted the same frame here.
+	if len(value) < 5 || value[4] == nil {
+		return nil, fmt.Errorf("wire-codec: malformed error tag")
 	}
+
+	props, err := decodeWire(value[4], depth+1)
+	if err != nil {
+		return nil, err
+	}
+
+	asMap, ok := props.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("wire-codec: error props is %T, want an object", props)
+	}
+
+	decoded.Props = asMap
 
 	if len(value) > 5 {
 		cause, err := decodeWire(value[5], depth+1)
@@ -701,6 +878,16 @@ func decodeBytes(value []any) (any, error) {
 		return nil, fmt.Errorf("wire-codec: invalid base64 in bytes tag: %w", err)
 	}
 
+	// The payload must be CANONICAL, not merely decodable. Go's decoder skips
+	// newlines and ignores the unused low bits of a short final quantum, so
+	// "AQID\n" and "AQJ=" both decoded here — the second one silently, into two
+	// bytes that re-encode as "AQI=", different bytes than the peer wrote.
+	// Re-encoding and comparing is the whole rule: the payload must be exactly
+	// what a conforming encoder would have written for these bytes.
+	if base64.StdEncoding.EncodeToString(data) != encoded {
+		return nil, fmt.Errorf("wire-codec: bytes payload is not canonical padded base64")
+	}
+
 	ctor := "Uint8Array"
 
 	if len(value) > 3 {
@@ -713,6 +900,23 @@ func decodeBytes(value []any) (any, error) {
 	// every other view keeps its constructor name so the type survives.
 	if ctor == "Uint8Array" {
 		return data, nil
+	}
+
+	if ctor != "ArrayBuffer" {
+		size, known := typedArrayElementSizes[ctor]
+
+		// An UNKNOWN ctor name decodes to raw bytes, dropping the name — the
+		// forward-compat rule in protocol/README.md §2.1. Keeping it re-encoded a
+		// 4-element form the reference emits as 3, so the same value relayed
+		// through JS and through here produced different bytes, and therefore
+		// different stable subscription keys.
+		if !known {
+			return data, nil
+		}
+
+		if len(data)%size != 0 {
+			return nil, fmt.Errorf("wire-codec: %s payload of %d bytes is not a multiple of its %d-byte element", ctor, len(data), size)
+		}
 	}
 
 	return Bytes{Ctor: ctor, Data: data}, nil

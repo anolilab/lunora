@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { applyDeps, projectUsesUmbrella, resolveDepRange, rewriteUmbrellaImports } from "../../src/commands/registry/apply";
+import { runAddFeature } from "../../src/commands/add/handler";
+import { applyDeps, confirmDepMutation, projectUsesUmbrella, resolveDepRange, rewriteUmbrellaImports } from "../../src/commands/registry/apply";
 import { parseManifest, runAddCommand } from "../../src/commands/registry/index";
 import type { Logger } from "../../src/util/logger";
 import { resolveDistTag } from "../../src/util/source-ref";
@@ -334,6 +335,46 @@ describe("lunora add", () => {
             expect(wrangler).toContain("RATELIMIT_ENABLED");
         });
 
+        it("merges an object-rooted binding key-wise instead of replacing the whole root", async () => {
+            expect.assertions(4);
+
+            // A custom-source item can declare a whole `vars` object. Writing it
+            // verbatim replaces the root, so every variable the project already
+            // set disappears from wrangler.jsonc without a word.
+            const customRegistry = mkdtempSync(join(tmpdir(), "lunora-custom-registry-"));
+
+            mkdirSync(join(customRegistry, "planter"), { recursive: true });
+            writeFileSync(
+                join(customRegistry, "planter", "registry.json"),
+                JSON.stringify({
+                    bindings: [{ path: ["vars"], value: { NEW_VAR: "added", SHARED: "theirs" } }],
+                    deps: {},
+                    description: "plants a vars block",
+                    files: [],
+                    name: "planter",
+                    requires: [],
+                }),
+                "utf8",
+            );
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), '{\n    "name": "demo",\n    "vars": { "EXISTING": "keep", "SHARED": "mine" }\n}\n', "utf8");
+
+            const { lines, logger } = makeLogger();
+
+            await runAddCommand({ cwd: workdir, from: customRegistry, logger, names: ["planter"], yes: true });
+
+            const { vars } = JSON.parse(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")) as { vars: Record<string, string> };
+
+            expect(vars.EXISTING).toBe("keep");
+            // The project's value wins on a collision, and the skip is reported.
+            expect(vars.SHARED).toBe("mine");
+            expect(lines.join("\n")).toContain("SHARED already exists in vars");
+            // A genuinely new key still lands.
+            expect(vars.NEW_VAR).toBe("added");
+
+            rmSync(customRegistry, { force: true, recursive: true });
+        });
+
         it("rewrites a manifest's workspace: dep range to a publishable one", async () => {
             expect.assertions(2);
 
@@ -376,6 +417,110 @@ describe("lunora add", () => {
             expect(result.code).toBe(0);
             expect(existsSync(join(workdir, "lunora", "ratelimit", "index.ts"))).toBe(true);
             expect(existsSync(join(workdir, "lunora", "needs-ratelimit", "index.ts"))).toBe(true);
+        });
+    });
+
+    describe("untrusted --source confirmation", () => {
+        it("`lunora add <item> --source …` refuses to write without confirmation", async () => {
+            expect.assertions(4);
+
+            const { lines, logger } = makeLogger();
+            const result = await runAddFeature({
+                cwd: workdir,
+                feature: "ratelimit",
+                from: registryRoot,
+                logger,
+                source: "gh:attacker/evil",
+            });
+
+            expect(result.code).toBe(1);
+            expect(lines.join("\n")).toContain("custom registry source");
+            // Nothing from the attacker-controlled origin reached the project.
+            expect(existsSync(join(workdir, "lunora", "ratelimit", "index.ts"))).toBe(false);
+            expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).not.toContain("RATELIMIT_ENABLED");
+        });
+
+        it("`--yes` is the conscious confirmation that lets it through", async () => {
+            expect.assertions(2);
+
+            const result = await runAddFeature({
+                cwd: workdir,
+                feature: "ratelimit",
+                from: registryRoot,
+                logger: makeLogger().logger,
+                source: "gh:attacker/evil",
+                yes: true,
+            });
+
+            expect(result.code).toBe(0);
+            expect(existsSync(join(workdir, "lunora", "ratelimit", "index.ts"))).toBe(true);
+        });
+
+        it("`--from` is the same kind of origin and is confirmed too", async () => {
+            expect.assertions(3);
+
+            // A local registry root the user named is no more trusted than a
+            // remote `--source`; `lunora add` used to auto-confirm this half.
+            const prompts: string[] = [];
+            const result = await runAddFeature({
+                confirm: async (message: string) => {
+                    prompts.push(message);
+
+                    return true;
+                },
+                cwd: workdir,
+                feature: "ratelimit",
+                from: registryRoot,
+                logger: makeLogger().logger,
+            });
+
+            expect(prompts).toHaveLength(1);
+            expect(result.code).toBe(0);
+            expect(existsSync(join(workdir, "lunora", "ratelimit", "index.ts"))).toBe(true);
+        });
+
+        it("names the origin the resolver actually reads when both are given", async () => {
+            expect.assertions(2);
+
+            // `resolveRegistryRoot` takes `--from` and ignores `--source` when
+            // both are set, so a prompt naming `source` asked the operator to
+            // confirm a place nothing read from.
+            const prompts: string[] = [];
+            const result = await runAddFeature({
+                confirm: async (message: string) => {
+                    prompts.push(message);
+
+                    return true;
+                },
+                cwd: workdir,
+                feature: "ratelimit",
+                from: registryRoot,
+                logger: makeLogger().logger,
+                source: "gh:attacker/evil",
+            });
+
+            expect(result.code).toBe(0);
+            expect(prompts[0]).toContain(registryRoot);
+        });
+
+        it("the default first-party registry still needs no confirmation", async () => {
+            expect.assertions(2);
+
+            // Neither `--source` nor `--from`: `lunora add` itself is the opt-in,
+            // so a files-only item from the pinned registry must not ask again.
+            const asked: string[] = [];
+            const proceeded = await confirmDepMutation([{ manifest: { files: [], name: "foo" } }], {
+                confirm: async (message: string) => {
+                    asked.push(message);
+
+                    return false;
+                },
+                logger: makeLogger().logger,
+                names: [],
+            });
+
+            expect(proceeded).toBe(true);
+            expect(asked).toHaveLength(0);
         });
     });
 

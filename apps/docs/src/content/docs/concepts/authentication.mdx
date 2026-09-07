@@ -52,8 +52,9 @@ different user (see [real-time](/docs/concepts/realtime)).
 configures a better-auth instance and Lunora forwards requests to it. Out of the
 box that gives you:
 
-- **Email / password**: PBKDF2-SHA-256 hashing that runs in WebCrypto, with no
-  Node polyfills.
+- **Email / password**: better-auth's scrypt hashing, which runs on Workers with
+  no Node polyfills. Swap the algorithm by passing
+  `emailAndPassword.password: { hash, verify }` to `createAuth`.
 - **OAuth**: GitHub and Google social providers (real code → token → userinfo
   exchanges, with `id_token` signatures verified against the provider's JWKS),
   plus any other provider via `genericOAuth`.
@@ -61,6 +62,11 @@ box that gives you:
   more**: curated better-auth plugins re-exported from
   [`@lunora/auth/plugins`](/docs/packages/auth/plugins), so you don't chase deep
   import paths.
+- **Invite-only sign-up**: `inviteOnly()` closes self-serve registration to
+  addresses an administrator invited, on every path that mints a user — read the
+  security section before you rely on it, because an invitation is keyed by
+  email address and carries no secret token. See
+  [invite-only sign-up](/docs/packages/auth/plugins#invite-only-sign-up).
 
 ```ts
 // lunora/auth.ts
@@ -76,9 +82,15 @@ export const buildAuth = (env: { AUTH_SECRET: string; DB: unknown }) =>
     });
 ```
 
-User records live in D1; session lifecycle lives in a dedicated `SessionDO`. The
-full configuration surface (providers, rate limiting, migrations, the studio
-user dashboard) is in the [package reference](/docs/packages/auth).
+User **and session** records live in D1 — better-auth's `session` table, through
+the D1 adapter. (`SessionDO` is a standalone TTL'd token store that ships with
+`@lunora/do`; `@lunora/auth` has never called it, so binding it gets you a
+correctly-configured object nothing uses. Back up and export the auth database,
+not that DO.) The Durable Object path for auth is `LunoraAuthDO` /
+`.auth({ namespace })`, which puts the whole better-auth schema in one object
+with real transactions. The full configuration surface (providers, rate
+limiting, migrations, the studio user dashboard) is in the
+[package reference](/docs/packages/auth).
 
 ## Routing `/api/auth/*`
 
@@ -109,6 +121,28 @@ export default {
 
 Because the routes are mounted, the browser talks to better-auth directly. Your
 functions never implement sign-in; they only _read_ the resolved `ctx.auth`.
+
+Two things about `ensureMigrated`, both of which bite exactly once:
+
+It drives better-auth's own migrator, which speaks **only** Kysely, so it needs
+the raw D1 binding as `database` — as above. Hand it a Lunora adapter
+(`lunoraD1Adapter`, `lunoraAuthAdapter`, `lunoraDoAdapter`) and it throws
+`AUTH_MIGRATOR_UNSUPPORTED`. Build a second, migration-only instance over the raw
+binding and keep the adapter on the one that serves requests; the adapter exists
+to dodge a dev-runner hang in `$context`, which the migration instance never
+resolves.
+
+And call it **once per isolate**, holding the promise rather than a flag, because
+better-auth emits a bare `CREATE TABLE`: two concurrent runs against a fresh
+database leave the loser with `table user already exists`, and since this sits
+ahead of the router that 500s every route. `defineApp().auth(...)` does both for
+you.
+
+better-auth owns those tables. Don't also declare `user` / `session` / `account`
+/ `verification` / `rateLimit` in `lunora/schema.ts` — two owners for one table
+means Lunora creates it with its own column layout and better-auth then plans an
+`ALTER TABLE … ADD COLUMN … NOT NULL` that SQLite rejects outright. Lunora's
+`.global()` tables are for your data.
 
 ## The client side
 

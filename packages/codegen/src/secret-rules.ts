@@ -1,6 +1,6 @@
 /**
  * Secret-shaped string heuristics — the pure, ts-morph-free matcher extracted from
- * the `discover-secrets` feeder so any caller can classify a raw string value with
+ * the `discover/secrets` feeder so any caller can classify a raw string value with
  * the *same* rule set. `@lunora/config` reuses these to scan `wrangler.jsonc`'s
  * committed `vars` (the `plaintext_secret_in_wrangler_vars` lint) without
  * duplicating — or diverging from — the codegen heuristics. Mirrors the

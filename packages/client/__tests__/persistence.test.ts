@@ -151,6 +151,40 @@ describe.each(adapters)("%s", (_name, makeAdapter) => {
         expect(loaded.map((m) => m.id)).toEqual(["a"]);
     });
 
+    it("replace() swaps a record in place, keeping its position in FIFO order", async () => {
+        expect.assertions(2);
+
+        const adapter = makeAdapter();
+
+        await adapter.append(mutation("a"));
+        await adapter.append(mutation("b"));
+        await adapter.append(mutation("c"));
+
+        // The offline queue restamps a queued write's identity after a sign-in.
+        // Done as remove + append it moved to the tail and replayed out of the
+        // order it was issued in — and left a crash window where the record was
+        // in no store at all.
+        await adapter.replace(mutation("b", { identity: "signed-in" }));
+
+        const loaded = await adapter.load();
+
+        expect(loaded.map((m) => m.id)).toEqual(["a", "b", "c"]);
+        expect(loaded[1]?.identity).toBe("signed-in");
+    });
+
+    it("replace() of an unknown id is a no-op — a drained record must not come back", async () => {
+        expect.assertions(1);
+
+        const adapter = makeAdapter();
+
+        await adapter.append(mutation("a"));
+        await adapter.replace(mutation("gone"));
+
+        const loaded = await adapter.load();
+
+        expect(loaded.map((m) => m.id)).toEqual(["a"]);
+    });
+
     it("clear() drops every persisted mutation", async () => {
         expect.assertions(1);
 

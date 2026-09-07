@@ -4,7 +4,7 @@ import type { SchemaIR, ValidatorIR } from "./ir";
 
 /**
  * Bridge the static {@link SchemaIR} (lifted from `lunora/schema.ts` by ts-morph
- * via {@link ./discover-schema}) into the runtime `Schema` shape `@lunora/seed`'s
+ * via {@link ./discover/schema}) into the runtime `Schema` shape `@lunora/seed`'s
  * introspection reads. Neither the CLI (`lunora seed`) nor the studio's
  * generate-rows endpoint ever executes the user's schema module — they only have
  * the IR — so we synthesize validator-like objects carrying the `kind` + `_meta`

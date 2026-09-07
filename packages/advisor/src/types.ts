@@ -14,7 +14,6 @@ import type { AdvisorExportSink } from "./export-sinks";
 import type { AdvisorFailOpenGuard } from "./fail-open-guards";
 import type { AdvisorFlagRead } from "./flag-reads";
 import type { AdvisorFlagSecurityDefault } from "./flag-security-defaults";
-import type { AdvisorFunctionMetrics } from "./function-metrics";
 import type { AdvisorGeoIndexUsage } from "./geo-index-usages";
 import type { AdvisorHttpActionGuard } from "./http-action-guards";
 import type { AdvisorHttpHeaderWrite } from "./http-header-writes";
@@ -51,7 +50,6 @@ import type { AdvisorSqlInterpolation } from "./sql-interpolation";
 import type { AdvisorStaleMigrationImport } from "./stale-migration-imports";
 import type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
 import type { AdvisorStorageUpload } from "./storage-uploads";
-import type { AdvisorTableSample } from "./table-samples";
 import type { AdvisorUnrestrictedWhereBranch } from "./unrestricted-where-branches";
 import type { AdvisorVectorNamespaceAccess } from "./vector-namespace-accesses";
 import type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
@@ -287,17 +285,6 @@ export interface LintContext {
      * codegen feeder; absent for runtime callers, where the lint finds nothing.
      */
     flagSecurityDefaults?: ReadonlyArray<AdvisorFlagSecurityDefault>;
-
-    /**
-     * Per-function call/error/latency volume observed over the window — the
-     * `error_rate_outlier` runtime lint's input (prototype, plan 248). Sourced
-     * from the same `FunctionCallStat` rows `context.tableScans` already draws
-     * `scannedTables` from (`__lunora_admin__:getFunctionStats`), scoped to
-     * whichever shard the caller queried — see {@link AdvisorFunctionMetrics}.
-     * Supplied by the studio backend; absent for static callers, where the lint
-     * finds nothing.
-     */
-    functionMetrics?: ReadonlyArray<AdvisorFunctionMetrics>;
 
     /**
      * `withGeoIndex("name", …)` reads discovered in function bodies — the use-side
@@ -562,11 +549,11 @@ export interface LintContext {
 
     /**
      * `ctx.db.<table>.findMany({ with: { <rel> } })` relation-hydrating list reads
-     * — the `masked_relation_leak_via_with` input. Column masking is applied to a
-     * read's top-level rows but does not descend into `with`-hydrated relations,
-     * so a masked table surfaced only through a `with` on an unprotected public
-     * read is returned in the clear. Supplied by the codegen feeder; absent for
-     * runtime callers, where the lint finds nothing.
+     * — the `masked_relation_leak_via_with` input. Column masking is
+     * per-procedure and the relation loader applies the READING procedure's
+     * policy to every `with` hop, so what leaks is a public read whose own
+     * procedure declares no policy for the related table. Supplied by the codegen
+     * feeder; absent for runtime callers, where the lint finds nothing.
      */
     relationLoads?: ReadonlyArray<AdvisorRelationLoad>;
 
@@ -656,21 +643,6 @@ export interface LintContext {
      * nothing.
      */
     storageUploads?: ReadonlyArray<AdvisorStorageUpload>;
-
-    /**
-     * Bounded row samples per table — the `constraint_validator` lint input.
-     * Supplied by the studio backend, which reads up to the configured row cap
-     * from each table via `readTablePage` and assembles the existing-id set for
-     * FK referential-integrity checks. Absent for static callers or codegen
-     * feeders, where the constraint lint simply finds nothing.
-     *
-     * Each entry carries `existingIds` (every `_id` in the sample window) so
-     * FK columns can be cross-checked across tables in O(1) per value. When
-     * `truncated` is `true`, violations on rows beyond the cap are not reported
-     * — the finding description notes the sample cap so the operator understands
-     * the bounded window.
-     */
-    tableSamples?: ReadonlyArray<AdvisorTableSample>;
 
     /**
      * Per-table full-scan volume observed at runtime (the hot-scan half of the

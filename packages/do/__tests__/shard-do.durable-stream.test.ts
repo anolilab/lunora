@@ -164,6 +164,38 @@ describe("shardDO durable streams", () => {
         expect(shard.starts).toBe(1);
     });
 
+    it("drops a durable-run consumer whose credential lapses mid-run, without killing the run", async () => {
+        expect.assertions(3);
+
+        const shard = new DurableStreamShard(state, {});
+
+        shard.registered.set("chat:slow", async function* slow() {
+            for (let index = 0; index < 40; index += 1) {
+                yield index;
+                // eslint-disable-next-line no-await-in-loop -- intentional per-yield event-loop turn
+                await new Promise<void>((resolve) => {
+                    setTimeout(resolve, 3);
+                });
+            }
+        });
+
+        const ws = createFakeWebSocket();
+
+        // Live when the stream frame arrived, lapsed a few chunks into the run.
+        shard.registerSocket(ws, { expiresAt: Date.now() + 25, subs: {} });
+        await shard.driveMessage(ws, { id: "slow_1", query: { functionPath: "chat:slow" }, type: "stream" });
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 250);
+        });
+
+        const frames = parseFrames(ws);
+
+        expect(frames.some((frame) => frame.code === "TOKEN_EXPIRED")).toBe(true);
+        expect(frames.filter((frame) => frame.type === "chunk").length).toBeLessThan(40);
+        // The producer is durable: dropping one consumer must not abort the run.
+        expect(shard.starts).toBe(1);
+    });
+
     it("shares one producer between two clients on the same run", async () => {
         expect.assertions(3);
 

@@ -11,6 +11,7 @@ import { downloadTemplate } from "giget";
 
 import type { Logger } from "../../util/logger";
 import { resolvePinnedSourceRef, resolveSourceRef } from "../../util/source-ref";
+import { isCustomRegistrySource } from "./apply";
 import parseManifest from "./manifest";
 import type { AddCommandOptions, RegistryManifest, ResolvedItem } from "./types";
 
@@ -46,9 +47,13 @@ const isSafeSource = (source: string): boolean => {
     return source.startsWith("gh:") || source.startsWith("github:") || source.startsWith("https://");
 };
 
-/** True when a remote `--source` is set but fails the safety gate. */
+/**
+ * True when a remote `--source` is set but fails the safety gate. A `--from`
+ * root is exempt on purpose: it is read from disk, never fetched, so the
+ * fetch-base rules have nothing to gate (its confirmation lives in `apply.ts`).
+ */
 const isBlockedRemoteSource = (options: AddCommandOptions): boolean =>
-    options.from === undefined && options.source !== undefined && options.source.length > 0 && !options.allowUnsafeSource && !isSafeSource(options.source);
+    isCustomRegistrySource(options) && options.from === undefined && !options.allowUnsafeSource && !isSafeSource(options.source ?? "");
 
 /**
  * The single source-gate error string for every command (`add`/`list`/`view`),
@@ -123,10 +128,9 @@ const resolveRemoteRef = async (options: AddCommandOptions): Promise<string> => 
         return cached;
     }
 
-    const pending =
-        options.source !== undefined && options.source.length > 0
-            ? Promise.resolve(resolveSourceRef(options.ref))
-            : resolvePinnedSourceRef(options.ref, options.logger);
+    // Only reached once `--from` has been ruled out, so "custom" here means a
+    // remote `--source`, whose ref is not pinned.
+    const pending = isCustomRegistrySource(options) ? Promise.resolve(resolveSourceRef(options.ref)) : resolvePinnedSourceRef(options.ref, options.logger);
 
     remoteRefCache.set(options, pending);
 

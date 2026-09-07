@@ -172,6 +172,20 @@ const buildReExportCases = (): ReExportCase[] => {
 const reExportCases = buildReExportCases();
 
 describe("lunora umbrella re-exports", () => {
+    // `it.each([])` registers ZERO tests and reports green, and `expect.hasAssertions()` in the test
+    // below is satisfied by the one unconditionally-pushed `@lunora/server` case — so a scan that
+    // yields nothing (a renamed packages/<dir>, an `exports` key that moved) would delete the
+    // forwarding gate silently. Pin the floor to the derivation's own inputs.
+    it("derives at least one case per upstream package, so the gates below cannot collapse", () => {
+        expect.assertions(2);
+
+        const covered = new Set(reExportCases.map(({ umbrellaSubpath }) => umbrellaSubpath.slice(2).split("/")[0]));
+        const missing = UPSTREAM_PACKAGE_DIRS.filter((dir) => !covered.has(dir));
+
+        expect(missing).toStrictEqual([]);
+        expect(reExportCases.length).toBeGreaterThan(UPSTREAM_PACKAGE_DIRS.length);
+    });
+
     it("has a mapping for every upstream subpath (deliberate opt-outs excepted)", () => {
         expect.hasAssertions();
 

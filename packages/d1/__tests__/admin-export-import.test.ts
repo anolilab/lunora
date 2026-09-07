@@ -8,11 +8,22 @@ import { createD1Exec } from "./_helpers/node-sqlite-d1";
 const FIXED_CLOCK = 1_700_000_000_000;
 
 const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
+    const meta: ColumnMetaLike = { notNull: true, ...column };
+
     return {
-        _meta: { column: { notNull: true, ...column } },
+        _meta: { column: meta },
         kind,
 
         parse(value: unknown) {
+            // `.nullable()` (which is the only thing that clears `notNull`) makes
+            // SQL NULL a value the column holds. Without this the double rejected
+            // its own legitimate storage form, so a nullable column could not be
+            // round-tripped through the fixture at all.
+
+            if (value === null && !meta.notNull) {
+                return value;
+            }
+
             if (kind === "string" && typeof value !== "string") {
                 throw new Error(`expected string, received ${typeof value}`);
             }
@@ -30,6 +41,22 @@ const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike 
     };
 };
 
+/**
+ * `v.optional(inner)` as the runtime shapes it: kind `"optional"`, the wrapped
+ * validator on `_meta.inner`, and a parser that accepts absence and NOTHING else
+ * the inner one would refuse — `optional(string).parse(null)` throws, which is
+ * exactly what made an unset optional column unrestorable.
+ */
+const optional = (inner: ValidatorLike): ValidatorLike =>
+    ({
+        _meta: { column: { notNull: true }, inner },
+        kind: "optional",
+
+        parse(value: unknown) {
+            return value === undefined ? value : inner.parse?.(value);
+        },
+    }) as unknown as ValidatorLike;
+
 // The D1 writer is the global-tables view; only the `.global()` table is in
 // its schema (the DO ctx-db owns shard-local tables). The import helper still
 // inspects shardMode and skips non-globals, which we exercise via a richer
@@ -38,7 +65,17 @@ const schema: SchemaLike = {
     tables: {
         settings: {
             indexes: [],
-            shape: { name: col("string"), value: col("string") },
+            shape: {
+                name: col("string"),
+                // An unset optional column and a genuinely-nullable one are both
+                // SQL NULL on disk and must NOT round-trip the same way: the first
+                // is an absence, the second is a value.
+                nickname: optional(col("string")),
+                // The `v.optional(v.string().nullable())` shape (`softDelete` uses
+                // it verbatim): absent OR null, and null is a value.
+                note: optional(col("string", { notNull: false })),
+                value: col("string"),
+            },
             shardMode: { kind: "global" } as never,
         },
     },
@@ -64,7 +101,10 @@ describe("d1 admin export/import globals", () => {
             `CREATE TABLE "settings" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
+            "_version" INTEGER,
             "name" TEXT,
+            "nickname" TEXT,
+            "note" TEXT,
             "value" TEXT
         )`,
         );
@@ -176,6 +216,24 @@ describe("d1 admin export/import globals", () => {
             expect(result.conflicts).toBe(0);
         });
 
+        it("reports a row with no usable `table` as BAD_ROW rather than skipping it", async () => {
+            expect.assertions(3);
+
+            // The global/shard routing check ran first, so
+            // `schema.tables[undefined]?.shardMode?.kind !== "global"` bucketed a
+            // corrupt row as "shard-local, not mine". The import then reported
+            // success with zero errors and an operator could not tell a malformed
+            // line from a legitimately-elsewhere one. The shard-engine twin
+            // reports BAD_ROW for the identical input.
+            const result = await importGlobalRows(writer, schema, {
+                rows: [{ doc: { _id: "s1", name: "theme", value: "dark" } } as never, { doc: { _id: "s2" }, table: 123 } as never],
+            });
+
+            expect(result.errors).toHaveLength(2);
+            expect(result.errors[0]?.code).toBe("BAD_ROW");
+            expect(result.errors[0]?.message).toContain("missing `table`");
+        });
+
         it("skips non-global tables silently (someone else's responsibility)", async () => {
             expect.assertions(1);
 
@@ -203,6 +261,51 @@ describe("d1 admin export/import globals", () => {
             expect(result.inserted).toEqual({ settings: 2 });
             expect(result.errors).toHaveLength(1);
             expect(result.errors[0]).toMatchObject({ code: "VALIDATION_ERROR", table: "settings" });
+        });
+
+        /**
+         * A `.global()` table stores real columns, so a key it does not declare
+         * has nowhere to go — the writer dropped it and the import still answered
+         * `{"conflicts":0,"errors":[],"inserted":{"settings":1}}`. A snapshot
+         * taken before a `title → heading` rename therefore restored as
+         * `{"heading": null}` and reported success. The shard twin errors with
+         * `unexpected field "…"` on the identical input; this half now does too.
+         */
+        it("rejects a field the table does not declare rather than dropping it and reporting success", async () => {
+            expect.assertions(3);
+
+            const result = await importGlobalRows(writer, schema, {
+                rows: [
+                    { doc: { _id: "s1", name: "ok", title: "renamed away", value: "x" }, table: "settings" },
+                    { doc: { _id: "s2", name: "ok2", value: "y" }, table: "settings" },
+                ],
+            });
+
+            expect(result.inserted).toEqual({ settings: 1 });
+            expect(result.errors).toHaveLength(1);
+            expect(result.errors[0]).toMatchObject({
+                code: "VALIDATION_ERROR",
+                message: 'unexpected field "title": not declared in table "settings"',
+                table: "settings",
+            });
+        });
+
+        it("rejects a prototype-named field the table does not declare", async () => {
+            expect.assertions(2);
+
+            // `key in definition.shape` walks the prototype chain, so `constructor`
+            // (and `toString`, `valueOf`) passed as "declared". The validation loop
+            // iterates `Object.entries(shape)` and never sees such a key, so it went
+            // straight to `writer.insert` — dropped on the floor, still answered 200.
+            const result = await importGlobalRows(writer, schema, {
+                rows: [{ doc: { _id: "s3", constructor: "injected", name: "ok", value: "x" }, table: "settings" }],
+            });
+
+            expect(result.inserted).toEqual({});
+            expect(result.errors[0]).toMatchObject({
+                message: 'unexpected field "constructor": not declared in table "settings"',
+                table: "settings",
+            });
         });
 
         it("attributes errors to each row's own `line` when non-contiguous (interspersed shard-local rows filtered out upstream)", async () => {
@@ -244,6 +347,81 @@ describe("d1 admin export/import globals", () => {
             expect(reloaded).toMatchObject({ value: "dark" });
         });
 
+        it("roundtrip: a bigint / bytes row survives JSON egress and comes back real", async () => {
+            expect.assertions(4);
+
+            const wireSchema: SchemaLike = {
+                tables: {
+                    ledger: {
+                        indexes: [],
+                        shape: { blob: col("bytes"), cents: col("bigint") },
+                        shardMode: { kind: "global" } as never,
+                    },
+                },
+            };
+
+            const source = createD1Exec();
+
+            source.ddl(
+                `CREATE TABLE "ledger" (
+                "id" TEXT PRIMARY KEY,
+                "_creationTime" INTEGER NOT NULL,
+                "_version" INTEGER,
+                "blob" BLOB,
+                "cents" TEXT
+            )`,
+            );
+
+            const sourceWriter = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: source.exec, schema: wireSchema });
+
+            await sourceWriter.insert(
+                "ledger",
+                { _id: "l1", blob: new Uint8Array([7, 8, 9]).buffer, cents: 9_007_199_254_740_993n },
+                { allowExplicitId: true },
+            );
+
+            const exported: { doc: Record<string, unknown>; table: string }[] = [];
+
+            for await (const row of exportGlobalRows(source.exec, wireSchema, {})) {
+                exported.push(row);
+            }
+
+            // What the scheduled R2 backup and the NDJSON stream actually do to
+            // these rows. Undecoded, this THREW on the bigint before writing a
+            // single object, and the bytes serialized to `{}`.
+            const ndjson = exported.map((row) => JSON.stringify(row)).join("\n");
+
+            expect(ndjson).toContain("9007199254740993");
+
+            const fresh = createD1Exec();
+
+            fresh.ddl(
+                `CREATE TABLE "ledger" (
+                "id" TEXT PRIMARY KEY,
+                "_creationTime" INTEGER NOT NULL,
+                "_version" INTEGER,
+                "blob" BLOB,
+                "cents" TEXT
+            )`,
+            );
+
+            const freshWriter = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: fresh.exec, schema: wireSchema });
+
+            const result = await importGlobalRows(freshWriter, wireSchema, {
+                rows: ndjson.split("\n").map((line) => JSON.parse(line) as { doc: Record<string, unknown>; table: string }),
+            });
+
+            expect(result.errors).toEqual([]);
+
+            const reload = await freshWriter.get("l1");
+
+            expect(reload?.["cents"]).toBe(9_007_199_254_740_993n);
+            expect([...new Uint8Array(reload?.["blob"] as ArrayBuffer)]).toStrictEqual([7, 8, 9]);
+
+            source.close();
+            fresh.close();
+        });
+
         it("roundtrip: export then re-import into a fresh D1 produces identical rows", async () => {
             expect.assertions(3);
 
@@ -262,7 +440,10 @@ describe("d1 admin export/import globals", () => {
                 `CREATE TABLE "settings" (
                 "id" TEXT PRIMARY KEY,
                 "_creationTime" INTEGER NOT NULL,
+                "_version" INTEGER,
                 "name" TEXT,
+                "nickname" TEXT,
+                "note" TEXT,
                 "value" TEXT
             )`,
             );
@@ -279,6 +460,106 @@ describe("d1 admin export/import globals", () => {
             const reload = await freshWriter.get("s1");
 
             expect(reload).toMatchObject({ name: "theme", value: "dark" });
+
+            fresh.close();
+        });
+
+        /*
+         * A `.global()` table stores real columns, so an unset `v.optional(...)`
+         * field is a SQL NULL — which the export decoder emitted as
+         * `"nickname": null` and the importer then fed to
+         * `optional(string).parse(null)`. That throws, so EVERY row that simply
+         * had no value for an optional column was reported as a validation error
+         * and silently missing from the restored table.
+         */
+        it("round-trips a row whose optional column was never set", async () => {
+            expect.assertions(4);
+
+            await writer.insert("settings", { _id: "s1", name: "theme", value: "dark" }, { allowExplicitId: true });
+
+            const exported: { doc: Record<string, unknown>; table: string }[] = [];
+
+            for await (const row of exportGlobalRows(harness.exec, schema, {})) {
+                exported.push(row);
+            }
+
+            // Absent, not null: `v.optional(v.string())` is `string | undefined`.
+            expect(exported[0]?.doc).not.toHaveProperty("nickname");
+
+            const fresh = createD1Exec();
+
+            fresh.ddl(
+                `CREATE TABLE "settings" (
+                "id" TEXT PRIMARY KEY,
+                "_creationTime" INTEGER NOT NULL,
+                "_version" INTEGER,
+                "name" TEXT,
+                "nickname" TEXT,
+                "note" TEXT,
+                "value" TEXT
+            )`,
+            );
+
+            const freshWriter = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: fresh.exec, schema });
+            const result = await importGlobalRows(freshWriter, schema, { rows: exported });
+
+            expect(result.errors).toEqual([]);
+            expect(result.inserted).toEqual({ settings: 1 });
+            await expect(freshWriter.get("s1")).resolves.toMatchObject({ name: "theme", value: "dark" });
+
+            fresh.close();
+        });
+
+        it("restores a snapshot line that carries `null` for an unset optional column", async () => {
+            expect.assertions(3);
+
+            // The shape every snapshot taken before the export decoder was fixed
+            // has on disk. Those files still have to import.
+            const result = await importGlobalRows(writer, schema, {
+                rows: [{ doc: { _id: "s1", name: "theme", nickname: null, value: "dark" }, table: "settings" }],
+            });
+
+            expect(result.errors).toEqual([]);
+            expect(result.inserted).toEqual({ settings: 1 });
+            // Restored as the absence it was, not as a null.
+            await expect(writer.get("s1")).resolves.not.toHaveProperty("nickname");
+        });
+
+        it("keeps a nullable column's null through the round trip", async () => {
+            expect.assertions(3);
+
+            await writer.insert("settings", { _id: "s1", name: "theme", note: null, value: "dark" }, { allowExplicitId: true });
+
+            const exported: { doc: Record<string, unknown>; table: string }[] = [];
+
+            for await (const row of exportGlobalRows(harness.exec, schema, {})) {
+                exported.push(row);
+            }
+
+            expect(exported[0]?.doc["note"]).toBeNull();
+
+            const fresh = createD1Exec();
+
+            fresh.ddl(
+                `CREATE TABLE "settings" (
+                "id" TEXT PRIMARY KEY,
+                "_creationTime" INTEGER NOT NULL,
+                "_version" INTEGER,
+                "name" TEXT,
+                "nickname" TEXT,
+                "note" TEXT,
+                "value" TEXT
+            )`,
+            );
+
+            const freshWriter = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: fresh.exec, schema });
+            const result = await importGlobalRows(freshWriter, schema, { rows: exported });
+
+            expect(result.errors).toEqual([]);
+
+            const restored = await freshWriter.get("s1");
+
+            expect(restored?.["note"]).toBeNull();
 
             fresh.close();
         });

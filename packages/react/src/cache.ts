@@ -1,4 +1,4 @@
-import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
+import type { FunctionReference, LunoraClient, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 
 import { keyHash } from "./query-key";
@@ -9,11 +9,25 @@ import { keyHash } from "./query-key";
  * so we close the underlying subscription on the last `detach()`.
  */
 interface RegistryEntry {
-    /** Polling fallback when `client.subscribe` is unavailable (e.g. no WS). */
-    pollTimer: ReturnType<typeof setInterval> | undefined;
+    /**
+     * Per-consumer error sinks. One shared subscription serves every hook on the
+     * key, so a server-pushed subscription error fans out to whichever consumers
+     * asked for one — read live at fire time, so a consumer that attached after
+     * the subscription opened still hears about it.
+     */
+    errorCallbacks: Set<SubscriptionErrorCallback>;
+
     refCount: number;
     /** WS unsubscribe handle, set on first successful attach. */
     unsubscribe: Unsubscribe | undefined;
+}
+
+/** A push-count sample held open across a `queryFn`'s fetch. */
+interface SnapshotSample {
+    /** The hashed query key the sample was opened on. */
+    readonly key: string;
+    /** The key's push count when the sample opened. */
+    readonly pushes: number;
 }
 
 /**
@@ -27,15 +41,36 @@ interface RegistryEntry {
  * Every hook that mounts a `useQuery({queryKey: ["lunora", fn, args, shard]})`
  * also calls `registry.attach(qc, queryKey, fn, args, shardKey)`; the registry
  * dedupes by hashed queryKey so two components observing the same query open a
- * single WS subscription. On the last `detach()` the subscription is closed
- * (or the polling fallback is cleared).
+ * single WS subscription. On the last `detach()` the subscription is closed.
  *
- * Polling fallback: if `client.subscribe` throws (no WS in the environment),
- * the registry installs a 5s interval that calls `qc.invalidateQueries({
- * queryKey })`, letting TanStack's own `refetch` loop drive freshness.
+ * `client.subscribe` is NOT caught here. A missing WebSocket does not throw —
+ * `ensureSocket` returns silently and the subscription simply stays unfed — so
+ * the only throws reachable are a closed client and args the wire codec cannot
+ * encode. Both are programming errors that no amount of retrying fixes, and the
+ * 5s `invalidateQueries` loop that used to swallow them just hid the stack
+ * behind a silently-degraded query.
  */
 class LunoraSubscriptionRegistry {
     private readonly entries = new Map<string, RegistryEntry>();
+
+    /**
+     * How many subscription frames each key has written to the TanStack cache.
+     *
+     * Deliberately NOT a field of {@link RegistryEntry}: the entry is deleted on
+     * the last `detach()`, and a `queryFn` that sampled the count before its
+     * fetch is still in flight then (nothing propagates TanStack's abort signal
+     * into `client.query`). With the counter inside the entry, the sample after
+     * the fetch read `0` again — the same value it started from — so a push that
+     * had landed in between was invisible and the older snapshot was written
+     * over it. Monotonic per key and per client, so it can only ever be read as
+     * "unchanged" when it genuinely is — which is also why nothing prunes it: a
+     * counter that resets is a counter that can repeat a sampled value. One
+     * number per query key this client ever subscribed to.
+     */
+    private readonly pushes = new Map<string, number>();
+
+    /** Open snapshot samples per key — the lifetime bound on the push counter. */
+    private readonly samples = new Map<string, number>();
 
     public constructor(private readonly client: LunoraClient) {}
 
@@ -46,6 +81,78 @@ class LunoraSubscriptionRegistry {
     // eslint-disable-next-line class-methods-use-this -- instance method by design: callers reach the hash through a registry handle rather than importing the module-level helper.
     public keyOf(queryKey: QueryKey): string {
         return keyHash(queryKey);
+    }
+
+    /**
+     * Whether any consumer still holds the subscription for `queryKey`.
+     *
+     * Read by {@link file://./use-paginated-core.ts} after its own `detach()`:
+     * that hook owns its cache entries' whole lifecycle (it has no TanStack
+     * observer, so it pins them against gc and removes them by hand), and it
+     * must not remove an entry a sibling hook on the same page range is still
+     * being fed through.
+     */
+    public hasConsumers(queryKey: QueryKey): boolean {
+        return this.entries.has(keyHash(queryKey));
+    }
+
+    /**
+     * How many subscription frames this key has written to the TanStack cache.
+     *
+     * A hook fires a one-shot HTTP snapshot alongside the subscription, and
+     * TanStack applies a resolved `queryFn` result unconditionally — a manual
+     * `setQueryData` mid-flight does not cancel it. So a push that lands while
+     * the snapshot is in the air is silently reverted to pre-push data, and with
+     * `staleTime: Infinity` and push-driven freshness it stays reverted until
+     * the next write. A `queryFn` opens a sample before its fetch and closes it
+     * after, and the registry reports whether anything pushed in between.
+     *
+     * The count is kept per key rather than on the entry because the entry is
+     * deleted on the last `detach()` while a fetch that sampled it may still be
+     * in flight — nothing propagates TanStack's abort signal into
+     * `client.query`. With the counter inside the entry, the closing read saw
+     * `0` again, the same value it opened with, so a push that had landed in
+     * between was invisible and the older snapshot was written over it.
+     *
+     * The count is pruned when the last open sample closes on a key nothing is
+     * subscribed to. Pruning only then is what keeps it honest: while a sample
+     * is open the count must stay monotonic, because a counter that resets is a
+     * counter that can repeat a value a reader already saw. Without that prune
+     * this map held one entry per query key the client had EVER subscribed to,
+     * which a high-cardinality search or filter key grows without bound.
+     */
+    public openSnapshotSample(queryKey: QueryKey): SnapshotSample {
+        const key = keyHash(queryKey);
+
+        this.samples.set(key, (this.samples.get(key) ?? 0) + 1);
+
+        return { key, pushes: this.pushes.get(key) ?? 0 };
+    }
+
+    /**
+     * Close a sample opened by {@link openSnapshotSample}. `true` when nothing
+     * pushed to the key while it was open — i.e. the caller's snapshot is still
+     * the newest thing and may be written.
+     */
+    public closeSnapshotSample(sample: SnapshotSample): boolean {
+        const open = (this.samples.get(sample.key) ?? 1) - 1;
+        const quiet = (this.pushes.get(sample.key) ?? 0) === sample.pushes;
+
+        if (open > 0) {
+            this.samples.set(sample.key, open);
+
+            return quiet;
+        }
+
+        this.samples.delete(sample.key);
+
+        // Nothing can sample this key again until something re-subscribes, and a
+        // fresh subscription starts from `0` either way.
+        if (!this.entries.has(sample.key)) {
+            this.pushes.delete(sample.key);
+        }
+
+        return quiet;
     }
 
     /**
@@ -60,37 +167,50 @@ class LunoraSubscriptionRegistry {
         function_: FunctionReference,
         args: Record<string, unknown>,
         shardKey: string | undefined,
-        options: { pollIntervalMs?: number } = {},
+        options: { onError?: SubscriptionErrorCallback } = {},
     ): () => void {
         const key = keyHash(queryKey);
         let entry = this.entries.get(key);
 
         if (!entry) {
-            entry = { pollTimer: undefined, refCount: 0, unsubscribe: undefined };
+            entry = { errorCallbacks: new Set(), refCount: 0, unsubscribe: undefined };
             this.entries.set(key, entry);
+
+            const opened = entry;
 
             try {
                 entry.unsubscribe = this.client.subscribe(
                     function_,
                     args,
                     (value) => {
+                        this.pushes.set(key, (this.pushes.get(key) ?? 0) + 1);
                         queryClient.setQueryData(queryKey, value);
                     },
-                    { shardKey },
+                    {
+                        onError: (error) => {
+                            for (const callback of opened.errorCallbacks) {
+                                callback(error);
+                            }
+                        },
+                        shardKey,
+                    },
                 );
-            } catch {
-                // WS unavailable — fall back to periodic invalidation so
-                // TanStack Query's own refetch loop keeps the cache fresh.
-                entry.pollTimer = setInterval(() => {
-                    queryClient.invalidateQueries({ queryKey }).catch(() => {
-                        // Best-effort refresh: a failed invalidation just means
-                        // the next tick tries again.
-                    });
-                }, options.pollIntervalMs ?? 5000);
+            } catch (error) {
+                // Leave no half-registered entry behind for the next attach of
+                // this key to join, then let the programming error surface.
+                this.entries.delete(key);
+
+                throw error;
             }
         }
 
         entry.refCount += 1;
+
+        const { onError } = options;
+
+        if (onError) {
+            entry.errorCallbacks.add(onError);
+        }
 
         // Single-shot guard: a second call of THIS detach must be a genuine
         // no-op. Without it, a stale second call re-reads `entries.get(key)` and
@@ -116,13 +236,12 @@ class LunoraSubscriptionRegistry {
 
             current.refCount -= 1;
 
+            if (onError) {
+                current.errorCallbacks.delete(onError);
+            }
+
             if (current.refCount <= 0) {
                 current.unsubscribe?.();
-
-                if (current.pollTimer) {
-                    clearInterval(current.pollTimer);
-                }
-
                 this.entries.delete(key);
             }
         };

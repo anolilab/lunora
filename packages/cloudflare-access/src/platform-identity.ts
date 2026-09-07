@@ -5,7 +5,8 @@ import type { AccessClaims } from "./types";
  * Read one group entry's name. Access emits group membership either as plain
  * names or as `{ id, name }` objects depending on the identity provider and the
  * policy; both normalize to the name, which is what an Access policy is written
- * against and what `accessRoles()` maps into `ctx.auth.roles`. Anything else
+ * against and what `createAccessResolver({ roles })` maps into the `roles`
+ * claim. Anything else
  * (a number, a nameless object) contributes nothing rather than stringifying
  * into a role nobody configured.
  */
@@ -25,7 +26,7 @@ const groupName = (entry: unknown): string | undefined => {
 
 /**
  * Normalize whatever the platform put in `groups` to the `string[]` the JWT path
- * produces, so a policy or `accessRoles()` mapping reads the same regardless of
+ * produces, so a policy or the resolver's role mapping reads the same regardless of
  * which path authenticated the caller. A non-array (absent, or a shape we don't
  * recognize) yields `undefined` — the claim is then simply absent, never `[]`,
  * which would falsely assert "verified: this user is in no groups".
@@ -37,7 +38,7 @@ const normalizeGroups = (groups: unknown): string[] | undefined =>
  * Read the identity Cloudflare Access attached to a Worker-protected request and
  * project it onto {@link AccessClaims} — the same claim shape the
  * `Cf-Access-Jwt-Assertion` path produces, so everything downstream (identity
- * mapping, `ctx.access`, `accessRoles()`, RLS policies) is indifferent to which
+ * mapping, `ctx.access`, the mapped RLS roles, RLS policies) is indifferent to which
  * path authenticated the caller.
  *
  * Returns `undefined` when Access did not authenticate this request (`ctx.access`

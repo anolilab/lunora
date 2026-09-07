@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { convertNonRetryableError, isNonRetryableError, NonRetryableError, toNativeNonRetryableError } from "../src/errors";
+import { convertNonRetryableError, isDuplicateInstanceError, isNonRetryableError, NonRetryableError, toNativeNonRetryableError } from "../src/errors";
 
 describe("nonRetryableError", () => {
     it("fixes the error name so the Workers SDK honors it", () => {
@@ -88,5 +88,28 @@ describe("convertNonRetryableError", () => {
         const ordinary = new Error("regular");
 
         expect(() => convertNonRetryableError(ordinary, FakeNativeNonRetryableError)).toThrow(ordinary);
+    });
+});
+
+describe("isDuplicateInstanceError", () => {
+    it("recognises the separator variants a duplicate-id rejection can spell", () => {
+        expect.assertions(6);
+
+        // This predicate is the idempotency signal the fan-out spawn and
+        // `@lunora/agent`'s sub-agent/channel dispatch both key on: a create that
+        // rejects this way already applied, so the caller attaches instead of
+        // burning its retries. It cannot be pinned against a live engine here —
+        // miniflare's `WorkflowBinding.create` never rejects a duplicate at all
+        // (it calls `stub.init(...)` unconditionally, and `Engine.init` returns
+        // early for an instance that already has metadata), so the attach branch
+        // is unreachable under workerd too. What IS in our control is not being
+        // defeated by the separator, which is what this pins.
+        expect(isDuplicateInstanceError(new Error('instance with id "x" already exists'))).toBe(true);
+        expect(isDuplicateInstanceError(new Error("instance.already-exists"))).toBe(true);
+        expect(isDuplicateInstanceError(new Error("instance.already_exists"))).toBe(true);
+        expect(isDuplicateInstanceError("Instance AlreadyExists")).toBe(true);
+        expect(isDuplicateInstanceError(new Error("Workflows service unavailable"))).toBe(false);
+        // The other deterministic `create` rejection — never an attach signal.
+        expect(isDuplicateInstanceError(new Error("Workflow instance has invalid id"))).toBe(false);
     });
 });

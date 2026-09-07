@@ -76,7 +76,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "body": {
                                                 "type": "string"
@@ -142,7 +141,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "body": {
                                                 "type": "string"
@@ -208,7 +206,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {},
                                         "required": [],
                                         "type": "object"
@@ -264,9 +261,37 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
-                                            "subscription": {}
+                                            "replacedEndpoint": {
+                                                "type": "string"
+                                            },
+                                            "subscription": {
+                                                "properties": {
+                                                    "endpoint": {
+                                                        "type": "string"
+                                                    },
+                                                    "keys": {
+                                                        "properties": {
+                                                            "auth": {
+                                                                "type": "string"
+                                                            },
+                                                            "p256dh": {
+                                                                "type": "string"
+                                                            }
+                                                        },
+                                                        "required": [
+                                                            "auth",
+                                                            "p256dh"
+                                                        ],
+                                                        "type": "object"
+                                                    }
+                                                },
+                                                "required": [
+                                                    "endpoint",
+                                                    "keys"
+                                                ],
+                                                "type": "object"
+                                            }
                                         },
                                         "required": [
                                             "subscription"

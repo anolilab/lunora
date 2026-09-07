@@ -50,6 +50,7 @@ describe("orchestrateExport", () => {
         const spy = createShardSpy((shardKey) => json({ result: { rows: [{ doc: { _id: shardKey }, table: "messages" }] } }));
 
         const result = await coordinator.orchestrateExport(spy.namespace, {
+            defaultShardKey: null,
             tables: ["messages"],
         });
 
@@ -77,7 +78,7 @@ describe("orchestrateExport", () => {
             return json({ result: { rows: [{ doc: { _id: "ok" }, table: "messages" }] } });
         });
 
-        const result = await coordinator.orchestrateExport(spy.namespace, { tables: ["messages"] });
+        const result = await coordinator.orchestrateExport(spy.namespace, { defaultShardKey: null, tables: ["messages"] });
 
         expect(result.ok).toBe(1);
         expect(result.failed).toBe(1);
@@ -95,7 +96,7 @@ describe("orchestrateExport", () => {
 
         const spy = createShardSpy(() => json({ result: { rows: [] } }));
 
-        await coordinator.orchestrateExport(spy.namespace, { tables: ["messages", "notifications"] });
+        await coordinator.orchestrateExport(spy.namespace, { defaultShardKey: null, tables: ["messages", "notifications"] });
 
         const visited = new Set(spy.calls.map((c) => c.shardKey));
 
@@ -180,7 +181,7 @@ describe("orchestrateCdcSync", () => {
             return json({ result: { changes: [{ id: `${shardKey}-x`, op: "insert", seq: since + 1 }], cursor: since + 1 } });
         });
 
-        const result = await coordinator.orchestrateCdcSync(spy.namespace, { cursors: { c1: 10 }, tables: ["messages"] });
+        const result = await coordinator.orchestrateCdcSync(spy.namespace, { cursors: { c1: 10 }, defaultShardKey: null, tables: ["messages"] });
 
         expect(result.ok).toBe(2);
         expect(result.failed).toBe(0);
@@ -198,7 +199,7 @@ describe("orchestrateCdcSync", () => {
 
         const spy = createShardSpy(() => Response.json({ error: { code: "BOOM", message: "broken" } }, { status: 500 }));
 
-        const result = await coordinator.orchestrateCdcSync(spy.namespace, { cursors: { c1: 42 }, tables: ["messages"] });
+        const result = await coordinator.orchestrateCdcSync(spy.namespace, { cursors: { c1: 42 }, defaultShardKey: null, tables: ["messages"] });
 
         expect(result.failed).toBe(1);
         expect(result.shards[0]?.cursor).toBe(42);

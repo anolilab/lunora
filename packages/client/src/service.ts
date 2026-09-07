@@ -39,7 +39,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeArgsOrThrow } from "../../../shared/wire-codec";
 import type { ArgsOf, FunctionReference, ReturnOf, RpcResponseBody } from "./types";
 
 /**
@@ -129,23 +129,14 @@ const callBinding = async (
 ): Promise<unknown> => {
     const path = reference.__lunoraRef;
 
-    // Wire-encoded, exactly as `LunoraClient` encodes its own RPC args: plain
-    // JSON cannot carry `bigint`, typed arrays, `NaN`, or ±Infinity, and a
-    // service binding is the same wire as the HTTP path. Skipping this would let
-    // a `bigint` argument arrive silently wrong.
-    let body: string;
-
-    try {
-        body = JSON.stringify({
-            args: encodeWire(args ?? {}),
-            functionPath: path,
-            ...(options?.shardKey === undefined ? {} : { shardKey: options.shardKey }),
-        });
-    } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-
-        throw new TypeError(`@lunora/client/service: cannot encode args for '${path}' — ${reason}`, error instanceof Error ? { cause: error } : undefined);
-    }
+    // Wire-encoded, exactly as `LunoraClient` encodes its own RPC args: a service
+    // binding is the same wire as the HTTP path, so skipping this would let a
+    // `bigint` argument arrive silently wrong.
+    const body = JSON.stringify({
+        args: encodeArgsOrThrow("@lunora/client/service", path, args ?? {}),
+        functionPath: path,
+        ...(options?.shardKey === undefined ? {} : { shardKey: options.shardKey }),
+    });
 
     // Deliberately only `content-type`. The HTTP client also sends
     // `x-lunora-mutation-id`, `x-lunora-client-id`, a bearer token and a D1

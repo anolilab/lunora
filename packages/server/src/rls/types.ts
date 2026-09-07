@@ -74,8 +74,12 @@ export interface TypedDefinePolicyInput<DM, REL extends Record<keyof DM, object>
 }
 
 /**
- * Context handed to a policy. `auth.roles` is the per-request role list,
- * sourced from the identity resolver (better-auth claims today). `auth.can`
+ * Context handed to a policy. `auth.roles` is the per-request role list, read
+ * from the `roles` CLAIM on the resolved identity — a `string[]` or a
+ * comma-separated string returned by `WorkerOptions.resolveIdentity` (and
+ * validated by `defineIdentity(...)` at the worker's trust boundary). A
+ * resolver that forwards no `roles` claim yields no roles, so every
+ * role-branched policy is evaluated against `[]`. `auth.can`
  * answers whether any of those roles grants a permission (see
  * {@link Permission} / {@link RlsOptions}). `row` is present only on write
  * policies (`insert`/`update`/`delete`) — for `update` and `delete` it is the
@@ -149,10 +153,13 @@ export interface Permission {
 }
 
 /**
- * A role declaration. Roles are string labels attached to the request's
- * identity (via better-auth claims today). `permissions` lists the
- * capabilities the role grants — at request time the middleware unions the
- * permissions of every role in `ctx.auth.roles` so a policy can ask
+ * A role declaration. Roles are string labels the request carries in the
+ * `roles` claim of its resolved identity — `WorkerOptions.resolveIdentity`
+ * forwards every non-`userId` key verbatim, so a resolver returning
+ * `{ userId, roles: ["admin"] }` (or the comma-joined `"user,admin"` that
+ * better-auth's `admin()` plugin stores) is what puts them there. `permissions`
+ * lists the capabilities the role grants — at request time the middleware
+ * unions the permissions of every role in `ctx.auth.roles` so a policy can ask
  * `ctx.auth.can(permission)` rather than enumerate roles.
  */
 export interface Role {

@@ -82,9 +82,10 @@ export default defineConfig(({ mode }) => ({
             nitro: {
                 // Analog runs SSR through Nitro. The `cloudflare-module` preset
                 // emits a Cloudflare module worker at
-                // `dist/analog/server/index.mjs`. The project-root
-                // `exports.cloudflare.ts` re-exports `ShardDO` onto that worker
-                // entry so the Durable Object class ships in the same single
+                // `dist/analog/server/index.mjs` that exports ONLY the SSR
+                // handler as `default`. The project-root `worker.ts` re-exports
+                // it plus `ShardDO` and is what `wrangler.jsonc`'s `main` points
+                // at, so the Durable Object class ships in the same single
                 // deploy as the Analog SSR handler.
                 preset: "cloudflare-module",
                 // Nitro's rollup cannot resolve codegen's `.js` specifiers on

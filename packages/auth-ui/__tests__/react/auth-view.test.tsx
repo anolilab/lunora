@@ -7,7 +7,7 @@ import { AuthUIProvider, AuthView } from "../../src/react";
 
 const ok = <T,>(data: T = null as T): Promise<AuthResponse<T>> => Promise.resolve({ data, error: null });
 
-const renderView = (view?: string): void => {
+const renderView = (view?: string, base?: string): void => {
     const nav = { navigate: vi.fn(), replace: vi.fn() };
     const client = {
         emailOtp: { sendVerificationOtp: vi.fn(() => ok()) },
@@ -24,7 +24,7 @@ const renderView = (view?: string): void => {
     } as unknown as AuthClient;
 
     const tree: ReactElement = (
-        <AuthUIProvider authClient={client} discover={false} nav={nav} redirects={{ afterSignIn: "/app" }}>
+        <AuthUIProvider authClient={client} discover={false} nav={nav} redirects={{ afterSignIn: "/app" }} viewPaths={{ base }}>
             <AuthView view={view} />
         </AuthUIProvider>
     );
@@ -86,5 +86,19 @@ describe(AuthView, () => {
         renderView();
 
         expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Sign in");
+    });
+
+    /**
+     * The mount this component documents. Every link it renders has to stay
+     * inside it — the cards used to link to root-level `/sign-up` and
+     * `/forgot-password`, which do not exist when the screens live under
+     * `/auth/:view`.
+     */
+    it("keeps its links inside the configured mount", () => {
+        expect.assertions(1);
+
+        renderView("sign-in", "/auth");
+
+        expect([...document.querySelectorAll("a")].map((anchor) => anchor.getAttribute("href"))).toStrictEqual(["/auth/forgot-password", "/auth/sign-up"]);
     });
 });

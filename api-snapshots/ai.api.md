@@ -11,6 +11,18 @@ SemVer promise until the package graduates.
 
 ## `@lunora/ai`
 
+### `AI_DEFAULT_EMBEDDING_MODEL_ENV` (const)
+
+```ts
+const AI_DEFAULT_EMBEDDING_MODEL_ENV = "LUNORA_AI_DEFAULT_EMBEDDING_MODEL";
+```
+
+### `AI_DEFAULT_MODEL_ENV` (const)
+
+```ts
+const AI_DEFAULT_MODEL_ENV = "LUNORA_AI_DEFAULT_MODEL";
+```
+
 ### `AI_GATEWAY_ACCOUNT_ID_ENV` (const)
 
 ```ts

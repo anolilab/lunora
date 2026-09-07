@@ -63,7 +63,7 @@ describe(createSubscription, () => {
         const fake = createFakeClient();
         const [channelId, setChannelId] = createSignal("c1");
 
-        render(
+        const { container } = render(
             () => {
                 const { data } = createSubscription(msgRef, () => {
                     return { channelId: channelId() };
@@ -77,7 +77,14 @@ describe(createSubscription, () => {
         expect(fake.subscriptions).toHaveLength(1);
         expect(fake.subscriptions[0]?.args).toStrictEqual({ channelId: "c1" });
 
+        fake.subscriptions[0]?.push("from-c1");
+
+        expect(container.textContent).toBe("from-c1");
+
         setChannelId("c2");
+
+        // The previous args' value does not survive the switch.
+        expect(container.textContent).toBe("undefined");
 
         expect(fake.subscriptions).toHaveLength(2);
         expect(fake.subscriptions[0]?.unsubscribed).toBe(true);

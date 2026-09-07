@@ -100,6 +100,14 @@ const UNTRACKED_MARKER = "signature not tracked";
  * `.tsx` would inline every component's whole JSX body into the snapshot and
  * fail the gate on implementation churn.
  */
+/*
+ * TIER_1/TIER_2/TIER_3 are hand-typed directory lists, and a package in none of
+ * them is invisible to this guard entirely — `@lunora/container` shipped a
+ * changed public surface exactly that way. `scripts/check-roadmap-tiers.js`
+ * reconciles all three against `packages/` on every `pnpm install` (and against
+ * ROADMAP.md), so adding a package here without listing it there, or the
+ * reverse, fails before anyone reaches a build.
+ */
 const TIER_1 = [
     "server",
     "values",

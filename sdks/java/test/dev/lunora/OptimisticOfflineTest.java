@@ -47,10 +47,16 @@ final class OptimisticOfflineTest {
         offlineQueueOverflowEvictsOldest();
         offlineQueuePreconditionDropsStaleWrite();
         offlineQueueHydratesPersistedWrites();
+        typedArgsSurviveASerialisingStore();
+        undecodablePersistedRecordSettlesRejected();
         offlineQueueHydrateOverflowSettlesDiscarded();
+        batchRefusedForSizeIsSplitAndRetried();
+        loneWriteSurvivesAnEnvelopeLess502();
+        rateLimitedReplayRequeuesAndDefersTheNextFlush();
         offlineQueueIdentityGateRejectsReplay();
         offlineFlushReplaysAndConfirmsOptimistic();
         offlineFlushBatchesMultipleWrites();
+        batchEntryCapMatchesProtocol();
         offlineFlushUnencodableWriteSettlesTerminal();
         clientIdIsPerInstanceAndPersisted();
         consumerCallbacksRunOutsideTheLock();
@@ -670,7 +676,14 @@ final class OptimisticOfflineTest {
                 "so the confirm at that cursor drops the overlay instead of stranding it");
     }
 
-    /** A persistence adapter that records every call. */
+    /**
+     * A persistence adapter that records every call.
+     *
+     * <p>It JSON round-trips every record, which an adapter holding the objects by reference does
+     * not — and that is the whole point: a file, a SQLite text column or a preferences store all
+     * serialise, so a record carrying the codec's native wrappers either raises here or is written
+     * as something that does not read back. Holding references made this suite blind to both.
+     */
     private static final class MemoryStore implements PersistenceAdapter {
         final List<Map<String, Object>> records = new ArrayList<>();
         final List<Map<String, Object>> appended = new ArrayList<>();
@@ -680,18 +693,32 @@ final class OptimisticOfflineTest {
         MemoryStore() {}
 
         MemoryStore(List<Map<String, Object>> seeded) {
-            records.addAll(seeded);
+            for (Map<String, Object> record : seeded) {
+                records.add(serialise(record));
+            }
+        }
+
+        private static Map<String, Object> serialise(Map<String, Object> record) {
+            return map(Json.parse(Json.write(record)));
         }
 
         @Override
         public void append(Map<String, Object> record) {
-            appended.add(record);
-            records.add(record);
+            Map<String, Object> stored = serialise(record);
+
+            appended.add(stored);
+            records.add(stored);
         }
 
         @Override
         public List<Map<String, Object>> load() {
-            return List.copyOf(records);
+            List<Map<String, Object>> loaded = new ArrayList<>();
+
+            for (Map<String, Object> record : records) {
+                loaded.add(serialise(record));
+            }
+
+            return loaded;
         }
 
         @Override
@@ -996,6 +1023,290 @@ final class OptimisticOfflineTest {
     }
 
     /**
+     * A queued write whose args carry codec wrappers survives a store that SERIALISES.
+     *
+     * <p>Every real adapter does — a file, a SQLite text column, a preferences store — so
+     * persisting the native form either raises inside the adapter (and the write is reported
+     * "queued" while nothing durable was written) or writes whatever the adapter makes of an opaque
+     * object and replays after a restart with corrupted args.
+     */
+    private static void typedArgsSurviveASerialisingStore() {
+        covers("offline_queue_hydrates_persisted_writes");
+
+        Map<String, Object> args = new LinkedHashMap<>();
+
+        args.put("amount", new Wire.WireBigInt(java.math.BigInteger.valueOf(7)));
+        args.put("blob", new Wire.WireBytes(new byte[] {1, 2, 3, 4}, "Int32Array"));
+        args.put("when", new Wire.WireDate(1700000000000.0));
+
+        MemoryStore store = new MemoryStore();
+        OfflineQueue queue = new OfflineQueue().persistence(store);
+        List<String> errors = new ArrayList<>();
+
+        queue.onPersistenceError = (operation, error, id) -> errors.add(operation + ":" + id);
+        queue.enqueue(new QueuedMutation("ledger:add", args, null, "m-typed"));
+
+        check(errors.isEmpty(), "the record serialises, so nothing is reported as a failed append");
+        check(
+                Json.write(map(store.appended.get(0).get("args")).get("amount"))
+                        .equals("[\"$lunora.wire$\",\"bigint\",\"7\"]"),
+                "the durable record holds the WIRE form of the args");
+
+        OfflineQueue restored = new OfflineQueue().persistence(store);
+
+        restored.hydrate();
+
+        check(ids(restored.items()).equals(List.of("m-typed")), "the write comes back");
+
+        // Decoded back to the SAME native values, so the replay sends the write that was made
+        // rather than whatever the adapter's stringification left.
+        Map<String, Object> back = map(restored.items().get(0).args);
+
+        check(
+                back.get("amount").equals(new Wire.WireBigInt(java.math.BigInteger.valueOf(7))),
+                "the bigint decodes back to its exact value");
+        check(
+                back.get("blob") instanceof Wire.WireBytes bytes
+                        && "Int32Array".equals(bytes.ctor())
+                        && java.util.Arrays.equals(bytes.data(), new byte[] {1, 2, 3, 4}),
+                "and the typed-array view keeps both its bytes and its constructor");
+        check(
+                back.get("when").equals(new Wire.WireDate(1700000000000.0)),
+                "and the date its epoch milliseconds");
+    }
+
+    /**
+     * A persisted record whose args do not decode is purged and settled, never replayed.
+     *
+     * <p>Replaying it with substitute args would commit a DIFFERENT write than the caller made,
+     * which is corruption rather than failure; throwing out of hydrate would kill the whole restart
+     * path for one bad row.
+     */
+    private static void undecodablePersistedRecordSettlesRejected() {
+        covers("offline_queue_hydrates_persisted_writes");
+
+        Map<String, Object> args = new LinkedHashMap<>();
+        Map<String, Object> record = new LinkedHashMap<>();
+
+        // A wire tag whose payload is not a bigint literal: the store was corrupted, or written by
+        // an incompatible build.
+        args.put("amount", List.of(Wire.TAG, "bigint", "not-a-number"));
+        record.put("args", args);
+        record.put("functionPath", "ledger:add");
+        record.put("id", "m-bad");
+
+        MemoryStore store = new MemoryStore(List.of(record));
+        List<MutationSettled> settled = new ArrayList<>();
+        Client client = new Client("https://app.example", null);
+
+        client.offlineQueue(new OfflineQueue().persistence(store));
+        client.onMutationSettled(settled::add);
+        client.hydrateOfflineQueue();
+
+        check(client.offlineQueue().items().isEmpty(), "the unreadable write is never queued");
+        check(settled.size() == 1, "and it settles exactly once");
+        check(
+                settled.get(0).mutationId().equals("m-bad")
+                        && settled.get(0).status() == MutationStatus.REJECTED
+                        && settled.get(0).error() instanceof OfflineException coded
+                        && coded.code.equals(Offline.OFFLINE_WRITE_UNDECODABLE),
+                "carrying the documented undecodable code");
+        check(
+                store.removed.equals(List.of("m-bad")),
+                "the unreadable record is purged, not left to fail every restart");
+    }
+
+    /**
+     * A batch the worker refuses for SIZE is split and retried, not settled rejected.
+     *
+     * <p>The worker reads a batch body under a 1 MiB budget ({@code
+     * packages/runtime/src/body-readers.ts}) and answers {@code 413 PAYLOAD_TOO_LARGE} past it. A
+     * whole-batch coded envelope is a verdict on every entry, so a count-only chunker settled the
+     * lot {@code rejected} — 500 durable writes that would each have committed alone.
+     */
+    private static void batchRefusedForSizeIsSplitAndRetried() {
+        covers("offline_flush_batch_splits_on_payload_too_large");
+
+        int budget = 400;
+        List<Integer> bodies = new ArrayList<>();
+        MemoryStore store = new MemoryStore();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            bodies.add(body.length);
+
+                            if (body.length > budget) {
+                                return new Response(
+                                        413,
+                                        "{\"error\":{\"code\":\"PAYLOAD_TOO_LARGE\",\"message\":\"Body"
+                                            + " too large\"}}");
+                            }
+
+                            return new Response(200, echoBatchSlots(body, "null", 1L));
+                        });
+
+        client.clientId = "c-1";
+        client.offlineQueue(new OfflineQueue().persistence(store));
+
+        List<String> queued = new ArrayList<>();
+        Map<String, Object> args = new LinkedHashMap<>();
+
+        args.put("text", "x".repeat(120));
+
+        for (int index = 0; index < 4; index++) {
+            String id = "m-" + index;
+
+            queued.add(id);
+            client.offlineQueue().enqueue(new QueuedMutation("messages:send", args, null, id));
+        }
+
+        FlushReport report = client.flushOfflineQueue(null);
+        int largest = 0;
+
+        for (int size : bodies) {
+            largest = Math.max(largest, size);
+        }
+
+        check(
+                report.committed.equals(queued),
+                "every write commits; none is dropped for the size of the batch it shared");
+        check(report.rejected.isEmpty(), "and nothing is settled rejected");
+        check(client.offlineQueue().items().isEmpty(), "the queue drains");
+        check(
+                largest > budget,
+                "the first attempt has to be the over-budget one, or nothing was split");
+    }
+
+    /**
+     * An envelope-less 502 does not drop a LONE queued write.
+     *
+     * <p>{@code parseRpcResponse} codes such a body {@code INTERNAL} (protocol §4.2) and every code
+     * outside the transient set used to be a verdict — so whether a gateway blip lost a durable
+     * write depended on the queue's depth, because the same response with two or more writes was
+     * already classified transient on the batch path.
+     */
+    private static void loneWriteSurvivesAnEnvelopeLess502() {
+        covers("non_2xx_without_error_envelope_fails");
+
+        MemoryStore store = new MemoryStore();
+        List<MutationSettled> settled = new ArrayList<>();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> new Response(502, "{\"message\":\"bad gateway\"}"));
+
+        client.offlineQueue(new OfflineQueue().persistence(store));
+        client.onMutationSettled(settled::add);
+        client.offlineQueue()
+                .enqueue(new QueuedMutation("messages:send", new LinkedHashMap<>(), null, "m-502"));
+
+        FlushReport report = client.flushOfflineQueue(null);
+
+        check(report.rejected.isEmpty(), "no verdict was reached, so nothing is rejected");
+        check(report.requeued.equals(List.of("m-502")), "the write is re-queued");
+        check(ids(client.offlineQueue().items()).equals(List.of("m-502")), "and stays queued");
+        check(settled.isEmpty(), "nothing settled: no verdict was ever reached");
+        check(store.removed.isEmpty(), "the durable record stays, because the write is still good");
+    }
+
+    /**
+     * A rate-limited replay is re-queued, and the delay the envelope names holds the next flush
+     * off.
+     *
+     * <p>"Not now", not "no": the write is valid and the server asked for it later, so dropping it
+     * loses data for being punctual — and replaying the identical burst immediately just earns the
+     * same 429, indefinitely.
+     */
+    private static void rateLimitedReplayRequeuesAndDefersTheNextFlush() {
+        covers("offline_flush_replays_and_confirms_optimistic");
+
+        int[] posts = {0};
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            posts[0]++;
+
+                            return new Response(
+                                    429,
+                                    "{\"error\":{\"code\":\"TOO_MANY_REQUESTS\",\"data\":{\"retryAfterMs\":60000},\"message\":\"slow"
+                                        + " down\"}}");
+                        });
+
+        client.offlineQueue(new OfflineQueue().persistence(new MemoryStore()));
+        client.offlineQueue()
+                .enqueue(new QueuedMutation("messages:send", new LinkedHashMap<>(), null, "m-429"));
+
+        FlushReport report = client.flushOfflineQueue(null);
+
+        check(report.rejected.isEmpty(), "a rate limit is not a verdict on the write");
+        check(report.requeued.equals(List.of("m-429")), "so it goes back on the queue");
+        check(
+                Long.valueOf(60000L).equals(report.retryAfterMs),
+                "and the delay the envelope named is reported");
+
+        FlushReport again = client.flushOfflineQueue(null);
+
+        check(
+                posts[0] == 1,
+                "the second flush waits out the delay rather than earning the same 429");
+        check(again.retryAfterMs != null && again.retryAfterMs > 0, "reporting what is left of it");
+        check(
+                ids(client.offlineQueue().items()).equals(List.of("m-429")),
+                "the write is still queued");
+
+        // The hint is a number this client did not write, so an absurd one must not be able to park
+        // a durable queue for an hour with nothing able to shorten it.
+        Client clamped =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) ->
+                                new Response(
+                                        429,
+                                        "{\"error\":{\"code\":\"RATE_LIMITED\",\"data\":{\"retryAfterMs\":3600000},\"message\":\"slow"
+                                            + " down\"}}"));
+
+        clamped.offlineQueue(new OfflineQueue().persistence(new MemoryStore()));
+        clamped.offlineQueue()
+                .enqueue(
+                        new QueuedMutation("messages:send", new LinkedHashMap<>(), null, "m-hour"));
+
+        check(
+                Long.valueOf(Offline.MAX_RETRY_AFTER_MS)
+                        .equals(clamped.flushOfflineQueue(null).retryAfterMs),
+                "an over-long delay is clamped rather than honoured");
+
+        // The same classification PER SLOT: a batch reply's slot body is exactly a §4.2 envelope,
+        // so a rate-limited entry is retried and its hint read, exactly as a whole response is.
+        Client batched =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) ->
+                                new Response(
+                                        200,
+                                        "{\"results\":[{\"id\":0,\"body\":{\"error\":{\"code\":\"TOO_MANY_REQUESTS\",\"data\":{\"retryAfterMs\":60000},\"message\":\"slow"
+                                            + " down\"}}},{\"id\":1,\"body\":{\"commitCursor\":4,\"result\":null}}]}"));
+
+        batched.offlineQueue(new OfflineQueue().persistence(new MemoryStore()));
+        batched.offlineQueue()
+                .enqueue(new QueuedMutation("messages:send", new LinkedHashMap<>(), null, "m-a"));
+        batched.offlineQueue()
+                .enqueue(new QueuedMutation("messages:send", new LinkedHashMap<>(), null, "m-b"));
+
+        FlushReport slots = batched.flushOfflineQueue(null);
+
+        check(
+                slots.rejected.isEmpty(),
+                "a rate-limited SLOT is not a verdict on that write either");
+        check(slots.requeued.equals(List.of("m-a")), "so it goes back on the queue");
+        check(slots.committed.equals(List.of("m-b")), "while its siblings still settle");
+        check(
+                Long.valueOf(60000L).equals(slots.retryAfterMs),
+                "and the slot's own hint reaches the report");
+    }
+
+    /**
      * A restored write the capacity cap drops still reports, through the client-level observer.
      *
      * <p>Driven through {@link Client#hydrateOfflineQueue}, deliberately: a hydrated entry has no
@@ -1056,6 +1367,23 @@ final class OptimisticOfflineTest {
         check(
                 store.removed.equals(strings(overflow.get("evicted"))),
                 "the evicted write is un-persisted");
+    }
+
+    /**
+     * The entry cap is not a port's to choose: the worker and the shard DO both refuse a larger
+     * batch with a coded 400, which {@code protocol/README.md} 4.3 makes a TERMINAL verdict - so a
+     * client chunking at a stale value discards durable writes instead of retrying them. It was a
+     * bare 500 in ten independent places with nothing reconciling them.
+     */
+    private static void batchEntryCapMatchesProtocol() throws IOException {
+        covers("batch_entry_cap_matches_protocol");
+
+        Map<String, Object> testCase = scenario("offlineQueue", "batchReplay");
+        int expected = ((Number) testCase.get("maxEntries")).intValue();
+
+        check(
+                Offline.MAX_BATCH_ENTRIES == expected,
+                "batch entry cap: " + Offline.MAX_BATCH_ENTRIES + ", want " + expected);
     }
 
     /**

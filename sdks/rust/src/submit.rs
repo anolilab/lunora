@@ -9,12 +9,14 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
 use crate::client::{ApiError, Client, ClientError, Subscription};
 use crate::key::stable_wire_key;
 use crate::offline::{
     identity_allows_replay, random_id, same_shard, Discarded, Identity, Precondition, QueuedMutation, SettledHandler, CODE_CLIENT_CLOSED,
-    CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_WRITE_UNENCODABLE, MAX_BATCH_ENTRIES, TRANSIENT_ERROR_CODES,
+    CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_WRITE_UNENCODABLE, CODE_PAYLOAD_TOO_LARGE, MAX_BATCH_BYTES, MAX_BATCH_ENTRIES, MAX_RETRY_AFTER_MS,
+    RATE_LIMIT_ERROR_CODES, TRANSIENT_ERROR_CODES,
 };
 use crate::optimistic::{apply_layer, confirm_layer, constant, rollback_layer, shared, SharedTransform};
 use crate::wire::{decode_wire, encode_wire, WireValue};
@@ -73,6 +75,11 @@ pub struct FlushReport {
     pub requeued: Vec<String>,
     /// The ids dropped because their precondition no longer held.
     pub conflicted: Vec<String>,
+    /// Milliseconds the server asked the caller to wait before flushing again,
+    /// when a replay came back rate-limited. `None` otherwise. The client
+    /// enforces it too — a flush inside the window is a no-op — so this is for a
+    /// caller that schedules its own retry.
+    pub retry_after_ms: Option<i64>,
 }
 
 /// A constant optimistic override for one subscribed query.
@@ -159,6 +166,7 @@ fn coded(code: &str, message: &str) -> ApiError {
         code: code.to_string(),
         data: None,
         message: message.to_string(),
+        transient: false,
     }
 }
 
@@ -226,7 +234,7 @@ impl Client {
     pub fn hydrate_offline_queue(&mut self) -> Result<Vec<Option<String>>, ClientError> {
         let (shard_keys, evicted) = self
             .offline_queue
-            .hydrate(|raw| decode_wire(raw).unwrap_or(WireValue::Null))
+            .hydrate(|raw| decode_wire(raw).map_err(|error| error.to_string()))
             .map_err(ClientError::Transport)?;
 
         self.report_discarded(evicted);
@@ -245,6 +253,19 @@ impl Client {
     /// every unreplayed one, in order, for the next attempt.
     pub fn flush_offline_queue(&mut self, shard_key: Option<&str>) -> FlushReport {
         let mut report = FlushReport::default();
+
+        // A server that answered "not now" gets waited out. Without this the
+        // caller's own reconnect loop replays the identical burst immediately and
+        // earns the same 429, indefinitely.
+        if let Some(deadline) = self.flush_not_before {
+            let now = Instant::now();
+
+            if now < deadline {
+                report.retry_after_ms = Some((deadline - now).as_millis() as i64 + 1);
+
+                return report;
+            }
+        }
         // The consumer's predicates run HERE, never inside the queue: they are the
         // consumer's code, so the queue only ever sees the verdicts.
         let stale: HashSet<String> = self
@@ -342,28 +363,25 @@ impl Client {
             return;
         }
 
-        // Chunked by hand rather than with `chunks()`, which needs `Clone`: a
-        // queued write owns its settle closures and is deliberately move-only.
-        let mut remaining = sendable;
         let mut to_requeue: Vec<QueuedMutation> = Vec::new();
+        let mut stopped = false;
 
-        while !remaining.is_empty() {
-            let rest = remaining.split_off(remaining.len().min(MAX_BATCH_ENTRIES));
-            let chunk = std::mem::replace(&mut remaining, rest);
+        for chunk in chunk_batches(sendable) {
+            if stopped {
+                // A whole-chunk transport failure already happened. Leave every
+                // write not yet sent queued, in order, rather than sending on
+                // into a connection that just failed.
+                to_requeue.extend(chunk);
+
+                continue;
+            }
+
             // Chunks replay sequentially, which is what preserves FIFO across a
             // flush longer than one batch.
             let (requeue, stop) = self.replay_batched(chunk, report);
 
             to_requeue.extend(requeue);
-
-            if stop {
-                // A whole-chunk transport failure. Leave every write not yet
-                // sent queued, in order, rather than sending on into a
-                // connection that just failed.
-                to_requeue.extend(std::mem::take(&mut remaining));
-
-                break;
-            }
+            stopped = stop;
         }
 
         if !to_requeue.is_empty() {
@@ -396,6 +414,10 @@ impl Client {
                     self.emit_settled(&entry, MutationStatus::Committed, value, None);
                 }
                 Err(error) if is_transient(&error) => {
+                    if let ClientError::Api(inner) = &error {
+                        self.note_retry_after(report, inner);
+                    }
+
                     // Nothing after this write may go out ahead of it: replaying
                     // out of order is how a durable queue corrupts the data it
                     // was protecting.
@@ -484,6 +506,39 @@ impl Client {
 
         let error = batch_slot_error(envelope, "batch rejected");
 
+        // The body was too big, not wrong — every entry in it would have
+        // committed alone. Halve and retry; the estimate `chunk_batches` used
+        // cannot see the framing the worker actually measured, and only the
+        // answer can.
+        if error.code == CODE_PAYLOAD_TOO_LARGE && items.len() > 1 {
+            let mut left = items;
+            let right = left.split_off(left.len() / 2);
+            let (mut requeue, stop) = self.replay_batched(left, report);
+
+            if stop {
+                // The left half stopped the flush, so the right half is put back
+                // unsent — after it, in order.
+                requeue.extend(right);
+
+                return (requeue, true);
+            }
+
+            let (right_requeue, stop) = self.replay_batched(right, report);
+
+            requeue.extend(right_requeue);
+
+            return (requeue, stop);
+        }
+
+        // A shard blip or a rate limit is not a verdict on the batch's contents.
+        // Requeue it whole and stop the flush, exactly as the single-call path
+        // does for the same codes.
+        if api_is_transient(&error) {
+            self.note_retry_after(report, &error);
+
+            return (items, true);
+        }
+
         for entry in items {
             self.offline_queue.unpersist(&entry.id);
             self.rollback_layers(&entry.layers);
@@ -518,19 +573,21 @@ impl Client {
             };
 
             if let Some(envelope) = slot.get("error").filter(|value| value.is_object()) {
-                let code = envelope.get("code").and_then(Value::as_str).unwrap_or("INTERNAL");
+                let error = batch_slot_error(envelope, "request failed");
 
-                // A transient shard failure is the batch's counterpart of an
-                // uncoded error on the single-call path: the server never reached
-                // a verdict, so the write goes back on the queue rather than being
-                // reported as failed.
-                if TRANSIENT_ERROR_CODES.contains(&code) {
+                // Through the SAME predicate the whole-batch and single-call paths
+                // use, never a second code set: a slot's `body` is exactly a §4.2
+                // envelope, so a durable write's fate must not depend on which of
+                // the three paths carried it. Transient means the server reached
+                // no verdict on that entry — it could not reach the shard, or a
+                // limiter refused to look — so the write goes back on the queue
+                // rather than being reported as failed.
+                if api_is_transient(&error) {
+                    self.note_retry_after(report, &error);
                     requeue.push(entry);
 
                     continue;
                 }
-
-                let error = batch_slot_error(envelope, "request failed");
 
                 self.offline_queue.unpersist(&entry.id);
                 self.rollback_layers(&entry.layers);
@@ -689,6 +746,21 @@ impl Client {
         }
     }
 
+    /// Records a rate limit's delay, and holds the next flush off until it passes.
+    fn note_retry_after(&mut self, report: &mut FlushReport, error: &ApiError) {
+        let Some(delay) = retry_after_ms(error) else {
+            return;
+        };
+
+        report.retry_after_ms = Some(delay);
+
+        let deadline = Instant::now() + Duration::from_millis(delay as u64);
+
+        if self.flush_not_before.is_none_or(|current| current < deadline) {
+            self.flush_not_before = Some(deadline);
+        }
+    }
+
     fn emit_settled(&self, entry: &QueuedMutation, status: MutationStatus, value: WireValue, error: Option<ApiError>) {
         let event = MutationSettled {
             error,
@@ -715,7 +787,85 @@ fn batch_slot_error(envelope: &Value, fallback: &str) -> ApiError {
         code: envelope.get("code").and_then(Value::as_str).unwrap_or("INTERNAL").to_string(),
         data: envelope.get("data").filter(|value| !value.is_null()).and_then(|value| decode_wire(value).ok()),
         message: envelope.get("message").and_then(Value::as_str).unwrap_or(fallback).to_string(),
+        // The batch transport reads the body, not the status: an entry-less
+        // envelope that is transport rather than a verdict arrives here as a
+        // parse failure instead, already classified transient.
+        transient: false,
     }
+}
+
+/// A batch entry's contribution to the request body, in bytes.
+///
+/// The args dominate and are the only part that can be large; the constant covers
+/// the entry's fixed keys and the comma joining it to the next one. Encoding twice
+/// (here and in [`Client::replay_batched`]) is deliberate — the flush is the slow
+/// path, and carrying the encoded form through the chunker would put a second
+/// representation of every queued write in memory.
+fn entry_bytes(item: &QueuedMutation) -> usize {
+    let args = encode_wire(&item.args).map_or(0, |encoded| encoded.to_string().len());
+
+    args + item.function_path.len() + item.id.len() + 160
+}
+
+/// Splits a flush into batch bodies the worker will accept.
+///
+/// By BYTES as well as by count: the worker reads a batch body under a 1 MiB
+/// budget and answers `413 PAYLOAD_TOO_LARGE` past it, so 500 writes carrying
+/// bytes or long text are one request the server refuses whole. A single write
+/// over the budget still forms its own chunk — splitting cannot help it, and
+/// [`Client::replay_batched`] settles it on the answer.
+///
+/// Chunked by hand rather than with `chunks()`, which needs `Clone`: a queued
+/// write owns its settle closures and is deliberately move-only.
+fn chunk_batches(items: Vec<QueuedMutation>) -> Vec<Vec<QueuedMutation>> {
+    let mut chunks: Vec<Vec<QueuedMutation>> = Vec::new();
+    let mut current: Vec<QueuedMutation> = Vec::new();
+    let mut size = 0;
+
+    for item in items {
+        let cost = entry_bytes(&item);
+
+        if !current.is_empty() && (current.len() >= MAX_BATCH_ENTRIES || size + cost > MAX_BATCH_BYTES) {
+            chunks.push(std::mem::take(&mut current));
+            size = 0;
+        }
+
+        size += cost;
+        current.push(item);
+    }
+
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+
+    chunks
+}
+
+/// How long a rate-limited replay asks to wait, if the envelope said.
+///
+/// `None` when the server named no delay — the caller then decides its own
+/// backoff rather than hammering, which is what [`FlushReport::retry_after_ms`]
+/// reports.
+pub fn retry_after_ms(error: &ApiError) -> Option<i64> {
+    if !RATE_LIMIT_ERROR_CODES.contains(&error.code.as_str()) {
+        return None;
+    }
+
+    let Some(WireValue::Object(fields)) = &error.data else {
+        return None;
+    };
+
+    fields.iter().find(|(key, _)| key == "retryAfterMs").and_then(|(_, value)| match value {
+        // Clamped: the hint is a number the server chose, and honouring an
+        // unbounded one parks a durable queue for as long as it says.
+        WireValue::Number(delay) if *delay > 0.0 => Some((*delay as i64).min(MAX_RETRY_AFTER_MS)),
+        _ => None,
+    })
+}
+
+/// Whether a coded server answer left the write still worth replaying.
+fn api_is_transient(error: &ApiError) -> bool {
+    error.transient || TRANSIENT_ERROR_CODES.contains(&error.code.as_str()) || RATE_LIMIT_ERROR_CODES.contains(&error.code.as_str())
 }
 
 /// Whether a failed replay may be retried rather than dropped.
@@ -729,7 +879,7 @@ fn batch_slot_error(envelope: &Value, fallback: &str) -> ApiError {
 /// decode.)
 pub fn is_transient(error: &ClientError) -> bool {
     match error {
-        ClientError::Api(inner) => TRANSIENT_ERROR_CODES.contains(&inner.code.as_str()),
+        ClientError::Api(inner) => api_is_transient(inner),
         ClientError::Wire(_) => false,
         ClientError::Transport(_) => true,
     }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { FanOutRequest, MigrationFanOutRequest, RankFanOutRequest, ShardRegistry } from "../src/query-coordinator";
+import { LunoraError } from "../src/errors";
+import type { ExportFanOutRequest, FanOutRequest, MigrationFanOutRequest, RankFanOutRequest, ShardRegistry } from "../src/query-coordinator";
 import { createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
@@ -352,21 +353,43 @@ describe("error handling", () => {
         expect(result.data).toEqual([{ shard: "a" }, { shard: "c" }]);
     });
 
-    it("thrown error from a shard becomes a ShardError", async () => {
-        expect.assertions(3);
+    it("thrown error from a shard becomes an INTERNAL ShardError with the raw message redacted", async () => {
+        expect.assertions(5);
 
         const registry = createStaticShardRegistry({ messages: ["a"] });
         const coordinator = createQueryCoordinator({ registry });
 
         const spy = createShardSpy(() => {
-            throw new Error("network down");
+            throw new Error("connect ECONNREFUSED for user=svc-admin pw=SECRET-CONN-STRING");
         });
 
         const result = await coordinator.fanOut(spy.namespace, buildRequest());
 
+        // `fanOut` reports failures as DATA — the envelope is `Response.json`-ed
+        // to the caller — so the per-shard message goes through the same
+        // `toErrorBody` shaping as every other error leaving the runtime: a
+        // plain `Error` is `INTERNAL` with its text redacted.
         expect(result.failed).toBe(1);
-        expect(result.errors[0]?.message).toContain("network down");
+        expect(result.errors[0]?.code).toBe("INTERNAL");
+        expect(result.errors[0]?.message).not.toContain("SECRET-CONN-STRING");
+        expect(result.errors[0]?.message).not.toContain("svc-admin");
         expect(result.errors[0]?.timedOut).toBe(false);
+    });
+
+    it("echoes a catalogued LunoraError code and message from a shard unchanged", async () => {
+        expect.assertions(2);
+
+        const registry = createStaticShardRegistry({ messages: ["a"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        const spy = createShardSpy(() => {
+            throw new LunoraError("row not found", { code: "NOT_FOUND", status: 404 });
+        });
+
+        const result = await coordinator.fanOut(spy.namespace, buildRequest());
+
+        expect(result.errors[0]?.code).toBe("NOT_FOUND");
+        expect(result.errors[0]?.message).toContain("row not found");
     });
 
     it("slow shard hits the per-shard timeout", async () => {
@@ -409,6 +432,9 @@ describe("orchestrateMigration", () => {
     const migrationRequest = (overrides: Partial<MigrationFanOutRequest> = {}): MigrationFanOutRequest => {
         return {
             args: { id: "backfill" },
+            // These cases all register real shard keys, so the fallback is
+            // deliberately not wanted — which is now something you must say.
+            defaultShardKey: null,
             functionPath: "__lunora_admin__:runMigration",
             headers: { authorization: "Bearer admin" },
             table: "messages",
@@ -681,5 +707,146 @@ describe("concurrency", () => {
 
         expect(spy.calls.map((call) => call.shardKey).toSorted((a, b) => a.localeCompare(b))).toEqual(["x", "y"]);
         expect(result.ok).toBe(2);
+    });
+});
+
+describe("orchestrateExport shard discovery", () => {
+    // Discovery is registry-driven, and a registry only ever knows the shard keys
+    // an app registers for its `.shardBy(...)` tables. A root-DO table has no entry
+    // and never will — so without a fallback the fan-out reached zero shards and
+    // the export streamed an empty body that reads exactly like "this table has no
+    // rows". `orchestrateImport` has always resolved this case to the default
+    // shard; these pin export to the same answer.
+    it("falls back to the default shard when the registry knows no keys", async () => {
+        expect.assertions(2);
+
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({}) });
+        const spy = createShardSpy(() => json({ ok: true, rows: [{ doc: { _id: "m1" }, table: "messages" }] }));
+
+        const result = await coordinator.orchestrateExport(spy.namespace, { args: {}, defaultShardKey: "__root__", headers: {}, tables: ["messages"] });
+
+        expect(spy.calls.map((call) => call.shardKey)).toEqual(["__root__"]);
+        expect(result.shards.flatMap((shard) => shard.rows ?? [])).toHaveLength(1);
+    });
+
+    it("reaches the default shard when no tables were named at all", async () => {
+        expect.assertions(1);
+
+        // What the worker passes when the caller sends no `tables` and codegen
+        // supplied no `listSchemaTables` — the union of zero tables is zero keys.
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({ messages: ["chan-1"] }) });
+        const spy = createShardSpy(() => json({ ok: true, rows: [] }));
+
+        await coordinator.orchestrateExport(spy.namespace, { args: {}, defaultShardKey: "__root__", headers: {}, tables: [] });
+
+        expect(spy.calls.map((call) => call.shardKey)).toEqual(["__root__"]);
+    });
+
+    it("prefers real registry keys over the fallback", async () => {
+        expect.assertions(1);
+
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({ messages: ["chan-1", "chan-2"] }) });
+        const spy = createShardSpy(() => json({ ok: true, rows: [] }));
+
+        await coordinator.orchestrateExport(spy.namespace, { args: {}, defaultShardKey: "__root__", headers: {}, tables: ["messages"] });
+
+        expect(spy.calls.map((call) => call.shardKey).toSorted((a, b) => a.localeCompare(b))).toEqual(["chan-1", "chan-2"]);
+    });
+
+    it("contacts nothing when the caller passes a null default shard", async () => {
+        expect.assertions(1);
+
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({}) });
+        const spy = createShardSpy(() => json({ ok: true, rows: [] }));
+
+        await coordinator.orchestrateExport(spy.namespace, { args: {}, defaultShardKey: null, headers: {}, tables: ["messages"] });
+
+        expect(spy.calls).toEqual([]);
+    });
+});
+
+describe("empty shard discovery", () => {
+    /**
+     * A registry only knows the keys an app registers for its `.shardBy(...)`
+     * tables, so a plain root-DO table has no entry and never will. Every fan-out
+     * that reads an empty discovery as "nothing to do" reports success having
+     * touched nothing — which is how `lunora export` shipped an empty file and how
+     * a data migration reported `completed` with `processed: 0`.
+     */
+    it("runs a migration on the default shard rather than reporting completed over zero shards", async () => {
+        expect.assertions(3);
+
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({}) });
+        const spy = createShardSpy(() => json({ ok: true, result: { changed: 3, processed: 3, status: "completed" } }));
+
+        const result = await coordinator.orchestrateMigration(spy.namespace, {
+            args: {},
+            defaultShardKey: "__root__",
+            functionPath: "__lunora_admin__:runMigration",
+            headers: {},
+            table: "messages",
+        });
+
+        expect(spy.calls.map((call) => call.shardKey)).toEqual(["__root__"]);
+        expect(result.ok).toBe(1);
+        // The number that made the old behaviour look like success.
+        expect(result.processed).toBe(3);
+    });
+
+    it("pulls CDC changes from the default shard when no table is registered", async () => {
+        expect.assertions(1);
+
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({}) });
+        const spy = createShardSpy(() => json({ ok: true, result: { changes: [], cursor: 0 } }));
+
+        await coordinator.orchestrateCdcSync(spy.namespace, { defaultShardKey: "__root__", headers: {}, tables: ["messages"] });
+
+        expect(spy.calls.map((call) => call.shardKey)).toEqual(["__root__"]);
+    });
+
+    it("still prefers real registry keys over the fallback", async () => {
+        expect.assertions(1);
+
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({ messages: ["a", "b"] }) });
+        const spy = createShardSpy(() => json({ ok: true, result: { changed: 0, processed: 0, status: "completed" } }));
+
+        await coordinator.orchestrateMigration(spy.namespace, {
+            args: {},
+            defaultShardKey: "__root__",
+            functionPath: "__lunora_admin__:runMigration",
+            headers: {},
+            table: "messages",
+        });
+
+        expect(spy.calls.map((call) => call.shardKey).toSorted((left, right) => left.localeCompare(right))).toEqual(["a", "b"]);
+    });
+
+    /**
+     * Regression: `defaultShardKey` was optional on the export / CDC / migration
+     * requests, so a fan-out that never mentioned it fell back to nothing and
+     * reported success over zero shards — which is how two of the six fan-outs
+     * were missed. Omission is no longer expressible; `null` is how a caller
+     * says it means it (as `orchestrateRank`'s callers do below).
+     */
+    it("does not let a fan-out request omit its shard fallback", () => {
+        expect.assertions(1);
+
+        // @ts-expect-error - `defaultShardKey` is required
+        const omitted: ExportFanOutRequest = { args: {}, headers: {}, tables: ["messages"] };
+        // @ts-expect-error - `defaultShardKey` is required
+        const omittedMigration: MigrationFanOutRequest = { functionPath: "__lunora_admin__:runMigration", table: "messages" };
+
+        expect([omitted.tables.length, omittedMigration.table]).toEqual([1, "messages"]);
+    });
+
+    it("keeps an empty fan-out for a caller that supplies no default", async () => {
+        expect.assertions(1);
+
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({}) });
+        const spy = createShardSpy(() => json({ ok: true }));
+
+        await coordinator.orchestrateRank(spy.namespace, { headers: {}, index: "by_score", partitionKey: "{}", rowId: "p1", sortValues: [1], table: "posts" });
+
+        expect(spy.calls).toEqual([]);
     });
 });

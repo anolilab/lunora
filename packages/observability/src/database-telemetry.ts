@@ -75,6 +75,13 @@ const INSTRUMENTED_METHODS = new Set([
  * (`get`/`patch`/`delete`) deliberately do NOT put the id in the name, because a
  * span name containing a row id makes every call its own group in a collector
  * and destroys the aggregate views the span exists to feed.
+ *
+ * Local on purpose, and NOT `@lunora/shard-engine`'s `LOOP_GATED_METHODS`: that
+ * one records how the RLS guard wraps a method, so it omits `deleteWhere` and
+ * `patchWhere` (gated inline instead) and includes `deleteAll`/`query`, which
+ * take a table name but produce no span here. This set answers a pure arity
+ * question — "is `arguments[0]` the table name?" — and the two memberships
+ * differ. They were once the same identifier in two packages.
  */
 const TABLE_FIRST_METHODS = new Set([
     "aggregate",

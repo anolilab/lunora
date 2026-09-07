@@ -29,7 +29,9 @@ import { tryCreateMysqlHarness } from "./_helpers/mysql-mem";
  * `mysql-memory-server` downloads the MySQL binary on first use; in sandboxes
  * where that download is blocked (e.g. an egress proxy answering 403) the whole
  * suite skips — with the captured reason — instead of failing on an environment
- * limitation.
+ * limitation. CI runs it under `LUNORA_MYSQL_TESTS=1` (the `test-mysql` job),
+ * where the same failure is raised rather than captured, so a green run means
+ * the cases executed rather than that they were skipped.
  */
 const FIXED_CLOCK = 1_700_000_000_000;
 const STARTUP_TIMEOUT = 180_000;
@@ -342,6 +344,37 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
 
                 await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(4);
                 await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(6);
+            },
+            TEST_TIMEOUT,
+        );
+
+        it(
+            "groupBy() over the indexed aggregate counter (regression: `key` is a reserved word on MySQL 8)",
+            async () => {
+                expect.assertions(1);
+
+                // The unconstrained group key takes the enumerate branch, which
+                // aliases the companion's `__key__` column. The alias was emitted
+                // bare — and `KEY` is reserved in MySQL 8, so the statement failed
+                // to parse (ER_PARSE_ERROR) and every `groupBy` whose `by` matches
+                // an `aggregateIndex` and carries no `where` was a 500. Postgres
+                // and SQLite accept the bare token, so only a real MySQL sees it.
+                await runSqlGlobalTableMigrations(harness.exec, aggregateSchema, mysqlDialect);
+                await runSqlAggregateMigrations(harness.exec, aggregateSchema, mysqlDialect);
+                const writer = writerFor(aggregateSchema);
+
+                await seed(writer);
+
+                const groups = await writer.groupBy("todos", { agg: { field: "seq", op: "sum" }, by: ["projectId"] });
+
+                expect(
+                    groups
+                        .map((group) => [(group.key as { projectId: string }).projectId, group.value] as const) // secret-scanner:allow -- `projectId` is a group-by column name, not a credential
+                        .toSorted((left, right) => left[0].localeCompare(right[0])),
+                ).toEqual([
+                    ["p1", 6],
+                    ["p2", 4],
+                ]);
             },
             TEST_TIMEOUT,
         );

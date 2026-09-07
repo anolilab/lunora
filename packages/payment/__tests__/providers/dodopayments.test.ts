@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 
+import DodoPayments from "dodopayments";
 import { describe, expect, it } from "vitest";
 
 import type { DodoPaymentsClientLike } from "../../src/providers/dodopayments";
@@ -97,7 +98,29 @@ describe("dodopayments adapter", () => {
         expect(adapter.capabilities.merchantOfRecord).toBe(true);
         expect(() => adapter.capturePayment({ sessionId: "x" })).toThrow(/does not support/);
         // Refunds ARE supported by Dodo (unlike manual capture).
-        await expect(adapter.refundPayment({ sessionId: "pay_1" })).resolves.toMatchObject({ state: "refunded" });
+        // `refundId` is Dodo's `refund_id` — the same id `refund.succeeded` carries.
+        await expect(adapter.refundPayment({ sessionId: "pay_1" })).resolves.toMatchObject({ pending: false, refundId: "ref_1", state: "refunded" });
+    });
+
+    it("flags a refund Dodo has only accepted, not settled", async () => {
+        expect.assertions(2);
+
+        const client = {
+            ...makeClient(),
+            refunds: {
+                create: async () => {
+                    return { amount: 2500, currency: "USD", payment_id: "pay_1", refund_id: "ref_1", status: "pending" };
+                },
+            },
+        };
+
+        const adapter = createDodoPaymentsAdapter({ client, webhookSecret: SECRET });
+        const result = await adapter.refundPayment({ sessionId: "pay_1" });
+
+        // `pending`/`review` settle later via `refund.succeeded` — or not at all, via `refund.failed`,
+        // which carries no transition. The facade holds its ledger back on this flag.
+        expect(result.pending).toBe(true);
+        expect(result.state).toBe("captured");
     });
 
     it("creates a checkout carrying the pinned reference metadata and product cart", async () => {
@@ -220,6 +243,32 @@ describe("dodopayments adapter", () => {
         expect(options?.idempotencyKey).not.toHaveLength(0);
     });
 
+    it("pins that the SDK drops that key rather than sending it (the fake above cannot see this)", async () => {
+        expect.assertions(2);
+
+        let sent: Headers | undefined;
+        // The real client, not the structural fake: `buildHeaders` only emits an idempotency header
+        // when `this.idempotencyHeader` is truthy, and that field is declared `protected` and never
+        // assigned anywhere in the package — so the key we pass type-checks and goes nowhere. Flip
+        // this test to assert the header when a future SDK release starts setting it, and update the
+        // `@lunora/payment` idempotency docblock with it.
+        const client = new DodoPayments({
+            bearerToken: "test-key",
+            environment: "test_mode",
+            fetch: async (_input, init) => {
+                sent = new Headers(init?.headers);
+
+                return Response.json({ customer_id: "cus_1", email: "a@b.test" });
+            },
+            maxRetries: 0,
+        });
+
+        await client.customers.create({ email: "a@b.test", name: "user_1" }, { idempotencyKey: "customer:dodopayments:user_1" });
+
+        expect(sent).toBeDefined();
+        expect([...(sent as Headers).keys()].filter((name) => name.includes("idempotency"))).toStrictEqual([]);
+    });
+
     it("ingests usage as a Dodo usage-event keyed on the customer id", async () => {
         expect.assertions(3);
 
@@ -304,6 +353,20 @@ describe("dodopayments adapter", () => {
         expect(action.type).toBe("subscription.paused");
     });
 
+    it("routes the subscription.paused event to paused whatever status it carries (regression)", async () => {
+        expect.assertions(1);
+
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        // Dodo's `SubscriptionStatus` is pending|active|on_hold|cancelled|failed|expired — there is no
+        // `paused` member, so a `subscription.paused` payload cannot carry one. Read from the status
+        // alone, a deliberate pause fell through to `subscription.past_due` and raised the dunning alert.
+        const payload = JSON.stringify({ data: { status: "on_hold", subscription_id: "sub_1" }, type: "subscription.paused" });
+        const action = await adapter.parseWebhook({ headers: headersFor("m8", timestamp, sign("m8", timestamp, payload)), payload });
+
+        expect(action.type).toBe("subscription.paused");
+    });
+
     it("rounds a fractional webhook amount instead of throwing on the BigInt conversion (regression)", async () => {
         expect.assertions(2);
 
@@ -317,15 +380,17 @@ describe("dodopayments adapter", () => {
     });
 
     it("normalizes a refund.succeeded webhook to a refund", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
-        const payload = JSON.stringify({ data: { amount: 1000, currency: "USD", payment_id: "pay_1" }, type: "refund.succeeded" });
+        const payload = JSON.stringify({ data: { amount: 1000, currency: "USD", payment_id: "pay_1", refund_id: "ref_1" }, type: "refund.succeeded" });
         const action = await adapter.parseWebhook({ headers: headersFor("m4", timestamp, sign("m4", timestamp, payload)), payload });
 
         expect(action.type).toBe("payment.refunded");
         expect(action.amount?.minorUnits).toBe(1000n);
+        // Per-refund identity, so the sync layer can tell this event from a same-amount sibling.
+        expect(action.refundId).toBe("ref_1");
     });
 
     it("treats a lost chargeback as a funds reversal, not an unhandled event (regression)", async () => {
@@ -333,11 +398,31 @@ describe("dodopayments adapter", () => {
 
         const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
-        const payload = JSON.stringify({ data: { amount: 2500, currency: "USD", payment_id: "pay_1" }, type: "dispute.lost" });
+        // The real wire shape: `GetDispute.amount` is a STRING ("represented as a string to
+        // accommodate precision"), not the number the old fixture used. A `readNumber` here yields
+        // `undefined` → a zero-money reversal on a real chargeback.
+        const payload = JSON.stringify({ data: { amount: "2500", currency: "USD", payment_id: "pay_1" }, type: "dispute.lost" });
         const action = await adapter.parseWebhook({ headers: headersFor("m8", timestamp, sign("m8", timestamp, payload)), payload });
 
         expect(action.type).toBe("payment.refunded");
         expect(action.amount?.minorUnits).toBe(2500n);
+        expect(action.sessionId).toBe("pay_1");
+    });
+
+    it("refuses to scale a non-integer dispute amount rather than guess its unit", async () => {
+        expect.assertions(3);
+
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const payload = JSON.stringify({ data: { amount: "25.00", currency: "USD", payment_id: "pay_1" }, type: "dispute.lost" });
+        const action = await adapter.parseWebhook({ headers: headersFor("m9", timestamp, sign("m9", timestamp, payload)), payload });
+
+        // Reading "25.00" as 25 minor units understates the reversal 100x; reading it as 2500
+        // overstates it 100x if Dodo ever sends integer minor units in that shape. Carry no amount:
+        // `sync.ts` then records a FULL reversal with the money untouched, which is loud and
+        // fail-closed, instead of writing a confidently wrong figure to the ledger.
+        expect(action.type).toBe("payment.refunded");
+        expect(action.amount).toBeUndefined();
         expect(action.sessionId).toBe("pay_1");
     });
 

@@ -10,7 +10,7 @@ const SKIP_DIRECTORIES = new Set([".git", "_generated", "dist", "node_modules"])
 /**
  * Recursively collect `*.eval.ts` files under `directory`, sorted for a
  * deterministic run order. Mirrors codegen's `listLunoraSourceFiles`
- * (`packages/codegen/src/discover-functions.ts`): `lstatSync`, never
+ * (`packages/codegen/src/discover/ast.ts`): `lstatSync`, never
  * `statSync`, so a directory symlink pointing at an ancestor is classified by
  * the link itself and never descended into — no symlink-cycle infinite
  * recursion. A missing `directory` yields `[]` rather than throwing, so an

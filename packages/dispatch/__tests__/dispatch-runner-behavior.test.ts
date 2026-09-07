@@ -8,7 +8,7 @@ import { createDispatchRunner } from "../src/create-dispatch-runner";
 const ENV = { LUNORA_ADMIN_TOKEN: "tok", LUNORA_ORIGIN_URL: "https://app.example.com" };
 const REF = { __lunoraRef: "messages:send" };
 
-const okJson = async (): Promise<Response> => Response.json({ ok: 1 }, { status: 200 });
+const okJson = async (): Promise<Response> => Response.json({ result: { ok: 1 } }, { status: 200 });
 
 const captureCall = (fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>): { body: Record<string, unknown>; headers: Record<string, string>; url: string } => {
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];

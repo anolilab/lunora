@@ -42,15 +42,36 @@
  *     table: "messages",
  *     where: (ctx, { channelId }) => (ctx.auth.userId === null ? deny() : { channelId }),
  * });
+ *
+ * // 4. Governed by RLS. `use` names the same `rls(...)` guards a query would
+ * //    `.use(...)`; their read policies AND-compose with `where`.
+ * export const channelMessages = defineShape({
+ *     args: { channelId: v.string() },
+ *     table: "messages",
+ *     use: [memberOfChannel],
+ *     where: (_ctx, { channelId }) => ({ channelId }),
+ * });
  * ```
+ *
+ * RLS on a shape is OPT-IN through `use`, exactly as it is on a procedure —
+ * policies declared elsewhere in the project do not reach a shape that did not
+ * ask for them. The omission is never silent: under a `.rls("required")` schema a
+ * shape over a non-`.public()` table with no `use` replicates nothing, and
+ * otherwise codegen stamps `assertShapesDeclareReadPolicies` into the generated
+ * DO, which refuses to boot when the shape's table IS governed on read and the
+ * shape named no guard. `use: []` is the acknowledgement that the omission is
+ * deliberate.
  */
 
 import { LunoraError } from "@lunora/errors";
 import type { InferValidatorMap, ValidatorMap } from "@lunora/values";
 
+import type { Middleware } from "./builder/types";
 import contextUserId from "./context-identity";
 import { validateArgs } from "./functions";
 import { deny, toWhereInput } from "./rls/predicates";
+import type { RlsReadRegistry } from "./rls/shape-read-base";
+import { buildRlsReadRegistry } from "./rls/shape-read-base";
 import type { WhereInput } from "./rls/types";
 import type { QueryCtx as QueryContext } from "./types";
 
@@ -100,6 +121,33 @@ export interface ShapeDefinition<Args extends ValidatorMap = ValidatorMap, Conte
     readonly table: string;
 
     /**
+     * The `rls(...)` guards whose **read** policies gate this shape, exactly as
+     * a procedure lists them with `.use(rls(...))`.
+     *
+     * A shape runs no procedure, so it has no `.use()` chain to inherit from —
+     * it has to name its own guards. Their read policies are evaluated under the
+     * socket's verified identity and AND-composed with `where` before a single
+     * row replicates, and (like a procedure's chain) several guards compose:
+     * every one of them must admit a row.
+     *
+     * SCOPE, and why it is per-shape: an `rls()` bundle is scoped to the
+     * procedures that opt into it. A shape naming no guard therefore replicates
+     * on `where` alone — the same deal a query with no `.use(rls(...))` gets.
+     * Under a `.rls("required")` schema that is a hard denial for any
+     * non-`.public()` table (nothing replicates), which is the secure-by-default
+     * answer and the reason `required` exists. Otherwise it is a boot failure
+     * whenever the table IS governed on read (see
+     * `assertShapesDeclareReadPolicies`); write `use: []` for a shape that is
+     * meant to be ungoverned.
+     *
+     * Only `rls()` middlewares are read here — their policies, not their bodies.
+     * A shape cannot run an authorization middleware, so a procedure-level gate
+     * (`requireAdmin`, a rate limiter) has no effect on a shape and must not be
+     * relied on to protect one.
+     */
+    readonly use?: ReadonlyArray<Middleware<never, unknown>>;
+
+    /**
      * Predicate selecting the rows this shape replicates. AND-composed with the
      * table's RLS read base-where on the DO. Runs server-side with a trusted
      * `ctx` (identity/auth the client can't forge) and the validated client
@@ -131,6 +179,19 @@ export interface RegisteredShape<Args extends ValidatorMap = ValidatorMap, Conte
      * `owner: true` shape. Omitted for an `owner: "field"` or plain `where` shape.
      */
     readonly compileWhere: (context: unknown, rawArgs: Record<string, unknown>, options?: { ownerField?: string }) => WhereInput;
+
+    /**
+     * Read-policy registry built from THIS shape's `use` guards — the argument
+     * the DO's `resolveShape` hands `composeShapeReadWhere`.
+     *
+     * Built here, per shape, and not project-wide: the registry is a union, so a
+     * project-wide one folded in the read policies of every procedure that names
+     * the table, and a single `rls([{ on: "read", when: () => true }])` inside an
+     * admin-only procedure collapsed a tenant shape's filter to "no filter" for
+     * every subscriber. Request-time scope is per-procedure; a shape's scope is
+     * its own `use` list.
+     */
+    readonly rlsRegistry: RlsReadRegistry;
 }
 
 /** Declare a replication shape. See the module docs for runtime semantics. */
@@ -183,5 +244,5 @@ export const defineShape = <Args extends ValidatorMap = ValidatorMap, Context = 
         return shapeWhere === undefined ? ownerWhere : { AND: [ownerWhere, shapeWhere] };
     };
 
-    return { __lunoraShape: true, ...definition, compileWhere };
+    return { __lunoraShape: true, ...definition, compileWhere, rlsRegistry: buildRlsReadRegistry(definition.use ?? []) };
 };

@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,7 +7,7 @@ import type { PlatformCapabilities } from "@lunora/platform";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { CapabilityKey } from "../src/capabilities";
-import type { FeatureUsage } from "../src/discover-feature-usage";
+import type { FeatureUsage } from "../src/discover/feature-usage";
 import { readProjectTarget, resolveCodegenTarget } from "../src/platform-target";
 import { runCodegen } from "../src/run-codegen";
 
@@ -318,6 +318,337 @@ describe("capability classification", () => {
 
         const usage: FeatureUsage = { ...ALL_OFF, ...Object.fromEntries(exempt.map((key) => [key, true])) };
 
-        expect(gateAgainstMatrix(usage, EMPTY_MATRIX, "empty")).toStrictEqual({ diagnostics: [], usage });
+        expect(gateAgainstMatrix(usage, EMPTY_MATRIX, "empty")).toStrictEqual({ diagnostics: [], signals: {}, usage });
+    });
+});
+
+describe("app-declarable signals with no capability row", () => {
+    /** A matrix that rates nothing — the shape a WIP host ships before it fills its features in. */
+    const EMPTY_MATRIX: PlatformCapabilities = { features: {}, id: "empty", name: "Empty Host" };
+
+    it("diagnoses a declared feature the target marks unsupported", async () => {
+        expect.assertions(3);
+
+        // Regression: `CAPABILITY_TO_FEATURE` only covers app-imported `ctx.*`
+        // add-ons, so `durableStreams` (and `globalTables` / `queues` /
+        // `crossShardFanout` / `secrets`) were rated in every matrix and consulted
+        // by nothing — a durable `.stream()` on `target: "node"` emitted its full
+        // surface with no diagnostic and silently behaved as ephemeral.
+        const { gateAgainstMatrix } = await import("../src/platform-target");
+        const matrix: PlatformCapabilities = {
+            features: { durableStreams: { level: "unsupported" }, secrets: { level: "native" } },
+            id: "some-host",
+            name: "Some Host",
+        };
+
+        const result = gateAgainstMatrix(ALL_OFF, matrix, "some-host", { durableStreams: true, secrets: true });
+
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.name).toBe("platform_unsupported_feature");
+        expect(result.diagnostics[0]?.message).toContain("durable streams");
+    });
+
+    it("diagnoses a `.commitOrdered()` table the target cannot order", async () => {
+        expect.assertions(3);
+
+        // `commitOrderedTables` was rated in every matrix and read by nothing, so
+        // a host marking it unsupported emitted the full `.commitOrdered()`
+        // surface and silently dropped the ordering guarantee — which is the only
+        // thing the feature is.
+        const { gateAgainstMatrix } = await import("../src/platform-target");
+        const matrix: PlatformCapabilities = {
+            features: { commitOrderedTables: { level: "unsupported" } },
+            id: "some-host",
+            name: "Some Host",
+        };
+
+        const result = gateAgainstMatrix(ALL_OFF, matrix, "some-host", { commitOrderedTables: true });
+
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.name).toBe("platform_unsupported_feature");
+        expect(result.diagnostics[0]?.message).toContain("commit-ordered tables");
+    });
+
+    it("fails closed on an unrated app-declarable feature", async () => {
+        expect.assertions(2);
+
+        const { gateAgainstMatrix } = await import("../src/platform-target");
+        const result = gateAgainstMatrix(ALL_OFF, EMPTY_MATRIX, "empty", { globalTables: true });
+
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.name).toBe("platform_undeclared_feature");
+    });
+
+    it("reports a feature reachable both ways exactly once, and still rejects it", async () => {
+        expect.assertions(4);
+
+        // `vectorStore` is a capability (`ctx.vectors`) AND a schema signal
+        // (`.vectorize()`), and an app that does both has one problem, not two.
+        const { gateAgainstMatrix } = await import("../src/platform-target");
+        const matrix: PlatformCapabilities = { features: { vectorStore: { level: "unsupported" } }, id: "some-host", name: "Some Host" };
+
+        const result = gateAgainstMatrix({ ...ALL_OFF, vectors: true }, matrix, "some-host", { vectorStore: true });
+
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.feature).toBe("vectors");
+
+        // Deduping the DIAGNOSTIC must not dedupe the REJECTION. Leaving the
+        // signal `true` here let `hasVectors` read it as accepted and emit
+        // `ctx.vectors` anyway — in the most common shape, since an app that
+        // declares a vector index almost always queries it too.
+        expect(result.usage.vectors).toBe(false);
+        expect(result.signals.vectorStore).toBe(false);
+    });
+
+    it("says nothing about a feature the app does not declare", async () => {
+        expect.assertions(1);
+
+        const { gateAgainstMatrix } = await import("../src/platform-target");
+
+        expect(gateAgainstMatrix(ALL_OFF, EMPTY_MATRIX, "empty", { durableStreams: false }).diagnostics).toStrictEqual([]);
+    });
+});
+
+/**
+ * The gate as an app author meets it: a real `runCodegen` over a real project
+ * whose `lunora.json` declares `target: "node"`, asserting on what codegen
+ * EMITTED — the diagnostics it returned and the surface it wrote — rather than
+ * on an intermediate flag. Asserting the flag is how the `browserTool` hole
+ * below survived a passing test suite: `usage.browser` was correctly `false`
+ * while `ctx.browser` was emitted anyway.
+ */
+describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const fixtureRoot = join(here, "fixtures", "simple");
+    let workdir: string;
+
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-target-node-"));
+        cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
+        writeFileSync(join(workdir, "lunora.json"), `{ "target": "node" }`, "utf8");
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    const write = (name: string, source: string): void => {
+        writeFileSync(join(workdir, "lunora", name), source, "utf8");
+    };
+
+    /** Append a table to the fixture schema's `defineSchema({ … })` object. */
+    const appendTable = (source: string): void => {
+        const schemaPath = join(workdir, "lunora", "schema.ts");
+        const text = readFileSync(schemaPath, "utf8");
+        const close = text.lastIndexOf("});");
+
+        writeFileSync(schemaPath, `${text.slice(0, close)}${source}\n${text.slice(close)}`, "utf8");
+    };
+
+    const codegen = (): ReturnType<typeof runCodegen> => runCodegen({ projectRoot: workdir });
+
+    it("gates a declared cron on a target where nothing dispatches one", () => {
+        expect.assertions(3);
+
+        // The `featureUsage` arm cannot cover this: it keys `scheduler` on a
+        // `@lunora/scheduler` import, while `cronJobs` is legitimately imported
+        // from `@lunora/server`. Before the signal existed, this app built green
+        // on a host where the nightly sweep never fires.
+        write(
+            "crons.ts",
+            `import { cronJobs } from "@lunora/server";\n\nconst crons = cronJobs();\n\ncrons.daily("nightly-billing-sweep", { hourUTC: 3, minuteUTC: 0 }, internal.messages.purge, {});\n\nexport default crons;\n`,
+        );
+
+        const result = codegen();
+
+        // The cron IS declared and emitted — the diagnostic is the only thing
+        // standing between it and a deploy where it never fires.
+        expect(result.cronTriggers).toStrictEqual(["0 3 * * *"]);
+        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(result.platformDiagnostics[0]?.message).toContain("cron");
+    });
+
+    it("gates a schema-declared vector index the target has no binding for", () => {
+        expect.assertions(6);
+
+        // `ctx.vectors` is emitted off `schema.vectorIndexes`, never off the
+        // gated `featureUsage.vectors` — and a `.vectorize()` declaration flips
+        // neither the import probe nor the `ctx.vectors` read the usage arm
+        // watches for.
+        appendTable(`    docs: defineTable({ body: v.string() }).vectorize("body", { dimensions: 768, index: "docs_search", metric: "cosine" }),`);
+
+        const result = codegen();
+
+        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(result.platformDiagnostics[0]?.message).toContain("vector");
+
+        // And the surface is actually WITHHELD, not merely complained about,
+        // by EVERY emitter that carries it. Asserting only the diagnostic is how
+        // the sibling `browser` gate came to be re-enabled downstream without any
+        // test noticing: the flag said "off" while the emitted bytes said
+        // otherwise. Asserting only ONE of the three emitters is how the shard
+        // kept the whole Vectorize wiring — the import, the `createVectorSyncHook`
+        // write hook and `vectors` on the runtime ctx — on a target with no
+        // vector binding at all, while `server.ts` and `app.ts` correctly
+        // withheld theirs.
+        expect(result.generated.server).not.toContain("readonly vectors:");
+        expect(result.generated.app).not.toContain(".vectors(");
+        expect(result.generated.shard).not.toContain("createVectorSyncHook");
+        expect(result.generated.shard).not.toContain("@lunora/bindings/vectors");
+    });
+
+    it("withholds the sharded-vector wiring, down to the ROOT_SHARD_NAME import it reads", () => {
+        expect.assertions(3);
+
+        // A `.shardBy()`'d vectorized table adds a second, separately-gated
+        // fragment: the shard-key namespace scoping, whose `ROOT_SHARD_NAME`
+        // sentinel is imported from `@lunora/do` off its own flag. Gating only
+        // the main wiring leaves that import behind, unused, in a file that
+        // imports nothing else it needs.
+        appendTable(
+            `    docs: defineTable({ body: v.string(), tenantId: v.string() }).shardBy("tenantId").vectorize("body", { dimensions: 768, index: "docs_search", metric: "cosine" }),`,
+        );
+
+        const result = codegen();
+
+        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(result.generated.shard).not.toContain("createVectorSyncHook");
+        expect(result.generated.shard).not.toContain("ROOT_SHARD_NAME");
+    });
+
+    it("does not demand the vector binding package on a target with no vector store", () => {
+        expect.assertions(2);
+
+        // The required-package check is keyed off the schema, so it read the raw
+        // `.vectorize()` count and hard-FAILED codegen unless the project
+        // installed `@lunora/bindings` — for a binding this host does not have,
+        // after the gate had already told the app the feature is unsupported.
+        // The generated output imports nothing from it here, so nothing is
+        // required.
+        // `@lunora/d1` is what the fixture's `.global()` table legitimately needs; the
+        // question here is only whether the vector binding is demanded alongside it.
+        writeFileSync(join(workdir, "package.json"), `{ "name": "gated", "dependencies": { "@lunora/d1": "*", "@lunora/storage": "*" } }`, "utf8");
+        appendTable(`    docs: defineTable({ body: v.string() }).vectorize("body", { dimensions: 768, index: "docs_search", metric: "cosine" }),`);
+
+        const result = codegen();
+
+        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(result.generated.shard).not.toContain("@lunora/bindings/vectors");
+    });
+
+    it("hides the studio's vector browser on a target with no vector store", () => {
+        expect.assertions(3);
+
+        // The studio nav reads `studioFeatures.vectors` out of the emitted shard.
+        // That flag was built from the RAW `.vectorize()` count, un-gated — so the
+        // same build that withheld `ctx.vectors` from the shard shipped a Vector
+        // browser entry advertising a binding this host does not have. The count
+        // has to fall to the platform verdict. `@lunora/bindings` is declared here
+        // to pin the sibling half: `kv` DOES fail open on the dependency, and must
+        // keep doing so on a target where `keyValueStore` is supported.
+        writeFileSync(
+            join(workdir, "package.json"),
+            `{ "name": "gated", "dependencies": { "@lunora/bindings": "*", "@lunora/d1": "*", "@lunora/storage": "*" } }`,
+            "utf8",
+        );
+        appendTable(`    docs: defineTable({ body: v.string() }).vectorize("body", { dimensions: 768, index: "docs_search", metric: "cosine" }),`);
+
+        const result = codegen();
+
+        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(result.generated.shard).toContain(`"vectors": false`);
+        // The sibling `@lunora/bindings` feature stays on — the verdict is
+        // per-capability, and `keyValueStore` is `emulated` on this target.
+        expect(result.generated.shard).toContain(`"kv": true`);
+    });
+
+    it("gates ctx.browser reached through @lunora/agent's browserTool exactly as it gates a direct import", () => {
+        expect.assertions(4);
+
+        const browserField = `readonly browser: import("@lunora/browser").Browser;`;
+
+        write("tools.ts", `import { browserTool } from "@lunora/agent";\n\nexport const tools = [browserTool()];\n`);
+
+        const viaTool = codegen();
+
+        expect(viaTool.platformDiagnostics.map((diagnostic) => diagnostic.feature)).toStrictEqual(["browser"]);
+        expect(viaTool.generated.server).not.toContain(browserField);
+
+        // The direct import has always been gated; the tool import must not be
+        // the way around it.
+        write("tools.ts", `import { createBrowser } from "@lunora/browser";\n\nexport const browser = createBrowser;\n`);
+
+        const viaImport = codegen();
+
+        expect(viaImport.platformDiagnostics.map((diagnostic) => diagnostic.feature)).toStrictEqual(["browser"]);
+        expect(viaImport.generated.server).not.toContain(browserField);
+    });
+
+    it("gates a destructured ctx.secrets read, not only a direct property access", () => {
+        expect.assertions(2);
+
+        write(
+            "keys.ts",
+            `import { action } from "@lunora/server";\n\nexport const send = action({ args: {}, handler: async (ctx) => {\n    const { secrets } = ctx;\n\n    return secrets.get("STRIPE_KEY");\n} });\n`,
+        );
+
+        const result = codegen();
+
+        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(result.platformDiagnostics[0]?.message).toContain("secrets");
+    });
+
+    it.each([
+        ["plain", `async ({ ctx }) => ctx.secrets.get("STRIPE_KEY")`],
+        ["renamed", `async ({ ctx: context }) => context.secrets.get("STRIPE_KEY")`],
+        ["destructured", `async ({ ctx: { secrets } }) => secrets.get("STRIPE_KEY")`],
+    ])("gates ctx.secrets reached through a %s handler context parameter", (_form, handler) => {
+        expect.assertions(2);
+
+        // A handler receives its context as a property of ONE destructured
+        // argument (`async ({ args, ctx }) => …`), so the local name the context
+        // is bound to is the handler's to choose. Matching the identifier text
+        // `ctx` recognised only the shorthand: renaming the binding or
+        // destructuring it built green on a host that rates `secrets`
+        // unsupported, and `ctx.secrets.get()` then threw `no Secrets Store
+        // binding named "…"` on first use — the exact failure this gate refuses.
+        // `secrets` has no import arm and no capability row, so nothing else
+        // covers it.
+        write("keys.ts", `import { action } from "@lunora/server";\n\nexport const send = action.action(${handler});\n`);
+
+        const result = codegen();
+
+        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(result.platformDiagnostics[0]?.message).toContain("secrets");
+    });
+
+    it.each([
+        ["an inline object literal", `export const feed = procedure.stream(async function* () {}, { durable: true });`],
+        ["a variable", `const streamOptions = { durable: true };\n\nexport const feed = procedure.stream(async function* () {}, streamOptions);`],
+    ])("gates a durable stream declared with %s", (_form, source) => {
+        expect.assertions(2);
+
+        // `durable` is carried in no IR — the emitted registry reads it off the
+        // registration object at runtime — so the signal is syntactic. Requiring
+        // the argument to BE an object literal meant hoisting the options into a
+        // variable slipped the gate, and the stream silently ran as ephemeral on
+        // a host with no durable stream storage.
+        write("feed.ts", `import { procedure } from "@lunora/server";\n\n${source}\n`);
+
+        const result = codegen();
+
+        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(result.platformDiagnostics[0]?.message).toContain("durable");
+    });
+
+    it("gates a declared agent on a target that cannot run one", () => {
+        expect.assertions(2);
+
+        write("agents.ts", `import { defineAgent } from "@lunora/agent";\n\nexport const support = defineAgent({ model: "m" });\n`);
+
+        const result = codegen();
+
+        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(result.platformDiagnostics[0]?.message).toContain("agent");
     });
 });

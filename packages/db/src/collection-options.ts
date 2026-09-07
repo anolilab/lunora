@@ -505,20 +505,6 @@ export const markCheckpointsAttached = (registry: CheckpointRegistry): void => {
 /** Whether any sync source will advance `registry`'s watermarks. */
 export const hasCheckpointsAttached = (registry: CheckpointRegistry): boolean => attachedRegistries.has(registry);
 
-/** Every live registry for `client`, keyed by shard (`""` = unsharded) — for a debug surface. */
-export const shardCheckpointStats = (client: LunoraClient): Record<string, CheckpointRegistryStats> => {
-    const byShard = registriesByClient.get(client);
-    const out: Record<string, CheckpointRegistryStats> = {};
-
-    if (byShard) {
-        for (const [shardKey, registry] of byShard) {
-            out[shardKey] = registry.stats();
-        }
-    }
-
-    return out;
-};
-
 /**
  * A replication-shape sync source (the local-first partial-replication path).
  * Mutually exclusive with {@link LunoraCollectionConfig.list}: the collection
@@ -610,18 +596,21 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
     const getKey = options.getKey ?? ((row: TRow) => row._id);
     // Shared per-shard by default — a per-collection registry hangs any shard with
     // more than one collection (see `getShardCheckpoints`). A `shape` carries its
-    // own shard key; the `list` path uses the top-level one. Resolved LAZILY at
-    // each callback use site rather than captured once: an identity switch
-    // retires the derived registry and mints a fresh one, and a still-mounted
-    // collection's frames must advance the replacement — a captured registry
-    // would leave the fresh one unattached and never authoritatively advanced,
-    // so post-switch overlays would drop ungated (or wait out the fallback).
+    // own shard key; the `list` path uses the top-level one. The sync callbacks
+    // re-resolve rather than close over the capture below, because
+    // {@link disposeShardCheckpoints} drops the whole per-client map: a
+    // collection still mounted across that teardown must advance the registry a
+    // later {@link getShardCheckpoints} mints, not the disposed one it was built
+    // with (whose gates resolve to `Infinity`, so every overlay drops ungated).
+    // An identity switch is NOT such a case — {@link syncShardCheckpointIdentity}
+    // rewinds each registry IN PLACE precisely so captures stay valid; see
+    // {@link registryResets}.
     const resolveCheckpoints = (): CheckpointRegistry => {
         const registry = options.checkpoints ?? getShardCheckpoints(options.client, options.shape?.shardKey ?? options.shardKey);
 
         // This collection's subscription is what advances the registry — record
         // that so `bindMutators` knows gating an overlay on it will actually
-        // settle. Re-marked on every resolve so a post-switch replacement
+        // settle. Re-marked on every resolve so a post-teardown replacement
         // registry is covered too (a WeakSet add is idempotent).
         markCheckpointsAttached(registry);
 
@@ -671,12 +660,13 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
     //     HTTP-RPC-issued writes.
     //
     // Both are fixed by scoping the watermark to the ONE `onRows` call it was
-    // reported for: `onCheckpoint` sets it, the matching `onRows` reads
-    // (falling back only when nothing arrived for THIS frame) and clears it,
-    // so a frame with no watermark of its own (an unstamped delta from an
-    // un-upgraded server, or a follower's data broadcast) always sees
-    // `undefined` and defers to the compensator — never a leftover value from
-    // an unrelated earlier frame.
+    // reported for: `onCheckpoint` sets it — only when the frame says rows
+    // actually follow (`rowsFollow`, which a rowless `settled` frame does not
+    // set) — the matching `onRows` reads (falling back only when nothing arrived
+    // for THIS frame) and clears it, so a frame with no watermark of its own (an
+    // unstamped delta from an un-upgraded server, or a follower's data
+    // broadcast) always sees `undefined` and defers to the compensator — never a
+    // leftover value from an unrelated earlier frame.
     let pendingFrameWatermark: number | undefined;
 
     // Open the underlying sync source — a full-table `list` query subscription or
@@ -692,10 +682,10 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
             // The shape path resolves the registry from the poke `checkpoint`
             // (wired below). The list path prefers `pendingFrameWatermark` —
             // set by the `onCheckpoint` call THIS SAME frame fired
-            // immediately beforehand (a `settled` frame, or a `data`/`delta`
-            // frame's own `lastMutationId`; `onCheckpoint` always fires
-            // before `onRows` for a frame that carries both — see
-            // `handleDataMessage`) — reflecting what THIS frame's rows
+            // immediately beforehand (a `data`/`delta` frame's own
+            // `lastMutationId`, the only checkpoint stamped `rowsFollow`;
+            // `onCheckpoint` always fires before `onRows` for such a frame —
+            // see `handleDataMessage`) — reflecting what THIS frame's rows
             // actually are. Only when nothing arrived for THIS frame (an
             // un-upgraded server's unstamped frame, or a follower's
             // cross-tab data broadcast, which never carries one) does it
@@ -716,8 +706,17 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
         // acknowledgement) have landed. Both paths forward the same watermark
         // shape, so the handler is identical. Also records the watermark
         // `onRows`'s list-path compensator above consumes.
-        const onCheckpoint = (watermark: { checkpoint?: number; mutationId?: number }): void => {
-            if (watermark.mutationId !== undefined) {
+        const onCheckpoint = (watermark: { checkpoint?: number; mutationId?: number; rowsFollow?: boolean }): void => {
+            // `rowsFollow` gates the stash, not just `mutationId !== undefined`.
+            // A `settled` frame — and the cross-tab `subscription-settled` relay
+            // — fires a checkpoint with NO matching `onRows` (the server
+            // suppressed a data frame whose value didn't change), so stashing its
+            // watermark left the value sitting until an unrelated later frame
+            // carrying no `lastMutationId` of its own consumed it. The gate then
+            // resolved at that stale mark rather than falling back to the
+            // compensator, holding the optimistic overlay until the 3s bounded
+            // fallback fired and blamed a dropped shape poke.
+            if (watermark.rowsFollow === true && watermark.mutationId !== undefined) {
                 pendingFrameWatermark = watermark.mutationId;
             }
 

@@ -111,6 +111,14 @@ Repeated terms collapse: `"cat cat"` is the same query as `"cat"`.
 Matches are ordered by relevance (how often the terms occur in the indexed
 field), newest first among equally relevant documents.
 
+Only the **first 1000 token occurrences** of a document are indexed, and a token
+longer than 256 characters is dropped. Both are per-document caps on the indexed
+text, not on distinct terms: the write path issues one statement per chunk of
+tokens, so an unbounded text column would turn one row write into hundreds of
+sequential round trips. The consequence for long documents (articles,
+transcripts) is that a term appearing only after the 1000th token does not match,
+and relevance counts occurrences within that window only.
+
 ## Filter fields
 
 Every column you want to filter by inside a search must be declared in
@@ -169,13 +177,33 @@ for.
 ## Backfill and `staged`
 
 Declaring a search index on a table that already holds rows indexes those rows
-too. That work is paged: each deploy (and, on `.global()` tables, each request
-until it finishes) indexes a bounded batch and records where it stopped, so a
-large table becomes searchable progressively instead of blocking behind a
-full-table scan. Rows written while the backfill is in flight are indexed
-immediately by the write path, as usual.
+too. That work is paged: each deploy — and on a shard-local table each search
+read, on a `.global()` table each request — indexes a bounded batch and records
+where it stopped, so a large table is walked in bounded pieces instead of
+blocking a cold start behind a full-table scan. Rows written while the backfill
+is in flight are indexed immediately by the write path, as usual.
 
-To keep that work out of the request path entirely, declare the index `staged`
+Until that walk finishes, a search on a **shard-local** table is refused with
+`SEARCH_INDEX_BUILDING` (HTTP 503) rather than answered from the part of the
+table indexed so far. The index covers a growing prefix in `id` order, and a
+result set missing every match past that point is indistinguishable from one
+where those matches never existed. Each read advances the backfill, so a caller
+that retries makes progress; the admin op below finishes it in one go. A
+`.global()` table is refused the same way, for the same reason — the read never
+falls back to a partial answer on either tier.
+
+An index **rebuilding** under a changed analyzer — a different `language`, or a
+new analyzer version shipped with Lunora — is a different state, and a
+shard-local table keeps answering throughout it. Every row is already in the
+index and the re-walk rewrites each one's analysis in place, so nothing goes
+missing; a shrinking suffix is matched under the previous rules until the walk
+reaches it. A `.global()` table rebuilds the same way — the companion is
+deliberately **not** emptied first, so it keeps answering throughout. Only a
+change of index _layout_ drops the companion table.
+
+### `staged`
+
+To keep the walk out of the request path entirely, declare the index `staged`
 and run the backfill yourself.
 
 ```ts
@@ -183,9 +211,15 @@ and run the backfill yourself.
 ```
 
 A staged index is maintained on every write from the moment it is declared, but
-starts out empty: until it is backfilled it only finds documents written after
-the deploy. **The backfill is not optional** — skip it and every row that
-predates the deploy stays unsearchable indefinitely.
+nothing walks the rows that predate it. On a shard-local table that means **every
+search on the table is refused with `SEARCH_INDEX_BUILDING` until you run the
+backfill** — the index is not partly useful in the meantime, and skipping the
+backfill leaves it that way indefinitely. A `.global()` table over existing rows
+behaves identically: the index is recorded as not-covered and every search is
+refused until the backfill runs, so `staged` on a large D1/Hyperdrive table is
+search-offline, not degraded-but-live. Declared together with the table there is
+nothing to walk, so the index is complete from the start and `staged` costs
+nothing.
 
 For sharded tables, drive it against a running deployment with the
 `backfillSearch` admin op:

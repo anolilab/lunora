@@ -44,7 +44,7 @@ export const list = query.query(async ({ ctx }): Promise<Doc<"profiles">[]> => {
 /** A short-lived URL for one avatar. An action for the same reason as `messages.attachmentUrl`. */
 export const avatarUrl = action
     .use(rateLimit(actionLimiter, "upload", byUser))
-    .input({ key: v.string().meta({ schema: { maxLength: 512 } }) })
+    .input({ key: v.string().max(512) })
     .action(async ({ args: { key }, ctx }): Promise<string> => {
         if (!ctx.auth.userId) {
             throw new LunoraError("UNAUTHENTICATED", "sign in to view avatars");
@@ -72,7 +72,7 @@ export const avatarUrl = action
  */
 export const save = mutation
     .use(rateLimit(mutationLimiter, "send", byUser))
-    .input({ name: v.string().meta({ schema: { maxLength: 80 } }), avatarKey: v.optional(v.string().meta({ schema: { maxLength: 512 } })) })
+    .input({ name: v.string().max(80), avatarKey: v.optional(v.string().max(512)) })
     .mutation(async ({ args: { avatarKey, name }, ctx }): Promise<Id<"profiles">> => {
         if (!ctx.auth.userId) {
             throw new LunoraError("UNAUTHENTICATED", "sign in to edit your profile");
@@ -93,7 +93,7 @@ export const save = mutation
 
 export const requestAvatarUpload = action
     .use(rateLimit(actionLimiter, "upload", byUser))
-    .input({ contentType: v.string().meta({ schema: { maxLength: 128 } }) })
+    .input({ contentType: v.string().max(128) })
     .action(async ({ args: { contentType }, ctx }): Promise<{ key: string; url: string }> => {
         if (!ctx.auth.userId) {
             throw new LunoraError("UNAUTHENTICATED", "sign in to upload");

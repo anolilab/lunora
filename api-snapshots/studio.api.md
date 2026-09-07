@@ -64,6 +64,7 @@ const ADMIN_FUNCTIONS: {
     readonly listTables: "__lunora_admin__:listTables";
     readonly maskPolicies: "__lunora_admin__:maskPolicies";
     readonly migrationStatus: "__lunora_admin__:migrationStatus";
+    readonly patchRows: "__lunora_admin__:patchRows";
     readonly pitrRestore: "__lunora_admin__:pitrRestore";
     readonly readTablePage: "__lunora_admin__:readTablePage";
     readonly replayQueueMessage: "__lunora_admin__:replayQueueMessage";
@@ -603,7 +604,7 @@ interface Insight {
 ### `InsightKind` (type)
 
 ```ts
-type InsightKind = "high-error-rate" | "high-evictions" | "high-write-contention" | "low-cache-hit-rate" | "missing-index" | "slow-function";
+type InsightKind = "high-error-rate" | "high-evictions" | "high-write-contention" | "low-cache-hit-rate" | "missing-index" | "slow-function" | "storage-headroom";
 ```
 
 ### `InsightSeverity` (type)
@@ -623,6 +624,8 @@ interface InsightThresholds {
     minConflictCalls: number;
     minErrorCalls: number;
     slowFunctionMs: number;
+    storageCriticalBytes: number;
+    storageWarnBytes: number;
 }
 ```
 
@@ -981,7 +984,7 @@ interface ShardInputProps {
 
 ```ts
 interface ShardMetrics {
-    cache: CacheStats | null;
+    cache?: CacheStats | null;
     databaseSize: null | number;
     errors: number;
     requests: number;
@@ -1022,7 +1025,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 ### `Studio` (const)
 
 ```ts
-const Studio: ({ basePath, chrome, dataEditable, functions, i18n, initialShardKey, locale, openApiSpec, openRpcSpec, runAsIdentity, schemaEditable, scheduledCancel, scheduledCron, scheduledLoad }: StudioProps) => ReactElement;
+const Studio: ({ i18n, locale, ...shellProps }: StudioProps) => ReactElement;
 ```
 
 ### `StudioApp` (const)
@@ -1072,6 +1075,7 @@ interface StudioI18nProviderProps {
 
 ```ts
 interface StudioProps {
+    readonly analyticsQuery?: AnalyticsPanelProps["runQuery"];
     readonly basePath?: string;
     readonly chrome?: StudioChrome;
     readonly dataEditable?: boolean;

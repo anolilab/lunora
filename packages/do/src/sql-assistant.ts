@@ -426,7 +426,10 @@ const modelFor = (rawArgs: Record<string, unknown>): string => capped(rawArgs.mo
  *
  * A response that fails the read-only gate is retried once and then DISCARDED —
  * returning unvalidated SQL, even labelled, would put model output inside a
- * security boundary it has no business in.
+ * security boundary it has no business in. Each discard is warned to the
+ * server console with the gate's rejection code, because the caller only learns
+ * `unsafe-response` and could not otherwise tell a bad completion from a gate
+ * that refuses a legitimate shape.
  */
 const generateSql = async (binding: unknown, rawArgs: Record<string, unknown>, schema: ReadonlyArray<SchemaFact>): Promise<GenerateSqlResult> => {
     const args: GenerateSqlArgs = {
@@ -448,7 +451,26 @@ const generateSql = async (binding: unknown, rawArgs: Record<string, unknown>, s
         (raw) => {
             const statement = extractStatement(raw);
 
-            return statement !== "" && classifyStatement(statement) === undefined ? statement : undefined;
+            if (statement === "") {
+                return undefined;
+            }
+
+            const rejection = classifyStatement(statement);
+
+            if (rejection === undefined) {
+                return statement;
+            }
+
+            // Discarding is the posture; discarding SILENTLY was the bug. The
+            // operator only ever sees `unsafe-response`, which reads the same
+            // whether the model really wrote a `DELETE` or the gate misread a
+            // read-only shape as a write — so a systematic false refusal was
+            // undiagnosable. Server-side only, and only on an admin-gated
+            // surface.
+            // eslint-disable-next-line no-console -- intentional operational notice: the caller only learns "unsafe-response", so without this a gate that refuses a legitimate shape is indistinguishable from a bad completion
+            console.warn(`[@lunora/do] sql-assistant: discarded a generated statement (${rejection.code}): ${statement}`);
+
+            return undefined;
         },
     );
 

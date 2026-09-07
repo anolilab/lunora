@@ -9,16 +9,16 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 
-import { resolveAdminBearer } from "../../util/admin-token";
+import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { Logger } from "../../util/logger";
 import { CONVEX_STORAGE_TABLE } from "../convex-snapshot";
-import type { ImportBatcher, ImportRowError, ImportTotals } from "./import-batcher";
+import type { ImportBatcher, ImportRowError, ImportShardFailure, ImportTotals } from "./import-batcher";
 import { createImportBatcher } from "./import-batcher";
 import { createRowTransformer } from "./import-rows";
 import type { ImportSource, ImportSourceName } from "./import-source";
 import { readConvexExport, resolveImportSource } from "./import-source";
-import { checkRowParity, reportStorageOutcome, reportUntransferredPaths } from "./import-verify";
+import { checkRowParity, reportStorageOutcome, reportUntransferredPaths, UNRESOLVED_REPORT_LIMIT } from "./import-verify";
 import type { StreamingFetchLike } from "./shared";
 import { IMPORT_ENDPOINT_PATH } from "./shared";
 import { readFirestoreExport } from "./sources/firebase";
@@ -112,13 +112,21 @@ interface ImportCommandOptions {
 interface ImportSummary {
     conflicts: number;
     errors: ImportRowError[];
+    /** Shards the endpoint could not reach (it answered 207). Their rows are MISSING, not rejected — present only when non-empty. */
+    failed?: ImportShardFailure[];
     inserted: Record<string, number>;
     received: number;
     storage?: {
+        /** Up to {@link UNRESOLVED_REPORT_LIMIT} distinct references — a sample, not the whole set. See `ambiguousTotal`. */
         ambiguous: StorageRemapReport["ambiguous"];
+        /** How many DISTINCT `(table, column, storageId)` references were ambiguous. */
+        ambiguousTotal: number;
         blobs: number;
         rewritten: number;
+        /** Up to {@link UNRESOLVED_REPORT_LIMIT} distinct references — a sample, not the whole set. See `unmigratedTotal`. */
         unmigrated: StorageRemapReport["unmigrated"];
+        /** How many DISTINCT `(table, column, storageId)` references resolved to no migrated blob. */
+        unmigratedTotal: number;
     };
     warnings?: string[];
 }
@@ -150,17 +158,20 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
         return undefined;
     }
 
-    if (options.prod && options.yes !== true) {
-        options.logger.error("import --prod bulk-writes production. Re-run with --yes to confirm.");
-
-        return undefined;
-    }
-
     // Resolved before the token so the `.dev.vars` fallback is gated on the
     // request's real destination rather than on the (possibly absent) flag.
     const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
     if (baseUrl === undefined) {
+        return undefined;
+    }
+
+    // Gated on the RESOLVED destination, not on `--prod`: the flag is a
+    // self-declaration, and a bulk write to `--url https://…` without it is
+    // just as destructive.
+    if (targetsRemoteWorker({ prod: options.prod, url: baseUrl }) && options.yes !== true) {
+        options.logger.error(`import bulk-writes ${baseUrl}, which is not local. Re-run with --yes to confirm.`);
+
         return undefined;
     }
 
@@ -208,11 +219,25 @@ const buildImportBody = (totals: ImportTotals, storageIdMap: Map<string, string>
     return {
         conflicts: totals.conflicts,
         errors: totals.errors,
+        ...(totals.failed.length > 0 ? { failed: totals.failed } : {}),
         inserted: totals.inserted,
         received: totals.received,
+        // A SAMPLE plus the totals, never the whole arrays: an unmapped 200k-row
+        // import produced tens of thousands of distinct references and pushed a
+        // multi-megabyte blob through one `logger.info`, burying the summary the
+        // display cap exists to protect. The `*Total` fields carry the real counts.
         ...(storageIdMap === undefined
             ? {}
-            : { storage: { ambiguous: report.ambiguous, blobs: storageIdMap.size, rewritten: report.rewritten, unmigrated: report.unmigrated } }),
+            : {
+                  storage: {
+                      ambiguous: report.ambiguous.slice(0, UNRESOLVED_REPORT_LIMIT),
+                      ambiguousTotal: report.ambiguous.length,
+                      blobs: storageIdMap.size,
+                      rewritten: report.rewritten,
+                      unmigrated: report.unmigrated.slice(0, UNRESOLVED_REPORT_LIMIT),
+                      unmigratedTotal: report.unmigrated.length,
+                  },
+              }),
         ...(totals.warnings.length > 0 ? { warnings: totals.warnings } : {}),
     };
 };
@@ -533,13 +558,23 @@ const runStoragePhase = async (
         const transferredPaths = await runForeignStorageTransfer(context, source, options, cwd);
 
         return transferredPaths === undefined ? undefined : { transferredPaths };
-    } catch {
-        // The transfer already reported which object failed and that the
-        // checkpoint is saved. Rows are deliberately NOT imported after a
-        // partial transfer: every path column would point at an object that is
-        // not there yet, which is the dangling reference the files-first
-        // ordering exists to prevent.
-        options.logger.error("no rows were imported — fix the transfer and re-run; it will resume where it stopped");
+    } catch (error: unknown) {
+        // The error is REPORTED, not discarded. Only one throw site inside the
+        // transfer logs before rethrowing (the per-object failure); every other
+        // reachable one — a bucket list refused because the anon key was supplied
+        // instead of the service-role key, an unreachable project URL — arrived
+        // here silently and the whole output became one fixed line, destroying the
+        // diagnostic that named the cause.
+        options.logger.error(`storage transfer failed: ${error instanceof Error ? error.message : String(error)}`);
+
+        // Rows are deliberately NOT imported after a partial transfer: every path
+        // column would point at an object that is not there yet, which is the
+        // dangling reference the files-first ordering exists to prevent.
+        //
+        // The re-run advice does not promise a checkpoint: a failure before the
+        // first object moved has none to resume from, and the old wording told the
+        // operator to expect one anyway.
+        options.logger.error("no rows were imported — fix the error above and re-run; objects that did transfer are checkpointed and will be skipped");
 
         return undefined;
     }
@@ -647,7 +682,7 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
 
     const streamFailure = await drainIntoBatcher(stream, toRow, batcher, options.logger);
 
-    const { conflicts, errors, inserted, received, warnings } = batcher.totals;
+    const { conflicts, errors, failed: failedShards, inserted, received, warnings } = batcher.totals;
 
     // Parity over an aborted run only restates the abort, so skip it there and
     // let the failure be the verdict.
@@ -659,7 +694,18 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     const insertedTotal = Object.values(inserted).reduce((a, b) => a + b, 0);
     const body = buildImportBody(batcher.totals, storageIdMap, remapReport);
 
-    const failed = streamFailure !== undefined || errors.length > 0 || parityMismatch > 0 || unmigratedFailure || unresolvedPathFailure;
+    // A shard the fan-out never reached leaves an unknown slice of the import
+    // unwritten, and its rows land in neither `inserted` nor `errors`. The
+    // endpoint says so with 207 Multi-Status, whose `Response.ok` is `true` —
+    // so without this the run reported a clean success over missing data.
+    for (const shard of failedShards) {
+        options.logger.error(
+            `import: shard "${shard.shardKey}" was never reached${shard.timedOut ? " (timed out)" : ""} — its rows were NOT written: ${shard.message}`,
+        );
+    }
+
+    const failed =
+        streamFailure !== undefined || errors.length > 0 || failedShards.length > 0 || parityMismatch > 0 || unmigratedFailure || unresolvedPathFailure;
 
     options.logger.info(JSON.stringify(body, undefined, 2));
     reportImportOutcome(options.logger, { conflicts, errorCount: errors.length, failed, insertedTotal, received, warnings });

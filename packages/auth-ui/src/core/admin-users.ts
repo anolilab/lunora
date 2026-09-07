@@ -119,6 +119,14 @@ const createAdminUsersController = (context: ControllerContext, options: AdminUs
     const afterSessionSwap = async (run: () => Promise<boolean>): Promise<void> => {
         if (await run()) {
             context.onSessionChange?.();
+
+            /*
+             * The raw field, not `postAuthDestination`: an admin starting or
+             * leaving an impersonation is not completing a sign-in, and the
+             * admin screen's own `?redirectTo=` belongs to whatever bounced them
+             * there — following it would drop them somewhere unrelated as the
+             * session swaps under them.
+             */
             context.nav.navigate(context.redirects.afterSignIn);
         }
     };

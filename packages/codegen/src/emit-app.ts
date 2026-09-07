@@ -32,8 +32,20 @@ interface EmitAppOptions {
     hasHyperdriveGlobal: boolean;
     /** App uses `@lunora/bindings/images` / `ctx.images` → emit `.images()`. */
     hasImages: boolean;
-    /** App uses `@lunora/bindings/kv` / `ctx.kv` → emit `.kv()`. */
+    /** App uses `@lunora/bindings/kv` / `ctx.kv` → emit `.kv()`. Usage-only, because the method's parameter type reads `ShardConfig["kv"]`, and that config field is emitted on the same usage signal. */
     hasKv: boolean;
+
+    /**
+     * Wire the studio's zero-config KV introspector. Gated on `studioFeatures.kv`
+     * (usage OR a declared `@lunora/bindings` dependency), NOT on {@link EmitAppOptions.hasKv},
+     * so a visible KV tab always has a working backend — never the reverse.
+     *
+     * Kept separate from `hasKv` deliberately: the two were accidentally equal
+     * while the dependency arm in `discover/studio-features.ts` matched a subpath
+     * and could never fire. Fixing that arm made them diverge, and the shared flag
+     * emitted a `.kv()` builder whose `ShardConfig["kv"]` type did not exist.
+     */
+    hasKvIntrospector: boolean;
     /** App declares `lunora/notify.ts` (`@lunora/notify`) → wire `options.notifySubscriptionStore` so the studio Notifications page can read registered devices. */
     hasNotify: boolean;
     /** App uses `@lunora/payment` / `ctx.payments` → emit `.payment()`. */
@@ -46,8 +58,16 @@ interface EmitAppOptions {
     hasScheduler: boolean;
     /** App uses `@lunora/storage` → emit `.storage()` (DO `ctx.storage` + studio file browser). */
     hasStorage: boolean;
-    /** Schema declares vector indexes → emit `.vectors()` (the Vectorize index map backing `ctx.vectors`). */
-    hasVectors: boolean;
+
+    /**
+     * The target platform supports a vector store — the gate's verdict, NOT the
+     * app's declaration, on the same convention `emitServer` and `emitShard`
+     * take it: `.vectors()` is emitted only when this AND
+     * {@link EmitAppOptions.vectorIndexCount} are both set. Defaults to `true` so
+     * a caller that does not gate (tests, fixtures) is unchanged; the index count
+     * alone then decides, as it did before the gate existed.
+     */
+    hasVectors?: boolean;
     /** App declares Cloudflare Workflows (`defineWorkflow`) → wire `options.workflowsClient` so the studio's workflow-instance proxy can reach the CF REST API. */
     hasWorkflow: boolean;
     /** App uses `@lunora/x402/pay` / `ctx.x402` → emit `.x402()` (wire the agent-wallet pay rail). */
@@ -56,8 +76,19 @@ interface EmitAppOptions {
     identity?: IdentityIR;
     /** Schema declares `.jurisdiction("…")` → pin every DO the worker reaches (shards, fan-out, scheduler, containers) to the Cloudflare data-residency jurisdiction. */
     jurisdiction?: JurisdictionIR;
+
+    /**
+     * Every table the schema declares. Emitted as a literal `listSchemaTables`
+     * so export can answer "every table" with a real list: shard discovery is
+     * driven by the table list, so an export naming no tables reaches no shards.
+     * A literal (rather than a read off the imported `schema`) keeps this working
+     * for apps with no `.global()` tables, which never import `schema` at all.
+     */
+    tableNames: ReadonlyArray<string>;
     /** Project depends on the unscoped `lunorash` umbrella → import the runtime via `lunorash/runtime` instead of `@lunora/runtime`. */
     useUmbrella: boolean;
+    /** Number of `.vectorize()` / `defineVectorIndex(...)` indexes the schema declares — the app-side half of {@link EmitAppOptions.hasVectors}. Defaults to `0`. */
+    vectorIndexCount?: number;
 
     /**
      * Voice-enabled agents (`defineAgent({ voice: … })`) → wire
@@ -123,7 +154,26 @@ const buildAccessImports = (hasAccess: boolean, hasAuth: boolean): string[] =>
         : [];
 
 /** KV-browser import — the zero-config env-scanning introspector factory backing `createWorker({ kvIntrospector })`. */
-const buildKvImports = (hasKv: boolean): string[] => (hasKv ? [`import { createKvIntrospectorFromEnv } from "@lunora/bindings/kv";`] : []);
+const buildKvImports = (hasKvIntrospector: boolean): string[] =>
+    hasKvIntrospector ? [`import { createKvIntrospectorFromEnv } from "@lunora/bindings/kv";`] : [];
+
+/**
+ * Vector-browser import — the admin introspector factory backing
+ * `createWorker({ vectorIntrospector })`. Its companion is the generated
+ * `LUNORA_VECTOR_INDEXES` registry (Vectorize cannot enumerate indexes at
+ * runtime, which is why `_generated/vectors.ts` exists at all), imported with
+ * the other relative `_generated` modules below.
+ */
+const buildVectorImports = (hasVectors: boolean): string[] => (hasVectors ? [`import { createVectorAdminIntrospector } from "@lunora/bindings/vectors";`] : []);
+
+/** `@lunora/d1` imports for a D1-backed `.global()` app — the store factory, the admin/introspection helpers, and the retrying exec. */
+const buildGlobalImports = (hasGlobal: boolean): string[] =>
+    hasGlobal
+        ? [
+              `import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";`,
+              `import { applyCdcChanges, createD1CtxDb, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";`,
+          ]
+        : [];
 
 /** `lunora/notify.ts` default-export import — the `defineNotify(...)` config the worker reads its subscription store off (`createWorker({ notifySubscriptionStore })`). */
 const buildNotifyImports = (hasNotify: boolean): string[] => (hasNotify ? [`import notifyConfig from "../notify.js";`] : []);
@@ -151,23 +201,13 @@ const buildInboundImports = (options: EmitAppOptions): string[] =>
 const buildAgentDefinitionsImport = (options: EmitAppOptions): string[] =>
     hasEmailAgents(options) ? [`import * as lunoraAgentDefinitions from "../agents.js";`] : [];
 
-/** Import lines — only what the enabled capabilities need. Add-ons via `@lunora/*`; the runtime via the umbrella subpath when the app depends on `lunora`. */
-const buildImportLines = (options: EmitAppOptions): string[] => {
-    const {
-        hasAccess,
-        hasAuth,
-        hasFramework,
-        hasGlobal,
-        hasHyperdriveGlobal,
-        hasKv,
-        hasQueue,
-        hasScheduler,
-        hasStorage,
-        hasWorkflow,
-        useUmbrella,
-        wantsOpenApi,
-        wantsOpenRpc,
-    } = options;
+/**
+ * The runtime module's own type and value import lines. Which symbols each side
+ * needs is driven entirely by the enabled capabilities, so it is kept next to
+ * the other per-capability builders rather than inline in {@link buildImportLines}.
+ */
+const buildRuntimeImports = (options: EmitAppOptions): string[] => {
+    const { hasFramework, hasGlobal, hasHyperdriveGlobal, hasQueue, useUmbrella } = options;
     const runtimeModule = useUmbrella ? "lunorash/runtime" : "@lunora/runtime";
 
     const runtimeTypeImports = [
@@ -178,15 +218,12 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         "ScheduledControllerLike",
         "ShardNamespaceLike",
         "WorkerOptions",
+        // The queue consumer's fourth argument — the trigger's own trace, forwarded
+        // so a handler's `ctx.run` dispatches join it.
+        ...(hasQueue ? ["TriggerTrace"] : []),
+        ...(hasGlobal ? ["GlobalIntrospector", "AdminTableResolver"] : []),
+        ...(hasFramework ? ["FrameworkHostHandler"] : []),
     ];
-
-    if (hasGlobal) {
-        runtimeTypeImports.push("GlobalIntrospector", "AdminTableResolver");
-    }
-
-    if (hasFramework) {
-        runtimeTypeImports.push("FrameworkHostHandler");
-    }
 
     const runtimeValueImports = [
         ...(hasGlobal || hasHyperdriveGlobal ? ["createCrossShardRelationCapabilities"] : []),
@@ -196,6 +233,27 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
     ].join(", ");
 
     return [
+        `import type { ${[...runtimeTypeImports].toSorted((a, b) => a.localeCompare(b)).join(", ")} } from "${runtimeModule}";`,
+        `import { ${runtimeValueImports} } from "${runtimeModule}";`,
+    ];
+};
+
+/** Import lines — only what the enabled capabilities need. Add-ons via `@lunora/*`; the runtime via the umbrella subpath when the app depends on `lunora`. */
+const buildImportLines = (options: EmitAppOptions): string[] => {
+    const {
+        hasAccess,
+        hasAuth,
+        hasGlobal,
+        hasHyperdriveGlobal,
+        hasKvIntrospector,
+        hasQueue,
+        hasScheduler,
+        hasStorage,
+        hasWorkflow,
+        wantsOpenApi,
+        wantsOpenRpc,
+    } = options;
+    return [
         ...(hasAuth
             ? [
                   `import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";`,
@@ -203,12 +261,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
               ]
             : []),
         ...buildAccessImports(hasAccess, hasAuth),
-        ...(hasGlobal
-            ? [
-                  `import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";`,
-                  `import { applyCdcChanges, createD1CtxDb, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";`,
-              ]
-            : []),
+        ...buildGlobalImports(hasGlobal),
         ...(hasHyperdriveGlobal
             ? [
                   `import type { HyperdriveEngine } from "@lunora/hyperdrive/global";`,
@@ -216,17 +269,20 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
                   `import type { SqlCtxDbOptions, SqlExec } from "@lunora/sql-store";`,
               ]
             : []),
-        ...buildKvImports(hasKv),
+        ...buildKvImports(hasKvIntrospector),
+        ...buildVectorImports(options.hasVectors === true),
         ...(hasScheduler
             ? [`import type { DurableObjectNamespaceLike } from "@lunora/scheduler";`, `import { createScheduler } from "@lunora/scheduler";`]
             : []),
         ...(hasStorage
-            ? [`import type { R2BucketLike, Storage } from "@lunora/storage";`, `import { createBucketStorage, createStorage } from "@lunora/storage";`]
+            ? [
+                  `import type { R2BucketLike, R2S3Credentials, Storage } from "@lunora/storage";`,
+                  `import { createBucketStorage, createStorage } from "@lunora/storage";`,
+              ]
             : []),
         ...(hasWorkflow ? [`import { createWorkflowsRestClient } from "@lunora/workflow";`] : []),
         ...buildInboundImports(options),
-        `import type { ${[...runtimeTypeImports].toSorted((a, b) => a.localeCompare(b)).join(", ")} } from "${runtimeModule}";`,
-        `import { ${runtimeValueImports} } from "${runtimeModule}";`,
+        ...buildRuntimeImports(options),
         ``,
         ...buildIdentityImports(options.identity),
         ...buildAgentDefinitionsImport(options),
@@ -243,6 +299,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         ...(wantsOpenApi ? [`import { openApiSpec } from "./openapi.js";`] : []),
         ...(wantsOpenRpc ? [`import { openRpcSpec } from "./openrpc.js";`] : []),
         `import { createShardDO } from "./shard.js";`,
+        ...(options.hasVectors === true ? [`import { LUNORA_VECTOR_INDEXES } from "./vectors.js";`] : []),
     ];
 };
 
@@ -258,6 +315,8 @@ interface StorageDeclaration<Env> {
     buckets?: Record<string, Selector<Env, R2BucketLike>>;
     /** Public base URL signed/public object URLs resolve against. */
     publicBaseUrl?: Selector<Env, string>;
+    /** R2 S3-API credentials (\`{ accountId, accessKeyId, secretAccessKey, bucket, jurisdiction? }\`) enabling \`ctx.storage.getPresignedUrl\` — native S3 presigned URLs that hit R2 directly, bypassing the worker. Omit to use only the worker-signed \`getSignedUrl\` path. */
+    s3?: Selector<Env, R2S3Credentials>;
     /** HMAC secret for signed URLs. */
     signingSecret?: Selector<Env, string>;
 }`,
@@ -265,12 +324,10 @@ interface StorageDeclaration<Env> {
         : []),
     ...(options.hasScheduler
         ? [
-              `/** \`.scheduler(...)\` declaration — the \`SchedulerDO\` namespace plus the worker origin its callbacks dispatch back to. Backs \`ctx.scheduler\` AND the studio's scheduled-jobs view. */
+              `/** \`.scheduler(...)\` declaration — the \`SchedulerDO\` namespace. Backs \`ctx.scheduler\` AND the studio's scheduled-jobs view. The origin its callbacks dispatch back to is not declared here: the DO reads \`env.LUNORA_ORIGIN_URL\` at fire time, because a caller-supplied dispatch target would be an SSRF vector. */
 interface SchedulerDeclaration<Env> {
     /** The \`SchedulerDO\` namespace binding (typically \`env.SCHEDULER\`). */
     namespace: Selector<Env, DurableObjectNamespaceLike & ShardNamespaceLike>;
-    /** The worker origin the \`SchedulerDO\` dispatches HTTP job callbacks back to. */
-    origin?: Selector<Env, string>;
 }`,
           ]
         : []),
@@ -323,6 +380,10 @@ const buildFieldLines = (options: EmitAppOptions): string[] => [
     `    private adminToken?: Selector<Env, string>;`,
     ...(options.hasAuth ? [`    private authDeclaration?: AuthDeclaration<Env>;`] : []),
     `    private cdcEnabled = false;`,
+    `    private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;`,
+    `    private maxRelationKeysLimit?: ShardConfig["maxRelationKeys"];`,
+    `    private observabilitySink?: ShardConfig["observability"];`,
+    `    private relationExistsPushDownMode?: ShardConfig["relationExistsPushDown"];`,
     `    private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];`,
     ...(options.hasGlobal ? [`    private globalDeclaration?: GlobalDeclaration<Env>;`] : []),
     ...(options.hasHyperdriveGlobal ? [`    private hyperdriveGlobalDeclaration?: HyperdriveGlobalDeclaration<Env>;`] : []),
@@ -372,6 +433,38 @@ const buildMethodBlocks = (options: EmitAppOptions): string[] => [
      */
     public cdc(enabled = true): this {
         this.cdcEnabled = enabled;
+
+        return this;
+    }`,
+    `    /**
+     * Enable the per-shard reactive query cache: query results are memoized by \`(functionPath, args, identity)\` and invalidated by the ctx-db write hooks BEFORE the subscription broadcast, so a subscriber re-running its query always observes the post-write state.
+     *
+     * Off by default (every dispatch re-runs its handler). Pass an options object to tune the caps: \`maxEntries\` (default 1000) and \`maxBytes\` (default 4 MiB); either accepts \`Number.POSITIVE_INFINITY\` to disable that cap.
+     */
+    public reactiveCache(config: boolean | { maxBytes?: number; maxEntries?: number } = true): this {
+        this.reactiveCacheConfig = config;
+
+        return this;
+    }`,
+    `    /** Ceiling on the join keys ONE relation-crossing \`where\` predicate may pre-resolve via semijoin before failing closed. Omit for the engine default. */
+    public maxRelationKeys(limit: NonNullable<ShardConfig["maxRelationKeys"]>): this {
+        this.maxRelationKeysLimit = limit;
+
+        return this;
+    }`,
+    `    /**
+     * Route the shard's \`ctx.log\` lines, \`ctx.trace\` spans and \`ctx.metrics\` measurements to a telemetry sink.
+     *
+     * The DO half of observability: without it every in-handler signal stays in the shard's local ring buffer (the studio Logs panel) and reaches no collector. The worker half — one \`onRpc\` event per dispatched RPC — is a \`createWorker\` option; pass the SAME sink to both via \`.extend((env) => ({ observability: sink(env) }))\` to correlate them.
+     */
+    public observability(selector: NonNullable<ShardConfig["observability"]>): this {
+        this.observabilitySink = selector;
+
+        return this;
+    }`,
+    `    /** Resolution policy for a relation-crossing \`where\` whose child is co-located in this shard: \`"auto"\` (cost-based, the engine default), \`"always"\` (inline correlated EXISTS) or \`"never"\` (universal semijoin). All three return identical rows. */
+    public relationExistsPushDown(mode: NonNullable<ShardConfig["relationExistsPushDown"]>): this {
+        this.relationExistsPushDownMode = mode;
 
         return this;
     }`,
@@ -502,6 +595,19 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
         // is never written, and the `.global()` shape poll's changed-tables fast
         // path is unreachable while looking, from the shard, like CDC-off.
         `            cdc: this.cdcEnabled,`,
+        // Same reason as `cdc` above: nothing else on the builder reaches
+        // `ShardDOConfig`, so without this line `.reactiveCache()` would set a
+        // field the generated shard never reads.
+        `            reactiveCache: this.reactiveCacheConfig,`,
+        // The three DO-side knobs that `ShardDOConfig` declares, the shard reads,
+        // and the docs tell you to pass — but that had no route here. `createShardDO`
+        // is called from this file and nowhere else in a `defineApp()` project, so
+        // `observability` in particular meant every in-handler `ctx.log` / span /
+        // metric stayed in the shard's local ring buffer whatever the app configured.
+        // Spread rather than assigned so an unset knob keeps the shard's own default.
+        `            ...(this.maxRelationKeysLimit === undefined ? {} : { maxRelationKeys: this.maxRelationKeysLimit }),`,
+        `            ...(this.observabilitySink === undefined ? {} : { observability: this.observabilitySink }),`,
+        `            ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),`,
         ...(options.hasGlobal
             ? [
                   `            ...(this.globalDeclaration
@@ -529,6 +635,10 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
                               // poll's changed-tables fast path is unreachable.
                               cdc: request?.cdc ?? false,
                               exec: buildExec(database, request?.bookmark, request?.onBookmark),
+                              // The binding outlives this per-request writer, so the
+                              // provisioning sweep runs once per isolate rather than
+                              // once per request. See \`SqlCtxDbOptions.provisionScope\`.
+                              provisionScope: database,
                               schema: schema as unknown as D1CtxDbOptions["schema"],
                           });
                       },
@@ -542,13 +652,14 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
                 ? {
                       hyperdriveGlobal: (rawEnv: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; userId?: string | null }) => {
                           const env = rawEnv as Env;
-                          const exec = this.hyperdriveGlobalDeclaration?.exec(env) as SqlExec | undefined;
+                          const declaration = this.hyperdriveGlobalDeclaration;
+                          const exec = declaration?.exec(env) as SqlExec | undefined;
 
-                          if (!exec) {
+                          if (!declaration || !exec) {
                               return undefined;
                           }
 
-                          const origin = this.hyperdriveGlobalDeclaration?.origin?.(env);
+                          const origin = declaration.origin?.(env);
                           const crossShard = origin
                               ? createCrossShardRelationCapabilities({ identity: request?.identity, origin, userId: request?.userId ?? undefined })
                               : undefined;
@@ -559,8 +670,14 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
                               auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
                               // See the D1 twin: one \`cdc\` switch, both changelogs.
                               cdc: request?.cdc ?? false,
-                              engine: this.hyperdriveGlobalDeclaration?.engine as HyperdriveEngine,
+                              engine: declaration.engine as HyperdriveEngine,
                               exec,
+                              // The DECLARATION, not \`exec\` — \`exec(env)\` is a user
+                              // callback that builds a fresh client per call, so scoping
+                              // to its result would key the memo on a new object every
+                              // request and never share anything. The declaration is
+                              // built once and names one database.
+                              provisionScope: declaration,
                               schema: schema as unknown as SqlCtxDbOptions["schema"],
                           });
                       },
@@ -588,6 +705,15 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
 
 /** The per-capability blocks of `buildWorkerOptions` (the worker-side fan-out). */
 const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
+    // Export's answer to "every table". Shard discovery unions each named table's
+    // live shard keys, so an export that names none discovers none — which is how
+    // `lunora export` with no `--tables`, and the scheduled backup with
+    // `backupTables` omitted, used to write a file holding only `.global()` rows.
+    // Emitted for every app (a literal, so it needs no `schema` import) and skipped
+    // only for an empty schema, where it would be an empty array anyway.
+    ...(options.tableNames.length > 0
+        ? [`        options.listSchemaTables = () => [${options.tableNames.map((table) => JSON.stringify(table)).join(", ")}];`]
+        : []),
     ...(options.hasScheduler
         ? [
               `        if (this.schedulerDeclaration) {
@@ -617,7 +743,6 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
             const database = this.globalDeclaration.d1(env);
 
             if (database) {
-                options.d1 = database;
                 options.globalIntrospector = buildGlobalIntrospector(database);
                 // \`resolveTableSharding\`/\`importGlobals\` wire the admin bulk-import
                 // endpoint: without the former, EVERY row (including a \`.global()\`
@@ -659,7 +784,39 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
     // entry in wrangler.jsonc appears under its binding name (any name, any count)
     // with no manual `createKvIntrospector` call. A deployment with no KV binding
     // yields an empty namespace list rather than crashing.
-    ...(options.hasKv ? [`        options.kvIntrospector = createKvIntrospectorFromEnv(env);`] : []),
+    ...(options.hasKvIntrospector ? [`        options.kvIntrospector = createKvIntrospectorFromEnv(env);`] : []),
+    // The studio's Vectorize browser, on the SAME flag that emits the `.vectors()`
+    // builder and that `studioFeatures.vectors` gates the nav tab on — so a visible
+    // Vectors tab always has a working backend, never the reverse. Without this the
+    // page and the home-screen "Vectorize Indexes" card both call
+    // `/_lunora/admin/vector/indexes` and get 400 `VECTORS_NOT_CONFIGURED`.
+    //
+    // The index map is the app's OWN `.vectors(...)` selector — the same
+    // `name → binding` mapping the DO uses — rather than a re-scan of `env`, so an
+    // arbitrary binding name resolves to its logical index without guessing.
+    // Embedders live on the schema's `.vectorize()` options and are not reachable
+    // from here, so `queryIndex` is withheld and similarity search reports
+    // `VECTOR_QUERY_UNSUPPORTED`; listing indexes and their live stats works.
+    ...(options.hasVectors === true
+        ? [
+              `        if (this.shardExtras.vectors) {
+            options.vectorIntrospector = createVectorAdminIntrospector({
+                indexes: this.shardExtras.vectors(env as unknown as Record<string, unknown>),
+                registry: LUNORA_VECTOR_INDEXES,
+            });
+        } else {
+            // Emitted only when the schema declares an index, so reaching here
+            // means the app declared one and never bound it. The studio's
+            // Vectors tab is on (its flag is the same index count) and every
+            // request to it would answer VECTORS_NOT_CONFIGURED, while
+            // \`ctx.vectors\` is the throwing stub — so this is already broken,
+            // just later and less legibly. Same shape as \`.auth()\`'s guards.
+            throw new Error(
+                ".vectors(): the schema declares vector index(es) but no binding map was chained. Pass \`.vectors((env) => ({ <indexName>: env.<BINDING> }))\` so \`ctx.vectors\` resolves and the studio's Vectors tab can list them.",
+            );
+        }`,
+          ]
+        : []),
     // The studio's Notifications page reads the app's registered `@lunora/notify`
     // device subscriptions through the SAME store the handlers register into. The
     // store is built from `env` via `lunora/notify.ts`'s `defineNotify({ store })`;
@@ -721,7 +878,37 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
 
                 const session = await auth.api.getSession({ headers: (request as Request).headers });
 
-                return session?.user?.id ? { userId: session.user.id } : null;
+                if (!session?.user?.id) {
+                    return null;
+                }
+
+                // \`role\` rides along so \`rls(policies, { roles })\` and \`auth.can(...)\`
+                // work on this wiring without a hand-written resolver. better-auth's
+                // \`admin()\` plugin owns that column (comma-joined for multiple roles)
+                // and only an administrator can write it; it is absent when the plugin
+                // is off, which reads as no roles.
+                //
+                // \`expiresAtMs\` is the socket credential expiry the runtime forwards
+                // as \`x-lunora-identity-exp\`. Without it the DO's expiry check never
+                // fires, so a signed-out, banned or lapsed user keeps streaming their
+                // RLS-scoped rows over an already-open WebSocket while every HTTP call
+                // is anonymous. better-auth hands back a \`Date\`; anything else means
+                // the adapter did not hydrate it, and omitting beats guessing.
+                const expiresAt = session.session.expiresAt;
+                // \`email\` and \`name\` are the claims \`ctx.auth.getIdentity()\` is
+                // documented to carry ("email, name, roles, custom claims"). Without
+                // them the documented \`me\` query — \`identity?.email\` — resolves
+                // \`undefined\` on the built-in wiring. Empty strings are dropped so an
+                // absent claim reads as absent rather than as "".
+                const user = session.user as { email?: unknown; name?: unknown; role?: unknown };
+
+                return {
+                    ...(typeof user.email === "string" && user.email.length > 0 ? { email: user.email } : {}),
+                    ...(expiresAt instanceof Date ? { expiresAtMs: expiresAt.getTime() } : {}),
+                    ...(typeof user.name === "string" && user.name.length > 0 ? { name: user.name } : {}),
+                    role: user.role,
+                    userId: session.user.id,
+                };
             };
             const authInstance = getAuth();
 
@@ -791,7 +978,7 @@ const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
     // Queues log via the root shard's `recordQueueMessage` admin RPC.
     ...(options.hasQueue
         ? [
-              `            queue: (batch: unknown, queueEnv: unknown, _context: ExecutionContextLike): Promise<void> =>`,
+              `            queue: (batch: unknown, queueEnv: unknown, _context: ExecutionContextLike, trigger: TriggerTrace): Promise<void> =>`,
               `                dispatchQueueBatch(batch as Parameters<typeof dispatchQueueBatch>[0], LUNORA_QUEUE_REGISTRY, {`,
               `                    capture: shouldCaptureQueue(queueEnv as Record<string, unknown>)`,
               `                        ? createQueueCaptureSink(queueEnv as Record<string, unknown>${
@@ -799,6 +986,9 @@ const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
               })`,
               `                        : undefined,`,
               `                    env: queueEnv as Record<string, unknown>,`,
+              // The consumer's `ctx.run` joins the queue invocation's trace instead
+              // of minting a fresh one per dispatched function.
+              `                    traceparent: trigger.traceparent,`,
               `                }),`,
           ]
         : []),
@@ -826,12 +1016,11 @@ const buildSchedulerHelper = (options: EmitAppOptions): string => {
     const jurisdiction = options.jurisdiction ? ` jurisdiction: ${JSON.stringify(options.jurisdiction)},` : "";
 
     return `
-    /** Resolve the \`SchedulerDO\`-backed scheduler for this env; \`undefined\` until both the namespace and origin are wired. */
+    /** Resolve the \`SchedulerDO\`-backed scheduler for this env; \`undefined\` until the namespace is wired. */
     private resolveScheduler(env: Env): ReturnType<typeof createScheduler> | undefined {
         const namespace = this.schedulerDeclaration?.namespace(env);
-        const origin = this.schedulerDeclaration?.origin?.(env);
 
-        return namespace && origin ? createScheduler({${jurisdiction} namespace, originUrl: origin }) : undefined;
+        return namespace ? createScheduler({${jurisdiction} namespace }) : undefined;
     }
 `;
 };
@@ -840,6 +1029,25 @@ const buildSchedulerHelper = (options: EmitAppOptions): string => {
 const buildStorageHelpers = (hasStorage: boolean): string =>
     hasStorage
         ? `
+    /**
+     * One bucket's \`Storage\`, signing under the name it is registered as.
+     *
+     * \`bucketName\` is bound into every signed URL's HMAC canonical, so a bucket
+     * that signs as the default's name lets a URL minted for one bucket verify
+     * against another sharing the secret — and multi-bucket verification fails
+     * outright. Hence \`"default"\` for the bare \`ctx.storage\` bucket and the
+     * \`buckets\` key for every other.
+     */
+    private makeStorage(env: Env, declaration: StorageDeclaration<Env>, bucket: R2BucketLike, bucketName: string): Storage {
+        return createStorage({
+            bucket,
+            bucketName,
+            publicBaseUrl: declaration.publicBaseUrl?.(env),
+            s3: declaration.s3?.(env),
+            signingSecret: declaration.signingSecret?.(env),
+        });
+    }
+
     /** Resolve the storage capability (single or multi-bucket) for the DO side. */
     private resolveStorage(env: Env): Storage | undefined {
         const declaration = this.storageDeclaration;
@@ -854,20 +1062,18 @@ const buildStorageHelpers = (hasStorage: boolean): string =>
             return undefined;
         }
 
-        const make = (bucket: R2BucketLike): Storage =>
-            createStorage({ bucket, publicBaseUrl: declaration.publicBaseUrl?.(env), signingSecret: declaration.signingSecret?.(env) });
         const extraEntries = Object.entries(declaration.buckets ?? {})
             .map(([name, selector]) => [name, selector(env)] as const)
             .filter((entry): entry is [string, R2BucketLike] => Boolean(entry[1]));
 
         if (extraEntries.length === 0) {
-            return make(defaultBucket);
+            return this.makeStorage(env, declaration, defaultBucket, "default");
         }
 
-        const map: Record<string, Storage> = { default: make(defaultBucket) };
+        const map: Record<string, Storage> = { default: this.makeStorage(env, declaration, defaultBucket, "default") };
 
         for (const [name, bucket] of extraEntries) {
-            map[name] = make(bucket);
+            map[name] = this.makeStorage(env, declaration, bucket, name);
         }
 
         return createBucketStorage(map, { default: "default" });
@@ -887,24 +1093,30 @@ const buildStorageHelpers = (hasStorage: boolean): string =>
             return {};
         }
 
-        const make = (bucket: R2BucketLike): Storage =>
-            createStorage({ bucket, publicBaseUrl: declaration.publicBaseUrl?.(env), signingSecret: declaration.signingSecret?.(env) });
         // Held separately from the map so \`pick\`'s fallback is a plain binding:
         // under \`noUncheckedIndexedAccess\` a \`Record<string, Storage>\` lookup —
         // including \`buckets.default\` — widens to \`Storage | undefined\`, which
         // would not satisfy \`pick\`'s declared \`Storage\` return.
-        const fallbackStorage = make(defaultBucket);
+        const fallbackStorage = this.makeStorage(env, declaration, defaultBucket, "default");
         const buckets: Record<string, Storage> = { default: fallbackStorage };
 
         for (const [name, selector] of Object.entries(declaration.buckets ?? {})) {
             const bucket = selector(env);
 
             if (bucket) {
-                buckets[name] = make(bucket);
+                buckets[name] = this.makeStorage(env, declaration, bucket, name);
             }
         }
 
-        const pick = (name?: string): Storage => buckets[name !== undefined && name !== "" ? name : "default"] ?? fallbackStorage;
+        // \`Object.hasOwn\`, not a bare lookup: \`buckets\` is a plain object, so a
+        // prototype key (\`?bucket=constructor\`, \`__proto__\`, \`toString\`) resolves
+        // to an inherited Object.prototype member, \`??\` never engages, and the
+        // caller gets a method-less value instead of the default bucket.
+        const pick = (name?: string): Storage => {
+            const wanted = name !== undefined && name !== "" ? name : "default";
+
+            return (Object.hasOwn(buckets, wanted) ? buckets[wanted] : undefined) ?? fallbackStorage;
+        };
         const hasSigning = Boolean(declaration.publicBaseUrl?.(env) && declaration.signingSecret?.(env));
 
         return {
@@ -932,8 +1144,8 @@ const buildGlobalHelpers = (hasGlobal: boolean): string =>
  * Opens a D1 Sessions API session pinned to \`bookmark\` (the caller's own
  * last-known write, when supplied) so reads observe it — read-your-writes
  * across replicas. \`onBookmark\`, when supplied, is invoked with the bookmark
- * produced by each write so the caller (the generated DO) can record it via
- * \`setOutboundBookmark\` and echo \`x-d1-bookmark\` on the response.
+ * produced by each write so the caller (the generated DO) can record it on the
+ * dispatch's bookmark sink and echo \`x-d1-bookmark\` on the response.
  *
  * Wrapped in \`retryingExec\` so D1's documented baseline of transient failures
  * (storage-object resets, isolate memory evictions, dropped connections) does
@@ -958,6 +1170,19 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
                 .prepare(sql)
                 .bind(...parameters)
                 .all<Record<string, unknown>>();
+
+            // \`all\` carries writes, not just reads: D1 runs
+            // \`UPDATE/DELETE … RETURNING\` through it exactly like \`.run()\`, and
+            // that is precisely what \`@lunora/sql-store\` issues for its
+            // optimistic-concurrency compare-and-swap — so \`patch\`, \`replace\`
+            // and \`delete\` all land here and nowhere else. Without this the
+            // bookmark those writes produced was never reported, and the next
+            // read could pin a replica that has not seen them: read-your-writes
+            // lost on the exact path the bookmark exists for. Reporting it after
+            // a plain \`SELECT\` too is harmless and correct — the session's
+            // bookmark only ever moves forward, and the sink takes the last
+            // value.
+            onBookmark?.(session?.getBookmark() ?? undefined);
 
             return result.results;
         },
@@ -1147,18 +1372,25 @@ const buildExportedTypes = (options: EmitAppOptions): string =>
  * it can import the add-on packages the app installed (`@lunora/auth`,
  * `@lunora/storage`, …) directly.
  */
-const emitApp = (options: EmitAppOptions): string => {
+const emitApp = (rawOptions: EmitAppOptions): string => {
+    // `hasVectors` arrives as the platform gate's VERDICT and is consumed (via
+    // `LONG_TAIL`'s `options[flag]` lookup) as "emit `.vectors()`" — the AND with
+    // the app's own declaration happens once, here, exactly as `emitServer` and
+    // `emitShard` make it against their `schema`. Normalising up front keeps the
+    // three emitters on one convention instead of leaving the conjunction to
+    // whichever call site remembered to make it.
+    const options: EmitAppOptions = { ...rawOptions, hasVectors: (rawOptions.hasVectors ?? true) && (rawOptions.vectorIndexCount ?? 0) > 0 };
     const { hasAuth } = options;
 
     const declarationBlocks = buildDeclarationBlocks(options);
     const workerOptionLines = buildWorkerOptionLines(options);
 
     // The auth lazy-init dance is woven through `build()` and `buildWorkerOptions`.
-    const authState = hasAuth ? `        let auth: LunoraAuth | null = null;\n` : "";
+    const authState = hasAuth ? `        let auth: LunoraAuth | null = null;\n        let authInit: Promise<void> | null = null;\n` : "";
     const ensureAuthBlock = hasAuth
         ? `
-        const ensureAuth = async (env: Env): Promise<void> => {
-            if (!this.authDeclaration || auth) {
+        const initAuth = async (env: Env): Promise<void> => {
+            if (!this.authDeclaration) {
                 return;
             }
 
@@ -1171,11 +1403,30 @@ const emitApp = (options: EmitAppOptions): string => {
                 return;
             }
 
-            auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
             // Apply the better-auth schema lazily on first request (raw-D1 Kysely
             // migrator). For production run the migrate command ahead of deploy.
+            // The migration instance takes the RAW binding: better-auth migrates
+            // only through Kysely and rejects the adapter the request instance uses.
             await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
+            // Assigned after the schema exists, never before. Assigning first is
+            // what let a concurrent request see a non-null \`auth\` and serve
+            // \`/api/auth/*\` against tables the migrator had not created yet —
+            // \`no such table: rateLimit\`, from the isolate that was mid-migration.
+            auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
         };
+
+        // Single-flighted on the PROMISE, not on \`auth\`. Every \`fetch\` awaits this
+        // and the body above is async, so a per-isolate cold start runs it once
+        // rather than once per concurrent request — better-auth's migrator emits a
+        // bare \`CREATE TABLE\` (no IF NOT EXISTS), so a second concurrent run on a
+        // fresh database fails with \`table user already exists\` and, because this is
+        // awaited ahead of the router, 500s every route. Evicted on failure so a
+        // transient error retries instead of being replayed forever.
+        const ensureAuth = (env: Env): Promise<void> =>
+            (authInit ??= initAuth(env).catch((error: unknown) => {
+                authInit = null;
+                throw error;
+            }));
 `
         : "";
     const ensureAuthCall = hasAuth ? `\n                await ensureAuth(env);` : "";
@@ -1228,7 +1479,10 @@ ${emailAgents.map((agent) => `            { agent: lunoraAgentDefinitions.${agen
 
 /** Read a value off the per-request \`env\`. Returns \`undefined\` to leave the capability unconfigured (its \`ctx.*\`/admin surface stays a clear-error stub). */
 type Selector<Env, T> = (env: Env) => T | undefined;
-${hasAnyLongTail(options) ? `\n/** The generated \`createShardDO\` config — the long-tail \`.ai()\` / \`.kv()\` / … methods pass straight through to it. */\ntype ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;\n` : ""}
+
+/** The generated \`createShardDO\` config — \`.observability()\`, \`.maxRelationKeys()\` and the long-tail \`.ai()\` / \`.kv()\` / … methods pass straight through to it. */
+type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
+
 ${declarationBlocks.join("\n\n")}${declarationBlocks.length > 0 ? "\n\n" : ""}/** The composed app: a Cloudflare module worker (\`fetch\` / \`scheduled\` / optional \`email\`) plus the \`ShardDO\` class binding. */
 interface ComposedApp extends LunoraWorker {
     /** Cloudflare Email Routing entry — present only when \`.onEmail(...)\` was configured. */
@@ -1281,7 +1535,13 @@ ${buildWorkerLine}
 
                 return worker.serverQuery(request, rawEnv, reference, args, options);
             },${
-                options.hasQueue
+                // Emitted for a framework-hosted app even with no push queues of its
+                // own: `withFrameworkWorker` hands the FRAMEWORK host's `queue` back
+                // out of the composed worker, and without this key wrangler never sees
+                // it. On workerd a consumer that returns without throwing implicitly
+                // acks, so the host's messages were not merely unprocessed — they were
+                // acked and destroyed.
+                options.hasQueue || options.hasFramework
                     ? `
             queue: async (batch: unknown, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {
                 worker ??= buildWorker(rawEnv as Env);
@@ -1297,7 +1557,23 @@ ${emailAgentsBlock}        if (this.emailHandler) {
 
             composed.email = (message, rawEnv, context) => handler(rawEnv as Env)(message, rawEnv, context);
         }
+${
+    options.hasFramework
+        ? `
+        // A framework host may export its own \`email\` (Nitro's \`cloudflare-module\`
+        // does). Nothing in Lunora serves one, so when the app registered no handler
+        // of its own the host's is the only one there is — forward to it rather than
+        // dropping the entry.
+        if (!composed.email && host && typeof host === "object" && typeof host.email === "function") {
+            composed.email = (message, rawEnv, context) => {
+                worker ??= buildWorker(rawEnv as Env);
 
+                return worker.email?.(message, rawEnv, context) ?? Promise.resolve();
+            };
+        }
+`
+        : ""
+}
         return composed;
     }
 ${buildSchedulerHelper(options)}${buildStorageHelpers(options.hasStorage)}

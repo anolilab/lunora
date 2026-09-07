@@ -57,6 +57,46 @@ const readMaskTag = (middleware: unknown): MaskTag | undefined => {
     return (middleware as Record<PropertyKey, unknown>)[MASK_TAG] as MaskTag | undefined;
 };
 
+/**
+ * Union the masked table→column NAMES carried by a chain of middlewares.
+ *
+ * The single owner of that union: the builder hoists it onto the registered
+ * function as `fn.maskedTables` (so the local-first shape path can ask "is
+ * column X of table Y masked" without re-running the chain), and the middleware
+ * composer re-stamps it onto the one arrow it folds N middlewares into (so a
+ * `mask()` reached through `protectPublic` / a plugin is not silently dropped).
+ *
+ * Unlike RLS's tags — which must stay grouped per middleware so a policy's
+ * `auth.can(...)` resolves against its OWN middleware's role map — a mask tag
+ * carries only column names, no role-scoped decision, so every step's columns
+ * flatten safely into one set per table. Returns `undefined` when no `mask()`
+ * middleware is present, so a non-masking function carries no `maskedTables`
+ * key and a tag-free composition stays untagged.
+ */
+const unionMaskColumns = (middlewares: Iterable<unknown>): ReadonlyMap<string, ReadonlySet<string>> | undefined => {
+    const columns = new Map<string, Set<string>>();
+
+    for (const middleware of middlewares) {
+        const tag = readMaskTag(middleware);
+
+        if (!tag) {
+            continue;
+        }
+
+        for (const [table, tableColumns] of tag.columns) {
+            const set = columns.get(table) ?? new Set<string>();
+
+            for (const column of tableColumns) {
+                set.add(column);
+            }
+
+            columns.set(table, set);
+        }
+    }
+
+    return columns.size > 0 ? columns : undefined;
+};
+
 /** A registered function that may carry the `.use(mask(...))` columns hoisted by the builder (`fn.maskedTables`). */
 interface FunctionWithMaskedTables {
     readonly maskedTables?: ReadonlyMap<string, ReadonlySet<string>>;
@@ -98,4 +138,4 @@ const buildMaskRegistry = (functions: Iterable<unknown>): MaskRegistry => {
 };
 
 export type { MaskRegistry, MaskTag };
-export { buildMaskRegistry, readMaskTag, tagMaskMiddleware };
+export { buildMaskRegistry, readMaskTag, tagMaskMiddleware, unionMaskColumns };

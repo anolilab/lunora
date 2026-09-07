@@ -119,6 +119,11 @@ interface AuthAdmin {
         permission: Record<string, string[]>;
         role: string;
     }) => Promise<Record<string, unknown>>;
+    createSignUpInvitation?: (input: {
+        email: string;
+        expiresInSeconds?: number;
+        invitedBy?: string;
+    }) => Promise<Record<string, unknown>>;
     createTeam?: (input: {
         name: string;
         organizationId: string;
@@ -181,6 +186,10 @@ interface AuthAdmin {
         offset?: number;
         userId?: string;
     }) => Promise<AuthPage<AuthSession>>;
+    listSignUpInvitations?: (options: {
+        limit?: number;
+        offset?: number;
+    }) => Promise<AuthPage<Record<string, unknown>>>;
     listTeamMembers?: (options: {
         limit?: number;
         offset?: number;
@@ -203,6 +212,9 @@ interface AuthAdmin {
     }) => Promise<void>;
     removeUser?: (input: {
         userId: string;
+    }) => Promise<void>;
+    revokeSignUpInvitation?: (input: {
+        email: string;
     }) => Promise<void>;
     revokeUserSession?: (input: {
         sessionId: string;
@@ -257,6 +269,7 @@ interface AuthAdmin {
 interface AuthCapabilities {
     accounts: boolean;
     admin: boolean;
+    inviteOnly: boolean;
     organization: boolean;
     passkey: boolean;
     twoFactor: boolean;
@@ -549,12 +562,6 @@ interface CsrfOptions {
 const DEFAULT_LOG_COLUMNS: Readonly<Record<PipelineLogField, string>>;
 ```
 
-### `DEFAULT_LOG_LIMIT` (const)
-
-```ts
-const DEFAULT_LOG_LIMIT: number;
-```
-
 ### `DEFAULT_REGISTRY_CACHE_TTL_MS` (const)
 
 ```ts
@@ -643,6 +650,7 @@ interface ExportCursorStore {
 ```ts
 interface ExportFanOutRequest {
     args?: Record<string, unknown>;
+    defaultShardKey: DefaultShardKey;
     headers?: Record<string, string>;
     tables: ReadonlyArray<string>;
 }
@@ -739,9 +747,7 @@ interface FivetranResponse {
 ### `FrameworkHostHandler` (type)
 
 ```ts
-type FrameworkHostHandler = ((request: Request, env?: unknown, context?: ExecutionContextLike) => Promise<Response> | Response) | (HttpRouterLike & {
-    scheduled?: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
-});
+type FrameworkHostHandler = ((request: Request, env?: unknown, context?: ExecutionContextLike) => Promise<Response> | Response) | (HttpRouterLike & Partial<FrameworkTriggers>);
 ```
 
 ### `FrameworkWorkerOptions` (type)
@@ -955,11 +961,13 @@ interface HttpActionContext {
         }) => Promise<unknown>;
     };
     fetch: typeof globalThis.fetch;
+    forShard: (shardKey: string) => Pick<HttpActionContext, "runAction" | "runMutation" | "runQuery">;
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     scheduler?: SchedulerContext;
     storage?: unknown;
+    waitUntil?: (promise: Promise<unknown>) => void;
 }
 ```
 
@@ -1204,6 +1212,7 @@ type LunoraHandlerOptions = ((env: unknown) => FrameworkWorkerOptions) | Partial
 
 ```ts
 interface LunoraWorker {
+    email?: (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>;
     fetch: (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response>;
     queue?: (batch: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>;
     scheduled: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void>;
@@ -1277,6 +1286,7 @@ type MetricKind = "counter" | "gauge" | "histogram";
 ```ts
 interface MigrationFanOutRequest {
     args?: Record<string, unknown>;
+    defaultShardKey: DefaultShardKey;
     functionPath: string;
     headers?: Record<string, string>;
     table: string;
@@ -1403,6 +1413,7 @@ interface OtlpSinkOptions extends OnlyErrorsOption {
     endpoint: string;
     headers?: Record<string, string>;
     postProcessor?: OtlpPostProcessor;
+    redactLogs?: boolean;
     resourceAttributes?: OtlpResourceAttributes;
     serviceName?: string;
     serviceNamespace?: string;
@@ -1623,6 +1634,7 @@ interface RateLimiterLike {
         key?: string;
     }) => Promise<{
         ok: boolean;
+        reason?: string;
         retryAfter: number;
     }>;
 }
@@ -1732,6 +1744,7 @@ interface RpcEnvelope {
 interface RunExportTapOptions {
     coordinator: QueryCoordinator;
     cursorStore: ExportCursorStore;
+    defaultShardKey: string | null;
     headers?: Record<string, string>;
     initialBackoffMs?: number;
     limit?: number;
@@ -1866,6 +1879,7 @@ interface ShardClientOptions {
 
 ```ts
 interface ShardError {
+    code: string;
     message: string;
     shardKey: string;
     timedOut: boolean;
@@ -2108,6 +2122,14 @@ interface TraceSamplingConfig {
 type TraceTrustSignal = "mtls";
 ```
 
+### `TriggerTrace` (interface)
+
+```ts
+interface TriggerTrace {
+    traceparent: string;
+}
+```
+
 ### `TrustInboundTraceContext` (type)
 
 ```ts
@@ -2192,7 +2214,6 @@ interface WorkerOptions {
     backupTables?: ReadonlyArray<string>;
     cronJobs?: Record<string, ReadonlyArray<CronJobDispatch>>;
     crons?: Record<string, CronHandler>;
-    d1?: unknown;
     defaultShardKey?: string;
     exportCursorStore?: ExportCursorStore;
     exportGlobals?: GlobalExportFunction;
@@ -2205,6 +2226,7 @@ interface WorkerOptions {
     importGlobals?: GlobalImportFunction;
     jurisdiction?: DurableObjectJurisdiction;
     kvIntrospector?: KvIntrospector;
+    listSchemaTables?: () => ReadonlyArray<string>;
     logArchive?: LogArchiveConfig;
     notifySubscriptionStore?: NotifySubscriptionStoreLike;
     observability?: ObservabilitySink;
@@ -2234,6 +2256,7 @@ interface WorkerOptions {
     storageSignedUrl?: StorageSignedUrlFunction;
     storageUpload?: StorageUploadFunction;
     syncGlobals?: GlobalCdcSyncFunction;
+    trustedClientIpHeader?: string;
     trustInboundTraceContext?: TrustInboundTraceContext;
     vectorIntrospector?: VectorIntrospector;
     voiceAgents?: Record<string, ShardNamespaceLike>;
@@ -2372,6 +2395,7 @@ const createQueryCoordinator: (options: QueryCoordinatorOptions) => QueryCoordin
 const createRestRateLimit: (limiter: RateLimiterLike, options: {
     key?: (request: Request, functionPath: string) => string | undefined;
     name: string;
+    trustedClientIpHeader?: string;
 }) => RestRateLimit;
 ```
 
@@ -2475,22 +2499,6 @@ const memoizeIdentity: (resolver: IdentityResolver, options?: MemoizeIdentityOpt
 const memoizeIdentityPerRequest: (resolver: IdentityResolver) => IdentityResolver;
 ```
 
-### `mergeStrategyForAggregate` (const)
-
-```ts
-const mergeStrategyForAggregate: (input: {
-    agg?: {
-        op?: "avg" | "count" | "max" | "min" | "sum";
-    };
-    kind: "groupBy";
-} | {
-    kind: "count";
-} | {
-    kind: "scalar";
-    op: "avg" | "count" | "max" | "min" | "sum";
-}) => MergeStrategy;
-```
-
 ### `normalizeBackupPrefix` (const)
 
 ```ts
@@ -2523,12 +2531,6 @@ const r2Sink: (config: {
     name: string;
     prefix?: string;
 }) => ExportSink;
-```
-
-### `readShardKey` (const)
-
-```ts
-const readShardKey: (url: URL, request: Request) => string | undefined;
 ```
 
 ### `requestCarriesCredentials` (const)

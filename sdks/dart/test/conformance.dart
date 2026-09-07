@@ -40,13 +40,15 @@ Future<void> main() async {
   await run(caseWireCodecRoundTrip);
   await run(caseUndefinedIsDistinctFromNull);
   await run(caseOverLongBigIntRejected);
-  await run(caseMalformedBytesRejected);
+  await run(caseMalformedValuesRejected);
   await run(caseDepthCapEnforced);
+  await run(caseExactIntegerRangeEnforced);
   await run(caseStableWireKeyFixtures);
   await run(caseFormatNumberMatchesEcmaScript);
   await run(caseKeyOrderMatchesUtf16);
   await run(caseStringEscapingMatchesJsonStringify);
   await run(caseErrorCauseRoundTrips);
+  await run(caseEmptyShardKeyIsOmitted);
   await run(caseRpcRequestBodies);
   await run(caseRpcResponses);
   await run(caseNon2xxWithoutErrorEnvelopeFails);
@@ -54,6 +56,8 @@ Future<void> main() async {
   await run(caseServerFrameConsumer);
   await run(caseSubscriptionStreamYieldsFrameValuesInOrder);
   await run(caseShapeSubscribeFrame);
+  await run(caseShapeSubscriptionsResendAfterReconnect);
+  await run(caseRefusedPayloadReachesTheSubscriptionNotTheReadLoop);
   await run(casePokeSequenceMaterialisesRows);
   await run(casePokePartsDoNotApplyBeforePokeEnd);
   await run(caseResetPokeReplacesTheView);
@@ -82,6 +86,7 @@ Future<void> main() async {
   await run(caseGoldenOfflineQueueFifo);
   await run(caseGoldenOfflineQueueShardDrain);
   await run(caseGoldenOfflineFlushBatchesMultipleWrites);
+  await run(caseGoldenBatchEntryCapMatchesProtocol);
   await run(caseGoldenOfflineQueueRequeue);
   await run(caseGoldenOfflineQueueClear);
   await run(caseGoldenOfflineQueueOverflow);
@@ -91,6 +96,12 @@ Future<void> main() async {
   await run(caseGoldenOfflineQueueIdentityGate);
   await run(caseGoldenOfflineFlushReplay);
   await run(caseGoldenOfflineFlushUnencodableWrite);
+  await run(caseTypedArgsSurviveASerialisingStore);
+  await run(caseUndecodableRecordSettlesRejected);
+  await run(caseBatchSplitsOnPayloadTooLarge);
+  await run(caseLoneQueuedWriteSurvivesAnEnvelopeLess502);
+  await run(caseRateLimitedReplayRequeuesAndDefers);
+  await run(caseRateLimitedBatchSlotIsTransient);
 
   await run(caseOptimisticLayerRebasesOntoAServerFrame);
   await run(caseOptimisticLayerDropsOnItsCommitCursor);

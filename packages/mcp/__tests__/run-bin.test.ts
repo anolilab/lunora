@@ -42,19 +42,40 @@ describe("runBin", () => {
 
         await runBin({ LUNORA_ADMIN_TOKEN: "admin-token", LUNORA_URL: "https://example.workers.dev" }, { connect, writeError });
 
-        expect(connect).toHaveBeenCalledWith({ agents: [], allowAgents: false, allowWrites: false, token: "admin-token", url: "https://example.workers.dev" });
+        expect(connect).toHaveBeenCalledWith({
+            agents: [],
+            allowAgents: false,
+            allowObservability: false,
+            allowWrites: false,
+            token: "admin-token",
+            url: "https://example.workers.dev",
+        });
     });
 
-    it("passes an undefined token through when LUNORA_ADMIN_TOKEN is unset", async () => {
+    // Every tool reaches admin-gated `/_lunora/admin/*` routes, so a tokenless
+    // server has no working surface at all — it used to start happily and 403 on
+    // the first tool call instead.
+    it("refuses to start when LUNORA_ADMIN_TOKEN is unset", async () => {
+        expect.assertions(3);
+
+        const connect = vi.fn<Connect>(async () => undefined);
+        const writeError = vi.fn<WriteError>();
+
+        await expect(runBin({ LUNORA_URL: "https://example.workers.dev" }, { connect, writeError })).rejects.toBeInstanceOf(BinError);
+
+        expect(connect).not.toHaveBeenCalled();
+        expect(writeError).toHaveBeenCalledWith("lunora-mcp: LUNORA_ADMIN_TOKEN environment variable is required (every tool reads admin-gated routes)\n");
+    });
+
+    it("treats an empty-string LUNORA_ADMIN_TOKEN as missing", async () => {
         expect.assertions(2);
 
         const connect = vi.fn<Connect>(async () => undefined);
         const writeError = vi.fn<WriteError>();
 
-        await runBin({ LUNORA_URL: "https://example.workers.dev" }, { connect, writeError });
+        await expect(runBin({ LUNORA_ADMIN_TOKEN: "", LUNORA_URL: "https://example.workers.dev" }, { connect, writeError })).rejects.toBeInstanceOf(BinError);
 
-        expect(connect).toHaveBeenCalledWith({ agents: [], allowAgents: false, allowWrites: false, token: undefined, url: "https://example.workers.dev" });
-        expect(writeError).not.toHaveBeenCalled();
+        expect(connect).not.toHaveBeenCalled();
     });
 
     it("enables writes only when LUNORA_MCP_ALLOW_WRITES is truthy", async () => {
@@ -63,9 +84,43 @@ describe("runBin", () => {
         const connect = vi.fn<Connect>(async () => undefined);
         const writeError = vi.fn<WriteError>();
 
-        await runBin({ LUNORA_MCP_ALLOW_WRITES: "true", LUNORA_URL: "https://example.workers.dev" }, { connect, writeError });
+        await runBin(
+            { LUNORA_ADMIN_TOKEN: "admin-token", LUNORA_MCP_ALLOW_WRITES: "true", LUNORA_URL: "https://example.workers.dev" },
+            { connect, writeError },
+        );
 
-        expect(connect).toHaveBeenCalledWith({ agents: [], allowAgents: false, allowWrites: true, token: undefined, url: "https://example.workers.dev" });
+        expect(connect).toHaveBeenCalledWith({
+            agents: [],
+            allowAgents: false,
+            allowObservability: false,
+            allowWrites: true,
+            token: "admin-token",
+            url: "https://example.workers.dev",
+        });
+    });
+
+    // The five `lunora_get_*` reads ship production log lines and grouped error
+    // messages to the model provider, so holding the admin bearer (which every
+    // tool needs) must not be what turns them on.
+    it("exposes the observability tools only when LUNORA_MCP_ALLOW_OBSERVABILITY is truthy", async () => {
+        expect.assertions(1);
+
+        const connect = vi.fn<Connect>(async () => undefined);
+        const writeError = vi.fn<WriteError>();
+
+        await runBin(
+            { LUNORA_ADMIN_TOKEN: "admin-token", LUNORA_MCP_ALLOW_OBSERVABILITY: "1", LUNORA_URL: "https://example.workers.dev" },
+            { connect, writeError },
+        );
+
+        expect(connect).toHaveBeenCalledWith({
+            agents: [],
+            allowAgents: false,
+            allowObservability: true,
+            allowWrites: false,
+            token: "admin-token",
+            url: "https://example.workers.dev",
+        });
     });
 
     it("exposes agent tools when LUNORA_MCP_ALLOW_AGENTS is truthy and LUNORA_MCP_AGENTS is set", async () => {
@@ -76,6 +131,7 @@ describe("runBin", () => {
 
         await runBin(
             {
+                LUNORA_ADMIN_TOKEN: "admin-token",
                 LUNORA_MCP_AGENT_TIMEOUT_MS: "30000",
                 LUNORA_MCP_AGENTS: "support:Support questions;billing:Billing help",
                 LUNORA_MCP_ALLOW_AGENTS: "1",
@@ -91,8 +147,9 @@ describe("runBin", () => {
                 { description: "Billing help", name: "billing" },
             ],
             allowAgents: true,
+            allowObservability: false,
             allowWrites: false,
-            token: undefined,
+            token: "admin-token",
             url: "https://example.workers.dev",
         });
     });
@@ -105,7 +162,7 @@ describe("runBin", () => {
         });
         const writeError = vi.fn<WriteError>();
 
-        await expect(runBin({ LUNORA_URL: "https://example.workers.dev" }, { connect, writeError })).rejects.toMatchObject({
+        await expect(runBin({ LUNORA_ADMIN_TOKEN: "admin-token", LUNORA_URL: "https://example.workers.dev" }, { connect, writeError })).rejects.toMatchObject({
             code: 1,
         });
 
@@ -123,7 +180,7 @@ describe("runBin", () => {
         });
         const writeError = vi.fn<WriteError>();
 
-        await runBin({ LUNORA_URL: "https://example.workers.dev" }, { connect, writeError }).catch(() => undefined);
+        await runBin({ LUNORA_ADMIN_TOKEN: "admin-token", LUNORA_URL: "https://example.workers.dev" }, { connect, writeError }).catch(() => undefined);
 
         expect(writeError).toHaveBeenCalledWith("lunora-mcp: failed to start — kaboom\n");
     });

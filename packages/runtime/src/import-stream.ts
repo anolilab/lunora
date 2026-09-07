@@ -224,11 +224,36 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
     return { errors, globalRows, perShard, received };
 };
 
+/**
+ * A shard the import fan-out could not write to at all (timed out, or the shard
+ * RPC errored). Distinct from an {@link ImportRowError}: no line of the source
+ * NDJSON is at fault, and an unknown number of that shard's rows are simply not
+ * in the database.
+ */
+interface ImportShardFailure {
+    message: string;
+    shardKey: string;
+    timedOut: boolean;
+}
+
 interface ImportTotals {
     conflicts: number;
     errors: ImportRowError[];
+    failed: ImportShardFailure[];
     inserted: Record<string, number>;
 }
+
+/**
+ * The shards that did not complete, as reported by `rollUpImport`.
+ *
+ * A dead shard is recorded ONLY in `failed` / `shards[].error` — it contributes
+ * nothing to `errors`, `inserted` or `conflicts`, which is exactly why folding
+ * only those three made a 3-shard import that lost one shard to
+ * `perShardTimeoutMs` answer `200 { errors: [], conflicts: 0 }` with a third of
+ * the dataset missing: structurally indistinguishable from a clean run.
+ */
+const shardFailures = (shards: ReadonlyArray<{ error?: { message: string; timedOut: boolean }; shardKey: string }>): ImportShardFailure[] =>
+    shards.flatMap((shard) => (shard.error ? [{ message: shard.error.message, shardKey: shard.shardKey, timedOut: shard.error.timedOut }] : []));
 
 /**
  * Fold a per-plane insert result (`{ inserted, errors, conflicts }`) into the
@@ -266,6 +291,7 @@ const streamingImport = async (
 ): Promise<{
     conflicts: number;
     errors: ImportRowError[];
+    failed: ImportShardFailure[];
     inserted: Record<string, number>;
     received: number;
     warnings?: string[];
@@ -274,7 +300,7 @@ const streamingImport = async (
 
     const { errors, globalRows, perShard, received } = await bucketImportStream(request, options, defaultShard);
 
-    const totals: ImportTotals = { conflicts: 0, errors, inserted: {} };
+    const totals: ImportTotals = { conflicts: 0, errors, failed: [], inserted: {} };
     const warnings: string[] = [];
 
     // A worker with no `resolveTableSharding` cannot tell a `.global()` table
@@ -311,6 +337,7 @@ const streamingImport = async (
         });
 
         mergeImportResult(totals, result);
+        totals.failed.push(...shardFailures(result.shards));
     }
 
     // Run global imports through the user-supplied helper.
@@ -344,9 +371,14 @@ const streamingImport = async (
     // write was indistinguishable from one that had nothing to do, and a
     // migration script could report "imported 4.2M rows" against an empty
     // database. A caller compares `received` against the inserted total.
+    //
+    // `failed` is the other half of that honesty: a non-empty array means an
+    // unknown slice of the batch never reached storage, so `inserted` is a floor
+    // rather than a result. The endpoint answers 207 in that case.
     return {
         conflicts: totals.conflicts,
         errors: totals.errors,
+        failed: totals.failed,
         inserted: totals.inserted,
         received,
         ...(warnings.length > 0 ? { warnings } : {}),

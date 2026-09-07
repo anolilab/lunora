@@ -9,16 +9,30 @@ the shared list that keeps the suites aligned.
 
 from __future__ import annotations
 
+import http.server
 import json
 import os
 import sys
+import threading
 import unittest
 from typing import ClassVar
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lunora.client import LunoraClient, LunoraError, parse_rpc_response
-from lunora.wire import MAX_BIGINT_DIGITS, MAX_DEPTH, TAG, UNDEFINED, decode_wire, encode_wire, stable_stringify
+from lunora.client import LunoraClient, LunoraError, _urllib_post, parse_rpc_response
+from lunora.wire import (
+    MAX_BIGINT_DIGITS,
+    MAX_DEPTH,
+    MAX_EXACT_INTEGER,
+    TAG,
+    UNDEFINED,
+    WireBigInt,
+    WireFormatError,
+    decode_wire,
+    encode_wire,
+    stable_stringify,
+)
+from tests._fixtures import load
 from tests._manifest import covers
 
 
@@ -35,16 +49,68 @@ class TestDecodeBounds(unittest.TestCase):
 
         self.assertEqual(decode_wire([TAG, "bigint", "-42"]).value, -42)
 
-    def test_malformed_bytes_rejected(self):
-        covers("malformed_bytes_rejected")
+    def test_malformed_values_rejected(self):
+        covers("malformed_values_rejected")
 
-        # Lenient base64 discards characters outside the alphabet instead of
-        # raising — a corrupted bytes payload silently became different, wrong
-        # data instead of a loud failure.
-        with self.assertRaises(ValueError):
-            decode_wire([TAG, "bytes", "not@@base64!!"])
+        # The list is data (protocol/fixtures/wire-codec.json), not a per-suite
+        # invention: a rejection each port hard-codes for itself is a rejection
+        # only some ports have, which is how one of them ended up accepting a
+        # truncated base64 payload as valid short bytes.
+        for case in load("wire-codec.json")["rejected"]:
+            # WireFormatError, not a bare ValueError/IndexError: a caller
+            # catching the codec's own type has to catch all of them.
+            with self.subTest(case=case["name"]), self.assertRaises(WireFormatError):
+                decode_wire(case["encoded"])
 
         self.assertEqual(decode_wire([TAG, "bytes", "AQID"]), b"\x01\x02\x03")
+
+        # A bare [TAG] is NOT malformed: it is the forward-compat shape, and the
+        # reference hands it back as an ordinary array rather than indexing past
+        # the end of it.
+        self.assertEqual(decode_wire([TAG]), [TAG])
+
+        # And the rejection has to REACH the subscription that owns the frame.
+        # `handle_frame` catches WireFormatError only, so every stdlib exception
+        # the codec used to leak — IndexError off a short tagged array, TypeError
+        # off a null props slot, ValueError off a non-ASCII digit string — escaped
+        # it and ended the socket read loop, taking every OTHER subscription on
+        # the client down with it. Driving the whole list through the client is
+        # what holds the codec to raising only its own type.
+        for case in load("wire-codec.json")["rejected"]:
+            with self.subTest(case=case["name"]):
+                client = LunoraClient("https://app.example")
+                client.attach_socket(lambda _frame: None)
+
+                seen: list = []
+                errors: list = []
+                client.subscribe("messages:list", None, seen.append, errors.append)
+
+                descriptor = client.handle_frame({"data": case["encoded"], "id": "sub_1", "type": "data"})
+
+                self.assertEqual(descriptor["kind"], "error", "handle_frame must return rather than throw")
+                self.assertEqual(seen, [], "a malformed value must not reach on_data")
+                self.assertEqual(len(errors), 1, "a malformed value must surface via on_error")
+
+    def test_exact_integer_range_enforced(self):
+        covers("exact_integer_range_enforced")
+
+        # Python's int is arbitrary-precision and a JSON number is not, so an
+        # integer past 2**53-1 passed through here was rounded by the server's
+        # own JSON.parse — a different integer arrived and neither end could
+        # tell. WireBigInt is the way across.
+        self.assertEqual(encode_wire(MAX_EXACT_INTEGER), MAX_EXACT_INTEGER)
+        self.assertEqual(encode_wire(-MAX_EXACT_INTEGER), -MAX_EXACT_INTEGER)
+
+        with self.assertRaises(WireFormatError):
+            encode_wire(MAX_EXACT_INTEGER + 1)
+
+        with self.assertRaises(WireFormatError):
+            encode_wire(-MAX_EXACT_INTEGER - 1)
+
+        self.assertEqual(
+            encode_wire(WireBigInt(MAX_EXACT_INTEGER + 1)),
+            [TAG, "bigint", str(MAX_EXACT_INTEGER + 1)],
+        )
 
     def test_depth_cap_enforced(self):
         covers("depth_cap_enforced")
@@ -91,6 +157,12 @@ class TestEcmaScriptSpellings(unittest.TestCase):
         (1e-21, "1e-21"),
         (1e20, "100000000000000000000"),
         (1e21, "1e+21"),
+        # An integral double past 2**53: ECMAScript prints the shortest
+        # round-tripping digits and zero-pads, so this is NOT the exact
+        # expansion 1152921504606846976 that an int conversion yields.
+        (2.0**60, "1152921504606847000"),
+        # Negative zero keeps its sign; every integer conversion drops it.
+        (-0.0, "-0"),
     ]
 
     def test_format_number_matches_ecmascript(self):
@@ -126,6 +198,112 @@ class TestTransportErrors(unittest.TestCase):
             parse_rpc_response({"message": "bad gateway"}, 502)
 
         self.assertEqual(caught.exception.code, "INTERNAL")
+
+    def test_redirect_does_not_replay_the_bearer_token(self):
+        """A 3xx must not hand the caller's credentials to the redirect target.
+
+        ``urllib``'s default redirect handler copies every header but
+        ``content-*`` onto the new request and follows it to any host, so a
+        challenge page or an open redirect walked off with the bearer token.
+        The reference client's ``fetch`` drops it cross-origin; this poster
+        refuses the redirect outright.
+        """
+
+        received: list[dict] = []
+
+        class Target(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # BaseHTTPRequestHandler's own naming
+                received.append(dict(self.headers))
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"result":null}')
+
+            do_POST = do_GET  # noqa: N815 - BaseHTTPRequestHandler dispatches on the verb
+
+            def log_message(self, *_args):
+                pass
+
+        target = http.server.HTTPServer(("127.0.0.1", 0), Target)
+        redirect_to = f"http://127.0.0.1:{target.server_address[1]}/stolen"
+
+        class Redirector(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # BaseHTTPRequestHandler's own naming
+                self.send_response(302)
+                self.send_header("location", redirect_to)
+                self.end_headers()
+
+            def log_message(self, *_args):
+                pass
+
+        origin = http.server.HTTPServer(("127.0.0.1", 0), Redirector)
+
+        for server in (target, origin):
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+
+        status, parsed = _urllib_post(
+            f"http://127.0.0.1:{origin.server_address[1]}/lunora/rpc",
+            {"authorization": "Bearer s3cret", "content-type": "application/json"},
+            b"{}",
+        )
+
+        self.assertEqual(received, [], "the redirect target must never be contacted")
+        self.assertEqual(status, 302, "a refused redirect surfaces as the non-2xx it is")
+
+        with self.assertRaises(LunoraError) as caught:
+            parse_rpc_response(parsed, status)
+
+        # Nothing reached the shard, so this is transport, not a verdict. A
+        # synthesized ``INTERNAL`` envelope here settles the offline queue
+        # TERMINALLY (``INTERNAL`` is in neither ``TRANSIENT_ERROR_CODES`` nor
+        # ``RATE_LIMIT_ERROR_CODES``), so a load balancer or captive portal
+        # would DROP a queued durable write.
+        self.assertTrue(caught.exception.transient, "a refused redirect must re-queue, not drop, a durable write")
+
+    def test_undecodable_error_body_stays_transport_not_a_verdict(self):
+        """A WAF/proxy HTML error page is not the shard's answer to the call.
+
+        Synthesizing an envelope for it makes it a coded verdict, and
+        ``INTERNAL`` is in neither of ``submit``'s replayable sets — so a queued
+        write is settled terminally against a body no Lunora function wrote.
+        """
+
+        class Blocker(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # BaseHTTPRequestHandler's own naming
+                body = b"<html><body>403 Forbidden</body></html>"
+
+                self.send_response(403)
+                self.send_header("content-type", "text/html")
+                self.send_header("content-length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                pass
+
+        origin = http.server.HTTPServer(("127.0.0.1", 0), Blocker)
+        thread = threading.Thread(target=origin.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(origin.server_close)
+        self.addCleanup(origin.shutdown)
+
+        status, parsed = _urllib_post(
+            f"http://127.0.0.1:{origin.server_address[1]}/lunora/rpc",
+            {"content-type": "application/json"},
+            b"{}",
+        )
+
+        self.assertEqual(status, 403)
+        self.assertEqual(parsed, {}, "an unreadable body carries no envelope — say so rather than inventing one")
+
+        with self.assertRaises(LunoraError) as caught:
+            parse_rpc_response(parsed, status)
+
+        self.assertEqual(caught.exception.code, "INTERNAL")
+        self.assertTrue(caught.exception.transient, "a body that never came from a Lunora function must re-queue the write")
 
 
 class TestPokeAtomicity(unittest.TestCase):

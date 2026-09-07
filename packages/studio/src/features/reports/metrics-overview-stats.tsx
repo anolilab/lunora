@@ -33,6 +33,11 @@ const MetricsOverviewStats = ({
 }): ReactElement => {
     const t = useT();
 
+    // Truthy, not `=== null`: a shard that sends no `cache` key at all reads as
+    // `undefined`, and `undefined === null` is false — the "present" branch then
+    // dereferenced nothing and threw.
+    const { cache } = metrics;
+
     return (
         <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" data-testid="mt-stats">
             <StatCard
@@ -76,7 +81,7 @@ const MetricsOverviewStats = ({
                 value={latencyPercentiles.p95 > 0 ? formatLatency(latencyPercentiles.p95) : "—"}
             />
             <StatCard
-                footer={metrics.cache === null ? undefined : `${metrics.cache.entries.toLocaleString()} ${t("cache entries")}`}
+                footer={cache ? `${cache.entries.toLocaleString()} ${t("cache entries")}` : undefined}
                 label={t("Database size")}
                 testId="mt-db-size"
                 value={formatBytes(metrics.databaseSize)}
@@ -86,11 +91,7 @@ const MetricsOverviewStats = ({
             <StatCard
                 label={t("Cache hit rate")}
                 testId="mt-cache"
-                value={
-                    metrics.cache === null
-                        ? t("no cache configured")
-                        : t("{rate} ({count} entries)", { count: metrics.cache.entries, rate: hitRate(metrics.cache.hits, metrics.cache.misses) })
-                }
+                value={cache ? t("{rate} ({count} entries)", { count: cache.entries, rate: hitRate(cache.hits, cache.misses) }) : t("no cache configured")}
             />
         </dl>
     );

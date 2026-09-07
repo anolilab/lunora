@@ -111,6 +111,7 @@ const CONFLICT_ERROR_CODE = "CONFLICT";
 
 ```ts
 interface CachedQuery {
+    credential?: string;
     identity: string | null;
     serverCursor?: number;
     serverEpoch?: string;
@@ -405,6 +406,7 @@ class LunoraClient {
     setAuthToken(token: string | null, subject?: string | null): void;
     getAuthToken(): string | null;
     currentIdentity(): string | null;
+    replayIdentityVerdict(stamped: null | string | undefined): "match" | "mismatch" | "unknown";
     clientIdentifier(): string;
     confirmedMutationWatermark(shardKey?: string): number;
     callMutator(functionPath: string, args: Record<string, unknown>, options?: {
@@ -660,6 +662,18 @@ class LunoraClient {
         offset?: number;
         organizationId: string;
     }): Promise<AuthPage<Record<string, unknown>>>;
+    listAuthSignUpInvitations(options?: {
+        limit?: number;
+        offset?: number;
+    }): Promise<AuthPage<Record<string, unknown>>>;
+    createAuthSignUpInvitation(input: {
+        email: string;
+        expiresInSeconds?: number;
+        invitedBy?: string;
+    }): Promise<Record<string, unknown>>;
+    revokeAuthSignUpInvitation(input: {
+        email: string;
+    }): Promise<void>;
     removeAuthOrgMember(input: {
         memberId: string;
     }): Promise<void>;
@@ -815,9 +829,7 @@ interface LunoraClientOptions {
 
 ### `LunoraErrorCode` (type)
 
-```ts
-type LunoraErrorCode = (typeof LUNORA_ERROR_CODES)[number];
-```
+Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `MutationCallOptions` (interface)
 
@@ -891,6 +903,7 @@ class OfflineQueue {
     get size(): number;
     enqueue<T>(entry: QueuedMutation<T>): void;
     hydrate(): Promise<(string | undefined)[]>;
+    restampIdentity(from: string | null, to: string | null): void;
     drain(predicate?: (item: QueuedMutation) => boolean): QueuedMutation[];
     requeue(items: QueuedMutation[]): void;
     drainConflict(): QueuedMutation[];
@@ -981,6 +994,7 @@ interface PersistenceAdapter {
     clear: () => Promise<void>;
     load: () => Promise<PersistedMutation[]>;
     remove: (id: string) => Promise<void>;
+    replace: (mutation: PersistedMutation) => Promise<void>;
 }
 ```
 
@@ -1039,7 +1053,7 @@ interface QueuedMutation<T = unknown> {
     clientId?: string;
     readonly functionPath: string;
     id?: string;
-    readonly identity?: string | null;
+    identity?: string | null;
     liveAwaiter?: boolean;
     readonly onCommit?: (commitCursor: number | undefined) => void;
     readonly precondition?: () => boolean;
@@ -1137,11 +1151,25 @@ interface ScheduleRecord {
     args: Record<string, unknown>;
     attempts?: number;
     enqueuedAt: number;
-    functionPath: string;
+    functionPath?: string;
     id: string;
+    instanceName?: string;
     pool?: string;
+    retry?: ScheduleRetryPolicy;
     scheduledFor: number;
     shardKey?: string;
+    workflow?: string;
+}
+```
+
+### `ScheduleRetryPolicy` (interface)
+
+```ts
+interface ScheduleRetryPolicy {
+    backoff?: "exponential" | "linear";
+    baseMs?: number;
+    maxAttempts?: number;
+    maxMs?: number;
 }
 ```
 
@@ -1293,7 +1321,7 @@ type SubscriptionCallback = (data: unknown) => void;
 
 ```ts
 interface SubscriptionError {
-    code?: string;
+    code?: LunoraErrorCodeInput;
     message: string;
 }
 ```
@@ -1309,11 +1337,13 @@ type SubscriptionErrorCallback = (error: SubscriptionError) => void;
 ```ts
 class SubscriptionRegistry {
     static key(functionPath: string, args: Record<string, unknown>, shardKey?: string): string;
+    static keyOf(state: SubscriptionState): string;
     get(key: string): SubscriptionState | undefined;
     getById(id: string): SubscriptionState | undefined;
     add(state: SubscriptionState): void;
     remove(state: SubscriptionState): void;
     all(): SubscriptionState[];
+    clear(): void;
 }
 ```
 
@@ -1325,10 +1355,7 @@ interface SubscriptionState {
     readonly args: Record<string, unknown>;
     readonly argsKey: string;
     readonly callbacks: Set<SubscriptionCallback>;
-    readonly checkpointCallbacks: Set<(watermark: {
-        checkpoint?: number;
-        mutationId?: number;
-    }) => void>;
+    readonly checkpointCallbacks: Set<(watermark: SyncWatermark) => void>;
     readonly errorCallbacks: Set<SubscriptionErrorCallback>;
     readonly fn: FunctionReference;
     readonly id: string;
@@ -1339,6 +1366,7 @@ interface SubscriptionState {
     serverCursor?: number;
     serverEpoch?: string;
     readonly shardKey?: string;
+    readonly wireArgs: Record<string, unknown>;
 }
 ```
 
@@ -1358,6 +1386,7 @@ interface SwToClientMessage {
 interface SyncWatermark {
     checkpoint?: number;
     mutationId?: number;
+    rowsFollow?: boolean;
 }
 ```
 
@@ -1374,9 +1403,17 @@ class TabCoordinator {
     get id(): string;
     get isRunning(): boolean;
     broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null): void;
-    broadcastSubscriptionError(key: string, error: SubscriptionError): void;
+    broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null): void;
     broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null): void;
     broadcastConnectionStatus(status: ConnectionStatus, identity?: string | null): void;
+}
+```
+
+### `TransportError` (class)
+
+```ts
+class TransportError extends LunoraError {
+    constructor(message: string, data?: unknown);
 }
 ```
 

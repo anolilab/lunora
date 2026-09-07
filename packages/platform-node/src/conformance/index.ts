@@ -41,13 +41,24 @@ export const createNodeConformanceHost = (): ConformanceHost => {
      * the `deadLetter` member being declared at all.
      */
     const dispatched = new Set<string>();
+
+    /**
+     * Dispatches per function path — what `cronTicks` answers from.
+     *
+     * A cron tick has no job row and no per-tick id, so the id set above cannot
+     * see one: every tick of a given cron reuses the same key. Counting by
+     * function path is what lets the TCK's cron leg tell "ticked once a second"
+     * apart from "fired immediately because its delay overflowed `setTimeout`".
+     */
+    const dispatchesByPath = new Map<string, number>();
     const {
         dispose: disposeScheduler,
         scheduler,
         simulateDeadLetter,
     } = createNodeSchedulerHost(database, {
-        onDispatch: (_functionPath, _args, job) => {
+        onDispatch: (functionPath, _args, job) => {
             dispatched.add(job.id);
+            dispatchesByPath.set(functionPath, (dispatchesByPath.get(functionPath) ?? 0) + 1);
         },
     });
 
@@ -103,6 +114,7 @@ export const createNodeConformanceHost = (): ConformanceHost => {
             return dispatched.has(id);
         },
         cleanup,
+        cronTicks: (functionPath) => dispatchesByPath.get(functionPath) ?? 0,
         directory,
         disposeTerminally: cleanup,
         kv,

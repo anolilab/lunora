@@ -40,6 +40,11 @@ export interface RegisteredLunoraFunction {
     lifecycle?: "connect" | "disconnect" | "init" | "reactor";
     /** `"internal"` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
+    /**
+     * `.x402({ price })` tag on a paid public procedure. The origin worker
+     * paywalls it; the shard refuses to subscribe it (`isPaidFunction`).
+     */
+    x402?: { readonly price: number | string };
 }
 
 /**
@@ -73,7 +78,9 @@ __val1 = source["id"];
 __has1 = true;
 }
 if (typeof source["title"] !== "string") return DEFER;
+if (source["title"].length > 256) return DEFER;
 if (typeof source["body"] !== "string") return DEFER;
+if (source["body"].length > 100000) return DEFER;
 return { ...(__has1 ? { "id": __val1 } : {}), "title": source["title"], "body": source["body"] };
 });
 installCompiledValidatorMap(lunora_posts_2.get.args, (source) => {
@@ -86,11 +93,14 @@ installCompiledValidatorMap(lunora_posts_2.publish.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["title"] !== "string") return DEFER;
+if (source["title"].length > 256) return DEFER;
 if (typeof source["body"] !== "string") return DEFER;
+if (source["body"].length > 100000) return DEFER;
 let __has1 = false;
 let __val1;
 if (source["imageKey"] !== undefined) {
 if (typeof source["imageKey"] !== "string") return DEFER;
+if (source["imageKey"].length > 512) return DEFER;
 __val1 = source["imageKey"];
 __has1 = true;
 }
@@ -100,12 +110,14 @@ installCompiledValidatorMap(lunora_posts_2.requestImageUpload.args, (source) => 
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["contentType"] !== "string") return DEFER;
+if (source["contentType"].length > 128) return DEFER;
 return { "contentType": source["contentType"] };
 });
 installCompiledValidatorMap(lunora_posts_2.search.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["text"] !== "string") return DEFER;
+if (source["text"].length > 1000) return DEFER;
 let __has1 = false;
 let __val1;
 if (source["topK"] !== undefined) {
@@ -165,12 +177,12 @@ export interface Caller {
         purgeStaleDrafts: (args?: {}) => Promise<{ deleted: number; }>;
     };
     drafts: {
-        listMine: (args?: {}) => Promise<{ _id: Id<"drafts">; authorId: Id<"users">; body: string; title: string; updatedAt: number }[]>;
+        listMine: (args?: {}) => Promise<{ _id: Id<"drafts">; authorId: string; body: string; title: string; updatedAt: number }[]>;
         save: (args: { id?: Id<"drafts">; title: string; body: string }) => Promise<Id<"drafts">>;
     };
     posts: {
-        get: (args: { id: Id<"posts"> }) => Promise<null | { _id: Id<"posts">; authorId: Id<"users">; body: string; imageKey?: string; publishedAt: number; title: string }>;
-        list: (args?: {}) => Promise<{ _id: Id<"posts">; authorId: Id<"users">; body: string; imageKey?: string; publishedAt: number; title: string }[]>;
+        get: (args: { id: Id<"posts"> }) => Promise<null | { _id: Id<"posts">; authorId: string; body: string; imageKey?: string; publishedAt: number; title: string }>;
+        list: (args?: {}) => Promise<{ _id: Id<"posts">; authorId: string; body: string; imageKey?: string; publishedAt: number; title: string }[]>;
         publish: (args: { title: string; body: string; imageKey?: string }) => Promise<Id<"posts">>;
         requestImageUpload: (args: { contentType: string }) => Promise<{ key: string; url: string; }>;
         search: (args: { text: string; topK?: number }) => Promise<{ id: Id<"posts">; score: number; title: string; }[]>;
@@ -182,6 +194,27 @@ const callRegistered = async <R>(context: CallerCtx, functionPath: string, args:
 
     if (!registered) {
         throw new LunoraError("FUNCTION_NOT_FOUND", `function not registered: ${functionPath}`);
+    }
+
+    // A mutation is routed through the caller's own `ctx.runMutation` rather than
+    // invoked directly, so `createCaller(ctx).ns.someMutation()` gets exactly what
+    // `ctx.runMutation(api.ns.someMutation)` gets: the BEGIN/COMMIT span (or the
+    // enclosing one, when the caller is already inside a transaction), the jobs it
+    // schedules held until that span commits, and the deferred object deletes
+    // flushed only once it has. Called straight, a mutation composed from an action
+    // or a stream had none of the three — its writes autocommitted one row at a
+    // time and its `ctx.scheduler` calls dispatched immediately, so a mid-handler
+    // throw left the earlier writes durable and the job already enqueued.
+    //
+    // The fallback covers a context that is not a shard dispatch (`runMutation` is
+    // installed by `buildCtx` on every kind but a query's TYPE omits it); there is
+    // no transaction to join in that case, so a direct call is all there is.
+    if (registered.kind === "mutation") {
+        const { runMutation } = context as { runMutation?: (reference: { __lunoraRef: string }, args: Record<string, unknown>) => Promise<unknown> };
+
+        if (typeof runMutation === "function") {
+            return (await runMutation.call(context, { __lunoraRef: functionPath }, args ?? {})) as R;
+        }
     }
 
     return (await registered.handler(context, args ?? {})) as R;

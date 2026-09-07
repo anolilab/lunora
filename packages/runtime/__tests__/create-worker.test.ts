@@ -3,8 +3,10 @@ import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { decodeIdentityHeader } from "../../../shared/identity-header";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ExecutionContextLike, HttpActionContext, HttpRouterLike, Route } from "../src/create-worker";
-import { composeWorker, createLunoraHandler, createWorker } from "../src/create-worker";
+import { composeWorker, createLunoraHandler, createWorker, withFrameworkWorker } from "../src/create-worker";
+import type { ObservabilityEvent } from "../src/observability";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 interface ShardSpy {
@@ -372,6 +374,39 @@ describe("createWorker", () => {
         expect(shard.calls[0]!.request.headers.get("x-lunora-identity")).toBeNull();
     });
 
+    it("refuses a client-supplied shard key carrying a reserved relay/replica infix", async () => {
+        expect.assertions(4);
+
+        // `::relay::` / `::replica::` are minted by the runtime alone: a DO reads
+        // its own name to learn its role, so forwarding a client-named
+        // `<victim>::relay::0` hands traffic to a DO that believes it relays for
+        // another shard. Only the replica ROUTING path checked the infixes; the
+        // WS relay mint and every RPC forward did not.
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace });
+
+        const upgrade = new Request(`https://app.example/_lunora/ws?shard=${encodeURIComponent("victim::relay::0")}`, {
+            headers: { Upgrade: "websocket" },
+        });
+
+        const upgradeResponse = await worker.fetch(upgrade, {}, fakeContext);
+
+        expect(upgradeResponse.status).toBe(403);
+
+        const rpc = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "posts:list", shardKey: "victim::replica::weur" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(rpc.status).toBe(403);
+        await expect(rpc.json()).resolves.toMatchObject({ error: { code: "FORBIDDEN_SHARD" } });
+        expect(shard.calls).toHaveLength(0);
+    });
+
     it("rejects /_lunora/ws without upgrade header", async () => {
         expect.assertions(1);
 
@@ -656,12 +691,12 @@ describe("createWorker", () => {
         });
 
         it("never re-targets a shard key that already carries a reserved role infix", async () => {
-            expect.assertions(1);
+            expect.assertions(2);
 
             const { calls, namespace } = createReplicaNamespace(() => Response.json({ result: [] }));
             const worker = createWorker({ allowUnauthenticatedShardAccess: true, functions, replicaReads: true, shardDO: namespace });
 
-            await worker.fetch(
+            const response = await worker.fetch(
                 Object.assign(
                     new Request("https://app.example/_lunora/rpc", {
                         body: JSON.stringify({ functionPath: "posts:list", shardKey: "tenant-7::replica::weur" }),
@@ -673,8 +708,13 @@ describe("createWorker", () => {
                 fakeContext,
             );
 
-            // A replica of a replica follows a DO nobody feeds.
-            expect(calls.map((call) => call.name)).toStrictEqual(["tenant-7::replica::weur"]);
+            // `replicaTargetFor` refuses to mint a replica of a replica (which
+            // would follow a DO nobody feeds) and still does so for the
+            // server-initiated dispatch that never crosses the shard gate. A
+            // CLIENT-supplied key never gets that far any more: the reserved
+            // infix is refused outright, so the owner is not addressed either.
+            expect(response.status).toBe(403);
+            expect(calls).toHaveLength(0);
         });
 
         it("names the shard it resolved, so the client can key one cursor for it", async () => {
@@ -1059,6 +1099,31 @@ describe("createWorker", () => {
         expect(shard.calls).toHaveLength(0);
     });
 
+    it("denies a single-shard RPC when authorizeShard returns a truthy non-boolean", async () => {
+        expect.assertions(2);
+
+        // The gate is app code and untyped JS reaches it. The canonical slip is
+        // returning the verifier's result object instead of its boolean field —
+        // `{ valid: false }` is a DENIAL that reads TRUTHY. Only an exact `true`
+        // may open a shard.
+        const worker = createWorker({
+            authorizeShard: () => ({ valid: false }) as unknown as boolean,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list", shardKey: "channel-42" }),
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(res.status).toBe(403);
+        expect(shard.calls).toHaveLength(0);
+    });
+
     it("exempts a reserved `__lunora_admin__:*` RPC from authorizeShard (the DO's admin-bearer gate authorizes it)", async () => {
         expect.assertions(4);
 
@@ -1345,6 +1410,41 @@ describe("createWorker — x402 paid procedures", () => {
         await expect(res.json()).resolves.toMatchObject({ error: { code: "MISCONFIGURED" } });
         // The crown jewel: a paid function without a paywall is refused, NOT dispatched free.
         expect(shard.calls).toHaveLength(0);
+    });
+
+    it("refuses to construct when an x402Charge gate is configured with no `functions` registry", () => {
+        expect.assertions(3);
+
+        // The third fail-closed condition, and the one that was silent: with no
+        // registry there is nothing to read `.x402` off, so every paid procedure
+        // dispatched FREE under a "fail-closed by construction" docblock. A paywall
+        // that cannot see its paid functions is a misconfiguration, and the honest
+        // time to say so is when the worker is built — not once per isolate in a log
+        // line while paid dispatches sail through.
+        const x402Charge = vi.fn<ChargeGateStub>(() => Promise.resolve(new Response(null, { status: 402 })));
+
+        expect(() => createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace, x402Charge })).toThrow(
+            /`x402Charge` requires `functions`/,
+        );
+        // Nothing was built, so nothing can dispatch free.
+        expect(shard.calls).toHaveLength(0);
+        expect(x402Charge).not.toHaveBeenCalled();
+    });
+
+    it("does not warn when no x402Charge gate is configured either", async () => {
+        expect.assertions(1);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        try {
+            const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace });
+
+            await worker.fetch(paidRpc("reports:latest"), {}, fakeContext);
+
+            expect(warn).not.toHaveBeenCalled();
+        } finally {
+            warn.mockRestore();
+        }
     });
 
     it("runs the injected charge gate around dispatch and withholds the shard when unpaid", async () => {
@@ -1776,6 +1876,56 @@ describe("createWorker — HTTP actions", () => {
         expect(probe.status).toBe(201);
     });
 
+    it("hands the handler a ctx.waitUntil that reaches the execution context's", async () => {
+        expect.assertions(3);
+
+        // "Ack the webhook now, finish the work after" is the shape an HTTP
+        // action exists for, and work started but not awaited is cancelled when
+        // the response resolves. Wrappers that need deferral (`@lunora/x402`'s
+        // `withX402`, whose receipt sink must outlive the response) read
+        // `waitUntil` structurally off the ctx, so its absence made them
+        // silently no-op.
+        const deferred: Promise<unknown>[] = [];
+        const context: ExecutionContextLike = {
+            passThroughOnException: () => undefined,
+            waitUntil: (promise) => {
+                deferred.push(promise);
+            },
+        };
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.get("/hook", (c) => {
+                    c.var.lunora.waitUntil?.(Promise.resolve("after"));
+
+                    return new Response("accepted", { status: 202 });
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/hook"), {}, context);
+
+        expect(res.status).toBe(202);
+        expect(deferred).toHaveLength(1);
+        await expect(deferred[0]).resolves.toBe("after");
+    });
+
+    it("leaves ctx.waitUntil absent when the host supplied no waitUntil", async () => {
+        expect.assertions(2);
+
+        // Absent rather than a no-op stub, for the same reason `storage` is:
+        // a handler can tell "no deferral available here" from "deferred".
+        const worker = createWorker({
+            httpRouter: honoApp((app) => app.get("/probe", (c) => new Response(String(c.var.lunora.waitUntil === undefined), { status: 200 }))),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/probe"), {}, { passThroughOnException: () => undefined });
+
+        expect(res.status).toBe(200);
+        await expect(res.text()).resolves.toBe("true");
+    });
+
     it("leaves ctx.storage absent when the app declared no storage", async () => {
         expect.assertions(2);
 
@@ -1828,6 +1978,162 @@ describe("createWorker — HTTP actions", () => {
         expect(scheduler.calls).toHaveLength(0);
     });
 
+    it("ctx.scheduler.list() returns the records array, walking every page the DO answers", async () => {
+        expect.assertions(3);
+
+        // The DO answers ONE bounded page plus `{ truncated, cursor }`. Handing
+        // the raw body back would return an object where an array is declared —
+        // and would drop every job past the first page on the floor.
+        const paths: string[] = [];
+        const schedulerNamespace: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        const url = new URL(request.url);
+
+                        paths.push(`${url.pathname}${url.search}`);
+
+                        if (url.searchParams.get("cursor") === "id:b") {
+                            return Response.json({ records: [{ id: "c" }], truncated: false });
+                        }
+
+                        return Response.json({ cursor: "id:b", records: [{ id: "a" }, { id: "b" }], truncated: true });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) => app.get("/jobs", async (c) => Response.json(await (c.var.lunora.scheduler?.list() ?? Promise.resolve([]))))),
+            schedulerDO: schedulerNamespace,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/jobs"), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        await expect(res.json()).resolves.toStrictEqual([{ id: "a" }, { id: "b" }, { id: "c" }]);
+        expect(paths).toStrictEqual(["/list", "/list?cursor=id%3Ab"]);
+    });
+
+    // The two `ctx.scheduler` implementations write to and read from the SAME
+    // SchedulerDO record: `@lunora/scheduler`'s `createScheduler` (from a shard)
+    // and this one (from an httpAction). `createScheduler` encodes on `runAt` and
+    // decodes on `list`/`get`; while this one did neither, a job scheduled from a
+    // webhook stored a raw `Date`/`Uint8Array` the shard then decoded as itself,
+    // and `ctx.scheduler.get()` here answered the tagged tuples for a record a
+    // shard read as real values. One record, two contexts, two answers.
+    it("wire-brackets the httpAction scheduler so a shard-side read of the SAME record agrees", async () => {
+        expect.assertions(7);
+
+        // Stateful stand-in for the SchedulerDO, which stores the posted record
+        // verbatim and serves it back from `/get` (`{ record }`) and `/list`.
+        const records: Record<string, unknown>[] = [];
+        const schedulerNamespace: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        const url = new URL(request.url);
+
+                        if (url.pathname === "/schedule") {
+                            const body: Record<string, unknown> = await request.json();
+
+                            records.push({ ...body, id: "job-1" });
+
+                            return Response.json({ id: "job-1", scheduledFor: body["scheduledFor"] });
+                        }
+
+                        if (url.pathname === "/get") {
+                            const record = records.find((candidate) => candidate["id"] === url.searchParams.get("id"));
+
+                            return Response.json(record === undefined ? {} : { record });
+                        }
+
+                        return Response.json({ records, truncated: false });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+
+        const args = { amount: 1234n, blob: new Uint8Array([1, 2]), when: new Date(0) };
+        let readBack: Record<string, unknown> | null = null;
+        let listed: Record<string, unknown>[] = [];
+        let missing: Record<string, unknown> | null = null;
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/hooks/stripe", async (c) => {
+                    const { scheduler } = c.var.lunora;
+
+                    const id = await scheduler!.runAt(Date.now() + 1000, { __lunoraRef: "billing:settle" }, args);
+
+                    readBack = await scheduler!.get(id);
+                    listed = await scheduler!.list();
+                    missing = await scheduler!.get("nope");
+
+                    // The values never leave as JSON — a `bigint` would throw on
+                    // the way out — so the assertions read the closures below.
+                    return new Response(id, { status: 202 });
+                }),
+            ),
+            schedulerDO: schedulerNamespace,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/hooks/stripe", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(202);
+        // Stored in the tagged wire form, byte for byte what `createScheduler`
+        // writes for the same call.
+        expect(records[0]?.["args"]).toStrictEqual(encodeWire(args));
+        // `decodeWire(record.args)` is exactly `createScheduler`'s
+        // `decodeRecordArgs`, i.e. what a shard-side `ctx.scheduler.get()` and
+        // `ctx.db.system.query("_scheduled_functions")` answer for this record.
+        expect(decodeWire(records[0]?.["args"])).toStrictEqual((readBack as unknown as Record<string, unknown> | null)?.["args"]);
+        expect((readBack as unknown as Record<string, unknown> | null)?.["args"]).toStrictEqual(args);
+        // `get` resolves the RECORD, not the DO's `{ record }` envelope — and
+        // `null`, not `{}`, for an id that matched nothing.
+        expect((readBack as unknown as Record<string, unknown> | null)?.["id"]).toBe("job-1");
+        expect(missing).toBeNull();
+        // `list()` decodes on the same terms.
+        expect(listed[0]?.["args"]).toStrictEqual(args);
+    });
+
+    // The codec rejects any non-plain object; the label and the function path are
+    // what make the throw traceable from a webhook's log line.
+    it("labels an unencodable scheduled argument with the surface and the target", async () => {
+        expect.assertions(2);
+
+        const scheduler = createShardSpy(Response.json({ id: "job-1" }, { status: 200 }));
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/hooks/stripe", async (c) => {
+                    try {
+                        await c.var.lunora.scheduler!.runAfter(0, { __lunoraRef: "billing:settle" }, { pattern: /nope/u });
+                    } catch (error: unknown) {
+                        return new Response(error instanceof Error ? error.message : "not-an-error", { status: 400 });
+                    }
+
+                    return new Response("scheduled", { status: 202 });
+                }),
+            ),
+            schedulerDO: scheduler.namespace,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/hooks/stripe", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(400);
+        await expect(res.text()).resolves.toMatch(/ctx\.scheduler: cannot encode args for 'billing:settle' — /);
+    });
+
     it("leaves ctx.scheduler undefined when the worker declares no schedulerDO", async () => {
         expect.assertions(2);
 
@@ -1848,7 +2154,11 @@ describe("createWorker — HTTP actions", () => {
     it("c.var.lunora.runMutation forwards an RPC envelope to the default shard and unwraps `{ result }`", async () => {
         expect.assertions(6);
 
-        shard.response = Response.json({ result: { id: "m1" } });
+        // Encoded, because that is what `ShardDO` answers (`encodeWire(result)`).
+        // A raw `{ id: "m1" }` here is pure JSON, so it round-trips identically
+        // through the codec and the assertion below would pass whether or not
+        // the worker decodes — which is exactly how the missing decode survived.
+        shard.response = Response.json({ result: encodeWire({ id: "m1" }) });
 
         const worker = createWorker({
             httpRouter: honoApp((app) =>
@@ -1867,12 +2177,166 @@ describe("createWorker — HTTP actions", () => {
         expect(res.status).toBe(200);
         await expect(res.json()).resolves.toEqual({ created: { id: "m1" } });
         expect(shard.calls).toHaveLength(1);
+        // The BARE `ctx.run*` targets the default shard on purpose — an HTTP
+        // action runs in the worker, so it has no shard of its own to inherit.
+        // `ctx.forShard(key)` is how a route names another (see below).
         expect(shard.calls[0]!.shardKey).toBe("__root__");
 
         const forwarded: { args: Record<string, unknown>; functionPath: string } = await shard.calls[0]!.request.json();
 
         expect(forwarded.functionPath).toBe("messages:send");
         expect(forwarded.args).toEqual({ body: { text: "hi" } });
+    });
+
+    it("routes `ctx.forShard(key).run*` to that shard, not the default one", async () => {
+        expect.assertions(4);
+
+        // Without this a webhook / REST route on a `.shardBy(...)` app could only
+        // ever reach the root DO — which holds none of a sharded table's rows —
+        // so it read empty and wrote to the wrong shard, silently.
+        shard.response = Response.json({ result: encodeWire([{ id: "msg_1" }]) });
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.get("/channels/:id/messages", async (c) => {
+                    const channelId = c.req.param("id");
+
+                    return Response.json({
+                        messages: await c.var.lunora.forShard(channelId).runQuery({ __lunoraRef: "messages:list" }, { channelId }),
+                    });
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/channels/tenant-42/messages"), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        await expect(res.json()).resolves.toEqual({ messages: [{ id: "msg_1" }] });
+        expect(shard.calls).toHaveLength(1);
+        expect(shard.calls[0]!.shardKey).toBe("tenant-42");
+    });
+
+    it("encodes `ctx.run*` args and decodes its result, so bigint / Date / bytes survive the shard hop", async () => {
+        expect.assertions(5);
+
+        // `ShardDO` answers `encodeWire(result)` and decodes the `args` it is sent
+        // (`shard-do.ts`), exactly as `createShardClient` assumes. Skipping either
+        // half handed the handler a tagged `["$lunora.wire$", …]` array where a
+        // `bigint`/`Date` belonged, and threw outright on a bigint ARGUMENT —
+        // `JSON.stringify` refuses one.
+        shard.response = Response.json({ result: encodeWire({ at: new Date(0), balance: 42n, blob: new Uint8Array([1, 2, 3]) }) });
+
+        let observed: { at: unknown; balance: unknown; blob: unknown } | undefined;
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/settle", async (c) => {
+                    observed = await c.var.lunora.runMutation({ __lunoraRef: "ledger:settle" }, { amount: 5n });
+
+                    return new Response("ok", { status: 200 });
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/settle", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+
+        const forwarded: { args: Record<string, unknown> } = await shard.calls[0]!.request.json();
+
+        // Byte-identical to what `createShardClient` puts on the wire.
+        expect(forwarded.args).toEqual({ amount: ["$lunora.wire$", "bigint", "5"] });
+        expect(observed?.balance).toBe(42n);
+        expect(observed?.at).toStrictEqual(new Date(0));
+        expect(observed?.blob).toStrictEqual(new Uint8Array([1, 2, 3]));
+    });
+
+    it("puts a `ctx.run*` dispatch on the RPC event stream and under a traceparent", async () => {
+        expect.assertions(4);
+
+        // Every other origin dispatch goes through `dispatchSingleShard`; a route's
+        // `ctx.run*` used to call `forwardToShard` bare, so a webhook's work was
+        // invisible in the RPC event stream and its shard span was unparented.
+        const events: ObservabilityEvent[] = [];
+
+        shard.response = Response.json({ result: encodeWire({ accepted: true }) });
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/hook", async (c) => {
+                    await c.var.lunora.runMutation({ __lunoraRef: "webhooks:ingest" }, {});
+
+                    return new Response("ok", { status: 200 });
+                }),
+            ),
+            observability: {
+                onRpc: (event) => {
+                    events.push(event);
+                },
+            },
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/hook", { method: "POST" }), {}, fakeContext);
+
+        const rpcEvent = events.find((event) => event.functionPath === "webhooks:ingest");
+
+        expect(rpcEvent).toBeDefined();
+        expect(rpcEvent?.ok).toBe(true);
+        expect(rpcEvent?.shardKey).toBe("__root__");
+        expect(shard.calls[0]!.request.headers.get("traceparent")).toMatch(/^00-[\da-f]{32}-[\da-f]{16}-\d{2}$/);
+    });
+
+    it("does not pre-reject an app route's declared body length — the app owns that plane's budget", async () => {
+        expect.assertions(3);
+
+        // The `Content-Length` fast-path is scoped to the planes the framework
+        // dispatches. Applied to `httpRouter` too it was neither a cap the app
+        // could rely on (the same bytes sent chunked reached the router untouched)
+        // nor one it could raise, and it 413'd before the router ever ran.
+        let received = 0;
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/upload", async (c) => {
+                    const uploaded = await c.req.arrayBuffer();
+
+                    received = uploaded.byteLength;
+
+                    return Response.json({ bytes: received });
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const body = new Uint8Array(2 * 1024 * 1024);
+        const res = await worker.fetch(
+            new Request("https://app.example/upload", { body, headers: { "content-length": String(body.byteLength) }, method: "POST" }),
+            {},
+            fakeContext,
+        );
+
+        expect(res.status).toBe(200);
+        await expect(res.json()).resolves.toEqual({ bytes: body.byteLength });
+        expect(received).toBe(body.byteLength);
+    });
+
+    it("still pre-rejects an oversized declared body on the reserved `/_lunora/*` plane", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace });
+
+        // The pre-check reads `content-length` only, so no body is needed to trip it.
+        const res = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", { headers: { "content-length": String(2 * 1024 * 1024) }, method: "POST" }),
+            {},
+            fakeContext,
+        );
+
+        expect(res.status).toBe(413);
+        expect(shard.calls).toHaveLength(0);
     });
 
     it("marks a route's `ctx.run*` as a trusted system dispatch, so `internal` functions are reachable", async () => {
@@ -2234,6 +2698,25 @@ describe("createWorker auth-metrics instrumentation (PLAN3 §2.3)", () => {
         expect(body.args.outcome).toBe("ok");
     });
 
+    it("applies the shared 1 MiB body cap to `/api/auth/*`, so the docs cannot claim a bypass", async () => {
+        expect.assertions(2);
+
+        const authHandler = vi.fn<(request: Request) => Promise<Response>>(async () => new Response("ok", { status: 200 }));
+
+        const worker = createWorker({ adminToken: "s3cret", authHandler, shardDO: shard.namespace });
+
+        // The pre-check reads `content-length` only, so no body is needed to trip it.
+        const res = await worker.fetch(
+            new Request("https://app.example/api/auth/scim/v2/Bulk", { headers: { "content-length": String(2 * 1024 * 1024) }, method: "POST" }),
+            {},
+            collectingContext,
+        );
+
+        expect(res.status).toBe(413);
+        // Rejected BEFORE dispatch, so better-auth never sees the request.
+        expect(authHandler).not.toHaveBeenCalled();
+    });
+
     it("does NOT record for a non-attempt auth route (get-session)", async () => {
         expect.assertions(2);
 
@@ -2415,5 +2898,120 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
         expect(forwards[0]?.binding).toBeNull(); // forged "EVIL" stripped, no binding resolved to re-set it
         expect(forwards[0]?.system).toBeNull(); // forged x-lunora-system stripped
         expect(forwards[0]?.userId).toBeNull(); // forged x-lunora-userid stripped (anonymous upgrade)
+    });
+});
+
+describe("createWorker — voice-session upgrade", () => {
+    /** Records the `x-lunora-*` headers the voice DO actually receives. */
+    const voiceNamespace = (seen: { headers: string[]; name: string }[]): ShardNamespaceLike => {
+        return {
+            get: (id) => {
+                const name = (id as { __name: string }).__name;
+
+                return {
+                    fetch: async (request: Request) => {
+                        seen.push({ headers: [...request.headers.keys()].filter((key) => key.startsWith("x-lunora-")), name });
+
+                        return new Response(null, { status: 101 });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+    };
+
+    it("strips every forged x-lunora-* header from the voice upgrade before forwarding", async () => {
+        expect.assertions(2);
+
+        const seen: { headers: string[]; name: string }[] = [];
+        const namespace = voiceNamespace(seen);
+        const worker = createWorker({
+            allowUnauthenticatedShardAccess: true,
+            shardDO: namespace,
+            voiceAgents: { support: namespace },
+        });
+
+        // Six forged headers, not three: a strip that deletes from a LIVE `Headers`
+        // iterator skips every second entry, and because iteration is sorted the
+        // attacker picks which one survives by padding with decoys. The decoys are
+        // named so `x-lunora-system` — the trusted-server-dispatch flag — is one of
+        // the survivors under the broken loop.
+        const forged = new Request("https://app.example/_lunora/voice/support?threadKey=t1", {
+            headers: {
+                Upgrade: "websocket",
+                "x-lunora-aaa": "1",
+                "x-lunora-bbb": "1",
+                "x-lunora-ccc": "1",
+                "x-lunora-ddd": "1",
+                "x-lunora-shard-binding": "EVIL",
+                "x-lunora-system": "1",
+            },
+        });
+
+        await worker.fetch(forged, {}, fakeContext);
+
+        expect(seen).toHaveLength(1);
+        // Anonymous upgrade: nothing server-minted is re-set, so NOTHING may survive.
+        expect(seen[0]?.headers).toStrictEqual([]);
+    });
+});
+
+describe("withFrameworkWorker — `scheduled` ownership", () => {
+    /**
+     * The exact shape codegen commits: `_generated/app.ts` passes
+     * `cronJobs: LUNORA_CRONS` unconditionally, and `_generated/crons.ts` exports
+     * `{}` for an app that declares no cron. Written as the generated literal (not
+     * a hand-built options object) because a hand-built one omits `cronJobs`
+     * entirely, which is the only case the presence check ever got right.
+     */
+    const generatedCronFreeOptions = { cronJobs: {}, crons: {} };
+
+    const hostWith = (scheduled: () => Promise<void>): HttpRouterLike & { scheduled: () => Promise<void> } => {
+        return { fetch: () => new Response("ssr"), scheduled };
+    };
+
+    it("keeps the framework host's scheduled when the generated cron registry is empty", async () => {
+        expect.assertions(2);
+
+        const shard = createShardSpy();
+        const hostScheduled = vi.fn<() => Promise<void>>(async () => undefined);
+
+        const worker = withFrameworkWorker(hostWith(hostScheduled), { ...generatedCronFreeOptions, shardDO: shard.namespace });
+
+        await worker.scheduled({ cron: "0 3 * * *", scheduledTime: 0 }, {}, fakeContext);
+
+        expect(hostScheduled).toHaveBeenCalledTimes(1);
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("takes scheduled over from the host once Lunora owns a cron surface", async () => {
+        expect.assertions(1);
+
+        const shard = createShardSpy();
+        const hostScheduled = vi.fn<() => Promise<void>>(async () => undefined);
+
+        const worker = withFrameworkWorker(hostWith(hostScheduled), {
+            cronJobs: { "0 3 * * *": [{ args: {}, functionPath: "presence:clear", name: "clear presence" }] },
+            shardDO: shard.namespace,
+        });
+
+        await worker.scheduled({ cron: "0 3 * * *", scheduledTime: 0 }, {}, fakeContext);
+
+        expect(hostScheduled).not.toHaveBeenCalled();
+    });
+
+    it("takes scheduled over for a backupCron even with no cron jobs", async () => {
+        expect.assertions(1);
+
+        const shard = createShardSpy();
+        const hostScheduled = vi.fn<() => Promise<void>>(async () => undefined);
+
+        const worker = withFrameworkWorker(hostWith(hostScheduled), { ...generatedCronFreeOptions, backupCron: "0 3 * * *", shardDO: shard.namespace });
+
+        await worker.scheduled({ cron: "0 3 * * *", scheduledTime: 0 }, {}, fakeContext);
+
+        expect(hostScheduled).not.toHaveBeenCalled();
     });
 });

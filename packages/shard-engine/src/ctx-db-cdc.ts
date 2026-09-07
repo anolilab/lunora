@@ -119,42 +119,45 @@ const appendCdcChange = (sql: SqlExec, ts: number, table: string, id: string, op
  */
 const CDC_TABLE_FILTER_CHUNK = 90;
 
-/** Bind a non-empty table set as an `AND "table" IN (?, …)` fragment, or nothing at all for the unfiltered read. */
-const tableInClause = (tables: ReadonlySet<string> | undefined): SQL => {
-    if (!tables || tables.size === 0) {
-        return dsql``;
-    }
-
+/**
+ * Bind one non-empty chunk of table names as an `AND "table" IN (?, …)`
+ * fragment. Chunking is the caller's job — the only caller is
+ * {@link cdcTouchesTables}, which splits an unbounded read-set at
+ * {@link CDC_TABLE_FILTER_CHUNK} so the statement stays inside workerd's
+ * 100-bound-parameter cap. A helper that silently accepted the whole set would
+ * put that cap one call site away again.
+ */
+const tableInClause = (tables: ReadonlySet<string>): SQL =>
     // Bind each table name as a parameter so the `IN (…)` list can never inject SQL.
-    return dsql` AND ${dsql.identifier("table")} IN (${dsql.join(
+    dsql` AND ${dsql.identifier("table")} IN (${dsql.join(
         [...tables].map((table) => dsql`${table}`),
         dsql`, `,
     )})`;
-};
 
 /**
  * Read changelog entries newer than `sinceSeq` in commit order, up to `limit`
  * (clamped to [1, 10000]). Returns the rows plus the cursor to resume from (the
- * last `seq`, or `sinceSeq` when the page is empty).
+ * last `seq`, or `sinceSeq` when the page is empty). Every table's changes are
+ * in the page — this is the whole-log reader, used by the streaming
+ * export/resume and archive-sweep callers.
  *
- * The optional `tables` set narrows the page to changes on those tables — the
- * shape/poke path reads one filtered page per flush so it never scans op-log
- * entries for tables no live shape is watching. Omit it (or pass an empty set)
- * for the full, unfiltered page (the existing streaming-export/resume callers).
+ * There is deliberately no table filter. One was carried here for the shape/poke
+ * path, which reads per table — but that path goes through
+ * {@link readCdcChangeKeys}, which takes a single `table` and returns keys
+ * without post-images, so nothing ever passed the set. Restoring it is not one
+ * predicate: `tableInClause` binds a parameter per name against workerd's cap of
+ * 100, and chunking an ORDERED, LIMIT-ed page is not the loop
+ * {@link cdcTouchesTables} gets away with — the chunks would have to be merged
+ * back into commit order and the cursor re-derived from the merge, or the page
+ * silently truncates at whichever chunk filled `limit` first.
  */
-const readCdcChanges = (
-    sql: SqlExec,
-    options: { limit?: number; sinceSeq?: number; tables?: ReadonlySet<string> } = {},
-): { changes: CdcChange[]; cursor: number } => {
+const readCdcChanges = (sql: SqlExec, options: { limit?: number; sinceSeq?: number } = {}): { changes: CdcChange[]; cursor: number } => {
     const sinceSeq = options.sinceSeq ?? 0;
     const limit = Math.max(1, Math.min(options.limit ?? 1000, 10_000));
 
-    // An empty/omitted set leaves the predicate off entirely (full page).
-    const tableFilter = tableInClause(options.tables);
-
     const rows = runDrizzle<{ doc: null | string; id: string; op: string; seq: number; table: string; ts: number }>(
         sql,
-        dsql`SELECT seq, ts, ${dsql.identifier("table")}, id, op, doc FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE seq > ${sinceSeq}${tableFilter} ORDER BY seq ASC LIMIT ${limit}`,
+        dsql`SELECT seq, ts, ${dsql.identifier("table")}, id, op, doc FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE seq > ${sinceSeq} ORDER BY seq ASC LIMIT ${limit}`,
     ).toArray();
 
     const changes = rows.map((row): CdcChange => {
@@ -230,13 +233,24 @@ const cdcTouchesTables = (sql: SqlExec, sinceSeq: number, tables: ReadonlySet<st
  *
  * So the vouchable set is defined POSITIVELY, and read from the storage itself
  * rather than from a list someone has to remember to extend: a dependency is
- * vouchable iff a table of that name exists in this DO's SQLite. That is the
- * set `recordCdc` appends for, plus the shard's own bookkeeping tables, which
- * no `ctx.db` read can name. Anything else — a `.global()` table, a sentinel, a
- * dependency stamped by a capability added after this was written — falls to
- * the default, and the default is "cannot vouch". Getting the classification
- * wrong then costs a needless re-snapshot instead of silently serving stale
- * data.
+ * vouchable iff a table of that name exists in this DO's SQLite. Anything else —
+ * a `.global()` table, a sentinel, a dependency stamped by a capability added
+ * after this was written — falls to the default, and the default is "cannot
+ * vouch". Getting the classification wrong then costs a needless re-snapshot
+ * instead of silently serving stale data.
+ *
+ * **One local table is nevertheless unvouchable, and it is the one exception to
+ * the paragraph above.** "Exists in this DO's SQLite" was meant as a proxy for
+ * "is a table `recordCdc` appends for", and a `.memory()` table breaks the two
+ * apart: migrations create it like any other (only its rows are cleared on
+ * eviction), so it is in `sqlite_master` — but `recordCdc` deliberately skips it,
+ * so the log holds no record of it and "nothing changed" is a claim this function
+ * cannot support. Rather than teach the catalog scan about a schema fact it
+ * cannot see, `ctx-db.ts` stamps {@link import("./read-footprint").UNVOUCHABLE_DEP}
+ * on every read of a memory table, which lands the read-set in the default branch
+ * where it belongs. A read-set assembled by hand rather than by the read
+ * footprint therefore still gets the naive answer for a memory table — the
+ * footprint is the only supported producer.
  *
  * The live-refresh path is already pessimistic in exactly this way (see
  * `writeTouchesMemo` in `subscription-range-gate.ts` — "assume touched on any
@@ -308,7 +322,7 @@ const cdcCanVouchFor = (sql: SqlExec, deps: ReadonlySet<string>): boolean => {
     return true;
 };
 
-/** One changed row key in a range: the id, the LATEST op that hit it, and that op's `seq`. No post-image. */
+/** One changed row key in a range: the id, the LATEST op that hit it (`update` whenever more than one did — see {@link readCdcChangeKeys}), and that op's `seq`. No post-image. */
 interface CdcChangeKey {
     id: string;
     op: CdcChange["op"];
@@ -329,24 +343,39 @@ interface CdcChangeKey {
  * `MAX(seq)` with bare `id`/`op` columns is SQLite's documented single-aggregate
  * behaviour — the bare columns come from the row that supplied the max — and
  * collapses multiple ops on one row to the newest, exactly as the read-then-
- * overwrite drain it replaces did. `seq <= upTo` bounds the read at the
- * checkpoint the poke will be stamped with; the drain it replaces bounded only
- * its loop, so its final page could pull rows past `upTo` into the diff.
+ * overwrite drain it replaces did. (`COUNT(*)` rides along without disturbing
+ * that: the rule needs exactly one `min()`/`max()` in the query, not exactly one
+ * aggregate.) `seq <= upTo` bounds the read at the checkpoint the poke will be
+ * stamped with; the drain it replaces bounded only its loop, so its final page
+ * could pull rows past `upTo` into the diff.
+ *
+ * **A collapsed group never reports `insert`.** {@link import("./shape-diff").buildShapeDiff}
+ * skips a non-member whose op is `insert`, on the sound ground that a row which
+ * never matched the predicate was never replicated, so a `delete` for it would
+ * spam every subscriber on the table. That ground only holds for a key whose
+ * insert is the ONLY op in the window. A hard `delete` followed by a re-insert of
+ * the same `_id` inside one poke window collapses to `insert` here — and that key
+ * HAD been replicated, so skipping it leaves the pre-delete row on the client
+ * forever. A multi-op group is reported as `update` instead: for a member it is
+ * the more accurate client-facing kind anyway (the client may already hold the
+ * key), and for a non-member it is what earns the `delete` the client needs.
  */
 const readCdcChangeKeys = (sql: SqlExec, table: string, sinceSeq: number, upTo: number): CdcChangeKey[] => {
     // `maxSeq`, not a second `seq`: aliasing the aggregate to the name of the
     // column it aggregates leaves `ORDER BY seq` resolvable two ways, and which
     // one wins is an engine rule rather than something stated here.
-    const rows = runDrizzle<{ id: string; maxSeq: number; op: string }>(
+    const rows = runDrizzle<{ id: string; maxSeq: number; op: string; ops: number }>(
         sql,
-        dsql`SELECT id, op, MAX(seq) AS maxSeq FROM ${dsql.identifier(CDC_LOG_TABLE)}
+        dsql`SELECT id, op, MAX(seq) AS maxSeq, COUNT(*) AS ops FROM ${dsql.identifier(CDC_LOG_TABLE)}
              WHERE ${dsql.identifier("table")} = ${table} AND seq > ${sinceSeq} AND seq <= ${upTo}
              GROUP BY id
              ORDER BY maxSeq ASC`,
     ).toArray();
 
     return rows.map((row) => {
-        return { id: row.id, op: row.op as CdcChange["op"], seq: row.maxSeq };
+        const op = row.op as CdcChange["op"];
+
+        return { id: row.id, op: op === "insert" && row.ops > 1 ? "update" : op, seq: row.maxSeq };
     });
 };
 
@@ -640,11 +669,17 @@ const applyCdcChange = async (writer: DatabaseWriterLike, change: CdcChange): Pr
         // trusted-replay `allowExplicitId` opt-in so `replace` preserves the
         // row's original creation time instead of resetting it to the replay
         // clock (the default mutation path mints a fresh `clock()`).
+        //
+        // `change.table` is passed as `expectedTable` like the delete and insert
+        // above: an unscoped `replace` probes every table on the premise that ids
+        // are unique across them, which `.source()` tables break — `liftSourceId`
+        // sets `_id` to the upstream natural primary key, so an orders update
+        // lands in the users row.
         const fields = { ...document };
 
         delete fields["_id"];
 
-        await writer.replace(change.id, fields, undefined, { allowExplicitId: true });
+        await writer.replace(change.id, fields, change.table, { allowExplicitId: true });
     }
 };
 

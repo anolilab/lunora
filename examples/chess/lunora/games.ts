@@ -127,9 +127,9 @@ export const makeMove = mutation
     .use(rateLimit(mutationLimiter, "move", byPlayer))
     .input({
         gameId: v.id("games"),
-        from: v.string().meta({ schema: { maxLength: 2 } }),
-        to: v.string().meta({ schema: { maxLength: 2 } }),
-        promotion: v.optional(v.string().meta({ schema: { maxLength: 1 } })),
+        from: v.string().max(2),
+        to: v.string().max(2),
+        promotion: v.optional(v.string().max(1)),
     })
     .mutation(async ({ args: { from, gameId, promotion, to }, ctx }): Promise<{ finished: boolean }> => {
         if (!ctx.auth.userId) {

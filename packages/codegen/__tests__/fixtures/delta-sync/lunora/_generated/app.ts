@@ -15,6 +15,9 @@ import { createShardDO } from "./shard.js";
 /** Read a value off the per-request `env`. Returns `undefined` to leave the capability unconfigured (its `ctx.*`/admin surface stays a clear-error stub). */
 type Selector<Env, T> = (env: Env) => T | undefined;
 
+/** The generated `createShardDO` config — `.observability()`, `.maxRelationKeys()` and the long-tail `.ai()` / `.kv()` / … methods pass straight through to it. */
+type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
+
 /** `.global(...)` declaration — the D1 binding backing `.global()` tables. Backs cross-tenant `ctx.db` reads/writes AND the studio's global data browser. */
 interface GlobalDeclaration<Env> {
     /** The D1 binding (typically `env.DB`). */
@@ -40,6 +43,10 @@ interface ComposedApp extends LunoraWorker {
 class AppBuilder<Env extends object> {
     private adminToken?: Selector<Env, string>;
     private cdcEnabled = false;
+    private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;
+    private maxRelationKeysLimit?: ShardConfig["maxRelationKeys"];
+    private observabilitySink?: ShardConfig["observability"];
+    private relationExistsPushDownMode?: ShardConfig["relationExistsPushDown"];
     private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];
     private globalDeclaration?: GlobalDeclaration<Env>;
     private httpRouterApp?: HttpRouterLike;
@@ -64,6 +71,42 @@ class AppBuilder<Env extends object> {
      */
     public cdc(enabled = true): this {
         this.cdcEnabled = enabled;
+
+        return this;
+    }
+
+    /**
+     * Enable the per-shard reactive query cache: query results are memoized by `(functionPath, args, identity)` and invalidated by the ctx-db write hooks BEFORE the subscription broadcast, so a subscriber re-running its query always observes the post-write state.
+     *
+     * Off by default (every dispatch re-runs its handler). Pass an options object to tune the caps: `maxEntries` (default 1000) and `maxBytes` (default 4 MiB); either accepts `Number.POSITIVE_INFINITY` to disable that cap.
+     */
+    public reactiveCache(config: boolean | { maxBytes?: number; maxEntries?: number } = true): this {
+        this.reactiveCacheConfig = config;
+
+        return this;
+    }
+
+    /** Ceiling on the join keys ONE relation-crossing `where` predicate may pre-resolve via semijoin before failing closed. Omit for the engine default. */
+    public maxRelationKeys(limit: NonNullable<ShardConfig["maxRelationKeys"]>): this {
+        this.maxRelationKeysLimit = limit;
+
+        return this;
+    }
+
+    /**
+     * Route the shard's `ctx.log` lines, `ctx.trace` spans and `ctx.metrics` measurements to a telemetry sink.
+     *
+     * The DO half of observability: without it every in-handler signal stays in the shard's local ring buffer (the studio Logs panel) and reaches no collector. The worker half — one `onRpc` event per dispatched RPC — is a `createWorker` option; pass the SAME sink to both via `.extend((env) => ({ observability: sink(env) }))` to correlate them.
+     */
+    public observability(selector: NonNullable<ShardConfig["observability"]>): this {
+        this.observabilitySink = selector;
+
+        return this;
+    }
+
+    /** Resolution policy for a relation-crossing `where` whose child is co-located in this shard: `"auto"` (cost-based, the engine default), `"always"` (inline correlated EXISTS) or `"never"` (universal semijoin). All three return identical rows. */
+    public relationExistsPushDown(mode: NonNullable<ShardConfig["relationExistsPushDown"]>): this {
+        this.relationExistsPushDownMode = mode;
 
         return this;
     }
@@ -119,6 +162,10 @@ class AppBuilder<Env extends object> {
     private assemble(): ComposedApp {
         const ShardDO = createShardDO({
             cdc: this.cdcEnabled,
+            reactiveCache: this.reactiveCacheConfig,
+            ...(this.maxRelationKeysLimit === undefined ? {} : { maxRelationKeys: this.maxRelationKeysLimit }),
+            ...(this.observabilitySink === undefined ? {} : { observability: this.observabilitySink }),
+            ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),
             ...(this.globalDeclaration
                 ? {
                       d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string | null }) => {
@@ -144,6 +191,10 @@ class AppBuilder<Env extends object> {
                               // poll's changed-tables fast path is unreachable.
                               cdc: request?.cdc ?? false,
                               exec: buildExec(database, request?.bookmark, request?.onBookmark),
+                              // The binding outlives this per-request writer, so the
+                              // provisioning sweep runs once per isolate rather than
+                              // once per request. See `SqlCtxDbOptions.provisionScope`.
+                              provisionScope: database,
                               schema: schema as unknown as D1CtxDbOptions["schema"],
                           });
                       },
@@ -202,11 +253,12 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
+        options.listSchemaTables = () => ["notes", "boards"];
+
         if (this.globalDeclaration) {
             const database = this.globalDeclaration.d1(env);
 
             if (database) {
-                options.d1 = database;
                 options.globalIntrospector = buildGlobalIntrospector(database);
                 // `resolveTableSharding`/`importGlobals` wire the admin bulk-import
                 // endpoint: without the former, EVERY row (including a `.global()`
@@ -247,8 +299,8 @@ class AppBuilder<Env extends object> {
  * Opens a D1 Sessions API session pinned to `bookmark` (the caller's own
  * last-known write, when supplied) so reads observe it — read-your-writes
  * across replicas. `onBookmark`, when supplied, is invoked with the bookmark
- * produced by each write so the caller (the generated DO) can record it via
- * `setOutboundBookmark` and echo `x-d1-bookmark` on the response.
+ * produced by each write so the caller (the generated DO) can record it on the
+ * dispatch's bookmark sink and echo `x-d1-bookmark` on the response.
  *
  * Wrapped in `retryingExec` so D1's documented baseline of transient failures
  * (storage-object resets, isolate memory evictions, dropped connections) does
@@ -273,6 +325,19 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
                 .prepare(sql)
                 .bind(...parameters)
                 .all<Record<string, unknown>>();
+
+            // `all` carries writes, not just reads: D1 runs
+            // `UPDATE/DELETE … RETURNING` through it exactly like `.run()`, and
+            // that is precisely what `@lunora/sql-store` issues for its
+            // optimistic-concurrency compare-and-swap — so `patch`, `replace`
+            // and `delete` all land here and nowhere else. Without this the
+            // bookmark those writes produced was never reported, and the next
+            // read could pin a replica that has not seen them: read-your-writes
+            // lost on the exact path the bookmark exists for. Reporting it after
+            // a plain `SELECT` too is harmless and correct — the session's
+            // bookmark only ever moves forward, and the sink takes the last
+            // value.
+            onBookmark?.(session?.getBookmark() ?? undefined);
 
             return result.results;
         },

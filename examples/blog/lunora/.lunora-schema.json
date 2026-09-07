@@ -4,7 +4,7 @@
         "drafts": {
             "fields": {
                 "authorId": {
-                    "kind": "id",
+                    "kind": "string",
                     "optional": false
                 },
                 "title": {
@@ -24,6 +24,10 @@
                 "by_updated": {
                     "fields": ["updatedAt"],
                     "unique": false
+                },
+                "by_author_updated": {
+                    "fields": ["authorId", "updatedAt"],
+                    "unique": false
                 }
             },
             "relations": {},
@@ -32,7 +36,7 @@
         "posts": {
             "fields": {
                 "authorId": {
-                    "kind": "id",
+                    "kind": "string",
                     "optional": false
                 },
                 "title": {
@@ -61,29 +65,33 @@
             "relations": {},
             "shardMode": "root"
         },
-        "users": {
+        "ratelimit_buckets": {
             "fields": {
-                "email": {
+                "key": {
                     "kind": "string",
                     "optional": false
                 },
-                "name": {
-                    "kind": "string",
+                "value": {
+                    "kind": "number",
                     "optional": false
                 },
-                "passwordHash": {
-                    "kind": "string",
+                "ts": {
+                    "kind": "number",
                     "optional": false
+                },
+                "prev": {
+                    "kind": "number",
+                    "optional": true
                 }
             },
             "indexes": {
-                "by_email": {
-                    "fields": ["email"],
-                    "unique": true
+                "by_key": {
+                    "fields": ["key"],
+                    "unique": false
                 }
             },
             "relations": {},
-            "shardMode": "global"
+            "shardMode": "root"
         }
     },
     "version": 1

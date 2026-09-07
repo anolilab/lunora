@@ -26,20 +26,28 @@
  * ada.cannot("insert", "docs", { ownerId: "x" }); // true  — denied
  * ```
  */
-import { computeReadBaseWhere, evaluateWrite, indexRolePermissions, matchesWhere, resolveCan } from "./middleware";
+import { computeReadBaseWhere, evaluateWrite, indexRolePermissions, matchesWhere, readIdentityRoles, resolveCan } from "./middleware";
 import type { Policy, PolicyContext, PolicyOperation, Role, WhereInput } from "./types";
 
 /**
  * The slice of a request identity a policy reads. Mirrors the
  * `PolicyContext.auth` shape the middleware builds at request time — every
  * field is optional and defaults the same way the middleware defaults it
- * (`userId`/`identity` → `null`, `roles` → `[]`).
+ * (`userId`/`identity` → `null`, `roles` → the `roles` claim on `identity`).
+ *
+ * There is deliberately NO separate `roles` field: `auth.roles` is derived from
+ * the identity claims by the same `readIdentityRoles` the middleware uses, so
+ * the harness cannot set up a world the runtime is unable to produce. Give a
+ * role-branched policy its roles the way production does —
+ * `.as({ identity: { roles: ["admin"] }, userId: "u1" })`.
  */
 export interface TestIdentity {
-    /** Raw identity claims a policy may branch on (`auth.identity.email`, …). */
+    /**
+     * Raw identity claims a policy may branch on (`auth.identity.email`, …).
+     * The `roles` claim (a `string[]` or a comma-separated string) is what
+     * populates `auth.roles` and backs `auth.can(...)`.
+     */
     identity?: Record<string, unknown> | null;
-    /** Role labels the request carries; resolved to permissions via the harness `roles` registry. */
-    roles?: ReadonlyArray<string>;
     /** The caller id (`auth.userId`); `null`/omitted is the anonymous caller. */
     userId?: null | string;
 }
@@ -100,15 +108,20 @@ export const expectPolicy = <Context = unknown>(policies: ReadonlyArray<Policy<C
     return {
         as: (identity) => {
             const auth = identity ?? {};
-            const roles = auth.roles ?? [];
+            // eslint-disable-next-line unicorn/no-null -- PolicyContext.auth.identity is a public `… | null` type, mirroring the middleware
+            const claims = auth.identity ?? null;
+            // Roles come off the identity claims — the SAME single source the
+            // middleware reads at request time. A harness that could set them
+            // independently would green-light a policy branch production can
+            // never reach.
+            const roles = readIdentityRoles(claims);
 
             const baseContext: PolicyContext<Context> = {
                 auth: {
                     // The same role→permission resolution the middleware performs
                     // once per request.
                     can: resolveCan(roles, rolePermissions),
-                    // eslint-disable-next-line unicorn/no-null -- PolicyContext.auth.identity is a public `… | null` type, mirroring the middleware
-                    identity: auth.identity ?? null,
+                    identity: claims,
                     roles,
                     // eslint-disable-next-line unicorn/no-null -- PolicyContext.auth.userId is a public `null | string` type, mirroring the middleware
                     userId: auth.userId ?? null,

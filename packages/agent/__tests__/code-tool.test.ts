@@ -1,3 +1,4 @@
+import { jsonSchema } from "ai";
 import { describe, expect, it } from "vitest";
 
 import { codeTool, resolveReferences, runToolScript } from "../src/code-tool";
@@ -10,6 +11,10 @@ const EMPTY_TOOLS_PATTERN = /non-empty map of tools/u;
 const GATED_TOOL_PATTERN = /cannot compose "gated"/u;
 const DUPLICATE_ID_PATTERN = /duplicate code step id "dup"/u;
 const BOOM_PATTERN = /boom/u;
+const MAX_STEPS_PATTERN = /`maxSteps` must be a positive integer/u;
+const TOO_MANY_STEPS_PATTERN = /code_tool_too_many_steps — the script has 10 steps, over the cap of 3/u;
+const INVALID_STEP_INPUT_PATTERN = /code step "a" input is invalid for tool "charge": amount must be a number/u;
+const INHERITED_REF_PATTERNS = [/unknown result "constructor"/u, /unknown result "__proto__"/u, /unknown result "hasOwnProperty"/u];
 
 // `step` is required on AgentToolContext — production always threads a real
 // durable handle — so a hand-built context supplies the pass-through double.
@@ -24,7 +29,7 @@ const fakeTool = (output: unknown, calls: unknown[] = []): AgentToolDefinition =
 
             return output;
         },
-        inputSchema: {} as never,
+        inputSchema: jsonSchema({ additionalProperties: true, type: "object" }),
         isLunoraAgentTool: true,
     };
 };
@@ -56,6 +61,15 @@ describe(resolveReferences, () => {
 
         expect(resolved.x).toBeUndefined();
         expect(resolved.y).toBeUndefined();
+    });
+
+    it("does not resolve a `$from` onto the prototype chain", () => {
+        // `"constructor" in {}` is true, so an inherited name resolved to a real
+        // `Function`/`Object.prototype` and was handed to the composed tool as an
+        // argument — instead of the documented hard error for an unknown ref.
+        for (const [index, name] of ["constructor", "__proto__", "hasOwnProperty"].entries()) {
+            expect(() => resolveReferences({ $from: name }, {})).toThrow(INHERITED_REF_PATTERNS[index]);
+        }
     });
 
     it("skips a `__proto__` own key when rebuilding input objects", () => {
@@ -112,6 +126,18 @@ describe(runToolScript, () => {
         await expect(runToolScript({ steps: [{ id: "x", tool: "nope" }] }, { real: fakeTool(1) }, context, 16)).rejects.toThrow(UNKNOWN_TOOL_PATTERN);
     });
 
+    it("throws on a step naming an inherited property instead of a composed tool", async () => {
+        // `tools["constructor"]` is `Object` — truthy, so the unknown-tool guard
+        // waved it through and the step died on `tool.execute is not a function`
+        // (a TypeError the host retries) rather than the documented BAD_REQUEST.
+        for (const name of ["constructor", "toString", "hasOwnProperty", "__proto__"]) {
+            // eslint-disable-next-line no-await-in-loop -- each name is its own assertion; the loop is the fixture
+            await expect(runToolScript({ steps: [{ id: "x", tool: name }] }, { real: fakeTool(1) }, context, 16)).rejects.toThrow(
+                new RegExp(`unknown tool "${name === "__proto__" ? String.raw`__proto__` : name}"`, "u"),
+            );
+        }
+    });
+
     it("rejects duplicate step ids up front, before running any tool", async () => {
         const calls: unknown[] = [];
         const tools = { t: fakeTool("ok", calls) };
@@ -143,7 +169,7 @@ describe(runToolScript, () => {
 
                 return "done";
             },
-            inputSchema: {} as never,
+            inputSchema: jsonSchema({ additionalProperties: true, type: "object" }),
             isLunoraAgentTool: true,
         };
 
@@ -165,17 +191,52 @@ describe(runToolScript, () => {
         expect((echoInput as { data: string }).data).toBe(big);
     });
 
-    it("caps the number of steps run", async () => {
+    it("rejects a script over `maxSteps` instead of running its prefix", async () => {
         const calls: unknown[] = [];
         const tools = { t: fakeTool("ok", calls) };
         const steps = Array.from({ length: 10 }, (_, index) => {
             return { id: `s${String(index)}`, tool: "t" };
         });
 
-        const result = await runToolScript({ steps }, tools, context, 3);
+        // Truncating ran the first 3 steps and reported SUCCESS, silently dropping
+        // the trailing 7 — typically the writes the earlier reads were gathered for.
+        await expect(runToolScript({ steps }, tools, context, 3)).rejects.toThrow(TOO_MANY_STEPS_PATTERN);
+        expect(calls).toHaveLength(0);
+    });
 
-        expect(calls).toHaveLength(3);
-        expect(result.results).toHaveLength(3);
+    it("validates a step's resolved input against the composed tool's own inputSchema", async () => {
+        const calls: unknown[] = [];
+        const tools = {
+            charge: {
+                description: "charge",
+                execute: (input: unknown) => {
+                    calls.push(input);
+
+                    return "ok";
+                },
+                inputSchema: jsonSchema<{ amount: number }>(
+                    { additionalProperties: false, properties: { amount: { type: "number" } }, required: ["amount"], type: "object" },
+                    {
+                        validate: (value) => {
+                            if (typeof (value as { amount?: unknown }).amount === "number") {
+                                return { success: true, value: value as { amount: number } };
+                            }
+
+                            return { error: new Error("amount must be a number"), success: false };
+                        },
+                    },
+                ),
+                isLunoraAgentTool: true,
+            } as AnyAgentTool,
+        };
+
+        // The model-facing step schema is `additionalProperties: true`, so nothing in
+        // the script shape can reject this — only the composed tool's own schema can,
+        // and until now nothing consulted it between `resolveReferences` and `execute`.
+        await expect(
+            runToolScript({ steps: [{ id: "a", input: { amount: "NaN-string", drop_table: true }, tool: "charge" }] }, tools, context, 4),
+        ).rejects.toThrow(INVALID_STEP_INPUT_PATTERN);
+        expect(calls).toStrictEqual([]);
     });
 
     it("gives each step its own idempotency key / tool-call id derived from the code tool's", async () => {
@@ -187,7 +248,7 @@ describe(runToolScript, () => {
 
                 return "ok";
             },
-            inputSchema: {} as never,
+            inputSchema: jsonSchema({ additionalProperties: true, type: "object" }),
             isLunoraAgentTool: true,
         };
         const baseContext = { idempotencyKey: "tool:code:call_1", step: passthroughStep, toolCallId: "call_1" } as AgentToolContext;
@@ -231,7 +292,7 @@ describe(runToolScript, () => {
 
                 return "c-ok";
             },
-            inputSchema: {} as never,
+            inputSchema: jsonSchema({ additionalProperties: true, type: "object" }),
             isLunoraAgentTool: true,
         };
 
@@ -310,5 +371,29 @@ describe(codeTool, () => {
         const gated: AgentToolDefinition = { ...fakeTool("x"), needsApproval: true };
 
         expect(() => codeTool({ gated })).toThrow(GATED_TOOL_PATTERN);
+    });
+
+    it.each([0, -1, 0.5, Number.NaN])("rejects a non-positive-integer maxSteps at declaration time (%s)", (maxSteps) => {
+        // `slice(0, maxSteps)` swallowed these silently: `0`/`0.5`/`NaN` ran NO
+        // step and still reported success, `-1` dropped the LAST step — a script
+        // that looks like it committed its final side effect and did not.
+        expect(() => codeTool({ search: fakeTool(["hit"]) }, { maxSteps })).toThrow(MAX_STEPS_PATTERN);
+    });
+
+    it("keeps running every step under a valid maxSteps", async () => {
+        const calls: unknown[] = [];
+        const tool = codeTool({ search: fakeTool("hit", calls) }, { maxSteps: 2 });
+
+        await tool.execute(
+            {
+                steps: [
+                    { id: "a", tool: "search" },
+                    { id: "b", tool: "search" },
+                ],
+            },
+            context,
+        );
+
+        expect(calls).toHaveLength(2);
     });
 });

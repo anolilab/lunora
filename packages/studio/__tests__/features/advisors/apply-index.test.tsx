@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ApplyIndexButton } from "../../../src/features/advisors/apply-index-button";
-import { composeCreateIndex, hasIndexMetadata } from "../../../src/features/advisors/compose-index-sql";
+import { composeIndexDeclaration, hasIndexMetadata } from "../../../src/features/advisors/compose-index-declaration";
 import { InsightsPanel } from "../../../src/features/advisors/insights-panel";
 import type { AdvisoryFinding, FunctionStatsResult, ShardMetrics } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
@@ -11,39 +11,33 @@ import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 import wrapInRouter from "../../render-with-router";
 
-// ── unit tests: composeCreateIndex ──────────────────────────────────────────
+// ── unit tests: composeIndexDeclaration ─────────────────────────────────────
 
-describe("composeCreateIndex", () => {
-    it("composes a CREATE INDEX IF NOT EXISTS statement with quoted identifiers", () => {
-        expect.assertions(1);
+describe("composeIndexDeclaration", () => {
+    it("composes the `.index(...)` chain call the schema declares, NOT raw CREATE INDEX DDL", () => {
+        expect.assertions(2);
 
-        expect(composeCreateIndex("posts", "byAuthorId", ["authorId"])).toBe(`CREATE INDEX IF NOT EXISTS "byAuthorId" ON "posts" ("authorId");`);
+        // A shard table is `(id, _creationTime, __doc__)` — user fields live in the
+        // JSON blob — so `CREATE INDEX … ON "posts" ("authorId")` fails with
+        // `no such column: authorId` wherever it is pasted, and the migration
+        // system tracks only what `schema.ts` declares.
+        const declaration = composeIndexDeclaration("byAuthorId", ["authorId"]);
+
+        expect(declaration).toBe(`.index("byAuthorId", ["authorId"])`);
+        expect(declaration).not.toContain("CREATE INDEX");
     });
 
     it("handles a composite index (multiple columns)", () => {
         expect.assertions(1);
 
-        expect(composeCreateIndex("posts", "byAuthorCreated", ["authorId", "createdAt"])).toBe(
-            `CREATE INDEX IF NOT EXISTS "byAuthorCreated" ON "posts" ("authorId", "createdAt");`,
-        );
+        expect(composeIndexDeclaration("byAuthorCreated", ["authorId", "createdAt"])).toBe(`.index("byAuthorCreated", ["authorId", "createdAt"])`);
     });
 
-    it("uses IF NOT EXISTS so the statement is idempotent", () => {
-        expect.assertions(1);
+    it("escapes a quote in a name as a JS string literal, since the output is TypeScript source", () => {
+        expect.assertions(2);
 
-        expect(composeCreateIndex("users", "byEmail", ["email"])).toContain("IF NOT EXISTS");
-    });
-
-    it("escapes a double quote embedded in the table name by doubling it", () => {
-        expect.assertions(1);
-
-        expect(composeCreateIndex('po"sts', "byAuthorId", ["authorId"])).toBe(`CREATE INDEX IF NOT EXISTS "byAuthorId" ON "po""sts" ("authorId");`);
-    });
-
-    it("escapes a double quote embedded in a column name by doubling it", () => {
-        expect.assertions(1);
-
-        expect(composeCreateIndex("posts", "byWeird", ['we"ird'])).toBe(`CREATE INDEX IF NOT EXISTS "byWeird" ON "posts" ("we""ird");`);
+        expect(composeIndexDeclaration("byWeird", ['we"ird'])).toBe(String.raw`.index("byWeird", ["we\"ird"])`);
+        expect(composeIndexDeclaration('by"Name', ["a"])).toBe(String.raw`.index("by\"Name", ["a"])`);
     });
 });
 
@@ -87,6 +81,37 @@ describe("hasIndexMetadata", () => {
 
         expect(hasIndexMetadata({ table: "posts" })).toBe(false);
     });
+
+    it("returns false when a field is not a usable string", () => {
+        expect.assertions(2);
+
+        // A non-empty `fields` passed the length check with unusable ELEMENTS in
+        // it, so `[null]` reached `quoteIdentifier` and threw inside the render.
+        expect(hasIndexMetadata({ suggestedIndex: { fields: [null], name: "byAuthorId" }, table: "posts" })).toBe(false);
+        expect(hasIndexMetadata({ suggestedIndex: { fields: ["authorId", 42], name: "byAuthorId" }, table: "posts" })).toBe(false);
+    });
+
+    it("returns false when suggestedIndex.name is not a usable string", () => {
+        expect.assertions(2);
+
+        // `metadata` is server-supplied `Record<string, unknown>`. The narrowing
+        // asserted `suggestedIndex.name: string` without ever checking it, so a
+        // finding carrying a non-string name reached `quoteIdentifier`, which
+        // calls `.replaceAll` on it — a TypeError inside the render.
+        expect(hasIndexMetadata({ suggestedIndex: { fields: ["authorId"], name: 7 }, table: "posts" })).toBe(false);
+        expect(hasIndexMetadata({ suggestedIndex: { fields: ["authorId"], name: "" }, table: "posts" })).toBe(false);
+    });
+
+    it("returns false when a FIELD is not a usable string", () => {
+        expect.assertions(3);
+
+        // Same defect one level down: `Array.isArray` accepted `[null]` / `[42]`
+        // and the predicate then exposed them as strings, so the action handed
+        // one to `sqlIdentifier` and `.replaceAll` threw during the render.
+        expect(hasIndexMetadata({ suggestedIndex: { fields: [null], name: "byAuthorId" }, table: "posts" })).toBe(false);
+        expect(hasIndexMetadata({ suggestedIndex: { fields: [42], name: "byAuthorId" }, table: "posts" })).toBe(false);
+        expect(hasIndexMetadata({ suggestedIndex: { fields: ["authorId", ""], name: "byAuthorId" }, table: "posts" })).toBe(false);
+    });
 });
 
 // ── render test: ApplyIndexButton ───────────────────────────────────────────
@@ -129,7 +154,7 @@ describe("applyIndexButton", () => {
         expect(screen.getByTestId("test-apply-cancel")).toBeDefined();
     });
 
-    it("copies SQL to clipboard and shows the applied state after confirm", () => {
+    it("copies SQL to clipboard and shows the copied state after confirm", async () => {
         expect.assertions(1);
 
         const writeText = vi.fn<(_sql: string) => Promise<void>>(() => Promise.resolve());
@@ -142,10 +167,52 @@ describe("applyIndexButton", () => {
         fireEvent.click(screen.getByTestId("test-apply"));
         fireEvent.click(screen.getByTestId("test-apply-confirm"));
 
-        // The applied state is set synchronously (setApplied before fireAndForget).
-        screen.getByTestId("test-apply-applied");
+        // Awaited, not synchronous: this used to call `setApplied(true)` on the
+        // line after an un-awaited `writeText`, so a REJECTED copy still rendered
+        // "copied to clipboard".
+        await screen.findByTestId("test-apply-applied");
 
-        expect(writeText).toHaveBeenCalledWith(`CREATE INDEX IF NOT EXISTS "byAuthorId" ON "posts" ("authorId");`);
+        expect(writeText).toHaveBeenCalledWith(`.index("byAuthorId", ["authorId"])`);
+    });
+
+    it("does not claim a copy when the clipboard write rejects", async () => {
+        expect.assertions(2);
+
+        const writeText = vi.fn<(_sql: string) => Promise<void>>(() => Promise.reject(new Error("denied")));
+        Object.defineProperty(globalThis.navigator, "clipboard", {
+            configurable: true,
+            value: { writeText },
+        });
+
+        renderButton({ fields: ["authorId"], indexName: "byAuthorId", table: "posts" });
+        fireEvent.click(screen.getByTestId("test-apply"));
+        fireEvent.click(screen.getByTestId("test-apply-confirm"));
+
+        // The statement is shown for manual copying instead — a state-changing
+        // `fireAndForget` with no `onError` (see `lib/internal.ts`) just swallowed
+        // the rejection.
+        const fallback = await screen.findByTestId("test-apply-manual");
+
+        expect(fallback.textContent).toContain(`.index("byAuthorId", ["authorId"])`);
+        expect(screen.queryByTestId("test-apply-applied")).toBeNull();
+    });
+
+    it("shows the statement when there is no clipboard at all (non-secure context)", async () => {
+        expect.assertions(2);
+
+        // The studio served over a LAN IP is not a secure context, so
+        // `navigator.clipboard` is undefined. Confirming used to return with no
+        // state change and no message whatsoever — the button simply did nothing.
+        Object.defineProperty(globalThis.navigator, "clipboard", { configurable: true, value: undefined });
+
+        renderButton({ fields: ["authorId"], indexName: "byAuthorId", table: "posts" });
+        fireEvent.click(screen.getByTestId("test-apply"));
+        fireEvent.click(screen.getByTestId("test-apply-confirm"));
+
+        const fallback = await screen.findByTestId("test-apply-manual");
+
+        expect(fallback.textContent).toContain(`.index("byAuthorId", ["authorId"])`);
+        expect(screen.queryByTestId("test-apply-applied")).toBeNull();
     });
 
     it("returns to the button after cancel", () => {

@@ -22,7 +22,16 @@ interface RateLimitMiddlewareOptions<Context> {
      * — note that a failing limiter then permits every request through.
      */
     failOpen?: boolean;
-    /** Sub-key derived from `ctx` (per-user/IP). Omit for a global limit. */
+
+    /**
+     * Sub-key derived from `ctx` (per-user/IP). Omit for a global limit.
+     *
+     * A resolver that returns `undefined` is a config bug, not a global limit:
+     * the middleware throws `INTERNAL` rather than silently pooling every
+     * keyless caller (e.g. every anonymous user) into one shared bucket. Fold
+     * the absent case yourself — `ctx.auth.userId ?? "anonymous"` — so the
+     * shared bucket is a visible choice.
+     */
     key?: (context: Context) => string | undefined;
     /** Override the error message thrown on rejection. */
     message?: string;
@@ -34,19 +43,41 @@ const STATUS_BY_REASON: Record<RateLimitReason, { code: string; status: number }
     rate: { code: "TOO_MANY_REQUESTS", status: 429 },
 };
 
-const defaultMessage = (name: string, reason: RateLimitReason, retryAfter: number | undefined): string => {
+const defaultMessage = (name: string, reason: RateLimitReason, retryAfterMs: number | undefined): string => {
     if (reason === "deny") {
         return `request denied for "${name}"`;
     }
 
-    return retryAfter === undefined ? `rate limit "${name}" exceeded` : `rate limit "${name}" exceeded; retry after ${String(retryAfter)}ms`;
+    return retryAfterMs === undefined ? `rate limit "${name}" exceeded` : `rate limit "${name}" exceeded; retry after ${String(retryAfterMs)}ms`;
+};
+
+/**
+ * Fail closed: a per-caller limit whose key resolves to `undefined` would
+ * quietly become one global bucket that a single caller can drain for everyone.
+ * INTERNAL, so the middleware's catch rethrows it as-is under both policies.
+ */
+const resolveKey = <Context>(name: string, context: Context, key: RateLimitMiddlewareOptions<Context>["key"]): string | undefined => {
+    if (!key) {
+        return undefined;
+    }
+
+    const resolved = key(context);
+
+    if (resolved === undefined) {
+        throw new LunoraError(
+            "INTERNAL",
+            `@lunora/ratelimit: rateLimit("${name}") key resolver returned undefined; return a fallback such as "anonymous" instead`,
+        );
+    }
+
+    return resolved;
 };
 
 /**
  * Procedure middleware that enforces a named rate limit before the handler
  * runs. Attach it with `.use()`. On rejection it throws a structural
  * `LunoraError` (`TOO_MANY_REQUESTS`/429, or `FORBIDDEN`/403 for deny-list
- * hits) carrying `retryAfter` in milliseconds — the runtime maps it to the
+ * hits) carrying `data.retryAfterMs` — the runtime maps it to the
  * matching RPC/HTTP status without any import of `@lunora/server` at runtime.
  *
  * **Failure policy:** if resolving or invoking the limiter throws for a genuine
@@ -68,7 +99,7 @@ const rateLimit =
         try {
             const resolved = typeof limiter === "function" ? await limiter(ctx) : limiter;
 
-            status = await resolved.limit(name, { count: options.count, key: options.key?.(ctx) });
+            status = await resolved.limit(name, { count: options.count, key: resolveKey(name, ctx, options.key) });
         } catch (error) {
             // Deterministic caller misuse (unconfigured limit, non-positive
             // count, a count that exceeds capacity) is thrown as an INTERNAL
@@ -95,11 +126,17 @@ const rateLimit =
         if (!status.ok) {
             const reason = status.reason ?? "rate";
             const mapped = STATUS_BY_REASON[reason];
-            const retryAfter = Number.isFinite(status.retryAfter) ? Math.ceil(status.retryAfter) : undefined;
+            const retryAfterMs = Number.isFinite(status.retryAfter) ? Math.ceil(status.retryAfter) : undefined;
 
-            throw new LunoraError(mapped.code, options.message ?? defaultMessage(name, reason, retryAfter), {
+            throw new LunoraError(mapped.code, options.message ?? defaultMessage(name, reason, retryAfterMs), {
                 status: mapped.status,
-                data: retryAfter === undefined ? undefined : { retryAfter },
+                // `retryAfterMs` — the key `protocol/fixtures/rpc.json`, the
+                // reference client and all eight SDK ports read. `TOO_MANY_REQUESTS`
+                // is a transient replay code, so a durable write denied here is
+                // re-queued and only the hint schedules the next attempt: sending
+                // it under any other name strands the write until the outbox
+                // evicts it.
+                data: retryAfterMs === undefined ? undefined : { retryAfterMs },
             });
         }
 

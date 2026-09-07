@@ -80,6 +80,18 @@ class ClientQueryStore {
     }
 
     /**
+     * Drop every value and subscriber without notifying. Terminal — used by
+     * `LunoraClient.close()` to release the subscriber closures (React state
+     * setters) that would otherwise outlive the closed client. Deliberately
+     * silent: a closed client must not push a final value into a component
+     * that is being torn down.
+     */
+    public clear(): void {
+        this.values.clear();
+        this.subscribers.clear();
+    }
+
+    /**
      * Subscribe to changes for `ref`. The callback is NOT invoked on
      * registration — callers should read the current value via
      * {@link get} first. Returns an unsubscribe function.

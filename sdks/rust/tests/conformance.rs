@@ -9,10 +9,11 @@ use std::thread;
 
 use lunora::client::{
     build_connect_frame, build_rpc_body, build_shape_subscribe_frame, build_subscribe_frame, build_unsubscribe_frame, parse_rpc_response, Client, ClientError,
-    StreamEvent, MAX_PENDING_POKES,
+    StreamEvent, CODE_INVALID_FRAME, MAX_PENDING_POKES,
 };
 use lunora::key::{stable_stringify, stable_wire_key};
-use lunora::wire::{decode_wire, encode_wire, from_model_json, WireValue, MAX_BIGINT_DIGITS, MAX_DEPTH, TAG};
+use lunora::submit::is_transient;
+use lunora::wire::{decode_wire, encode_wire, from_json, from_model_json, WireValue, MAX_BIGINT_DIGITS, MAX_DEPTH, MAX_EXACT_INTEGER, TAG};
 use serde_json::{json, Value};
 
 // The optimistic-layer and offline-queue cases live in their own file, dispatched
@@ -22,11 +23,12 @@ use serde_json::{json, Value};
 mod offline_cases;
 
 use offline_cases::{
-    offline_flush_batches_multiple_writes, offline_flush_replays_and_confirms_optimistic, offline_flush_unencodable_write_settles_terminal,
-    offline_queue_drains_only_the_named_shard, offline_queue_fifo_replay_order, offline_queue_hydrate_overflow_settles_discarded,
-    offline_queue_hydrates_persisted_writes, offline_queue_identity_gate_rejects_replay, offline_queue_overflow_evicts_oldest,
-    offline_queue_precondition_drops_stale_write, optimistic_cursorless_frame_preserves_cursor, optimistic_layer_drops_on_commit_cursor,
-    optimistic_layer_drops_on_settled_frame, optimistic_layer_rebases_onto_server_frame, optimistic_layer_rolls_back_on_failure,
+    batch_entry_cap_matches_protocol, offline_flush_batch_splits_on_payload_too_large, offline_flush_batches_multiple_writes,
+    offline_flush_replays_and_confirms_optimistic, offline_flush_unencodable_write_settles_terminal, offline_queue_drains_only_the_named_shard,
+    offline_queue_fifo_replay_order, offline_queue_hydrate_overflow_settles_discarded, offline_queue_hydrates_persisted_writes,
+    offline_queue_identity_gate_rejects_replay, offline_queue_overflow_evicts_oldest, offline_queue_precondition_drops_stale_write,
+    optimistic_cursorless_frame_preserves_cursor, optimistic_layer_drops_on_commit_cursor, optimistic_layer_drops_on_settled_frame,
+    optimistic_layer_rebases_onto_server_frame, optimistic_layer_rolls_back_on_failure,
 };
 
 /// Walks up from the crate directory to the repo's `protocol/fixtures`.
@@ -60,6 +62,15 @@ fn canonical(value: &Value) -> String {
     stable_stringify(value)
 }
 
+/// Renders a value the way `client.rs` puts it on the socket, with `serde_json`.
+/// Separate from `canonical`, which is free to normalise: `stable_stringify`
+/// spells every number the ECMAScript way, so `1.0` and `1` compare EQUAL
+/// through it — the divergence a round-trip case exists to catch. Dart's dates
+/// went out as `1700000000000.0` for exactly that reason, on a green suite.
+fn wire_text(value: &Value) -> String {
+    serde_json::to_string(value).expect("serialize")
+}
+
 /// Fails if this run did not exercise every case in the shared manifest.
 ///
 /// libtest has no after-all hook and no cross-test state a final check could
@@ -87,12 +98,14 @@ fn conformance_manifest_is_covered() {
             "wire_codec_round_trip" => wire_codec_round_trip(),
             "undefined_is_distinct_from_null" => undefined_is_distinct_from_null(),
             "over_long_bigint_rejected" => over_long_bigint_rejected(),
-            "malformed_bytes_rejected" => malformed_bytes_rejected(),
+            "malformed_values_rejected" => malformed_values_rejected(),
             "depth_cap_enforced" => depth_cap_enforced(),
+            "exact_integer_range_enforced" => exact_integer_range_enforced(),
             "stable_wire_key_fixtures" => stable_wire_key_fixtures(),
             "format_number_matches_ecmascript" => format_number_matches_ecmascript(),
             "key_order_matches_utf16" => key_order_matches_utf16(),
             "string_escaping_matches_json_stringify" => string_escaping_matches_json_stringify(),
+            "empty_shard_key_is_omitted" => empty_shard_key_is_omitted(),
             "rpc_request_bodies" => rpc_request_bodies(),
             "rpc_responses" => rpc_responses(),
             "non_2xx_without_error_envelope_fails" => non_2xx_without_error_envelope_fails(),
@@ -100,6 +113,7 @@ fn conformance_manifest_is_covered() {
             "server_frame_consumer" => server_frame_consumer(),
             "subscription_stream_yields_frame_values_in_order" => subscription_stream_yields_frame_values_in_order(),
             "shape_subscribe_frame" => shape_subscribe_frame(),
+            "shape_subscriptions_resend_after_reconnect" => shape_subscriptions_resend_after_reconnect(),
             "poke_sequence_materialises_rows" => poke_sequence_materialises_rows(),
             "poke_parts_do_not_apply_before_poke_end" => poke_parts_do_not_apply_before_poke_end(),
             "shape_reset_poke_replaces_membership" => reset_poke_replaces_the_view(),
@@ -116,9 +130,11 @@ fn conformance_manifest_is_covered() {
             "offline_queue_identity_gate_rejects_replay" => offline_queue_identity_gate_rejects_replay(),
             "offline_flush_replays_and_confirms_optimistic" => offline_flush_replays_and_confirms_optimistic(),
             "offline_flush_batches_multiple_writes" => offline_flush_batches_multiple_writes(),
+            "offline_flush_batch_splits_on_payload_too_large" => offline_flush_batch_splits_on_payload_too_large(),
             "optimistic_cursorless_frame_preserves_cursor" => optimistic_cursorless_frame_preserves_cursor(),
             "offline_queue_hydrate_overflow_settles_discarded" => offline_queue_hydrate_overflow_settles_discarded(),
             "offline_flush_unencodable_write_settles_terminal" => offline_flush_unencodable_write_settles_terminal(),
+            "batch_entry_cap_matches_protocol" => batch_entry_cap_matches_protocol(),
             other => panic!("protocol/conformance-cases.json requires case {other:?}, which this suite does not implement"),
         }
     }
@@ -134,8 +150,17 @@ fn wire_codec_round_trip() {
         let name = case["name"].as_str().unwrap_or("?");
         let encoded = &case["encoded"];
         let round_tripped = encode_wire(&decode_wire(encoded).expect("decode")).expect("encode");
+        // A handful of shapes are legitimately not fixed points — a bare [TAG]
+        // array is escaped on the way out, an `undefined` object field is
+        // dropped — and carry the expected re-encoding.
+        let expected = case.get("reencoded").unwrap_or(encoded);
 
-        assert_eq!(canonical(&round_tripped), canonical(encoded), "round-trip mismatch for {name}");
+        assert_eq!(canonical(&round_tripped), canonical(expected), "round-trip mismatch for {name}");
+
+        // And again as the BYTES the transport sends: a round-trip assertion
+        // measured on a string the transport never sends cannot see the
+        // divergence it exists to catch.
+        assert_eq!(wire_text(&round_tripped), wire_text(expected), "wire-text mismatch for {name}");
     }
 }
 
@@ -166,12 +191,60 @@ fn over_long_bigint_rejected() {
     assert_eq!(decode_wire(&json!([TAG, "bigint", "-42"])).expect("decode"), WireValue::BigInt("-42".into()));
 }
 
-fn malformed_bytes_rejected() {
-    assert!(
-        decode_wire(&json!([TAG, "bytes", "not@@base64!!"])).is_err(),
-        "malformed base64 in a bytes tag must be rejected"
-    );
+/// Walks the shared rejection list.
+///
+/// The list is data (`protocol/fixtures/wire-codec.json`), not a per-suite
+/// invention: a rejection each port hard-codes for itself is a rejection only
+/// some ports have, which is exactly how THIS port's hand-rolled base64 decoder
+/// went on accepting `"AQIDA"` and `"AQ=ID"` — handing short, valid-looking
+/// bytes to application code — while seven ports rejected both.
+fn malformed_values_rejected() {
+    let document = fixture("wire-codec.json");
+    let rejected = document["rejected"].as_array().expect("rejected");
+
+    assert!(!rejected.is_empty(), "the fixture must carry a rejection list");
+
+    for case in rejected {
+        let name = case["name"].as_str().unwrap_or("?");
+
+        assert!(decode_wire(&case["encoded"]).is_err(), "{name} must be rejected");
+    }
+
     assert_eq!(decode_wire(&json!([TAG, "bytes", "AQID"])).expect("decode"), WireValue::Bytes(vec![1, 2, 3]));
+
+    // A bare [TAG] is NOT malformed: it is the forward-compat shape, and the
+    // reference hands it back as an ordinary array.
+    assert_eq!(
+        decode_wire(&json!([TAG])).expect("decode"),
+        WireValue::Array(vec![WireValue::String(TAG.into())])
+    );
+}
+
+/// An integer a float64 cannot hold exactly must not silently become a
+/// different integer on the wire.
+///
+/// `WireValue::Number` IS an `f64`, so this port cannot carry such an integer
+/// through the codec at all — the exposure is `from_json`, where a generated
+/// model's `i64` field arrives as a `serde_json` integer with every digit still
+/// intact. Narrowing it there rounded it silently; it now keeps its digits as a
+/// bigint, which a `v.number()` field rejects loudly at the server instead.
+fn exact_integer_range_enforced() {
+    // An integral number is written as a JSON integer, not `1.0` — that is what
+    // `JSON.stringify` writes, and the conformance comparison normalises both
+    // sides through `stable_stringify`, so it could not see the difference.
+    assert_eq!(encode_wire(&WireValue::Number(1.0)).expect("encode"), json!(1));
+    assert_eq!(
+        encode_wire(&WireValue::Number(MAX_EXACT_INTEGER)).expect("encode"),
+        json!(9_007_199_254_740_991_i64)
+    );
+    assert_eq!(encode_wire(&WireValue::Number(3.5)).expect("encode"), json!(3.5));
+
+    assert_eq!(from_json(&json!(9_007_199_254_740_993_u64)), WireValue::BigInt("9007199254740993".into()));
+    assert_eq!(from_json(&json!(-9_007_199_254_740_993_i64)), WireValue::BigInt("-9007199254740993".into()));
+
+    // In range, and a float of any magnitude, stay plain numbers.
+    assert_eq!(from_json(&json!(9_007_199_254_740_991_i64)), WireValue::Number(MAX_EXACT_INTEGER));
+    assert_eq!(from_json(&json!(1e300)), WireValue::Number(1e300));
 }
 
 fn depth_cap_enforced() {
@@ -182,6 +255,29 @@ fn depth_cap_enforced() {
     }
 
     assert!(decode_wire(&nested).is_err());
+
+    // The ENCODE side too, as the Swift and JVM ports assert: a cap that only
+    // guards the inbound direction lets this process build the payload that
+    // crashes the peer.
+    let mut deep = WireValue::String("leaf".to_string());
+
+    for _ in 0..(MAX_DEPTH + 2) {
+        deep = WireValue::Array(vec![deep]);
+    }
+
+    assert!(encode_wire(&deep).is_err());
+
+    // And the boundary, or a cap that regressed to ANY smaller value still
+    // passed the two assertions above: exactly MAX_DEPTH deep must round-trip.
+    let mut deepest = json!("leaf");
+
+    for _ in 0..MAX_DEPTH {
+        deepest = json!([deepest]);
+    }
+
+    let decoded = decode_wire(&deepest).expect("a value nested exactly MAX_DEPTH deep must decode");
+
+    assert_eq!(encode_wire(&decoded).expect("re-encode"), deepest);
 }
 
 fn stable_wire_key_fixtures() {
@@ -217,6 +313,12 @@ fn format_number_matches_ecmascript() {
         (1e-21, "1e-21"),
         (1e20, "100000000000000000000"),
         (1e21, "1e+21"),
+        // An integral double past 2^53: ECMAScript prints the SHORTEST digits
+        // that read back as the same double and zero-pads, so this is not the
+        // exact expansion 1152921504606846976 that `{:.0}` writes.
+        (1.152_921_504_606_847e18, "1152921504606847000"),
+        // Negative zero keeps its sign in a key.
+        (-0.0, "-0"),
     ] {
         assert_eq!(stable_stringify(&json!(value)), want, "formatting {value}");
     }
@@ -262,15 +364,16 @@ fn rpc_request_bodies() {
 
 /// An EMPTY shard key is absent, not the shard named `""`.
 ///
-/// Not a shared fixture case — only some ports ever sent it — but the one place
+/// A manifest case now, so every port is held to it — it used to be this suite's
+/// own test on the grounds that only some ports ever sent it, which is precisely
+/// the reason to make it required rather than local. It is the one place
 /// where getting it wrong is worse than the bug it replaced: this client treats
 /// `""` and `None` as one shard wherever it matches a subscription or drains the
 /// queue, so a `""` that reached the wire would route the write to a DIFFERENT
 /// Durable Object than the subscription it updated. Both builders that carry a
 /// shard key are asserted, because normalising one and not the other is the same
 /// split.
-#[test]
-fn empty_shard_key_is_the_default_shard() {
+fn empty_shard_key_is_omitted() {
     let body = build_rpc_body("messages:send", &WireValue::Object(Vec::new()), Some("")).expect("build");
 
     assert!(body.get("shardKey").is_none(), "an empty shard key is omitted from the body");
@@ -322,7 +425,26 @@ fn rpc_responses() {
 fn non_2xx_without_error_envelope_fails() {
     // protocol/README.md §4.2. Without the status check this returned a null
     // result and no error — the caller believes its mutation committed.
-    assert!(parse_rpc_response(&json!({ "message": "bad gateway" }), 502).is_err());
+    let Err(ClientError::Api(error)) = parse_rpc_response(&json!({ "message": "bad gateway" }), 502) else {
+        panic!("a non-2xx with no error envelope must fail");
+    };
+
+    // The CODE is unchanged, per §4.2. What is new is the flag beside it: this
+    // body never came from a Lunora function, so nothing reached the shard and a
+    // lone queued write must not be dropped for being alone.
+    assert_eq!(error.code, "INTERNAL");
+    assert!(error.transient, "an envelope-less non-2xx reached no verdict");
+    assert!(is_transient(&ClientError::Api(error)));
+
+    // A coded 5xx is likewise the shard failing UNDER the call, while the same
+    // envelope at 4xx is the function's own answer and terminal.
+    let coded = |status| match parse_rpc_response(&json!({ "error": { "code": "BAD_REQUEST", "message": "no" } }), status) {
+        Err(ClientError::Api(error)) => error.transient,
+        other => panic!("expected an ApiError, got {other:?}"),
+    };
+
+    assert!(coded(503));
+    assert!(!coded(400));
 }
 
 fn client_frame_builders() {
@@ -389,6 +511,56 @@ fn server_frame_consumer() {
             assert_eq!(errors[0].code.as_deref(), expect["code"].as_str(), "{name}");
         }
     }
+
+    a_refused_payload_stays_on_its_own_subscription();
+}
+
+/// A `data` payload the codec refuses reaches THAT subscription's error callback
+/// and nothing else.
+///
+/// Returning it out of `handle_frame` ended the caller's socket read loop — and
+/// with it every OTHER subscription on the client — over one bad frame.
+fn a_refused_payload_stays_on_its_own_subscription() {
+    let mut client = Client::new("https://app.example", None);
+
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let errors: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&errors);
+    let seen: Arc<Mutex<Vec<WireValue>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::clone(&seen);
+
+    let first = client.subscribe(
+        "messages:list",
+        WireValue::Object(Vec::new()),
+        None,
+        Some(Box::new(move |error| recorder.lock().expect("errors").push(error.code.clone()))),
+    );
+    let second = client.subscribe(
+        "messages:count",
+        WireValue::Object(Vec::new()),
+        Some(Box::new(move |value| observer.lock().expect("seen").push(value.clone()))),
+        None,
+    );
+
+    // A bigint tag whose payload is not a number: inside the codec's vocabulary,
+    // outside its grammar.
+    let refused = format!(r#"{{"cursor":1,"data":["{TAG}","bigint","not-a-number"],"id":"{first}","type":"data"}}"#);
+    let kind = client.handle_frame(&refused).expect("a refused payload must not fail handle_frame");
+
+    assert_eq!(kind.as_deref(), Some("error"), "it is reported as an error frame");
+    assert_eq!(
+        *errors.lock().expect("errors"),
+        vec![Some(CODE_INVALID_FRAME.to_string())],
+        "on the addressed subscription's own error callback"
+    );
+
+    // The read loop survived, so every other subscription still delivers.
+    client
+        .handle_frame(&format!(r#"{{"cursor":2,"data":7,"id":"{second}","type":"data"}}"#))
+        .expect("the next good frame still lands");
+
+    assert_eq!(*seen.lock().expect("seen"), vec![WireValue::Number(7.0)]);
 }
 
 /// The channel form of a live query: same subscription, same decode, same order
@@ -430,6 +602,61 @@ fn shape_subscribe_frame() {
     let frame = build_shape_subscribe_frame("shape_1", "roomMessages", Some(&args), None, None).expect("build");
 
     assert_eq!(canonical(&frame), canonical(&document["shape"]["shape-subscribe-cold"]));
+}
+
+/// A reconnect re-subscribes BOTH registries.
+///
+/// A resend that walked only the queries left every `subscribe_shape` view
+/// subscribed to a socket that no longer exists — silently, and for the rest of
+/// the process's life.
+fn shape_subscriptions_resend_after_reconnect() {
+    let mut client = Client::new("https://app.example", None);
+
+    client.attach_socket(Box::new(|_frame| {}));
+    client.subscribe(
+        "messages:list",
+        WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
+        None,
+        None,
+    );
+    client.subscribe_shape(
+        "roomMessages",
+        Some(WireValue::Object(vec![("room".into(), WireValue::String("general".into()))])),
+        None,
+        None,
+    );
+
+    // The cursors a resume carries are written by the frame handler, so they have
+    // to exist before the resend is built.
+    client
+        .handle_frame(r#"{"cursor":9,"data":[],"epoch":"e1","id":"sub_1","type":"data"}"#)
+        .expect("data frame");
+    client
+        .handle_frame(r#"{"epoch":"e1","pokeId":"poke-1","type":"pokeStart"}"#)
+        .expect("poke start");
+    client
+        .handle_frame(r#"{"pokeId":"poke-1","reset":true,"rowsPatch":[],"shapeId":"shape_1","type":"pokePart"}"#)
+        .expect("poke part");
+    client
+        .handle_frame(r#"{"checkpoint":5,"epoch":"e1","pokeId":"poke-1","type":"pokeEnd"}"#)
+        .expect("poke end");
+
+    let resent: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&resent);
+
+    client.attach_socket(Box::new(move |frame| recorder.lock().expect("resent").push(frame.clone())));
+    client.resend_subscriptions().expect("resend");
+
+    let frames = resent.lock().expect("resent");
+    let kinds: Vec<&str> = frames.iter().map(|frame| frame["type"].as_str().unwrap_or_default()).collect();
+
+    assert_eq!(kinds, vec!["subscribe", "shape_subscribe"], "both registries, queries first");
+    assert_eq!(frames[0]["query"]["sinceSeq"], json!(9), "the query resumes from its tracked cursor");
+    assert_eq!(frames[1]["id"], json!("shape_1"));
+    assert_eq!(frames[1]["shape"]["name"], json!("roomMessages"));
+    assert_eq!(frames[1]["shape"]["args"], json!({ "room": "general" }));
+    assert_eq!(frames[1]["sinceCheckpoint"], json!(5), "and the shape from its tracked checkpoint");
+    assert_eq!(frames[1]["sinceEpoch"], json!("e1"));
 }
 
 fn poke_sequence_materialises_rows() {

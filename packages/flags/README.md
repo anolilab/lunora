@@ -79,7 +79,11 @@ export const listPosts = query(async (ctx) => {
 ```
 
 `ctx.flags` never throws: a missing flag, type mismatch, or provider error resolves
-with the `defaultValue`. The default `targetingKey` (from `identify`) is merged under
+with the `defaultValue`. It does not do so silently — a provider that fails to BIND
+(a missing binding, an unset token, a throwing `initialize`) is logged through
+`defineFlags({ logger })`, or on `console.error` when none is configured, since
+otherwise a misconfigured deployment serves every flag at its checked-in default
+with nothing to notice. The default `targetingKey` (from `identify`) is merged under
 any per-call context, and identical evaluations within one request are memoized.
 
 ## Exports

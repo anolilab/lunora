@@ -17,22 +17,38 @@ export const parseDevVariable = (contents: string, key: string): string | undefi
 };
 
 /**
- * Resolve the worker's admin token so the studio can auto-authenticate in
- * dev. Prefers the `LUNORA_ADMIN_TOKEN` env var, then the project's `.dev.vars`
- * — the same file `@cloudflare/vite-plugin` / `wrangler dev` feed the worker, so
- * the token the studio sends matches the one the worker's admin gate
- * verifies. Returns `undefined` when neither is set (the studio then prompts).
+ * Resolve the worker's admin token so the studio can auto-authenticate in dev.
+ *
+ * The ONLY source is the project's `.dev.vars` — the file
+ * `@cloudflare/vite-plugin` / `wrangler dev` feed the local worker, and
+ * therefore the only token the worker's admin gate can verify. A shell-exported
+ * `LUNORA_ADMIN_TOKEN` (the documented way to run `lunora backup` /
+ * `lunora deploy --migrate` against **production**) never reaches the local
+ * worker's `env`, so embedding it would both fail the gate and put a production
+ * bearer into every `/__lunora` document served on the developer's machine.
+ * When the two disagree we say so once and keep using `.dev.vars`.
+ *
+ * Returns `undefined` when `.dev.vars` carries no token (the studio then prompts).
  */
 export const resolveAdminToken = (root: string): string | undefined => {
-    const fromEnv = process.env["LUNORA_ADMIN_TOKEN"];
-
-    if (typeof fromEnv === "string" && fromEnv !== "") {
-        return fromEnv;
-    }
+    let fromDevVariables: string | undefined;
 
     try {
-        return parseDevVariable(readFileSync(join(root, ".dev.vars"), "utf8"), "LUNORA_ADMIN_TOKEN");
+        fromDevVariables = parseDevVariable(readFileSync(join(root, ".dev.vars"), "utf8"), "LUNORA_ADMIN_TOKEN");
     } catch {
-        return undefined;
+        fromDevVariables = undefined;
     }
+
+    const fromEnvironment = process.env["LUNORA_ADMIN_TOKEN"];
+
+    if (typeof fromEnvironment === "string" && fromEnvironment !== "" && fromEnvironment !== fromDevVariables) {
+        // Not rate-limited on purpose: each host resolves the token once per dev
+        // session (the document is built once and cached), so this is one line.
+        // eslint-disable-next-line no-console -- dev-host notice; the studio hosts have no shared logger at this seam.
+        console.warn(
+            "[lunora] LUNORA_ADMIN_TOKEN is exported in this shell but differs from .dev.vars — the local worker only verifies the .dev.vars token, so the studio uses that one.",
+        );
+    }
+
+    return fromDevVariables;
 };

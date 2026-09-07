@@ -38,6 +38,22 @@ describe("storage-correlation", () => {
             expect(references).toHaveLength(2);
         });
 
+        it("addresses a doc field whose name contains a double quote", () => {
+            expect.assertions(1);
+
+            // A JSON path is not a SQL identifier: doubling `"` (the identifier
+            // rule) emits `$."file""key"`, which SQLite resolves to nothing and
+            // reads back as NULL, so the scan saw no values and reported nothing
+            // dangling. `$."file\"key"` — the JSON string escape, from
+            // `shared/json-path-segment.ts` — reads the value.
+            database.raw(`CREATE TABLE "odd" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+            database.raw(`INSERT INTO "odd" VALUES ('o1', 1, ?)`, JSON.stringify({ 'file"key': "u/gone.png" }));
+
+            const { references } = findDanglingReferences(database.sql, { odd: ['file"key'] }, new Set(["u/1.png"]));
+
+            expect(references).toEqual([{ column: 'file"key', id: "o1", key: "u/gone.png", table: "odd" }]);
+        });
+
         it("reports no dangling references when every value resolves to a live object (owned case)", () => {
             expect.assertions(2);
 

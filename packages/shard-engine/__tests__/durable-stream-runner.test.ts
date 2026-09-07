@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DurableStreamRun } from "../src/durable-stream";
-import { appendStreamChunk, claimStreamRun, finishStreamRun, migrateDurableStreams, readStreamRun, trimStreamRuns } from "../src/durable-stream";
+import {
+    appendStreamChunk,
+    claimStreamRun,
+    finishStreamRun,
+    migrateDurableStreams,
+    readStreamChunks,
+    readStreamRun,
+    trimStreamRuns,
+} from "../src/durable-stream";
 import type { DurableStreamSink } from "../src/durable-stream-runner";
 import { decideDurableAttach, DurableStreamRunner } from "../src/durable-stream-runner";
 import createSqliteExec from "./_helpers/node-sqlite";
@@ -193,6 +201,44 @@ describe("durableStreamRunner.attach", () => {
             }
         });
 
+    it("sweeps expired transcripts on a replay-terminal attach, not only when a NEW run starts", async () => {
+        expect.assertions(3);
+
+        // A run whose retention lapsed long ago...
+        claimStreamRun(harness.sql, "expired", Date.now() - 100_000, 1);
+        appendStreamChunk(harness.sql, "expired", 1, JSON.stringify("stale"));
+        finishStreamRun(harness.sql, "expired", "complete", 1);
+
+        // ...alongside a finished, still-in-retention run a caller replays.
+        const kept = Date.now();
+
+        claimStreamRun(harness.sql, "kept", kept, 86_400_000);
+        appendStreamChunk(harness.sql, "kept", 1, JSON.stringify("hello"));
+        appendStreamChunk(harness.sql, "kept", 2, JSON.stringify("again"));
+        finishStreamRun(harness.sql, "kept", "complete", 2);
+
+        const runner = new DurableStreamRunner({ sql: () => harness.sql });
+        const { events, sink } = recordingSink();
+
+        // The replay-terminal branch returns before the run-claim path — the only
+        // place the sweep used to run. A shard whose streaming settled into
+        // replays (or stopped starting runs at all) therefore kept every expired
+        // transcript forever, however long its retention had been set to.
+        await runner.attach({
+            generation: kept,
+            iterator: () => {
+                throw new Error("a replay must never re-run the handler");
+            },
+            runKey: "kept",
+            sinceChunk: 1,
+            sink,
+        });
+
+        expect(chunksOf(events).map((event) => event.data)).toStrictEqual(["again"]);
+        expect(readStreamRun(harness.sql, "expired")).toBeUndefined();
+        expect(readStreamRun(harness.sql, "kept")).toBeDefined();
+    });
+
     it("starts a fresh run and stamps every chunk with the run's generation", async () => {
         expect.assertions(4);
 
@@ -303,6 +349,68 @@ describe("durableStreamRunner.attach", () => {
 
         expect(chunksOf(second.events).map((event) => event.data)).toStrictEqual(["tail"]);
         expect(second.events.at(-1)?.type).toBe("complete");
+    });
+
+    it("leaves no chunks behind when a TTL sweep took its run row mid-production", async () => {
+        expect.assertions(3);
+
+        const runner = new DurableStreamRunner({ sql: () => harness.sql });
+        const first = recordingSink();
+
+        let release = (): void => {};
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        // Long enough that the halves either side of the sweep both matter: the
+        // first 20 chunks are persisted under a live row, the last 20 under a key
+        // whose row the sweep already removed.
+        const answer = async function* (): AsyncGenerator<string> {
+            for (let index = 1; index <= 20; index += 1) {
+                yield `dead-${String(index)}`;
+            }
+
+            await gate;
+
+            for (let index = 21; index <= 40; index += 1) {
+                yield `dead-${String(index)}`;
+            }
+        };
+
+        const producing = runner.attach({ iterator: () => answer(), runKey: "run-a", sinceChunk: 0, sink: first.sink, ttlMs: 50 });
+
+        await waitForFirstChunk(first.events);
+
+        trimStreamRuns(harness.sql, Date.now() + 60_000);
+
+        expect(readStreamRun(harness.sql, "run-a")).toBeUndefined();
+
+        release();
+        await producing;
+
+        // The sweep's chunk delete is scoped by `run_key IN (SELECT ... FROM
+        // __stream_runs ...)`, so anything appended after the row went is
+        // unreachable by every future sweep — a permanent leak in the shard's
+        // shared SQLite.
+        expect(readStreamChunks(harness.sql, "run-a", 0)).toStrictEqual([]);
+
+        // ...and because `appendStreamChunk` is `INSERT OR IGNORE`, the next run
+        // under the same key silently inherits them: its own chunks at the
+        // colliding seqs are dropped and the dead run's tail is what a reconnect
+        // replays, under the new run's generation stamp.
+        const fresh = recordingSink();
+
+        const replacement = async function* (): AsyncGenerator<string> {
+            for (let index = 1; index <= 40; index += 1) {
+                yield `live-${String(index)}`;
+            }
+        };
+
+        await runner.attach({ iterator: () => replacement(), runKey: "run-a", sinceChunk: 0, sink: fresh.sink });
+
+        expect(readStreamChunks(harness.sql, "run-a", 0).map((chunk) => JSON.parse(chunk.dataJson) as string)).toStrictEqual(
+            Array.from({ length: 40 }, (_, index) => `live-${String(index + 1)}`),
+        );
     });
 
     it("replays a finished run's tail and outcome to a matching-generation resume without re-running the handler", async () => {

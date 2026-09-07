@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import bindingsProvisionPlugin from "../src/bindings-provision-plugin";
 import type { ResolvedLunoraPluginOptions } from "../src/types";
 import { warnWhenDockerMissing, wranglerValidatorPlugin } from "../src/wrangler-validator-plugin";
 
@@ -37,6 +38,17 @@ export const schema = defineSchema({
 });
 `;
 
+const WRANGLER_WITHOUT_D1 = `{
+    "name": "x",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["web_socket_auto_reply_to_close"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }]
+}
+`;
+
 const VALID_WRANGLER = `{
     "name": "lunora-app",
     "main": "src/index.ts",
@@ -60,6 +72,7 @@ const makeOptions = (projectRoot: string): ResolvedLunoraPluginOptions => {
         overlay: false,
         projectRoot,
         schemaDir: "lunora",
+        shard: {},
         target: "cloudflare",
         validateWrangler: true,
     };
@@ -72,8 +85,35 @@ const writeSchema = (source: string): void => {
     writeFileSync(join(workdir, "lunora", "schema.ts"), source, "utf8");
 };
 
-const callConfigResolved = (plugin: ReturnType<typeof wranglerValidatorPlugin>): void => {
-    (plugin.configResolved as (this: unknown) => void).call(undefined);
+/**
+ * Run one plugin's `config` hook — the phase `@cloudflare/vite-plugin` parses
+ * `wrangler.jsonc` in, so anything this hook writes must be on disk by the time
+ * it returns.
+ */
+const runConfigHook = async (plugin: ReturnType<typeof wranglerValidatorPlugin>, isPreview = false): Promise<void> => {
+    await (plugin.config as (this: unknown, userConfig: unknown, environment: { command: string; isPreview: boolean }) => Promise<void>).call(
+        undefined,
+        {},
+        {
+            command: "serve",
+            isPreview,
+        },
+    );
+};
+
+/**
+ * Drive the pair through Vite's hook order: both `config` hooks in registration
+ * order — `bindingsProvisionPlugin` writes the inferred bindings, then the
+ * validator records `isPreview` — and then `configResolved`. The same sequence
+ * `resolveConfig` runs, so a test cannot accidentally validate in an order the
+ * dev server never uses, nor validate against bindings the dev server would only
+ * have provisioned later.
+ */
+const runHooks = async (plugin: ReturnType<typeof wranglerValidatorPlugin>, isPreview = false): Promise<void> => {
+    await runConfigHook(bindingsProvisionPlugin(makeOptions(workdir)), isPreview);
+    await runConfigHook(plugin, isPreview);
+
+    await (plugin.configResolved as (this: unknown) => void | Promise<void>).call(undefined);
 };
 
 describe("wrangler-validator-plugin", () => {
@@ -86,7 +126,7 @@ describe("wrangler-validator-plugin", () => {
     });
 
     describe("wranglerValidatorPlugin", () => {
-        it("passes when wrangler.jsonc declares everything the schema implies", () => {
+        it("passes when wrangler.jsonc declares everything the schema implies", async () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_WITH_GLOBAL);
@@ -94,24 +134,20 @@ describe("wrangler-validator-plugin", () => {
 
             const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-            expect(() => {
-                callConfigResolved(plugin);
-            }).not.toThrow();
+            await expect(runHooks(plugin)).resolves.toBeUndefined();
         });
 
-        it("throws when wrangler.jsonc is missing entirely", () => {
+        it("throws when wrangler.jsonc is missing entirely", async () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_NO_GLOBAL);
 
             const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-            expect(() => {
-                callConfigResolved(plugin);
-            }).toThrow(WRANGLER_NOT_FOUND);
+            await expect(runHooks(plugin)).rejects.toThrow(WRANGLER_NOT_FOUND);
         });
 
-        it("throws when SHARD durable-object binding is missing", () => {
+        it("throws when SHARD durable-object binding is missing", async () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_NO_GLOBAL);
@@ -128,13 +164,11 @@ describe("wrangler-validator-plugin", () => {
 
             const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-            expect(() => {
-                callConfigResolved(plugin);
-            }).toThrow(SHARD_SHARDDO);
+            await expect(runHooks(plugin)).rejects.toThrow(SHARD_SHARDDO);
         });
 
-        it("throws when schema has .global() tables but D1 binding is missing", () => {
-            expect.assertions(1);
+        it("provisions the D1 binding a .global() schema implies instead of killing the dev server", async () => {
+            expect.assertions(2);
 
             writeSchema(SCHEMA_WITH_GLOBAL);
             writeFileSync(
@@ -145,7 +179,8 @@ describe("wrangler-validator-plugin", () => {
     "compatibility_flags": ["web_socket_auto_reply_to_close"],
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
-    }
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }]
 }
 `,
                 "utf8",
@@ -153,12 +188,37 @@ describe("wrangler-validator-plugin", () => {
 
             const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-            expect(() => {
-                callConfigResolved(plugin);
-            }).toThrow(D1_DATABASES);
+            // The binding this check requires is one Lunora writes itself, so
+            // validating before provisioning killed `vite dev` the first time a
+            // project added a `.global()` table.
+            await expect(runHooks(plugin)).resolves.toBeUndefined();
+            expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toMatch(D1_DATABASES);
         });
 
-        it("does not require D1 when no table is global", () => {
+        it("writes the inferred binding in `config`, before the Cloudflare plugin parses wrangler.jsonc", async () => {
+            expect.assertions(2);
+
+            writeSchema(SCHEMA_WITH_GLOBAL);
+            writeFileSync(join(workdir, "wrangler.jsonc"), WRANGLER_WITHOUT_D1, "utf8");
+
+            // The write lives in its OWN plugin, registered unconditionally: it is
+            // not the validator's job and must not be skippable with the checks.
+            //
+            // `@cloudflare/vite-plugin` reads and parses `wrangler.jsonc` inside its
+            // own `config` hook and builds the miniflare worker options from that
+            // parsed object; its restart watcher only exists from `configureServer`.
+            // So a binding written any later than `config` never reaches the worker
+            // that boots — `env.DB` is missing while the file on disk looks right.
+            // `enforce: "pre"` is what puts this hook ahead of the Cloudflare one.
+            const plugin = bindingsProvisionPlugin(makeOptions(workdir));
+
+            await runConfigHook(plugin);
+
+            expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toMatch(D1_DATABASES);
+            expect(plugin.enforce).toBe("pre");
+        });
+
+        it("does not require D1 when no table is global", async () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_NO_GLOBAL);
@@ -179,12 +239,10 @@ describe("wrangler-validator-plugin", () => {
 
             const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-            expect(() => {
-                callConfigResolved(plugin);
-            }).not.toThrow();
+            await expect(runHooks(plugin)).resolves.toBeUndefined();
         });
 
-        it("throws when compatibility_date is too old", () => {
+        it("throws when compatibility_date is too old", async () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_NO_GLOBAL);
@@ -204,12 +262,10 @@ describe("wrangler-validator-plugin", () => {
 
             const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-            expect(() => {
-                callConfigResolved(plugin);
-            }).toThrow(COMPATIBILITY_DATE);
+            await expect(runHooks(plugin)).rejects.toThrow(COMPATIBILITY_DATE);
         });
 
-        it("does not require web_socket_auto_reply_to_close when compatibility_date is recent enough", () => {
+        it("does not require web_socket_auto_reply_to_close when compatibility_date is recent enough", async () => {
             expect.assertions(1);
 
             // The flag became the default on 2026-04-07; workerd warns when it's set redundantly.
@@ -231,12 +287,10 @@ describe("wrangler-validator-plugin", () => {
 
             const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-            expect(() => {
-                callConfigResolved(plugin);
-            }).not.toThrow();
+            await expect(runHooks(plugin)).resolves.toBeUndefined();
         });
 
-        it("supports jsonc comments and trailing commas", () => {
+        it("supports jsonc comments and trailing commas", async () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_NO_GLOBAL);
@@ -258,9 +312,22 @@ describe("wrangler-validator-plugin", () => {
 
             const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-            expect(() => {
-                callConfigResolved(plugin);
-            }).not.toThrow();
+            await expect(runHooks(plugin)).resolves.toBeUndefined();
+        });
+    });
+
+    describe("vite preview", () => {
+        it("validates nothing under preview, which resolves as a `serve` command", async () => {
+            expect.assertions(1);
+
+            // `vite preview` resolves with `command: "serve"`, so `apply: "serve"`
+            // plugins run there too. Previewing a built app must not fail on the
+            // project's wrangler config — or shell out to `docker info`.
+            writeSchema(SCHEMA_NO_GLOBAL);
+
+            const plugin = wranglerValidatorPlugin(makeOptions(workdir));
+
+            await expect(runHooks(plugin, true)).resolves.toBeUndefined();
         });
     });
 

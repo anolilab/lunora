@@ -9,8 +9,9 @@
  * writes are enabled), each backed by `LunoraClient` over HTTP RPC. It also
  * exposes the deployment's observability reads (`lunora_get_logs`,
  * `lunora_get_issues`, `lunora_get_advisories`, `lunora_get_query_insights`,
- * `lunora_get_migration_status`) whenever an admin token resolved — read-only,
- * but privileged, so they are omitted entirely without one. The server is
+ * `lunora_get_migration_status`) when `allowObservability` (or the
+ * LUNORA_MCP_ALLOW_OBSERVABILITY env) is set — read-only, but they return
+ * production user data, so they are omitted entirely without it. The server is
  * read-only by default — the write tools are exposed only when `allowWrites`
  * (or the `LUNORA_MCP_ALLOW_WRITES` env) is set, and every run tool is
  * allowlisted against the deployment's discovered public functions. It can also
@@ -34,11 +35,20 @@ export type { AuthedMcpFetchHandlerOptions, AuthedMcpServerOptions, McpAccessTok
 export { createAuthedMcpFetchHandler, mcpTokenScopes } from "./authed-http";
 export type { McpServerInfo, McpTool } from "./compose";
 export { createToolServer } from "./compose";
-export type { McpFetchHandler } from "./http";
-export { createMcpFetchHandler, serveStateless } from "./http";
+export type { McpFetchHandler, McpFetchHandlerOptions, ServeStatelessOptions } from "./http";
+export { createMcpFetchHandler, DEFAULT_MAX_REQUEST_BYTES, serveStateless } from "./http";
 export type { LocalDeployment, LocalDeploymentSource, LocalMcpServerOptions } from "./local";
 export { connectLocalStdio, createLocalMcpServer, LOCAL_SERVER_NAME, localTools, NO_DEPLOYMENT_MESSAGE } from "./local";
-export type { PaidMcpChargeConfig, PaidMcpServer, PaidMcpServerConfig, RegisterPaidToolOptions, RegisterToolOptions, ToolHandler } from "./paid";
+export type {
+    PaidMcpChargeConfig,
+    PaidMcpExecutionContext,
+    PaidMcpFetchHandler,
+    PaidMcpServer,
+    PaidMcpServerConfig,
+    RegisterPaidToolOptions,
+    RegisterToolOptions,
+    ToolHandler,
+} from "./paid";
 export { createPaidMcpServer } from "./paid";
 export type { LunoraMcpServerOptions } from "./server";
 export { connectStdio, createLunoraMcpServer } from "./server";

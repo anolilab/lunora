@@ -12,9 +12,7 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 ### `ArgsOf` (type)
 
 ```ts
-type ArgsOf<F extends FunctionReference> = F extends {
-    _args?: infer A;
-} ? A : Record<string, unknown>;
+type ArgsOf<F> = F extends FunctionReference<infer _K, infer A, infer _R> ? A : never;
 ```
 
 ### `BranchCompensationParams` (interface)
@@ -32,12 +30,22 @@ interface BranchCompensationParams {
 }
 ```
 
+### `FunctionKind` (type)
+
+```ts
+type FunctionKind = "action" | "mutation" | "query" | "stream";
+```
+
 ### `FunctionReference` (interface)
 
 ```ts
-interface FunctionReference {
+interface FunctionReference<Kind extends FunctionKind = FunctionKind, Args = unknown, Return = unknown> {
+    readonly __lunoraPhantom?: {
+        args: Args;
+        kind: Kind;
+        returns: Return;
+    };
     readonly __lunoraRef: string;
-    readonly _kind?: "query" | "mutation" | "action";
 }
 ```
 
@@ -633,6 +641,12 @@ const defineWorkflow: <Params = Record<string, unknown>, Output = unknown>(confi
 
 ```ts
 const defineWorkflowEvent: <Payload>(type: string, payload: Validator<Payload>) => WorkflowEventDefinition<Payload>;
+```
+
+### `isDuplicateInstanceError` (const)
+
+```ts
+const isDuplicateInstanceError: (error: unknown) => boolean;
 ```
 
 ### `isNonRetryableError` (const)

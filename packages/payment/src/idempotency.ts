@@ -1,10 +1,59 @@
 /**
  * Outbound idempotency keys.
  *
- * Every mutating provider call carries a stable key derived from our own operation + inputs, so
- * a Worker retry can never double-charge. Distinct from inbound webhook dedupe (keyed on the
- * provider event id).
+ * A key here is a stable string derived from our own operation + inputs, so a Worker retry of a
+ * mutating provider call cannot repeat its effect. Distinct from inbound webhook dedupe (keyed on
+ * the provider event id).
+ *
+ * **This only reaches the wire where the provider offers a surface for it, and most do not.** Only
+ * Stripe carries a general per-request `idempotencyKey`; the other four adapters can key a call
+ * only where the request body happens to have a field for it (Creem checkout's `requestId`, Dodo
+ * usage ingestion's `event_id`, Polar usage ingestion's `externalId`). Everything else is sent
+ * un-keyed, and a retry is a second call at the provider.
+ *
+ * The un-keyable calls that MOVE MONEY, and are therefore the real exposure:
+ *
+ * - `creem.ts` `subscriptions.upgrade` — `UpgradeSubscriptionRequestEntity` is `{ productId,
+ * updateBehavior }` and Creem's `RequestOptions` has no key field. We pass
+ * `updateBehavior: "proration-charge-immediately"`, so a retry charges the proration twice.
+ * (Creem does understand `Idempotency-Key` on `products.create`, which takes it as an explicit
+ * argument — nothing in the SDK says the subscription routes honour the same header.)
+ * - `dodopayments.ts` `subscriptions.changePlan` — sent with
+ * `proration_billing_mode: "prorated_immediately"`, so the same double-proration applies. See
+ * the Dodo note below for why its typed key is not a fix.
+ * - `autumn.ts` `billing.attach` (both the `createCheckout` and `updateSubscription` paths) —
+ * `autumn-js` has no idempotency surface anywhere (zero matches for `idempot` in the package),
+ * and attach charges the card immediately unless `invoiceMode` is set, which we do not set.
+ * - Polar and Dodo `refunds.create` — Polar's `RefundCreate` is `{ metadata, orderId, reason,
+ * amount, comment, revokeBenefits }`, with no key field and no working per-request option on
+ * either SDK, so a retry genuinely issues a second refund. `create-payment.ts`'s `refundPayment`
+ * still computes a key and hands it to the adapter; those two adapters have nowhere to put it.
+ * The guard is local instead, and provider-agnostic: `refundPayment` records the refunded total
+ * on the session row before returning, so the over-refund check rejects the retry without
+ * reaching the adapter at all.
+ *
+ * Un-keyable and non-money-moving, for completeness: Creem `subscriptions.cancel` and
+ * `customers.create`; Autumn `billing.update` (the cancel/uncancel pair); Dodo
+ * `subscriptions.update`; and the hosted-checkout creators on Polar and Dodo (a checkout is a URL
+ * the customer must still act on, so a duplicate is an abandoned session, not a charge).
+ *
+ * **Dodo's `RequestOptions.idempotencyKey` is inert.** The field is typed on every method, but the
+ * client only turns it into a header when `this.idempotencyHeader` is set, and that property is
+ * declared and read and never once assigned in the package — so the key we pass on
+ * `customers.create` type-checks and never leaves the process. Dodo's only working idempotency in
+ * this SDK version is body-level (`event_id` on usage ingestion), which we do use.
+ *
+ * **A key is stable for the logical OPERATION, not fresh per attempt.** A plan change is keyed on
+ * the subscription AND the target plan/quantity, so an identical retry replays while a different
+ * target is a different key — one key across two parameter sets is a provider-side mismatch error.
+ * The cost of that stability is a toggle: re-issuing a target that was applied and then changed
+ * away from, inside the provider's idempotency window (24h on Stripe), replays the first response
+ * instead of acting. Pass an explicit key (`SubscriptionPatch.idempotencyKey`,
+ * `CancelSubscriptionOptions.idempotencyKey`, `resumeSubscription`'s `options`) for that case.
+ * Those overrides are honoured by the Stripe adapter only — per the list above, no other
+ * provider's plan-change endpoint accepts a key at all.
  */
+import type { Money } from "./types";
 
 const encoder = new TextEncoder();
 
@@ -29,3 +78,26 @@ export const derivedIdempotencyKey = async (operation: string, provider: string,
 
     return `${operation}:${provider}:${digest}`;
 };
+
+/**
+ * Marker recording that the facade already folded ONE specific refund into `sessionId`'s row.
+ *
+ * Claimed (in the same store as inbound event ids) by `refundPayment` and consumed by the provider's
+ * confirming `payment.refunded` webhook, so a DELTA provider's event — Polar, Creem, Dodo, which
+ * report one refund each rather than a running total — does not add the same money a second time.
+ * Absolute providers (Stripe) are idempotent without it, and an unconsumed marker is inert.
+ *
+ * The key is the provider's own `refundId` whenever there is one, because that is the only per-refund
+ * identity: two in-flight refunds of the same amount on one session are two distinct refunds, and
+ * keying on the amount would give them one shared marker, so one confirming event would be counted
+ * twice. `amount` is the fallback for a provider that reports no refund id, and carries that
+ * collision.
+ */
+export const localRefundKey = (sessionId: string, refundId: string | undefined, amount: Money): string =>
+    refundId === undefined ? `local-refund:${sessionId}:${amount.currency}:${String(amount.minorUnits)}` : `local-refund:${sessionId}:id:${refundId}`;
+
+/**
+ * Claim `type` recorded for a {@link localRefundKey} marker. Internal bookkeeping, not a provider
+ * delivery — the `marker.` prefix is what separates the two in the `events` audit log.
+ */
+export const LOCAL_REFUND_CLAIM_TYPE = "marker.local_refund";

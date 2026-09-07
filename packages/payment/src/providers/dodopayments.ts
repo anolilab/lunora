@@ -96,6 +96,36 @@ const SUBSCRIPTION_STATE_BY_DODO_STATUS: Record<string, SubscriptionState> = {
 
 const notSupported = makeNotSupported("dodopayments (merchant-of-record)");
 
+/** A whole number of minor units, the only string shape `readMinorUnits` will accept. */
+const WHOLE_MINOR_UNITS = /^-?\d+$/;
+
+/**
+ * Minor units from a Dodo money field that may arrive as a number **or** a string.
+ *
+ * `refund.succeeded` carries `Refund.amount` as a `number`, but `dispute.*` carries
+ * `GetDispute.amount` as a **string** ("represented as a string to accommodate precision"), which a
+ * plain `readNumber` reads as `undefined` — so a lost chargeback reversed `0`.
+ *
+ * A digits-only string is read as minor units, matching every money field Dodo *does* document
+ * (`total_amount`: "the currency's smallest unit — cents for USD, yen for JPY, fils for KWD"). A
+ * string that is not a whole number is refused rather than scaled: Dodo does not document the
+ * dispute amount's unit, and choosing between `"25.00"` meaning 25 and meaning 2500 is a 100x error
+ * on a funds reversal. Returning `undefined` leaves the action with no amount, which `sync.ts`
+ * records as a FULL reversal with the money untouched — loud and fail-closed — rather than writing a
+ * confidently wrong figure into the ledger.
+ */
+const readMinorUnits = (object: Record<string, unknown>, key: string): bigint | undefined => {
+    const value = object[key];
+
+    if (typeof value === "number") {
+        // Round before BigInt, as elsewhere in this adapter: a stray fractional number would throw a
+        // RangeError out of the parse path (a webhook 400 → provider retry loop).
+        return Number.isFinite(value) ? BigInt(Math.round(value)) : undefined;
+    }
+
+    return typeof value === "string" && WHOLE_MINOR_UNITS.test(value) ? BigInt(value) : undefined;
+};
+
 const customerIdOf = (object: Record<string, unknown>): string | undefined =>
     readString(asRecord(object.customer), "customer_id") ?? readString(object, "customer_id");
 
@@ -153,16 +183,23 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         // `unhandled`; a won dispute needs no transition.
         case "dispute.lost":
         case "refund.succeeded": {
+            // `refund.succeeded` reports a number, `dispute.lost` a string — see `readMinorUnits`.
+            const minorUnits = readMinorUnits(object, "amount");
+
             return {
                 ...base,
-                amount: money(BigInt(Math.round(readNumber(object, "amount") ?? 0)), currency),
+                amount: minorUnits === undefined ? undefined : money(minorUnits, currency),
                 referenceId: referenceFromMetadata(object),
+                // Per-refund identity for the sync layer's marker match. A lost dispute is not a refund
+                // the facade issued, so `dispute_id` stands in: distinct from every refund id, it can
+                // never consume a marker and have its reversal silently dropped.
+                refundId: readString(object, "refund_id") ?? readString(object, "dispute_id"),
                 sessionId: readString(object, "payment_id"),
                 type: "payment.refunded",
             };
         }
         // A cancelled payment never settled — record it as a non-entitling failure (there is no
-        // dedicated `payment.canceled` action; `failed` is the closest terminal, non-entitling state).
+        // dedicated `payment.canceled` action; `failed` is the closest non-entitling state).
         case "payment.cancelled":
         case "payment.failed": {
             return { ...base, referenceId: referenceFromMetadata(object), sessionId: readString(object, "payment_id"), type: "payment.failed" };
@@ -188,7 +225,22 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "subscription.plan_changed":
         case "subscription.renewed":
         case "subscription.updated": {
-            const status = readString(object, "status");
+            // The event name is authoritative for a pause: Dodo's `SubscriptionStatus` is
+            // pending|active|on_hold|cancelled|failed|expired, with no `paused` member, so a
+            // `subscription.paused` payload cannot say so itself. Read from the status alone, a
+            // deliberate pause landed on the fail-closed `past_due` and raised the dunning alert
+            // `sync.ts` emits for it. `paused` is non-entitling either way — this only stops a
+            // customer-initiated pause from being reported as a failed payment.
+            //
+            // The label lasts until the next `reconcile` and no longer: `getSubscriptionStatus` reads
+            // the same enum, so it re-reports `past_due` and reconcile — which trusts the adapter for
+            // subscriptions — writes that back (as `reconcile.drift`, not a fresh dunning alert). Not
+            // preserved the way `mergePaymentTruth` preserves a refund: a refund is monotone and
+            // fails safe, whereas pinning `paused` over provider truth would keep a subscription that
+            // resumed out-of-band non-entitling forever, defeating the one sweep meant to catch a
+            // missed resume. So `paused -> resume` is a webhook-only edge here; on Stripe and Creem,
+            // whose status enums do carry `paused`, the label survives reconcile.
+            const status = eventType === "subscription.paused" ? "paused" : readString(object, "status");
 
             return {
                 ...base,
@@ -262,8 +314,10 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
 
         getOrCreateCustomer: async (ref: CustomerRef): Promise<Customer> => {
             // Dodo's `customers.create` is NOT idempotent by email, so a retried/raced first checkout
-            // for the same reference would mint duplicate customers. Key the create on the reference so
-            // repeats return the same customer (the facade also gates this behind a store lookup).
+            // for the same reference would mint duplicate customers. The store lookup the facade puts in
+            // front of this call is what actually prevents that: the key below is INERT on this SDK,
+            // which drops it rather than sending a header (see the `@lunora/payment` idempotency
+            // docblock). It is passed anyway so the call is covered the day the SDK starts honouring it.
             const customer = asRecord(
                 await client.customers.create(
                     { email: ref.email ?? "", name: ref.metadata?.name ?? ref.referenceId },
@@ -321,21 +375,24 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
 
             // Dodo refunds can settle asynchronously (`pending`/`review` → later `refund.succeeded` or
             // `refund.failed`). Reflect the refund's real status instead of optimistically claiming
-            // "refunded"; the webhook-synced store stays authoritative for the final state.
-            let state: PaymentState = "captured";
-
-            if (readString(refund, "status") === "succeeded") {
-                state = "refunded";
-            }
+            // "refunded"; the webhook-synced store stays authoritative for the final state. `pending`
+            // says so explicitly, so the facade does not have to infer it from the SESSION's state —
+            // it holds its ledger back until `refund.succeeded` lands, because `refund.failed` carries
+            // no transition and would leave an optimistic write over-stating the row for good.
+            const settled = readString(refund, "status") === "succeeded";
+            const state: PaymentState = settled ? "refunded" : "captured";
 
             return {
                 amount: refundedAmount,
                 capturedAmount: refundedAmount,
                 createdAt: Date.now(),
                 id: input.sessionId,
+                pending: !settled,
                 provider: "dodopayments",
                 referenceId: "",
                 refundedAmount,
+                // The same id Dodo's confirming `refund.succeeded` carries.
+                refundId: readString(refund, "refund_id"),
                 state,
                 updatedAt: Date.now(),
             };
@@ -374,6 +431,8 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
                     patch.priceId !== undefined && patch.quantity !== undefined ? undefined : await client.subscriptions.retrieve(subscriptionId),
                 );
 
+                // Un-deduped on purpose, for want of anywhere to put a key: `SubscriptionChangePlanParams`
+                // has no idempotency field and this SDK never sends the header one. A retry prorates twice.
                 await client.subscriptions.changePlan(subscriptionId, {
                     product_id: patch.priceId ?? readString(current, "product_id") ?? "",
                     proration_billing_mode: "prorated_immediately",

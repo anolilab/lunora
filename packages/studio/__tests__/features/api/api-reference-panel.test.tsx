@@ -1,5 +1,5 @@
 import { LunoraProvider } from "@lunora/react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
@@ -151,5 +151,25 @@ describe("apiReferencePanel", () => {
         await waitFor(() => {
             expect(screen.getByTestId("api-reference-error")).toBeDefined();
         });
+    });
+
+    it("fetches the spec once, whatever identity the caller's fetcher has", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({ fetchOpenApi: () => SPEC_WITH_PATHS });
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("api-reference");
+
+        // The resolved spec is classified into a fresh object, so a re-render was
+        // always going to follow the fetch. If the fetch is keyed on the caller's
+        // callback identity, that re-render mints a new one and refetches — forever.
+        await act(async () => {
+            await Promise.resolve();
+            await Promise.resolve();
+        });
+
+        expect(mock.fetchOpenApi).toHaveBeenCalledTimes(1);
     });
 });
