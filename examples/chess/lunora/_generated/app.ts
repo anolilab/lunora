@@ -388,4 +388,4 @@ class AppBuilder<Env extends object> {
 const defineApp = <Env extends object>(): AppBuilder<Env> => new AppBuilder<Env>();
 
 export { AppBuilder, defineApp };
-export type { AuthDeclaration, ComposedApp, Selector, ShardNamespaceLike };
+export type { AuthDeclaration, ComposedApp, Selector };

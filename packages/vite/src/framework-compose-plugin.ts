@@ -203,16 +203,9 @@ const buildWorkerEntrySource = (
 // Do not edit: emitted from the detected framework (${framework}). Point your
 // wrangler \`main\` here (or re-export it) instead of hand-wiring createWorker.
 ${wiring.imports}
-import type { ShardNamespaceLike } from "${base}/app";
 import { defineApp } from "${base}/app";
 
-// \`defineApp()\` with no argument infers \`Env\` as its \`object\` constraint, so
-// \`env.SHARD\` below does not typecheck. Name the one binding this entry reads.
-// The type comes from the generated module rather than the runtime package so
-// this file still names no \`@lunora/*\` specifier.
-type Env = { SHARD: ShardNamespaceLike };
-
-const app = defineApp<Env>()
+const app = defineApp()
     .shard((env) => env.SHARD)
     .httpRouter(${wiring.handler})${shardCalls}${allowUnauthenticatedShardAccess ? "\n    .extend(() => ({ allowUnauthenticatedShardAccess: true }))" : ""}
     .build();
