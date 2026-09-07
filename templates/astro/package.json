@@ -17,9 +17,9 @@
         "@astrojs/cloudflare": "^14.3.0",
         "@astrojs/react": "^5.0.7",
         "@lunora/astro": "^0.0.0",
+        "@lunora/ratelimit": "^0.0.0",
         "@lunora/react": "^0.0.0",
         "astro": "^7.3.1",
-        "@lunora/ratelimit": "^0.0.0",
         "lunorash": "^0.0.0",
         "react": "^19.2.7",
         "react-dom": "^19.2.7"

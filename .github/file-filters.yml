@@ -84,22 +84,17 @@ frontend_lintable:
     - ".github/file-filters.yml"
     - "pnpm-lock.yaml"
 
-# Scoped to the pnpm workspaces, because that is exactly what the job reads:
-# `vis sort-package-json` derives its file set from `pnpm-workspace.yaml` and
-# resolves it from the repo root regardless of cwd. `templates/*` are deliberately
-# NOT workspaces (they are whole-project starters fetched by `lunora init`, so a
-# workspace link would rewrite their `@lunora/*` deps), and `**/package.json` here
-# used to match them anyway — so a template-only PR ran this job, had its manifest
-# never opened, and got a green check that asserted nothing about the file it
-# changed. Adding a second sorter for them is not the fix: `sort-package-json` (npm)
-# reports all four of `packages/{do,client,runtime,server}/package.json` as unsorted
-# after vis has sorted them, so the two tools disagree on key order outright.
+# `**/package.json` again, because the job now actually reads them all.
+# `vis sort-package-json` takes its file set from `pnpm-workspace.yaml`, which
+# omits `templates/*` — they are whole-project starters `lunora init` fetches, and
+# a workspace link would rewrite the `@lunora/*` ranges they ship. So the filter
+# matched files the job never opened, and a template-only PR got a green check on
+# a manifest nothing had read. `scripts/sort-package-json-all.sh` widens the file
+# set for one run and restores the workspace, so the filter and the job agree.
 package_json_lintable:
-    - "apps/*/package.json"
-    - "packages/*/package.json"
-    - "examples/*/package.json"
-    - "tests/*/package.json"
+    - "**/package.json"
     - "package.json"
+    - "scripts/sort-package-json-all.sh"
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
 
