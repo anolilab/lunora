@@ -830,3 +830,425 @@ Re-exported from `@lunora/config` — signature tracked at its source.
 ```ts
 const validatorKindToSqlType: (kind: string) => ColumnSnapshot["sqlType"];
 ```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `ApiSpec` (type)
+
+```ts
+type ApiSpec = NonNullable<CodegenOptions["apiSpec"]>;
+```
+
+### `AuthUiItem` (type)
+
+```ts
+type AuthUiItem = "auth-ui-angular" | "auth-ui-react" | "auth-ui-solid" | "auth-ui-solid-v2" | "auth-ui-svelte" | "auth-ui-vue";
+```
+
+### `CatalogItem` (interface)
+
+```ts
+interface CatalogItem {
+    description?: string;
+    name: string;
+}
+```
+
+### `CiProvider` (type)
+
+```ts
+type CiProvider = "github" | "gitlab";
+```
+
+### `CodegenCommandOptions` (interface)
+
+```ts
+interface CodegenCommandOptions {
+    apiSpec?: ApiSpec;
+    cwd?: string;
+    format?: string;
+    logger: Logger;
+    strictAdvisories?: boolean;
+    target?: string;
+}
+```
+
+### `CodegenCommandResult` (interface)
+
+```ts
+interface CodegenCommandResult {
+    advisories: ReadonlyArray<{
+        detail: string;
+        level: Finding["level"];
+        name: string;
+        remediation: string;
+    }>;
+    cronTriggers: ReadonlyArray<string>;
+    error?: string;
+    failedAdvisories: number;
+    outputDirectory: string;
+}
+```
+
+### `CodegenWatcherHandle` (interface)
+
+```ts
+interface CodegenWatcherHandle {
+    close: () => Promise<void>;
+    ready: Promise<void>;
+    watchAvailable: boolean;
+}
+```
+
+### `CodegenWatcherOptions` (interface)
+
+```ts
+interface CodegenWatcherOptions {
+    apiSpec?: CodegenOptions["apiSpec"];
+    debounceMs?: number;
+    jsonLogs?: boolean;
+    logger: Logger;
+    lunoraDirectory?: string;
+    projectRoot: string;
+    spawner?: Spawner;
+    target?: string;
+}
+```
+
+### `DevFlavor` (type)
+
+```ts
+type DevFlavor = "framework-worker" | "vite" | "wrangler";
+```
+
+### `DevRemotePlan` (interface)
+
+```ts
+interface DevRemotePlan {
+    bindings: string[];
+    cleanup: () => void;
+    enabled: boolean;
+    reason?: string;
+}
+```
+
+### `DockerProbe` (type)
+
+```ts
+type DockerProbe = () => boolean;
+```
+
+### `EntrypointReexport` (interface)
+
+```ts
+interface EntrypointReexport {
+    comment?: string;
+    module: string;
+}
+```
+
+### `FeatureApply` (interface)
+
+```ts
+interface FeatureApply {
+    label: string;
+    names: ReadonlyArray<string>;
+    transformManifest?: OfferTransformManifest;
+}
+```
+
+### `FeatureItem` (type)
+
+```ts
+type FeatureItem = "auth" | "auth-auth0" | "auth-clerk" | AuthUiItem | "mail";
+```
+
+### `HealthFetch` (type)
+
+```ts
+type HealthFetch = (url: string) => Promise<{
+    ok: boolean;
+    status: number;
+}>;
+```
+
+### `IMPORT_SOURCE_NAMES` (const)
+
+```ts
+const IMPORT_SOURCE_NAMES: readonly [
+    "firebase",
+    "supabase"
+];
+```
+
+### `ImportRowError` (interface)
+
+```ts
+interface ImportRowError {
+    code: string;
+    line: number;
+    message: string;
+    table: string;
+}
+```
+
+### `ImportShardFailure` (interface)
+
+```ts
+interface ImportShardFailure {
+    message: string;
+    shardKey: string;
+    timedOut: boolean;
+}
+```
+
+### `ImportSourceName` (type)
+
+```ts
+type ImportSourceName = (typeof IMPORT_SOURCE_NAMES)[number];
+```
+
+### `ImportSummary` (interface)
+
+```ts
+interface ImportSummary {
+    conflicts: number;
+    errors: ImportRowError[];
+    failed?: ImportShardFailure[];
+    inserted: Record<string, number>;
+    received: number;
+    storage?: {
+        ambiguous: StorageRemapReport["ambiguous"];
+        ambiguousTotal: number;
+        blobs: number;
+        rewritten: number;
+        unmigrated: StorageRemapReport["unmigrated"];
+        unmigratedTotal: number;
+    };
+    warnings?: string[];
+}
+```
+
+### `IndexItem` (interface)
+
+```ts
+interface IndexItem extends CatalogItem {
+    title?: string;
+}
+```
+
+### `LintToolOfferDeps` (interface)
+
+```ts
+interface LintToolOfferDeps {
+    apply: (tools: ReadonlyArray<LintTool>) => LintIgnoreOutcome[];
+    detected: ReadonlyArray<LintTool>;
+    interactive: boolean;
+    logger: Logger;
+    multiSelect: (message: string, choices: ReadonlyArray<LintToolOption>, settings?: {
+        defaults?: ReadonlyArray<LintTool>;
+    }) => Promise<LintTool[]>;
+}
+```
+
+### `LintToolOption` (interface)
+
+```ts
+interface LintToolOption {
+    description: string;
+    label: string;
+    value: LintTool;
+}
+```
+
+### `ListRemoteSecretsInputs` (interface)
+
+```ts
+interface ListRemoteSecretsInputs {
+    cwd: string;
+    env?: string;
+    runner?: SecretListRunner;
+    temporary?: boolean;
+}
+```
+
+### `ListRemoteSecretsResult` (interface)
+
+```ts
+interface ListRemoteSecretsResult {
+    error?: string;
+    names: ReadonlyArray<string>;
+    ok: boolean;
+}
+```
+
+### `OfferDeps` (interface)
+
+```ts
+interface OfferDeps {
+    applyAll: (plans: ReadonlyArray<FeatureApply>) => Promise<boolean>;
+    interactive: boolean;
+    logger: Logger;
+    multiSelect: (message: string, options: ReadonlyArray<{
+        description?: string;
+        label: string;
+        value: StackFeature;
+    }>, settings?: {
+        defaults?: ReadonlyArray<StackFeature>;
+    }) => Promise<StackFeature[]>;
+    preselected?: ReadonlyArray<StackFeature>;
+    projectName: string;
+    resolveAuthUiItem?: () => string | undefined;
+    select: (message: string, options: ReadonlyArray<{
+        description?: string;
+        label: string;
+        value: FeatureItem;
+    }>, settings?: {
+        default?: FeatureItem;
+    }) => Promise<FeatureItem | undefined>;
+    text: (message: string, settings?: {
+        default?: string;
+        placeholder?: string;
+    }) => Promise<string>;
+}
+```
+
+### `OfferTransformManifest` (type)
+
+```ts
+type OfferTransformManifest = (manifest: RegistryManifest) => RegistryManifest;
+```
+
+### `PailLogger` (interface)
+
+```ts
+interface PailLogger {
+    debug: (message: string) => void;
+    error: (message: string) => void;
+    info: (message: string) => void;
+    success: (message: string) => void;
+    warn: (message: string) => void;
+}
+```
+
+### `PreDeployCommand` (type)
+
+```ts
+type PreDeployCommand = "build" | "deploy" | "prepare";
+```
+
+### `ReadinessProbe` (type)
+
+```ts
+type ReadinessProbe = (origin: string, signal?: AbortSignal) => Promise<boolean>;
+```
+
+### `RegistryEnvVariable` (interface)
+
+```ts
+interface RegistryEnvVariable {
+    description?: string;
+    name: string;
+    secret?: boolean;
+    value?: string;
+}
+```
+
+### `SecretListRunner` (type)
+
+```ts
+type SecretListRunner = (command: string, args: ReadonlyArray<string>, cwd: string) => Promise<SecretListRunnerResult>;
+```
+
+### `SecretListRunnerResult` (interface)
+
+```ts
+interface SecretListRunnerResult {
+    code: number;
+    stderr: string;
+    stdout: string;
+}
+```
+
+### `StackFeature` (type)
+
+```ts
+type StackFeature = "ai" | "auth" | "auth-ui" | "backup" | "browser" | "cloudflare-access" | "crons" | "email" | "flags" | "hyperdrive" | "payment" | "presence" | "queue" | "storage" | "workflow";
+```
+
+### `StorageRemapReport` (interface)
+
+```ts
+interface StorageRemapReport {
+    ambiguous: UnresolvedStorageReference[];
+    rewritten: number;
+    unmigrated: UnresolvedStorageReference[];
+}
+```
+
+### `StudioServerHandle` (interface)
+
+```ts
+interface StudioServerHandle {
+    close: () => Promise<void>;
+    url: string;
+}
+```
+
+### `StudioServerOptions` (interface)
+
+```ts
+interface StudioServerOptions {
+    apiSpec?: CodegenOptions["apiSpec"];
+    cwd: string;
+    host?: string;
+    logger?: {
+        warnOnce?: (message: string) => void;
+    };
+    port: number;
+    workerOrigin: string;
+}
+```
+
+### `UnresolvedStorageReference` (interface)
+
+```ts
+interface UnresolvedStorageReference {
+    column: string;
+    storageId: string;
+    table: string;
+}
+```
+
+### `WorkerProcess` (interface)
+
+```ts
+interface WorkerProcess {
+    exited: Promise<number>;
+    kill: (signal: NodeJS.Signals) => void;
+}
+```
+
+### `WorkerSpawner` (type)
+
+```ts
+type WorkerSpawner = (descriptor: SpawnDescriptor & {
+    tag: string;
+}, logger: Logger) => WorkerProcess;
+```
+
+### `startCodegenWatch` (const)
+
+```ts
+const startCodegenWatch: (options: CodegenWatcherOptions) => CodegenWatcherHandle;
+```
+
+### `startStudioServer` (const)
+
+```ts
+const startStudioServer: (options: StudioServerOptions) => Promise<StudioServerHandle>;
+```

@@ -131,3 +131,31 @@ const seedPlan: (schema: Schema, options?: SeedOptions) => ReadonlyArray<TablePl
 ```ts
 const seed: (harness: TestHarness, schema: Schema, options?: SeedOptions) => Promise<Record<string, string[]>>;
 ```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `FieldOverride` (type)
+
+```ts
+type FieldOverride<Value> = ((context: OverrideContext) => Value) | Value;
+```
+
+### `SeedClientState` (interface)
+
+```ts
+interface SeedClientState {
+    readonly $ids: Readonly<Record<string, ReadonlyArray<string>>>;
+    $reset: () => void;
+    readonly $store: Readonly<Record<string, ReadonlyArray<Record<string, unknown>>>>;
+}
+```
+
+### `TableSeeder` (type)
+
+```ts
+type TableSeeder<InsertModel, Table extends keyof InsertModel> = (spec?: SeedSpec<InsertModel[Table]>, options?: SeedCallOptions<InsertModel[Table]>) => Promise<SeedCallResult<InsertModel, Table>>;
+```

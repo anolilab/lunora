@@ -179,3 +179,78 @@ const accessContext: <Context extends AccessContextInput>() => Middleware<Contex
 ```ts
 const accessFacade: (identity: Record<string, unknown> | null | undefined, userId: string | null | undefined) => AccessFacade;
 ```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `AccessContextLike` (interface)
+
+```ts
+interface AccessContextLike {
+    getIdentity: () => AccessIdentityLike | null | undefined | Promise<AccessIdentityLike | null | undefined>;
+}
+```
+
+### `AccessIdentityLike` (interface)
+
+```ts
+interface AccessIdentityLike {
+    [claim: string]: unknown;
+    common_name?: string;
+    email?: string;
+    exp?: number;
+    groups?: unknown;
+    name?: string;
+    sub?: string;
+    user_uuid?: string;
+}
+```
+
+### `ExecutionContextLike` (interface)
+
+```ts
+interface ExecutionContextLike {
+    access?: AccessContextLike;
+    cache?: {
+        purge: (options: {
+            purgeEverything?: boolean;
+            tags?: string[];
+        }) => Promise<unknown>;
+    };
+    passThroughOnException?: () => void;
+    waitUntil?: (promise: Promise<unknown>) => void;
+}
+```
+
+### `Middleware` (type)
+
+```ts
+type Middleware<ContextIn, ContextOut> = (options: {
+    ctx: ContextIn;
+    next: MiddlewareNext<ContextIn>;
+}) => ContextOut | Promise<ContextOut>;
+```
+
+### `MiddlewareNext` (interface)
+
+```ts
+interface MiddlewareNext<ContextIn> {
+    (): Promise<ContextIn>;
+    <Extension extends Record<string, unknown>>(options: {
+        ctx: Extension;
+    }): Promise<ContextIn & Extension>;
+}
+```
+
+### `RequestVerifyOptions` (interface)
+
+```ts
+interface RequestVerifyOptions extends VerifyAccessJwtOptions {
+    cookieName?: string;
+    headerName?: string;
+    onError?: (error: unknown, request: Request) => void;
+}
+```

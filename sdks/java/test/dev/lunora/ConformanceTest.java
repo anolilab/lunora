@@ -444,6 +444,29 @@ public final class ConformanceTest {
                 "data".equals(client.handleFrame(Json.write(envelope))),
                 "a MAX_DEPTH value must survive its frame envelope");
         check(seen.size() == 1, "and reach onData");
+
+        // A `data` frame is ONE envelope level, and measuring the cap only there
+        // is how it shipped a level short. The deepest envelope the protocol has
+        // is the batch response (protocol/README.md §4.3) at four, and an offline
+        // flush that could not parse its own 200 body classified a committed
+        // batch as a transport failure and replayed it forever.
+        Map<String, Object> slotBody = new LinkedHashMap<>();
+
+        slotBody.put("result", deepest);
+
+        Map<String, Object> slot = new LinkedHashMap<>();
+
+        slot.put("id", 0);
+        slot.put("status", 200);
+        slot.put("body", slotBody);
+
+        Map<String, Object> batch = new LinkedHashMap<>();
+
+        batch.put("results", List.of(slot));
+
+        check(
+                Json.parse(Json.write(batch)) != null,
+                "a MAX_DEPTH value must survive the batch-response envelope");
     }
 
     @SuppressWarnings("unchecked")

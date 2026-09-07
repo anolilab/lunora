@@ -865,3 +865,56 @@ Re-exported from `@lunora/platform/conformance` — signature tracked in that se
 ### `defineHostContractSuite` (const)
 
 Re-exported from `@lunora/platform/conformance` — signature tracked in that section.
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `AccessContextLike` (interface)
+
+```ts
+interface AccessContextLike {
+    getIdentity: () => AccessIdentityLike | null | undefined | Promise<AccessIdentityLike | null | undefined>;
+}
+```
+
+### `AccessIdentityLike` (interface)
+
+```ts
+interface AccessIdentityLike {
+    [claim: string]: unknown;
+    common_name?: string;
+    email?: string;
+    exp?: number;
+    groups?: unknown;
+    name?: string;
+    sub?: string;
+    user_uuid?: string;
+}
+```
+
+### `REGION_HINTS` (const)
+
+```ts
+const REGION_HINTS: readonly [
+    "wnam",
+    "enam",
+    "sam",
+    "weur",
+    "eeur",
+    "apac",
+    "apac-ne",
+    "apac-se",
+    "oc",
+    "afr",
+    "me"
+];
+```
+
+### `RegionHint` (type)
+
+```ts
+type RegionHint = (typeof REGION_HINTS)[number];
+```

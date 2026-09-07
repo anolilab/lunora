@@ -267,6 +267,16 @@ private fun depthCapEnforced() {
 
     check(client.handleFrame(Json.write(envelope)) == "data", "a MAX_DEPTH value must survive its frame envelope")
     check(seen.size == 1, "and reach onData")
+
+    // A `data` frame is ONE envelope level, and measuring the cap only there is
+    // how it shipped a level short. The deepest envelope the protocol has is the
+    // batch response (protocol/README.md §4.3) at four, and an offline flush that
+    // could not parse its own 200 body classified a committed batch as a
+    // transport failure and replayed it forever.
+    val slot = linkedMapOf<String, Any?>("id" to 0, "status" to 200, "body" to linkedMapOf("result" to deepest))
+    val batch = Json.write(linkedMapOf("results" to listOf(slot)))
+
+    check(Json.parse(batch) != null, "a MAX_DEPTH value must survive the batch-response envelope")
 }
 
 private fun stableWireKeyFixtures() {
