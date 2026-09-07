@@ -806,4 +806,4 @@ const buildGlobalCdcApplier =
 const defineApp = <Env extends object>(): AppBuilder<Env> => new AppBuilder<Env>();
 
 export { AppBuilder, defineApp };
-export type { AuthDeclaration, ComposedApp, GlobalDeclaration, Selector, StorageDeclaration };
+export type { AuthDeclaration, ComposedApp, GlobalDeclaration, Selector, ShardNamespaceLike, StorageDeclaration };

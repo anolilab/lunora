@@ -584,4 +584,4 @@ class AppBuilder<Env extends object> {
 const defineApp = <Env extends object>(): AppBuilder<Env> => new AppBuilder<Env>();
 
 export { AppBuilder, defineApp };
-export type { AuthDeclaration, ComposedApp, SchedulerDeclaration, Selector, StorageDeclaration };
+export type { AuthDeclaration, ComposedApp, SchedulerDeclaration, Selector, ShardNamespaceLike, StorageDeclaration };
