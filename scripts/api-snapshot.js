@@ -39,6 +39,9 @@
  *   churn without a snapshot update. Adding/removing the tag IS a gated change.
  * - Internal `import("./packem_shared/…-<hash>.js")` specifiers inside type text
  *   are rewritten to `import("~internal")` so packem chunk-hash churn is inert.
+ * - A `const`/`let` read out of `.ts`/`.tsx` source rather than a `.d.ts` prints
+ *   the type the checker infers for it, not its initializer — see
+ *   `printDeclaration`.
  * - A type a printed signature REFERENCES but that the package does not itself
  *   export is printed too, in a per-package `Referenced internal declarations`
  *   appendix — otherwise it appears by name and is declared nowhere, and its
@@ -48,6 +51,7 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -97,13 +101,14 @@ const UNTRACKED_MARKER = "signature not tracked";
  * `react`, `angular`, `solid`, `solid-v2`, `svelte`, `vue` — because the
  * registry copies every one of them verbatim into consumer projects, so an
  * ungated port is a breaking change shipping to users with no record of it.
- * Fidelity per port is whatever a plain TS program can resolve: `core` and
- * `angular` are `.ts` and pin full signatures; `.tsx` components (`react`,
- * `solid`, `solid-v2`) and `.vue`/`.svelte` SFCs resolve no further than the
- * export, so those pin name + kind and catch an added/removed/renamed screen
- * rather than a changed prop. Deliberate: teaching the program to resolve
- * `.tsx` would inline every component's whole JSX body into the snapshot and
- * fail the gate on implementation churn.
+ * Fidelity per port is whatever a plain TS program can resolve: `core`,
+ * `angular`, `react`, `solid` and `solid-v2` pin full signatures — the `.tsx`
+ * ports because `jsx` is set on the program, which is what makes their props
+ * interfaces reachable, and `printDeclaration` rather than the resolver is what
+ * keeps the component bodies out. `.vue`/`.svelte` SFCs still resolve no
+ * further than the export, so those pin name + kind and catch an
+ * added/removed/renamed screen rather than a changed prop: reading them needs
+ * the framework's own compiler, not a TS program.
  */
 /*
  * TIER_1/TIER_2/TIER_3 are hand-typed directory lists, and a package in none of
@@ -367,8 +372,33 @@ const normalizeText = (text) => {
     return collapsed.join("\n").trim();
 };
 
-/** Print one declaration of an exported symbol as normalized text. */
-const printDeclaration = (decl) => {
+/**
+ * Print one declaration as normalized text.
+ *
+ * A `const`/`let` in a `.d.ts` already IS its signature. The same declaration in
+ * `.ts`/`.tsx` source — which a source-shipping package ships instead of a build,
+ * see `collectEntries` — carries its implementation, and an implementation is not
+ * public API: printing it buries the signature and fails the gate on every
+ * refactor. So print the type the checker infers for it. This is the rule
+ * {@link isPrintableInternal} already applies to the appendix, stated once and
+ * used in both places.
+ *
+ * A class is excluded, not overlooked: the type of a class VALUE is the useless
+ * `typeof C`, and the members that are its surface are already in the printed
+ * declaration. Its method bodies come along with them — the one place a body
+ * still reaches the snapshot, unchanged by this and only in `auth-ui/angular`.
+ */
+const printDeclaration = (checker, decl) => {
+    if (!decl.getSourceFile().isDeclarationFile && ts.isVariableDeclaration(decl) && ts.isIdentifier(decl.name)) {
+        const symbol = checker.getSymbolAtLocation(decl.name);
+
+        if (symbol) {
+            const type = checker.typeToString(checker.getTypeOfSymbolAtLocation(symbol, decl), decl, ts.TypeFormatFlags.NoTruncation);
+
+            return normalizeText(`${kindOfDeclaration(decl)} ${decl.name.text}: ${type};`);
+        }
+    }
+
     let node = decl;
 
     // A variable declaration alone loses its `const`/`let` keyword — print the
@@ -435,11 +465,7 @@ const referencedTypeName = (node) => {
  * is referenced twice by `runtime.api.md` and declared zero times: adding a
  * required member to it, or renaming `rest`, breaks every `expose: {…}` caller
  * while the snapshot bytes do not move and the gate stays green. 403 such
- * declarations across the 55 packages were unpinned that way; this closes 396
- * of them. The remaining 7 are `auth-ui` props interfaces behind a `.tsx`
- * component, which this program deliberately does not resolve through — see the
- * `auth-ui` paragraph on `COVERED` — so their referencing export prints as an
- * unresolved re-export and reaches no type reference to follow.
+ * declarations across the 55 packages were unpinned that way, and none is now.
  *
  * Own package only. A referenced type from a sibling `@lunora/*` is pinned by
  * that package's own snapshot, and one from `node_modules` is a dependency's
@@ -493,7 +519,7 @@ const collectInternalReferences = (checker, ownPrefix, roots, exportedKeys) => {
     const printed = new Map();
 
     for (const decl of found.values()) {
-        const entry = { kind: kindOfDeclaration(decl), name: decl.name.getText(), text: printDeclaration(decl) };
+        const entry = { kind: kindOfDeclaration(decl), name: decl.name.getText(), text: printDeclaration(checker, decl) };
 
         printed.set(`${entry.name}\u0000${entry.kind}\u0000${entry.text}`, entry);
     }
@@ -562,7 +588,7 @@ const resolveExport = (checker, pkgDirName, symbol) => {
  * `pinnedTo`, when set, is the OTHER subpath of this same package that prints
  * these exact declarations in full — see {@link chooseOwners}.
  */
-const renderExport = (info, pinnedTo) => {
+const renderExport = (checker, info, pinnedTo) => {
     const header = `### \`${info.name}\` (${info.kind})`;
 
     if (info.experimental) {
@@ -581,7 +607,9 @@ const renderExport = (info, pinnedTo) => {
         return `${header}\n\nRe-exported from \`${pinnedTo}\` — signature tracked in that section.`;
     }
 
-    const bodies = [...new Set(info.declarations.map((decl) => (ts.isSourceFile(decl) ? `/* module namespace re-export */` : printDeclaration(decl))))];
+    const bodies = [
+        ...new Set(info.declarations.map((decl) => (ts.isSourceFile(decl) ? `/* module namespace re-export */` : printDeclaration(checker, decl)))),
+    ];
 
     return `${header}\n\n\`\`\`ts\n${bodies.join("\n\n")}\n\`\`\``;
 };
@@ -674,7 +702,7 @@ const renderPackage = (program, checker, covered) => {
                     .map((info) => {
                         const owner = owners.get(info.key);
 
-                        return renderExport(info, owner && owner.subpathName !== subpathName ? owner.subpathName : undefined);
+                        return renderExport(checker, info, owner && owner.subpathName !== subpathName ? owner.subpathName : undefined);
                     })
                     .join("\n\n")
                     .split("\n"),
@@ -735,6 +763,46 @@ const renderPackage = (program, checker, covered) => {
     return `${header}\n${sections.join("\n\n")}\n`;
 };
 
+/**
+ * A compiler host that can actually read the standard library.
+ *
+ * `ts-morph` vendors its compiler as one bundled file and ships the `lib.*.d.ts`
+ * texts inside it, so the path its `getDefaultLibFilePath` reports is not a file
+ * on disk. The default host reads nothing there and the program loads ZERO lib
+ * files: `Set`, `Array`, `Promise` and every other global resolve to `any`. That
+ * was invisible while every signature was printed from its source text, and is
+ * not once `printDeclaration` asks the checker to infer one — `new Set([…])`
+ * pinned as `any` records nothing. The `typescript` package next door is the
+ * classic 6.x build with the real lib files, and only its `lib/` is used here,
+ * never its API — see the note on the `ts-morph` import.
+ */
+const compilerHost = (options) => {
+    const libDir = join(dirname(createRequire(import.meta.url).resolve("typescript/package.json")), "lib");
+    const host = ts.createCompilerHost(options);
+
+    host.getDefaultLibLocation = () => libDir;
+    host.getDefaultLibFileName = (forOptions) => join(libDir, ts.getDefaultLibFileName(forOptions));
+
+    return host;
+};
+
+/**
+ * `jsx` is what lets a `.tsx` module load at all: without it the resolver finds
+ * the file and the program then refuses it, so every export of it is an
+ * unresolved specifier with no signature and no type reference to follow — 244
+ * of `auth-ui`'s were pinned by name and kind alone that way, and the props
+ * interfaces they reference by nothing. Keeping the component bodies out of the
+ * snapshot is `printDeclaration`'s job, not the resolver's.
+ */
+const PROGRAM_OPTIONS = {
+    jsx: ts.JsxEmit.Preserve,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    noEmit: true,
+    skipLibCheck: true,
+    target: ts.ScriptTarget.ESNext,
+};
+
 const snapshotFileName = (dir) => `${dir}.api.md`;
 
 const buildAll = () => {
@@ -765,13 +833,8 @@ const buildAll = () => {
     }
 
     const program = ts.createProgram({
-        options: {
-            module: ts.ModuleKind.ESNext,
-            moduleResolution: ts.ModuleResolutionKind.Bundler,
-            noEmit: true,
-            skipLibCheck: true,
-            target: ts.ScriptTarget.ESNext,
-        },
+        host: compilerHost(PROGRAM_OPTIONS),
+        options: PROGRAM_OPTIONS,
         rootNames: allEntries,
     });
     const checker = program.getTypeChecker();
