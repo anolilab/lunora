@@ -38,7 +38,8 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
  * our own Vite plugin, and that emitter IS covered end to end — the suite below
  * writes the real emitted entry to disk and invokes `scheduled`/`queue`/`email`.
  * So rather than pretend to prove it here or wave it through, this asserts the
- * proof still exists: delete that suite and this gate fails.
+ * proof still holds: delete that suite, empty it, or skip it, and this gate
+ * fails.
  */
 const CLASS_A_ENTRY_SUITE = "packages/vite/__tests__/class-a-worker-entry.test.ts";
 
@@ -63,11 +64,22 @@ const sourceFiles = (dir, out = []) => {
     return out;
 };
 
-/** Comments stripped, so a handler named only in prose cannot satisfy a text match. */
+/**
+ * Comments stripped, so a handler named only in prose cannot satisfy a text
+ * match — but string literals blanked FIRST, because a `//` inside one is not a
+ * comment. Cutting the line at the first `//` ate the rest of any line carrying
+ * a URL, so `const docs = "https://…"; const crons = cronJobs();` lost its
+ * declaration and this gate passed vacuously. That is precisely the class of
+ * defect it was rewritten to remove, reintroduced by its own comment stripper.
+ *
+ * Quoted strings only: a template literal can hold real code in `${…}`.
+ */
 const codeOf = (file) =>
     readFileSync(file, "utf8")
         .replaceAll(/\/\*[\S\s]*?\*\//g, "")
-        .replaceAll(/^.*?\/\/.*$/gm, (line) => line.replace(/\/\/.*$/, ""));
+        .replaceAll(/"(?:[^"\\\n]|\\.)*"/g, '""')
+        .replaceAll(/'(?:[^'\\\n]|\\.)*'/g, "''")
+        .replaceAll(/\/\/.*$/gm, "");
 
 /** `wrangler.jsonc`'s `main` — the module Cloudflare actually loads. */
 const declaredMain = (root) => {
@@ -118,11 +130,22 @@ const offences = [];
 // read here, so neither may pass silently: an app that declares a handler and
 // cannot be shown to forward it is exactly the case this gate exists for.
 if (main !== undefined && main.startsWith("virtual:")) {
-    if (!existsSync(join(REPO_ROOT, CLASS_A_ENTRY_SUITE))) {
+    // Existence alone was too weak a proxy: emptying the file, renaming its
+    // describe, or `.skip`ping it would all keep this green while proving
+    // nothing. Require the suite to still invoke each handler this app declares,
+    // and to not be skipped wholesale.
+    const suitePath = join(REPO_ROOT, CLASS_A_ENTRY_SUITE);
+    const suite = existsSync(suitePath) ? codeOf(suitePath) : undefined;
+    const unproven = suite === undefined ? declared : declared.filter((name) => !new RegExp(String.raw`\.${name}\s*\(`, "u").test(suite));
+
+    if (suite !== undefined && /\b(?:describe|it|test)\.skip\s*\(/u.test(suite)) {
+        offences.push(`${CLASS_A_ENTRY_SUITE} is skipped, so the generated entry's ${declared.join("/")} is proven nowhere.`);
+    } else if (unproven.length > 0) {
         offences.push(
             `wrangler main is "${main}", emitted by the Vite plugin, so its handler set cannot be read from the ` +
-                `scaffold — and ${CLASS_A_ENTRY_SUITE}, the suite that invokes the emitted entry's ` +
-                `${declared.join("/")}, is gone. Restore it, or this template's forwarding is proven nowhere.`,
+                `scaffold — and ${CLASS_A_ENTRY_SUITE}, the suite that invokes the emitted entry, ` +
+                `${suite === undefined ? "is gone" : `no longer invokes ${unproven.join("/")}`}. ` +
+                `Restore it, or this template's forwarding is proven nowhere.`,
         );
     }
 } else {
