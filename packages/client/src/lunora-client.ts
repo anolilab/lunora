@@ -27,11 +27,11 @@ import { queryCacheKey, resolveQueryCacheAdapter } from "./query-cache";
 import type { ReconnectCalculator } from "./reconnect";
 import { createReconnect } from "./reconnect";
 import {
+    isAuthReplayFailure,
     isTransientReplayFailure,
     MAX_BATCH_BODY_BYTES,
     replayRetryDelayMs,
     retryAfterData,
-    TRANSIENT_REPLAY_ERROR_CODES,
     unparseableResponseError,
     utf8ByteLength,
 } from "./replay";
@@ -1105,6 +1105,9 @@ class LunoraClient {
     /** Subscribers notified when the server drops a socket for an expired token (see `onTokenExpired`). */
     private readonly tokenExpiredListeners = new Listeners();
 
+    /** Token hash the last durable-replay auth refusal fired `onTokenExpired` for — see `shouldRequeueReplayFailure`. */
+    private authRefusalNotifiedFor: string | undefined;
+
     /** Subscribers to offline-queued mutation verdicts (see `onMutationSettled`). */
     private readonly mutationSettledListeners = new Listeners<MutationSettledEvent>();
 
@@ -1390,6 +1393,11 @@ class LunoraClient {
                 this.restampQueuedIdentity(previousIdentity, newIdentity);
                 this.restampWatermarks(previousIdentity, newIdentity);
                 this.restampConnectionIdentity(previousIdentity, newIdentity);
+                // The read cache is the other side of the same relabel: an entry
+                // stamped `subj:<id>` in a previous session could not be matched
+                // against the raw token this one started with, and the
+                // subscription that would have consumed it is already open.
+                this.reseedFromHydratedCache();
             } else {
                 // A genuine credential change — reject the in-memory offline
                 // writes that can no longer replay as the identity now signed in.
@@ -2199,7 +2207,7 @@ class LunoraClient {
             return undefined;
         }
 
-        return entry.identity === this.identityFingerprint() ? entry.value : undefined;
+        return this.cachedQueryMatchesIdentity(entry) ? entry.value : undefined;
     }
 
     /**
@@ -4689,7 +4697,11 @@ class LunoraClient {
 
                 const openSubscription = live.get(key);
 
-                if (openSubscription) {
+                // Only an entry that can be handed over NOW is consumed here. An
+                // identity that hasn't settled yet (the reload shape: token
+                // restored, subject still a round trip away) is held instead, so
+                // `reseedFromHydratedCache` can deliver it once it does.
+                if (openSubscription && this.cachedQueryMatchesIdentity(entry)) {
                     this.seedSubscriptionFromCache(openSubscription, entry);
 
                     continue;
@@ -4713,7 +4725,7 @@ class LunoraClient {
      * always beats the cache. Identity-gated exactly like `takeHydratedCache`.
      */
     private seedSubscriptionFromCache(state: SubscriptionState, entry: CachedQuery): void {
-        if (state.serverBase !== undefined || state.lastValue !== undefined || entry.identity !== this.identityFingerprint()) {
+        if (state.serverBase !== undefined || state.lastValue !== undefined || !this.cachedQueryMatchesIdentity(entry)) {
             return;
         }
 
@@ -4732,23 +4744,56 @@ class LunoraClient {
 
     /**
      * Consume the hydrated read-cache entry for a key (if any), gated on
-     * identity. The entry is removed whether or not it matches — the cache only
-     * ever seeds a subscription's first value. A mismatch (the cache was written
-     * under a different identity) yields `undefined` so a signed-out cache never
-     * leaks into a new session.
+     * identity ({@link cachedQueryMatchesIdentity}). A mismatch yields
+     * `undefined`, so a cache written under a different identity never leaks
+     * into a new session.
+     *
+     * Only a MATCH is removed. The cache seeds a subscription's first value
+     * once, so consuming a match is right — but destroying a mismatch is what
+     * made a late-resolving identity unrecoverable: the subject typically lands
+     * a `/get-session` after the first `subscribe()`, and by then the entry that
+     * would have matched was gone. Left in place, {@link reseedFromHydratedCache}
+     * can still hand it over when the identity settles.
      */
-
     private takeHydratedCache(functionPath: string, argsKey: string, shardKey?: string): CachedQuery | undefined {
         const key = queryCacheKey(functionPath, argsKey, shardKey);
         const entry = this.hydratedQueryCache.get(key);
 
-        if (entry === undefined) {
+        if (entry === undefined || !this.cachedQueryMatchesIdentity(entry)) {
             return undefined;
         }
 
         this.hydratedQueryCache.delete(key);
 
-        return entry.identity === this.identityFingerprint() ? entry : undefined;
+        return entry;
+    }
+
+    /**
+     * Hand every still-held read-cache entry to the subscription that is open on
+     * its key, now that the identity has settled onto a resolved subject.
+     *
+     * `subscribe()` runs long before `/get-session` answers, so on a reload the
+     * gate is asked its question with only a raw token in hand. When the token
+     * itself matches, {@link cachedQueryMatchesIdentity} already says yes there
+     * and then; when it has been refreshed since the value was cached, the only
+     * honest answer at that moment is "unknown" — and this is where it becomes
+     * knowable. {@link seedSubscriptionFromCache} is a no-op for any subscription
+     * the socket has already fed, so a live value always wins.
+     */
+    private reseedFromHydratedCache(): void {
+        if (this.hydratedQueryCache.size === 0) {
+            return;
+        }
+
+        for (const state of this.subscriptions.all()) {
+            const key = queryCacheKey(state.fn.__lunoraRef, state.argsKey, state.shardKey);
+            const entry = this.hydratedQueryCache.get(key);
+
+            if (entry !== undefined && this.cachedQueryMatchesIdentity(entry)) {
+                this.hydratedQueryCache.delete(key);
+                this.seedSubscriptionFromCache(state, entry);
+            }
+        }
     }
 
     /**
@@ -4780,12 +4825,17 @@ class LunoraClient {
         // values arrive over the identity-checked cross-tab channel, so the live
         // fingerprint is the right stamp there.
         const socketIdentity = this.getConnection(state.shardKey)?.identity;
+        const identity = socketIdentity === undefined ? this.identityFingerprint() : socketIdentity;
 
         this.pendingCacheWrites.set(key, {
-            identity: socketIdentity === undefined ? this.identityFingerprint() : socketIdentity,
+            identity,
             serverCursor: state.serverCursor,
             ts: Date.now(),
             value: authoritative,
+            // Only stamp the credential when the delivering identity IS the one
+            // this client holds a token for — a frame from a previous user's
+            // still-open socket must not be labelled with the current bearer.
+            ...(identity === this.identityFingerprint() ? this.credentialStamp() : {}),
             ...(state.serverEpoch === undefined ? {} : { serverEpoch: state.serverEpoch }),
             ...(this.persistenceVersion === undefined ? {} : { version: this.persistenceVersion }),
         });
@@ -6765,6 +6815,49 @@ class LunoraClient {
     }
 
     /**
+     * The `credential` field a read-cache write carries: the token hash of the
+     * bearer currently held, or nothing at all when signed out (there is no
+     * credential to match against, and the `null` identity already covers it).
+     */
+    private credentialStamp(): { credential?: string } {
+        const token = this.authToken;
+
+        return token === null ? {} : { credential: this.hashToken(token) };
+    }
+
+    /**
+     * Whether a read-cache entry belongs to the identity in effect right now —
+     * the ONE gate the hydrated peek, the subscribe-time take and the late seed
+     * all share.
+     *
+     * Three ways to be the same identity, because the label and the credential
+     * resolve at different times:
+     *
+     * 1. The fingerprints are equal — the plain case.
+     * 2. The entry is stamped under a token hash and the live identity has since
+     * been relabelled to the subject that credential resolved to
+     * ({@link isSameCredentialUnderTokenHash}).
+     * 3. The entry is stamped under a subject and THIS session has only the raw
+     * token so far, but it is byte-for-byte the credential the entry was written
+     * under. This is the direction the strict comparison missed entirely, and it
+     * is the normal shape of every reload: every adapter calls
+     * `setAuthToken(token)` from storage and only learns the subject a
+     * `/get-session` round trip later — which offline never completes at all.
+     * Without it the durable read cache never seeded for a bearer-token app.
+     */
+    private cachedQueryMatchesIdentity(entry: CachedQuery): boolean {
+        if (entry.identity === this.identityFingerprint()) {
+            return true;
+        }
+
+        if (this.isSameCredentialUnderTokenHash(entry.identity)) {
+            return true;
+        }
+
+        return entry.credential !== undefined && entry.credential === this.credentialStamp().credential;
+    }
+
+    /**
      * True when `stamped` is a token-hash of the SAME credential still held now,
      * even though the live identity has since been relabelled to a subject. Covers
      * `setAuthToken(token, userId)` where the subject resolved a tick after the
@@ -7354,6 +7447,42 @@ class LunoraClient {
         this.shardCursors.set(key, Math.max(this.shardCursors.get(key) ?? 0, commitCursor));
     }
 
+    /**
+     * Whether a replay failure leaves the durable write queued rather than
+     * settling it terminally — the ONE classification the single-call, per-slot
+     * and whole-batch paths share, so a write's fate never depends on how many
+     * siblings rode along.
+     *
+     * {@link isTransientReplayFailure} answers the "no verdict was reached" half.
+     * The other half is a refused CREDENTIAL ({@link isAuthReplayFailure}): the
+     * queue flushes on the shard's `open` handler with whatever bearer survived
+     * the offline window, so an expired token is the expected outcome of a long
+     * disconnect, not a verdict on the write. Notifying {@link onTokenExpired}
+     * here is what closes the loop — the HTTP replay path has no equivalent of
+     * the WS `4001` close frame, so without this nothing tells the app to
+     * refresh, and `setAuthToken` (which re-flushes) is never called.
+     *
+     * Notified once per credential, not once per write: a flush of a hundred
+     * queued writes earns a hundred identical refusals, and firing the hook for
+     * each would put a hundred token refreshes on the app. The stamp re-arms as
+     * soon as the credential moves, which is the only thing that can change the
+     * answer.
+     */
+    private shouldRequeueReplayFailure(error: unknown): boolean {
+        if (isAuthReplayFailure(error)) {
+            const refusedCredential = this.hashToken(this.authToken ?? "");
+
+            if (this.authRefusalNotifiedFor !== refusedCredential) {
+                this.authRefusalNotifiedFor = refusedCredential;
+                this.notifyTokenExpired();
+            }
+
+            return true;
+        }
+
+        return isTransientReplayFailure(error);
+    }
+
     /** Settle a write the server reached a coded verdict on: replaying would re-trigger the same failure (a poison-message loop), so drop it. */
     private settleReplayTerminal(item: QueuedMutation, error: unknown): void {
         this.unpersist(item.id);
@@ -7398,7 +7527,7 @@ class LunoraClient {
 
                 this.settleReplaySuccess(item, value, commitCursor);
             } catch (error) {
-                if (!isTransientReplayFailure(error)) {
+                if (!this.shouldRequeueReplayFailure(error)) {
                     this.settleReplayTerminal(item, error);
 
                     continue;
@@ -7419,11 +7548,11 @@ class LunoraClient {
      * per-entry `mutationId` idempotency and in-order application are inherited from
      * the proven path. Per-slot demux mirrors {@link replaySequential}'s
      * classification: success confirms the optimistic layer against the echoed
-     * `commitCursor`; a coded application verdict is terminal; a {@link
-     * TRANSIENT_REPLAY_ERROR_CODES} code, a missing slot, or a whole-batch
+     * `commitCursor`; a coded application verdict is terminal; a failure
+     * {@link shouldRequeueReplayFailure} keeps, a missing slot, or a whole-batch
      * transport failure re-queues for the next reconnect (never dropping a durable
-     * write). A whole-batch coded rejection (bad request / authorization denial the
-     * server reached a verdict on) is terminal for every entry.
+     * write). A whole-batch coded rejection (a bad request the server reached a
+     * verdict on) is terminal for every entry.
      *
      * The body is also held under {@link MAX_BATCH_BODY_BYTES}: the worker caps a
      * batch body at 1 MiB and answers `413`, which is ONE refusal covering every
@@ -7531,18 +7660,19 @@ class LunoraClient {
 
     /**
      * Classify a `/_lunora/rpc-batch` reply that carried no per-slot results — one
-     * outcome covering every entry in the chunk. A {@link TRANSIENT_REPLAY_ERROR_CODES}
-     * code (an unreachable shard, a rate-limit refusal) or a
-     * {@link TransportError} (an edge reply with no verdict in it) leaves every
-     * write durable for the next attempt; anything else is a verdict reached on
-     * the request itself, and settles all of them.
+     * outcome covering every entry in the chunk. A code
+     * {@link shouldRequeueReplayFailure} keeps (an unreachable shard, a
+     * rate-limit refusal, a refused credential) or a {@link TransportError} (an
+     * edge reply with no verdict in it) leaves every write durable for the next
+     * attempt; anything else is a verdict reached on the request itself, and
+     * settles all of them.
      */
     private settleWholeBatchError(
         items: QueuedMutation[],
         error: Error & { code?: string },
         shardKey: string | undefined,
     ): { requeue: QueuedMutation[]; stop: boolean } {
-        if (error instanceof TransportError || (error.code !== undefined && TRANSIENT_REPLAY_ERROR_CODES.has(error.code))) {
+        if (error instanceof TransportError || (error.code !== undefined && this.shouldRequeueReplayFailure(error))) {
             this.noteReplayRetryDelay(shardKey, error);
 
             return { requeue: items, stop: true };
@@ -7579,9 +7709,9 @@ class LunoraClient {
      * in input order. Each slot's envelope classifies its write the same way
      * {@link replaySequential} does: a success confirms the optimistic layer
      * against the echoed `commitCursor`; a coded application verdict is terminal;
-     * a transient failure ({@link TRANSIENT_REPLAY_ERROR_CODES}) or a slot the
-     * server never returned is returned for the caller to re-queue.
-     * @returns the writes that must be re-queued (transient slots), in input order
+     * a failure {@link shouldRequeueReplayFailure} keeps, or a slot the server
+     * never returned, is returned for the caller to re-queue.
+     * @returns the writes that must be re-queued (kept slots), in input order
      */
     private settleReplayBatchSlots(
         items: QueuedMutation[],
@@ -7606,11 +7736,13 @@ class LunoraClient {
                 // committed; retry under the same `mutationId` (idempotent).
                 requeue.push(item);
             } else if ("error" in inner) {
-                if (TRANSIENT_REPLAY_ERROR_CODES.has(inner.error.code)) {
-                    this.noteReplayRetryDelay(shardKey, reconstructError(inner.error));
+                const error = reconstructError(inner.error);
+
+                if (this.shouldRequeueReplayFailure(error)) {
+                    this.noteReplayRetryDelay(shardKey, error);
                     requeue.push(item);
                 } else {
-                    this.settleReplayTerminal(item, reconstructError(inner.error));
+                    this.settleReplayTerminal(item, error);
                 }
             } else {
                 this.settleReplaySuccess(item, decodeWire(inner.result), inner.commitCursor);

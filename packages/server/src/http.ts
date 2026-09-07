@@ -4,6 +4,7 @@ import { ValidationError } from "@lunora/values";
 import type { Context } from "hono";
 import { Hono } from "hono";
 
+import { encodeWire } from "../../../shared/wire-codec";
 import applyOutput from "./apply-output";
 import type { EmptyArgs } from "./builder/index";
 import { parseValidatorMap } from "./functions";
@@ -523,9 +524,19 @@ const SSE_HEADERS: Record<string, string> = {
  * Format one SSE frame. Each frame ends with `\n\n`, the spec-required
  * separator. `event:` is omitted for `data` (the default event name); we use
  * named events only for the terminal sentinels (`complete`, `error`).
+ *
+ * A default `data` frame carries a user chunk, so it goes through the wire codec
+ * — the same bracketing the WS stream path has always had, and which this
+ * transport was missing on both ends. Bare `JSON.stringify` flattens a `Date` to
+ * an ISO string, an `ArrayBuffer` to `{}` and `NaN` to `null` (all still typed
+ * as the declared yield type on the client), and throws outright on a `bigint`,
+ * killing the stream mid-flight with a redacted "Internal error".
+ *
+ * The terminal sentinels are NOT encoded: `complete` carries `{}` and `error`
+ * carries a plain `{ code, message }` that the client reads without decoding.
  */
 const sseFrame = (chunk: unknown, event?: "complete" | "error"): string => {
-    const data = JSON.stringify(chunk);
+    const data = JSON.stringify(event === undefined ? encodeWire(chunk) : chunk);
     const prefix = event ? `event: ${event}\n` : "";
 
     return `${prefix}data: ${data}\n\n`;
