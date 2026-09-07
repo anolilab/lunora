@@ -401,6 +401,40 @@ emails**, duplicate session tokens, and duplicates across all twelve of SCIM's u
 fields. If you hand-roll this, emit the indexes; or call `authDoSchemaStatements(options)`
 and execute what it returns.
 
+### Upgrading a database created before better-auth 1.7.3
+
+better-auth 1.7.0 added a **required** `account.issuer` column and 1.7.3 reverted it
+([better-auth#11153](https://github.com/better-auth/better-auth/pull/11153)). The revert
+only stopped better-auth _writing_ the column — it does not remove one that already
+exists, and neither does better-auth's own migrator. So a database first created while
+`@better-auth/core` 1.7.0–1.7.2 was installed still has `issuer text NOT NULL`, and
+**every sign-up and account link fails** with:
+
+```
+NOT NULL constraint failed: account.issuer
+```
+
+`@lunora/auth` clears this for you: a Durable Object does it on its next cold start, and
+D1 does it inside `ensureMigrated()`. Both are best-effort and skip a column your own
+config declares, so an `account.additionalFields.issuer` of your own is never touched.
+
+If you pre-apply the schema at deploy time (`compileMigrationsSql` +
+`wrangler d1 execute`) rather than calling `ensureMigrated()`, run the cleanup once
+yourself. Drop the indexes first — SQLite refuses to drop an indexed column:
+
+```sql
+SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'account';
+-- then, for each index whose SQL mentions "issuer":
+DROP INDEX IF EXISTS "account_issuer_accountId_uidx";
+ALTER TABLE "account" DROP COLUMN "issuer";
+```
+
+`legacyIssuerCleanupStatements(accountTable, indexNames)` builds exactly those statements
+if you would rather generate them. On Postgres or MySQL behind `@lunora/hyperdrive`, drop
+the constraint instead of the column — `ALTER TABLE account ALTER COLUMN issuer DROP NOT
+NULL` — per better-auth's
+[1.7 upgrade guide](https://www.better-auth.com/docs/guides/1-7-upgrade-guide).
+
 ### What DO mode does not give you
 
 `ctx.authApi`, sign-in, sessions, SCIM, and the studio's **audit feed** all work: the

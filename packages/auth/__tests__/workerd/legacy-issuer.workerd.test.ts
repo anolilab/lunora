@@ -105,6 +105,45 @@ describe("legacy account.issuer cleanup in workerd", () => {
         expect(after.insert).toBe("inserted");
     });
 
+    it("drops an index under whatever name it ended up with, so the column can go", async () => {
+        // better-auth names an index after the physical columns, so a renamed `accountId`
+        // changes it. The name is enumerated from `sqlite_master`, not reconstructed — and
+        // SQLite refuses `DROP COLUMN` while any index still references the column, so a
+        // missed index turns the whole cleanup into a silent no-op.
+        expect.assertions(4);
+
+        const stub = env.AUTH_DO.get(env.AUTH_DO.idFromName("legacy-issuer-renamed-index"));
+
+        await runInDurableObject(stub, (_instance, state) => {
+            state.storage.sql.exec(LEGACY_ACCOUNT_DDL);
+            state.storage.sql.exec(`CREATE UNIQUE INDEX "account_issuer_provider_account_id_uidx" ON "account" ("issuer", "accountId")`);
+            state.storage.sql.exec(`CREATE INDEX "someone_elses_issuer_idx" ON "account" ("issuer")`);
+        });
+
+        await warmSchema(stub);
+
+        const after = await runInDurableObject(stub, (_instance, state) => {
+            return {
+                columns: [...state.storage.sql.exec(`SELECT name FROM pragma_table_info('account')`)]
+                    .map((row) => row["name"])
+                    .filter((name) => typeof name === "string"),
+                indexes: [...state.storage.sql.exec(`SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%'`)]
+                    .map((row) => row["name"])
+                    .filter((name) => typeof name === "string"),
+            };
+        });
+
+        expect(after.columns).not.toContain("issuer");
+
+        // Each named separately: `expect.not.arrayContaining([a, b])` is satisfied when
+        // merely one of the two is gone, which is the regression this is guarding against.
+        expect(after.indexes).not.toContain("account_issuer_provider_account_id_uidx");
+        expect(after.indexes).not.toContain("someone_elses_issuer_idx");
+
+        // …while the rest of better-auth's schema survives.
+        expect(after.indexes).toContain("user_email_uidx");
+    });
+
     it("leaves a database that never had the column alone", async () => {
         // The cleanup is gated on the column actually being present: on a fresh DO it
         // must not run, or every cold start would issue a failing `DROP COLUMN`.

@@ -27,6 +27,8 @@
  * staleness window on revocation, which is the trade to make deliberately.
  * @experimental
  */
+import { getAuthTablesWithResolvedIndexes } from "@better-auth/core/db/internal";
+
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { lunoraDoAdapter } from "./adapter";
 import type { AuthAuditEntry, ReadAuthAuditOptions } from "./audit";
@@ -37,7 +39,7 @@ import { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 import type { DoStorageLike } from "./do-store";
 import { doExecutor } from "./do-store";
 import { handleAuthRequest } from "./handler";
-import { hasLegacyIssuerColumn, legacyIssuerCleanupStatements } from "./legacy-issuer";
+import { indexesReferencingIssuer, legacyIssuerCleanupStatements, schemaDeclaresIssuer } from "./legacy-issuer";
 
 /**
  * The Durable Object state slice this class needs — structural so unit tests can
@@ -200,18 +202,9 @@ class LunoraAuthDO {
                 [...this.#storage.sql.exec(statement)];
             }
 
-            // The mirror image, and the only column this ever removes: better-auth 1.7.0
-            // added a required `account.issuer` and 1.7.3 reverted it, leaving databases
-            // provisioned in between with a NOT NULL column nothing writes any more — so
-            // every sign-up fails until it is gone. Additive migration cannot fix that.
-            // See `legacy-issuer.ts`; this becomes a no-op once each DO has run it.
-            const accountTable = resolved.account?.modelName ?? "account";
-
-            if (hasLegacyIssuerColumn(this.#columnNames(accountTable))) {
-                for (const statement of legacyIssuerCleanupStatements(accountTable)) {
-                    [...this.#storage.sql.exec(statement)];
-                }
-            }
+            // The mirror image, and the only column this ever removes. See
+            // `legacy-issuer.ts` for what better-auth 1.7.0 added and 1.7.3 reverted.
+            this.#dropLegacyIssuerColumn(resolved);
 
             this.#schemaApplied = true;
         }
@@ -232,6 +225,57 @@ class LunoraAuthDO {
         const rows = [...this.#storage.sql.exec(`SELECT name FROM pragma_table_info(?)`, table)];
 
         return rows.map((row) => String(row["name"]));
+    }
+
+    /**
+     * Remove the `account.issuer` column better-auth 1.7.0 required and 1.7.3 reverted, if
+     * this object still carries it. See `legacy-issuer.ts`.
+     *
+     * Skipped entirely when better-auth's own resolved schema declares the column, because
+     * then it is the app's — added through `account.additionalFields` — not the reverted
+     * one. That check is what keeps this from fighting `authDoColumnAdditions`, which runs
+     * first and re-adds every declared-but-missing column: without it the two steps would
+     * add and drop the same column on every cold start.
+     *
+     * **Best-effort.** Nothing here is allowed to escape. `#schemaApplied` and `#auth` are
+     * both set after this returns, so a throw would leave them unset and re-run — and
+     * re-throw — on every later request, and `fetch` does not catch, so the stub call would
+     * reject for *all* the worker's traffic rather than just `/api/auth/*`. A database that
+     * still carries the column is no worse off than before the attempt, which makes failing
+     * loudly here strictly worse than not trying. The next cold start retries.
+     */
+    #dropLegacyIssuerColumn(resolved: LunoraAuthOptions): void {
+        const { tables } = getAuthTablesWithResolvedIndexes(resolved);
+        const { account } = tables;
+
+        if (account === undefined) {
+            return;
+        }
+
+        const declared = Object.entries(account.fields).map(([key, field]) => field.fieldName ?? key);
+
+        if (schemaDeclaresIssuer(declared) || !this.#columnNames(account.modelName).includes("issuer")) {
+            return;
+        }
+
+        // Enumerated, not derived: better-auth names an index after the physical columns,
+        // so a renamed `accountId` changes the name, and any index left behind makes the
+        // `DROP COLUMN` fail. `pragma_index_list` is a table-valued function — allowed here,
+        // refused on D1, which is why the D1 path reads `sqlite_master` instead.
+        const indexes = [...this.#storage.sql.exec(`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ?`, account.modelName)].map(
+            (row) => {
+                return { name: String(row["name"]), sql: typeof row["sql"] === "string" ? row["sql"] : undefined };
+            },
+        );
+
+        try {
+            for (const statement of legacyIssuerCleanupStatements(account.modelName, indexesReferencingIssuer(indexes))) {
+                [...this.#storage.sql.exec(statement)];
+            }
+        } catch (error) {
+            // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
+            console.error("@lunora/auth: could not drop the reverted `account.issuer` column; sign-ups will fail until it is removed.", error);
+        }
     }
 
     /**

@@ -1,10 +1,12 @@
+import { getAuthTablesWithResolvedIndexes } from "@better-auth/core/db/internal";
 import { LunoraError } from "@lunora/errors";
 import { getMigrations } from "better-auth/db/migration";
 
+import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { resolveAuthOptions } from "./create-auth";
 import { isD1Database, withD1IndexIntrospection } from "./d1-index-introspection";
-import { ddlDeclaresLegacyIssuer, legacyIssuerCleanupStatements } from "./legacy-issuer";
+import { indexesReferencingIssuer, legacyIssuerCleanupStatements, schemaDeclaresIssuer } from "./legacy-issuer";
 
 /**
  * Reject a `database` better-auth's migrator cannot drive, *before* handing it
@@ -52,11 +54,28 @@ const withD1MigrationSupport = (options: LunoraAuthOptions): LunoraAuthOptions =
     isD1Database(options.database) ? { ...options, database: withD1IndexIntrospection(options.database) } : options;
 
 /**
- * `isD1Database` narrows to the two methods its own shim calls (`prepare` / `batch`); this
- * restates the same runtime check against the full binding type, so the query below can
- * use `bind` / `first` / `run` without a type assertion over an `unknown` return.
+ * Whether the account table physically carries the column.
+ *
+ * Probed with a zero-row `SELECT` rather than introspected. D1's authorizer refuses the
+ * pragma table-valued functions a column list would come from (the reason
+ * `d1-index-introspection.ts` exists), and the remaining option — pattern-matching
+ * `sqlite_master.sql` — is not safe enough to gate an irreversible `DROP COLUMN`: SQLite
+ * stores the verbatim `CREATE TABLE` text, so the name also appears in a comment, a
+ * `CHECK (… <> 'issuer')` literal, or a `REFERENCES issuer(id)` clause. Matching any of
+ * those would run a `DROP COLUMN` that fails with `no such column`, and because the DDL
+ * text never changes the retry fails identically — wedging `ensureMigrated` forever on a
+ * database that was never broken. The probe answers the question exactly instead.
  */
-const isD1Binding = (value: unknown): value is D1Database => isD1Database(value);
+const hasIssuerColumn = async (database: D1Database, accountTable: string): Promise<boolean> => {
+    try {
+        await database.prepare(`SELECT ${quoteIdentifier("issuer")} FROM ${quoteIdentifier(accountTable)} LIMIT 0`).run();
+
+        return true;
+    } catch {
+        // Either the column or the table is absent; both mean there is nothing to clean up.
+        return false;
+    }
+};
 
 /**
  * Remove the `account.issuer` column better-auth 1.7.0 required and 1.7.3 reverted.
@@ -66,36 +85,61 @@ const isD1Binding = (value: unknown): value is D1Database => isD1Database(value)
  * provisioned under 1.7.0-1.7.2 the migration "succeeds" and every subsequent sign-up
  * still fails on `NOT NULL constraint failed: account.issuer`. See `legacy-issuer.ts`.
  *
- * Only D1 bindings are handled. The other `database` shapes better-auth accepts reach
- * engines that are not necessarily SQLite (where the remedy is to relax the constraint,
- * not drop the column) and that this package does not target; those operators get
- * `legacyIssuerCleanupStatements` to run themselves.
+ * Only D1 bindings are cleaned up automatically. Any other `database` shape is left alone
+ * and told about instead: `getMigrations` accepts dialects for engines where the remedy is
+ * to relax the constraint rather than drop the column, and this package cannot execute raw
+ * DDL through them anyway.
  *
- * Existence is read off `sqlite_master`, never `pragma_table_info` — D1's authorizer
- * refuses pragma table-valued functions through the Worker binding, which is the whole
- * reason `d1-index-introspection.ts` exists. The check is the DDL text of the account
- * table, which is exactly what better-auth's own D1 dialect parses.
+ * **Best-effort**, like the Durable Object path: a database that still carries the column
+ * is no worse off than before the attempt, so a throw here — which would reject
+ * `ensureMigrated` and fail the whole migration — is strictly worse than not trying. That
+ * also covers the concurrent case, where two isolates both see the column and the loser's
+ * `DROP COLUMN` finds it already gone.
  */
 const dropLegacyIssuerColumn = async (options: LunoraAuthOptions): Promise<void> => {
     // Widened to `unknown` for the same reason `assertMigratableDatabase` does it:
     // better-auth's `database` union has an adapter arm the linter reads as an error
     // type, so destructuring it as-is trips `no-unsafe-assignment`.
     const { database } = options as { database?: unknown };
+    const { tables } = getAuthTablesWithResolvedIndexes(options);
+    const { account } = tables;
 
-    if (!isD1Binding(database)) {
+    if (account === undefined) {
         return;
     }
 
-    const accountTable = options.account?.modelName ?? "account";
-    const row = await database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").bind(accountTable).first<{ sql?: null | string }>();
-
-    if (!ddlDeclaresLegacyIssuer(row?.sql ?? "")) {
+    // The app's own column, added through `account.additionalFields`, is not the reverted
+    // one and must survive.
+    if (schemaDeclaresIssuer(Object.entries(account.fields).map(([key, field]) => field.fieldName ?? key))) {
         return;
     }
 
-    for (const statement of legacyIssuerCleanupStatements(accountTable)) {
-        // eslint-disable-next-line no-await-in-loop -- DDL is ordered: the index must be gone before the column can be.
-        await database.prepare(statement).run();
+    if (!isD1Database(database)) {
+        return;
+    }
+
+    if (!(await hasIssuerColumn(database, account.modelName))) {
+        return;
+    }
+
+    // Enumerated rather than derived from the default field names — better-auth names an
+    // index after the physical columns, and any index still referencing `issuer` makes the
+    // `DROP COLUMN` fail. `sqlite_master` is readable through the binding; pragma index
+    // functions are not.
+    const { results } = await database
+        .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ?")
+        .bind(account.modelName)
+        .all<{ name: string; sql?: null | string }>();
+
+    try {
+        // One batch, so the indexes cannot be dropped without the column following: SQLite
+        // has no way back to a unique index that is gone while the column it covered stays.
+        await database.batch(
+            legacyIssuerCleanupStatements(account.modelName, indexesReferencingIssuer(results)).map((statement) => database.prepare(statement)),
+        );
+    } catch (error) {
+        // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
+        console.error("@lunora/auth: could not drop the reverted `account.issuer` column; sign-ups will fail until it is removed.", error);
     }
 };
 
