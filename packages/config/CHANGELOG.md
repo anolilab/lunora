@@ -1,3 +1,18 @@
+## @lunora/config [1.0.0-alpha.201](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.200...@lunora/config@1.0.0-alpha.201) (2026-09-07)
+
+### Bug Fixes
+
+* **do,shard-engine,runtime,client:** repair four core-path defects ([#649](https://github.com/anolilab/lunora/issues/649)) ([6fb9990](https://github.com/anolilab/lunora/commit/6fb99906617ed2811020d5d2ddeda16b312f8e03))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.165
+* **@lunora/container:** upgraded to 1.0.0-alpha.48
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+* **@lunora/seed:** upgraded to 1.0.0-alpha.113
+* **@lunora/studio:** upgraded to 1.0.0-alpha.163
+
 ## @lunora/config [1.0.0-alpha.200](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.199...@lunora/config@1.0.0-alpha.200) (2026-09-07)
 
 ### Bug Fixes
