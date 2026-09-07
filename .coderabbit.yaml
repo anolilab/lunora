@@ -27,6 +27,7 @@
             # carrying the fix for the fail-open its own shape-scoping change
             # introduces, and the rest is based on it.
             - "fix/r33-server-authz-complete"
+            - "fix/r33-do-data-runtime-client"
             # The audit chain: each group PR is based on the previous one.
             - "fix/r7-auth-agent-mail"
             - "fix/r7-payment"
