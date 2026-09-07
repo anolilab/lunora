@@ -2043,6 +2043,7 @@ interface RelayHost {
     resolveShape: (name: string, args: Record<string, unknown>, identity?: SubscriptionIdentity) => ResolvedShape | undefined;
     rlsMetadata: () => RlsPoliciesResult;
     shardBinding: () => string | undefined;
+    shardJurisdiction: () => string | undefined;
     sql: () => SqlExec;
 }
 ```
@@ -2610,6 +2611,7 @@ interface ShardSiblingHost {
     doName: () => string | undefined;
     env: () => unknown;
     shardBinding: () => string | undefined;
+    shardJurisdiction: () => string | undefined;
     sql: () => SqlExec;
 }
 ```
