@@ -1,3 +1,9 @@
+## @lunora/runtime [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.100...@lunora/runtime@1.0.0-alpha.101) (2026-09-07)
+
+### Bug Fixes
+
+* **config:** warn when a SchedulerDO has no LUNORA_ORIGIN_URL ([#646](https://github.com/anolilab/lunora/issues/646)) ([e8c55c7](https://github.com/anolilab/lunora/commit/e8c55c7aa493e6684a7a57facc7928c72bb530e0))
+
 ## @lunora/runtime [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.99...@lunora/runtime@1.0.0-alpha.100) (2026-09-06)
 
 ### Features
