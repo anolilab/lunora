@@ -741,6 +741,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ShapeGuardDeclaration` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ShapeReadWhereRequest` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1070,6 +1074,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `asBucketStorage` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `assertShapesDeclareReadPolicies` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5475,6 +5483,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ShapeGuardDeclaration` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ShapeReadWhereRequest` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5804,6 +5816,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `asBucketStorage` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `assertShapesDeclareReadPolicies` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
