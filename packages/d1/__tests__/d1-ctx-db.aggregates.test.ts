@@ -215,15 +215,22 @@ describe("d1 aggregateIndex parity", () => {
             await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(15);
         });
 
-        it("aggregate(sum) honors the index static `where`", async () => {
-            expect.assertions(1);
+        it("honors the index static `where` when the request carries it", async () => {
+            expect.assertions(2);
 
             const writer = await setupWriter(makeSchema(activeSumSeqByProject));
 
             await seed(writer);
 
-            // Active p1 rows (seq 1,2,0) → 3 (archived t3 excluded).
-            await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(3);
+            // Active p1 rows (seq 1,2,0) → 3 (the archived t3 is excluded).
+            await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { archived: false, projectId: "p1" } })).resolves.toBe(3);
+
+            // The SAME request minus the index's own filter is a BROADER question —
+            // every p1 row, archived or not — and the counter only ever tallied the
+            // narrower one. Answering it from that counter is how `count()` came to
+            // report a filtered total for an unfiltered request; it now falls to the
+            // scan, which sees all four p1 rows (1 + 2 + 0 + 3).
+            await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(6);
         });
 
         it("aggregate(avg) reads sum/count as the maintained average", async () => {
