@@ -1980,8 +1980,9 @@ interface ShapeDefinition<Args extends ValidatorMap = ValidatorMap, Context = Qu
 
 ```ts
 interface ShapeGuardDeclaration {
+    readonly rlsRegistry: RlsReadRegistry;
     readonly table: string;
-    readonly use?: unknown;
+    readonly use?: ReadonlyArray<unknown>;
 }
 ```
 

@@ -572,6 +572,94 @@ describe("builder middleware", () => {
         await expect(fn.handler({}, {})).rejects.toThrow(/resolved without calling next\(\)/u);
     });
 
+    /**
+     * `void next()` satisfies the "did it call next()?" guard while still
+     * resolving the chain early: `next()` hands back the downstream promise and
+     * nothing awaits it, so the handler runs against a half-built context — the
+     * later `.use()` steps (`rls()`, `mask()`, `storageRules()`) are still in
+     * flight — and a downstream rejection detaches into an unhandled rejection.
+     */
+    it("does not resolve the chain before a fire-and-forget next() has run the rest of it", async () => {
+        expect.assertions(2);
+
+        const order: string[] = [];
+        // Fire-and-forget: the promise is kept, and nothing ever awaits it.
+        const dropped: unknown[] = [];
+
+        const fn = c.query
+            .use(({ ctx, next }) => {
+                dropped.push(next());
+
+                return ctx;
+            })
+            .use(async ({ next }) => {
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 5);
+                });
+
+                order.push("downstream");
+
+                return next();
+            })
+            .query(() => {
+                order.push("handler");
+
+                return "ok";
+            });
+
+        await fn.handler({}, {});
+
+        expect(dropped).toHaveLength(1);
+        expect(order).toStrictEqual(["downstream", "handler"]);
+    });
+
+    it("surfaces the rejection a fire-and-forget next() detached, instead of running the handler", async () => {
+        expect.assertions(3);
+
+        const handler = vi.fn<() => string>(() => "secret");
+        const dropped: unknown[] = [];
+
+        const fn = c.query
+            .use(({ ctx, next }) => {
+                dropped.push(next());
+
+                return ctx;
+            })
+            .use(() => {
+                throw new LunoraError("FORBIDDEN");
+            })
+            .query(handler);
+
+        await expect(fn.handler({}, {})).rejects.toThrow(/FORBIDDEN/u);
+
+        expect(dropped).toHaveLength(1);
+        expect(handler).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The other side of that fix: a middleware that AWAITED `next()` owns the
+     * outcome, including a rejection it deliberately swallowed. Re-awaiting the
+     * downstream promise on its behalf would re-throw what it just handled.
+     */
+    it("keeps a middleware that catches a downstream rejection and returns a fallback context", async () => {
+        expect.assertions(1);
+
+        const fn = c.query
+            .use(async ({ ctx, next }) => {
+                try {
+                    return await next();
+                } catch {
+                    return { ...ctx, fallback: true };
+                }
+            })
+            .use(() => {
+                throw new LunoraError("FORBIDDEN");
+            })
+            .query(({ ctx }) => ((ctx as { fallback?: boolean }).fallback === true ? "fallback" : "ok"));
+
+        await expect(fn.handler({}, {})).resolves.toBe("fallback");
+    });
+
     it("a middleware that throws aborts before the handler runs", async () => {
         expect.assertions(2);
 

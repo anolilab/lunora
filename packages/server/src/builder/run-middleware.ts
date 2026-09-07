@@ -20,6 +20,12 @@ import type { Middleware, MiddlewareNext } from "./types";
  * into a bare `TypeError` deeper in the handler. To deny a request, THROW (a
  * `LunoraError("FORBIDDEN")`); to change the context, `return next({ ctx })`.
  *
+ * Calling `next()` without awaiting it (`void next(); return ctx;`) is the same
+ * bypass one step subtler — the call happened, but the chain would resolve while
+ * the rest of it is still running. A link that never read its `next()` result is
+ * therefore held open until the downstream chain settles, and a rejection it
+ * dropped is propagated rather than left to detach (see `next` below).
+ *
  * `terminal` runs when the chain is exhausted, with the fully accumulated
  * context: the builder returns it verbatim; the plugin composer hands it to the
  * surrounding builder's own `next` so the composed unit is transparent.
@@ -44,24 +50,72 @@ const runMiddlewareChain = async (
             return terminal(context);
         }
 
-        // A holder rather than a plain `let`: the flag is written inside `next`,
-        // and control-flow analysis would otherwise pin a local to its
-        // initializer and read the check below as statically true.
-        const advanced = { byThisLink: false };
+        // A holder rather than plain `let`s: both fields are written inside
+        // `next`, and control-flow analysis would otherwise pin a local to its
+        // initializer and read the checks below as statically true.
+        const downstream: { observed: boolean; promise: Promise<unknown> | undefined } = { observed: false, promise: undefined };
 
         const next = ((options?: { ctx: Record<string, unknown> }) => {
-            advanced.byThisLink = true;
+            const running = dispatch(index + 1, options?.ctx ? { ...(context as Record<string, unknown>), ...options.ctx } : context);
 
-            return dispatch(index + 1, options?.ctx ? { ...(context as Record<string, unknown>), ...options.ctx } : context);
+            downstream.promise = running;
+
+            // Hand back a thenable rather than `running` itself. Whether the
+            // middleware READ the downstream result is the one bit that separates
+            // the two shapes below, and a bare native promise offers no hook to
+            // observe it — `await p` unwraps a native promise through an internal
+            // slot, never through its `then`. A plain thenable has no such slot,
+            // so `await` has to go through the `then` below, which is the signal.
+            //
+            //   `return await next()`, or `try { return await next() } catch
+            //   { return fallback }` — observed. The middleware owns the outcome,
+            //   including a rejection it deliberately swallowed; awaiting
+            //   `downstream.promise` again below would re-throw what it just
+            //   handled and break error-handling middleware.
+            //
+            //   `void next(); return ctx;` — NOT observed. Only the flag was set,
+            //   so the old guard passed while the chain resolved early: the handler
+            //   ran against a context the later `.use()` steps had not finished
+            //   building, and a downstream rejection detached into an unhandled
+            //   rejection. That is the case the await below closes.
+            //
+            // A `Proxy` over `running` is the other way to see the read, and the
+            // one this started as; it measured ~15% slower per guarded call than
+            // the literal, on a path `__bench__/rls-overhead.bench.ts` watches.
+            const observable: Promise<unknown> = {
+                [Symbol.toStringTag]: "Promise",
+                catch: (onRejected) => {
+                    downstream.observed = true;
+
+                    return running.catch(onRejected);
+                },
+                finally: (onFinally) => {
+                    downstream.observed = true;
+
+                    return running.finally(onFinally);
+                },
+                // eslint-disable-next-line unicorn/no-thenable -- deliberate: `then` IS the interface here, and being awaited through it rather than unwrapped as a native promise is the whole mechanism
+                then: (onFulfilled, onRejected) => {
+                    downstream.observed = true;
+
+                    return running.then(onFulfilled, onRejected);
+                },
+            };
+
+            return observable;
         }) as MiddlewareNext<unknown>;
 
         const result = await middleware({ ctx: context, next });
 
-        if (!advanced.byThisLink) {
+        if (!downstream.promise) {
             throw new LunoraError(
                 "INTERNAL",
                 `middleware at position ${String(index)} resolved without calling next(): every later .use() step (rls/mask/storageRules) and the handler's context were skipped. Return next() — or next({ ctx }) to extend the context — and throw to deny.`,
             );
+        }
+
+        if (!downstream.observed) {
+            await downstream.promise;
         }
 
         return result;
