@@ -5,12 +5,13 @@ import { MAX_SEARCH_SCAN } from "@lunora/search-core";
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { CURSOR_PREFIX } from "@lunora/shard-engine";
 import { sql } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { SqlCtxExec } from "../src/ctx-db";
 import { createSqlCtxDb, readSqlCdcChanges } from "../src/ctx-db";
 import type { SqlDialect } from "../src/dialect";
 import { BACKFILL_BATCH_SIZE } from "../src/sql-exec";
+import { sqliteEncode } from "../src/value-codec";
 
 /**
  * In-package end-to-end coverage for the dialect-blind store core. The concrete
@@ -2009,17 +2010,27 @@ describe("createSqlCtxDb — recomputing an extreme over a large group", () => {
  * returned. The identical reads against the DO row store are correct, which is
  * what made moving a table to `.global()` change the answers.
  *
- * NOT fixed here, and asserted so it stays visible: the marked form is JSON
- * text, so SQLite orders an untyped column's numbers lexicographically. Ranges
- * and cursors are now consistent WITH that order — which is what makes paging
- * whole — but it is not numeric order, and making it numeric is a stored-format
- * change.
+ * The marked form a number takes is an order-preserving key, so that one order
+ * is NUMERIC. It was interim text order for one round — the assertions below
+ * pinned it deliberately, and now pin the numeric order they were placed to be
+ * replaced by.
  */
 const untypedFilterSchema: SchemaLike = {
     tables: {
         readings: {
             indexes: [],
             shape: { label: col("string"), value: col("union") },
+            shardMode: { kind: "global" },
+        },
+    },
+} as never;
+
+/** The same table with a NULLABLE untyped column, so a stored SQL NULL is part of the ordering under test. */
+const untypedMixedSchema: SchemaLike = {
+    tables: {
+        readings: {
+            indexes: [],
+            shape: { label: col("string"), value: col("union", { notNull: false }) },
             shardMode: { kind: "global" },
         },
     },
@@ -2078,7 +2089,7 @@ describe("createSqlCtxDb — filtering and paging an untyped column", () => {
     });
 
     it("returns every row across pages when the sort key is an untyped column", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const writer = makeWriter();
 
@@ -2108,17 +2119,21 @@ describe("createSqlCtxDb — filtering and paging an untyped column", () => {
         expect(seenLabels).toHaveLength(7);
         expect(new Set(seenLabels).size).toBe(7);
 
-        // The order the page walks is the STORAGE order, which for an untyped
-        // column is text order over the marked form. Pinned rather than papered
-        // over: what the fix guarantees is that paging agrees with it, not that
-        // it is numeric.
+        // The order the page walks is the STORAGE order, and for a number in an
+        // untyped column that is now the order-preserving key's — so it is
+        // numeric, and paging agrees with it. This assertion pinned the interim
+        // text order (`a, d, e, b, c`) for one round.
         const straight = await writer.findMany("readings", { limit: 100, orderBy: [{ value: "asc" }] });
 
         expect(seenLabels).toStrictEqual(straight.page.map((row) => String(row["label"])));
+
+        // 1.5 < 2 < 9 < 10 < 100, then `true`, then the string "10" — not
+        // `1.5, 10, 100, 2, 9` with the rest interleaved by text.
+        expect(seenLabels).toStrictEqual(["a", "b", "c", "d", "e", "f", "g"]);
     });
 
-    it("keeps a range filter on the same side of the order the sort uses", async () => {
-        expect.assertions(1);
+    it("selects a numeric range, not the rows a text comparison would put after the bound", async () => {
+        expect.assertions(2);
 
         const writer = makeWriter();
 
@@ -2128,10 +2143,376 @@ describe("createSqlCtxDb — filtering and paging an untyped column", () => {
         const pivotIndex = ordered.page.findIndex((row) => row["label"] === "c");
         const after = await writer.findMany("readings", { limit: 100, orderBy: [{ value: "asc" }], where: { value: { gt: 9 } } });
 
-        // `{ gt: 9 }` selects exactly the rows the ORDER BY places after `c`.
-        // Before the fix it bound a bare `9` against marked text and selected
-        // none of them.
+        // `{ gt: 9 }` still selects exactly the rows the ORDER BY places after
+        // `c` — the consistency the round before this one bought. Before that it
+        // bound a bare `9` against marked text and selected none of them.
         expect(after.page.map((row) => String(row["label"]))).toStrictEqual(ordered.page.slice(pivotIndex + 1).map((row) => String(row["label"])));
+
+        // And the rows it selects are the numerically greater ones. Under text
+        // order over the marked JSON this returned neither `d` (10) nor `e`
+        // (100), because `"1"` sorts below `"9"`.
+        expect(after.page.filter((row) => typeof row["value"] === "number").map((row) => row["value"])).toStrictEqual([10, 100]);
+    });
+});
+
+/**
+ * A `.global()` untyped column at a scale the planner actually has to choose a
+ * strategy for.
+ *
+ * The lexicographic-order defect this pins is invisible at five rows whose
+ * values are single digits — text order and numeric order agree there, so a
+ * small fixture reads correct against broken storage. The values below span
+ * 1e-3 to 1e6 with both signs across 2,000 rows, so the two orders disagree on
+ * most adjacent pairs, and a range predicate's MEMBERSHIP — not just its
+ * ordering — differs between the two encodings.
+ */
+const UNTYPED_SCALE_ROWS = 2000;
+
+/** A spread of magnitudes and signs whose text order is nothing like their numeric order. */
+const untypedScaleValue = (index: number): number => {
+    const magnitude = 10 ** (index % 10) / 1000;
+
+    return index % 3 === 0 ? -magnitude - index : magnitude + index;
+};
+
+/** A raw-SQL harness: the same in-memory database the store runs on, plus the statements it emitted. */
+const createRecordingSqliteHarness = (): {
+    close: () => void;
+    exec: SqlCtxExec;
+    raw: (query: string, ...parameters: unknown[]) => Record<string, unknown>[];
+    statements: { params: ReadonlyArray<unknown>; sql: string }[];
+} => {
+    const database = new DatabaseSync(":memory:");
+    const statements: { params: ReadonlyArray<unknown>; sql: string }[] = [];
+    const all = (query: string, parameters: ReadonlyArray<unknown>): Record<string, unknown>[] => {
+        statements.push({ params: parameters, sql: query });
+
+        return database.prepare(query).all(...(parameters as never[]));
+    };
+
+    return {
+        close: () => {
+            database.close();
+        },
+        exec: {
+            all: (query, parameters) => Promise.resolve(all(query, parameters)),
+            run: (query, parameters) => {
+                all(query, parameters);
+
+                return Promise.resolve();
+            },
+        },
+        raw: (query, ...parameters) => database.prepare(query).all(...(parameters as never[])),
+        statements,
+    };
+};
+
+describe("createSqlCtxDb — an untyped column orders numerically at scale", () => {
+    let harness: ReturnType<typeof createRecordingSqliteHarness>;
+    let writer: ReturnType<typeof createSqlCtxDb>;
+    let values: number[];
+
+    // Seeded once: every case below only reads, and 2,000 inserts per case would
+    // buy nothing but wall-clock.
+    beforeAll(async () => {
+        harness = createRecordingSqliteHarness();
+        writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedFilterSchema });
+        values = [];
+
+        for (let index = 0; index < UNTYPED_SCALE_ROWS; index += 1) {
+            const value = untypedScaleValue(index);
+
+            values.push(value);
+            // eslint-disable-next-line no-await-in-loop -- a seed loop; sequential writes keep `_creationTime` and `id` deterministic.
+            await writer.insert("readings", { label: String(index).padStart(5, "0"), value });
+        }
+    }, 120_000);
+
+    afterAll(() => {
+        harness.close();
+    });
+
+    const numerically = (): number[] => values.toSorted((left, right) => left - right);
+
+    it("returns 2,000 rows in numeric order, which is not their text order", async () => {
+        expect.assertions(2);
+
+        const ordered = await writer.findMany("readings", { limit: UNTYPED_SCALE_ROWS, orderBy: [{ value: "asc" }] });
+
+        expect(ordered.page.map((row) => row["value"])).toStrictEqual(numerically());
+
+        // The assertion that makes the fixture worth its size: sorting the same
+        // values by the form an earlier build stored gives a DIFFERENT answer,
+        // so a pass above cannot be an accident of small, same-width numbers.
+        const byMarkedJson = values.toSorted((left, right) => `$lunora.wire$${JSON.stringify(left)}`.localeCompare(`$lunora.wire$${JSON.stringify(right)}`));
+
+        expect(byMarkedJson).not.toStrictEqual(numerically());
+    });
+
+    it("selects exactly the numerically-matching rows for a range spanning magnitudes", async () => {
+        expect.assertions(2);
+
+        const between = await writer.findMany("readings", { limit: UNTYPED_SCALE_ROWS, where: { value: { gt: 5, lt: 1000 } } });
+        const expected = values.filter((value) => value > 5 && value < 1000).toSorted((left, right) => left - right);
+
+        expect(between.page.map((row) => Number(row["value"])).toSorted((left, right) => left - right)).toStrictEqual(expected);
+
+        // Membership, not only order: text order puts `-1000.001` inside
+        // `(5, 1000)` and `9.009` outside it, so the count alone separates the
+        // two encodings.
+        expect(expected.length).toBeGreaterThan(100);
+    });
+
+    it("binds the range as the stored key and lets SQL order the column itself", async () => {
+        expect.assertions(5);
+
+        harness.statements.length = 0;
+
+        await writer.findMany("readings", { limit: 25, orderBy: [{ value: "asc" }], where: { value: { gt: 5 } } });
+
+        const select = harness.statements.find((statement) => statement.sql.startsWith("SELECT") && statement.sql.includes("ORDER BY"));
+
+        expect(select).toBeDefined();
+        // Ordering is delegated to SQL over the raw column — there is no
+        // decode-then-sort step that could paper over a wrong storage order, so
+        // the stored form IS the answer's order.
+        expect(select?.sql).toContain(`ORDER BY "value" ASC`);
+        // And the bound bound is the order-preserving key, so the comparison SQL
+        // makes is the one the caller asked for. A bare `5` (the kind-blind
+        // binding) or `$lunora.wire$5` (the marked JSON) compares as text.
+        // Spelled out rather than re-derived from `sqliteEncode`, which would
+        // make the assertion agree with whatever the encoder currently does.
+        expect(select?.params).toContain("$lunora.wire$#c014000000000000");
+        expect(sqliteEncode(5, "union")).toBe("$lunora.wire$#c014000000000000");
+        expect(select?.params).not.toContain(5);
+    });
+
+    it("walks every row across keyset pages in the same numeric order", async () => {
+        expect.assertions(2);
+
+        const seen: unknown[] = [];
+        let cursor: null | string = null;
+
+        for (let page = 0; page < 100; page += 1) {
+            // eslint-disable-next-line no-await-in-loop -- keyset pagination is sequential by construction.
+            const result: { continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] } = await writer.findMany("readings", {
+                cursor,
+                limit: 100,
+                orderBy: [{ value: "asc" }],
+            });
+
+            seen.push(...result.page.map((row) => row["value"]));
+            cursor = result.continueCursor;
+
+            if (result.isDone) {
+                break;
+            }
+        }
+
+        // A cursor pivot bound in a form that disagrees with `ORDER BY` drops
+        // every row after the page it first disagrees on.
+        expect(seen).toHaveLength(UNTYPED_SCALE_ROWS);
+        expect(seen).toStrictEqual(numerically());
+    });
+});
+
+describe("createSqlCtxDb — an untyped column stays totally ordered across types", () => {
+    let harness: ReturnType<typeof createRecordingSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createRecordingSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("places null, then every number, then booleans, then strings and composites, then bytes", async () => {
+        expect.assertions(2);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedMixedSchema });
+
+        for (const [label, value] of [
+            ["a-null", null],
+            ["b-neg", -5],
+            ["c-frac", 0.25],
+            ["d-nine", 9],
+            ["e-big", 1000],
+            ["f-false", false],
+            ["g-true", true],
+            ["h-string", "zulu"],
+            ["i-object", { nested: 1 }],
+            ["j-bytes", new Uint8Array([1, 2, 3]).buffer],
+        ] as [string, unknown][]) {
+            // eslint-disable-next-line no-await-in-loop -- a seed loop; ordering the writes keeps `_creationTime` deterministic.
+            await writer.insert("readings", { label, value });
+        }
+
+        const ordered = await writer.findMany("readings", { limit: 100, orderBy: [{ value: "asc" }] });
+
+        /*
+         * The order this pins, and why each boundary lands where it does:
+         *
+         * - NULL is a real SQL NULL, which SQLite sorts below every value. Matches
+         *   the reference order `index-key-codec.ts` reproduces.
+         * - Every number is `$lunora.wire$#` + a fixed-width order-preserving key,
+         *   so the block is internally NUMERIC and contiguous.
+         * - `false`/`true` follow, because `#` sorts below `f` and `t`. That is the
+         *   position they already held when numbers were marked JSON too, so this
+         *   change moved the numbers without moving the boundary.
+         * - A string is stored verbatim (which is what `contains`/`startsWith` run
+         *   their substring test against) and a composite as its JSON, so both sort
+         *   by their own text.
+         * - Bytes bind as a BLOB, and SQLite sorts every BLOB above every TEXT.
+         *
+         * Across the whole column the order is therefore total, deterministic and
+         * stable — but it is NOT SQLite's own class order, because numbers live in
+         * the TEXT class at the `$` position rather than below every string. That
+         * is the price of storing strings verbatim, and it is the right way round:
+         * moving strings into a tagged encoding would order the classes correctly
+         * and break every substring filter in exchange.
+         */
+        expect(ordered.page.map((row) => row["label"])).toStrictEqual([
+            "a-null",
+            "b-neg",
+            "c-frac",
+            "d-nine",
+            "e-big",
+            "f-false",
+            "g-true",
+            "h-string",
+            "i-object",
+            "j-bytes",
+        ]);
+        // `9` before `1000`: the number block is internally numeric, not the
+        // text order (`0.25`, `1000`, `9`) the marked JSON gave it.
+        expect(ordered.page.slice(1, 5).map((row) => row["value"])).toStrictEqual([-5, 0.25, 9, 1000]);
+    });
+});
+
+/**
+ * The storage-format change above is only half a fix. A table written before it
+ * holds the marked JSON, and the new binding does not match that — so `eq` would
+ * start missing rows it used to find, and a range would run against a column
+ * holding two incomparable encodings. The rewrite walk in `ctx-db-migrations.ts`
+ * converts the stragglers from the same provisioning pass that creates the table.
+ */
+describe("createSqlCtxDb — a table written before the key encoding still reads back", () => {
+    let harness: ReturnType<typeof createRecordingSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createRecordingSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    /** Comfortably more than the 100 rows the rewrite converts per round trip, so the keyset walk pages several times. */
+    const LEGACY_ROWS = 450;
+
+    /**
+     * Provision the table, then fill it the way a pre-change build would have:
+     * the marked JSON form written straight in, with the completion marker
+     * cleared so the next ctx-db sees an unconverted table.
+     */
+    const seedLegacyTable = async (): Promise<number[]> => {
+        const provisioner = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedFilterSchema });
+
+        await provisioner.insert("readings", { label: "provision", value: 1 });
+
+        harness.raw(`DELETE FROM "readings"`);
+        harness.raw(`DELETE FROM "__lunora_migration_state"`);
+
+        const legacyValues: number[] = [];
+
+        for (let index = 0; index < LEGACY_ROWS; index += 1) {
+            const value = untypedScaleValue(index);
+
+            legacyValues.push(value);
+            harness.raw(
+                `INSERT INTO "readings" ("id", "_creationTime", "label", "value") VALUES (?, ?, ?, ?)`,
+                `r${String(index).padStart(5, "0")}`,
+                1,
+                String(index).padStart(5, "0"),
+                `$lunora.wire$${JSON.stringify(value)}`,
+            );
+        }
+
+        // A marked boolean and a wire-encoded composite ride along: the probe
+        // matches both (SQL cannot tell them from a number) and the pass must
+        // leave them byte-identical rather than mangle them.
+        harness.raw(`INSERT INTO "readings" ("id", "_creationTime", "label", "value") VALUES (?, ?, ?, ?)`, "zz-bool", 1, "zz-bool", "$lunora.wire$true");
+        harness.raw(`INSERT INTO "readings" ("id", "_creationTime", "label", "value") VALUES (?, ?, ?, ?)`, "zz-json", 1, "zz-json", '{"a":1}');
+
+        return legacyValues;
+    };
+
+    it("converts every legacy row on the next cold start and reads it back numerically ordered", async () => {
+        expect.assertions(4);
+
+        const legacyValues = await seedLegacyTable();
+        // A fresh ctx-db over the same database IS the cold start that runs the
+        // provisioning pass.
+        const reader = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedFilterSchema });
+        const ordered = await reader.findMany("readings", { limit: LEGACY_ROWS + 10, orderBy: [{ value: "asc" }] });
+
+        expect(ordered.page.filter((row) => typeof row["value"] === "number").map((row) => row["value"])).toStrictEqual(
+            legacyValues.toSorted((left, right) => left - right),
+        );
+        expect(ordered.page).toHaveLength(LEGACY_ROWS + 2);
+
+        // Every number is in the new form on disk, and the row that is correct
+        // as stored was not touched.
+        const stillLegacy = harness.raw(`SELECT "value" FROM "readings" WHERE "value" LIKE '$lunora.wire$%' AND "value" NOT LIKE '$lunora.wire$#%'`);
+
+        expect(stillLegacy.map((row) => row["value"])).toStrictEqual(["$lunora.wire$true"]);
+        expect(harness.raw(`SELECT "name" FROM "__lunora_migration_state" WHERE "name" = 'untyped-number-key:readings'`)).toHaveLength(1);
+    });
+
+    it("matches an equality and a range against a converted row, which the format change alone would have broken", async () => {
+        expect.assertions(3);
+
+        const legacyValues = await seedLegacyTable();
+        const reader = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedFilterSchema });
+        const target = legacyValues[7] ?? 0;
+
+        // `eq` binds the key. Against an unconverted row it matches nothing —
+        // that row is still marked JSON — which is the silent read break the
+        // rewrite exists to prevent.
+        const matched = await reader.findMany("readings", { where: { value: target } });
+
+        expect(matched.page).toHaveLength(legacyValues.filter((value) => value === target).length);
+
+        const above = await reader.findMany("readings", { limit: LEGACY_ROWS + 10, where: { value: { gt: 100 } } });
+        const expected = legacyValues.filter((value) => value > 100);
+
+        expect(above.page.filter((row) => typeof row["value"] === "number")).toHaveLength(expected.length);
+        expect(expected.length).toBeGreaterThan(0);
+    });
+
+    it("does not re-scan a converted table on the cold start after it", async () => {
+        expect.assertions(2);
+
+        await seedLegacyTable();
+
+        const first = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedFilterSchema });
+
+        await first.findMany("readings", { limit: 1 });
+
+        harness.statements.length = 0;
+
+        const second = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedFilterSchema });
+
+        await second.findMany("readings", { limit: 1 });
+
+        // The walk's probe can use no index, so leaving it armed would be a full
+        // table scan on every request against a Hyperdrive binding, forever, on
+        // a table where it can never match again.
+        expect(harness.statements.filter((statement) => statement.sql.includes("NOT LIKE"))).toHaveLength(0);
+        expect(
+            harness.statements.filter((statement) => statement.sql.includes("__lunora_migration_state") && statement.sql.startsWith("SELECT")).length,
+        ).toBeGreaterThan(0);
     });
 });
 
