@@ -68,8 +68,10 @@ interface CrossShardRelationOptions {
     identity?: Record<string, unknown>;
 
     /**
-     * Origin the worker is reachable at (`LUNORA_WORKER_ORIGIN`). The DO issues a
-     * loopback subrequest to `${origin}/_lunora/rpc`.
+     * Origin the worker is reachable at. The DO issues a loopback subrequest to
+     * `${origin}/_lunora/rpc`, so this is the app's own public URL — the same
+     * value the SchedulerDO dispatches from, which is why apps wire
+     * `.global({ origin })` to the `LUNORA_ORIGIN_URL` binding.
      */
     origin: string;
     /** Forwarded user id (the `x-lunora-userid` header), when authenticated. */

@@ -42,6 +42,10 @@
             - "fix/r8-compute"
             # Any later audit-chain branch (regex, per CodeRabbit's base_branches).
             - "fix/r[0-9]+-.*"
+            # Long-lived feature branches that carry their own stacks — a PR based
+            # on one is reviewable work, not an integration merge. #637 was
+            # skipped in full for want of this line.
+            - "claude/.*"
 
     "profile": "chill"
 

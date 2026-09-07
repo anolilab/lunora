@@ -37,8 +37,14 @@ interface Env extends Record<string, unknown> {
      * `tests/e2e/globalSetup.ts` — *never* set this in production.
      */
     LUNORA_E2E?: string;
-    /** Origin the SchedulerDO dispatches HTTP callbacks back to (job execution). */
-    LUNORA_WORKER_ORIGIN?: string;
+
+    /**
+     * This worker's own public origin — the one binding every loopback back
+     * into it uses. The SchedulerDO reads it off its own env to dispatch jobs
+     * (never off the schedule request, which would be an SSRF vector), and
+     * `.global({ origin })` fans reverse cross-shard relations across it.
+     */
+    LUNORA_ORIGIN_URL?: string;
     /** Sender address for auth (verification / reset) email; captured into the studio Mail tab in dev. */
     MAIL_FROM?: string;
     /** Public base URL R2 objects resolve against — used to mint signed URLs. */
@@ -119,7 +125,7 @@ const app = defineApp<Env>()
         signingSecret: (env) => env.STORAGE_SECRET,
     })
     .scheduler({ namespace: (env) => env.SCHEDULER })
-    .global({ d1: (env) => env.DB, origin: (env) => env.LUNORA_WORKER_ORIGIN })
+    .global({ d1: (env) => env.DB, origin: (env) => env.LUNORA_ORIGIN_URL })
     .auth({ d1: (env) => env.DB, options: authOptions })
     .admin((env) => env.LUNORA_ADMIN_TOKEN)
     .onEmail((env) => async (message, _workerEnv, context) => {

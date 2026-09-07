@@ -28,6 +28,11 @@ separate API service, no platform sign-up.
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }],
     "d1_databases": [{ "binding": "DB", "database_name": "my-lunora-app", "database_id": "<from-wrangler-d1-create>" }],
     "r2_buckets": [{ "binding": "FILES", "bucket_name": "my-lunora-files" }],
+    // Required whenever a SchedulerDO is declared. The DO reads its dispatch
+    // target from this binding on its own env — never off the schedule request,
+    // which would let a caller steer the callback — and refuses to enqueue
+    // without it, failing every ctx.scheduler.runAfter/runAt.
+    "vars": { "LUNORA_ORIGIN_URL": "https://my-lunora-app.example.workers.dev" },
 }
 ```
 
