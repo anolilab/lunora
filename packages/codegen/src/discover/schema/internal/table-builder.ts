@@ -804,6 +804,16 @@ const parseBaseTables = (object: ObjectLiteralExpression): TableIR[] => {
     const seenNames = new Set<string>();
 
     for (const property of object.getProperties()) {
+        // A spread of table definitions used to be skipped in silence: every
+        // table behind it vanished from the data model while the schema still
+        // declared them, and the only symptom was a missing type at a caller.
+        if (Node.isSpreadAssignment(property)) {
+            throw diagnosticAt(
+                property,
+                `defineSchema({...}): the tables behind \`${property.getText()}\` cannot be read — spread table maps are not resolved here, and every table in one would be silently absent from the generated data model. List the tables inline.`,
+            );
+        }
+
         if (!Node.isPropertyAssignment(property)) {
             continue;
         }

@@ -1742,6 +1742,26 @@ describe("discoverSchema", () => {
         expect(() => discoverSchema(project, schemaPath)).toThrow(/table "messages" is declared more than once/u);
     });
 
+    it("throws a diagnostic for a spread of table definitions instead of dropping them", () => {
+        expect.assertions(2);
+
+        // Skipped in silence before: every table behind the spread was absent
+        // from the generated data model while the schema still declared it.
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            const sharedTables = { audit: defineTable({ actor: v.string() }) };
+
+            export const schema = defineSchema({
+                ...sharedTables,
+                messages: defineTable({ text: v.string() }),
+            });
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(CodegenDiagnosticError);
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/tables behind `\.\.\.sharedTables` cannot be read/u);
+    });
+
     it("throws a pinpointed diagnostic (not a generic INTERNAL error) for an extension table named after a reserved keyword", () => {
         expect.assertions(3);
 

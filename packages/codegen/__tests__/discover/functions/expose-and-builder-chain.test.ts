@@ -202,12 +202,27 @@ describe("builder-chain.ts", () => {
             expect(argsFromBuilderChain(receiver(chain))).toStrictEqual({ id: { kind: "string" }, keep: { kind: "boolean" } });
         });
 
-        it("skips an `.input()` whose argument is not an object literal", () => {
+        it("resolves an `.input()` that names a const object literal", () => {
             expect.assertions(1);
 
-            expect(argsFromBuilderChain(receiver(`export const list = query.input(sharedArgs).input({ id: v.string() }).query(h);`))).toStrictEqual({
+            // Sharing an argument record between two procedures is the most
+            // ordinary thing there is, and it used to contribute NOTHING to the
+            // generated type while the runtime still enforced every field.
+            const chain =
+                `const sharedArgs = { alpha: v.string(), beta: v.optional(v.number()) };\n` +
+                `export const list = query.input(sharedArgs).input({ id: v.string() }).query(h);`;
+
+            expect(argsFromBuilderChain(receiver(chain))).toStrictEqual({
+                alpha: { kind: "string" },
+                beta: { inner: { kind: "number" }, kind: "optional" },
                 id: { kind: "string" },
             });
+        });
+
+        it("reports an `.input()` whose argument cannot be resolved, rather than dropping it", () => {
+            expect.assertions(1);
+
+            expect(() => argsFromBuilderChain(receiver(`export const list = query.input(buildArgs()).query(h);`))).toThrow(/cannot read the fields/u);
         });
 
         it("returns an empty record for a chain with no `.input()`", () => {

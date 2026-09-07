@@ -1,5 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import type { CallExpression, Expression, Identifier, ObjectLiteralExpression } from "ts-morph";
+import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, SpreadAssignment } from "ts-morph";
 import { Node } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
@@ -147,6 +147,13 @@ const PARSE_BEHAVIOR_MODIFIERS = new Set(["strip"]);
 const resolvingAliases = new Set<Identifier>();
 
 /**
+ * Object literals currently being merged into a shape through a spread, so a
+ * cycle terminates with a diagnostic instead of a stack overflow. Same
+ * single-threaded, `finally`-cleared discipline as {@link resolvingAliases}.
+ */
+const spreadingShapes = new Set<ObjectLiteralExpression>();
+
+/**
  * Follow a bare identifier to the validator expression its `const` holds.
  *
  * A validator written once and reused — `const vDocumentDoc = v.object({…})`,
@@ -190,6 +197,45 @@ const resolveValidatorAlias = (identifier: Identifier): Expression | undefined =
     }
 
     return declaration.getInitializer();
+};
+
+/**
+ * The object literal an expression stands for: the literal itself, the one a
+ * `const` holds (local or imported, via {@link resolveValidatorAlias}), or
+ * `undefined` when it cannot be read statically.
+ *
+ * Sharing an argument record between two procedures — `const sharedArgs = {…}`,
+ * then `.input({ ...sharedArgs, extra })` — is the most ordinary thing there is,
+ * and the fields behind the spread used to vanish from the generated types with
+ * no diagnostic. Callers that cannot resolve one must say so rather than emit a
+ * shape that disagrees with the validator the runtime enforces.
+ */
+const resolveObjectLiteral = (expression: Expression): ObjectLiteralExpression | undefined => {
+    if (Node.isParenthesizedExpression(expression) || Node.isAsExpression(expression) || Node.isSatisfiesExpression(expression)) {
+        return resolveObjectLiteral(expression.getExpression());
+    }
+
+    if (Node.isObjectLiteralExpression(expression)) {
+        return expression;
+    }
+
+    if (!Node.isIdentifier(expression) || resolvingAliases.has(expression)) {
+        return undefined;
+    }
+
+    const target = resolveValidatorAlias(expression);
+
+    if (target === undefined) {
+        return undefined;
+    }
+
+    resolvingAliases.add(expression);
+
+    try {
+        return resolveObjectLiteral(target);
+    } finally {
+        resolvingAliases.delete(expression);
+    }
 };
 
 /**
@@ -270,10 +316,45 @@ const parseValidator = (expression: Expression): ValidatorIR => {
     return { kind: "any", sourceText: expression.getText() };
 };
 
+/**
+ * The fields `{ ...sharedArgs }` contributes.
+ *
+ * `spreadingShapes` catches a cycle (`const a = { ...b }; const b = { ...a }`):
+ * the alias guard is released before the shape is parsed, so without it the two
+ * literals recurse into each other until the stack gives out.
+ */
+const parseSpreadShape = (property: SpreadAssignment): Record<string, ValidatorIR> => {
+    const spread = resolveObjectLiteral(property.getExpression());
+
+    if (spread === undefined || spreadingShapes.has(spread)) {
+        throw diagnosticAt(
+            property,
+            `cannot read the fields behind \`${property.getText()}\` — a spread resolves only when it names an object literal, or a \`const\` holding one that does not spread its way back here. Inline the fields, or assign them to a \`const\` object literal first`,
+        );
+    }
+
+    spreadingShapes.add(spread);
+
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: a spread's shape is parsed by the same parser that found it
+        return parseObjectShape(spread);
+    } finally {
+        spreadingShapes.delete(spread);
+    }
+};
+
 const parseObjectShape = (object: ObjectLiteralExpression): Record<string, ValidatorIR> => {
     const out: Record<string, ValidatorIR> = {};
 
     for (const property of object.getProperties()) {
+        // Merged in source order, so spread semantics hold: a key written after
+        // the spread wins, one written before it loses.
+        if (Node.isSpreadAssignment(property)) {
+            Object.assign(out, parseSpreadShape(property));
+
+            continue;
+        }
+
         // A shorthand property (`{ status }`, where `status` is a validator held
         // in a const) is its own initializer. Treating it as "not a property
         // assignment" dropped the field from the shape with no error anywhere —
@@ -511,5 +592,14 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
     return parseBuilderMember(member, args, call);
 };
 
-export { COLUMN_MODIFIERS, METADATA_MODIFIERS, PARSE_BEHAVIOR_MODIFIERS, parseObjectShape, parseValidator, REFINEMENT_MODIFIERS, setStandardTypeResolver };
+export {
+    COLUMN_MODIFIERS,
+    METADATA_MODIFIERS,
+    PARSE_BEHAVIOR_MODIFIERS,
+    parseObjectShape,
+    parseValidator,
+    REFINEMENT_MODIFIERS,
+    resolveObjectLiteral,
+    setStandardTypeResolver,
+};
 export type { StandardTypeResolver };
