@@ -1,3 +1,16 @@
+## @lunora/react [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.91...@lunora/react@1.0.0-alpha.92) (2026-09-07)
+
+### Bug Fixes
+
+* **do,shard-engine,runtime,client:** repair four core-path defects ([#649](https://github.com/anolilab/lunora/issues/649)) ([6fb9990](https://github.com/anolilab/lunora/commit/6fb99906617ed2811020d5d2ddeda16b312f8e03))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.87
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.44
+
 ## @lunora/react [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.90...@lunora/react@1.0.0-alpha.91) (2026-09-07)
 
 
