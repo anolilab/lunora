@@ -31,8 +31,12 @@
  * Ordering contract (matches SQLite's `NULL < INTEGER/REAL < TEXT`):
  *
  * - `null`   → tag `"0"`
- * - number   → tag `"1"` + 16 hex chars (order-preserving IEEE-754)
+ * - number   → tag `"1"` + `float64SqlKey` (16 hex chars, order-preserving IEEE-754)
  * - string   → tag `"2"` + UTF-8 bytes as hex
+ *
+ * The number half is `sql-projection.ts`'s key rather than a copy of it, because
+ * the `.global()` store writes that same key into an untyped column: narrowing
+ * is only correct while its numeric order and the stored one are one order.
  *
  * The tags are ASCII digits, so tag order alone already reproduces the storage
  * class order. Every emitted character is ASCII (`0-9a-f`, plus the separator
@@ -52,6 +56,8 @@
  * to the conservative whole-table dependency — never as "no match".
  */
 
+import { float64SqlKey } from "./sql-projection";
+
 /**
  * Separator between components of a compound index key. Must sort BELOW every
  * character {@link encodeIndexValue} can emit (lowest is the tag `"0"`, 0x30)
@@ -70,38 +76,6 @@ const KEY_HIGH = "￿";
 
 /** Returned when a value has no faithful order-preserving encoding. */
 const UNENCODABLE = undefined;
-
-/**
- * Encode a float64 so that lexicographic order over the hex output matches
- * numeric order over the input.
- *
- * The standard total-order transform: view the double as big-endian bits; for
- * negatives (sign bit set) flip every bit so more-negative sorts lower, for
- * non-negatives flip only the sign bit so they all sort above the negatives.
- * Fixed 16-char width keeps compound keys aligned.
- */
-/* eslint-disable no-bitwise -- the IEEE-754 total-order transform IS bit manipulation; expressing it any other way would obscure the one thing this function does. */
-const encodeNumber = (value: number): string => {
-    const view = new DataView(new ArrayBuffer(8));
-
-    view.setFloat64(0, value, false);
-
-    let high = view.getUint32(0, false);
-    let low = view.getUint32(4, false);
-
-    if ((high & 0x80_00_00_00) === 0) {
-        // Non-negative: set the sign bit so it sorts above every negative.
-        // `>>> 0` is load-bearing — JS bitwise ops yield a SIGNED int32, and a
-        // negative `high` would render as "-3ff00000" and destroy the ordering.
-        high = (high ^ 0x80_00_00_00) >>> 0;
-    } else {
-        // Negative: flip everything so larger magnitudes sort lower.
-        high = ~high >>> 0;
-        low = ~low >>> 0;
-    }
-
-    return high.toString(16).padStart(8, "0") + low.toString(16).padStart(8, "0");
-};
 
 /** UTF-8 bytes of `value` as lowercase hex — byte order == SQLite `BINARY` order. */
 const encodeString = (value: string): string => {
@@ -132,8 +106,9 @@ const encodeIndexValue = (value: unknown): string | undefined => {
             return UNENCODABLE;
         }
 
-        // -0 and +0 compare equal in SQL; normalize so they encode identically.
-        return `1${encodeNumber(value === 0 ? 0 : value)}`;
+        // `float64SqlKey` normalizes -0 to +0, which is what SQL needs — the
+        // two compare equal there, so two keys would split one value.
+        return `1${float64SqlKey(value)}`;
     }
 
     if (typeof value === "string") {
