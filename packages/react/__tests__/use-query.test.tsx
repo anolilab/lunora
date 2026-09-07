@@ -1,8 +1,10 @@
 import type { FunctionReference, SubscriptionError } from "@lunora/client";
+import { QueryClient } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
+import { lunoraQueryKey } from "../src/cache";
 import { LunoraProvider } from "../src/lunora-provider";
 import useQuery from "../src/use-query";
 import { createMockClient } from "./mock-client";
@@ -230,6 +232,63 @@ describe("useQuery", () => {
         });
 
         expect(screen.getByTestId("display").textContent).toBe(JSON.stringify("post-mutation push"));
+    });
+
+    it("keeps the pushed value when the last consumer detaches before the snapshot resolves", async () => {
+        expect.hasAssertions();
+
+        let releaseSnapshot: () => void = () => {};
+        const mock = createMockClient(
+            async () =>
+                new Promise((resolve) => {
+                    releaseSnapshot = () => {
+                        resolve("pre-mutation snapshot");
+                    };
+                }),
+        );
+        const queryClient = new QueryClient({
+            defaultOptions: { queries: { gcTime: 5 * 60_000, retry: 0, staleTime: Number.POSITIVE_INFINITY } },
+        });
+
+        const view = render(
+            <LunoraProvider client={mock.asClient} queryClient={queryClient}>
+                <Display />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        await act(async () => {
+            mock.emit("posts:list", "post-mutation push");
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("display").textContent).toBe(JSON.stringify("post-mutation push"));
+        });
+
+        // The last consumer goes away while the snapshot is still on the wire.
+        // Nothing aborts that fetch (the `queryFn` takes no signal), so it still
+        // resolves — and its "has anything been pushed since?" reading must not
+        // be reset by the detach that tore the registry entry down.
+        view.unmount();
+
+        await act(async () => {
+            releaseSnapshot();
+
+            for (let tick = 0; tick < 5; tick += 1) {
+                // eslint-disable-next-line no-await-in-loop -- intentional sequential drain of task ticks
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 0);
+                });
+            }
+        });
+
+        // The cache entry outlives the unmount (`gcTime`), and a remount reads it
+        // synchronously — so a stale snapshot written here is what the user sees
+        // on the way back.
+        expect(queryClient.getQueryData(lunoraQueryKey(makeRef("posts:list"), DEFAULT_ARGS, undefined))).toBe("post-mutation push");
     });
 
     // The hydration gate (`client.isReady` / `client.whenReady()`), which every

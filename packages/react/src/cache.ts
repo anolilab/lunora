@@ -17,13 +17,6 @@ interface RegistryEntry {
      */
     errorCallbacks: Set<SubscriptionErrorCallback>;
 
-    /**
-     * How many subscription frames have been written to the TanStack cache for
-     * this key. Read by {@link LunoraSubscriptionRegistry.pushCount} so a hook's
-     * one-shot HTTP snapshot can tell that a NEWER push landed while it was in
-     * flight — see the `queryFn` guards in `use-query` / `use-paginated-core`.
-     */
-    pushes: number;
     refCount: number;
     /** WS unsubscribe handle, set on first successful attach. */
     unsubscribe: Unsubscribe | undefined;
@@ -51,6 +44,22 @@ interface RegistryEntry {
  */
 class LunoraSubscriptionRegistry {
     private readonly entries = new Map<string, RegistryEntry>();
+
+    /**
+     * How many subscription frames each key has written to the TanStack cache.
+     *
+     * Deliberately NOT a field of {@link RegistryEntry}: the entry is deleted on
+     * the last `detach()`, and a `queryFn` that sampled the count before its
+     * fetch is still in flight then (nothing propagates TanStack's abort signal
+     * into `client.query`). With the counter inside the entry, the sample after
+     * the fetch read `0` again — the same value it started from — so a push that
+     * had landed in between was invisible and the older snapshot was written
+     * over it. Monotonic per key and per client, so it can only ever be read as
+     * "unchanged" when it genuinely is — which is also why nothing prunes it: a
+     * counter that resets is a counter that can repeat a sampled value. One
+     * number per query key this client ever subscribed to.
+     */
+    private readonly pushes = new Map<string, number>();
 
     public constructor(private readonly client: LunoraClient) {}
 
@@ -87,11 +96,13 @@ class LunoraSubscriptionRegistry {
      * the next write. Sampling this either side of the fetch is how a `queryFn`
      * detects that and yields to the newer value.
      *
-     * `0` for a key with no live subscription, which reads the same as "nothing
-     * pushed" — the snapshot then wins, which is correct.
+     * `0` for a key nothing has ever pushed to, which reads the same as "nothing
+     * pushed" — the snapshot then wins, which is correct. The count survives a
+     * detach, so a snapshot in flight past the last consumer's teardown still
+     * sees the push that overtook it.
      */
     public pushCount(queryKey: QueryKey): number {
-        return this.entries.get(keyHash(queryKey))?.pushes ?? 0;
+        return this.pushes.get(keyHash(queryKey)) ?? 0;
     }
 
     /**
@@ -112,7 +123,7 @@ class LunoraSubscriptionRegistry {
         let entry = this.entries.get(key);
 
         if (!entry) {
-            entry = { errorCallbacks: new Set(), pushes: 0, refCount: 0, unsubscribe: undefined };
+            entry = { errorCallbacks: new Set(), refCount: 0, unsubscribe: undefined };
             this.entries.set(key, entry);
 
             const opened = entry;
@@ -122,7 +133,7 @@ class LunoraSubscriptionRegistry {
                     function_,
                     args,
                     (value) => {
-                        opened.pushes += 1;
+                        this.pushes.set(key, (this.pushes.get(key) ?? 0) + 1);
                         queryClient.setQueryData(queryKey, value);
                     },
                     {
