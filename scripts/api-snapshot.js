@@ -373,6 +373,25 @@ const normalizeText = (text) => {
 };
 
 /**
+ * The type {@link printDeclaration} prints for this declaration instead of its
+ * source text, or `undefined` when it prints the source text.
+ *
+ * Its own function because {@link collectInternalReferences} has to follow
+ * exactly the declarations that branch prints: re-deriving the condition there
+ * is how the two drift apart and a printed type names something the walk never
+ * looked for.
+ */
+const inferredType = (checker, decl) => {
+    if (decl.getSourceFile().isDeclarationFile || !ts.isVariableDeclaration(decl) || !ts.isIdentifier(decl.name)) {
+        return undefined;
+    }
+
+    const symbol = checker.getSymbolAtLocation(decl.name);
+
+    return symbol ? checker.getTypeOfSymbolAtLocation(symbol, decl) : undefined;
+};
+
+/**
  * Print one declaration as normalized text.
  *
  * A `const`/`let` in a `.d.ts` already IS its signature. The same declaration in
@@ -389,14 +408,10 @@ const normalizeText = (text) => {
  * still reaches the snapshot, unchanged by this and only in `auth-ui/angular`.
  */
 const printDeclaration = (checker, decl) => {
-    if (!decl.getSourceFile().isDeclarationFile && ts.isVariableDeclaration(decl) && ts.isIdentifier(decl.name)) {
-        const symbol = checker.getSymbolAtLocation(decl.name);
+    const inferred = inferredType(checker, decl);
 
-        if (symbol) {
-            const type = checker.typeToString(checker.getTypeOfSymbolAtLocation(symbol, decl), decl, ts.TypeFormatFlags.NoTruncation);
-
-            return normalizeText(`${kindOfDeclaration(decl)} ${decl.name.text}: ${type};`);
-        }
+    if (inferred) {
+        return normalizeText(`${kindOfDeclaration(decl)} ${decl.name.text}: ${checker.typeToString(inferred, decl, ts.TypeFormatFlags.NoTruncation)};`);
     }
 
     let node = decl;
@@ -418,21 +433,31 @@ const declarationKey = (decl) => `${decl.getSourceFile().fileName}:${decl.pos}`;
 /**
  * Declaration kinds the internal-reference appendix prints.
  *
- * Types everywhere; values only out of a `.d.ts`. A `declare const` or a class
- * in a declaration file IS a signature and nothing else — `@lunora/values`
- * exports one object literal whose every member is `typeof <unexported const>`,
- * so refusing them would leave twenty of that package's members unpinned. In
- * `auth-ui`, which ships `.ts`/`.tsx` source rather than a build (see
- * `collectEntries`), the same declaration carries its implementation, and
- * inlining a function body would fail the gate on every refactor.
+ * The split is by whether printing the declaration can drag an IMPLEMENTATION
+ * into the snapshot. A type declaration IS its signature, and `printDeclaration`
+ * renders a `const`/`let` as `const x: T;` from the checker wherever it lives —
+ * so both print from any file. A class or a function outside a `.d.ts` carries
+ * its body, and inlining that would fail the gate on every refactor, so those
+ * are admitted only from a declaration file.
+ *
+ * A variable was in the `.d.ts`-only group until `printDeclaration` learned to
+ * infer, which made the restriction wrong rather than cautious: in a
+ * source-shipping package (`auth-ui`, see `collectEntries`)
+ * `export type Config = typeof internalConfig;` printed `typeof internalConfig`
+ * with the declaration nowhere, so changing that object's shape moved no bytes.
  */
-const TYPE_KINDS = new Set([ts.SyntaxKind.EnumDeclaration, ts.SyntaxKind.InterfaceDeclaration, ts.SyntaxKind.TypeAliasDeclaration]);
-const DECLARATION_FILE_KINDS = new Set([ts.SyntaxKind.ClassDeclaration, ts.SyntaxKind.FunctionDeclaration, ts.SyntaxKind.VariableDeclaration]);
+const BODY_FREE_KINDS = new Set([
+    ts.SyntaxKind.EnumDeclaration,
+    ts.SyntaxKind.InterfaceDeclaration,
+    ts.SyntaxKind.TypeAliasDeclaration,
+    ts.SyntaxKind.VariableDeclaration,
+]);
+const DECLARATION_FILE_KINDS = new Set([ts.SyntaxKind.ClassDeclaration, ts.SyntaxKind.FunctionDeclaration]);
 
 const isPrintableInternal = (decl) =>
     // Anonymous (a default-exported function) has no name to head a section with.
     Boolean(decl.name && ts.isIdentifier(decl.name)) &&
-    (TYPE_KINDS.has(decl.kind) || (decl.getSourceFile().isDeclarationFile && DECLARATION_FILE_KINDS.has(decl.kind)));
+    (BODY_FREE_KINDS.has(decl.kind) || (decl.getSourceFile().isDeclarationFile && DECLARATION_FILE_KINDS.has(decl.kind)));
 
 /** The name node a type-position reference resolves through, if this node is one. */
 const referencedTypeName = (node) => {
@@ -470,11 +495,88 @@ const referencedTypeName = (node) => {
  * Own package only. A referenced type from a sibling `@lunora/*` is pinned by
  * that package's own snapshot, and one from `node_modules` is a dependency's
  * concern — the same rule `resolveExport`'s foreign handling already applies.
+ *
+ * Two walks, because a declaration has two ways to name a type. Syntax covers
+ * what it WRITES. {@link inferredType} declarations write nothing useful — the
+ * AST of `export const state = createState()` is a call expression, while the
+ * printed line is `const state: State;` — so those are followed through the
+ * checker as well; see `visitType`.
  */
 const collectInternalReferences = (checker, ownPrefix, roots, exportedKeys) => {
     const found = new Map();
     const queue = [...roots];
     const walked = new Set(roots.map((decl) => declarationKey(decl)));
+
+    const enqueue = (symbol) => {
+        for (const decl of symbol?.declarations ?? []) {
+            const key = declarationKey(decl);
+
+            if (!walked.has(key) && !exportedKeys.has(key) && decl.getSourceFile().fileName.startsWith(ownPrefix) && isPrintableInternal(decl)) {
+                walked.add(key);
+                found.set(key, decl);
+                queue.push(decl);
+            }
+        }
+    };
+
+    /**
+     * Follow a checker type along the same spine `typeToString` prints.
+     *
+     * A NAMED type prints as its name and nothing more, so enqueue it and stop:
+     * its own declaration is where the members live, and the syntax walk covers
+     * that once it is queued. This is also what bounds the traversal — every
+     * path ends at a name or an intrinsic. An ANONYMOUS type is expanded inline
+     * by the printer, so its constituents, signatures, members and index
+     * signatures are all visible in the printed text and are followed too.
+     * Type arguments are followed either way: `Promise<Internal>` prints
+     * `Internal` while stopping at `Promise`.
+     */
+    const visitType = (type, seen) => {
+        if (type === undefined || seen.has(type)) {
+            return;
+        }
+
+        seen.add(type);
+
+        for (const argument of type.aliasTypeArguments ?? []) {
+            visitType(argument, seen);
+        }
+
+        // eslint-disable-next-line no-bitwise
+        if (type.flags & ts.TypeFlags.Object) {
+            for (const argument of checker.getTypeArguments(type)) {
+                visitType(argument, seen);
+            }
+        }
+
+        for (const constituent of type.types ?? []) {
+            visitType(constituent, seen);
+        }
+
+        const symbol = type.aliasSymbol ?? type.getSymbol();
+
+        if ((symbol?.declarations ?? []).some((decl) => decl.name && ts.isIdentifier(decl.name))) {
+            enqueue(symbol);
+
+            return;
+        }
+
+        for (const signature of [...type.getCallSignatures(), ...type.getConstructSignatures()]) {
+            for (const parameter of signature.getParameters()) {
+                visitType(checker.getTypeOfSymbol(parameter), seen);
+            }
+
+            visitType(signature.getReturnType(), seen);
+        }
+
+        for (const property of type.getProperties()) {
+            visitType(checker.getTypeOfSymbol(property), seen);
+        }
+
+        for (const indexInfo of checker.getIndexInfosOfType(type)) {
+            visitType(indexInfo.type, seen);
+        }
+    };
 
     while (queue.length > 0) {
         const current = queue.pop();
@@ -494,21 +596,14 @@ const collectInternalReferences = (checker, ownPrefix, roots, exportedKeys) => {
                     }
                 }
 
-                for (const decl of symbol?.declarations ?? []) {
-                    const key = declarationKey(decl);
-
-                    if (!walked.has(key) && !exportedKeys.has(key) && decl.getSourceFile().fileName.startsWith(ownPrefix) && isPrintableInternal(decl)) {
-                        walked.add(key);
-                        found.set(key, decl);
-                        queue.push(decl);
-                    }
-                }
+                enqueue(symbol);
             }
 
             ts.forEachChild(node, visit);
         };
 
         visit(current);
+        visitType(inferredType(checker, current), new Set());
     }
 
     // Sorted by name then body, never by file: packem spells a shared chunk
