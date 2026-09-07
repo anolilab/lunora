@@ -5,13 +5,16 @@
  * `serializeColumnValue`/`decodeGlobalRow` hard-code {@link sqliteEncode}
  * /{@link sqliteDecode}, so global-table storage is SQLite-shaped on D1,
  * Postgres, and MySQL alike (booleans as 1/0, JSON as TEXT, `bigint` as the
- * order-preserving text key {@link bigintSqlKey} builds). `SqlDialect` deliberately carries NO codec member: an engine-native
+ * order-preserving text key {@link bigintSqlKey} builds, and a number in an
+ * untyped column as the order-preserving `float64SqlKey` under
+ * {@link UNTYPED_NUMBER_PREFIX} — an untyped column is TEXT everywhere, so a
+ * number kept as JSON there sorted `"10"` before `"2"`). `SqlDialect` deliberately carries NO codec member: an engine-native
  * one there would never run, and a dialect author writing one would only learn
  * that at runtime. Adding one means routing the core through it first.
  */
 import { LunoraError } from "@lunora/errors";
 import type { ValidatorLike } from "@lunora/shard-engine";
-import { BIGINT_KEY_DIGITS, bigintSqlKey, decodeBigintSqlKey } from "@lunora/shard-engine";
+import { BIGINT_KEY_DIGITS, bigintSqlKey, decodeBigintSqlKey, decodeFloat64SqlKey, float64SqlKey } from "@lunora/shard-engine";
 
 import { effectiveKind } from "../../../shared/effective-kind";
 import { decodeWire, encodeWire, needsWireEncoding, WIRE_TAG } from "../../../shared/wire-codec";
@@ -23,6 +26,28 @@ import { decodeWire, encodeWire, needsWireEncoding, WIRE_TAG } from "../../../sh
  * `{`, `[`, `"`, a digit, `-`, `t`, `f`, or `n`, never `$`.
  */
 const WIRE_PREFIX = WIRE_TAG;
+
+/**
+ * Second marker character, after {@link WIRE_PREFIX}, on a number stored in an
+ * untyped column. What follows is `float64SqlKey`'s fixed-width, order-preserving
+ * hex rather than `JSON.stringify` output, so SQLite's text comparison over the
+ * column IS numeric comparison over the values.
+ *
+ * `"#"` is chosen for where it sorts, not for how it reads. It is below every
+ * first character `JSON.stringify` can emit (`-`, a digit, `"`, `[`, `{`, `t`,
+ * `f`, `n`), which does two things: it tells a new-form number apart from the
+ * marked JSON an earlier build wrote with certainty rather than by parsing, and
+ * it keeps every number sorting below `false`/`true` — the position they already
+ * held when both were JSON text, so switching the numbers to a key does not
+ * silently move the number/boolean boundary as well.
+ */
+const NUMBER_TAG = "#";
+
+/** The full marker a stored untyped number carries. Exported for the storage migration, which probes for the rows still missing it. */
+const UNTYPED_NUMBER_PREFIX: string = WIRE_TAG + NUMBER_TAG;
+
+/** The marker every wire-encoded stored value carries. Exported for the same probe — it is the half that narrows the scan to marked rows. */
+const UNTYPED_WIRE_PREFIX: string = WIRE_TAG;
 
 /**
  * Decode a stored JSON column, honouring the wire marker written by
@@ -40,8 +65,27 @@ const WIRE_PREFIX = WIRE_TAG;
  * ~1.25x on a 100-row page. A `startsWith` is O(1) against the O(n) scan a
  * content sniff needs.
  */
-const decodeJsonColumn = (raw: string, parse: (text: string) => unknown): unknown =>
-    raw.startsWith(WIRE_PREFIX) ? decodeWire(parse(raw.slice(WIRE_PREFIX.length))) : parse(raw);
+const decodeJsonColumn = (raw: string, parse: (text: string) => unknown): unknown => {
+    if (!raw.startsWith(WIRE_PREFIX)) {
+        return parse(raw);
+    }
+
+    const payload = raw.slice(WIRE_PREFIX.length);
+
+    // A number written by the CURRENT build: `NUMBER_TAG` plus the
+    // order-preserving key. Tested before the JSON path because the key is not
+    // JSON — `parse` would hand back the hex string.
+    if (payload.startsWith(NUMBER_TAG)) {
+        // A malformed key is returned as the stored text rather than as a wrong
+        // number; nothing this encoder writes can be one.
+        return decodeFloat64SqlKey(payload.slice(NUMBER_TAG.length)) ?? raw;
+    }
+
+    // A number written BEFORE the key encoding is marked JSON (`$lunora.wire$42`)
+    // and still decodes here, which is what lets a table read back correctly
+    // between the format change and the rewrite pass that converts it.
+    return decodeWire(parse(payload));
+};
 
 /**
  * Column kinds whose storage type is TEXT on every engine (see
@@ -50,22 +94,50 @@ const decodeJsonColumn = (raw: string, parse: (text: string) => unknown): unknow
  */
 const UNTYPED_KINDS = new Set(["any", "from", "union"]);
 
+/**
+ * The storage form of a scalar written to an untyped column, or `undefined` when
+ * the value takes the same form there as it would anywhere else.
+ *
+ * A number or boolean bound to one of those kinds' TEXT column is COERCED by the
+ * engine — `42` lands as the text `42.0`, `true` (encoded 1) as `1.0` — and the
+ * decode has no type to reverse it with, so the caller read back a string. Both
+ * go out marked and self-describing, so {@link sqliteDecode} reverses them by
+ * the marker alone and needs no kind.
+ *
+ * A NUMBER is marked AND ordered: {@link UNTYPED_NUMBER_PREFIX} plus the
+ * fixed-width `float64SqlKey`, whose byte order is numeric order. The marked
+ * JSON this used to write (`$lunora.wire$42`) is exact for `=` but sorts `"10"`
+ * before `"2"`, so `orderBy`, every range predicate, `MIN`/`MAX` and every page
+ * cursor over an untyped column ran on text order and returned the wrong rows —
+ * `where: { un: { gt: 5 } }` matched 1 of the 3 rows above it while the
+ * identical read against the DO row store matched all 3. The same defect
+ * `bigintSqlKey` exists for, in the one column kind that had been left on the
+ * lossy form.
+ *
+ * Strings, bigints and composites are NOT handled here and keep the storage form
+ * they already had: the WHERE path binds through {@link sqliteEncode} WITHOUT a
+ * kind, so changing them would stop every existing equality filter from
+ * matching — and a string stored verbatim is what `contains`/`startsWith` run
+ * their substring test against.
+ */
+const untypedStorageForm = (value: unknown, kind: string | undefined): string | undefined => {
+    if (kind === undefined || !UNTYPED_KINDS.has(kind)) {
+        return undefined;
+    }
+
+    if (typeof value === "number") {
+        return UNTYPED_NUMBER_PREFIX + float64SqlKey(value);
+    }
+
+    return typeof value === "boolean" ? WIRE_PREFIX + JSON.stringify(value) : undefined;
+};
+
 /** Map a JS value onto its SQLite storage form — SQLite has no boolean, so true/false → 1/0. */
 export const sqliteEncode = (value: unknown, kind?: string): unknown => {
-    // A number or boolean bound to one of the untyped kinds' TEXT column is
-    // COERCED by the engine — `42` lands as the text `42.0`, `true` (encoded 1)
-    // as `1.0` — and the decode has no type to reverse it with, so the caller
-    // read back a string. Store those two in the marked, self-describing form
-    // the composites already use; `sqliteDecode` reverses it by the marker
-    // alone, so no kind is needed on the way out.
-    //
-    // Strings, bigints and composites keep the storage form they already had:
-    // the WHERE path binds through this same function WITHOUT a kind, so
-    // changing them would stop every existing equality filter from matching.
-    // Equality on an untyped numeric column does not match today either (the
-    // stored `42.0` never equalled a bound `42`), so nothing regresses.
-    if (kind !== undefined && (typeof value === "number" || typeof value === "boolean") && UNTYPED_KINDS.has(kind)) {
-        return WIRE_PREFIX + JSON.stringify(value);
+    const untyped = untypedStorageForm(value, kind);
+
+    if (untyped !== undefined) {
+        return untyped;
     }
 
     if (typeof value === "boolean") {
@@ -127,6 +199,38 @@ export const tryJsonParse = (raw: string): unknown => {
 };
 
 /**
+ * Convert one stored untyped-column value from the marked JSON an earlier build
+ * wrote for a number (`$lunora.wire$42`) into the order-preserving key form
+ * {@link sqliteEncode} writes now — or `undefined` when `raw` is not one and
+ * must be left exactly as stored.
+ *
+ * Lives here rather than in the migration that calls it because it is the only
+ * place that knows both forms, and a rewrite pass that reconstructs a storage
+ * format from a second copy of the rules is how a migration corrupts the data
+ * it was written to repair.
+ *
+ * Deliberately narrow. A marked BOOLEAN (`true`/`false`) keeps its form — the
+ * key change moved only the numbers, and `NUMBER_TAG` was picked so the
+ * number/boolean order is the one it already was. A marked COMPOSITE parses to
+ * an array or object, not a number. A number an earlier build could not
+ * represent at all (`NaN`/`±Infinity` stringified to `null`) parses to `null`,
+ * so it is left alone and still reads back as the `null` it already read back
+ * as — the pass cannot invent a value the row never held.
+ */
+export const rewriteLegacyUntypedNumber = (raw: unknown): string | undefined => {
+    if (typeof raw !== "string" || !raw.startsWith(WIRE_PREFIX) || raw.startsWith(UNTYPED_NUMBER_PREFIX)) {
+        return undefined;
+    }
+
+    const parsed = tryJsonParse(raw.slice(WIRE_PREFIX.length));
+
+    return typeof parsed === "number" ? UNTYPED_NUMBER_PREFIX + float64SqlKey(parsed) : undefined;
+};
+
+/** Is `kind` one of the untyped column kinds whose stored form keys off the runtime value's type? */
+export const isUntypedColumnKind = (kind: string | undefined): boolean => kind !== undefined && UNTYPED_KINDS.has(kind);
+
+/**
  * Decode a `bigint` column: the order-preserving key {@link bigintSqlKey} writes,
  * or — for a row stored by a build that wrote plain decimal text — the decimal
  * string, else verbatim.
@@ -180,7 +284,10 @@ export const effectiveColumnKind = (validator: ValidatorLike): string | undefine
  *   A `number` or `boolean` does NOT round-trip through the column's native
  *   type — all three kinds store as TEXT on every engine, which coerces a bound
  *   `42` to the text `42.0` — so {@link sqliteEncode} writes those two in the
- *   marked form and this branch reverses them by the marker alone.
+ *   marked form and this branch reverses them by the marker alone. A number's
+ *   marked payload is `float64SqlKey`, so its text order is numeric order; the
+ *   marked JSON an earlier build wrote is still read back here, which is what
+ *   makes a table correct between the format change and the rewrite pass.
  *   `from` belongs to THIS group, not to `object`/`array`/`record`: an external
  *   Standard Schema can describe a string just as easily as an object, and
  *   {@link sqliteEncode} keys off the runtime JS type — so a `v.from(z.string())`
@@ -290,4 +397,5 @@ export const sqliteDecode = (raw: unknown, kind: string | undefined): unknown =>
  */
 export const BIGINT_KEY_LENGTH: number = BIGINT_KEY_DIGITS + 1;
 
+export { UNTYPED_NUMBER_PREFIX, UNTYPED_WIRE_PREFIX };
 export { bigintSqlKey } from "@lunora/shard-engine";

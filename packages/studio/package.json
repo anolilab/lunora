@@ -1,6 +1,6 @@
 {
     "name": "@lunora/studio",
-    "version": "1.0.0-alpha.163",
+    "version": "1.0.0-alpha.164",
     "description": "The Lunora Studio: a local admin UI for your schema, data, logs, and advisors",
     "keywords": [
         "admin-ui",
@@ -79,9 +79,9 @@
         "@lingui/message-utils": "catalog:i18n",
         "@lunora/advisor": "1.0.0-alpha.115",
         "@lunora/bindings": "1.0.0-alpha.54",
-        "@lunora/client": "1.0.0-alpha.87",
+        "@lunora/client": "1.0.0-alpha.88",
         "@lunora/errors": "1.0.0-alpha.35",
-        "@lunora/react": "1.0.0-alpha.92",
+        "@lunora/react": "1.0.0-alpha.93",
         "@tanstack/react-query": "catalog:frontend",
         "@tanstack/react-router": "catalog:frontend",
         "@tanstack/react-table": "catalog:frontend",
@@ -99,7 +99,7 @@
         "@babel/preset-react": "catalog:build",
         "@lunora/mail": "1.0.0-alpha.67",
         "@lunora/notify": "1.0.0-alpha.42",
-        "@lunora/runtime": "1.0.0-alpha.102",
+        "@lunora/runtime": "1.0.0-alpha.103",
         "@tailwindcss/cli": "catalog:vite",
         "@testing-library/dom": "catalog:frontend",
         "@testing-library/react": "catalog:frontend",

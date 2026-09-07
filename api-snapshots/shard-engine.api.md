@@ -3660,6 +3660,12 @@ const decodeBigintSqlKey: (raw: string) => bigint | undefined;
 const decodeCursor: (cursor: string) => unknown[];
 ```
 
+### `decodeFloat64SqlKey` (const)
+
+```ts
+const decodeFloat64SqlKey: (raw: string) => number | undefined;
+```
+
 ### `deleteGlobalShapeSnapshot` (const)
 
 ```ts
@@ -3814,6 +3820,12 @@ const finishStreamRun: (sql: SqlExec, runKey: string, status: "complete" | "erro
     code: string;
     message: string;
 }) => void;
+```
+
+### `float64SqlKey` (const)
+
+```ts
+const float64SqlKey: (value: number) => string;
 ```
 
 ### `foldAggregateTally` (const)

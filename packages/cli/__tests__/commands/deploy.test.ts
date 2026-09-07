@@ -692,13 +692,13 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
                 expect(result.code).toBe(0);
             });
 
-            it("surfaces validator warnings on the command that actually ships", async () => {
+            it("blocks the deploy when the entry does not export a declared class", async () => {
                 expect.assertions(2);
 
-                // The unexported-class check is deliberately a WARNING so a
-                // scanner miss cannot block a working deploy — but `deploy`
-                // printed `report.errors` only, so on the one command that ships
-                // a Worker the warning was invisible and wrangler failed instead.
+                // wrangler refuses to bundle this Worker, so shipping it can only
+                // fail — the validator now parses the entry rather than scanning
+                // it, which is what makes the finding certain enough to block on
+                // the one command that ships.
                 writeFileSync(
                     join(workdir, "wrangler.jsonc"),
                     `{
@@ -717,12 +717,12 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
                 writeFileSync(join(workdir, "src", "index.ts"), "export const ShardDO = class {};\nexport default { fetch() {} };\n", "utf8");
 
                 const { spawner } = createRecordingSpawner();
-                const { logger, warns } = silentLogger();
+                const { errors, logger } = silentLogger();
 
                 const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner });
 
-                expect(result.code).toBe(0);
-                expect(warns.join("\n")).toContain("SchedulerDO");
+                expect(result.code).toBe(1);
+                expect(errors.join("\n")).toContain("SchedulerDO");
             });
 
             it("blocks --env <name> that names no declared environment", async () => {

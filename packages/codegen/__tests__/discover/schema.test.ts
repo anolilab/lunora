@@ -1742,6 +1742,47 @@ describe("discoverSchema", () => {
         expect(() => discoverSchema(project, schemaPath)).toThrow(/table "messages" is declared more than once/u);
     });
 
+    it("follows a spread of table definitions instead of dropping them", () => {
+        expect.assertions(1);
+
+        // Skipped in silence before: every table behind the spread was absent
+        // from the generated data model while the schema still declared it.
+        // `registry/payment` ships `paymentTables` as exactly this shape.
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            const sharedTables = { audit: defineTable({ actor: v.string() }) };
+
+            export const schema = defineSchema({
+                ...sharedTables,
+                messages: defineTable({ text: v.string() }),
+            });
+        `);
+
+        expect(discoverSchema(project, schemaPath).tables.map((table) => table.name)).toStrictEqual(["audit", "messages"]);
+    });
+
+    it("skips a table spread it cannot read rather than aborting the run", () => {
+        expect.assertions(1);
+
+        // `defineSchema({ ...authTables(options) })` is the documented
+        // `@lunora/auth` wiring and the record is built at runtime — there is no
+        // inline form to fall back to, so refusing it would leave that path
+        // unable to generate at all.
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            const authTables = () => ({ user: defineTable({ email: v.string() }) });
+
+            export const schema = defineSchema({
+                ...authTables(),
+                messages: defineTable({ text: v.string() }),
+            });
+        `);
+
+        expect(discoverSchema(project, schemaPath).tables.map((table) => table.name)).toStrictEqual(["messages"]);
+    });
+
     it("throws a pinpointed diagnostic (not a generic INTERNAL error) for an extension table named after a reserved keyword", () => {
         expect.assertions(3);
 
