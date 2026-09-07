@@ -1,3 +1,24 @@
+## @lunora/codegen [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.164...@lunora/codegen@1.0.0-alpha.165) (2026-09-07)
+
+### Bug Fixes
+
+* **do,shard-engine,runtime,client:** repair four core-path defects ([#649](https://github.com/anolilab/lunora/issues/649)) ([6fb9990](https://github.com/anolilab/lunora/commit/6fb99906617ed2811020d5d2ddeda16b312f8e03))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.115
+* **@lunora/agent:** upgraded to 1.0.0-alpha.95
+* **@lunora/container:** upgraded to 1.0.0-alpha.48
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+* **@lunora/queue:** upgraded to 1.0.0-alpha.51
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.58
+* **@lunora/values:** upgraded to 1.0.0-alpha.43
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.49
+* **@lunora/do:** upgraded to 1.0.0-alpha.122
+* **@lunora/server:** upgraded to 1.0.0-alpha.108
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.60
+
 ## @lunora/codegen [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.163...@lunora/codegen@1.0.0-alpha.164) (2026-09-06)
 
 ### Features
