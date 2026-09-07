@@ -96,10 +96,10 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
             // raw). Sample the key's push counter either side of the fetch and
             // yield to anything newer.
             const registry = getSubscriptionRegistry(client);
-            const pushesBefore = registry.pushCount(queryKey);
+            const sample = registry.openSnapshotSample(queryKey);
             const snapshot = await client.query<F>(function_, argsRecord as ArgsOf<F>, { shardKey });
 
-            if (registry.pushCount(queryKey) === pushesBefore) {
+            if (registry.closeSnapshotSample(sample)) {
                 return snapshot;
             }
 

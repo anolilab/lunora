@@ -1344,7 +1344,15 @@ const buildGlobalCdcApplier =
 `
         : "";
 
-/** The `export type { ... }` list — only the declaration types that were emitted. */
+/**
+ * The `export type { ... }` list — only the declaration types that were emitted.
+ *
+ * `ShardNamespaceLike` is re-exported although this module only imports it:
+ * `@lunora/vite`'s class-A entry has to name the shard binding's type to call
+ * `defineApp<Env>()`, and taking it from here rather than from the runtime keeps
+ * that generated entry free of any `@lunora/*` specifier — which is what lets it
+ * resolve identically under the umbrella and the scoped packages.
+ */
 const buildExportedTypes = (options: EmitAppOptions): string =>
     [
         ...(options.hasAuth ? ["AuthDeclaration"] : []),
@@ -1352,6 +1360,7 @@ const buildExportedTypes = (options: EmitAppOptions): string =>
         ...(options.hasGlobal ? ["GlobalDeclaration"] : []),
         ...(options.hasScheduler ? ["SchedulerDeclaration"] : []),
         "Selector",
+        "ShardNamespaceLike",
         ...(options.hasStorage ? ["StorageDeclaration"] : []),
     ]
         .toSorted((a, b) => a.localeCompare(b))

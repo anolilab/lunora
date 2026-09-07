@@ -46,6 +46,11 @@ const CLASS_A_ENTRY_SUITE = "packages/vite/__tests__/class-a-worker-entry.test.t
 const SKIP_DIRS = new Set(["node_modules", "_generated", "dist", "build", ".git", ".svelte-kit", ".output", ".nuxt", ".vinxi"]);
 
 /** Every source file in the scaffold, minus build output and generated code. */
+/**
+ * @param {string} dir
+ * @param {string[]} out
+ * @returns {string[]}
+ */
 const sourceFiles = (dir, out = []) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
         if (SKIP_DIRS.has(entry.name) || entry.name.startsWith(".")) {
@@ -74,6 +79,7 @@ const sourceFiles = (dir, out = []) => {
  *
  * Quoted strings only: a template literal can hold real code in `${…}`.
  */
+/** @param {string} file @returns {string} */
 const codeOf = (file) => stripToCode(readFileSync(file, "utf8"));
 
 /**
@@ -92,6 +98,7 @@ const codeOf = (file) => stripToCode(readFileSync(file, "utf8"));
  * Blanking quoted strings first removes both openings. Quoted strings only: a
  * template literal can hold real code in a `${…}` substitution.
  */
+/** @param {string} source @returns {string} */
 const stripToCode = (source) =>
     source
         .replaceAll(/"(?:[^"\\\n]|\\.)*"/g, '""')
@@ -100,6 +107,7 @@ const stripToCode = (source) =>
         .replaceAll(/\/\/.*$/gm, "");
 
 /** `wrangler.jsonc`'s `main` — the module Cloudflare actually loads. */
+/** @param {string} root @returns {string | undefined} */
 const declaredMain = (root) => {
     const config = join(root, "wrangler.jsonc");
 
@@ -115,6 +123,7 @@ const declaredMain = (root) => {
  * module can be imported to pin {@link stripToCode} — the ordering below has
  * been wrong twice and is the whole correctness argument for this gate.
  */
+/** @param {string} root @returns {void} */
 const main = (root) => {
     const files = sourceFiles(root);
     const allCode = files.map((file) => codeOf(file)).join("\n");

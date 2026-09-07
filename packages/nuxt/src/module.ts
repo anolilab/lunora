@@ -149,8 +149,14 @@ const lunoraTsSourceResolver = (rootDirectory: string): TsSourceResolverPlugin =
  * re-export produces a worker where Cloudflare finds those entrypoints, calls
  * them successfully, and Lunora's own never run.
  */
+// All three event entrypoints, not just `scheduled`. Nitro exports `scheduled`,
+// `queue` and `email`, and each only fires an empty `cloudflare:*` hook, so a
+// bare `export { default } from` swallows every one of them. Handing the user a
+// snippet that fixes one and warns about the other two invites exactly the
+// silent loss the warning describes — a queue consumer that returns without
+// throwing ACKS its batch. Mirrors `templates/nuxt/worker.ts`.
 const WORKER_TS_SNIPPET =
-    'import nitro from "./.output/server/index.mjs"; import app, { ShardDO } from "./lunora/server"; export { ShardDO }; export default { ...nitro, scheduled: (c, e, x) => app.scheduled(c, e, x) };';
+    'import nitro from "./.output/server/index.mjs"; import app, { ShardDO } from "./lunora/server"; export { ShardDO }; export default { ...nitro, email: (m, e, x) => app.email?.(m, e, x), queue: (b, e, x) => app.queue?.(b, e, x), scheduled: (c, e, x) => app.scheduled(c, e, x) };';
 
 /** Whether the source has an `export` keyword anywhere at all. */
 const EXPORT_KEYWORD_PATTERN = /\bexport\b/u;
@@ -248,7 +254,7 @@ export const checkWorkerEntry = (rootDirectory: string, warn: (message: string) 
     // build says a word about it, which is why it is worth a warning.
     if (!SCHEDULED_IDENTIFIER_PATTERN.test(source)) {
         warn(
-            `worker.ts at the project root does not forward \`scheduled\` — re-exporting Nitro's \`default\` gives Cloudflare a \`scheduled\` entrypoint that only fires an empty \`cloudflare:scheduled\` hook, so a cron declared in \`lunora/crons.ts\` is provisioned and then runs nothing. Compose the two instead (\`${WORKER_TS_SNIPPET}\`); \`queue\` and \`email\` need the same.`,
+            `worker.ts at the project root does not forward \`scheduled\` — re-exporting Nitro's \`default\` gives Cloudflare a \`scheduled\` entrypoint that only fires an empty \`cloudflare:scheduled\` hook, so a cron declared in \`lunora/crons.ts\` is provisioned and then runs nothing. Compose the two instead (\`${WORKER_TS_SNIPPET}\`), which forwards \`queue\` and \`email\` too — Nitro's exports for those fire empty hooks the same way, and a queue consumer that returns without throwing ACKS its batch.`,
         );
     }
 };

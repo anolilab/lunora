@@ -78,3 +78,36 @@ describe("lunoraSubscriptionRegistry detach idempotency", () => {
         expect(unsubscribes[1]).toHaveBeenCalledTimes(1);
     });
 });
+
+describe("lunoraSubscriptionRegistry — snapshot sample lifetime", () => {
+    it("keeps the push count while a sample is open past the last detach", () => {
+        expect.assertions(2);
+
+        const { client, subscribe } = buildClient();
+        const registry = new LunoraSubscriptionRegistry(client);
+        const queryClient = { setQueryData: vi.fn<() => void>() } as unknown as QueryClient;
+        const detach = registry.attach(queryClient, KEY, FN, {}, undefined);
+        // The registry's own push handler — the third argument it hands `subscribe`.
+        const push = subscribe.mock.calls[0]?.[2] as (value: unknown) => void;
+
+        // A `queryFn` samples, then the last consumer leaves while its fetch is
+        // still in flight — nothing propagates TanStack's abort signal into
+        // `client.query`, so the fetch really does outlive the entry.
+        const sample = registry.openSnapshotSample(KEY);
+
+        detach();
+
+        // A push that landed after the sample opened must still be visible to it,
+        // or the older snapshot silently overwrites the newer value.
+        push({ pushed: true });
+
+        expect(registry.closeSnapshotSample(sample)).toBe(false);
+
+        // With that sample closed and nothing subscribed, the counter is dropped:
+        // a fresh sample starts clean rather than accumulating one entry per key
+        // this client ever subscribed to.
+        const next = registry.openSnapshotSample(KEY);
+
+        expect(registry.closeSnapshotSample(next)).toBe(true);
+    });
+});

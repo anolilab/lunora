@@ -256,7 +256,7 @@ const usePaginatedCore = function <T>(
                 // closure below removes it on detach rather than leaking it.
                 gcTime: Number.POSITIVE_INFINITY,
                 queryFn: async () => {
-                    const pushesBefore = registry.pushCount(entry.key);
+                    const sample = registry.openSnapshotSample(entry.key);
                     const snapshot = await (client.query as (function_: FunctionReference, args: unknown, options: { shardKey?: string }) => Promise<unknown>)(
                         desired.fn,
                         entry.args,
@@ -269,7 +269,7 @@ const usePaginatedCore = function <T>(
                     // fetch unconditionally, so a page frame pushed while this
                     // snapshot was in flight would be reverted to the older
                     // rows. The push is strictly newer; yield to it.
-                    if (registry.pushCount(entry.key) === pushesBefore) {
+                    if (registry.closeSnapshotSample(sample)) {
                         return snapshot;
                     }
 
