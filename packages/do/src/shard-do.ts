@@ -1469,10 +1469,9 @@ abstract class ShardDO {
      *
      * Assigned ONLY by the dispatch tail, from that dispatch's own
      * {@link DispatchBookmark} sink, at a point where nothing else can be
-     * mid-handler on this instance. Handlers write the sink (via
-     * {@link ShardDO.setOutboundBookmark}), never this field: an action holds its
-     * bookmark across `await`s a sibling dispatch runs inside, and a shared field
-     * loses it there.
+     * mid-handler on this instance. Handlers write `sink.value`, never this
+     * field: an action holds its bookmark across `await`s a sibling dispatch runs
+     * inside, and a shared field loses it there.
      */
     private currentResponseBookmark: string | undefined;
 
@@ -2374,10 +2373,10 @@ abstract class ShardDO {
      * is omitted, which is what every non-cached dispatch passes.
      *
      * `bookmarks` is the third such thread — see {@link DispatchBookmark}.
-     * Implementations must hand it to {@link ShardDO.setOutboundBookmark} from
-     * the global database's `onBookmark` callback so the bookmark a `.global()`
-     * write produced reaches THIS dispatch's response rather than a shared field
-     * a concurrent action can clear.
+     * Implementations must record the bookmark on it from the global database's
+     * `onBookmark` callback so the bookmark a `.global()` write produced reaches
+     * THIS dispatch's response rather than a shared field a concurrent action can
+     * clear.
      */
     public abstract handleRpc(
         functionPath: string,
@@ -2850,30 +2849,6 @@ abstract class ShardDO {
      */
     protected getInboundBookmark(): string | undefined {
         return this.currentRequestBookmark;
-    }
-
-    /**
-     * Record the post-write D1 bookmark that should be echoed back to the
-     * client on the outbound `x-d1-bookmark` header. Safe to call multiple
-     * times — the last value wins; only the most recent write's bookmark
-     * is meaningful for downstream read pinning.
-     *
-     * It lands in the DISPATCH's own {@link DispatchBookmark}, threaded down from
-     * `handleRpc`, never on a shared instance field: an action holds the field
-     * across `await`s a sibling dispatch can run inside, and that sibling's
-     * prologue used to clear it — dropping the header from a response that had
-     * genuinely written a global row. A `sink` of `undefined` means the caller
-     * has no response to carry a bookmark (an alarm tick, a lifecycle dispatch,
-     * `runAs`), so there is nothing to record.
-     */
-    // eslint-disable-next-line class-methods-use-this -- writes the caller's per-dispatch sink, deliberately not instance state (see `DispatchBookmark`)
-    protected setOutboundBookmark(bookmark: string | undefined, sink: DispatchBookmark | undefined): void {
-        if (sink !== undefined) {
-            // `Object.assign` into the caller's bag, as `runCachedQuery` fills
-            // its `QueryAttribution` — the value has to land in the object the
-            // dispatch tail holds, and a fresh object would be written nowhere.
-            Object.assign(sink, { value: bookmark });
-        }
     }
 
     /**
@@ -5860,26 +5835,6 @@ abstract class ShardDO {
     }
 
     /**
-     * Stamp everything one RPC dispatch needs off its request, and reset every
-     * per-request capture the handler will fill.
-     *
-     * Split from {@link ShardDO.handleFetchCloudflare} together with
-     * {@link ShardDO.endDispatch}, and the pairing is the point: these two own
-     * the same set of fields, and the whole correctness story for them is that
-     * every field one sets, the other clears. Spread across a 479-line method
-     * the two ends were 350 lines apart, so a newly-added per-request field
-     * stamped here and forgotten there leaks into the NEXT request on the same
-     * DO instance — a cross-request identity bleed with no local symptom.
-     * `__tests__/dispatch-lifecycle.test.ts` asserts the symmetry directly.
-     *
-     * Returns the two values the caller must hold in locals rather than read
-     * back off `this`: an `await`-interleaved concurrent dispatch can re-set the
-     * shared fields, and the `finally` would then file this dispatch's telemetry
-     * under another request's trace (see the comments inside).
-     * @returns this dispatch's trace anchor and its transaction-headroom tracker
-     */
-
-    /**
      * Cloudflare-specific fetch implementation — WebSocket upgrades and the RPC
      * routes. Injected into {@link ShardRunner} as the host-specific handler while
      * the engine is progressively extracted.
@@ -5935,37 +5890,10 @@ abstract class ShardDO {
             }
         }
 
-        // Reserved admin-introspection RPCs are intercepted before user
-        // dispatch — they read raw SQLite directly rather than running a
-        // registered function, and carry their own bearer-token gate. Run under
-        // their own request scope: this branch returns before `beginDispatch`, so
-        // without it the admin plane inherits whatever a concurrent `/rpc` left on
-        // `this`. See {@link ShardDO.withAdminRequestScope}.
-        if (payload.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-            return await this.withAdminRequestScope(async () => await this.handleAdminRpc(request, payload.functionPath, payload.args ?? {}));
-        }
+        const answered = this.preDispatchAnswer(request, payload);
 
-        // Paid (`.x402`) backstop. The paywall itself lives at the origin worker,
-        // which reads the price off the `functions` registry it was built with — so
-        // a worker built WITHOUT one (`createLunoraHandler()`, a hand-rolled
-        // `createWorker({ shardDO })`) cannot see the tag and would dispatch every
-        // paid procedure free. The shard always knows: the generated subclass
-        // overrides `isPaidFunction` from `LUNORA_FUNCTIONS`. So an unmarked paid
-        // dispatch is refused here rather than served.
-        //
-        // Placed after the admin branch and before `beginDispatch` so a refusal
-        // costs no dispatch bookkeeping. The batch transport replays each entry
-        // through this same `/rpc` path, so it is covered by this one guard.
-        if (request.headers.get(ORIGIN_PAYWALL_HEADER) !== ORIGIN_PAYWALL_APPLIED && this.isPaidFunction(payload.functionPath)) {
-            return jsonResponse(
-                {
-                    error: {
-                        code: "MISCONFIGURED",
-                        message: `paid (\`.x402\`) function "${payload.functionPath}" reached the shard without passing the origin paywall, so nothing charged for it; build the worker with \`defineApp()\` (or pass \`functions\` to \`createWorker\`) and call it individually over /_lunora/rpc`,
-                    },
-                },
-                500,
-            );
+        if (answered !== undefined) {
+            return await answered;
         }
 
         // Stash the inbound D1 bookmark and identity headers for the
@@ -10958,6 +10886,81 @@ abstract class ShardDO {
         return Promise.resolve(undefined);
     }
 
+    /**
+     * The two answers a `/rpc` can earn between the replica gate and
+     * `beginDispatch`: a reserved admin RPC (served under its own scope and
+     * bearer gate) and the paid-procedure backstop.
+     *
+     * Split out of {@link ShardDO.handleFetchCloudflare} because both are the same
+     * shape — request in, response out, no dispatch bookkeeping in scope — while
+     * everything after them shares eight dispatch locals. `undefined` means
+     * "nothing answered it here; go dispatch".
+     *
+     * Deliberately NOT `async`: the admin branch is the only one that awaits, and
+     * an `async` wrapper would spend a microtask on the common path where this
+     * returns `undefined` — which is enough to move `beginDispatch` after a
+     * concurrent admin request that overlaps it (see
+     * `__tests__/shard-do.system-dispatch.test.ts`).
+     * @param request The inbound `/rpc` request.
+     * @param payload Its parsed body.
+     * @returns The response to return, or `undefined` to continue into dispatch.
+     */
+    private preDispatchAnswer(request: Request, payload: RpcRequest): Promise<Response> | Response | undefined {
+        // Reserved admin-introspection RPCs are intercepted before user
+        // dispatch — they read raw SQLite directly rather than running a
+        // registered function, and carry their own bearer-token gate. Run under
+        // their own request scope: this branch returns before `beginDispatch`, so
+        // without it the admin plane inherits whatever a concurrent `/rpc` left on
+        // `this`. See {@link ShardDO.withAdminRequestScope}.
+        if (payload.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
+            return this.withAdminRequestScope(async () => await this.handleAdminRpc(request, payload.functionPath, payload.args ?? {}));
+        }
+
+        // Paid (`.x402`) backstop. The paywall itself lives at the origin worker,
+        // which reads the price off the `functions` registry it was built with — so
+        // a worker built WITHOUT one (`createLunoraHandler()`, a hand-rolled
+        // `createWorker({ shardDO })`) cannot see the tag and would dispatch every
+        // paid procedure free. The shard always knows: the generated subclass
+        // overrides `isPaidFunction` from `LUNORA_FUNCTIONS`. So an unmarked paid
+        // dispatch is refused here rather than served.
+        //
+        // Placed after the admin branch and before `beginDispatch` so a refusal
+        // costs no dispatch bookkeeping. The batch transport replays each entry
+        // through this same `/rpc` path, so it is covered by this one guard.
+        if (request.headers.get(ORIGIN_PAYWALL_HEADER) !== ORIGIN_PAYWALL_APPLIED && this.isPaidFunction(payload.functionPath)) {
+            return jsonResponse(
+                {
+                    error: {
+                        code: "MISCONFIGURED",
+                        message: `paid (\`.x402\`) function "${payload.functionPath}" reached the shard without passing the origin paywall, so nothing charged for it; an origin worker must be built with \`defineApp()\` (or passed \`functions\`) to read the \`.x402\` tag, and a server-side \`createShardClient\` caller must keep its default system privilege`,
+                    },
+                },
+                500,
+            );
+        }
+
+        return undefined;
+    }
+
+    /**
+     * Stamp everything one RPC dispatch needs off its request, and reset every
+     * per-request capture the handler will fill.
+     *
+     * Split from {@link ShardDO.handleFetchCloudflare} together with
+     * {@link ShardDO.endDispatch}, and the pairing is the point: these two own
+     * the same set of fields, and the whole correctness story for them is that
+     * every field one sets, the other clears. Spread across a 479-line method
+     * the two ends were 350 lines apart, so a newly-added per-request field
+     * stamped here and forgotten there leaks into the NEXT request on the same
+     * DO instance — a cross-request identity bleed with no local symptom.
+     * `__tests__/dispatch-lifecycle.test.ts` asserts the symmetry directly.
+     *
+     * Returns the two values the caller must hold in locals rather than read
+     * back off `this`: an `await`-interleaved concurrent dispatch can re-set the
+     * shared fields, and the `finally` would then file this dispatch's telemetry
+     * under another request's trace (see the comments inside).
+     * @returns this dispatch's trace anchor and its transaction-headroom tracker
+     */
     private beginDispatch(request: Request): {
         dispatchAttribution: QueryAttribution;
         dispatchBookmark: DispatchBookmark;

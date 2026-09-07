@@ -435,8 +435,8 @@ class AppBuilder<Env extends object> {
  * Opens a D1 Sessions API session pinned to `bookmark` (the caller's own
  * last-known write, when supplied) so reads observe it — read-your-writes
  * across replicas. `onBookmark`, when supplied, is invoked with the bookmark
- * produced by each write so the caller (the generated DO) can record it via
- * `setOutboundBookmark` and echo `x-d1-bookmark` on the response.
+ * produced by each write so the caller (the generated DO) can record it on the
+ * dispatch's bookmark sink and echo `x-d1-bookmark` on the response.
  *
  * Wrapped in `retryingExec` so D1's documented baseline of transient failures
  * (storage-object resets, isolate memory evictions, dropped connections) does
@@ -471,8 +471,8 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
             // read could pin a replica that has not seen them: read-your-writes
             // lost on the exact path the bookmark exists for. Reporting it after
             // a plain `SELECT` too is harmless and correct — the session's
-            // bookmark only ever moves forward, and `setOutboundBookmark` takes
-            // the last value.
+            // bookmark only ever moves forward, and the sink takes the last
+            // value.
             onBookmark?.(session?.getBookmark() ?? undefined);
 
             return result.results;

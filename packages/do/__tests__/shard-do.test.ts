@@ -92,7 +92,7 @@ class TestShard extends ShardDO {
     /** Bookmark observed by `handleRpc` on the most recent request. */
     public observedInboundBookmark: string | undefined;
 
-    /** When set, `handleRpc` echoes this value via `setOutboundBookmark`. */
+    /** When set, `handleRpc` echoes this value through the dispatch's bookmark sink. */
     public bookmarkToEmit: string | undefined;
 
     /** UserId observed by `handleRpc` on the most recent request. */
@@ -113,8 +113,11 @@ class TestShard extends ShardDO {
         this.observedUserId = this.getCurrentUserId();
         this.observedIdentity = this.getCurrentIdentity();
 
-        if (this.bookmarkToEmit !== undefined) {
-            this.setOutboundBookmark(this.bookmarkToEmit, bookmarks);
+        if (this.bookmarkToEmit !== undefined && bookmarks !== undefined) {
+            // Through `Object.assign` rather than `bookmarks.value = …`: the sink
+            // arrives as a parameter, and `no-param-reassign` forbids writing a
+            // parameter's properties directly.
+            Object.assign(bookmarks, { value: this.bookmarkToEmit });
         }
 
         return this.rpcResult;
@@ -526,7 +529,7 @@ describe("shardDO", () => {
         expect(shard.observedInboundBookmark).toBe("bm-123");
     });
 
-    it("echoes setOutboundBookmark on the response x-d1-bookmark header", async () => {
+    it("echoes the dispatch bookmark sink on the response x-d1-bookmark header", async () => {
         expect.assertions(1);
 
         shard.bookmarkToEmit = "bm-after-write";
@@ -541,7 +544,7 @@ describe("shardDO", () => {
         expect(response.headers.get("x-d1-bookmark")).toBe("bm-after-write");
     });
 
-    it("omits x-d1-bookmark when the handler does not call setOutboundBookmark", async () => {
+    it("omits x-d1-bookmark when the handler writes no bookmark", async () => {
         expect.assertions(1);
 
         const request = new Request("https://shard.internal/rpc", {

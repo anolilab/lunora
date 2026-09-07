@@ -319,7 +319,6 @@ abstract class ShardDO {
     protected deferPastResponse(work: Promise<unknown>): Promise<void>;
     protected runInTransaction<T>(handler: () => Promise<T> | T): Promise<T>;
     protected getInboundBookmark(): string | undefined;
-    protected setOutboundBookmark(bookmark: string | undefined, sink: DispatchBookmark | undefined): void;
     protected getCurrentUserId(): string | undefined;
     protected getCurrentIp(): string | undefined;
     protected getCurrentTraceparent(): string | undefined;
