@@ -1511,13 +1511,12 @@ const abortResult = (error: string, extra?: Partial<DeployCommandResult>): Deplo
  * Log wrangler.jsonc validation problems (if any) and report whether the deploy
  * must abort.
  *
- * Warnings are printed too. The validator's unexported-class check is
- * deliberately a warning rather than an error (its scanner fails closed on
- * export forms it does not know, and blocking a working deploy is worse than
- * missing one) — but this command only ever printed `report.errors`, so on the
- * single command that actually ships a Worker the warning was invisible and the
- * user met wrangler's own bundle failure instead. Same for the `unverifiedKeys`
- * env-override notice and the missing-assets-directory warning.
+ * Warnings are printed too, not just `report.errors`. This command is the one
+ * that actually ships a Worker, so a warning it swallows is one the user meets
+ * as a wrangler failure instead — which is what happened while the
+ * unexported-class check was warning-level (it blocks now), and still applies to
+ * the `unverifiedKeys` env-override notice and the missing-assets-directory
+ * warning.
  */
 const reportWranglerProblems = (validation: { problems: ReadonlyArray<string>; report?: { warnings: ReadonlyArray<string> } }, logger: Logger): boolean => {
     for (const warning of validation.report?.warnings ?? []) {
