@@ -311,6 +311,20 @@ describe("wrangler-validator", () => {
                 expect(warnings).toHaveLength(1);
                 expect(warnings[0]).toContain(`env.production.vars.${ORIGIN_VAR}`);
             });
+
+            it("scopes the secret remedy to the same environment", () => {
+                expect.assertions(2);
+
+                // Wrangler secrets are non-inheritable too, so an unscoped
+                // `secret put` writes the top-level worker and leaves the
+                // environment the warning is about exactly as it was.
+                const config = withScheduler({
+                    env: { production: { durable_objects: { bindings: [{ class_name: "SchedulerDO", name: "SCHEDULER" }] } } },
+                });
+
+                expect(originWarnings(validateWranglerConfig(config, undefined, "production"))[0]).toContain(`secret put ${ORIGIN_VAR} --env production`);
+                expect(originWarnings(validateWranglerConfig(config))[0]).not.toContain("--env");
+            });
         });
 
         it("rejects a wildcard CORS origin paired with credentials in vars", () => {

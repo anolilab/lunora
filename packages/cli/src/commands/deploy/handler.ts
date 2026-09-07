@@ -1244,7 +1244,8 @@ const checkLocalhostOriginVariables = (cwd: string, logger: Logger, command: Pre
 
     const message =
         `${command} blocked: ${offenders.join(", ")} in wrangler.jsonc point at localhost. A deployed Worker can't reach a loopback ` +
-        `address, so this silently breaks scheduled-job dispatch / auth callbacks. Set each to the deployed worker's public URL ` +
+        `address, so this silently breaks scheduled-job dispatch, reverse cross-shard relations, and auth callbacks. ` +
+        `Set each to the deployed worker's public URL ` +
         `(or move it to a secret with \`wrangler secret put\`) before deploying.`;
 
     logger.error(message);

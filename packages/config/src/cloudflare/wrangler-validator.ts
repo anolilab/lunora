@@ -1279,9 +1279,13 @@ const validateSchedulerOrigin = (wrangler: WranglerConfig, environment: string |
     // NOT what wrangler ships — naming the bare key would send the reader to a
     // `vars` block that already has it.
     const scope = environment === undefined ? "vars" : `env.${environment}.vars`;
+    // Secrets are non-inheritable exactly like `vars`, so the fallback remedy has
+    // to name the same environment the warning is about — an unscoped
+    // `secret put` writes the top-level worker and leaves this one untouched.
+    const secretPut = environment === undefined ? "" : ` --env ${environment}`;
 
     warnings.push(
-        `durable_objects.bindings declares the SchedulerDO but ${scope}.${SCHEDULER_ORIGIN_VAR} is unset — the DO reads its dispatch origin from its own env and refuses to schedule without it, so every ctx.scheduler.runAfter/runAt fails with ORIGIN_NOT_CONFIGURED. Set ${scope}.${SCHEDULER_ORIGIN_VAR} to the worker's public URL, or \`wrangler secret put ${SCHEDULER_ORIGIN_VAR}\` (ignore this if it is already set as a secret or in the dashboard).`,
+        `durable_objects.bindings declares the SchedulerDO but ${scope}.${SCHEDULER_ORIGIN_VAR} is unset — the DO reads its dispatch origin from its own env and refuses to schedule without it, so every ctx.scheduler.runAfter/runAt fails with ORIGIN_NOT_CONFIGURED. Set ${scope}.${SCHEDULER_ORIGIN_VAR} to the worker's public URL, or \`wrangler secret put ${SCHEDULER_ORIGIN_VAR}${secretPut}\` (ignore this if it is already set as a secret or in the dashboard).`,
     );
 };
 
