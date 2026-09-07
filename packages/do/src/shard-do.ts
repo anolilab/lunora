@@ -10761,8 +10761,16 @@ abstract class ShardDO {
         } catch {
             // A failed arm restores the previous pending time (not `undefined`)
             // so a later seed/tick retries without forgetting an alarm that is
-            // still armed at the older, later target.
-            this.globalPollArmedAt = pendingAt;
+            // still armed at the older, later target — but only while this call
+            // still owns the field. Fetches and alarm ticks interleave across
+            // the `await`, so another `scheduleGlobalPoll` may have armed an
+            // EARLIER target meanwhile (or the alarm may have fired and cleared
+            // it); writing the older `pendingAt` back over that makes every
+            // later caller compare against an alarm that is not the one armed,
+            // and delays the next poll.
+            if (this.globalPollArmedAt === target) {
+                this.globalPollArmedAt = pendingAt;
+            }
         }
     }
 
