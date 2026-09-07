@@ -3,9 +3,9 @@
  * rather than reads or writes a row.
  *
  * Table DDL and its drift repair, the declared/`.unique()`/default-order
- * indexes, the aggregate and rank companion tables, and the one-shot `v.bigint()`
- * storage rewrite — the cluster `ensureMigrated` runs once per ctx-db, and
- * nothing on a read or write path calls.
+ * indexes, the aggregate and rank companion tables, and the one-shot storage
+ * rewrites for `v.bigint()` and untyped columns — the cluster `ensureMigrated`
+ * runs once per ctx-db, and nothing on a read or write path calls.
  *
  * Split out of `ctx-db.ts` along the same seam as `ctx-db-search.ts` and for the
  * same reason: everything here reaches the engine through `sql-exec`, never
@@ -25,7 +25,15 @@ import { sql } from "drizzle-orm";
 import type { SqlDialect } from "./dialect";
 import type { SqlCtxExec } from "./sql-exec";
 import { columnRefSql, createIndexIfNotExists, OCC_VERSION_COLUMN, queryAll, queryBatch, queryRun, tableColumns } from "./sql-exec";
-import { BIGINT_KEY_LENGTH, bigintSqlKey, effectiveColumnKind } from "./value-codec";
+import {
+    BIGINT_KEY_LENGTH,
+    bigintSqlKey,
+    effectiveColumnKind,
+    isUntypedColumnKind,
+    rewriteLegacyUntypedNumber,
+    UNTYPED_NUMBER_PREFIX,
+    UNTYPED_WIRE_PREFIX,
+} from "./value-codec";
 
 /**
  * SQLite affinity for a column. Resolves the *effective* validator kind (so
@@ -380,18 +388,25 @@ const migrationCompleted = async (exec: SqlCtxExec, dialect: SqlDialect, marker:
 };
 
 /**
- * Record the bigint rewrite of one table as finished, and report the rows it
- * could not convert — once, here, rather than by re-scanning them on every cold
- * start from now on.
+ * Record one table's storage rewrite as finished, and report the rows it could
+ * not convert — once, here, rather than by re-scanning them on every cold start
+ * from now on.
  *
  * A concurrent cold start that inserted the same marker first is the expected
  * race, not a failure: both passes walked the same table to the same end.
  */
-const completeBigintRewrite = async (exec: SqlCtxExec, dialect: SqlDialect, marker: string, tableName: string, unconvertible: number): Promise<void> => {
-    if (unconvertible > 0) {
+const completeLegacyRewrite = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    marker: string,
+    tableName: string,
+    unconvertible: number,
+    describeUnconvertible: string | undefined,
+): Promise<void> => {
+    if (unconvertible > 0 && describeUnconvertible !== undefined) {
         // eslint-disable-next-line no-console -- the only channel a provisioning pass has; reported once per table rather than re-scanned every cold start.
         console.warn(
-            `[@lunora/sql-store] bigint storage migration on "${tableName}": ${String(unconvertible)} row(s) hold a value the order-preserving key cannot represent (non-numeric text, or a magnitude past 39 digits) and were left as stored — range filters and ORDER BY over them stay wrong until they are corrected by hand.`,
+            `[@lunora/sql-store] storage migration "${marker}" on "${tableName}": ${String(unconvertible)} row(s) ${describeUnconvertible} and were left as stored — range filters and ORDER BY over them stay wrong until they are corrected by hand.`,
         );
     }
 
@@ -405,7 +420,7 @@ const completeBigintRewrite = async (exec: SqlCtxExec, dialect: SqlDialect, mark
 };
 
 /**
- * Rows converted per pass by {@link rewriteLegacyBigintColumns}; keeps one
+ * Rows converted per pass by {@link runLegacyColumnRewrite}; keeps one
  * statement's bound-parameter count inside D1's budget.
  *
  * Rendered into the `LIMIT` inline (`sql.raw`) rather than bound: mysql2's
@@ -414,20 +429,40 @@ const completeBigintRewrite = async (exec: SqlCtxExec, dialect: SqlDialect, mark
  * provisioning pass down. It is a module constant, so nothing caller-supplied
  * reaches the statement text.
  */
-const BIGINT_REWRITE_PAGE = 100;
+const LEGACY_REWRITE_PAGE = 100;
 
 /**
- * The declared fields of `table` that are stored as a `bigint` key.
+ * One storage-format rewrite: which columns it touches, how it recognises a row
+ * still in the old form, and what the new form is.
  */
-const bigintFields = (definition: SchemaLike["tables"][string]): string[] =>
-    Object.entries(definition.shape)
-        .filter(([, validator]) => validator._meta?.column !== undefined && effectiveColumnKind(validator) === "bigint")
-        .map(([field]) => field);
+interface LegacyColumnRewrite {
+    /** New stored value for `raw`, or `undefined` to leave the column exactly as stored. */
+    convert: (raw: unknown) => unknown;
+
+    /**
+     * What an unconvertible row holds, for the one-shot warning — completing the
+     * sentence "N row(s) …".
+     *
+     * Omitted by a rewrite whose probe over-matches rows that are CORRECT as
+     * stored, where a warning would fire on every ordinary table and mean
+     * nothing.
+     */
+    describeUnconvertible?: string;
+
+    /** The declared columns this pass considers. Empty means the table has nothing to do. */
+    fields: string[];
+
+    /** Recorded in {@link MIGRATION_STATE_TABLE} once the walk finishes; unique per rewrite AND table. */
+    marker: string;
+
+    /** SQL matching a row whose `field` may still hold the old form. May over-match — `convert` decides per row. */
+    probe: (field: string) => SQL;
+}
 
 /**
- * The `SET` assignments that convert one row's legacy `bigint` columns, and the
- * `WHERE` guard that makes applying them safe — both empty when every column
- * already holds a key.
+ * The `SET` assignments that convert one row's legacy columns, and the `WHERE`
+ * guard that makes applying them safe — both empty when every column is already
+ * in the new form.
  *
  * The guard is the compare-and-swap the user write path already does
  * (`runGuardedWrite`, in `ctx-db.ts`). The page below is read, then written in a second
@@ -437,95 +472,79 @@ const bigintFields = (definition: SchemaLike["tables"][string]): string[] =>
  * column against the exact text the page read means the losing statement
  * updates nothing, and the row is already in the new encoding either way.
  *
- * A value this encoding cannot hold — non-numeric text no encoder here ever
- * wrote, or a magnitude past the 39-digit ceiling — contributes no assignment
- * and is left exactly as stored rather than aborting the pass.
+ * A value the new encoding cannot hold — one the rewrite's `convert` returns
+ * `undefined` for — contributes no assignment and is left exactly as stored
+ * rather than aborting the pass.
  */
-const legacyBigintRewrite = (row: Record<string, unknown>, fields: ReadonlyArray<string>): { assignments: SQL[]; guards: SQL[] } => {
+const legacyRewriteStatements = (row: Record<string, unknown>, rewrite: LegacyColumnRewrite): { assignments: SQL[]; guards: SQL[] } => {
     const assignments: SQL[] = [];
     const guards: SQL[] = [];
 
-    for (const field of fields) {
+    for (const field of rewrite.fields) {
         const raw = row[field];
+        const next = rewrite.convert(raw);
 
-        if (typeof raw !== "string" || raw.length === BIGINT_KEY_LENGTH) {
+        if (next === undefined) {
             continue;
         }
 
-        try {
-            const key = bigintSqlKey(BigInt(raw));
-
-            assignments.push(sql`${columnRefSql(field)} = ${key}`);
-            guards.push(sql`${columnRefSql(field)} = ${raw}`);
-        } catch {
-            // Not a value this encoding can hold. Left as stored.
-        }
+        assignments.push(sql`${columnRefSql(field)} = ${next}`);
+        guards.push(sql`${columnRefSql(field)} = ${raw}`);
     }
 
     return { assignments, guards };
 };
 
 /**
- * Rewrite any `v.bigint()` column still holding the plain decimal text an
- * earlier build stored into the order-preserving key {@link bigintSqlKey} now
- * writes.
+ * Walk one table and rewrite every column still holding a superseded storage
+ * form into the one this build writes.
  *
- * This is a **storage-format migration, and it is not optional**. Decimal text
- * is exact for `=` but sorts `"9"` after `"10"`, so every range filter,
- * `ORDER BY`, page cursor and `MIN`/`MAX` over such a column returned the wrong
- * rows. The fix changes what is written — which means a table holding both forms
- * has a worse problem than the one it started with: `where: { n: { eq: 10n } }`
- * binds the key and no longer matches a row stored as `"10"`. Converting the
- * stragglers is what keeps that from being a silent read break, so it runs from
- * the same provisioning pass that creates the table.
+ * **A storage-format change is not optional, and this is why.** Both rewrites
+ * below replace a form that is exact for `=` but sorts wrongly, so every range
+ * filter, `ORDER BY`, page cursor and `MIN`/`MAX` over such a column returned
+ * the wrong rows. Fixing the writer alone leaves a table holding BOTH forms,
+ * which is worse than where it started: the new binding does not match a row
+ * still in the old form, so `eq` starts missing rows it used to find. Converting
+ * the stragglers is what keeps that from being a silent read break, so it runs
+ * from the same provisioning pass that creates the table.
  *
  * **A converted table costs one primary-key lookup, and that is the point.**
  * `ensureMigrated` runs per ctx-db — per request on a Hyperdrive binding — and
- * the page probe (`WHERE LENGTH(col) <> 40 AND id > ?`) can use no index for
- * `LENGTH`, so it is a full table scan on every cold start, forever, on a table
- * where it will never match again. Worse, the rows it CANNOT convert keep
- * matching, so each start pages through them from the top. Completion is
- * therefore recorded per table in {@link MIGRATION_STATE_TABLE} and read back
- * before any of that: the walk runs once, and a table it has finished is a
- * single keyed lookup from then on.
+ * no probe here can use an index (`LENGTH(col)`, `col LIKE`), so it is a full
+ * table scan on every cold start, forever, on a table where it will never match
+ * again. Worse, the rows it CANNOT convert keep matching, so each start pages
+ * through them from the top. Completion is therefore recorded per table in
+ * {@link MIGRATION_STATE_TABLE} and read back before any of that: the walk runs
+ * once, and a table it has finished is a single keyed lookup from then on.
  *
  * Recording completion is sound because nothing writes the legacy form any more:
  * a row this pass could not convert is unconvertible for the same reason next
- * time (it is reported once, here, rather than re-scanned every start), and a
- * user write that races the pass writes the NEW encoding — the compare-and-swap
- * in {@link legacyBigintRewrite} is what stops this pass reverting it. The one
- * case that assumption does not cover is an isolate of a PRE-key build still
+ * time (it is reported once rather than re-scanned every start), and a user
+ * write that races the pass writes the NEW encoding — the compare-and-swap in
+ * {@link legacyRewriteStatements} is what stops this pass reverting it. The one
+ * case that assumption does not cover is an isolate of a PRE-change build still
  * writing while a new one finishes the walk; delete that table's row from
  * `__lunora_migration_state` to make the pass run again.
  *
  * It pages on a keyset cursor over `id`, so a value it cannot convert is stepped
  * over rather than retried forever within a run.
  */
-const rewriteLegacyBigintColumns = async (
-    exec: SqlCtxExec,
-    tableName: string,
-    definition: SchemaLike["tables"][string],
-    dialect: SqlDialect,
-): Promise<void> => {
-    const fields = bigintFields(definition);
-
-    if (fields.length === 0) {
+const runLegacyColumnRewrite = async (exec: SqlCtxExec, tableName: string, dialect: SqlDialect, rewrite: LegacyColumnRewrite): Promise<void> => {
+    if (rewrite.fields.length === 0) {
         return;
     }
 
     await ensureMigrationState(exec, dialect);
 
-    const marker = `bigint-key:${tableName}`;
-
-    if (await migrationCompleted(exec, dialect, marker)) {
+    if (await migrationCompleted(exec, dialect, rewrite.marker)) {
         return;
     }
 
     const legacy = sql.join(
-        fields.map((field) => sql`(${columnRefSql(field)} IS NOT NULL AND LENGTH(${columnRefSql(field)}) <> ${BIGINT_KEY_LENGTH})`),
+        rewrite.fields.map((field) => rewrite.probe(field)),
         sql` OR `,
     );
-    const selected = sql.join([columnRefSql("id"), ...fields.map((field) => columnRefSql(field))], sql`, `);
+    const selected = sql.join([columnRefSql("id"), ...rewrite.fields.map((field) => columnRefSql(field))], sql`, `);
     let cursor = "";
     let unconvertible = 0;
 
@@ -534,12 +553,12 @@ const rewriteLegacyBigintColumns = async (
         const rows = await queryAll(
             exec,
             dialect,
-            sql`SELECT ${selected} FROM ${sql.identifier(tableName)} WHERE (${legacy}) AND ${columnRefSql("id")} > ${cursor} ORDER BY ${columnRefSql("id")} LIMIT ${sql.raw(String(BIGINT_REWRITE_PAGE))}`,
+            sql`SELECT ${selected} FROM ${sql.identifier(tableName)} WHERE (${legacy}) AND ${columnRefSql("id")} > ${cursor} ORDER BY ${columnRefSql("id")} LIMIT ${sql.raw(String(LEGACY_REWRITE_PAGE))}`,
         );
 
         if (rows.length === 0) {
             // eslint-disable-next-line no-await-in-loop -- the loop's exit: one write, on the shared connection, and the pass is over.
-            await completeBigintRewrite(exec, dialect, marker, tableName, unconvertible);
+            await completeLegacyRewrite(exec, dialect, rewrite.marker, tableName, unconvertible, rewrite.describeUnconvertible);
 
             return;
         }
@@ -548,10 +567,10 @@ const rewriteLegacyBigintColumns = async (
 
         for (const row of rows) {
             const { id } = row;
-            const { assignments, guards } = typeof id === "string" ? legacyBigintRewrite(row, fields) : { assignments: [], guards: [] };
+            const { assignments, guards } = typeof id === "string" ? legacyRewriteStatements(row, rewrite) : { assignments: [], guards: [] };
 
             if (assignments.length === 0) {
-                // Matched the probe but holds nothing this encoding can write.
+                // Matched the probe but holds nothing the new encoding can write.
                 unconvertible += 1;
 
                 continue;
@@ -574,6 +593,96 @@ const rewriteLegacyBigintColumns = async (
         cursor = last;
     }
 };
+
+/**
+ * `prefix` as a SQL string literal matching every value that starts with it.
+ *
+ * Rendered into the statement, so it is only safe for a value that cannot close
+ * the quote or act as a wildcard. Both callers pass a module constant from
+ * `value-codec.ts` — `$lunora.wire$` and that plus `#` — which carry no quote,
+ * no backslash, and neither LIKE wildcard (`%`, `_`). Nothing caller-supplied
+ * reaches here; a schema field name never does.
+ */
+const likePrefixLiteral = (prefix: string): string => `'${prefix}%'`;
+
+/** The declared fields of `table` that are stored as a `bigint` key. */
+const bigintFields = (definition: SchemaLike["tables"][string]): string[] =>
+    Object.entries(definition.shape)
+        .filter(([, validator]) => validator._meta?.column !== undefined && effectiveColumnKind(validator) === "bigint")
+        .map(([field]) => field);
+
+/**
+ * The declared `v.any()` / `v.union()` / `v.from()` fields of `table` — the
+ * columns whose stored form keys off the runtime value's type, so a number
+ * written to one is kept as an order-preserving key.
+ */
+const untypedFields = (definition: SchemaLike["tables"][string]): string[] =>
+    Object.entries(definition.shape)
+        .filter(([, validator]) => validator._meta?.column !== undefined && isUntypedColumnKind(effectiveColumnKind(validator)))
+        .map(([field]) => field);
+
+/**
+ * Rewrite any `v.bigint()` column still holding the plain decimal text an
+ * earlier build stored into the order-preserving key {@link bigintSqlKey} now
+ * writes. Decimal text is exact for `=` but sorts `"9"` after `"10"`.
+ */
+const rewriteLegacyBigintColumns = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> =>
+    runLegacyColumnRewrite(exec, tableName, dialect, {
+        convert: (raw) => {
+            if (typeof raw !== "string" || raw.length === BIGINT_KEY_LENGTH) {
+                return undefined;
+            }
+
+            try {
+                return bigintSqlKey(BigInt(raw));
+            } catch {
+                return undefined;
+            }
+        },
+        describeUnconvertible: "hold a value the order-preserving key cannot represent (non-numeric text, or a magnitude past 39 digits)",
+        fields: bigintFields(definition),
+        marker: `bigint-key:${tableName}`,
+        probe: (field) => sql`(${columnRefSql(field)} IS NOT NULL AND LENGTH(${columnRefSql(field)}) <> ${BIGINT_KEY_LENGTH})`,
+    });
+
+/**
+ * Rewrite any untyped column still holding a number as the marked JSON an
+ * earlier build wrote (`$lunora.wire$42`) into the order-preserving key form
+ * (`$lunora.wire$#3ff8…`).
+ *
+ * Same defect as the bigint rewrite above, in the last column kind that had been
+ * left on the lossy form: JSON text sorts `"10"` before `"2"`, so `orderBy`,
+ * ranges, cursors and `MIN`/`MAX` over a `.global()` `v.union()` column ran on
+ * text order — `where: { un: { gt: 5 } }` matched 1 of the 3 rows above it,
+ * while the identical read against the DO row store matched all 3.
+ *
+ * The probe over-matches on purpose: it selects every row whose column carries
+ * the wire marker without the number tag, which is also every marked BOOLEAN and
+ * every wire-encoded COMPOSITE. Narrowing it further would mean encoding the
+ * form rules into SQL, and the rewrite helper in `value-codec.ts` — the one
+ * place that knows both forms — decides per row anyway. Those rows convert to `undefined`
+ * and are left byte-identical, and this pass reports NO unconvertible count: a
+ * marked boolean and a wire-encoded composite are correct exactly as stored, so
+ * warning about them would fire on most tables and mean nothing.
+ *
+ * The two patterns are rendered into the statement rather than bound, for the
+ * reason the `LIMIT` above is: it keeps the probe's bound-parameter count at
+ * ZERO per column. Bound, a table near D1's 100-column ceiling would need 2
+ * placeholders per untyped column and blow the 100-parameter budget outright —
+ * a hard provisioning failure, not a wrong answer. See {@link likePrefixLiteral}
+ * for why rendering these two is safe.
+ */
+const rewriteLegacyUntypedNumbers = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> =>
+    runLegacyColumnRewrite(exec, tableName, dialect, {
+        convert: rewriteLegacyUntypedNumber,
+        fields: untypedFields(definition),
+        marker: `untyped-number-key:${tableName}`,
+        // Two separate patterns rather than one concatenated expression: MySQL's
+        // `||` is logical OR, not string concatenation, so assembling the
+        // pattern in SQL would silently match nothing there.
+        probe: (field) =>
+            sql`(${columnRefSql(field)} LIKE ${sql.raw(likePrefixLiteral(UNTYPED_WIRE_PREFIX))} AND ${columnRefSql(field)} NOT LIKE ${sql.raw(likePrefixLiteral(UNTYPED_NUMBER_PREFIX))})`,
+    });
 
 /**
  * Add the columns a `.global()` table is missing.
@@ -672,6 +781,8 @@ const runSqlGlobalTableMigrations = async (exec: SqlCtxExec, schema: SchemaLike,
         await createGlobalTableIndexes(exec, tableName, definition, dialect);
         // eslint-disable-next-line no-await-in-loop -- runs on the same connection, after the columns exist.
         await rewriteLegacyBigintColumns(exec, tableName, definition, dialect);
+        // eslint-disable-next-line no-await-in-loop -- same connection, same reason; each pass records its own completion marker.
+        await rewriteLegacyUntypedNumbers(exec, tableName, definition, dialect);
     }
 };
 
