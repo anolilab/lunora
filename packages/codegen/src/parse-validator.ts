@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, SpreadAssignment } from "ts-morph";
-import { Node } from "ts-morph";
+import { Node, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
 import type { ColumnMetaIR, ValidatorIR } from "./ir";
@@ -200,6 +200,18 @@ const resolveValidatorAlias = (identifier: Identifier): Expression | undefined =
 };
 
 /**
+ * Whether an expression reached through {@link resolveValidatorAlias} is held by
+ * a `const`. The resolver hands back a declaration's initializer, so its parent
+ * is that declaration; anything that is not a variable declaration at all (a
+ * property assignment, say) is not a rebindable binding and passes.
+ */
+const isConstBinding = (initializer: Expression): boolean => {
+    const declaration = initializer.getParent();
+
+    return !Node.isVariableDeclaration(declaration) || declaration.getVariableStatement()?.getDeclarationKind() === VariableDeclarationKind.Const;
+};
+
+/**
  * The object literal an expression stands for: the literal itself, the one a
  * `const` holds (local or imported, via {@link resolveValidatorAlias}), or
  * `undefined` when it cannot be read statically.
@@ -209,6 +221,12 @@ const resolveValidatorAlias = (identifier: Identifier): Expression | undefined =
  * and the fields behind the spread used to vanish from the generated types with
  * no diagnostic. Callers that cannot resolve one must say so rather than emit a
  * shape that disagrees with the validator the runtime enforces.
+ *
+ * A property access (`sharedSchema.args`) resolves through the checker to the
+ * property's own initializer, so a record reached off an object resolves like
+ * one held in a `const`. Values assembled at RUNTIME — `defineListArgs(...).args`,
+ * which `lunora introspect` generates — have no literal to find and correctly
+ * come back `undefined`.
  */
 const resolveObjectLiteral = (expression: Expression): ObjectLiteralExpression | undefined => {
     if (Node.isParenthesizedExpression(expression) || Node.isAsExpression(expression) || Node.isSatisfiesExpression(expression)) {
@@ -219,13 +237,24 @@ const resolveObjectLiteral = (expression: Expression): ObjectLiteralExpression |
         return expression;
     }
 
+    if (Node.isPropertyAccessExpression(expression)) {
+        const declaration = expression.getSymbol()?.getValueDeclaration();
+        const initializer = declaration !== undefined && Node.isPropertyAssignment(declaration) ? declaration.getInitializer() : undefined;
+
+        return initializer === undefined ? undefined : resolveObjectLiteral(initializer);
+    }
+
     if (!Node.isIdentifier(expression) || resolvingAliases.has(expression)) {
         return undefined;
     }
 
     const target = resolveValidatorAlias(expression);
 
-    if (target === undefined) {
+    // `const` only. A `let`/`var` holding an args record can be reassigned
+    // between its initializer and the `.input(…)` that names it, and the shape
+    // emitted from the initializer would then be a type the runtime validator
+    // disagrees with — the exact mismatch this resolution exists to remove.
+    if (target === undefined || !isConstBinding(target)) {
         return undefined;
     }
 
@@ -317,7 +346,14 @@ const parseValidator = (expression: Expression): ValidatorIR => {
 };
 
 /**
- * The fields `{ ...sharedArgs }` contributes.
+ * The fields `{ ...sharedArgs }` contributes, or `{}` when it cannot be read.
+ *
+ * Unreadable is deliberately NOT fatal. `defineSchema({ ...authTables(options) })`
+ * is the documented way to consume `@lunora/auth`, and the record it spreads is
+ * built at runtime from the better-auth plugin list — there is no inline form to
+ * fall back to, so aborting would leave that path unable to generate at all.
+ * What the shape loses is reported instead, by the pass that knows which
+ * procedure the shape belongs to (`discover/unreadable-arguments.ts`).
  *
  * `spreadingShapes` catches a cycle (`const a = { ...b }; const b = { ...a }`):
  * the alias guard is released before the shape is parsed, so without it the two
@@ -327,10 +363,7 @@ const parseSpreadShape = (property: SpreadAssignment): Record<string, ValidatorI
     const spread = resolveObjectLiteral(property.getExpression());
 
     if (spread === undefined || spreadingShapes.has(spread)) {
-        throw diagnosticAt(
-            property,
-            `cannot read the fields behind \`${property.getText()}\` — a spread resolves only when it names an object literal, or a \`const\` holding one that does not spread its way back here. Inline the fields, or assign them to a \`const\` object literal first`,
-        );
+        return {};
     }
 
     spreadingShapes.add(spread);

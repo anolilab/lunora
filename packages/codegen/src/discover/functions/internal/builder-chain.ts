@@ -1,7 +1,6 @@
 import type { CallExpression } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { diagnosticAt } from "../../../diagnostics";
 import type { ValidatorIR } from "../../../ir";
 import { parseObjectShape, parseValidator, resolveObjectLiteral } from "../../../parse-validator";
 import { builderChainSteps } from "../../builder-chain";
@@ -65,23 +64,21 @@ const argsFromBuilderChain = (receiver: Node): Record<string, ValidatorIR> => {
 
         const argument = step.call.getArguments()[0];
 
-        if (argument === undefined || !Node.isExpression(argument)) {
-            continue;
-        }
-
         // `.input(sharedArgs)` is as legal as an inline literal — the builder
         // takes any `ArgsValidator` record — and used to contribute NOTHING to
         // the generated type while the runtime still enforced every field.
-        const literal = resolveObjectLiteral(argument);
+        //
+        // An argument that does not resolve is SKIPPED, never fatal. `lunora
+        // introspect` emits `.input(<table>List.args)` (see `defineListArgs`),
+        // whose record is built at runtime and cannot be read statically at all;
+        // aborting on it would take `dev`/`verify`/`deploy` down for every
+        // introspected project. The gap is reported instead — see
+        // `discover/unreadable-arguments.ts`.
+        const literal = argument !== undefined && Node.isExpression(argument) ? resolveObjectLiteral(argument) : undefined;
 
-        if (literal === undefined) {
-            throw diagnosticAt(
-                argument,
-                `cannot read the fields of this \`.input(…)\` — it resolves only when it is an object literal or a \`const\` holding one. Inline the fields, or assign them to a \`const\` object literal first`,
-            );
+        if (literal !== undefined) {
+            merged = { ...parseObjectShape(literal), ...merged };
         }
-
-        merged = { ...parseObjectShape(literal), ...merged };
     }
 
     return merged;

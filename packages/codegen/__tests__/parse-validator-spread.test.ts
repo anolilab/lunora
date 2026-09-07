@@ -13,13 +13,9 @@ import { describe, expect, it } from "vitest";
 
 import { parseObjectShape } from "../src/parse-validator";
 
-let project: Project;
-
 /** Parse the `args` object literal declared last in `source`. */
 const shapeOf = (source: string): Record<string, unknown> => {
-    project = new Project({ useInMemoryFileSystem: true });
-
-    const file = project.createSourceFile("snippet.ts", source, { overwrite: true });
+    const file = new Project({ useInMemoryFileSystem: true }).createSourceFile("snippet.ts", source, { overwrite: true });
     const initializer = file.getVariableDeclarationOrThrow("args").getInitializerOrThrow();
 
     if (!Node.isObjectLiteralExpression(initializer)) {
@@ -58,18 +54,34 @@ describe("parseObjectShape spreads", () => {
         expect(shapeOf(source)).toStrictEqual({ alpha: { kind: "string" }, beta: { kind: "number" }, gamma: { kind: "boolean" } });
     });
 
-    it("reports a spread it cannot resolve rather than dropping its fields", () => {
+    it("keeps the readable fields when a spread cannot be resolved, and never throws", () => {
         expect.assertions(1);
 
-        // Silence here is what made this expensive: the loss surfaced as a name
-        // error at a caller in another package, reading as a typo rather than as
-        // a dropped field.
-        expect(() => shapeOf(`const args = { ...buildArgs(), gamma: v.boolean() };`)).toThrow(/cannot read the fields behind/u);
+        // A record built by a call has no literal to read. Aborting on it would
+        // take down `defineSchema({ ...authTables(options) })` and every
+        // `lunora introspect` project, which have no inline form to fall back
+        // to — so the readable half is kept and the gap is reported by
+        // `discoverUnreadableArguments`, which knows the procedure's name.
+        expect(shapeOf(`const args = { ...buildArgs(), gamma: v.boolean() };`)).toStrictEqual({ gamma: { kind: "boolean" } });
     });
 
     it("terminates on a mutually-referential spread instead of recursing forever", () => {
         expect.assertions(1);
 
-        expect(() => shapeOf(`const a = { ...b };\nconst b = { ...a };\nconst args = { ...a };`)).toThrow(/cannot read the fields behind/u);
+        expect(shapeOf(`const a = { ...b };\nconst b = { ...a };\nconst args = { ...a, id: v.string() };`)).toStrictEqual({ id: { kind: "string" } });
+    });
+
+    it("does not follow a `let` — it can be reassigned before the chain reads it", () => {
+        expect.assertions(1);
+
+        expect(shapeOf(`let shared = { alpha: v.string() };\nconst args = { ...shared, gamma: v.boolean() };`)).toStrictEqual({ gamma: { kind: "boolean" } });
+    });
+
+    it("follows a property access to the record it holds", () => {
+        expect.assertions(1);
+
+        // `lunora introspect` generates `.input(<table>List.args)`, so this
+        // shape is machine-written, not exotic.
+        expect(shapeOf(`const list = { args: { page: v.number() } };\nconst args = { ...list.args };`)).toStrictEqual({ page: { kind: "number" } });
     });
 });

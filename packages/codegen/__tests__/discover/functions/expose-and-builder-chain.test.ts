@@ -61,15 +61,26 @@ describe("expose.ts", () => {
             expect(argsFromCall(lastCall(`export const list = query();`))).toStrictEqual({});
         });
 
-        it("returns no args when `args` is absent, shorthand, or a reference rather than a literal", () => {
+        it("returns no args when `args` is absent, shorthand, or an unreadable reference", () => {
             expect.assertions(3);
 
-            // A shorthand (`{ args }`) or an indirection (`args: shared`) is not
+            // A shorthand (`{ args }`) or an unresolvable indirection is not
             // statically readable. Reporting `{}` under-documents; inventing a shape
             // would type calls the runtime validator then rejects.
             expect(argsFromCall(lastCall(`export const list = query({ handler: () => [] });`))).toStrictEqual({});
             expect(argsFromCall(lastCall(`export const list = query({ args, handler: () => [] });`))).toStrictEqual({});
-            expect(argsFromCall(lastCall(`export const list = query({ args: shared, handler: () => [] });`))).toStrictEqual({});
+            expect(argsFromCall(lastCall(`export const list = query({ args: buildArgs(), handler: () => [] });`))).toStrictEqual({});
+        });
+
+        it("resolves `args: sharedArgs` to the const record it names", () => {
+            expect.assertions(1);
+
+            // One argument record shared by two procedures is ordinary, and this
+            // form used to contribute nothing while the runtime enforced every
+            // field.
+            const source = `const shared = { id: v.string() };\nexport const list = query({ args: shared, handler: () => [] });`;
+
+            expect(argsFromCall(lastCall(source))).toStrictEqual({ id: { kind: "string" } });
         });
     });
 
@@ -219,10 +230,24 @@ describe("builder-chain.ts", () => {
             });
         });
 
-        it("reports an `.input()` whose argument cannot be resolved, rather than dropping it", () => {
+        it("skips an `.input()` whose argument cannot be resolved, without throwing", () => {
             expect.assertions(1);
 
-            expect(() => argsFromBuilderChain(receiver(`export const list = query.input(buildArgs()).query(h);`))).toThrow(/cannot read the fields/u);
+            // `lunora introspect` GENERATES `.input(<table>List.args)`, whose
+            // record `defineListArgs` builds at runtime. Aborting would take
+            // `dev`/`verify`/`deploy` down for every introspected project, so
+            // the unreadable-arguments advisory reports the gap instead.
+            expect(argsFromBuilderChain(receiver(`export const list = query.input(buildArgs()).input({ id: v.string() }).query(h);`))).toStrictEqual({
+                id: { kind: "string" },
+            });
+        });
+
+        it("resolves an `.input()` that reads a record off an object", () => {
+            expect.assertions(1);
+
+            const chain = `const listArgs = { args: { page: v.number() } };\nexport const list = query.input(listArgs.args).query(h);`;
+
+            expect(argsFromBuilderChain(receiver(chain))).toStrictEqual({ page: { kind: "number" } });
         });
 
         it("returns an empty record for a chain with no `.input()`", () => {

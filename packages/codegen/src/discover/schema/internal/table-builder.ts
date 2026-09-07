@@ -15,7 +15,7 @@ import type {
     ValidatorIR,
     VectorIndexIR,
 } from "../../../ir";
-import { parseObjectShape } from "../../../parse-validator";
+import { parseObjectShape, resolveObjectLiteral } from "../../../parse-validator";
 import {
     asMetric,
     getBooleanProperty,
@@ -798,20 +798,33 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
     };
 };
 
-/** Parse the base `defineSchema({ table: defineTable(...) })` object literal into {@link TableIR}s. */
-const parseBaseTables = (object: ObjectLiteralExpression): TableIR[] => {
-    const tables: TableIR[] = [];
-    const seenNames = new Set<string>();
+/**
+ * Parse the base `defineSchema({ table: defineTable(...) })` object literal into
+ * {@link TableIR}s.
+ *
+ * A spread is followed when it names a readable table map — `registry/payment`
+ * exports `paymentTables` as exactly that — so those tables reach the data model
+ * instead of vanishing from it. One built by a CALL (`...authTables(options)`,
+ * the documented `@lunora/auth` wiring) has no literal to read and is skipped,
+ * exactly as every spread was before. Not an error: that path has no inline form
+ * to fall back to, so refusing it would leave it unable to generate at all.
+ *
+ * `visited` guards a self- or mutually-referential spread; the duplicate-name
+ * check spans the spread and the inline keys together, which is exactly the
+ * collision `authTables`' own docs warn silently loses a table to spread order.
+ */
+const parseBaseTables = (object: ObjectLiteralExpression, tables: TableIR[] = [], seenNames = new Set<string>(), visited = new Set<Node>()): TableIR[] => {
+    visited.add(object);
 
     for (const property of object.getProperties()) {
-        // A spread of table definitions used to be skipped in silence: every
-        // table behind it vanished from the data model while the schema still
-        // declared them, and the only symptom was a missing type at a caller.
         if (Node.isSpreadAssignment(property)) {
-            throw diagnosticAt(
-                property,
-                `defineSchema({...}): the tables behind \`${property.getText()}\` cannot be read — spread table maps are not resolved here, and every table in one would be silently absent from the generated data model. List the tables inline.`,
-            );
+            const spread = resolveObjectLiteral(property.getExpression());
+
+            if (spread !== undefined && !visited.has(spread)) {
+                parseBaseTables(spread, tables, seenNames, visited);
+            }
+
+            continue;
         }
 
         if (!Node.isPropertyAssignment(property)) {
