@@ -1038,15 +1038,17 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      * exact and there is nothing to fail closed about. Keying off "a read policy
      * exists" instead made every rank/count unreachable the moment a table was
      * governed at all, including from the very procedures the policy admits.
+     *
+     * Returns nothing on purpose: not throwing MEANS the base is unrestricted,
+     * so there is no `baseWhere` for a caller to merge and each one forwards its
+     * own `options` untouched.
      */
-    const requireUnrestrictedReadBase = (tableName: string, method: string): undefined | WhereInput => {
+    const assertUnrestrictedReadBase = (tableName: string, method: string): void => {
         const { baseWhere } = readBase(tableName);
 
         if (narrowsReads(baseWhere)) {
             throw new LunoraError("COUNT_RLS_UNSUPPORTED", `${method}() is not supported on "${tableName}" inside an RLS-restricted context`);
         }
-
-        return undefined;
     };
 
     // `rankBefore`/`rankPageRows` are the two analytical methods that may be
@@ -1068,7 +1070,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
                 // Flagged only when the policies actually NARROW the table — the
                 // writer refuses a count it cannot compute exactly, and an
                 // allow-all policy leaves it exactly computable. Same test as
-                // `requireUnrestrictedReadBase`; see its docblock.
+                // `assertUnrestrictedReadBase`; see its docblock.
                 restrictsCounts: (args.restrictsCounts ?? false) || narrowsReads(baseWhere),
             });
         },
@@ -1478,7 +1480,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         // `groupBy` are scoped to `where`, so the read `baseWhere` is AND-merged
         // and the reduction only sees policy-visible rows. `rank` / `rankPage`
         // are counts-of-partition that can't be safely narrowed, so they fail
-        // closed under a read policy (see `requireUnrestrictedReadBase`).
+        // closed under a read policy (see `assertUnrestrictedReadBase`).
         aggregate(tableName, options) {
             const { baseWhere } = readBase(tableName);
 
@@ -1500,15 +1502,15 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         },
 
         rank(tableName, indexName, options) {
-            const baseWhere = requireUnrestrictedReadBase(tableName, "rank");
+            assertUnrestrictedReadBase(tableName, "rank");
 
-            return route(tableName).rank(tableName, indexName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere) });
+            return route(tableName).rank(tableName, indexName, options);
         },
 
         rankPage(tableName, indexName, options) {
-            const baseWhere = requireUnrestrictedReadBase(tableName, "rankPage");
+            assertUnrestrictedReadBase(tableName, "rankPage");
 
-            return route(tableName).rankPage(tableName, indexName, { ...options, baseWhere: mergeBaseWhere(options?.baseWhere, baseWhere) });
+            return route(tableName).rankPage(tableName, indexName, options);
         },
 
         wipeShard() {
@@ -1534,7 +1536,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         // closed for the same reason `rankPage` does: its rows carry partition
         // rank keys that cannot be reduced under a row policy.
         ...optionalWriterOverride("rankBefore", baseRankBefore, (rankBefore) => (tableName: string, indexName: string, options: RankBeforeArgs) => {
-            requireUnrestrictedReadBase(tableName, "rankBefore");
+            assertUnrestrictedReadBase(tableName, "rankBefore");
 
             // Route to the policy/non-policy writer; both carry `rankBefore` when `base` does (the guard spreads `raw`).
             const target = route(tableName);
@@ -1542,15 +1544,12 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return (target.rankBefore ?? rankBefore)(tableName, indexName, options);
         }),
         ...optionalWriterOverride("rankPageRows", baseRankPageRows, (rankPageRows) => (tableName: string, indexName: string, options?: RankPageArgs) => {
-            const baseWhere = requireUnrestrictedReadBase(tableName, "rankPageRows");
+            assertUnrestrictedReadBase(tableName, "rankPageRows");
 
             // Route to the policy/non-policy writer; both carry `rankPageRows` when `base` does (the guard spreads `raw`).
             const target = route(tableName);
 
-            return (target.rankPageRows ?? rankPageRows)(tableName, indexName, {
-                ...options,
-                baseWhere: mergeBaseWhere(options?.baseWhere, baseWhere),
-            });
+            return (target.rankPageRows ?? rankPageRows)(tableName, indexName, options);
         }),
     };
 
