@@ -152,7 +152,9 @@ describe("durable replay under an expired bearer", () => {
         await expect(outcome).resolves.toBe("committed");
         expect(settled).toStrictEqual([{ code: undefined, status: "committed" }]);
         await expect(persistence.load()).resolves.toHaveLength(0);
-        expect(fetchImpl.mock.calls.at(-1)?.[1].headers).toMatchObject({ authorization: "Bearer refreshed-jwt" });
+        expect(fetchImpl.mock.calls.at(-1)?.[1].headers).toMatchObject({
+            authorization: "Bearer refreshed-jwt" /* gitleaks:allow -- test fixture, not a real credential */,
+        });
 
         client.close();
     });
