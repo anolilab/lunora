@@ -132,7 +132,7 @@ import {
     serializeDocumentColumn,
     tableColumns,
 } from "./sql-exec";
-import { bigintSqlKey, effectiveColumnKind, sqliteDecode } from "./value-codec";
+import { effectiveColumnKind, sqliteDecode } from "./value-codec";
 
 /** Order fields that already provide a stable tiebreak (no extra `id` term needed). */
 const ID_ORDER_FIELDS = new Set(["_id", "id"]);
@@ -821,7 +821,8 @@ const mayHoldBigintKey = (validator: SchemaLike["tables"][string]["shape"][strin
  * Refuse a SQL-side reduce or group over a column stored as an order-preserving
  * key rather than as its value.
  *
- * A `v.bigint()` column holds the zero-padded key {@link bigintSqlKey} builds, so
+ * A `v.bigint()` column holds the zero-padded key `bigintSqlKey`
+ * ({@link file://./value-codec.ts}) builds, so
  * `SUM` over it coerces to nonsense (1.5e40 for a couple of small amounts),
  * `MIN`/`MAX` hand back the padded string, and a `GROUP BY` key comes back as 40
  * characters of padding. All three look like answers, and `SUM` past 2^53 used

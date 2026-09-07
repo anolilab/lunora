@@ -79,6 +79,36 @@ const sourceFiles = (dir, out = []) => {
  *
  * Quoted strings only: a template literal can hold real code in `${…}`.
  */
+/**
+ * Whether `source` re-exports another module's default binding.
+ *
+ * Every spelling counts, not just `export { default } from "…"`: the exported
+ * NAME is what wrangler loads, so `export { default as default } from "…"`,
+ * `export { worker as default } from "…"` and `export { default, ShardDO } from
+ * "…"` all hand Cloudflare a default this gate cannot read. Matching only the
+ * bare form let the other three through — an entry that declares a cron and
+ * forwards nothing would pass.
+ *
+ * `export * from "…"` is deliberately NOT one of them: a star re-export does not
+ * carry the default binding, so such a file has no default to be opaque about.
+ *
+ * The module specifier is matched as possibly EMPTY: this runs on stripped
+ * source, where {@link stripToCode} has already blanked every quoted string, so
+ * `from "./worker"` reaches here as `from ""`. Requiring a non-empty specifier
+ * matched nothing at all and waved every re-export through.
+ *
+ * @param {string} source
+ * @returns {boolean}
+ */
+const reExportsDefault = (source) =>
+    [...source.matchAll(/export\s*\{([^}]*)\}\s*from\s*["'][^"']*["']/gu)].some((match) =>
+        (match[1] ?? "").split(",").some((specifier) => {
+            const parts = specifier.trim().split(/\s+as\s+/u);
+
+            return (parts.at(-1) ?? "").trim() === "default";
+        }),
+    );
+
 /** @param {string} file @returns {string} */
 const codeOf = (file) => stripToCode(readFileSync(file, "utf8"));
 
@@ -181,7 +211,7 @@ const main = (root) => {
         for (const file of candidates) {
             const source = codeOf(file);
 
-            if (/export\s*\{\s*default\s*\}\s*from/u.test(source)) {
+            if (reExportsDefault(source)) {
                 offences.push(
                     `${relative(root, file)} re-exports another module's default, so it cannot be shown to forward ` +
                         `${declared.join(", ")} — the re-exported handler set is opaque here.`,
@@ -235,4 +265,4 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
     main(target);
 }
 
-export { stripToCode };
+export { reExportsDefault, stripToCode };
