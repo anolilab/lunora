@@ -22,6 +22,10 @@
  * (`requireAdmin`) that a shape cannot run. Request-time scope is per-procedure,
  * so a shape's has to be per-shape.
  *
+ * Fail-open is the other direction, and it is NOT silent: see
+ * `assertShapesDeclareReadPolicies`, which refuses to boot an app whose shape
+ * omits `use` on a table the project's own read policies govern.
+ *
  * Fail-closed parity with `@lunora/do`'s `guardWriter`: under a
  * `.rls("required")` schema a non-`.public()` table the shape declares no read
  * policy for is denied (the shape replicates nothing), never silently
@@ -35,6 +39,8 @@
  * the identity claim only, because no middleware runs to contribute
  * `ctx.auth.roles` (see the KNOWN DIVERGENCE note on `evaluateGroupBaseWhere`).
  */
+
+import { LunoraError } from "@lunora/errors";
 
 import { computeReadBaseWhere, indexRolePermissions, readIdentityRoles, resolveCan } from "./middleware";
 import type { RlsTag } from "./policy-tag";
@@ -277,6 +283,70 @@ const buildRlsReadRegistry = (guards: Iterable<unknown>): RlsReadRegistry => {
     return { byTable };
 };
 
+/** One entry of the generated `LUNORA_SHAPES` registry, as {@link assertShapesDeclareReadPolicies} reads it. */
+interface ShapeGuardDeclaration {
+    /** Logical table the shape replicates. */
+    readonly table: string;
+    /** Present (even as `[]`) exactly when the declaration wrote `use` — the acknowledgement bit. */
+    readonly use?: unknown;
+}
+
+/**
+ * Fail a project's startup closed when a shape would replicate AROUND the read
+ * policies its table is governed by.
+ *
+ * Scoping shape RLS to `defineShape({ use })` fixed one direction (a project-wide
+ * union let one admin-only `rls([{ on: "read", when: () => true }])` unrestrict
+ * every tenant shape) and opened the other: under the OPT-IN default a shape that
+ * names no guard has an empty registry, `resolveReadBaseWhere` returns
+ * `undefined`, and the shape replicates on its own `where` alone. An app whose
+ * `messages` table is tenant-scoped on its queries and exposes
+ * `defineShape({ table: "messages", where: (_c, { channelId }) => ({ channelId }) })`
+ * therefore replicated `{ channelId }` where it used to replicate
+ * `{ AND: [{ channelId }, { tenantId }] }` — every tenant's messages, to every
+ * subscriber, with no error and no diagnostic. Silence is the defect; this is the
+ * noise.
+ *
+ * `readPolicyTables` is the set of tables the project's `.use(rls(...))` chains
+ * declare an `on: "read"` policy for — statically discovered by codegen, which
+ * stamps the call into the generated shard. The registry is the authority on the
+ * other half: `use` is present exactly when the declaration wrote it, so
+ * `use: []` is the explicit acknowledgement ("this shape's own `where` is the
+ * whole filter") and a missing `use` on a governed table is the accident.
+ *
+ * Skipped under `.rls("required")`: there a guard-less shape over a non-`.public()`
+ * table already replicates nothing (see `resolveReadBaseWhere`), so the omission
+ * cannot leak — it is the secure-by-default answer, not a fail-open.
+ *
+ * Throws at module scope in the generated shard, so it surfaces the moment the
+ * worker boots rather than on the first subscription. A codegen-time check would
+ * be louder still, but codegen sees only the shape IR, which does not lift `use`
+ * — and the registry, which does, exists only at runtime.
+ */
+const assertShapesDeclareReadPolicies = (
+    shapes: Readonly<Record<string, ShapeGuardDeclaration>>,
+    readPolicyTables: Iterable<string>,
+    rlsRequired: boolean,
+): void => {
+    if (rlsRequired) {
+        return;
+    }
+
+    const governed = new Set(readPolicyTables);
+    const unguarded = Object.entries(shapes)
+        .filter(([, shape]) => shape.use === undefined && governed.has(shape.table))
+        .map(([name, shape]) => `"${name}" (table "${shape.table}")`);
+
+    if (unguarded.length === 0) {
+        return;
+    }
+
+    throw new LunoraError(
+        "INTERNAL",
+        `defineShape ${unguarded.join(", ")} replicate${unguarded.length === 1 ? "s" : ""} a table this project's rls() read policies restrict, but declare${unguarded.length === 1 ? "s" : ""} no \`use\` — a shape runs no procedure, so those policies never reach it and every subscriber would replicate every row the shape's own \`where\` admits. Name the guards the equivalent query lists: \`defineShape({ use: [<the rls() guard>], ... })\`. If the shape really is meant to be ungoverned (its own \`where\` is the whole filter), say so with \`use: []\`.`,
+    );
+};
+
 /**
  * Compute the effective `where` a shape replicates: the table's RLS read
  * base-where AND the shape's own predicate. Returns the shape predicate
@@ -287,5 +357,5 @@ const buildRlsReadRegistry = (guards: Iterable<unknown>): RlsReadRegistry => {
 const composeShapeReadWhere = (registry: RlsReadRegistry, request: ShapeReadWhereRequest): WhereInput =>
     andMerge(resolveReadBaseWhere(registry, request), request.shapeWhere);
 
-export type { RlsReadRegistry, ShapeReadWhereRequest };
-export { buildRlsReadRegistry, composeShapeReadWhere };
+export type { RlsReadRegistry, ShapeGuardDeclaration, ShapeReadWhereRequest };
+export { assertShapesDeclareReadPolicies, buildRlsReadRegistry, composeShapeReadWhere };

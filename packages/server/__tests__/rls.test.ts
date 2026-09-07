@@ -1706,6 +1706,22 @@ describe("rls — analytical reads (baseWhere on the full facade)", () => {
         await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toMatchObject({ isDone: true });
     });
 
+    it("forwards the caller's own rank() baseWhere untouched — the guard contributes none", async () => {
+        expect.assertions(1);
+
+        // `assertUnrestrictedReadBase` is a check, not a producer: reaching past it
+        // means the read base is unrestricted, so there is nothing to AND in and the
+        // caller's `options` go through as written.
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([allowAllPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rank("documents", "byScore", { baseWhere: { ownerId: "u1" }, row: "d1" }));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        expect(database.calls.find((entry) => entry.method === "rank")?.args).toStrictEqual({ baseWhere: { ownerId: "u1" }, row: "d1" });
+    });
+
     it("serves rank() under a read policy whose predicate is an empty (match-everything) WhereInput", async () => {
         expect.assertions(1);
 

@@ -4621,6 +4621,26 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         }
 `
         : "";
+    // Boot-time fail-closed check for the OTHER direction of shape RLS scoping: a
+    // shape whose table the project governs on read but that names no `use` has an
+    // empty registry, so it replicates on its own `where` alone — unfiltered, with
+    // no error. Only the runtime registry knows whether `use` was written (the
+    // shape IR does not lift it), so the tables come from codegen and the verdict
+    // from `@lunora/server`. Emitted only when both halves exist, so a project
+    // without shapes or without read policies keeps a byte-identical `shard.ts`.
+    const shapeReadPolicyTables = hasShapes
+        ? [...new Set(rlsData.policies.filter((policy) => policy.on === "read" && policy.table !== "").map((policy) => policy.table))].toSorted((a, b) =>
+              a.localeCompare(b),
+          )
+        : [];
+    const shapeReadPolicyAssertion =
+        shapeReadPolicyTables.length > 0
+            ? `
+/** Refuses to boot a shape that would replicate around the read policies its table is governed by (\`defineShape({ use })\` is how a shape opts in; \`use: []\` acknowledges an ungoverned one). */
+assertShapesDeclareReadPolicies(LUNORA_SHAPES, ${JSON.stringify(shapeReadPolicyTables)}, (schema as unknown as { rlsMode?: string }).rlsMode === "required");
+`
+            : "";
+
     const customMutatorOverride = hasMutators
         ? `
         protected override isCustomMutator(functionPath: string): boolean {
@@ -4635,6 +4655,9 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // pulled in only when the project has shapes so a shape-free `shard.ts`
     // stays byte-identical.
     const shapeGuardImport = hasShapes ? "assertShapeShardable, " : "";
+    // Imported only when the boot-time check is actually stamped: an unused import in
+    // generated output fails the strict `noUnusedLocals` config it compiles under.
+    const shapeReadPolicyImport = shapeReadPolicyAssertion === "" ? "" : "assertShapesDeclareReadPolicies, ";
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
@@ -4651,7 +4674,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         // read-registry builder + `composeShapeReadWhere` so `resolveShape` can
         // AND-merge a shape's predicate with the table's read base-where.
         hasShapes
-            ? `import { asBucketStorage, beginDeferredSchedules, composeShapeReadWhere, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "${base.server}";`
+            ? `import { asBucketStorage, ${shapeReadPolicyImport}beginDeferredSchedules, composeShapeReadWhere, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "${base.server}";`
             : `import { asBucketStorage, beginDeferredSchedules, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "${base.server}";`,
     ];
 
@@ -5398,7 +5421,7 @@ const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = ${JSON.stringify(advisorPr
 
 /** Read-only RLS metadata (policies + roles discovered from \`.use(rls(...))\` chains) served via \`__lunora_admin__:rlsPolicies\` for the studio's RLS inspector. */
 const LUNORA_RLS_METADATA: RlsPoliciesResult = ${JSON.stringify(rlsData, undefined, 4)};
-
+${shapeReadPolicyAssertion}
 /** Read-only masking metadata (table + column + strategy discovered from \`.use(mask(...))\` chains) served via \`__lunora_admin__:maskPolicies\` for the studio's data-browser mask preview. */
 const LUNORA_MASK_METADATA: MaskPoliciesResult = ${JSON.stringify(maskData, undefined, 4)};
 

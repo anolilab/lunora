@@ -893,11 +893,24 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      * keeps the common case — a shard-local row that hits — at the ONE round-trip
      * the seam exists for, and charges the extra probes only to a miss.
      *
+     * `probeTable` narrows the FALLBACK probe set without pinning the lookup.
+     * `expectedTable` does both, which `deleteAll`/`deleteWhere` cannot use: a
+     * pinned table blocks the writer's global fallback and turns every delete on
+     * a `.global()` table into a silent no-op. Those callers know the table
+     * anyway (their ids came from that table's own filtered read), so they pass
+     * it here instead — one probe per row rather than one per policy-gated
+     * table, which is what put a chunked erase into workerd's 1000-subrequest
+     * ceiling partway through.
+     *
      * `row` is `null` when the id doesn't exist. `tableName` is `undefined` when
      * the row exists but isn't in any policy-gated table (no policy applies →
      * callers fall through unrestricted).
      */
-    const locateRow = async (id: string, expectedTable?: string): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
+    const locateRow = async (
+        id: string,
+        expectedTable?: string,
+        probeTable?: string,
+    ): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
         if (raw.lookupById) {
             // Pin the lookup to the bound table when the by-id facade forwards
             // one, so a foreign id resolves to "absent" rather than another
@@ -924,10 +937,11 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
 
         // Ids are globally unique, so at most one probe hits; settle all of
         // them in parallel and pick the hit instead of serializing the
-        // round-trips. When the facade pinned a table, only that table's policy
-        // can apply — restrict the probe set to it.
-        const pinnedProbe = expectedTable !== undefined && policyTables.has(expectedTable) ? [expectedTable] : [];
-        const probeTables = expectedTable === undefined ? [...policyTables] : pinnedProbe;
+        // round-trips. When the caller named a table — pinned via `expectedTable`
+        // or scoped via `probeTable` — only that table's policy can apply, so the
+        // probe set is that one table (or none, when it carries no policy).
+        const scopedTable = expectedTable ?? probeTable;
+        const probeTables = scopedTable === undefined ? [...policyTables] : [scopedTable].filter((table) => policyTables.has(table));
         const probes = await Promise.all(
             probeTables.map(async (tableName) => {
                 const probe = await raw.findFirst(tableName, { limit: 1, where: { _id: id } });
@@ -944,8 +958,12 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      * wrapper over {@link locateRow} that drops the unguarded-row case — a write
      * to a row in no policy-gated table needs no policy check.
      */
-    const findRowTable = async (id: string, expectedTable?: string): Promise<undefined | { row: Record<string, unknown>; tableName: string }> => {
-        const located = await locateRow(id, expectedTable);
+    const findRowTable = async (
+        id: string,
+        expectedTable?: string,
+        probeTable?: string,
+    ): Promise<undefined | { row: Record<string, unknown>; tableName: string }> => {
+        const located = await locateRow(id, expectedTable, probeTable);
 
         return located.row && located.tableName !== undefined ? { row: located.row, tableName: located.tableName } : undefined;
     };
@@ -975,8 +993,9 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         perform: (writer: RlsDatabase) => Promise<R>,
         computeNextRow?: (preRow: Record<string, unknown>) => Record<string, unknown>,
         expectedTable?: string,
+        probeTable?: string,
     ): Promise<R> => {
-        const located = await findRowTable(id, expectedTable);
+        const located = await findRowTable(id, expectedTable, probeTable);
 
         if (!located) {
             // The id is in no policy-gated table (a non-policy table or absent).
@@ -1019,15 +1038,17 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      * exact and there is nothing to fail closed about. Keying off "a read policy
      * exists" instead made every rank/count unreachable the moment a table was
      * governed at all, including from the very procedures the policy admits.
+     *
+     * Returns nothing on purpose: not throwing MEANS the base is unrestricted,
+     * so there is no `baseWhere` for a caller to merge and each one forwards its
+     * own `options` untouched.
      */
-    const requireUnrestrictedReadBase = (tableName: string, method: string): undefined | WhereInput => {
+    const assertUnrestrictedReadBase = (tableName: string, method: string): void => {
         const { baseWhere } = readBase(tableName);
 
         if (narrowsReads(baseWhere)) {
             throw new LunoraError("COUNT_RLS_UNSUPPORTED", `${method}() is not supported on "${tableName}" inside an RLS-restricted context`);
         }
-
-        return undefined;
     };
 
     // `rankBefore`/`rankPageRows` are the two analytical methods that may be
@@ -1049,7 +1070,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
                 // Flagged only when the policies actually NARROW the table — the
                 // writer refuses a count it cannot compute exactly, and an
                 // allow-all policy leaves it exactly computable. Same test as
-                // `requireUnrestrictedReadBase`; see its docblock.
+                // `assertUnrestrictedReadBase`; see its docblock.
                 restrictsCounts: (args.restrictsCounts ?? false) || narrowsReads(baseWhere),
             });
         },
@@ -1086,10 +1107,22 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
                     // survive. It costs nothing here: these ids came from this table's
                     // own policy-filtered read, so they are provably its rows, and
                     // `gateById` still resolves each row's real table and applies that
-                    // table's delete policy. Same reasoning as `deleteWhere`, which hands
-                    // its ids to `deleteMany` unpinned.
+                    // table's delete policy. Same reasoning as `deleteWhere`.
+                    //
+                    // `tableName` rides along as the PROBE scope, which pins nothing:
+                    // unpinned, a row that misses the shard-local `lookupById` seam is
+                    // probed against every policy-gated table, so a chunked erase of N
+                    // global rows costs N × (policy tables) subrequests and trips
+                    // workerd's 1000-subrequest ceiling mid-erase.
                     // eslint-disable-next-line no-await-in-loop -- sequential per-row policy gate, mirrors looped single deletes
-                    await gateById(id, "delete", (writer) => writer.delete(id, undefined, options?.hard === undefined ? undefined : { hard: options.hard }));
+                    await gateById(
+                        id,
+                        "delete",
+                        (writer) => writer.delete(id, undefined, options?.hard === undefined ? undefined : { hard: options.hard }),
+                        undefined,
+                        undefined,
+                        tableName,
+                    );
                     deleted += 1;
                 }
 
@@ -1132,7 +1165,17 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
 
             assertBatchLimit(ids.length, options?.limit, "deleteWhere");
 
-            return wrapped.deleteMany(ids, options);
+            // Gated per id here rather than through `deleteMany` so `tableName` can
+            // ride along as the probe scope: `expectedTable` must stay unpinned (it
+            // would block the writer's global fallback and make every global delete a
+            // silent no-op), and unpinned means every policy-gated table gets probed
+            // for every row. See `locateRow`.
+            for (const id of ids) {
+                // eslint-disable-next-line no-await-in-loop -- sequential per-row policy gate, mirrors looped single deletes
+                await gateById(id, "delete", (writer) => writer.delete(id), undefined, undefined, tableName);
+            }
+
+            return { deleted: ids.length };
         },
 
         async findFirst(tableName, args) {
@@ -1437,7 +1480,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         // `groupBy` are scoped to `where`, so the read `baseWhere` is AND-merged
         // and the reduction only sees policy-visible rows. `rank` / `rankPage`
         // are counts-of-partition that can't be safely narrowed, so they fail
-        // closed under a read policy (see `requireUnrestrictedReadBase`).
+        // closed under a read policy (see `assertUnrestrictedReadBase`).
         aggregate(tableName, options) {
             const { baseWhere } = readBase(tableName);
 
@@ -1459,15 +1502,15 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         },
 
         rank(tableName, indexName, options) {
-            const baseWhere = requireUnrestrictedReadBase(tableName, "rank");
+            assertUnrestrictedReadBase(tableName, "rank");
 
-            return route(tableName).rank(tableName, indexName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere) });
+            return route(tableName).rank(tableName, indexName, options);
         },
 
         rankPage(tableName, indexName, options) {
-            const baseWhere = requireUnrestrictedReadBase(tableName, "rankPage");
+            assertUnrestrictedReadBase(tableName, "rankPage");
 
-            return route(tableName).rankPage(tableName, indexName, { ...options, baseWhere: mergeBaseWhere(options?.baseWhere, baseWhere) });
+            return route(tableName).rankPage(tableName, indexName, options);
         },
 
         wipeShard() {
@@ -1493,7 +1536,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         // closed for the same reason `rankPage` does: its rows carry partition
         // rank keys that cannot be reduced under a row policy.
         ...optionalWriterOverride("rankBefore", baseRankBefore, (rankBefore) => (tableName: string, indexName: string, options: RankBeforeArgs) => {
-            requireUnrestrictedReadBase(tableName, "rankBefore");
+            assertUnrestrictedReadBase(tableName, "rankBefore");
 
             // Route to the policy/non-policy writer; both carry `rankBefore` when `base` does (the guard spreads `raw`).
             const target = route(tableName);
@@ -1501,15 +1544,12 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return (target.rankBefore ?? rankBefore)(tableName, indexName, options);
         }),
         ...optionalWriterOverride("rankPageRows", baseRankPageRows, (rankPageRows) => (tableName: string, indexName: string, options?: RankPageArgs) => {
-            const baseWhere = requireUnrestrictedReadBase(tableName, "rankPageRows");
+            assertUnrestrictedReadBase(tableName, "rankPageRows");
 
             // Route to the policy/non-policy writer; both carry `rankPageRows` when `base` does (the guard spreads `raw`).
             const target = route(tableName);
 
-            return (target.rankPageRows ?? rankPageRows)(tableName, indexName, {
-                ...options,
-                baseWhere: mergeBaseWhere(options?.baseWhere, baseWhere),
-            });
+            return (target.rankPageRows ?? rankPageRows)(tableName, indexName, options);
         }),
     };
 

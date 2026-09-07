@@ -1976,6 +1976,15 @@ interface ShapeDefinition<Args extends ValidatorMap = ValidatorMap, Context = Qu
 }
 ```
 
+### `ShapeGuardDeclaration` (interface)
+
+```ts
+interface ShapeGuardDeclaration {
+    readonly table: string;
+    readonly use?: unknown;
+}
+```
+
 ### `ShapeReadWhereRequest` (interface)
 
 ```ts
@@ -2853,6 +2862,12 @@ const anyApi: AnyApi;
 
 ```ts
 const asBucketStorage: (raw: unknown) => unknown;
+```
+
+### `assertShapesDeclareReadPolicies` (const)
+
+```ts
+const assertShapesDeclareReadPolicies: (shapes: Readonly<Record<string, ShapeGuardDeclaration>>, readPolicyTables: Iterable<string>, rlsRequired: boolean) => void;
 ```
 
 ### `beginDeferredSchedules` (const)
