@@ -1,3 +1,22 @@
+## @lunora/do [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.121...@lunora/do@1.0.0-alpha.122) (2026-09-07)
+
+### Bug Fixes
+
+* **do,shard-engine,runtime,client:** repair four core-path defects ([#649](https://github.com/anolilab/lunora/issues/649)) ([6fb9990](https://github.com/anolilab/lunora/commit/6fb99906617ed2811020d5d2ddeda16b312f8e03))
+
+### Tests
+
+* **dispatch,queue,workflow,agent,do:** pin both halves of the ctx.run wire bracket ([#645](https://github.com/anolilab/lunora/issues/645)) ([9fd8827](https://github.com/anolilab/lunora/commit/9fd882739609734a3db51b45b27c380062e4b9ff))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+* **@lunora/observability:** upgraded to 1.0.0-alpha.60
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.37
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.60
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.54
+
 ## @lunora/do [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.120...@lunora/do@1.0.0-alpha.121) (2026-09-06)
 
 ### ⚠ BREAKING CHANGES
