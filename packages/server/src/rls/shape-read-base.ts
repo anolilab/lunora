@@ -285,10 +285,12 @@ const buildRlsReadRegistry = (guards: Iterable<unknown>): RlsReadRegistry => {
 
 /** One entry of the generated `LUNORA_SHAPES` registry, as {@link assertShapesDeclareReadPolicies} reads it. */
 interface ShapeGuardDeclaration {
+    /** The registry `defineShape` already built from `use` — the authority on what those guards actually govern. */
+    readonly rlsRegistry: RlsReadRegistry;
     /** Logical table the shape replicates. */
     readonly table: string;
     /** Present (even as `[]`) exactly when the declaration wrote `use` — the acknowledgement bit. */
-    readonly use?: unknown;
+    readonly use?: ReadonlyArray<unknown>;
 }
 
 /**
@@ -314,6 +316,12 @@ interface ShapeGuardDeclaration {
  * `use: []` is the explicit acknowledgement ("this shape's own `where` is the
  * whole filter") and a missing `use` on a governed table is the accident.
  *
+ * A non-empty `use` has to earn it: the shape's own `rlsRegistry` must hold a
+ * read-policy group for its table. A list naming a guard for a DIFFERENT table,
+ * or a middleware with no `rls()` policies on it at all, produces no group and
+ * leaves the shape filtered by its `where` alone — the same fail-open, hidden
+ * behind a `use` that looks answered.
+ *
  * Skipped under `.rls("required")`: there a guard-less shape over a non-`.public()`
  * table already replicates nothing (see `resolveReadBaseWhere`), so the omission
  * cannot leak — it is the secure-by-default answer, not a fail-open.
@@ -333,18 +341,33 @@ const assertShapesDeclareReadPolicies = (
     }
 
     const governed = new Set(readPolicyTables);
-    const unguarded = Object.entries(shapes)
-        .filter(([, shape]) => shape.use === undefined && governed.has(shape.table))
-        .map(([name, shape]) => `"${name}" (table "${shape.table}")`);
+    const onGovernedTable = Object.entries(shapes).filter(([, shape]) => governed.has(shape.table));
+    const list = (entries: typeof onGovernedTable): string => entries.map(([name, shape]) => `"${name}" (table "${shape.table}")`).join(", ");
 
-    if (unguarded.length === 0) {
-        return;
+    const unguarded = onGovernedTable.filter(([, shape]) => shape.use === undefined);
+
+    if (unguarded.length > 0) {
+        throw new LunoraError(
+            "INTERNAL",
+            `defineShape ${list(unguarded)} replicate${unguarded.length === 1 ? "s" : ""} a table this project's rls() read policies restrict, but declare${unguarded.length === 1 ? "s" : ""} no \`use\` — a shape runs no procedure, so those policies never reach it and every subscriber would replicate every row the shape's own \`where\` admits. Name the guards the equivalent query lists: \`defineShape({ use: [<the rls() guard>], ... })\`. If the shape really is meant to be ungoverned (its own \`where\` is the whole filter), say so with \`use: []\`.`,
+        );
     }
 
-    throw new LunoraError(
-        "INTERNAL",
-        `defineShape ${unguarded.join(", ")} replicate${unguarded.length === 1 ? "s" : ""} a table this project's rls() read policies restrict, but declare${unguarded.length === 1 ? "s" : ""} no \`use\` — a shape runs no procedure, so those policies never reach it and every subscriber would replicate every row the shape's own \`where\` admits. Name the guards the equivalent query lists: \`defineShape({ use: [<the rls() guard>], ... })\`. If the shape really is meant to be ungoverned (its own \`where\` is the whole filter), say so with \`use: []\`.`,
-    );
+    // A NON-EMPTY `use` is not the acknowledgement either — what governs the
+    // shape is the read-policy group its guards produce for THIS table, and a
+    // list can easily produce none: an `rls()` guard for a different table, or a
+    // plain authorization middleware (`requireAdmin`) a shape cannot even run.
+    // The shape then replicates on its own `where` alone, which is exactly the
+    // fail-open the branch above exists to catch, one level down. `use: []`
+    // stays the documented opt-out and is excluded here.
+    const ineffective = onGovernedTable.filter(([, shape]) => shape.use !== undefined && shape.use.length > 0 && !shape.rlsRegistry.byTable.has(shape.table));
+
+    if (ineffective.length > 0) {
+        throw new LunoraError(
+            "INTERNAL",
+            `defineShape ${list(ineffective)} name \`use\` guards that declare no \`on: "read"\` policy for that table, so nothing governs what replicates and the shape's own \`where\` is the whole filter — the same gap a missing \`use\` leaves, on a table this project's rls() read policies restrict. A guard for a different table, or a middleware carrying no rls() policies at all, does not count: name the same rls() guard the equivalent query lists. If the shape really is meant to be ungoverned, say so with \`use: []\`.`,
+        );
+    }
 };
 
 /**

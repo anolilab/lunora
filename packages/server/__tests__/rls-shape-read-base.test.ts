@@ -433,6 +433,40 @@ describe("assertShapesDeclareReadPolicies", () => {
         }).not.toThrow();
     });
 
+    /**
+     * A non-empty `use` used to satisfy the check on its own, which is the same
+     * fail-open one level down: what the list has to produce is a READ-policy
+     * group for THIS shape's table. A guard for a different table, or a plain
+     * authorization middleware a shape cannot even run, produces none — so the
+     * shape replicates on its own `where` alone, exactly as if `use` were absent.
+     */
+    it("refuses a `use` list whose guards declare no read policy for the shape's own table", () => {
+        expect.assertions(2);
+
+        const otherTable = defineShape({
+            table: "messages",
+            use: [rls(definePolicies([definePolicy({ on: "read", table: "notes", when: () => true })]))],
+            where: () => {
+                return { channelId: "c1" };
+            },
+        });
+        const notRls = defineShape({
+            table: "messages",
+            use: [({ next }) => next()],
+            where: () => {
+                return { channelId: "c1" };
+            },
+        });
+
+        expect(() => {
+            assertShapesDeclareReadPolicies({ otherTable }, ["messages"], false);
+        }).toThrow(/"otherTable" \(table "messages"\)/u);
+
+        expect(() => {
+            assertShapesDeclareReadPolicies({ notRls }, ["messages"], false);
+        }).toThrow(/"notRls" \(table "messages"\)/u);
+    });
+
     it("stays quiet for an ungoverned table, and under .rls('required') where the omission already denies", () => {
         expect.assertions(2);
 

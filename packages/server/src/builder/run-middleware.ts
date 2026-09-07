@@ -20,6 +20,12 @@ import type { Middleware, MiddlewareNext } from "./types";
  * into a bare `TypeError` deeper in the handler. To deny a request, THROW (a
  * `LunoraError("FORBIDDEN")`); to change the context, `return next({ ctx })`.
  *
+ * Calling `next()` without awaiting it (`void next(); return ctx;`) is the same
+ * bypass one step subtler — the call happened, but the chain would resolve while
+ * the rest of it is still running. A link that never read its `next()` result is
+ * therefore held open until the downstream chain settles, and a rejection it
+ * dropped is propagated rather than left to detach (see `next` below).
+ *
  * `terminal` runs when the chain is exhausted, with the fully accumulated
  * context: the builder returns it verbatim; the plugin composer hands it to the
  * surrounding builder's own `next` so the composed unit is transparent.
@@ -44,25 +50,44 @@ const runMiddlewareChain = async (
             return terminal(context);
         }
 
-        // A holder rather than a plain `let`: the flag is written inside `next`,
+        // A holder rather than a plain `let`: the field is written inside `next`,
         // and control-flow analysis would otherwise pin a local to its
         // initializer and read the check below as statically true.
-        const advanced = { byThisLink: false };
+        const downstream: { promise: Promise<unknown> | undefined } = { promise: undefined };
 
         const next = ((options?: { ctx: Record<string, unknown> }) => {
-            advanced.byThisLink = true;
+            downstream.promise = dispatch(index + 1, options?.ctx ? { ...(context as Record<string, unknown>), ...options.ctx } : context);
 
-            return dispatch(index + 1, options?.ctx ? { ...(context as Record<string, unknown>), ...options.ctx } : context);
+            return downstream.promise;
         }) as MiddlewareNext<unknown>;
 
         const result = await middleware({ ctx: context, next });
 
-        if (!advanced.byThisLink) {
+        if (downstream.promise === undefined) {
             throw new LunoraError(
                 "INTERNAL",
                 `middleware at position ${String(index)} resolved without calling next(): every later .use() step (rls/mask/storageRules) and the handler's context were skipped. Return next() — or next({ ctx }) to extend the context — and throw to deny.`,
             );
         }
+
+        // Await the rest of the chain unconditionally, INCLUDING when the
+        // middleware already awaited it and swallowed a rejection.
+        //
+        // `void next(); return ctx;` satisfied the check above while the chain
+        // resolved early — the handler then ran against a context the later
+        // `.use()` steps had not finished building, and a downstream rejection
+        // detached into an unhandled rejection.
+        //
+        // Re-throwing something a middleware deliberately caught is the point,
+        // not a cost. The terminal here only BUILDS the context
+        // (`(context) => context` in the builder; the composer forwards to its
+        // surrounding `next`) and the handler runs after this resolves — so a
+        // rejection reaching here is never a handler error a middleware might
+        // legitimately recover from. It is a later middleware refusing: an
+        // `rls()` denial, or this very guard firing one link down. Letting a
+        // link swallow that and return a fallback context is the authorization
+        // bypass this function exists to prevent.
+        await downstream.promise;
 
         return result;
     };
