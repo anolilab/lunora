@@ -119,6 +119,58 @@
             - "name": "Disable git hooks for release commits"
               "run": "git config core.hooksPath /dev/null"
 
+            # ---------------------------------------------------------------------
+            # vis release — owns the packages that carry `"vis-release": { "managed":
+            # true }`. Everything else stays with multi-semantic-release below, which
+            # is handed the same list as `--ignore-packages` so no package is released
+            # twice. Moving a package is therefore two edits that must land together:
+            # the `vis-release` block in its package.json, and the `--ignore-packages`
+            # argument on the msr step below.
+            #
+            # `vis release` is change-file driven (changesets-style), so a commit-driven
+            # release needs the change file derived first. `github.event.before` is the
+            # branch tip this push replaced, which is exactly "the commits this push
+            # added" — and it excludes the previous run's own `chore(release):` commits,
+            # which `generate` would otherwise transcribe into the changelog. A dispatch
+            # has no `before`, so fall back to the last commit.
+            - "name": "Derive vis change files from this push"
+              "shell": "bash"
+              "env":
+                  "BEFORE": "${{ github.event.before }}"
+              "run": |
+                  set -euo pipefail
+
+                  from="${BEFORE:-}"
+
+                  if [ -z "${from}" ] || ! git rev-parse --verify --quiet "${from}^{commit}" >/dev/null; then
+                      echo "No usable github.event.before (${from:-unset}); deriving from HEAD~1."
+                      from="HEAD~1"
+                  fi
+
+                  pnpm exec vis release generate --from "${from}" --name "ci-$(git rev-parse --short HEAD)"
+
+                  # `vis release ci release` refuses to run on a dirty tree, and the change
+                  # file it just wrote is untracked. Commit it so the release step sees a
+                  # clean tree; the version step deletes it again in the release commit.
+                  if [ -n "$(git status --porcelain -- .vis/release)" ]; then
+                      git -c "user.name=github-actions-shell" \
+                          -c "user.email=github-actions[bot]@users.noreply.github.com" \
+                          add -- .vis/release
+                      git -c "user.name=github-actions-shell" \
+                          -c "user.email=github-actions[bot]@users.noreply.github.com" \
+                          commit --message "chore(release): record pending vis change file [skip ci]"
+                  else
+                      echo "No change file written — nothing for vis to release."
+                  fi
+
+            - "name": "vis release"
+              "env":
+                  "GH_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
+                  "GITHUB_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
+                  "NPM_TOKEN": "${{ secrets.NPM_TOKEN }}"
+                  "VIS_GH_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
+              "run": "pnpm exec vis release ci release --auto-publish"
+
             - "name": "Multi semantic release"
               "env":
                   "GITHUB_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
@@ -128,7 +180,9 @@
                   "GIT_AUTHOR_EMAIL": "github-actions[bot]@users.noreply.github.com"
                   "GIT_COMMITTER_NAME": "github-actions-shell"
                   "GIT_COMMITTER_EMAIL": "github-actions[bot]@users.noreply.github.com"
-              "run": "pnpm exec multi-semantic-release"
+              # --ignore-packages takes workspace path globs, not package names, and
+              # negates them against the workspace patterns.
+              "run": "pnpm exec multi-semantic-release --ignore-packages packages/browser"
 
             # The release bumps every package.json, but @semantic-release/git stages only
             # per-package assets — the root pnpm-lock.yaml drifts, and a drifted lockfile

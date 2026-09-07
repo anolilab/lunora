@@ -19,6 +19,14 @@ If hooks aren't firing, run `pnpm exec vis hook install` (or `vis hook validate`
 
 Independent per-package versioning via `multi-semantic-release`. Publishable packages ship a `.releaserc.json` extending `@anolilab/semantic-release-preset/pnpm`. Conventional Commits drive bumps; the `semantic-release.yml` workflow publishes on push to `alpha` / `main` / `next` / `beta`. Do not author `release` commits manually.
 
+### Two release tools, one owner per package
+
+`vis release` (the `release` block in `vis.config.ts`) is being trialled alongside msr. A package belongs to vis only when its `package.json` carries `"vis-release": { "managed": true }`; the same package is passed to msr as `--ignore-packages <path>` in `semantic-release.yml`, so exactly one tool releases it. **Those two edits land together** — a package in neither list never releases, a package in both releases twice. `@lunora/browser` is the only one on vis today.
+
+Same branch → dist-tag table, same `{name}@{version}` tags, same prerelease counter (`1.0.0-alpha.44 → .45`), so a migrated package continues its version stream. Two visible differences: its CHANGELOG gains vis-style sections (`## 1.0.0-alpha.45`) above the older semantic-release ones, and entries are a flat list rather than grouped under Features / Bug Fixes.
+
+Because vis is change-file driven, the workflow derives one from the pushed commits (`vis release generate --from ${{ github.event.before }}`) and commits it before publishing. Locally, `vis release status` prints the pending plan and `vis release doctor` checks the setup.
+
 ## Internal scaffolding (`vis generate`)
 
 Adding a query/mutation/action/table/cron to `lunora/`, or a fresh `@lunora/<name>` package, is done with `vis generate` (templates at `.vis/templates/lunora-*.ts`). There is no `lunora new` subcommand.

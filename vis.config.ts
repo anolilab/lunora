@@ -127,6 +127,51 @@ export default defineConfig({
     taskRunner: {
         parallel: 5,
     },
+    // `vis release` runs BESIDE multi-semantic-release, not instead of it. A package
+    // is vis's only once it opts in with `"vis-release": { "managed": true }`, and the
+    // release workflow passes that same package to msr as `--ignore-packages`, so
+    // exactly one tool owns each package. Keep the two lists in lockstep: a package in
+    // neither never releases, a package in both releases twice.
+    release: {
+        // The subsystem prints an unstable warning (RFC §21.2) on every invocation.
+        // Acknowledged deliberately, not silenced by accident — see the migration notes
+        // in the PR that added this block.
+        acknowledgeUnstable: true,
+        changelog: "github",
+        // `alpha` is the development branch here, not `main` — same reason as `defaultBase`
+        // above. This is what `vis release generate` merge-bases against on a PR branch.
+        baseBranch: "alpha",
+        // Mirrors the branch/channel table of @anolilab/semantic-release-preset, so a
+        // migrated package keeps publishing to the same dist-tags it does today.
+        channels: {
+            alpha: { mode: "auto-publish", prerelease: "alpha", tag: "alpha" },
+            beta: { mode: "auto-publish", prerelease: "beta", tag: "beta" },
+            main: { mode: "auto-publish", tag: "latest" },
+            next: { mode: "auto-publish", tag: "next" },
+        },
+        // Git tags are semantic-release's source of truth too, so a package that moves
+        // over continues its existing version stream instead of restarting from whatever
+        // `package.json` happens to hold. All 4,925 existing tags parse under the default
+        // `{name}@{version}` pattern, so nothing needs backfilling.
+        currentVersionResolver: "git-tag",
+        // Opt-in only. Flipping this to `true` hands every package to vis at once.
+        defaultManaged: false,
+        // The version step rewrites package.json, which Prettier does check
+        // (CHANGELOG.md is in .prettierignore, so only the manifest matters).
+        formatChangedFiles: true,
+        gitUser: { email: "github-actions[bot]@users.noreply.github.com", name: "github-actions-shell" },
+        publish: {
+            catalogResolution: "auto",
+            // Replaces @anolilab/semantic-release-clean-package-json.
+            cleanPackageJson: true,
+            packManager: "auto",
+            // Replaces @anolilab/semantic-release-pnpm: resolve `workspace:` / `catalog:`
+            // specifiers at pack time so the published manifest carries real ranges.
+            protocolResolution: "pack",
+            publishArgs: ["--provenance"],
+            publishStrategy: "npm-publish-tarball",
+        },
+    },
     staged: {
         // Reject a raw NUL byte (which turns a source file binary, hiding it from
         // diff/blame/review), then Prettier-format every staged file, repo-wide.
