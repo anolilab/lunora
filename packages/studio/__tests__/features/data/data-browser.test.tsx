@@ -507,6 +507,123 @@ describe("dataBrowser", () => {
         expect(headerIds()).toStrictEqual(["gamma", "beta", "__id__", "alpha"]);
     });
 
+    /**
+     * Drag-to-resize.
+     *
+     * Same class of guard as the reorder test above: `columnResizingFeature` and
+     * `columnSizingFeature` are registered features, and dropping either one is not
+     * a type error at the call site — `header.getResizeHandler()` is simply
+     * `undefined` and the mousedown throws. Verified by removing each in turn.
+     *
+     * `columnResizeMode: "onChange"` means the width tracks the pointer live, so a
+     * single mousemove is enough; the assertion reads the width off the header's
+     * inline style, which is what `header.getSize()` feeds.
+     */
+    it("resizes a column by dragging its handle, and marks it resizing while held", async () => {
+        expect.assertions(4);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+
+        await screen.findByTestId("db-rows");
+
+        const headWidth = (): number => Number.parseFloat(screen.getByTestId("db-head-text").style.width);
+
+        const handle = screen.getByTestId("db-resize-text");
+        const before = headWidth();
+
+        expect(before).toBeGreaterThan(0);
+        expect(handle.dataset["resizing"]).toBe("false");
+
+        // Grab the handle and drag it 60px to the right.
+        fireEvent.mouseDown(handle, { clientX: 0 });
+
+        await waitFor(() => {
+            if (screen.getByTestId("db-resize-text").dataset["resizing"] !== "true") {
+                throw new Error("handle never entered the resizing state");
+            }
+        });
+
+        expect(screen.getByTestId("db-resize-text").dataset["resizing"]).toBe("true");
+
+        fireEvent.mouseMove(document, { clientX: 60 });
+        fireEvent.mouseUp(document, { clientX: 60 });
+
+        await waitFor(() => {
+            if (headWidth() <= before) {
+                throw new Error(`width did not grow: ${String(before)} -> ${String(headWidth())}`);
+            }
+        });
+
+        expect(headWidth()).toBeGreaterThan(before);
+    });
+
+    /**
+     * The Columns menu, driven through the real table rather than a stub.
+     *
+     * `grid-features.test.tsx` covers this file's pure exports (`toCsv` and
+     * friends) and nothing else, so the menu's binding to TanStack —
+     * `column.toggleVisibility`, `table.getIsAllColumnsVisible`,
+     * `table.toggleAllColumnsVisible` — had no coverage at all. Under v9 that
+     * binding is exactly what an unregistered `columnVisibilityFeature` breaks, at
+     * runtime and not in `tsc`; verified by removing it and watching this fail.
+     */
+    it("hides and restores a column from the Columns menu, and toggles them all", async () => {
+        expect.assertions(4);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+
+        await screen.findByTestId("db-rows");
+
+        // `queryAll`, not `getAll`: hiding every column legitimately leaves no headers,
+        // and `getAllByTestId` throws on an empty match instead of returning [].
+        const headerIds = (): string[] => screen.queryAllByTestId(/^db-head-/u).map((cell) => cell.dataset["testid"]?.replace("db-head-", "") ?? "");
+
+        expect(headerIds()).toContain("text");
+
+        fireEvent.click(screen.getByTestId("grid-columns"));
+
+        // Hiding a column drops its header, not just the menu checkbox.
+        fireEvent.click(await screen.findByTestId("grid-column-text"));
+
+        await waitFor(() => {
+            if (headerIds().includes("text")) {
+                throw new Error(`text still rendered: ${headerIds().join(",")}`);
+            }
+        });
+
+        expect(headerIds()).not.toContain("text");
+
+        // "All" restores every hidden column in one go.
+        fireEvent.click(screen.getByTestId("grid-columns-all"));
+
+        await waitFor(() => {
+            if (!headerIds().includes("text")) {
+                throw new Error(`text not restored: ${headerIds().join(",")}`);
+            }
+        });
+
+        expect(headerIds()).toContain("text");
+
+        // And toggling "All" again hides the data columns rather than doing nothing.
+        fireEvent.click(screen.getByTestId("grid-columns-all"));
+
+        await waitFor(() => {
+            if (headerIds().includes("text")) {
+                throw new Error(`text still rendered after hide-all: ${headerIds().join(",")}`);
+            }
+        });
+
+        expect(headerIds()).not.toContain("text");
+    });
+
     it("clears the sort on the third click", async () => {
         expect.assertions(2);
 
